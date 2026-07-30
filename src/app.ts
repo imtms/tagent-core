@@ -72,6 +72,11 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     if (!service.getRun(id)) return reply.code(404).send({ error: "run not found" });
     return store.listTranscriptEntries(id);
   });
+  app.get("/api/runs/:id/transcript-view", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!service.getRun(id)) return reply.code(404).send({ error: "run not found" });
+    return store.listTranscriptView(id);
+  });
   app.get("/api/runs/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const run = service.getRun(id);

@@ -2,6 +2,8 @@
 
 A minimal persistent TAgent control plane built around [`@mariozechner/pi-agent-core`](https://www.npmjs.com/package/@mariozechner/pi-agent-core).
 
+> `0.1.0-alpha.1` is a source preview for one trusted process, one workspace, and localhost or private-network deployment. It has no built-in API authentication or OS sandbox and is not production-ready.
+
 Project records:
 
 - [Development status](docs/STATUS.md)
@@ -18,13 +20,18 @@ Project records:
 - Transactional single-owner continuation claims with persisted lease metadata
 - Durable repeated-call and repeated-failure tool guards
 - Streaming events, cancellation, and steering
-- Workspace-scoped `read`, `write`, `edit`, `bash`, and `task_run` tools
+- Workspace-scoped `ls`, `read`, `write`, `edit`, `bash`, and `task_run` tools
 - Fastify HTTP/SSE API
 - Responsive React workbench for conversations and TaskRun visibility
+- Safe Markdown rendering and expandable transcript tool calls with paired arguments and results
 
 Knowledge, memory, scheduling, policy, and worker modules remain outside the core and will be added behind explicit interfaces.
 
+See [Security Policy](SECURITY.md), [Changelog](CHANGELOG.md), and [Release Checklist](docs/RELEASE_CHECKLIST.md) before deploying or releasing.
+
 ## Run
+
+Requires Node.js `>=20.19.0` and npm `>=10`.
 
 ```bash
 cp .env.example .env
@@ -98,6 +105,7 @@ npm run check
 npm test
 npm run build
 npm audit --omit=dev
+npm audit --audit-level=high
 ```
 
 ## Architecture

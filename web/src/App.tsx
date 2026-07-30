@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, Bot, Check, ChevronDown, ChevronRight, Circle, Command, FileText, Menu, MessageSquarePlus, PanelRight, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
-import { api, subscribe, type Message, type RunEvent, type RuntimeStatus, type Session, type TaskRun } from "./api";
+import { api, subscribe, type Message, type RunEvent, type RuntimeStatus, type Session, type TaskRun, type TranscriptItem } from "./api";
+import { Markdown } from "./Markdown";
 
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
+
+function ToolCall({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> }) {
+  return <details className={`tool-call ${item.isError ? "failed" : ""}`}>
+    <summary><Terminal size={14} /><span>{item.toolName}</span><small>{item.status}</small><ChevronRight className="tool-chevron" size={14} /></summary>
+    <div className="tool-call-body"><div><strong>Arguments</strong><pre>{JSON.stringify(item.arguments, null, 2)}</pre></div><div><strong>Result</strong><pre>{item.result || "No result recorded"}</pre></div></div>
+  </details>;
+}
 
 function RunDetails({ run }: { run: TaskRun }) {
   return <div className="run-details">
@@ -24,6 +32,7 @@ export function App() {
   const [runs, setRuns] = useState<TaskRun[]>([]);
   const [expandedRunId, setExpandedRunId] = useState("");
   const [events, setEvents] = useState<RunEvent[]>([]);
+  const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [draft, setDraft] = useState("");
   const [steering, setSteering] = useState(false);
   const [streaming, setStreaming] = useState("");
@@ -47,6 +56,7 @@ export function App() {
       const latest = runHistory[0] ?? null;
       const active = runHistory.find((item) => item.status === "running") ?? null;
       setMessages(history); setRuns(runHistory); setActiveRun(active); setSelectedRun(latest); setExpandedRunId(latest?.id ?? "");
+      if (latest) void api.transcriptView(latest.id).then(setTranscript); else setTranscript([]);
     });
   }, [sessionId]);
 
@@ -62,6 +72,7 @@ export function App() {
         setSelectedRun((current) => current?.id === updated.id ? updated : current);
         setRuns(await api.runs(sessionId));
         setMessages(await api.messages(sessionId));
+        setTranscript(await api.transcriptView(updated.id));
         await loadSessions();
       } else if (event.type.startsWith("tool.") || event.type.startsWith("continuation.")) {
         const updated = await api.run(activeRun.id);
@@ -119,9 +130,10 @@ export function App() {
 
       <section className="message-scroll">
         {!messages.length && !streaming && <div className="empty-state"><div className="empty-icon"><MessageSquarePlus size={25} /></div><h2>Start with an outcome</h2><p>TAgent will turn substantial work into a durable plan, execute tools, and hold completion behind checks.</p></div>}
-        {messages.map((message) => <article key={message.id} className={`message ${message.role}`}><div className="message-meta"><span>{message.role === "user" ? "You" : "TAgent"}</span><time>{formatTime(message.createdAt)}</time></div><div className="message-body">{message.content}</div></article>)}
+        {messages.map((message) => <article key={message.id} className={`message ${message.role}`}><div className="message-meta"><span>{message.role === "user" ? "You" : "TAgent"}</span><time>{formatTime(message.createdAt)}</time></div><div className="message-body"><Markdown>{message.content}</Markdown></div></article>)}
+        {selectedRun && transcript.some((item) => item.kind === "tool") && <section className="transcript-tools"><div className="transcript-heading"><span>Tool calls</span><small>{transcript.filter((item) => item.kind === "tool").length}</small></div>{transcript.filter((item): item is Extract<TranscriptItem, { kind: "tool" }> => item.kind === "tool").map((item) => <ToolCall key={`${item.seq}-${item.index}`} item={item} />)}</section>}
         {activeRun && <div className="active-run-strip"><Activity size={14} /><span>Attempt {activeRun.attempt}</span><strong>{activeRun.phase}</strong><small>{activeRun.usage.totalTokens.toLocaleString()} tokens</small></div>}
-        {streaming && <article className="message assistant live"><div className="message-meta"><span>TAgent</span><span className="live-label"><span className="pulse" />Working</span></div><div className="message-body">{streaming}</div></article>}
+        {streaming && <article className="message assistant live"><div className="message-meta"><span>TAgent</span><span className="live-label"><span className="pulse" />Working</span></div><div className="message-body"><Markdown>{streaming}</Markdown></div></article>}
         {activeTools.length > 0 && <div className="tool-stack">{activeTools.map((event) => <div className="tool-row" key={`${event.seq}-${event.type}`}><Terminal size={14} /><span>{String(event.data.toolName ?? "tool")}</span><small>{event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "done"}</small></div>)}</div>}
         <div ref={endRef} />
       </section>
@@ -140,7 +152,7 @@ export function App() {
         return <section className={`run-history-item ${expanded ? "expanded" : ""}`} key={item.id}>
           <button className="run-history-toggle" onClick={async () => {
             if (expanded) { setExpandedRunId(""); return; }
-            const selected = await api.run(item.id); setSelectedRun(selected); setExpandedRunId(item.id);
+            const selected = await api.run(item.id); setSelectedRun(selected); setExpandedRunId(item.id); setTranscript(await api.transcriptView(item.id));
           }} aria-expanded={expanded}>
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
             <span className={`history-status ${item.status}`} />

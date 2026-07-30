@@ -10,4 +10,15 @@ describe("Web workbench state model", () => {
     expect(source).toContain("setSelectedRun(selected)");
     expect(source).not.toContain("const [run, setRun]");
   });
+
+  it("renders Markdown without raw HTML injection and exposes expandable tool calls", async () => {
+    const app = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    const markdown = await readFile(new URL("../web/src/Markdown.tsx", import.meta.url), "utf8");
+    expect(app).toContain("<Markdown>{message.content}</Markdown>");
+    expect(app).toContain("<details className={`tool-call");
+    expect(app).toContain("api.transcriptView");
+    expect(markdown).not.toContain("dangerouslySetInnerHTML");
+    expect(markdown).toContain("target=\"_blank\"");
+    expect(markdown).toContain("rel=\"noreferrer\"");
+  });
 });

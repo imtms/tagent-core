@@ -34,6 +34,8 @@ describe("HTTP API", () => {
     expect(missingOperations.statusCode).toBe(404);
     const missingTranscript = await app.inject({ method: "GET", url: "/api/runs/missing/transcript" });
     expect(missingTranscript.statusCode).toBe(404);
+    const transcriptView = await app.inject({ method: "GET", url: `/api/runs/${secondRun.id}/transcript-view` });
+    expect(transcriptView.json()).toEqual([]);
   });
 
   it("rejects empty messages before invoking the model", async () => {

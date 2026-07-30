@@ -36,6 +36,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Durable tool-attempt guards block repeated identical calls and repeated failures before long continuation budgets amplify loops.
 - Startup recovery requeues queued/running continuation records, restores the Run to blocked, and resumes from the persisted transcript.
 - Continuation startup uses a transactional database claim that atomically leases one queued continuation, resumes the Run, increments its attempt, and writes `continuation.started`; a partial unique index permits only one queued/running continuation per Run.
+- Active continuations renew their lease every 10 seconds, and terminal continuation updates are fenced by lease owner.
 - Versioned SQLite schema metadata rejects newer unsupported databases and advances only after transactional migration success.
 - Resume/continuation context assembly prunes oldest complete turns to a 75% context-window budget while retaining the full transcript in SQLite.
 - New Run context reads the newest persisted Session message window in chronological order, including Sessions beyond 10,000 messages.
@@ -44,8 +45,10 @@ Updated: 2026-07-30 (Asia/Singapore)
 
 - `GET /api/runs/:id/operations` exposes durable side-effect receipts for audit and recovery decisions.
 - Fastify API for sessions, messages, run history, runs, cancellation, steering, resumption, transcript audit, and SSE event replay.
+- A normalized transcript-view API pairs assistant tool calls with results for stable Web diagnostics.
 - Injectable `createApp()` factory for tests and future modules.
 - Responsive React workbench with session navigation, streaming conversation, tool activity, and TaskRun details.
+- Conversation messages render safe Markdown, and transcript tool calls expand inline to show arguments and paired results.
 - Production server serves the built Web application without an additional static-file dependency.
 - Client request IDs support browsers without `crypto.randomUUID`, including `getRandomValues` and legacy fallbacks.
 - Blocked and interrupted runs can be resumed from the Web workbench; the UI exposes the current attempt.
@@ -59,6 +62,8 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Store, completion gate, workspace tool, and HTTP API tests.
 - Desktop and mobile Chromium rendering checks.
 - Production dependency audit with no known vulnerabilities at the current lockfile.
+- Full production and development dependency audit with no known vulnerabilities at the `0.1.0-alpha.1` lockfile.
+- ESLint flat configuration, release checklist, security policy, changelog, license, and tag-triggered GitHub prerelease workflow.
 - Git repository linked to `git@github.com:imtms/tagent-core.git` with incremental commits on `main`.
 
 ## In Progress
@@ -73,28 +78,25 @@ Updated: 2026-07-30 (Asia/Singapore)
 
 - Implement a pi RPC worker adapter behind the AgentRuntime interface.
 - Use in-process pi for the primary interactive agent and pi RPC for isolated or concurrent worker tasks.
-- Add bounded retries, provider timeouts, model usage persistence, and per-run token limits.
+- Add typed bounded retries, retry audit events, Retry-After handling, and one-shot context-overflow recovery.
 - Persist enough runtime transcript state to support exact provider conversation continuation after process restart.
 
 ### P2: Tool governance
 
 - Replace regex-only Bash restrictions with capability policies and explicit approvals.
-- Add per-tool timeout, output, and concurrency budgets.
+- Add sidecar output artifacts, credential-path policy, and per-tool concurrency budgets.
 - Separate read-only and mutating tools.
-- Add operation receipts and idempotency keys for side-effecting tools.
 - Run workers under a dedicated low-privilege account or container boundary.
 
 ### P3: Context modules
 
 - Add memory and knowledge interfaces without coupling them to the core runtime.
-- Add context assembly with deterministic precedence and token budgeting.
+- Add dynamic PromptAssembler sections, evidence summaries, and prompt provenance.
 - Add source provenance and retrieval evidence to TaskRun artifacts.
 
 ### P4: Operations
 
-- Add structured configuration validation and a `/api/config/status` endpoint without exposing secrets.
-- Add migrations with schema versions.
-- Add metrics, structured model usage, tracing, and health checks for SQLite and provider connectivity.
+- Add metrics, tracing, and provider connectivity health checks.
 - Package a service unit and documented upgrade/rollback procedure.
 
 ### P5: Specialized workers
@@ -110,5 +112,6 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Resume continues from persisted pi messages, but provider-specific server-side session state is not guaranteed to survive.
 - Bash isolation is policy-based, not an OS-level sandbox.
 - The first Web interface does not expose model/runtime selection or provider health.
-- Multiple TAgent Core processes can currently target the same SQLite database; leader/lease enforcement is not implemented.
-- Continuation claims have lease ownership and expiry metadata, but long-running attempts do not yet heartbeat or renew the lease.
+- Multiple TAgent Core processes must not target the same SQLite database; process-level leader enforcement is not implemented.
+- Continuation attempts heartbeat and use owner fencing, but startup recovery does not yet wait for a non-expired owner lease before takeover.
+- The HTTP API has no authentication or multi-tenant isolation and must remain on localhost or a trusted private network for this alpha.

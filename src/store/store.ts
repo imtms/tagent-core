@@ -448,6 +448,39 @@ export class Store {
     return this.listTranscriptEntries(runId).map((entry) => entry.message);
   }
 
+  listTranscriptView(runId: RunId) {
+    type TranscriptViewItem =
+      | { seq: number; index?: number; attempt: number; kind: "user" | "assistant"; text: string; createdAt: number }
+      | { seq: number; index: number; attempt: number; kind: "tool"; toolCallId: string; toolName: string; arguments: unknown; result: string; isError: boolean; status: "pending" | "completed" | "failed"; createdAt: number };
+    const toolResults = new Map<string, { content: string; isError: boolean; toolName: string }>();
+    const entries = this.listTranscriptEntries(runId);
+    for (const entry of entries) {
+      const message = entry.message;
+      if (message.role !== "toolResult") continue;
+      const content = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+      toolResults.set(message.toolCallId, { content, isError: message.isError, toolName: message.toolName });
+    }
+    const view: TranscriptViewItem[] = [];
+    for (const entry of entries) {
+      const message = entry.message;
+      if (message.role === "user") {
+        view.push({ seq: entry.seq, attempt: entry.attempt, kind: "user", text: typeof message.content === "string" ? message.content : "", createdAt: entry.createdAt });
+        continue;
+      }
+      if (message.role !== "assistant") continue;
+      for (const [index, part] of message.content.entries()) {
+        if (part.type === "text" && part.text) {
+          view.push({ seq: entry.seq, index, attempt: entry.attempt, kind: "assistant", text: part.text, createdAt: entry.createdAt });
+          continue;
+        }
+        if (part.type !== "toolCall") continue;
+        const result = toolResults.get(part.id);
+        view.push({ seq: entry.seq, index, attempt: entry.attempt, kind: "tool", toolCallId: part.id, toolName: part.name, arguments: part.arguments, result: result?.content ?? "", isError: result?.isError ?? false, status: result ? (result.isError ? "failed" : "completed") : "pending", createdAt: entry.createdAt });
+      }
+    }
+    return view;
+  }
+
   private canonicalHash(payload: unknown) {
     const canonicalize = (value: unknown): unknown => {
       if (Array.isArray(value)) return value.map(canonicalize);

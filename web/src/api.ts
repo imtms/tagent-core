@@ -16,6 +16,9 @@ export interface TaskRun {
   completionGate: { passed: boolean; failures: Array<{ kind: string; key: string; reason: string }> };
 }
 export interface RunEvent { runId: string; seq: number; type: string; data: Record<string, unknown>; createdAt: number }
+export type TranscriptItem =
+  | { seq: number; index?: number; attempt: number; kind: "user" | "assistant"; text: string; createdAt: number }
+  | { seq: number; index: number; attempt: number; kind: "tool"; toolCallId: string; toolName: string; arguments: unknown; result: string; isError: boolean; status: string; createdAt: number };
 export interface RuntimeStatus { runtime: string; provider: string; api: string; baseUrl: string; modelId: string; credentialConfigured: boolean; providerTimeoutMs: number; providerMaxRetries: number; runTimeoutMs: number; maxContinuations: number; maxRunTokens: number; dynamicBudget: boolean; schemaVersion?: number }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -32,6 +35,7 @@ export const api = {
   runs: (sessionId: string, limit = 50) => request<TaskRun[]>(`/api/sessions/${sessionId}/runs?limit=${limit}`),
   latestRun: (sessionId: string) => request<TaskRun | null>(`/api/sessions/${sessionId}/run`),
   run: (runId: string) => request<TaskRun>(`/api/runs/${runId}`),
+  transcriptView: (runId: string) => request<TranscriptItem[]>(`/api/runs/${runId}/transcript-view`),
   send: (sessionId: string, content: string) => request<TaskRun>(`/api/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId() }) }),
   cancel: (runId: string) => request(`/api/runs/${runId}/cancel`, { method: "POST" }),
   steer: (runId: string, content: string) => request(`/api/runs/${runId}/steer`, { method: "POST", body: JSON.stringify({ content }) }),

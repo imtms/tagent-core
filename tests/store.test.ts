@@ -21,6 +21,21 @@ describe("Store", () => {
     expect(store.listMessages(session.id).map((message) => message.content)).toEqual(["hello", "world"]);
   });
 
+  it("normalizes assistant text and paired tool calls for the Web transcript", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "transcript view");
+    store.appendTranscript(run.id, 1, {
+      role: "assistant", content: [{ type: "text", text: "Before" }, { type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.txt" } }], api: "openai-completions", provider: "test", model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: 1,
+    });
+    store.appendTranscript(run.id, 1, { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "file contents" }], details: {}, isError: false, timestamp: 2 });
+    expect(store.listTranscriptView(run.id)).toEqual([
+      expect.objectContaining({ kind: "assistant", text: "Before" }),
+      expect.objectContaining({ kind: "tool", toolName: "read", arguments: { path: "a.txt" }, result: "file contents", status: "completed" }),
+    ]);
+  });
+
   it("renews and fences continuation leases by owner", () => {
     const store = createStore();
     const session = store.createSession();
