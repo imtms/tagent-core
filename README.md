@@ -2,22 +2,28 @@
 
 A minimal persistent TAgent control plane built around [`@mariozechner/pi-agent-core`](https://www.npmjs.com/package/@mariozechner/pi-agent-core).
 
+Project records:
+
+- [Development status](docs/STATUS.md)
+- [Agent runtime decision](docs/RUNTIME.md)
+
 ## Current scope
 
 - Persistent sessions and messages in SQLite
 - Durable TaskRun state with plans, checks, artifacts, ordered events, and a deterministic completion gate
-- pi agent runtime adapter with streaming events, cancellation, and steering
+- Replaceable AgentRuntime boundary with an in-process pi implementation
+- Streaming events, cancellation, and steering
 - Workspace-scoped `read`, `write`, `edit`, `bash`, and `task_run` tools
 - Fastify HTTP/SSE API
 - Responsive React workbench for conversations and TaskRun visibility
 
-Knowledge, memory, scheduling, policy, and worker modules are intentionally left outside the core and can be added behind explicit interfaces later.
+Knowledge, memory, scheduling, policy, and worker modules remain outside the core and will be added behind explicit interfaces.
 
 ## Run
 
 ```bash
 cp .env.example .env
-# Set the provider API key in your shell or environment.
+# Set OPENAI_API_KEY in the environment. Do not commit it.
 npm install
 npm run build
 npm start
@@ -31,14 +37,36 @@ Development mode:
 npm run dev
 ```
 
+## Default model
+
+TAgent Core uses an explicit OpenAI-compatible model instead of pi's built-in OpenAI catalog:
+
+- API: `openai-completions`
+- Base URL: `https://one.tms.im/v1`
+- Model: `gpt-5.6-sol`
+- API key: `OPENAI_API_KEY`
+
+The base URL is configurable because OpenAI-compatible services are not guaranteed to use `https://api.openai.com/v1`.
+
 ## Configuration
 
-- `TAGENT_PROVIDER`: pi provider ID, default `openai`
-- `TAGENT_MODEL`: pi model ID, default `gpt-4o-mini`
-- Provider API keys use the environment variables recognized by `@mariozechner/pi-ai`, such as `OPENAI_API_KEY`
+- `TAGENT_RUNTIME`: enabled runtime, currently `in-process`
+- `TAGENT_PROVIDER`: provider label persisted in pi messages, default `openai-compatible`
+- `TAGENT_API_BASE`: OpenAI-compatible API base, default `https://one.tms.im/v1`
+- `TAGENT_MODEL`: model ID, default `gpt-5.6-sol`
+- `TAGENT_CONTEXT_WINDOW`: advertised context size, default `200000`
+- `TAGENT_MAX_TOKENS`: maximum output tokens, default `32768`
+- `TAGENT_REASONING`: enable reasoning metadata, default `true`
+- `OPENAI_API_KEY`: credential sent to the OpenAI-compatible provider
 - `TAGENT_DB`: SQLite path, default `./data/tagent.db`
-- `TAGENT_WORKSPACE`: tool workspace, default current directory in production setup
+- `TAGENT_WORKSPACE`: tool workspace, default current directory unless configured
 - `PORT`: API and Web port, default `3100`
+
+## Runtime scheduling
+
+The primary interactive agent uses pi in-process. This keeps TAgent-owned tools, event persistence, cancellation, and TaskRun updates in one control-plane process.
+
+pi RPC is planned for isolated and concurrent worker tasks. The AgentRuntime factory added to the core prevents pi-specific implementation details from leaking into AgentService. See [Agent runtime decision](docs/RUNTIME.md) for the criteria and migration gates.
 
 ## Verification
 
@@ -58,11 +86,11 @@ Fastify HTTP + SSE
       |
 AgentService -------- SQLite Store
       |                   |
-PiRuntimeAdapter       TaskRun gate
+AgentRuntime Factory   TaskRun gate
       |
-pi agent core
+In-process pi adapter
       |
-workspace tools
+TAgent-owned tools
 ```
 
-pi owns the bounded model/tool loop. TAgent Core owns durable identity, execution state, event ordering, evidence, and completion.
+pi owns the bounded model/tool loop. TAgent Core owns durable identity, execution state, event ordering, evidence, policy boundaries, and completion.

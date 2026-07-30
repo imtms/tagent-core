@@ -1,13 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { Store } from "../store/store.js";
-import { PiRuntime } from "../runtime/pi-runtime.js";
+import { createInProcessRuntime } from "../runtime/factory.js";
+import type { AgentRuntime, RuntimeFactory } from "../runtime/types.js";
 import type { RunEvent, SessionId, RunId, TaskRun } from "../core/types.js";
 
 export class AgentService {
-  private readonly runtimes = new Map<RunId, PiRuntime>();
+  private readonly runtimes = new Map<RunId, AgentRuntime>();
   private readonly listeners = new Map<RunId, Set<(event: RunEvent) => void>>();
 
-  constructor(private readonly store: Store, private readonly workspace: string) {
+  constructor(
+    private readonly store: Store,
+    private readonly workspace: string,
+    private readonly runtimeFactory: RuntimeFactory = createInProcessRuntime,
+  ) {
     this.store.markInterrupted();
   }
 
@@ -19,7 +24,7 @@ export class AgentService {
     this.store.appendMessage(sessionId, "user", query);
     this.publish(this.store.appendEvent(run.id, "run.started", { goal: query }));
 
-    const runtime = new PiRuntime({
+    const runtime = this.runtimeFactory({
       store: this.store,
       runId: run.id,
       workspace: this.workspace,
@@ -32,7 +37,7 @@ export class AgentService {
     return run;
   }
 
-  private async execute(runId: RunId, runtime: PiRuntime) {
+  private async execute(runId: RunId, runtime: AgentRuntime) {
     try {
       await runtime.prompt(this.store.getRun(runId)?.goal ?? "");
       const runtimeError = runtime.getError();

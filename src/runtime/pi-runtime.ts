@@ -1,17 +1,7 @@
 import { Agent, type AgentMessage } from "@mariozechner/pi-agent-core";
-import { getModels, type KnownProvider, type Model } from "@mariozechner/pi-ai";
-import type { Store } from "../store/store.js";
-import type { RunId, RunEvent } from "../core/types.js";
+import { createModel, loadConfig } from "../config.js";
 import { createTools } from "../tools/tools.js";
-
-export interface RuntimeOptions {
-  store: Store;
-  runId: RunId;
-  workspace: string;
-  systemPrompt: string;
-  model?: Model<any>;
-  onEvent?: (event: RunEvent) => void;
-}
+import type { AgentRuntime, RuntimeOptions } from "./types.js";
 
 function messageText(message: AgentMessage | undefined) {
   if (!message || !("content" in message)) return "";
@@ -22,26 +12,21 @@ function messageText(message: AgentMessage | undefined) {
     .join("");
 }
 
-export class PiRuntime {
+export class PiRuntime implements AgentRuntime {
   readonly agent: Agent;
-  private readonly store: Store;
-  private readonly runId: RunId;
-  private readonly onEvent?: (event: RunEvent) => void;
 
-  constructor(options: RuntimeOptions) {
-    this.store = options.store;
-    this.runId = options.runId;
-    this.onEvent = options.onEvent;
-    const model = options.model ?? resolveModel();
+  constructor(private readonly options: RuntimeOptions) {
+    const model = options.model ?? createModel(loadConfig().model);
     this.agent = new Agent({
       initialState: {
         systemPrompt: options.systemPrompt,
         model,
-        thinkingLevel: "off",
+        thinkingLevel: model.reasoning ? "medium" : "off",
         tools: createTools(options.store, options.runId, options.workspace),
       },
       toolExecution: "sequential",
       sessionId: options.runId,
+      maxRetryDelayMs: 15_000,
       beforeToolCall: async ({ toolCall }) => {
         this.emit("tool.started", { toolCallId: toolCall.id, toolName: toolCall.name, args: toolCall.arguments });
         return undefined;
@@ -83,15 +68,7 @@ export class PiRuntime {
   }
 
   private emit(type: string, data: Record<string, unknown>) {
-    const event = this.store.appendEvent(this.runId, type, data);
-    this.onEvent?.(event);
+    const event = this.options.store.appendEvent(this.options.runId, type, data);
+    this.options.onEvent?.(event);
   }
-}
-
-function resolveModel(): Model<any> {
-  const provider = (process.env.TAGENT_PROVIDER ?? "openai") as KnownProvider;
-  const modelId = process.env.TAGENT_MODEL ?? "gpt-4o-mini";
-  const model = getModels(provider).find((candidate) => candidate.id === modelId);
-  if (!model) throw new Error(`Unknown pi model ${provider}/${modelId}`);
-  return model;
 }
