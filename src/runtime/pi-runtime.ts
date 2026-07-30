@@ -138,7 +138,7 @@ export class PiRuntime implements AgentRuntime {
     if (event.type === "message_end") {
       const run = this.options.store.getRun(this.options.runId);
       if (run) this.options.store.appendTranscript(this.options.runId, run.attempt, event.message);
-      if (event.message.role === "assistant") {
+      if (run?.status === "running" && event.message.role === "assistant") {
         const kind = classifyProviderFailure(event.message, this.options.model?.contextWindow);
         const summary = (event.message.errorMessage ?? "").replace(/\s+/g, " ").slice(0, 500);
         if (kind) this.emit("provider.failure", { kind, retryable: isRetryableProviderFailure(kind), summary, stopReason: event.message.stopReason });
@@ -149,8 +149,10 @@ export class PiRuntime implements AgentRuntime {
     if (event.type === "tool_execution_end") this.emit("tool.completed", { toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError });
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") this.emit("message.delta", { delta: event.assistantMessageEvent.delta });
     if (event.type === "agent_end") {
-      const final = [...event.messages].reverse().find((message) => message.role === "assistant");
-      this.emit(event.willRetry ? "message.retrying" : "message.completed", { content: messageText(final), willRetry: event.willRetry });
+      if (this.options.store.getRun(this.options.runId)?.status === "running") {
+        const final = [...event.messages].reverse().find((message) => message.role === "assistant");
+        this.emit(event.willRetry ? "message.retrying" : "message.completed", { content: messageText(final), willRetry: event.willRetry });
+      }
     }
     if (event.type === "queue_update") this.emit("runtime.queue", { steering: event.steering, followUp: event.followUp });
     if (event.type === "auto_retry_start") this.emit("provider.retry", { attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs, summary: event.errorMessage.replace(/\s+/g, " ").slice(0, 500) });

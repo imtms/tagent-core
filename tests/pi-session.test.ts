@@ -29,6 +29,29 @@ describe("Pi 0.83 AgentSession integration", () => {
     store.close();
   });
 
+  it("does not emit completion or provider failure events after a Run is cancelled", async () => {
+    const faux = fauxProvider({ models: [{ id: "faux-cancel", contextWindow: 32_000, maxTokens: 2_000 }], tokensPerSecond: 10 });
+    faux.setResponses([fauxAssistantMessage("late response")]);
+    const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "cancel events");
+    const runtime = new PiRuntime({ store, runId: run.id, workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), modelRuntime, initialMessages: [] });
+    const prompt = runtime.prompt("start");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    store.transitionRun(run.id, ["running"], "cancelled", "run.cancelled", {}, "Cancelled by user");
+    await runtime.abort();
+    await prompt;
+    const eventTypes = store.listEvents(run.id).map((event) => event.type);
+    expect(eventTypes).not.toContain("message.completed");
+    expect(eventTypes).not.toContain("message.retrying");
+    expect(eventTypes).not.toContain("provider.failure");
+    expect(store.listTranscript(run.id).some((message) => message.role === "assistant" && message.stopReason === "aborted")).toBe(true);
+    runtime.dispose();
+    store.close();
+  });
+
   it("settles an active tool attempt before disposing an aborted session", async () => {
     const faux = fauxProvider({ models: [{ id: "faux-abort", contextWindow: 32_000, maxTokens: 2_000 }] });
     faux.setResponses([fauxAssistantMessage([{ type: "toolCall", id: "slow-bash", name: "bash", arguments: { command: "sleep 30" } }], { stopReason: "toolUse" })]);
