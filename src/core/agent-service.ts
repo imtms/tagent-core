@@ -61,9 +61,10 @@ export class AgentService {
           if (this.store.getRun(run.id)?.status !== "running") return;
           runtime.abort();
           const message = `Run exceeded ${attemptTimeoutMs}ms timeout`;
-          this.store.finalizeRun(run.id, "failed", message);
+          const event = this.store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: message, reason: "timeout" }, message);
+          if (!event) return;
           this.store.appendMessage(run.sessionId, "assistant", `Run failed: ${message}`);
-          this.publish(this.store.appendEvent(run.id, "run.failed", { error: message, reason: "timeout" }));
+          this.publish(event);
         }, attemptTimeoutMs)
       : undefined;
     void this.execute(run.id, runtime, prompt).then((blocked) => {
@@ -96,15 +97,16 @@ export class AgentService {
         : "";
       const result = this.store.completeWithGate(runId, response);
       if (result.gate.passed && response) this.store.appendMessage(result.run.sessionId, "assistant", response);
-      this.publish(this.store.listEvents(runId, Math.max(0, result.run.lastEventSeq - 1)).at(-1)!);
+      this.publish(result.event);
       return !result.gate.passed;
     } catch (error) {
       const current = this.store.getRun(runId);
       if (!current || current.status !== "running") return false;
       const message = error instanceof Error ? error.message : String(error);
-      this.store.finalizeRun(runId, "failed", message);
-      this.store.appendMessage(this.store.getRun(runId)!.sessionId, "assistant", `Run failed: ${message}`);
-      this.publish(this.store.appendEvent(runId, "run.failed", { error: message }));
+      const event = this.store.transitionRun(runId, ["running"], "failed", "run.failed", { error: message }, message);
+      if (!event) return false;
+      this.store.appendMessage(current.sessionId, "assistant", `Run failed: ${message}`);
+      this.publish(event);
       return false;
     }
   }
@@ -189,8 +191,9 @@ export class AgentService {
     const runtime = this.runtimes.get(runId);
     if (!runtime) return false;
     runtime.abort();
-    this.store.finalizeRun(runId, "cancelled", "Cancelled by user");
-    this.publish(this.store.appendEvent(runId, "run.cancelled", {}));
+    const event = this.store.transitionRun(runId, ["running"], "cancelled", "run.cancelled", {}, "Cancelled by user");
+    if (!event) return false;
+    this.publish(event);
     return true;
   }
 

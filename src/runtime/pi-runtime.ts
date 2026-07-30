@@ -37,10 +37,20 @@ export class PiRuntime implements AgentRuntime {
       }),
       maxRetryDelayMs: 15_000,
       beforeToolCall: async ({ toolCall }) => {
+        const run = this.options.store.getRun(this.options.runId);
+        if (!run) return { block: true, reason: "Run not found" };
+        const attempt = this.options.store.recordToolAttempt(this.options.runId, run.attempt, toolCall.id, toolCall.name, toolCall.arguments);
+        if (attempt.guard.blocked) {
+          this.options.store.completeToolAttempt(this.options.runId, run.attempt, toolCall.id, false, attempt.guard.reason);
+          this.emit("tool.guard.blocked", { toolCallId: toolCall.id, toolName: toolCall.name, argsHash: attempt.argsHash, reason: attempt.guard.reason });
+          return { block: true, reason: `${attempt.guard.reason}. Use a different approach or report the blocker.` };
+        }
         this.emit("tool.started", { toolCallId: toolCall.id, toolName: toolCall.name, args: toolCall.arguments });
         return undefined;
       },
       afterToolCall: async ({ toolCall, result, isError }) => {
+        const run = this.options.store.getRun(this.options.runId);
+        if (run) this.options.store.completeToolAttempt(this.options.runId, run.attempt, toolCall.id, !isError, isError ? "Tool execution failed" : "");
         this.emit("tool.completed", { toolCallId: toolCall.id, toolName: toolCall.name, isError, result: result.details });
         return undefined;
       },

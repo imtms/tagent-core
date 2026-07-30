@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Store } from "../src/store/store.js";
 
@@ -41,7 +44,89 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(1);
+    expect(store.getSchemaVersion()).toBe(2);
+  });
+
+  it("migrates a version 1 database to schema version 2", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
+    const store = new Store(filename);
+    store.db.exec("DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
+    store.close();
+    const migrated = new Store(filename);
+    expect(migrated.getSchemaVersion()).toBe(2);
+    expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('operations', 'tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["operations", "tool_attempts"]);
+    migrated.close();
+  });
+
+  it("claims and replays operation receipts by canonical payload", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "operation");
+    const first = store.claimOperation("op-1", run.id, 1, "tool.write", { path: "a", nested: { z: 1, a: 2 } });
+    expect(first.claimed).toBe(true);
+    store.updateOperation("op-1", { status: "succeeded", stage: "completed", result: { ok: true } });
+    const replay = store.claimOperation("op-1", run.id, 1, "tool.write", { nested: { a: 2, z: 1 }, path: "a" });
+    expect(replay).toMatchObject({ claimed: false, status: "succeeded", result: { ok: true } });
+    expect(() => store.updateOperation("op-1", { status: "failed", error: "late" })).toThrow("cannot transition");
+    expect(() => store.claimOperation("op-1", run.id, 1, "tool.write", { path: "b" })).toThrow("different payload");
+  });
+
+  it("allows only one operation claimant across store connections", async () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "claim.db");
+    const firstStore = new Store(filename);
+    const session = firstStore.createSession();
+    const run = firstStore.createRun(session.id, "claim race");
+    const secondStore = new Store(filename);
+    const claims = await Promise.all([
+      Promise.resolve().then(() => firstStore.claimOperation("op-race", run.id, 1, "tool.write", { path: "a" }).claimed),
+      Promise.resolve().then(() => secondStore.claimOperation("op-race", run.id, 1, "tool.write", { path: "a" }).claimed),
+    ]);
+    expect(claims.sort()).toEqual([false, true]);
+    firstStore.close();
+    secondStore.close();
+  });
+
+  it("marks unfinished operations outcome unknown after restart", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "restart.db");
+    const store = new Store(filename);
+    const session = store.createSession();
+    const run = store.createRun(session.id, "operation restart");
+    store.claimOperation("op-running", run.id, 1, "tool.bash", { command: "echo x" });
+    store.updateOperation("op-running", { status: "running", stage: "executing" });
+    store.close();
+    const reopened = new Store(filename);
+    expect(reopened.getOperation("op-running")).toMatchObject({ status: "outcome_unknown", stage: "service_restart" });
+    reopened.close();
+  });
+
+  it("transitions terminal status and event atomically with compare-and-set", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "transition");
+    const event = store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: "x" }, "x");
+    expect(event?.seq).toBe(1);
+    expect(store.getRun(run.id)).toMatchObject({ status: "failed", blockedReason: "x", lastEventSeq: 1 });
+    expect(store.transitionRun(run.id, ["running"], "cancelled", "run.cancelled", {})).toBeUndefined();
+    expect(store.listEvents(run.id)).toHaveLength(1);
+  });
+
+  it("blocks repeated and repeatedly failing tool attempts", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "guard");
+    for (let index = 1; index <= 5; index += 1) {
+      const attempt = store.recordToolAttempt(run.id, 1, `call-${index}`, "read", { path: "same" });
+      expect(attempt.guard.blocked).toBe(false);
+      store.completeToolAttempt(run.id, 1, `call-${index}`, true);
+    }
+    expect(store.recordToolAttempt(run.id, 1, "call-6", "read", { path: "same" }).guard.blocked).toBe(true);
+
+    const failureRun = store.createRun(session.id, "failure guard");
+    for (let index = 1; index <= 3; index += 1) {
+      store.recordToolAttempt(failureRun.id, 1, `fail-${index}`, "bash", { command: "false" });
+      store.completeToolAttempt(failureRun.id, 1, `fail-${index}`, false, "failed");
+    }
+    expect(store.recordToolAttempt(failureRun.id, 1, "fail-4", "bash", { command: "false" }).guard.blocked).toBe(true);
   });
 
   it("persists continuation lifecycle records", () => {

@@ -28,6 +28,10 @@ describe("HTTP API", () => {
     const secondRun = store.createRun(created.id, "second");
     const runs = (await app.inject({ method: "GET", url: `/api/sessions/${created.id}/runs` })).json();
     expect(runs.map((run: { id: string }) => run.id)).toEqual([secondRun.id, firstRun.id]);
+    const operations = await app.inject({ method: "GET", url: `/api/runs/${secondRun.id}/operations` });
+    expect(operations.json()).toEqual([]);
+    const missingOperations = await app.inject({ method: "GET", url: "/api/runs/missing/operations" });
+    expect(missingOperations.statusCode).toBe(404);
     const missingTranscript = await app.inject({ method: "GET", url: "/api/runs/missing/transcript" });
     expect(missingTranscript.statusCode).toBe(404);
   });

@@ -29,12 +29,17 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Provider request timeout/retry controls and a wall-clock timeout for each run attempt.
 - Persistent bounded continuations after completion-gate blocks, with queued/running/completed/blocked/failed/cancelled audit states.
 - Automatic continuation limits by count and cumulative run tokens; exhausted runs remain blocked for manual inspection.
+- Persistent operation receipts make `write`, `edit`, and `bash` idempotent by Run attempt and tool-call ID; unfinished operations become `outcome_unknown` after restart.
+- Mutating tools automatically stale previously passing checks, so later workspace changes cannot reuse old verification evidence.
+- Run terminal status and its terminal event are committed in one compare-and-set transaction.
+- Durable tool-attempt guards block repeated identical calls and repeated failures before long continuation budgets amplify loops.
 - Startup recovery requeues queued/running continuation records, restores the Run to blocked, and resumes from the persisted transcript.
 - Versioned SQLite schema metadata rejects newer unsupported databases and advances only after transactional migration success.
 - Resume/continuation context assembly prunes oldest complete turns to a 75% context-window budget while retaining the full transcript in SQLite.
 
 ### HTTP and Web
 
+- `GET /api/runs/:id/operations` exposes durable side-effect receipts for audit and recovery decisions.
 - Fastify API for sessions, messages, run history, runs, cancellation, steering, resumption, transcript audit, and SSE event replay.
 - Injectable `createApp()` factory for tests and future modules.
 - Responsive React workbench with session navigation, streaming conversation, tool activity, and TaskRun details.

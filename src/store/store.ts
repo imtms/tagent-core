@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type {
   Artifact,
@@ -18,7 +18,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export class Store {
   readonly db: Database.Database;
@@ -110,6 +110,36 @@ export class Store {
         PRIMARY KEY (run_id, seq)
       );
       CREATE INDEX IF NOT EXISTS idx_transcript_run ON run_transcript(run_id, seq);
+      CREATE TABLE IF NOT EXISTS operations (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        attempt INTEGER NOT NULL,
+        operation_type TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        effects_json TEXT NOT NULL DEFAULT '[]',
+        result_json TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        completed_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_operations_run ON operations(run_id, created_at);
+      CREATE TABLE IF NOT EXISTS tool_attempts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        attempt INTEGER NOT NULL,
+        tool_call_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        args_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        UNIQUE(run_id, attempt, tool_call_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_tool_attempts_guard ON tool_attempts(run_id, tool_name, args_hash, id);
       CREATE TABLE IF NOT EXISTS plan_items (
         run_id TEXT NOT NULL REFERENCES runs(id),
         item_key TEXT NOT NULL,
@@ -155,6 +185,7 @@ export class Store {
       .run(SCHEMA_VERSION, now());
     });
     migration();
+    this.db.prepare("UPDATE operations SET status = 'outcome_unknown', stage = 'service_restart', error = 'Service restarted before operation outcome was recorded', updated_at = ? WHERE status = 'running'").run(now());
   }
 
   getSchemaVersion() {
@@ -237,8 +268,10 @@ export class Store {
       FROM runs WHERE id = ?
     `).get(id) as RunRow | undefined;
     if (!row) return undefined;
-    const plan = this.db.prepare(`SELECT item_key as key, title, status, required, position FROM plan_items WHERE run_id = ? ORDER BY position`).all(id) as PlanItem[];
-    const checks = this.db.prepare(`SELECT check_key as key, title, status, required, command, evidence, stale FROM run_checks WHERE run_id = ? ORDER BY check_key`).all(id) as RunCheck[];
+    const planRows = this.db.prepare(`SELECT item_key as key, title, status, required, position FROM plan_items WHERE run_id = ? ORDER BY position`).all(id) as Array<Omit<PlanItem, "required"> & { required: number }>;
+    const checkRows = this.db.prepare(`SELECT check_key as key, title, status, required, command, evidence, stale FROM run_checks WHERE run_id = ? ORDER BY check_key`).all(id) as Array<Omit<RunCheck, "required" | "stale"> & { required: number; stale: number }>;
+    const plan = planRows.map((item) => ({ ...item, required: Boolean(item.required) }));
+    const checks = checkRows.map((item) => ({ ...item, required: Boolean(item.required), stale: Boolean(item.stale) }));
     const artifacts = this.db.prepare(`SELECT id, run_id as runId, kind, title, content, uri, created_at as createdAt FROM artifacts WHERE run_id = ? ORDER BY created_at`).all(id) as Artifact[];
     const continuations = this.listContinuations(id);
     const { usageInput, usageOutput, usageCacheRead, usageCacheWrite, usageTotalTokens, usageCost, transcriptCount, ...runRow } = row;
@@ -345,6 +378,97 @@ export class Store {
     return this.listTranscriptEntries(runId).map((entry) => entry.message);
   }
 
+  private canonicalHash(payload: unknown) {
+    const canonicalize = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(canonicalize);
+      if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, canonicalize(item)]));
+      return value;
+    };
+    return createHash("sha256").update(JSON.stringify(canonicalize(payload))).digest("hex");
+  }
+
+  claimOperation(id: string, runId: RunId, attempt: number, operationType: string, payload: unknown) {
+    const payloadHash = this.canonicalHash(payload);
+    const timestamp = now();
+    const transaction = this.db.transaction(() => {
+      const inserted = this.db.prepare(`INSERT OR IGNORE INTO operations
+        (id, run_id, attempt, operation_type, payload_hash, status, stage, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'running', 'executing', ?, ?)`).run(id, runId, attempt, operationType, payloadHash, timestamp, timestamp);
+      const receipt = this.getOperation(id)!;
+      if (receipt.operationType !== operationType || receipt.payloadHash !== payloadHash || receipt.runId !== runId) throw new Error("Operation ID already exists with a different payload or scope");
+      return { ...receipt, claimed: inserted.changes === 1 };
+    });
+    return transaction();
+  }
+
+  updateOperation(id: string, update: { status: string; stage?: string; effects?: unknown[]; result?: unknown; error?: string; expectedStatuses?: string[] }) {
+    const timestamp = now();
+    const completedAt = ["succeeded", "failed", "cancelled", "outcome_unknown"].includes(update.status) ? timestamp : null;
+    const current = this.getOperation(id);
+    if (!current) throw new Error(`Unknown operation ${id}`);
+    const expected = update.expectedStatuses ?? (completedAt ? ["running"] : [current.status]);
+    if (!expected.includes(current.status)) throw new Error(`Operation ${id} cannot transition from ${current.status} to ${update.status}`);
+    const placeholders = expected.map(() => "?").join(", ");
+    const result = this.db.prepare(`UPDATE operations SET status = ?, stage = ?, effects_json = ?, result_json = ?, error = ?, updated_at = ?, completed_at = ? WHERE id = ? AND status IN (${placeholders})`)
+      .run(update.status, update.stage ?? current.stage, JSON.stringify(update.effects ?? current.effects), update.result === undefined ? (current.result === undefined ? "" : JSON.stringify(current.result)) : JSON.stringify(update.result), update.error ?? current.error, timestamp, completedAt, id, ...expected);
+    if (result.changes !== 1) throw new Error(`Operation ${id} transition lost its compare-and-set race`);
+    return this.getOperation(id)!;
+  }
+
+  getOperation(id: string) {
+    const row = this.db.prepare(`SELECT id, run_id as runId, attempt, operation_type as operationType, payload_hash as payloadHash,
+      status, stage, effects_json as effectsJson, result_json as resultJson, error, created_at as createdAt,
+      updated_at as updatedAt, completed_at as completedAt FROM operations WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    const { effectsJson, resultJson, ...receipt } = row;
+    return { ...receipt, effects: JSON.parse(String(effectsJson || "[]")), result: resultJson ? JSON.parse(String(resultJson)) : undefined } as {
+      id: string; runId: string; attempt: number; operationType: string; payloadHash: string; status: string; stage: string; effects: unknown[]; result?: unknown; error: string; createdAt: number; updatedAt: number; completedAt: number | null;
+    };
+  }
+
+  listOperations(runId: RunId) {
+    const rows = this.db.prepare("SELECT id FROM operations WHERE run_id = ? ORDER BY created_at, id").all(runId) as Array<{ id: string }>;
+    return rows.map((row) => this.getOperation(row.id)!);
+  }
+
+  recordToolAttempt(runId: RunId, attempt: number, toolCallId: string, toolName: string, args: unknown) {
+    const argsHash = this.canonicalHash(args);
+    const timestamp = now();
+    this.db.prepare(`INSERT OR IGNORE INTO tool_attempts
+      (run_id, attempt, tool_call_id, tool_name, args_hash, status, created_at)
+      VALUES (?, ?, ?, ?, ?, 'running', ?)`).run(runId, attempt, toolCallId, toolName, argsHash, timestamp);
+    return { argsHash, guard: this.evaluateToolGuard(runId, toolName, argsHash) };
+  }
+
+  completeToolAttempt(runId: RunId, attempt: number, toolCallId: string, success: boolean, error = "") {
+    this.db.prepare("UPDATE tool_attempts SET status = ?, error = ?, completed_at = ? WHERE run_id = ? AND attempt = ? AND tool_call_id = ?")
+      .run(success ? "succeeded" : "failed", error, now(), runId, attempt, toolCallId);
+  }
+
+  private evaluateToolGuard(runId: RunId, toolName: string, argsHash: string) {
+    const recent = this.db.prepare(`SELECT tool_name as toolName, args_hash as argsHash, status FROM tool_attempts
+      WHERE run_id = ? AND status != 'running' ORDER BY id DESC LIMIT 50`).all(runId) as Array<{ toolName: string; argsHash: string; status: string }>;
+    let sameArgs = 0;
+    let sameArgsFailures = 0;
+    let sameToolFailures = 0;
+    for (const item of recent) {
+      if (item.toolName === toolName && item.argsHash === argsHash) sameArgs += 1;
+      else break;
+    }
+    for (const item of recent) {
+      if (item.toolName !== toolName || item.argsHash !== argsHash || item.status !== "failed") break;
+      sameArgsFailures += 1;
+    }
+    for (const item of recent) {
+      if (item.toolName !== toolName || item.status !== "failed") break;
+      sameToolFailures += 1;
+    }
+    if (sameArgs >= 5) return { blocked: true, reason: `Tool ${toolName} repeated the same arguments ${sameArgs} times` };
+    if (sameArgsFailures >= 3) return { blocked: true, reason: `Tool ${toolName} failed with the same arguments ${sameArgsFailures} times` };
+    if (sameToolFailures >= 6) return { blocked: true, reason: `Tool ${toolName} failed consecutively ${sameToolFailures} times` };
+    return { blocked: false, reason: "" };
+  }
+
   setRunPhase(runId: RunId, phase: RunPhase) {
     this.db.prepare("UPDATE runs SET phase = ?, updated_at = ? WHERE id = ?").run(phase, now(), runId);
   }
@@ -355,6 +479,12 @@ export class Store {
       ON CONFLICT(run_id, item_key) DO UPDATE SET title=excluded.title, status=excluded.status, required=excluded.required, position=excluded.position
     `).run(runId, item.key, item.title, item.status, Number(item.required), item.position);
     this.db.prepare("UPDATE runs SET updated_at = ? WHERE id = ?").run(now(), runId);
+  }
+
+  markChecksStale(runId: RunId) {
+    const result = this.db.prepare("UPDATE run_checks SET stale = 1 WHERE run_id = ? AND status = 'passed'").run(runId);
+    if (result.changes) this.db.prepare("UPDATE runs SET updated_at = ? WHERE id = ?").run(now(), runId);
+    return result.changes;
   }
 
   upsertCheck(runId: RunId, check: RunCheck) {
@@ -389,6 +519,26 @@ export class Store {
   listEvents(runId: RunId, after = 0): RunEvent[] {
     const rows = this.db.prepare(`SELECT run_id as runId, seq, type, data, created_at as createdAt FROM run_events WHERE run_id = ? AND seq > ? ORDER BY seq`).all(runId, after) as Array<Omit<RunEvent, "data"> & { data: string }>;
     return rows.map((row) => ({ ...row, data: JSON.parse(row.data) as Record<string, unknown> }));
+  }
+
+  transitionRun(runId: RunId, expected: RunStatus[], nextStatus: RunStatus, type: string, data: Record<string, unknown>, reason = "") {
+    const transaction = this.db.transaction(() => {
+      const row = this.db.prepare("SELECT status, last_event_seq as seq FROM runs WHERE id = ?").get(runId) as { status: RunStatus; seq: number } | undefined;
+      if (!row || !expected.includes(row.status)) return undefined;
+      const createdAt = now();
+      const seq = row.seq + 1;
+      const phase = nextStatus === "completed" ? "done" : nextStatus === "blocked" ? "blocked" : undefined;
+      const completedAt = ["completed", "cancelled", "failed"].includes(nextStatus) ? createdAt : null;
+      this.db.prepare("INSERT INTO run_events (run_id, seq, type, data, created_at) VALUES (?, ?, ?, ?, ?)")
+        .run(runId, seq, type, JSON.stringify(data), createdAt);
+      const placeholders = expected.map(() => "?").join(", ");
+      const result = this.db.prepare(`UPDATE runs SET status = ?, phase = COALESCE(?, phase), blocked_reason = ?,
+        last_event_seq = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status IN (${placeholders})`)
+        .run(nextStatus, phase, reason, seq, completedAt, createdAt, runId, ...expected);
+      if (result.changes !== 1) throw new Error("Run transition lost its compare-and-set race");
+      return { runId, seq, type, data, createdAt } satisfies RunEvent;
+    });
+    return transaction();
   }
 
   finalizeRun(runId: RunId, status: Exclude<RunStatus, "running" | "interrupted" | "blocked">, reason = "") {
@@ -433,9 +583,9 @@ export class Store {
     const run = this.getRun(runId);
     if (!run) throw new Error("Run not found");
     const gate = this.evaluateGate(run);
-    this.appendEvent(runId, gate.passed ? "run.completed" : "run.blocked", { response, gate });
-    if (gate.passed) this.finalizeRun(runId, "completed");
-    else this.blockRun(runId, gate.failures.map((failure) => `${failure.key}: ${failure.reason}`).join("; "));
-    return { gate, run: this.getRun(runId)! };
+    const reason = gate.failures.map((failure) => `${failure.key}: ${failure.reason}`).join("; ");
+    const event = this.transitionRun(runId, ["running"], gate.passed ? "completed" : "blocked", gate.passed ? "run.completed" : "run.blocked", { response, gate }, reason);
+    if (!event) throw new Error("Run is no longer running");
+    return { gate, run: this.getRun(runId)!, event };
   }
 }

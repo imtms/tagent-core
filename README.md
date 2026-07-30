@@ -12,6 +12,10 @@ Project records:
 - Persistent sessions and messages in SQLite
 - Durable TaskRun state with plans, checks, artifacts, ordered events, and a deterministic completion gate
 - Replaceable AgentRuntime boundary with an in-process pi implementation
+- Durable operation receipts for idempotent mutating tool calls and restart-safe `outcome_unknown` handling
+- Atomic compare-and-set terminal Run transitions
+- Automatic verification staleness after workspace mutations
+- Durable repeated-call and repeated-failure tool guards
 - Streaming events, cancellation, and steering
 - Workspace-scoped `read`, `write`, `edit`, `bash`, and `task_run` tools
 - Fastify HTTP/SSE API
