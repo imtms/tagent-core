@@ -38,6 +38,30 @@ describe("HTTP API", () => {
     expect(transcriptView.json()).toEqual([]);
   });
 
+  it("queues all message input through the Session Supervisor inbox and deletes only unstarted items", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
+    const store = new Store(":memory:");
+    class WaitingRuntime {
+      private resolve?: () => void;
+      prompt() { return new Promise<void>((resolve) => { this.resolve = resolve; }); }
+      async steer() { return "accepted" as const; }
+      abort() { this.resolve?.(); }
+      getMessages() { return []; }
+      getError() { return undefined; }
+    }
+    const service = new AgentService(store, workspace, () => new WaitingRuntime());
+    const app = createApp({ store, service, logger: false, webRoot: workspace }); apps.push(app);
+    const session = store.createSession();
+    const first = (await app.inject({ method: "POST", url: `/api/sessions/${session.id}/messages`, payload: { content: "first", requestId: "msg-1" } })).json();
+    const second = (await app.inject({ method: "POST", url: `/api/sessions/${session.id}/messages`, payload: { content: "second", requestId: "msg-2" } })).json();
+    expect(first).toMatchObject({ item: { content: "first", status: "started" }, run: { goal: "first", status: "running" } });
+    expect(second).toMatchObject({ item: { content: "second", status: "queued" }, run: null });
+    expect((await app.inject({ method: "GET", url: `/api/sessions/${session.id}/inbox` })).json()).toEqual([expect.objectContaining({ id: second.item.id, content: "second" })]);
+    expect((await app.inject({ method: "DELETE", url: `/api/sessions/${session.id}/inbox/${first.item.id}` })).statusCode).toBe(409);
+    expect((await app.inject({ method: "DELETE", url: `/api/sessions/${session.id}/inbox/${second.item.id}` })).json()).toEqual({ ok: true });
+    expect((await app.inject({ method: "GET", url: `/api/sessions/${session.id}/inbox` })).json()).toEqual([]);
+  });
+
   it("rejects empty messages before invoking the model", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
     const store = new Store(":memory:");

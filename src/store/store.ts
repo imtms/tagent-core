@@ -21,12 +21,13 @@ import type {
   RunPhase,
   RunStatus,
   Session,
+  SessionInboxItem,
   SessionId,
   TaskRun,
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 export class Store {
   readonly db: Database.Database;
@@ -175,6 +176,23 @@ export class Store {
         PRIMARY KEY (run_id, seq)
       );
       CREATE INDEX IF NOT EXISTS idx_transcript_run ON run_transcript(run_id, seq);
+      CREATE TABLE IF NOT EXISTS session_supervisor_inbox (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        request_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        status TEXT NOT NULL,
+        decision TEXT NOT NULL DEFAULT 'pending',
+        run_id TEXT REFERENCES runs(id),
+        error TEXT NOT NULL DEFAULT '',
+        position INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        claimed_at INTEGER,
+        started_at INTEGER,
+        UNIQUE(session_id, request_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_session_supervisor_inbox_queue ON session_supervisor_inbox(session_id,status,position,created_at);
       CREATE TABLE IF NOT EXISTS supervisor_decisions (
         id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), attempt INTEGER NOT NULL,
         checkpoint_seq INTEGER NOT NULL, trigger TEXT NOT NULL, action TEXT NOT NULL, reason_code TEXT NOT NULL,
@@ -377,6 +395,84 @@ export class Store {
       .run(sessionId, role, content, createdAt);
     this.touchSession(sessionId);
     return { id: Number(result.lastInsertRowid), sessionId, role, content, createdAt };
+  }
+
+  enqueueSessionInbox(sessionId: SessionId, content: string, requestId: string = randomUUID()): SessionInboxItem {
+    const transaction = this.db.transaction(() => {
+      const existing = this.db.prepare("SELECT id FROM session_supervisor_inbox WHERE session_id = ? AND request_id = ?").get(sessionId, requestId) as { id: string } | undefined;
+      if (existing) return this.getSessionInboxItem(existing.id)!;
+      const timestamp = now();
+      const position = (this.db.prepare("SELECT COALESCE(MAX(position),0)+1 as position FROM session_supervisor_inbox WHERE session_id = ? AND status = 'queued'").get(sessionId) as { position: number }).position;
+      const id = randomUUID();
+      this.db.prepare(`INSERT INTO session_supervisor_inbox (id,session_id,request_id,content,status,decision,position,created_at,updated_at)
+        VALUES (?,?,?,?,'queued','pending',?,?,?)`).run(id, sessionId, requestId, content, position, timestamp, timestamp);
+      return this.getSessionInboxItem(id)!;
+    });
+    return transaction();
+  }
+
+  getSessionInboxItem(id: string): SessionInboxItem | undefined {
+    return this.db.prepare(`SELECT id,session_id as sessionId,request_id as requestId,content,status,decision,run_id as runId,error,position,
+      created_at as createdAt,updated_at as updatedAt,claimed_at as claimedAt,started_at as startedAt FROM session_supervisor_inbox WHERE id = ?`).get(id) as SessionInboxItem | undefined;
+  }
+
+  listSessionInbox(sessionId: SessionId, includeTerminal = false): SessionInboxItem[] {
+    return this.db.prepare(`SELECT id,session_id as sessionId,request_id as requestId,content,status,decision,run_id as runId,error,position,
+      created_at as createdAt,updated_at as updatedAt,claimed_at as claimedAt,started_at as startedAt FROM session_supervisor_inbox
+      WHERE session_id = ? ${includeTerminal ? "" : "AND status IN ('queued','claimed')"} ORDER BY position,created_at,id`).all(sessionId) as SessionInboxItem[];
+  }
+
+  deleteSessionInboxItem(id: string, sessionId: SessionId) {
+    const timestamp = now();
+    return this.db.prepare(`UPDATE session_supervisor_inbox SET status='deleted',decision='delete',updated_at=?
+      WHERE id=? AND session_id=? AND status='queued'`).run(timestamp, id, sessionId).changes === 1;
+  }
+
+  decideSessionInboxItem(id: string, sessionId: SessionId, decision: "pending" | "defer") {
+    return this.db.prepare("UPDATE session_supervisor_inbox SET decision=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'").run(decision,now(),id,sessionId).changes === 1;
+  }
+
+  mergeSessionInboxItems(sourceId: string, targetId: string, sessionId: SessionId) {
+    if (sourceId === targetId) return false;
+    const transaction = this.db.transaction(() => {
+      const source = this.getSessionInboxItem(sourceId); const target = this.getSessionInboxItem(targetId);
+      if (!source || !target || source.sessionId !== sessionId || target.sessionId !== sessionId || source.status !== "queued" || target.status !== "queued") return false;
+      const content = `${target.content}
+
+Additional queued instruction:
+${source.content}`;
+      const timestamp = now();
+      this.db.prepare("UPDATE session_supervisor_inbox SET content=?,decision='pending',updated_at=? WHERE id=? AND status='queued'").run(content,timestamp,targetId);
+      this.db.prepare("UPDATE session_supervisor_inbox SET status='deleted',decision='merge',error=?,updated_at=? WHERE id=? AND status='queued'").run(`Merged into ${targetId}`,timestamp,sourceId);
+      return true;
+    });
+    return transaction();
+  }
+
+  claimNextSessionInbox(sessionId: SessionId) {
+    const transaction = this.db.transaction(() => {
+      const active = this.db.prepare("SELECT 1 FROM runs WHERE session_id = ? AND status IN ('running','blocked','interrupted') LIMIT 1").get(sessionId);
+      if (active) return undefined;
+      const item = this.db.prepare("SELECT id FROM session_supervisor_inbox WHERE session_id = ? AND status = 'queued' AND decision = 'pending' ORDER BY position,created_at,id LIMIT 1").get(sessionId) as { id: string } | undefined;
+      if (!item) return undefined;
+      const timestamp = now();
+      const claimed = this.db.prepare("UPDATE session_supervisor_inbox SET status='claimed',decision='start_taskrun',claimed_at=?,updated_at=? WHERE id=? AND status='queued'").run(timestamp,timestamp,item.id);
+      if (claimed.changes !== 1) return undefined;
+      const inbox = this.getSessionInboxItem(item.id)!;
+      const run = this.createRun(sessionId, inbox.content, `inbox:${inbox.id}`);
+      this.db.prepare("UPDATE session_supervisor_inbox SET status='started',run_id=?,started_at=?,updated_at=? WHERE id=? AND status='claimed'").run(run.id,timestamp,timestamp,inbox.id);
+      return { item: this.getSessionInboxItem(inbox.id)!, run };
+    });
+    return transaction();
+  }
+
+  failSessionInboxStart(itemId: string, runId: RunId, error: string) {
+    const timestamp = now();
+    this.db.prepare("UPDATE session_supervisor_inbox SET status='failed',error=?,updated_at=? WHERE id=? AND run_id=?").run(error,timestamp,itemId,runId);
+  }
+
+  listSessionsWithQueuedInbox() {
+    return (this.db.prepare("SELECT DISTINCT session_id as sessionId FROM session_supervisor_inbox WHERE status='queued'").all() as Array<{sessionId:string}>).map((row)=>row.sessionId);
   }
 
   createRun(sessionId: SessionId, goal: string, requestId: string = randomUUID()): TaskRun {

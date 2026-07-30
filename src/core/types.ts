@@ -56,6 +56,22 @@ export interface SupervisorDecision { id: string; runId: RunId; attempt: number;
 export interface SpawnProposal { id: string; runId: RunId; goal: string; acceptanceCriteria: string[]; relation: "depends_on" | "follow_up" | "parallel" | "derived"; status: "proposed" | "approved" | "spawned" | "rejected"; spawnedRunId: string; createdAt: number; updatedAt: number }
 export interface TaskRunEdge { fromRunId: RunId; toRunId: RunId; relation: SpawnProposal["relation"] | "blocks" | "supersedes"; reason: string; createdAt: number }
 
+export interface SessionInboxItem {
+  id: string;
+  sessionId: SessionId;
+  requestId: string;
+  content: string;
+  status: "queued" | "claimed" | "started" | "deleted" | "failed";
+  decision: "pending" | "start_taskrun" | "defer" | "merge" | "delete";
+  runId: RunId | null;
+  error: string;
+  position: number;
+  createdAt: number;
+  updatedAt: number;
+  claimedAt: number | null;
+  startedAt: number | null;
+}
+
 export interface Message {
   id: number;
   sessionId: SessionId;

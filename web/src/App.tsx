@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, Bot, Check, ChevronDown, ChevronRight, Circle, Command, FileText, Menu, MessageSquarePlus, PanelRight, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
-import { api, subscribe, type Message, type RunEvent, type RuntimeStatus, type Session, type TaskRun, type TranscriptItem } from "./api";
+import { api, subscribe, type Message, type RunEvent, type RuntimeStatus, type Session, type SessionInboxItem, type TaskRun, type TranscriptItem } from "./api";
 import { Markdown } from "./Markdown";
 import { createRequestId } from "./id";
 
@@ -37,7 +37,7 @@ export function App() {
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [draft, setDraft] = useState("");
-  const [steering, setSteering] = useState(false);
+  const [inbox, setInbox] = useState<SessionInboxItem[]>([]);
   const [streaming, setStreaming] = useState("");
   const [error, setError] = useState("");
   const [leftOpen, setLeftOpen] = useState(false);
@@ -54,11 +54,23 @@ export function App() {
   useEffect(() => { void loadSessions(); void api.status().then(setRuntimeStatus); }, [loadSessions]);
   useEffect(() => {
     if (!sessionId) return;
+    const timer = setInterval(() => {
+      void Promise.all([api.inbox(sessionId), api.runs(sessionId)]).then(([queued, runHistory]) => {
+        setInbox(queued);
+        setRuns(runHistory);
+        const active = runHistory.find((item) => item.status === "running") ?? null;
+        setActiveRun((current) => current?.id === active?.id ? current : active);
+      }).catch(() => undefined);
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [sessionId]);
+  useEffect(() => {
+    if (!sessionId) return;
     setStreaming(""); setEvents([]); setError("");
-    void Promise.all([api.messages(sessionId), api.runs(sessionId)]).then(([history, runHistory]) => {
+    void Promise.all([api.messages(sessionId), api.runs(sessionId), api.inbox(sessionId)]).then(([history, runHistory, queued]) => {
       const latest = runHistory[0] ?? null;
       const active = runHistory.find((item) => item.status === "running") ?? null;
-      setMessages(history); setRuns(runHistory); setActiveRun(active); setSelectedRun(latest); setExpandedRunId(latest?.id ?? "");
+      setMessages(history); setRuns(runHistory); setInbox(queued); setActiveRun(active); setSelectedRun(latest); setExpandedRunId(latest?.id ?? "");
       setStreaming(active?.checkpoint?.active ? active.checkpoint.assistantPartial : "");
       setEvents(active?.checkpoint?.active && active.checkpoint.currentTool ? [{ runId: active.id, seq: active.checkpoint.lastEventSeq, type: "tool.started", data: active.checkpoint.currentTool, createdAt: active.checkpoint.updatedAt }] : []);
       if (latest) void api.transcriptView(latest.id).then(setTranscript); else setTranscript([]);
@@ -83,10 +95,13 @@ export function App() {
       if (["run.completed", "run.blocked", "run.failed", "run.cancelled"].includes(event.type)) {
         setStreaming("");
         const updated = await api.run(runId);
-        setActiveRun(updated.status === "running" ? updated : null);
+        const runHistory = await api.runs(sessionId);
+        const nextActive = runHistory.find((item) => item.status === "running") ?? null;
+        setActiveRun(nextActive);
         setSelectedRun((current) => current?.id === updated.id ? updated : current);
-        setRuns(await api.runs(sessionId));
+        setRuns(runHistory);
         setMessages(await api.messages(sessionId));
+        setInbox(await api.inbox(sessionId));
         setTranscript(await api.transcriptView(updated.id));
         await loadSessions();
       } else if (event.type === "run.updated" || event.type.startsWith("tool.") || event.type.startsWith("continuation.") || event.type.startsWith("supervisor.")) {
@@ -114,15 +129,14 @@ export function App() {
     const content = draft.trim();
     if (!content || !sessionId) return;
     setDraft(""); setError("");
-    if (activeRun?.status === "running") {
-      try { await api.steer(activeRun.id, content); setSteering(false); }
-      catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-      return;
-    }
-    setMessages((current) => [...current, { id: Date.now(), sessionId, role: "user", content, createdAt: Date.now() }]);
     try {
-      const nextRun = await api.send(sessionId, content);
-      setActiveRun(nextRun); setSelectedRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setStreaming("");
+      const admission = await api.send(sessionId, content);
+      setInbox(await api.inbox(sessionId));
+      if (admission.run) {
+        const nextRun = admission.run;
+        setMessages(await api.messages(sessionId));
+        setActiveRun(nextRun); setSelectedRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setStreaming("");
+      }
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
@@ -158,8 +172,9 @@ export function App() {
 
       <footer className="composer-wrap">
         {error && <div className="error-banner">{error}</div>}
-        {activeRun && <div className="composer-mode"><button className={steering ? "active" : ""} onClick={() => setSteering((value) => !value)}><Activity size={13} />Steer active run</button><span>Instructions apply at the next safe point</span></div>}
-        <div className={`composer ${activeRun ? "steer-composer" : ""}`}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} placeholder={activeRun ? "Add direction to the active run" : "Describe the outcome you need"} rows={1} /><button onClick={() => void submit()} disabled={!draft.trim()} aria-label={activeRun ? "Steer run" : "Send"}><Send size={18} /></button></div>
+        <div className="composer-mode"><span><Activity size={13} />Supervisor inbox</span><span>{activeRun ? "New input waits below while the current TaskRun finishes" : "Supervisor starts the next eligible item"}</span></div>
+        <div className="composer"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} placeholder="Add an outcome or instruction to the Supervisor queue" rows={1} /><button onClick={() => void submit()} disabled={!draft.trim()} aria-label="Add to Supervisor queue"><Send size={18} /></button></div>
+        {inbox.length > 0 && <section className="supervisor-inbox"><div className="inbox-heading"><span>Up next</span><small>{inbox.length} queued</small></div>{inbox.map((item, index) => <div className="inbox-item" key={item.id}><span className="inbox-position">{index + 1}</span><div><strong>{item.content}</strong><small>{item.decision === "defer" ? "Deferred by Supervisor" : "Waiting for Supervisor selection"}</small><span className="inbox-actions"><button onClick={async () => { try { await api.decideInbox(sessionId, item.id, item.decision === "defer" ? "pending" : "defer"); setInbox(await api.inbox(sessionId)); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}>{item.decision === "defer" ? "Resume" : "Defer"}</button>{index > 0 && <button onClick={async () => { try { await api.mergeInbox(sessionId, item.id, inbox[0].id); setInbox(await api.inbox(sessionId)); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}>Merge first</button>}</span></div><button onClick={async () => { try { await api.deleteInbox(sessionId, item.id); setInbox(await api.inbox(sessionId)); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }} aria-label="Remove queued input"><X size={14} /></button></div>)}</section>}
       </footer>
     </main>
 

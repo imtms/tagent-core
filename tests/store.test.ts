@@ -13,6 +13,60 @@ const createStore = () => {
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
 
 describe("Store", () => {
+  it("persists, deduplicates, deletes, and atomically claims Session Supervisor inbox items", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const first = store.enqueueSessionInbox(session.id, "first", "request-1");
+    expect(store.enqueueSessionInbox(session.id, "duplicate body", "request-1").id).toBe(first.id);
+    const second = store.enqueueSessionInbox(session.id, "second", "request-2");
+    const third = store.enqueueSessionInbox(session.id, "third", "request-3");
+    expect(store.deleteSessionInboxItem(second.id, session.id)).toBe(true);
+    expect(store.deleteSessionInboxItem(second.id, session.id)).toBe(false);
+    const claimed = store.claimNextSessionInbox(session.id)!;
+    expect(claimed.item).toMatchObject({ id: first.id, status: "started", decision: "start_taskrun", runId: claimed.run.id });
+    expect(claimed.run.goal).toBe("first");
+    expect(store.claimNextSessionInbox(session.id)).toBeUndefined();
+    store.finalizeRun(claimed.run.id, "completed");
+    expect(store.claimNextSessionInbox(session.id)?.item.id).toBe(third.id);
+  });
+
+  it("allows only one Session inbox claimant across store connections", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-inbox-claim-")), "store.db");
+    const firstStore = new Store(filename); const secondStore = new Store(filename);
+    stores.push(firstStore, secondStore);
+    const session = firstStore.createSession();
+    firstStore.enqueueSessionInbox(session.id, "one", "claim-one");
+    firstStore.enqueueSessionInbox(session.id, "two", "claim-two");
+    const first = firstStore.claimNextSessionInbox(session.id);
+    const second = secondStore.claimNextSessionInbox(session.id);
+    expect([first, second].filter(Boolean)).toHaveLength(1);
+    expect(firstStore.listRuns(session.id)).toHaveLength(1);
+    expect(firstStore.listSessionInbox(session.id)).toEqual([expect.objectContaining({ content: "two", status: "queued" })]);
+  });
+
+  it("defers queued items and merges related input before TaskRun creation", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const first = store.enqueueSessionInbox(session.id, "primary", "merge-1");
+    const second = store.enqueueSessionInbox(session.id, "detail", "merge-2");
+    expect(store.decideSessionInboxItem(first.id, session.id, "defer")).toBe(true);
+    expect(store.claimNextSessionInbox(session.id)?.item.id).toBe(second.id);
+    store.finalizeRun(store.getActiveRun(session.id)!.id, "completed");
+    expect(store.decideSessionInboxItem(first.id, session.id, "pending")).toBe(true);
+    const third = store.enqueueSessionInbox(session.id, "extra", "merge-3");
+    expect(store.mergeSessionInboxItems(third.id, first.id, session.id)).toBe(true);
+    expect(store.getSessionInboxItem(first.id)?.content).toContain("Additional queued instruction:\nextra");
+    expect(store.getSessionInboxItem(third.id)).toMatchObject({ status: "deleted", decision: "merge" });
+  });
+
+  it("keeps queued Session inbox input out of conversation history until selected", () => {
+    const store = createStore();
+    const session = store.createSession();
+    store.appendMessage(session.id, "assistant", "history");
+    store.enqueueSessionInbox(session.id, "future task", "future");
+    expect(store.listMessages(session.id).map((item) => item.content)).toEqual(["history"]);
+  });
+
   it("persists sessions and ordered messages", () => {
     const store = createStore();
     const session = store.createSession("Core work");
@@ -266,17 +320,17 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(7);
+    expect(store.getSchemaVersion()).toBe(8);
   });
 
-  it("migrates an older database to schema version 7", () => {
+  it("migrates an older database to schema version 8", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(7);
-    expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('control_inbox','event_consumers','gate_evaluations','operations','progress_snapshots','run_checkpoints','spawn_proposals','supervisor_decisions','taskrun_edges','tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["control_inbox", "event_consumers", "gate_evaluations", "operations", "progress_snapshots", "run_checkpoints", "spawn_proposals", "supervisor_decisions", "taskrun_edges", "tool_attempts"]);
+    expect(migrated.getSchemaVersion()).toBe(8);
+    expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('control_inbox','event_consumers','gate_evaluations','operations','progress_snapshots','run_checkpoints','session_supervisor_inbox','spawn_proposals','supervisor_decisions','taskrun_edges','tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["control_inbox", "event_consumers", "gate_evaluations", "operations", "progress_snapshots", "run_checkpoints", "session_supervisor_inbox", "spawn_proposals", "supervisor_decisions", "taskrun_edges", "tool_attempts"]);
     migrated.close();
   });
 

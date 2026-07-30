@@ -30,7 +30,7 @@ class ControlledRuntime implements AgentRuntime {
   constructor(private readonly messages: AgentMessage[]) {}
   prompt() { return new Promise<void>((resolve, reject) => { this.resolvePrompt = resolve; this.rejectPrompt = reject; }); }
   async steer() { return "accepted" as const; }
-  abort() {}
+  abort() { this.resolvePrompt?.(); }
   resolve() { this.resolvePrompt?.(); }
   reject(error: Error) { this.rejectPrompt?.(error); }
   getMessages() { return this.messages; }
@@ -107,6 +107,63 @@ class ActiveDeferredRuntime extends DeferredRuntime {
 }
 
 describe("AgentService runtime boundary", () => {
+  it("queues continuous Session input and starts the next TaskRun serially", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const runtimes: ControlledRuntime[] = [];
+    const service = new AgentService(store, "/tmp", () => {
+      const runtime = new ControlledRuntime([assistantMessage("done")]);
+      runtimes.push(runtime);
+      return runtime;
+    });
+    const first = service.enqueueSessionInput(session.id, "first task", "inbox-1");
+    const second = service.enqueueSessionInput(session.id, "second task", "inbox-2");
+    expect(first.run).toMatchObject({ goal: "first task", status: "running" });
+    expect(second.run).toBeNull();
+    expect(store.listSessionInbox(session.id)).toEqual([expect.objectContaining({ content: "second task", status: "queued" })]);
+    expect(store.listMessages(session.id).map((item) => item.content)).toEqual(["first task"]);
+    store.upsertPlanItem(first.run!.id, { key: "done", title: "Done", status: "done", required: true, position: 1 });
+    runtimes[0].resolve();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(store.listRuns(session.id).map((run) => run.goal)).toEqual(["second task", "first task"]);
+    expect(store.getActiveRun(session.id)?.goal).toBe("second task");
+    expect(store.listMessages(session.id).filter((item) => item.role === "user").map((item) => item.content)).toEqual(["first task", "second task"]);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("keeps later Session input queued while the current TaskRun is blocked for continuation", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const runtimes: ControlledRuntime[] = [];
+    const service = new AgentService(store, "/tmp", () => {
+      const runtime = new ControlledRuntime([assistantMessage("not complete")]);
+      runtimes.push(runtime);
+      return runtime;
+    });
+    service.enqueueSessionInput(session.id, "blocked task", "blocked-1");
+    service.enqueueSessionInput(session.id, "later task", "blocked-2");
+    runtimes[0].resolve();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(store.listRuns(session.id)).toHaveLength(1);
+    expect(store.listSessionInbox(session.id)).toEqual([expect.objectContaining({ content: "later task", status: "queued" })]);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("recovers queued Session Supervisor inbox work after restart", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const blocking = store.createRun(session.id, "old run");
+    store.enqueueSessionInbox(session.id, "recover me", "recover-inbox");
+    store.finalizeRun(blocking.id, "completed");
+    const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
+    expect(service.recoverSessionInbox()).toHaveLength(1);
+    expect(store.getActiveRun(session.id)?.goal).toBe("recover me");
+    await service.closeRuntimes();
+    store.close();
+  });
+
   it("persists and serially delivers idempotent control input into Pi runtime queues", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();

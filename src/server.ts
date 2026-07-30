@@ -17,6 +17,7 @@ const service = new AgentService(
 );
 const app = createApp({ store, service, runtimeConfig: publicRuntimeConfig(config, store.getSchemaVersion()) });
 service.recoverContinuations();
+service.recoverSessionInbox();
 await app.listen({ host: "0.0.0.0", port: config.port });
 console.log(`TAgent Core listening on http://localhost:${config.port}`);
 console.log(`Runtime=${config.runtime} Model=${config.model.modelId} Base=${config.model.baseUrl}`);

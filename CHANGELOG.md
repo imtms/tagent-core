@@ -4,6 +4,8 @@ All notable changes to TAgent Core are documented here.
 
 ## Unreleased
 
+- Add Schema v8 Session Supervisor Inbox so all chat composer input is durably queued before TaskRun creation, with idempotent admission, atomic claim, serial dispatch, restart recovery, defer/resume, merge, and deletion of unstarted items.
+- Replace direct active-run steering in the Web composer with a persistent queue panel; queued input remains outside conversation history until Supervisor selection.
 - Harden TaskRun supervision against duplicate proposed steers, stale attempt progress, terminal decision crash gaps, missing continuation rows, exhausted continuation resurrection, and spawned runtime launch failures.
 - Refine progress semantics so read-only tool success and assistant message completion do not erase consecutive failures; classify skipped required contract items as non-recoverable.
 - Add Schema v6 durable control inbox with request idempotency, bounded admission, per-attempt fencing, serialized FIFO delivery into Pi, and restart-safe `outcome_unknown` receipts.

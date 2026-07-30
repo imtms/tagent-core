@@ -116,6 +116,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(22, 116, 
 .tool-call-body pre { max-height: 260px; margin: 0; padding: 10px; overflow: auto; border: 1px solid #dfe4df; border-radius: var(--radius); background: #f6f8f6; color: #39433d; white-space: pre-wrap; overflow-wrap: anywhere; font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .composer-wrap { padding: 12px clamp(20px, 7vw, 88px) 20px; background: rgba(255, 255, 255, .96); border-top: 1px solid rgba(223, 228, 223, .72); }
 .composer-mode { max-width: 760px; margin: 0 auto 8px; display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 10px; }
+.composer-mode > span:first-child { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-weight: 750; }
 .composer-mode button { min-height: 28px; padding: 0 9px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid #cedbd3; border-radius: var(--radius); background: #f6faf7; color: var(--accent); cursor: pointer; font-size: 10px; font-weight: 700; }
 .composer-mode button.active { background: var(--accent-soft); border-color: #a7c6b6; }
 .composer { max-width: 760px; min-height: 52px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) 38px; gap: 10px; align-items: end; padding: 7px 7px 7px 15px; border: 1px solid #cfd6d1; border-radius: var(--radius); background: white; box-shadow: var(--shadow); }
@@ -126,6 +127,19 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(22, 116, 
 .composer button { width: 38px; height: 38px; border: 0; border-radius: 5px; background: #18201b; color: white; display: grid; place-items: center; cursor: pointer; }
 .composer button:disabled { background: #cbd0cc; cursor: default; }
 .error-banner { max-width: 760px; margin: 0 auto 8px; padding: 8px 10px; background: #fff0f0; color: #983b3b; border: 1px solid #f0d1d1; border-radius: var(--radius); font-size: 11px; }
+.supervisor-inbox { max-width: 760px; max-height: 196px; margin: 10px auto 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: #f8faf8; box-shadow: 0 1px 2px rgba(24,34,28,.03); }
+.inbox-heading { min-height: 34px; padding: 0 11px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); color: #4b554f; font-size: 9px; font-weight: 750; text-transform: uppercase; letter-spacing: .04em; }
+.inbox-heading small { color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; }
+.inbox-item { min-height: 48px; padding: 7px 8px 7px 10px; display: grid; grid-template-columns: 22px minmax(0,1fr) 30px; gap: 8px; align-items: center; border-bottom: 1px solid #e8ece9; }
+.inbox-item:last-child { border-bottom: 0; }
+.inbox-position { width: 20px; height: 20px; display: grid; place-items: center; border: 1px solid #d8dfda; border-radius: 4px; background: white; color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; }
+.inbox-item > div { min-width: 0; display: grid; gap: 3px; }
+.inbox-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 650; }
+.inbox-item small { color: var(--muted); font-size: 9px; }
+.inbox-actions { display: flex; gap: 8px; margin-top: 2px; }
+.inbox-actions button { width: auto !important; height: auto !important; padding: 0 !important; color: var(--accent) !important; font-size: 9px; font-weight: 700; }
+.inbox-item button { width: 28px; height: 28px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 5px; background: transparent; color: #7d8781; cursor: pointer; }
+.inbox-item button:hover { background: #f3e8e8; color: var(--danger); }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
 .eyebrow { text-transform: uppercase; color: var(--accent); font-size: 9px; font-weight: 750; }
 .panel-heading h2 { font-size: 14px; margin: 3px 0 0; }

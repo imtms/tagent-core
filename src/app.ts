@@ -43,7 +43,32 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const body = request.body as { content?: string; requestId?: string };
     if (!body?.content?.trim()) return reply.code(400).send({ error: "content is required" });
     if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
-    return service.start(id, body.content.trim(), body.requestId);
+    return service.enqueueSessionInput(id, body.content.trim(), body.requestId);
+  });
+  app.get("/api/sessions/:id/inbox", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    return store.listSessionInbox(id);
+  });
+  app.post("/api/sessions/:id/inbox/:itemId/decision", async (request, reply) => {
+    const { id, itemId } = request.params as { id: string; itemId: string };
+    const body = request.body as { decision?: "pending" | "defer" };
+    if (!body?.decision || !["pending","defer"].includes(body.decision)) return reply.code(400).send({ error: "invalid decision" });
+    if (!service.decideSessionInput(id,itemId,body.decision)) return reply.code(409).send({ error: "inbox item is not queued" });
+    return { ok: true };
+  });
+  app.post("/api/sessions/:id/inbox/:itemId/merge", async (request, reply) => {
+    const { id, itemId } = request.params as { id: string; itemId: string };
+    const body = request.body as { targetId?: string };
+    if (!body?.targetId) return reply.code(400).send({ error: "targetId is required" });
+    if (!service.mergeSessionInputs(id,itemId,body.targetId)) return reply.code(409).send({ error: "items are not mergeable" });
+    return { ok: true };
+  });
+  app.delete("/api/sessions/:id/inbox/:itemId", async (request, reply) => {
+    const { id, itemId } = request.params as { id: string; itemId: string };
+    if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    if (!service.deleteSessionInput(id, itemId)) return reply.code(409).send({ error: "inbox item is not queued" });
+    return { ok: true };
   });
   app.post("/api/runs/:id/cancel", async (request, reply) => {
     const { id } = request.params as { id: string };

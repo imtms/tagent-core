@@ -1,6 +1,7 @@
 import { createRequestId } from "./id";
 
 export interface Session { id: string; title: string; createdAt: number; updatedAt: number }
+export interface SessionInboxItem { id: string; sessionId: string; requestId: string; content: string; status: "queued" | "claimed" | "started" | "deleted" | "failed"; decision: "pending" | "start_taskrun" | "defer" | "merge" | "delete"; runId: string | null; error: string; position: number; createdAt: number; updatedAt: number; claimedAt: number | null; startedAt: number | null }
 export interface Message { id: number; sessionId: string; role: "user" | "assistant" | "tool"; content: string; createdAt: number }
 export interface PlanItem { key: string; title: string; status: string; required: boolean; position: number }
 export interface RunCheck { key: string; title: string; status: string; required: boolean; command: string; evidence: string; stale: boolean }
@@ -44,7 +45,11 @@ export const api = {
   latestRun: (sessionId: string) => request<TaskRun | null>(`/api/sessions/${sessionId}/run`),
   run: (runId: string) => request<TaskRun>(`/api/runs/${runId}`),
   transcriptView: (runId: string) => request<TranscriptItem[]>(`/api/runs/${runId}/transcript-view`),
-  send: (sessionId: string, content: string) => request<TaskRun>(`/api/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId() }) }),
+  send: (sessionId: string, content: string) => request<{ item: SessionInboxItem; run: TaskRun | null }>(`/api/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId() }) }),
+  inbox: (sessionId: string) => request<SessionInboxItem[]>(`/api/sessions/${sessionId}/inbox`),
+  deleteInbox: (sessionId: string, itemId: string) => request<{ ok: true }>(`/api/sessions/${sessionId}/inbox/${itemId}`, { method: "DELETE" }),
+  decideInbox: (sessionId: string, itemId: string, decision: "pending" | "defer") => request<{ ok: true }>(`/api/sessions/${sessionId}/inbox/${itemId}/decision`, { method: "POST", body: JSON.stringify({ decision }) }),
+  mergeInbox: (sessionId: string, itemId: string, targetId: string) => request<{ ok: true }>(`/api/sessions/${sessionId}/inbox/${itemId}/merge`, { method: "POST", body: JSON.stringify({ targetId }) }),
   cancel: (runId: string) => request(`/api/runs/${runId}/cancel`, { method: "POST" }),
   steer: (runId: string, content: string) => request(`/api/runs/${runId}/steer`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId() }) }),
   resume: (runId: string) => request<TaskRun>(`/api/runs/${runId}/resume`, { method: "POST" }),

@@ -199,6 +199,62 @@ export class AgentService {
     this.continuationRecoveryTimer.unref?.();
   }
 
+  enqueueSessionInput(sessionId: SessionId, content: string, requestId: string = randomUUID()) {
+    if (this.closing) throw new Error("Service is shutting down");
+    const item = this.store.enqueueSessionInbox(sessionId, content, requestId);
+    const run = this.dispatchSessionInbox(sessionId);
+    return { item: this.store.getSessionInboxItem(item.id)!, run: run ?? null };
+  }
+
+  deleteSessionInput(sessionId: SessionId, itemId: string) {
+    return this.store.deleteSessionInboxItem(itemId, sessionId);
+  }
+
+  decideSessionInput(sessionId: SessionId, itemId: string, decision: "pending" | "defer") {
+    const changed = this.store.decideSessionInboxItem(itemId, sessionId, decision);
+    if (changed && decision === "pending") this.dispatchSessionInbox(sessionId);
+    return changed;
+  }
+
+  mergeSessionInputs(sessionId: SessionId, sourceId: string, targetId: string) {
+    const changed = this.store.mergeSessionInboxItems(sourceId, targetId, sessionId);
+    if (changed) this.dispatchSessionInbox(sessionId);
+    return changed;
+  }
+
+  recoverSessionInbox() {
+    if (this.closing) return [];
+    const started: string[] = [];
+    for (const sessionId of this.store.listSessionsWithQueuedInbox()) {
+      const run = this.dispatchSessionInbox(sessionId);
+      if (run) started.push(run.id);
+    }
+    return started;
+  }
+
+  private dispatchSessionInbox(sessionId: SessionId) {
+    if (this.closing) return undefined;
+    const claimed = this.store.claimNextSessionInbox(sessionId);
+    if (!claimed) return undefined;
+    const { item, run } = claimed;
+    try {
+      const sessionHistory = this.prepareSessionHistory(run, item.content);
+      this.store.appendMessage(sessionId, "user", item.content);
+      this.publish(this.store.appendEvent(run.id, "run.started", { goal: item.content, source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: sessionHistory.messages.length }));
+      this.publishContextEvents(run.id, sessionHistory);
+      this.launch(run, item.content, sessionHistory.messages);
+      if (!this.runtimes.has(run.id)) throw new Error("Inbox TaskRun runtime did not start");
+      return this.store.getRun(run.id)!;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.store.failSessionInboxStart(item.id, run.id, message);
+      const event = this.store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: message, reason: "inbox_launch_failed", inboxItemId: item.id }, message, run.attempt);
+      if (event) this.publish(event);
+      setImmediate(() => { if (!this.closing) this.dispatchSessionInbox(sessionId); });
+      return undefined;
+    }
+  }
+
   async start(sessionId: SessionId, query: string, requestId: string = randomUUID()) {
     if (this.closing) throw new Error("Service is shutting down");
     const existing = this.store.db.prepare("SELECT id FROM runs WHERE request_id = ?").get(requestId) as { id: string } | undefined;
@@ -304,8 +360,11 @@ export class AgentService {
       this.checkpointDrafts.delete(run.id);
       if (this.executionTasks.get(run.id) === execution) this.executionTasks.delete(run.id);
       setImmediate(() => {
-        try { if (!this.closing) this.startQueuedContinuation(run.id); }
-        catch { /* Store may be closed during shutdown. */ }
+        try {
+          if (this.closing) return;
+          this.startQueuedContinuation(run.id);
+          this.dispatchSessionInbox(run.sessionId);
+        } catch { /* Store may be closed during shutdown. */ }
       });
     });
     this.executionTasks.set(run.id, execution);
