@@ -12,6 +12,7 @@ export class AgentService {
     private readonly store: Store,
     private readonly workspace: string,
     private readonly runtimeFactory: RuntimeFactory = createInProcessRuntime,
+    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey"> = {},
   ) {
     this.store.markInterrupted();
   }
@@ -29,6 +30,7 @@ export class AgentService {
       runId: run.id,
       workspace: this.workspace,
       systemPrompt: this.buildSystemPrompt(run),
+      ...this.runtimeDefaults,
       onEvent: (event) => this.publish(event),
     });
     this.runtimes.set(run.id, runtime);

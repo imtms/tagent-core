@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Check, Circle, Command, FileText, Menu, MessageSquarePlus, PanelRight, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
-import { api, subscribe, type Message, type RunEvent, type Session, type TaskRun } from "./api";
+import { api, subscribe, type Message, type RunEvent, type RuntimeStatus, type Session, type TaskRun } from "./api";
 
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
 
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [sessionId, setSessionId] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [run, setRun] = useState<TaskRun | null>(null);
@@ -24,7 +25,7 @@ export function App() {
     setSessionId((current) => current || items[0].id);
   }, []);
 
-  useEffect(() => { void loadSessions(); }, [loadSessions]);
+  useEffect(() => { void loadSessions(); void api.status().then(setRuntimeStatus); }, [loadSessions]);
   useEffect(() => {
     if (!sessionId) return;
     setStreaming(""); setEvents([]); setError("");
@@ -80,7 +81,7 @@ export function App() {
     <main className="conversation">
       <header className="topbar">
         <button className="icon-button mobile-only" onClick={() => setLeftOpen(true)} aria-label="Open sessions"><Menu size={19} /></button>
-        <div><h1>{sessions.find((session) => session.id === sessionId)?.title ?? "TAgent Core"}</h1><p>{run ? `${run.phase} · ${run.status}` : "Ready for a new task"}</p></div>
+        <div><h1>{sessions.find((session) => session.id === sessionId)?.title ?? "TAgent Core"}</h1><p>{run ? `${run.phase} · ${run.status}` : runtimeStatus ? `${runtimeStatus.modelId} · ${runtimeStatus.runtime}` : "Ready for a new task"}</p></div>
         <div className="top-actions">{run?.status === "running" && <button className="icon-button danger" onClick={() => void api.cancel(run.id)} title="Stop run"><Square size={17} /></button>}<button className="icon-button mobile-only" onClick={() => setRightOpen(true)} aria-label="Open task panel"><PanelRight size={19} /></button></div>
       </header>
 

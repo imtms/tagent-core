@@ -17,6 +17,7 @@ export interface RuntimeOptions {
   workspace: string;
   systemPrompt: string;
   model?: Model<any>;
+  apiKey?: string;
   onEvent?: (event: RunEvent) => void;
 }
 

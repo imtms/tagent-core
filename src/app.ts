@@ -1,6 +1,7 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import type { PublicRuntimeConfig } from "./config.js";
 import type { Store } from "./store/store.js";
 import type { AgentService } from "./core/agent-service.js";
 
@@ -9,12 +10,14 @@ export interface AppDependencies {
   service: AgentService;
   webRoot?: string;
   logger?: boolean;
+  runtimeConfig?: PublicRuntimeConfig;
 }
 
-export function createApp({ store, service, webRoot = path.resolve("dist/web"), logger = true }: AppDependencies) {
+export function createApp({ store, service, webRoot = path.resolve("dist/web"), logger = true, runtimeConfig }: AppDependencies) {
   const app = Fastify({ logger });
 
   app.get("/api/health", async () => ({ ok: true, service: "tagent-core" }));
+  app.get("/api/config/status", async () => runtimeConfig ?? null);
   app.get("/api/sessions", async () => store.listSessions());
   app.post("/api/sessions", async (request) => {
     const body = (request.body ?? {}) as { title?: string };

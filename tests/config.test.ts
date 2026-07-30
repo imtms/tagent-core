@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createModel, loadConfig } from "../src/config.js";
+import { createModel, loadConfig, publicRuntimeConfig } from "../src/config.js";
 
 describe("configuration", () => {
   it("uses the TAgent OpenAI-compatible defaults", () => {
     const config = loadConfig({});
     expect(config.runtime).toBe("in-process");
+    expect(config.apiKey).toBeUndefined();
     expect(config.model).toMatchObject({
       api: "openai-completions",
       baseUrl: "https://one.tms.im/v1",
@@ -27,6 +28,13 @@ describe("configuration", () => {
       reasoning: false,
     });
     expect(model.compat?.maxTokensField).toBe("max_completion_tokens");
+  });
+
+  it("exposes runtime status without exposing the credential", () => {
+    const status = publicRuntimeConfig(loadConfig({ OPENAI_API_KEY: "secret" }));
+    expect(status.credentialConfigured).toBe(true);
+    expect(status).not.toHaveProperty("apiKey");
+    expect(JSON.stringify(status)).not.toContain("secret");
   });
 
   it("rejects unsupported runtime modes", () => {

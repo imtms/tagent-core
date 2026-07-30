@@ -15,6 +15,7 @@ export interface AppConfig {
   database: string;
   workspace: string;
   runtime: "in-process";
+  apiKey?: string;
   model: ModelConfig;
 }
 
@@ -38,6 +39,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     database: env.TAGENT_DB ?? "./data/tagent.db",
     workspace: env.TAGENT_WORKSPACE ?? process.cwd(),
     runtime,
+    apiKey: env.OPENAI_API_KEY,
     model: {
       provider: env.TAGENT_PROVIDER ?? "openai-compatible",
       modelId: env.TAGENT_MODEL ?? "gpt-5.6-sol",
@@ -47,6 +49,26 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       maxTokens: positiveInteger(env.TAGENT_MAX_TOKENS, 32_768, "TAGENT_MAX_TOKENS"),
       reasoning: env.TAGENT_REASONING !== "false",
     },
+  };
+}
+
+export interface PublicRuntimeConfig {
+  runtime: AppConfig["runtime"];
+  provider: string;
+  api: ModelConfig["api"];
+  baseUrl: string;
+  modelId: string;
+  credentialConfigured: boolean;
+}
+
+export function publicRuntimeConfig(config: AppConfig): PublicRuntimeConfig {
+  return {
+    runtime: config.runtime,
+    provider: config.model.provider,
+    api: config.model.api,
+    baseUrl: config.model.baseUrl,
+    modelId: config.model.modelId,
+    credentialConfigured: Boolean(config.apiKey),
   };
 }
 

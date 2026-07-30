@@ -17,6 +17,7 @@ describe("HTTP API", () => {
     apps.push(app);
 
     expect((await app.inject({ method: "GET", url: "/api/health" })).json()).toEqual({ ok: true, service: "tagent-core" });
+    expect((await app.inject({ method: "GET", url: "/api/config/status" })).json()).toBeNull();
     const created = (await app.inject({ method: "POST", url: "/api/sessions", payload: { title: "API test" } })).json();
     expect(created.title).toBe("API test");
     const sessions = (await app.inject({ method: "GET", url: "/api/sessions" })).json();

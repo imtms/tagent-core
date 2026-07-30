@@ -26,6 +26,7 @@ export class PiRuntime implements AgentRuntime {
       },
       toolExecution: "sequential",
       sessionId: options.runId,
+      getApiKey: () => options.apiKey ?? process.env.OPENAI_API_KEY,
       maxRetryDelayMs: 15_000,
       beforeToolCall: async ({ toolCall }) => {
         this.emit("tool.started", { toolCallId: toolCall.id, toolName: toolCall.name, args: toolCall.arguments });
