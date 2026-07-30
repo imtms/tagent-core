@@ -9,7 +9,7 @@ This checklist applies to source prereleases. TAgent Core is not published to np
 1. Confirm `package.json` and `package-lock.json` use the target version.
 2. Update `CHANGELOG.md`, `README.md`, `docs/STATUS.md`, and known limitations.
 3. Confirm the worktree is clean and the release commit is on `main`.
-4. Run `npm ci` from the lockfile in a clean Node.js `20.19.0` or newer environment.
+4. Run `npm ci` from the lockfile in a clean Node.js `22.19.0` or newer environment.
 5. Run `npm run lint`, `npm run check`, `npm test -- --run`, and `npm run build`.
 6. Run production and full dependency audits at high severity.
 7. Start the built server with a temporary SQLite database and workspace; verify `/api/health`, `/api/config/status`, session creation, run history, and the Web shell.

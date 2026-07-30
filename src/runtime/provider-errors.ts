@@ -1,5 +1,5 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { isContextOverflow } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { isContextOverflow } from "@earendil-works/pi-ai";
 
 export type ProviderFailureKind = "aborted" | "auth" | "invalid_request" | "context_overflow" | "rate_limit" | "timeout" | "network" | "server" | "unknown";
 

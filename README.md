@@ -34,7 +34,7 @@ See [Security Policy](SECURITY.md), [Changelog](CHANGELOG.md), and [Release Chec
 
 ## Run
 
-Requires Node.js `>=20.19.0` and npm `>=10`.
+Requires Node.js `>=22.19.0` and npm `>=10`.
 
 ```bash
 cp .env.example .env

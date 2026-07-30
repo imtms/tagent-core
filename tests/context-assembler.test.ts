@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { ContextAssembler, estimateTextTokens } from "../src/core/context-assembler.js";
 
 function assistant(text: string, content?: Extract<AgentMessage, { role: "assistant" }>["content"]): AgentMessage {

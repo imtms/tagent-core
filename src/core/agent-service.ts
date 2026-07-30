@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { randomUUID } from "node:crypto";
 import type { Store } from "../store/store.js";
 import { createInProcessRuntime } from "../runtime/factory.js";
@@ -18,6 +18,29 @@ export class AgentService {
     private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number; contextWindow?: number; maxContextTurns?: number; contextReserveTokens?: number; dynamicBudget?: boolean } = {},
   ) {
     this.store.markInterrupted();
+  }
+
+  async followUp(runId: RunId, instruction: string) {
+    const runtime = this.runtimes.get(runId);
+    if (!runtime?.followUp) return "inactive" as const;
+    try { await runtime.followUp(instruction); }
+    catch (error) {
+      this.publish(this.store.appendEvent(runId, "run.follow_up.failed", { error: error instanceof Error ? error.message : String(error) }));
+      return "failed" as const;
+    }
+    this.publish(this.store.appendEvent(runId, "run.follow_up.queued", { instruction }));
+    return "accepted" as const;
+  }
+
+  async compact(runId: RunId, instructions?: string) {
+    const runtime = this.runtimes.get(runId);
+    if (!runtime?.compact) return "inactive" as const;
+    try { await runtime.compact(instructions); }
+    catch (error) {
+      this.publish(this.store.appendEvent(runId, "context.compaction.failed", { error: error instanceof Error ? error.message : String(error) }));
+      return "failed" as const;
+    }
+    return "completed" as const;
   }
 
   private repairTranscript(runId: RunId, reason: "cancelled" | "resume" | "continuation") {
@@ -116,6 +139,7 @@ export class AgentService {
       if (hardTimer) clearTimeout(hardTimer);
       if (leaseTimer) clearInterval(leaseTimer);
       if (this.store.getRun(run.id)?.status === "cancelled") this.repairTranscript(run.id, "cancelled");
+      runtime.dispose?.();
       this.runtimes.delete(run.id);
       setImmediate(() => {
         try { this.startQueuedContinuation(run.id); }
@@ -235,12 +259,16 @@ export class AgentService {
     return true;
   }
 
-  steer(runId: RunId, instruction: string) {
+  async steer(runId: RunId, instruction: string) {
     const runtime = this.runtimes.get(runId);
-    if (!runtime) return false;
-    runtime.steer(instruction);
+    if (!runtime) return "inactive" as const;
+    try { await runtime.steer(instruction); }
+    catch (error) {
+      this.publish(this.store.appendEvent(runId, "run.steer.failed", { error: error instanceof Error ? error.message : String(error) }));
+      return "failed" as const;
+    }
     this.publish(this.store.appendEvent(runId, "run.steered", { instruction }));
-    return true;
+    return "accepted" as const;
   }
 
   subscribe(runId: RunId, listener: (event: RunEvent) => void) {

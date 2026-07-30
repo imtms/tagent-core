@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type {
   Artifact,
   CompletionGate,

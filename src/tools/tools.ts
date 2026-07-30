@@ -2,7 +2,7 @@ import { access, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promi
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { Type, type Static } from "typebox";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Store } from "../store/store.js";
 import type { RunId } from "../core/types.js";
 

@@ -54,8 +54,25 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const { id } = request.params as { id: string };
     const body = request.body as { content?: string };
     if (!body?.content?.trim()) return reply.code(400).send({ error: "content is required" });
-    if (!service.steer(id, body.content.trim())) return reply.code(409).send({ error: "run is not active" });
-    return { ok: true };
+    const status = await service.steer(id, body.content.trim());
+    if (status === "inactive") return reply.code(409).send({ error: "run is not active", status });
+    if (status === "failed") return reply.code(409).send({ error: "steer was rejected", status });
+    return { ok: true, status };
+  });
+  app.post("/api/runs/:id/follow-up", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as { content?: string };
+    if (!body?.content?.trim()) return reply.code(400).send({ error: "content is required" });
+    const status = await service.followUp(id, body.content.trim());
+    if (status !== "accepted") return reply.code(409).send({ error: status === "inactive" ? "run is not active" : "follow-up was rejected", status });
+    return { ok: true, status };
+  });
+  app.post("/api/runs/:id/compact", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { instructions?: string };
+    const status = await service.compact(id, body.instructions?.trim() || undefined);
+    if (status !== "completed") return reply.code(409).send({ error: status === "inactive" ? "run is not active" : "compaction failed", status });
+    return { ok: true, status };
   });
   app.post("/api/runs/:id/resume", async (request, reply) => {
     const { id } = request.params as { id: string };

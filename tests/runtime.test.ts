@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { AgentService } from "../src/core/agent-service.js";
 import { Store } from "../src/store/store.js";
 import type { AgentRuntime, RuntimeFactory } from "../src/runtime/types.js";
@@ -14,7 +14,7 @@ class FakeRuntime implements AgentRuntime {
   prompts: string[] = [];
   constructor(private readonly messages: AgentMessage[]) {}
   async prompt(query: string) { this.prompts.push(query); }
-  steer(instruction: string) { this.steered.push(instruction); }
+  async steer(instruction: string) { this.steered.push(instruction); }
   abort() { this.aborted = true; }
   getMessages() { return this.messages; }
   getError() { return undefined; }
@@ -24,7 +24,7 @@ class CallbackRuntime implements AgentRuntime {
   prompts: string[] = [];
   constructor(private readonly message: AgentMessage, private readonly onPrompt: (query: string) => void = () => {}) {}
   async prompt(query: string) { this.prompts.push(query); this.onPrompt(query); }
-  steer() {}
+  async steer() {}
   abort() {}
   getMessages() { return [this.message]; }
   getError() { return undefined; }
@@ -34,7 +34,7 @@ class DeferredRuntime implements AgentRuntime {
   aborted = false;
   private rejectPrompt?: (error: Error) => void;
   prompt() { return new Promise<void>((_resolve, reject) => { this.rejectPrompt = reject; }); }
-  steer() {}
+  async steer() {}
   abort() { this.aborted = true; this.rejectPrompt?.(new Error("aborted")); }
   getMessages() { return []; }
   getError() { return undefined; }

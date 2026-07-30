@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { classifyProviderFailure, isRetryableProviderFailure } from "../src/runtime/provider-errors.js";
 
 function error(message: string, stopReason: AssistantMessage["stopReason"] = "error"): AssistantMessage {
