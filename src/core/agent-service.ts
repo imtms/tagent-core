@@ -8,8 +8,11 @@ import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 
 export class AgentService {
   private readonly runtimes = new Map<RunId, AgentRuntime>();
+  private readonly executionTasks = new Map<RunId, Promise<void>>();
   private readonly listeners = new Map<RunId, Set<(event: RunEvent) => void>>();
   private readonly continuationOwner = randomUUID();
+  private continuationRecoveryTimer?: ReturnType<typeof setTimeout>;
+  private closing = false;
 
   constructor(
     private readonly store: Store,
@@ -20,12 +23,9 @@ export class AgentService {
     this.store.markInterrupted();
   }
 
-  private abortRuntime(runtime: AgentRuntime, runId?: RunId) {
+  private async abortRuntime(runtime: AgentRuntime, runId?: RunId) {
     try {
-      const result = runtime.abort();
-      if (result && typeof result.then === "function") void result.catch((error) => {
-        if (runId && this.store.getRun(runId)) this.publish(this.store.appendEvent(runId, "runtime.abort.failed", { error: error instanceof Error ? error.message : String(error) }));
-      });
+      await runtime.abort();
     } catch (error) {
       if (runId && this.store.getRun(runId)) this.publish(this.store.appendEvent(runId, "runtime.abort.failed", { error: error instanceof Error ? error.message : String(error) }));
     }
@@ -61,6 +61,9 @@ export class AgentService {
   }
 
   recoverContinuations() {
+    if (this.closing) return [];
+    if (this.continuationRecoveryTimer) clearTimeout(this.continuationRecoveryTimer);
+    this.continuationRecoveryTimer = undefined;
     const recovered = this.store.recoverContinuationsAfterRestart();
     const runIds = [...new Set(recovered.map((item) => item.runId))];
     for (const runId of runIds) {
@@ -68,19 +71,37 @@ export class AgentService {
       this.publish(this.store.appendEvent(runId, "continuation.recovered", { reason: "lease_expired_or_queued", continuations: items.map((item) => ({ id: item.id, ordinal: item.ordinal })) }));
       setImmediate(() => this.startQueuedContinuation(runId));
     }
+    this.scheduleContinuationRecovery();
     return runIds;
   }
 
-  closeRuntimes() {
+  async closeRuntimes() {
+    this.closing = true;
+    if (this.continuationRecoveryTimer) clearTimeout(this.continuationRecoveryTimer);
+    this.continuationRecoveryTimer = undefined;
+    const aborts: Promise<void>[] = [];
     for (const runtime of this.runtimes.values()) {
-      this.abortRuntime(runtime);
-      runtime.dispose?.();
+      aborts.push(this.abortRuntime(runtime).finally(() => runtime.dispose?.()));
     }
+    await Promise.all(aborts);
+    await Promise.allSettled([...this.executionTasks.values()]);
     this.runtimes.clear();
-    return this.store.releaseContinuationLeases(this.continuationOwner);
+    const released = this.store.releaseContinuationLeases(this.continuationOwner);
+    this.store.markInterrupted();
+    return released;
+  }
+
+  private scheduleContinuationRecovery() {
+    if (this.closing) return;
+    const leaseUntil = this.store.nextContinuationLeaseExpiry();
+    if (leaseUntil === null) return;
+    const delay = Math.min(2_147_483_647, Math.max(1, leaseUntil - Date.now() + 1));
+    this.continuationRecoveryTimer = setTimeout(() => this.recoverContinuations(), delay);
+    this.continuationRecoveryTimer.unref?.();
   }
 
   async start(sessionId: SessionId, query: string, requestId: string = randomUUID()) {
+    if (this.closing) throw new Error("Service is shutting down");
     const existing = this.store.db.prepare("SELECT id FROM runs WHERE request_id = ?").get(requestId) as { id: string } | undefined;
     if (existing) return this.store.getRun(existing.id)!;
 
@@ -94,6 +115,7 @@ export class AgentService {
   }
 
   private launch(run: TaskRun, prompt: string, initialMessages: AgentMessage[] = [], continuationId?: string) {
+    if (this.closing) return;
     const budget = this.executionBudget(run);
     const idleTimeoutMs = budget.runTimeoutMs;
     const hardTimeoutMs = this.runtimeDefaults.runHardTimeoutMs ?? 86_400_000;
@@ -104,11 +126,11 @@ export class AgentService {
 
     const failTimeout = (reason: "idle_timeout" | "hard_timeout", limitMs: number) => {
       if (this.store.getRun(run.id)?.status !== "running") return;
-      this.abortRuntime(runtime, run.id);
+      void this.abortRuntime(runtime, run.id);
       const message = reason === "idle_timeout"
         ? `Run idle for ${limitMs}ms without progress`
         : `Run exceeded ${limitMs}ms absolute hard timeout`;
-      const event = this.store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: message, reason, limitMs }, message);
+      const event = this.store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: message, reason, limitMs }, message, run.attempt);
       if (!event) return;
       this.store.appendMessage(run.sessionId, "assistant", `Run failed: ${message}`);
       this.publish(event);
@@ -138,12 +160,21 @@ export class AgentService {
       },
     });
     this.runtimes.set(run.id, runtime);
-    if (continuationId) leaseTimer = setInterval(() => this.store.renewContinuationLease(continuationId, this.continuationOwner, 30_000), 10_000);
+    if (continuationId) leaseTimer = setInterval(() => {
+      if (this.store.renewContinuationLease(continuationId, this.continuationOwner, 30_000)) return;
+      if (leaseTimer) clearInterval(leaseTimer);
+      leaseTimer = undefined;
+      this.publish(this.store.appendEvent(run.id, "continuation.lease.lost", { continuationId, attempt: run.attempt, leaseOwner: this.continuationOwner }));
+      void this.abortRuntime(runtime, run.id);
+      this.recoverContinuations();
+    }, 10_000);
     touchActivity();
     hardTimer = setTimeout(() => failTimeout("hard_timeout", hardTimeoutMs), hardTimeoutMs);
 
-    void this.execute(run.id, runtime, prompt).then((blocked) => {
+    const execution = this.execute(run.id, run.attempt, runtime, prompt, continuationId).then((blocked) => {
+      if (this.closing) return;
       if (continuationId) {
+        if (!this.store.ownsContinuationLease(continuationId, this.continuationOwner)) return;
         const status = this.store.getRun(run.id)?.status;
         this.store.updateContinuation(continuationId, status === "completed" ? "completed" : status === "blocked" ? "blocked" : status === "cancelled" ? "cancelled" : "failed", status === "failed" ? this.store.getRun(run.id)?.blockedReason ?? "" : "", this.continuationOwner);
       }
@@ -155,18 +186,24 @@ export class AgentService {
       if (this.store.getRun(run.id)?.status === "cancelled") this.repairTranscript(run.id, "cancelled");
       runtime.dispose?.();
       this.runtimes.delete(run.id);
+      if (this.executionTasks.get(run.id) === execution) this.executionTasks.delete(run.id);
       setImmediate(() => {
-        try { this.startQueuedContinuation(run.id); }
+        try { if (!this.closing) this.startQueuedContinuation(run.id); }
         catch { /* Store may be closed during shutdown. */ }
       });
     });
+    this.executionTasks.set(run.id, execution);
   }
 
-  private async execute(runId: RunId, runtime: AgentRuntime, prompt: string) {
+  private async execute(runId: RunId, attempt: number, runtime: AgentRuntime, prompt: string, continuationId?: string) {
     try {
       await runtime.prompt(prompt);
       const runtimeError = runtime.getError();
       if (runtimeError) throw new Error(runtimeError);
+      if (continuationId && !this.store.ownsContinuationLease(continuationId, this.continuationOwner)) {
+        this.recoverContinuations();
+        return false;
+      }
       const current = this.store.getRun(runId);
       if (!current || current.status !== "running") return false;
       const messages = runtime.getMessages();
@@ -174,15 +211,20 @@ export class AgentService {
       const response = final && "content" in final
         ? (typeof final.content === "string" ? final.content : final.content.filter((part) => part.type === "text").map((part) => part.text).join(""))
         : "";
-      const result = this.store.completeWithGate(runId, response);
+      const result = this.store.completeWithGate(runId, response, attempt);
       if (result.gate.passed && response) this.store.appendMessage(result.run.sessionId, "assistant", response);
       this.publish(result.event);
       return !result.gate.passed;
     } catch (error) {
+      if (this.closing) return false;
+      if (continuationId && !this.store.ownsContinuationLease(continuationId, this.continuationOwner)) {
+        this.recoverContinuations();
+        return false;
+      }
       const current = this.store.getRun(runId);
       if (!current || current.status !== "running") return false;
       const message = error instanceof Error ? error.message : String(error);
-      const event = this.store.transitionRun(runId, ["running"], "failed", "run.failed", { error: message }, message);
+      const event = this.store.transitionRun(runId, ["running"], "failed", "run.failed", { error: message }, message, attempt);
       if (!event) return false;
       this.store.appendMessage(current.sessionId, "assistant", `Run failed: ${message}`);
       this.publish(event);
@@ -241,6 +283,7 @@ export class AgentService {
   }
 
   private startQueuedContinuation(runId: RunId) {
+    if (this.closing) return;
     if (this.runtimes.has(runId)) return;
     this.repairTranscript(runId, "continuation");
     const claimed = this.store.claimContinuation(runId, this.continuationOwner, 30_000);
@@ -266,8 +309,9 @@ export class AgentService {
   cancel(runId: RunId) {
     const runtime = this.runtimes.get(runId);
     if (!runtime) return false;
-    this.abortRuntime(runtime, runId);
-    const event = this.store.transitionRun(runId, ["running"], "cancelled", "run.cancelled", {}, "Cancelled by user");
+    void this.abortRuntime(runtime, runId);
+    const attempt = this.store.getRun(runId)?.attempt;
+    const event = this.store.transitionRun(runId, ["running"], "cancelled", "run.cancelled", {}, "Cancelled by user", attempt);
     if (!event) return false;
     this.publish(event);
     return true;
@@ -312,6 +356,7 @@ export class AgentService {
   }
 
   resume(runId: RunId) {
+    if (this.closing) throw new Error("Service is shutting down");
     if (this.runtimes.has(runId)) throw new Error("Run is already active");
     this.store.cancelQueuedContinuations(runId, "Superseded by manual resume");
     this.repairTranscript(runId, "resume");

@@ -30,6 +30,17 @@ export class Store {
     this.migrate();
   }
 
+  nextContinuationLeaseExpiry() {
+    const row = this.db.prepare(`SELECT MIN(lease_until) as leaseUntil FROM run_continuations
+      WHERE status = 'running' AND lease_until IS NOT NULL`).get() as { leaseUntil: number | null };
+    return row.leaseUntil;
+  }
+
+  ownsContinuationLease(id: string, owner: string) {
+    return Boolean(this.db.prepare(`SELECT 1 FROM run_continuations
+      WHERE id = ? AND status = 'running' AND lease_owner = ? AND lease_until > ?`).get(id, owner, now()));
+  }
+
   listRecentMessages(sessionId: SessionId, limit = 200): Message[] {
     return this.db.prepare(`
       SELECT id, sessionId, role, content, createdAt FROM (
@@ -367,7 +378,7 @@ export class Store {
   renewContinuationLease(id: string, owner: string, leaseMs: number) {
     const timestamp = now();
     const result = this.db.prepare(`UPDATE run_continuations SET lease_until = ?, heartbeat_at = ?
-      WHERE id = ? AND status = 'running' AND lease_owner = ?`).run(timestamp + leaseMs, timestamp, id, owner);
+      WHERE id = ? AND status = 'running' AND lease_owner = ? AND lease_until > ?`).run(timestamp + leaseMs, timestamp, id, owner, timestamp);
     return result.changes === 1;
   }
 
@@ -681,10 +692,10 @@ export class Store {
     return rows.map((row) => ({ ...row, data: JSON.parse(row.data) as Record<string, unknown> }));
   }
 
-  transitionRun(runId: RunId, expected: RunStatus[], nextStatus: RunStatus, type: string, data: Record<string, unknown>, reason = "") {
+  transitionRun(runId: RunId, expected: RunStatus[], nextStatus: RunStatus, type: string, data: Record<string, unknown>, reason = "", expectedAttempt?: number) {
     const transaction = this.db.transaction(() => {
-      const row = this.db.prepare("SELECT status, last_event_seq as seq FROM runs WHERE id = ?").get(runId) as { status: RunStatus; seq: number } | undefined;
-      if (!row || !expected.includes(row.status)) return undefined;
+      const row = this.db.prepare("SELECT status, attempt, last_event_seq as seq FROM runs WHERE id = ?").get(runId) as { status: RunStatus; attempt: number; seq: number } | undefined;
+      if (!row || !expected.includes(row.status) || (expectedAttempt !== undefined && row.attempt !== expectedAttempt)) return undefined;
       const createdAt = now();
       const seq = row.seq + 1;
       const phase = nextStatus === "completed" ? "done" : nextStatus === "blocked" ? "blocked" : undefined;
@@ -692,9 +703,10 @@ export class Store {
       this.db.prepare("INSERT INTO run_events (run_id, seq, type, data, created_at) VALUES (?, ?, ?, ?, ?)")
         .run(runId, seq, type, JSON.stringify(data), createdAt);
       const placeholders = expected.map(() => "?").join(", ");
+      const attemptClause = expectedAttempt === undefined ? "" : " AND attempt = ?";
       const result = this.db.prepare(`UPDATE runs SET status = ?, phase = COALESCE(?, phase), blocked_reason = ?,
-        last_event_seq = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status IN (${placeholders})`)
-        .run(nextStatus, phase, reason, seq, completedAt, createdAt, runId, ...expected);
+        last_event_seq = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status IN (${placeholders})${attemptClause}`)
+        .run(nextStatus, phase, reason, seq, completedAt, createdAt, runId, ...expected, ...(expectedAttempt === undefined ? [] : [expectedAttempt]));
       if (result.changes !== 1) throw new Error("Run transition lost its compare-and-set race");
       return { runId, seq, type, data, createdAt } satisfies RunEvent;
     });
@@ -739,12 +751,12 @@ export class Store {
     return { passed: failures.length === 0, failures };
   }
 
-  completeWithGate(runId: RunId, response: string) {
+  completeWithGate(runId: RunId, response: string, expectedAttempt?: number) {
     const run = this.getRun(runId);
     if (!run) throw new Error("Run not found");
     const gate = this.evaluateGate(run);
     const reason = gate.failures.map((failure) => `${failure.key}: ${failure.reason}`).join("; ");
-    const event = this.transitionRun(runId, ["running"], gate.passed ? "completed" : "blocked", gate.passed ? "run.completed" : "run.blocked", { response, gate }, reason);
+    const event = this.transitionRun(runId, ["running"], gate.passed ? "completed" : "blocked", gate.passed ? "run.completed" : "run.blocked", { response, gate }, reason, expectedAttempt);
     if (!event) throw new Error("Run is no longer running");
     return { gate, run: this.getRun(runId)!, event };
   }

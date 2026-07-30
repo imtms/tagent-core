@@ -8,6 +8,19 @@ function assistantMessage(text: string): AgentMessage {
   return { role: "assistant", content: [{ type: "text", text }], api: "openai-completions", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: Date.now() };
 }
 
+class ControlledRuntime implements AgentRuntime {
+  private resolvePrompt?: () => void;
+  private rejectPrompt?: (error: Error) => void;
+  constructor(private readonly messages: AgentMessage[]) {}
+  prompt() { return new Promise<void>((resolve, reject) => { this.resolvePrompt = resolve; this.rejectPrompt = reject; }); }
+  async steer() {}
+  abort() {}
+  resolve() { this.resolvePrompt?.(); }
+  reject(error: Error) { this.rejectPrompt?.(error); }
+  getMessages() { return this.messages; }
+  getError() { return undefined; }
+}
+
 class FakeRuntime implements AgentRuntime {
   aborted = false;
   steered: string[] = [];
@@ -47,6 +60,15 @@ class RejectingAbortRuntime extends DeferredRuntime {
   }
 }
 
+class SlowAbortRuntime extends DeferredRuntime {
+  settled = false;
+  override async abort() {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    super.abort();
+    this.settled = true;
+  }
+}
+
 class ActiveDeferredRuntime extends DeferredRuntime {
   constructor(private readonly emitActivity: () => void, private readonly intervalMs: number) { super(); }
   private timer?: ReturnType<typeof setInterval>;
@@ -69,6 +91,87 @@ describe("AgentService runtime boundary", () => {
     expect(factory).toHaveBeenCalledOnce();
     expect(runtime.prompts).toEqual(["test factory"]);
     expect(store.getRun(run.id)?.status).toBe("blocked");
+    store.close();
+  });
+
+  it("does not let an expired continuation owner complete the Run", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "expired owner completion");
+    store.blockRun(run.id, "gate");
+    store.queueContinuation(run.id, "gate");
+    let oldRuntime!: ControlledRuntime;
+    let calls = 0;
+    const service = new AgentService(store, "/tmp", () => {
+      calls += 1;
+      if (calls === 1) return oldRuntime = new ControlledRuntime([assistantMessage("late")]);
+      return new CallbackRuntime(assistantMessage("new owner"), () => {
+        store.upsertPlanItem(run.id, { key: "recover", title: "Recover", status: "done", required: true, position: 1 });
+      });
+    }, { maxContinuations: 1 });
+    service.recoverContinuations();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const active = store.listContinuations(run.id)[0];
+    store.db.prepare("UPDATE run_continuations SET lease_until = ? WHERE id = ?").run(Date.now() - 1, active.id);
+    oldRuntime.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls).toBe(2);
+    expect(store.getRun(run.id)).toMatchObject({ status: "completed", attempt: 3 });
+    expect(store.listEvents(run.id).filter((event) => event.type === "run.completed")).toHaveLength(1);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("schedules recovery when a previous owner's continuation lease expires", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "delayed lease recovery");
+    store.blockRun(run.id, "plan missing");
+    store.queueContinuation(run.id, "plan missing");
+    const old = store.claimContinuation(run.id, "dead-owner", 30_000)!;
+    store.db.prepare("UPDATE run_continuations SET lease_until = ? WHERE id = ?").run(Date.now() + 25, old.continuation.id);
+    let calls = 0;
+    const service = new AgentService(store, "/tmp", () => new CallbackRuntime(assistantMessage("recovered"), () => {
+      calls += 1;
+      store.upsertPlanItem(run.id, { key: "recover", title: "Recover", status: "done", required: true, position: 1 });
+    }), { maxContinuations: 1 });
+    expect(service.recoverContinuations()).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(calls).toBe(1);
+    expect(store.getRun(run.id)).toMatchObject({ status: "completed", attempt: 3 });
+    expect(store.listEvents(run.id).some((event) => event.type === "continuation.recovered")).toBe(true);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("waits for asynchronous runtime aborts before closing", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const runtime = new SlowAbortRuntime();
+    const service = new AgentService(store, "/tmp", () => runtime);
+    await service.start(session.id, "graceful close");
+    const closing = service.closeRuntimes();
+    expect(runtime.settled).toBe(false);
+    await closing;
+    expect(runtime.settled).toBe(true);
+    expect(store.getRun((store.listRuns(session.id)[0]).id)?.status).toBe("interrupted");
+    store.close();
+  });
+
+  it("releases a continuation lease instead of failing it during graceful close", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "close continuation");
+    store.blockRun(run.id, "gate");
+    store.queueContinuation(run.id, "gate");
+    const runtime = new SlowAbortRuntime();
+    const service = new AgentService(store, "/tmp", () => runtime);
+    service.recoverContinuations();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.listContinuations(run.id)[0].status).toBe("running");
+    await service.closeRuntimes();
+    expect(store.listContinuations(run.id)[0]).toMatchObject({ status: "queued", leaseOwner: "" });
+    expect(store.getRun(run.id)).toMatchObject({ status: "blocked", phase: "blocked" });
     store.close();
   });
 

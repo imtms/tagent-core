@@ -22,6 +22,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Pi owns ephemeral per-attempt steering/follow-up delivery, automatic retry, and threshold/overflow/manual compaction; TAgent remains authoritative for TaskRun state, SQLite transcript, completion gates, operation receipts, and policy.
 - Pi SessionManager and SettingsManager are in-memory, ModelRuntime starts offline with runtime-only credentials, and project Extensions, Skills, prompts, themes, and context-file discovery are disabled.
 - Only TAgent custom tools are active. Pi built-in file and shell tools stay disabled because they do not carry TAgent operation receipts, stale-check propagation, or workspace governance.
+- TAgent composes Pi's installed before/after tool hooks instead of replacing them, and records prepared/validated arguments so future controlled Pi hook behavior remains intact.
 - Streaming model deltas and tool lifecycle events persisted to the run event log.
 - TAgent-owned tools: `read`, `write`, `edit`, `bash`, and `task_run`.
 - Workspace path containment and a minimal destructive-command policy.
@@ -41,8 +42,11 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Durable tool-attempt guards block repeated identical calls and repeated failures before long continuation budgets amplify loops.
 - Startup recovery requeues queued/running continuation records, restores the Run to blocked, and resumes from the persisted transcript.
 - Continuation startup uses a transactional database claim that atomically leases one queued continuation, resumes the Run, increments its attempt, and writes `continuation.started`; a partial unique index permits only one queued/running continuation per Run.
-- Active continuations renew their lease every 10 seconds, and terminal continuation updates are fenced by lease owner.
-- Startup recovery only reclaims queued or expired continuation leases; live owners are not preempted, and graceful service close releases only its own leases.
+- Active continuations renew their lease every 10 seconds; expired leases cannot be renewed, lease loss aborts the old runtime, and terminal continuation updates are fenced by lease owner.
+- Recovery reclaims queued or expired continuation leases at startup and schedules a wake-up at the next persisted lease deadline, so an unexpired orphan is recovered after expiry without another process restart.
+- Run completion, failure, cancellation, and timeout transitions are fenced by attempt, preventing a stale runtime from changing a newer attempt.
+- Graceful close stops scheduling, waits for Pi abort and AgentService execution settlement, releases only this owner's continuation leases, and marks other active Runs interrupted before SQLite closes.
+- SIGTERM and SIGINT enter the Fastify close path instead of bypassing runtime and lease cleanup.
 - Versioned SQLite schema metadata rejects newer unsupported databases and advances only after transactional migration success.
 - Resume/continuation context assembly prunes oldest complete turns to a 75% context-window budget while retaining the full transcript in SQLite.
 - New Run context reads the newest persisted Session message window in chronological order, including Sessions beyond 10,000 messages.

@@ -113,20 +113,28 @@ export class PiRuntime implements AgentRuntime {
       settingsManager,
     });
     session.agent.state.messages = [...(this.options.initialMessages ?? [])];
-    session.agent.beforeToolCall = async ({ toolCall }) => {
+    const piBeforeToolCall = session.agent.beforeToolCall;
+    const piAfterToolCall = session.agent.afterToolCall;
+    session.agent.beforeToolCall = async (context, signal) => {
+      const piResult = await piBeforeToolCall?.(context, signal);
+      if (piResult?.block) return piResult;
+      const { toolCall, args } = context;
       const run = this.options.store.getRun(this.options.runId);
       if (!run) return { block: true, reason: "Run not found" };
       if (["write", "edit", "bash"].includes(toolCall.name)) this.options.store.advanceRunPhase(this.options.runId, "implement");
-      const attempt = this.options.store.recordToolAttempt(this.options.runId, run.attempt, toolCall.id, toolCall.name, toolCall.arguments);
+      const attempt = this.options.store.recordToolAttempt(this.options.runId, run.attempt, toolCall.id, toolCall.name, args);
       if (!attempt.guard.blocked) return undefined;
       this.options.store.completeToolAttempt(this.options.runId, run.attempt, toolCall.id, false, attempt.guard.reason);
       this.emit("tool.guard.blocked", { toolCallId: toolCall.id, toolName: toolCall.name, argsHash: attempt.argsHash, reason: attempt.guard.reason });
       return { block: true, reason: `${attempt.guard.reason}. Use a different approach or report the blocker.` };
     };
-    session.agent.afterToolCall = async ({ toolCall, isError }) => {
+    session.agent.afterToolCall = async (context, signal) => {
+      const piResult = await piAfterToolCall?.(context, signal);
+      const { toolCall, isError } = context;
+      const effectiveError = piResult?.isError ?? isError;
       const run = this.options.store.getRun(this.options.runId);
-      if (run) this.options.store.completeToolAttempt(this.options.runId, run.attempt, toolCall.id, !isError, isError ? "Tool execution failed" : "");
-      return undefined;
+      if (run) this.options.store.completeToolAttempt(this.options.runId, run.attempt, toolCall.id, !effectiveError, effectiveError ? "Tool execution failed" : "");
+      return piResult;
     };
     this.unsubscribe = session.subscribe((event) => this.handleEvent(event));
     if (this.disposed) session.dispose();

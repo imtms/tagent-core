@@ -21,6 +21,30 @@ describe("Store", () => {
     expect(store.listMessages(session.id).map((message) => message.content)).toEqual(["hello", "world"]);
   });
 
+  it("does not renew an already expired continuation lease", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "expired renewal");
+    store.blockRun(run.id, "gate");
+    store.queueContinuation(run.id, "gate");
+    const claimed = store.claimContinuation(run.id, "owner", 10_000)!;
+    store.db.prepare("UPDATE run_continuations SET lease_until = ? WHERE id = ?").run(Date.now() - 1, claimed.continuation.id);
+    expect(store.renewContinuationLease(claimed.continuation.id, "owner", 30_000)).toBe(false);
+  });
+
+  it("fences terminal Run transitions by attempt", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "attempt fence");
+    store.blockRun(run.id, "gate");
+    store.queueContinuation(run.id, "gate");
+    const claimed = store.claimContinuation(run.id, "owner", 30_000)!;
+    expect(claimed.run.attempt).toBe(2);
+    expect(store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: "late" }, "late", 1)).toBeUndefined();
+    expect(store.getRun(run.id)).toMatchObject({ status: "running", attempt: 2 });
+    expect(store.listEvents(run.id).map((event) => event.type)).toEqual(["continuation.started"]);
+  });
+
   it("advances task phases from structured work without allowing regressions", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
