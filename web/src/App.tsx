@@ -47,7 +47,7 @@ export function App() {
     }, () => undefined);
   }, [run?.id, run?.status, run?.lastEventSeq, sessionId, loadSessions]);
 
-  useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [messages, streaming, events]);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, streaming, events]);
 
   const activeTools = useMemo(() => events.filter((event) => event.type.startsWith("tool.")).slice(-8), [events]);
 

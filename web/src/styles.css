@@ -112,6 +112,10 @@ button { color: inherit; }
   .topbar h1 { max-width: 48vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .message-scroll { padding: 24px 16px 12px; }
   .message.user { width: 94%; }
-  .composer-wrap { padding: 10px 12px 14px; }
+  .composer-wrap { padding: 10px 12px max(14px, env(safe-area-inset-bottom)); }
+  .icon-button { width: 42px; height: 42px; }
+  .composer { grid-template-columns: minmax(0, 1fr) 42px; }
+  .composer button { width: 42px; height: 42px; }
+  .composer textarea::placeholder, .topbar p { color: #68716c; }
   .mobile-only { display: grid; }
 }

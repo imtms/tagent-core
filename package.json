@@ -7,8 +7,8 @@
   "scripts": {
     "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "tsx watch src/server.ts",
-    "dev:web": "vite --host 0.0.0.0",
-    "build": "tsc -p tsconfig.server.json && vite build",
+    "dev:web": "vite --config ./vite.config.ts --host 0.0.0.0",
+    "build": "tsc -p tsconfig.server.json && vite build --config ./vite.config.ts",
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -17,11 +17,11 @@
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
-    "@fastify/cors": "^11.1.0",
+    "@fastify/cors": "^11.3.0",
     "@mariozechner/pi-agent-core": "0.73.1",
     "@mariozechner/pi-ai": "0.73.1",
     "better-sqlite3": "12.4.1",
-    "fastify": "5.6.1",
+    "fastify": "^5.10.0",
     "lucide-react": "0.553.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",

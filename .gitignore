@@ -8,4 +8,6 @@ test-results/
 .env.*
 !.env.example
 *.log
+*.pid
+tmp-*.png
 .DS_Store
