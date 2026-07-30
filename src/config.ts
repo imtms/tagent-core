@@ -80,9 +80,10 @@ export interface PublicRuntimeConfig {
   runTimeoutMs: number;
   maxContinuations: number;
   maxRunTokens: number;
+  schemaVersion?: number;
 }
 
-export function publicRuntimeConfig(config: AppConfig): PublicRuntimeConfig {
+export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): PublicRuntimeConfig {
   return {
     runtime: config.runtime,
     provider: config.model.provider,
@@ -95,6 +96,7 @@ export function publicRuntimeConfig(config: AppConfig): PublicRuntimeConfig {
     runTimeoutMs: config.runTimeoutMs,
     maxContinuations: config.maxContinuations,
     maxRunTokens: config.maxRunTokens,
+    schemaVersion,
   };
 }
 

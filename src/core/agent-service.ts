@@ -13,9 +13,20 @@ export class AgentService {
     private readonly store: Store,
     private readonly workspace: string,
     private readonly runtimeFactory: RuntimeFactory = createInProcessRuntime,
-    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number } = {},
+    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number; contextWindow?: number } = {},
   ) {
     this.store.markInterrupted();
+  }
+
+  recoverContinuations() {
+    const recovered = this.store.recoverContinuationsAfterRestart();
+    const runIds = [...new Set(recovered.map((item) => item.runId))];
+    for (const runId of runIds) {
+      const items = recovered.filter((item) => item.runId === runId);
+      this.publish(this.store.appendEvent(runId, "continuation.recovered", { reason: "service_restart", continuations: items.map((item) => ({ id: item.id, ordinal: item.ordinal })) }));
+      setImmediate(() => this.startQueuedContinuation(runId));
+    }
+    return runIds;
   }
 
   async start(sessionId: SessionId, query: string, requestId: string = randomUUID()) {
@@ -129,7 +140,7 @@ export class AgentService {
     }
     this.store.updateContinuation(continuation.id, "running");
     const run = this.store.resumeRun(runId);
-    const transcript = this.store.listTranscript(runId);
+    const transcript = this.prepareTranscript(runId);
     this.publish(this.store.appendEvent(runId, "continuation.started", { continuationId: continuation.id, ordinal: continuation.ordinal, attempt: run.attempt, transcriptCount: transcript.length }));
     this.launch(run, this.buildContinuationPrompt(run, continuation.ordinal), transcript, continuation.id);
   }
@@ -186,11 +197,39 @@ export class AgentService {
     if (this.runtimes.has(runId)) throw new Error("Run is already active");
     this.store.cancelQueuedContinuations(runId, "Superseded by manual resume");
     const run = this.store.resumeRun(runId);
-    const transcript = this.store.listTranscript(run.id);
+    const transcript = this.prepareTranscript(run.id);
     const event = this.store.appendEvent(run.id, "run.resumed", { attempt: run.attempt, resumedAt: run.resumedAt, mode: transcript.length ? "transcript-continuation" : "durable-snapshot-replay", transcriptCount: transcript.length });
     this.publish(event);
     this.launch(run, this.buildResumePrompt(run, transcript.length), transcript);
     return run;
+  }
+
+  private prepareTranscript(runId: RunId) {
+    const messages = this.store.listTranscript(runId);
+    const contextWindow = this.runtimeDefaults.contextWindow ?? this.runtimeDefaults.model?.contextWindow ?? 200_000;
+    const budget = Math.max(1_000, Math.floor(contextWindow * 0.75));
+    const estimate = (message: AgentMessage) => {
+      const jsonTokens = Math.ceil(JSON.stringify(message).length / 4);
+      return message.role === "assistant" ? Math.max(jsonTokens, message.usage.totalTokens) : jsonTokens;
+    };
+    const turns: AgentMessage[][] = [];
+    for (const message of messages) {
+      if (message.role === "user" || turns.length === 0) turns.push([message]);
+      else turns.at(-1)!.push(message);
+    }
+    const keptTurns: AgentMessage[][] = [];
+    let used = 0;
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      const turnTokens = turns[index].reduce((sum, message) => sum + estimate(message), 0);
+      if (used + turnTokens > budget && keptTurns.length > 0) break;
+      used += turnTokens;
+      keptTurns.unshift(turns[index]);
+    }
+    const kept = keptTurns.flat();
+    if (kept.length < messages.length) {
+      this.publish(this.store.appendEvent(runId, "context.pruned", { originalMessages: messages.length, keptMessages: kept.length, estimatedTokens: used, budget }));
+    }
+    return kept;
   }
 
   private buildResumePrompt(run: TaskRun, transcriptCount: number) {

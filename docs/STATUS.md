@@ -29,6 +29,9 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Provider request timeout/retry controls and a wall-clock timeout for each run attempt.
 - Persistent bounded continuations after completion-gate blocks, with queued/running/completed/blocked/failed/cancelled audit states.
 - Automatic continuation limits by count and cumulative run tokens; exhausted runs remain blocked for manual inspection.
+- Startup recovery requeues queued/running continuation records, restores the Run to blocked, and resumes from the persisted transcript.
+- Versioned SQLite schema metadata rejects newer unsupported databases and advances only after transactional migration success.
+- Resume/continuation context assembly prunes oldest complete turns to a 75% context-window budget while retaining the full transcript in SQLite.
 
 ### HTTP and Web
 
@@ -49,8 +52,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 
 ## In Progress
 
-- Add transcript compaction and token-budget pruning before context windows are exhausted.
-- Recover queued/running continuation records after a service restart with an explicit lease policy.
+- Add semantic or model-generated transcript summaries before old turns are pruned from runtime context.
 - Define bounded retry classes that distinguish transient provider failures from deterministic request errors.
 - Prepare the worker protocol needed for a future pi RPC adapter.
 
@@ -93,7 +95,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 
 ## Known Limitations
 
-- The current transcript is persisted as complete JSON messages but is not compacted or pruned.
+- The full transcript remains durable, but runtime context pruning currently drops old turns without generating a semantic summary.
 - Resume continues from persisted pi messages, but provider-specific server-side session state is not guaranteed to survive.
 - Bash isolation is policy-based, not an OS-level sandbox.
 - The first Web interface does not expose model/runtime selection or provider health.

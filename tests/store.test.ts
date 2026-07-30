@@ -39,6 +39,11 @@ describe("Store", () => {
     expect(result.run.status).toBe("completed");
   });
 
+  it("records the current schema version", () => {
+    const store = createStore();
+    expect(store.getSchemaVersion()).toBe(1);
+  });
+
   it("persists continuation lifecycle records", () => {
     const store = createStore();
     const session = store.createSession();
@@ -49,6 +54,20 @@ describe("Store", () => {
     store.updateContinuation(continuation.id, "completed");
     expect(store.listContinuations(run.id)[0]).toMatchObject({ status: "completed", startedAt: expect.any(Number), completedAt: expect.any(Number) });
     expect(store.getRun(run.id)?.continuations).toHaveLength(1);
+  });
+
+  it("requeues active continuations after restart", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "restart");
+    store.blockRun(run.id, "gate");
+    const continuation = store.queueContinuation(run.id, "gate");
+    store.updateContinuation(continuation.id, "running");
+    store.resumeRun(run.id);
+    store.markInterrupted();
+    expect(store.recoverContinuationsAfterRestart()).toEqual([{ id: continuation.id, runId: run.id, ordinal: 1 }]);
+    expect(store.getRun(run.id)).toMatchObject({ status: "blocked", blockedReason: "Continuation recovered after service restart" });
+    expect(store.listContinuations(run.id)[0]).toMatchObject({ status: "queued", error: "Recovered after service restart", startedAt: null });
   });
 
   it("returns the latest terminal run for a session", () => {

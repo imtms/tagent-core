@@ -13,9 +13,10 @@ const service = new AgentService(
   store,
   config.workspace,
   resolveRuntimeFactory(config.runtime),
-  { model: createModel(config.model), apiKey: config.apiKey, providerTimeoutMs: config.providerTimeoutMs, providerMaxRetries: config.providerMaxRetries, runTimeoutMs: config.runTimeoutMs, maxContinuations: config.maxContinuations, maxRunTokens: config.maxRunTokens },
+  { model: createModel(config.model), apiKey: config.apiKey, providerTimeoutMs: config.providerTimeoutMs, providerMaxRetries: config.providerMaxRetries, runTimeoutMs: config.runTimeoutMs, maxContinuations: config.maxContinuations, maxRunTokens: config.maxRunTokens, contextWindow: config.model.contextWindow },
 );
-const app = createApp({ store, service, runtimeConfig: publicRuntimeConfig(config) });
+const app = createApp({ store, service, runtimeConfig: publicRuntimeConfig(config, store.getSchemaVersion()) });
+service.recoverContinuations();
 await app.listen({ host: "0.0.0.0", port: config.port });
 console.log(`TAgent Core listening on http://localhost:${config.port}`);
 console.log(`Runtime=${config.runtime} Model=${config.model.modelId} Base=${config.model.baseUrl}`);

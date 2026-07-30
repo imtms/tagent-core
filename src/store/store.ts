@@ -18,6 +18,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
+const SCHEMA_VERSION = 1;
 
 export class Store {
   readonly db: Database.Database;
@@ -34,7 +35,13 @@ export class Store {
   }
 
   private migrate() {
+    const migration = this.db.transaction(() => {
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_meta (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        version INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
@@ -133,6 +140,8 @@ export class Store {
         created_at INTEGER NOT NULL
       );
     `);
+    const current = this.db.prepare("SELECT version FROM schema_meta WHERE id = 1").get() as { version: number } | undefined;
+    if (current && current.version > SCHEMA_VERSION) throw new Error(`Database schema version ${current.version} is newer than supported version ${SCHEMA_VERSION}`);
     this.ensureColumn("runs", "attempt", "INTEGER NOT NULL DEFAULT 1");
     this.ensureColumn("runs", "resumed_at", "INTEGER");
     this.ensureColumn("runs", "usage_input", "INTEGER NOT NULL DEFAULT 0");
@@ -141,6 +150,15 @@ export class Store {
     this.ensureColumn("runs", "usage_cache_write", "INTEGER NOT NULL DEFAULT 0");
     this.ensureColumn("runs", "usage_total_tokens", "INTEGER NOT NULL DEFAULT 0");
     this.ensureColumn("runs", "usage_cost", "REAL NOT NULL DEFAULT 0");
+    this.db.prepare(`INSERT INTO schema_meta (id, version, updated_at) VALUES (1, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET version = excluded.version, updated_at = excluded.updated_at`)
+      .run(SCHEMA_VERSION, now());
+    });
+    migration();
+  }
+
+  getSchemaVersion() {
+    return (this.db.prepare("SELECT version FROM schema_meta WHERE id = 1").get() as { version: number }).version;
   }
 
   private ensureColumn(table: string, column: string, definition: string) {
@@ -247,6 +265,20 @@ export class Store {
   getActiveRun(sessionId: SessionId): TaskRun | undefined {
     const row = this.db.prepare("SELECT id FROM runs WHERE session_id = ? AND status = 'running' ORDER BY updated_at DESC LIMIT 1").get(sessionId) as { id: string } | undefined;
     return row ? this.getRun(row.id) : undefined;
+  }
+
+  recoverContinuationsAfterRestart() {
+    const transaction = this.db.transaction(() => {
+      const active = this.db.prepare("SELECT id, run_id as runId, ordinal FROM run_continuations WHERE status IN ('queued', 'running') ORDER BY created_at").all() as Array<{ id: string; runId: string; ordinal: number }>;
+      const timestamp = now();
+      for (const item of active) {
+        this.db.prepare("UPDATE run_continuations SET status = 'queued', error = 'Recovered after service restart', started_at = NULL, completed_at = NULL WHERE id = ?").run(item.id);
+        this.db.prepare("UPDATE runs SET status = 'blocked', phase = 'blocked', blocked_reason = 'Continuation recovered after service restart', completed_at = NULL, updated_at = ? WHERE id = ? AND status IN ('running', 'interrupted', 'blocked')")
+          .run(timestamp, item.runId);
+      }
+      return active;
+    });
+    return transaction();
   }
 
   listContinuations(runId: RunId): RunContinuation[] {

@@ -15,7 +15,7 @@ export interface TaskRun {
   completionGate: { passed: boolean; failures: Array<{ kind: string; key: string; reason: string }> };
 }
 export interface RunEvent { runId: string; seq: number; type: string; data: Record<string, unknown>; createdAt: number }
-export interface RuntimeStatus { runtime: string; provider: string; api: string; baseUrl: string; modelId: string; credentialConfigured: boolean; providerTimeoutMs: number; providerMaxRetries: number; runTimeoutMs: number; maxContinuations: number; maxRunTokens: number }
+export interface RuntimeStatus { runtime: string; provider: string; api: string; baseUrl: string; modelId: string; credentialConfigured: boolean; providerTimeoutMs: number; providerMaxRetries: number; runTimeoutMs: number; maxContinuations: number; maxRunTokens: number; schemaVersion?: number }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });

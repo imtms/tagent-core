@@ -75,7 +75,7 @@ export function App() {
           <span className="session-icon"><Command size={15} /></span><span><strong>{session.title}</strong><small>{formatTime(session.updatedAt)}</small></span>
         </button>)}
       </div>
-      <div className="rail-footer"><span className="status-dot" />Local control plane</div>
+      <div className="rail-footer"><span className="status-dot" />Local control plane{runtimeStatus?.schemaVersion ? ` · db v${runtimeStatus.schemaVersion}` : ""}</div>
     </aside>
 
     <main className="conversation">

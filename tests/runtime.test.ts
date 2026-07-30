@@ -107,6 +107,44 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
+  it("recovers and completes a persisted continuation after restart", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "restart continuation");
+    store.blockRun(run.id, "plan missing");
+    const continuation = store.queueContinuation(run.id, "plan missing");
+    store.updateContinuation(continuation.id, "running");
+    store.resumeRun(run.id);
+    const service = new AgentService(store, "/tmp", () => new CallbackRuntime(assistantMessage("recovered"), () => {
+      store.upsertPlanItem(run.id, { key: "recover", title: "Recover", status: "done", required: true, position: 1 });
+    }), { maxContinuations: 2, maxRunTokens: 1000 });
+    expect(service.recoverContinuations()).toEqual([run.id]);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(store.getRun(run.id)).toMatchObject({ status: "completed", attempt: 3 });
+    expect(store.listContinuations(run.id)[0]).toMatchObject({ status: "completed", error: "" });
+    expect(store.listEvents(run.id).some((event) => event.type === "continuation.recovered")).toBe(true);
+    store.close();
+  });
+
+  it("prunes old transcript turns before resume", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "prune context");
+    const oldUser = { role: "user", content: "A".repeat(2400), timestamp: 1 } as const;
+    const oldAssistant = assistantMessage("B".repeat(2400));
+    const newUser = { role: "user", content: "latest", timestamp: 3 } as const;
+    const newAssistant = assistantMessage("latest answer");
+    for (const message of [oldUser, oldAssistant, newUser, newAssistant]) store.appendTranscript(run.id, 1, message);
+    store.blockRun(run.id, "gate");
+    let options: Parameters<RuntimeFactory>[0] | undefined;
+    const service = new AgentService(store, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 1_000 });
+    service.resume(run.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(options?.initialMessages).toEqual([newUser, newAssistant]);
+    expect(store.listEvents(run.id).some((event) => event.type === "context.pruned" && event.data.originalMessages === 4 && event.data.keptMessages === 2)).toBe(true);
+    store.close();
+  });
+
   it("automatically continues a gate-blocked run and completes it", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
