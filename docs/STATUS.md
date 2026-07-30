@@ -129,6 +129,6 @@ Updated: 2026-07-30 (Asia/Singapore)
 - The first Web interface does not expose model/runtime selection or provider health.
 - Multiple TAgent Core processes must not target the same SQLite database; process-level leader enforcement is not implemented.
 - Continuation attempts heartbeat, use owner fencing, and only expire into recovery after the persisted lease deadline; process-level leader election remains absent.
-- Cancel/resume transcript repair is implemented. Steering and follow-up now use pi's observable queue, but TAgent still lacks a bounded durable control-plane inbox and explicit closing/full responses.
+- Cancel/resume transcript repair is implemented. Steering and follow-up use Pi only while `AgentSession.isStreaming`; settled runtimes reject admission, queue snapshots and settled state are persisted, and cancellation clears/audits Pi pending input. TAgent still lacks a bounded durable control-plane inbox and explicit closing/full responses.
 - Provider failures are typed and auditable, but retry scheduling still uses the provider SDK/pi boundary rather than a TAgent-owned retry loop.
 - The HTTP API has no authentication or multi-tenant isolation and must remain on localhost or a trusted private network for this alpha.

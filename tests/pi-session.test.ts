@@ -121,6 +121,30 @@ describe("Pi 0.83 AgentSession integration", () => {
     store.close();
   });
 
+  it("uses Pi clearQueue when aborting and audits discarded pending input", async () => {
+    const { store, run, runtime } = await setup([fauxAssistantMessage("a long streaming answer"), fauxAssistantMessage("must not run")], 10);
+    const prompt = runtime.prompt("start");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await expect(runtime.followUp("pending input")).resolves.toBe("accepted");
+    await runtime.abort();
+    await prompt;
+    expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "runtime.queue.cleared", data: expect.objectContaining({ followUp: ["pending input"] }) }),
+    ]));
+    runtime.dispose();
+    store.close();
+  });
+
+  it("rejects steer and follow-up after Pi has settled instead of orphaning queue messages", async () => {
+    const { store, run, runtime } = await setup([fauxAssistantMessage("settled")]);
+    await runtime.prompt("start");
+    await expect(runtime.steer("too late")).resolves.toBe("settled");
+    await expect(runtime.followUp("also too late")).resolves.toBe("settled");
+    expect(store.listEvents(run.id).filter((event) => event.type === "runtime.queue")).toHaveLength(0);
+    runtime.dispose();
+    store.close();
+  });
+
   it("uses the SDK follow-up queue after the active response settles", async () => {
     const { store, run, runtime } = await setup([fauxAssistantMessage("active response"), fauxAssistantMessage("follow-up result")], 10);
     const prompt = runtime.prompt("start");

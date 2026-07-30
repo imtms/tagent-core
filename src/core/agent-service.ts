@@ -72,7 +72,10 @@ export class AgentService {
   async followUp(runId: RunId, instruction: string) {
     const runtime = this.runtimes.get(runId);
     if (!runtime?.followUp) return "inactive" as const;
-    try { await runtime.followUp(instruction); }
+    try {
+      const result = await runtime.followUp(instruction);
+      if (result === "settled") return "inactive" as const;
+    }
     catch (error) {
       this.publish(this.store.appendEvent(runId, "run.follow_up.failed", { error: error instanceof Error ? error.message : String(error) }));
       return "failed" as const;
@@ -369,7 +372,10 @@ export class AgentService {
   async steer(runId: RunId, instruction: string) {
     const runtime = this.runtimes.get(runId);
     if (!runtime) return "inactive" as const;
-    try { await runtime.steer(instruction); }
+    try {
+      const result = await runtime.steer(instruction);
+      if (result === "settled") return "inactive" as const;
+    }
     catch (error) {
       this.publish(this.store.appendEvent(runId, "run.steer.failed", { error: error instanceof Error ? error.message : String(error) }));
       return "failed" as const;

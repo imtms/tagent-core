@@ -40,8 +40,8 @@ TAgent owns this minimal contract:
 
 ```text
 prompt(query) -> Promise<void>
-steer(instruction) -> Promise<void>
-followUp(instruction) -> Promise<void>
+steer(instruction) -> Promise<"accepted" | "settled">
+followUp(instruction) -> Promise<"accepted" | "settled">
 compact(instructions?) -> Promise<void>
 abort() -> void | Promise<void>
 dispose() -> void
@@ -53,6 +53,7 @@ The runtime factory receives Run ID, workspace, system prompt, tools, and an eve
 Run events are consumed through Schema v5 durable consumer cursors. Each `(run, consumer)` claim increments a generation; replay starts after the durable ACK, ACKs are monotonic and bounded by the persisted event tail, and stale generations cannot advance delivery state.
 
 Pi 0.83 abort is asynchronous and does not complete until the session is idle. Runtime adapters must preserve an abort requested during initialization, and must not dispose a busy session before that abort settles. Service close must also join the AgentService execution task before closing durable storage. Intermediate `agent_end` events with `willRetry: true` are retry progress, not completed assistant messages.
+Pi queue methods are used only while `AgentSession.isStreaming`; `agent_settled` closes admission, `queue_update` is the authoritative in-memory queue snapshot, and cancellation calls Pi `clearQueue()` before asynchronous abort. See [PI_RUNTIME_BOUNDARY.md](PI_RUNTIME_BOUNDARY.md).
 
 Pi installs Agent-level before/after tool hooks for its own runtime and extension semantics. TAgent adapters must compose those hooks rather than replace them, preserve Pi block/result transformations, and bind operation guards to Pi's prepared and validated arguments.
 

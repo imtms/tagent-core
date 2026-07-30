@@ -4,10 +4,12 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Store } from "../store/store.js";
 import type { RunEvent, RunId } from "../core/types.js";
 
+export type RuntimeQueueResult = "accepted" | "settled";
+
 export interface AgentRuntime {
   prompt(query: string): Promise<void>;
-  steer(instruction: string): Promise<void>;
-  followUp?(instruction: string): Promise<void>;
+  steer(instruction: string): Promise<RuntimeQueueResult>;
+  followUp?(instruction: string): Promise<RuntimeQueueResult>;
   compact?(instructions?: string): Promise<void>;
   abort(): void | Promise<void>;
   dispose?(): void;

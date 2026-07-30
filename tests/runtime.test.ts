@@ -475,7 +475,9 @@ describe("AgentService runtime boundary", () => {
     }, { dynamicBudget: false, maxContinuations: 64, maxRunTokens: 1_000_000, runTimeoutMs: 60_000 });
     const run = await service.start(session.id, "long durable run");
     runId = run.id;
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    for (let index = 0; index < 200 && store.getRun(run.id)?.status !== "completed"; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     expect(calls).toBe(41);
     expect(store.getRun(run.id)).toMatchObject({ status: "completed", attempt: 41 });
     expect(store.listContinuations(run.id)).toHaveLength(40);

@@ -44,7 +44,9 @@ export class PiRuntime implements AgentRuntime {
 
   async followUp(instruction: string) {
     const session = await this.initialize();
+    if (!session.isStreaming) return "settled" as const;
     await session.followUp(instruction);
+    return "accepted" as const;
   }
 
   async compact(instructions?: string) {
@@ -162,11 +164,15 @@ export class PiRuntime implements AgentRuntime {
         this.emit(event.willRetry ? "message.retrying" : "message.completed", { content: messageText(final), willRetry: event.willRetry });
       }
     }
-    if (event.type === "queue_update") this.emit("runtime.queue", { steering: event.steering, followUp: event.followUp });
+    if (event.type === "queue_update") this.emit("runtime.queue", { steering: event.steering, followUp: event.followUp, pendingMessageCount: event.steering.length + event.followUp.length });
+    if (event.type === "agent_settled") this.emit("runtime.settled", { pendingMessageCount: this.session?.pendingMessageCount ?? 0 });
     if (event.type === "auto_retry_start") this.emit("provider.retry", { attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs, summary: event.errorMessage.replace(/\s+/g, " ").slice(0, 500) });
     if (event.type === "auto_retry_end") this.emit("provider.retry.completed", { success: event.success, attempt: event.attempt, finalError: event.finalError?.replace(/\s+/g, " ").slice(0, 500) });
     if (event.type === "compaction_start") this.emit("context.compaction.started", { reason: event.reason });
     if (event.type === "compaction_end") this.emit("context.compaction.completed", { reason: event.reason, aborted: event.aborted, willRetry: event.willRetry, error: event.errorMessage?.replace(/\s+/g, " ").slice(0, 500) });
+    if (event.type === "summarization_retry_scheduled") this.emit("context.summarization.retry", { attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs, summary: event.errorMessage.replace(/\s+/g, " ").slice(0, 500) });
+    if (event.type === "summarization_retry_attempt_start") this.emit("context.summarization.retry.started", { source: event.source, ...(event.source === "compaction" ? { reason: event.reason } : {}) });
+    if (event.type === "summarization_retry_finished") this.emit("context.summarization.retry.finished", {});
   }
 
   async prompt(query: string) {
@@ -178,7 +184,9 @@ export class PiRuntime implements AgentRuntime {
 
   async steer(instruction: string) {
     const session = await this.initialize();
+    if (!session.isStreaming) return "settled" as const;
     await session.steer(instruction);
+    return "accepted" as const;
   }
 
   async abort() {
@@ -186,7 +194,11 @@ export class PiRuntime implements AgentRuntime {
     if (!this.abortPromise) {
       this.abortPromise = (async () => {
         const session = this.session ?? await this.initializing?.catch(() => undefined);
-        if (session) await session.abort();
+        if (session) {
+          const cleared = session.clearQueue();
+          if (cleared.steering.length || cleared.followUp.length) this.emit("runtime.queue.cleared", cleared);
+          await session.abort();
+        }
       })();
     }
     await this.abortPromise;
