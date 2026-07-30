@@ -64,7 +64,29 @@ export class PiRuntime implements AgentRuntime {
       },
     }, { projectTrusted: false });
     const modelRuntime = this.options.modelRuntime ?? await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
-    if (this.options.model && this.options.apiKey) await modelRuntime.setRuntimeApiKey(this.options.model.provider, this.options.apiKey);
+    if (this.options.model && !modelRuntime.getProvider(this.options.model.provider)) {
+      modelRuntime.registerProvider(this.options.model.provider, {
+        name: this.options.model.provider,
+        api: this.options.model.api,
+        baseUrl: this.options.model.baseUrl,
+        models: [{
+          id: this.options.model.id,
+          name: this.options.model.name,
+          api: this.options.model.api,
+          baseUrl: this.options.model.baseUrl,
+          reasoning: this.options.model.reasoning,
+          thinkingLevelMap: this.options.model.thinkingLevelMap,
+          input: [...this.options.model.input],
+          cost: this.options.model.cost,
+          contextWindow: this.options.model.contextWindow,
+          maxTokens: this.options.model.maxTokens,
+          headers: this.options.model.headers,
+          compat: this.options.model.compat,
+        }],
+      });
+      await modelRuntime.refresh({ allowNetwork: false });
+    }
+    if (this.options.model && this.options.apiKey) await modelRuntime.setRuntimeApiKey(this.options.model.provider, this.options.apiKey, { allowNetwork: false });
     const resourceLoader = new DefaultResourceLoader({
       cwd: this.options.workspace,
       agentDir: this.options.workspace,

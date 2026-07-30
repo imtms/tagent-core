@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createServer } from "node:http";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { PiRuntime } from "../src/runtime/pi-runtime.js";
@@ -72,5 +73,43 @@ describe("Pi 0.83 AgentSession integration", () => {
     expect(store.listEvents(run.id).filter((event) => event.type === "provider.failure")).toEqual(expect.arrayContaining([expect.objectContaining({ data: expect.objectContaining({ retryable: false }) })]));
     runtime.dispose();
     store.close();
+  });
+
+  it("registers an unknown OpenAI-compatible provider before applying its runtime key", async () => {
+    let authorization = "";
+    const server = createServer((request, response) => {
+      authorization = request.headers.authorization ?? "";
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end([
+        'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"custom-model","choices":[{"index":0,"delta":{"role":"assistant","content":"custom ready"},"finish_reason":null}]}',
+        'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"custom-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}}',
+        "data: [DONE]",
+        "",
+      ].join("\n\n"));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("HTTP test server did not bind");
+    const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "custom provider");
+    const model = {
+      id: "custom-model", name: "custom-model", api: "openai-completions" as const, provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
+    };
+    const runtime = new PiRuntime({ store, runId: run.id, workspace: process.cwd(), systemPrompt: "Controlled prompt", model, modelRuntime, apiKey: "test-runtime-key", initialMessages: [], providerMaxRetries: 0 });
+    try {
+      await runtime.prompt("hello");
+      expect(modelRuntime.getProvider(model.provider)).toBeDefined();
+      expect((await modelRuntime.getAuth(model))?.auth.apiKey).toBe("test-runtime-key");
+      expect(authorization).toBe("Bearer test-runtime-key");
+      expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "custom ready" }] });
+    } finally {
+      runtime.dispose();
+      store.close();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   });
 });
