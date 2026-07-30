@@ -78,6 +78,10 @@ export class PiRuntime {
     return this.agent.state.messages;
   }
 
+  getError() {
+    return this.agent.state.errorMessage;
+  }
+
   private emit(type: string, data: Record<string, unknown>) {
     const event = this.store.appendEvent(this.runId, type, data);
     this.onEvent?.(event);

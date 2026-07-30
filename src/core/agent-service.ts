@@ -35,6 +35,8 @@ export class AgentService {
   private async execute(runId: RunId, runtime: PiRuntime) {
     try {
       await runtime.prompt(this.store.getRun(runId)?.goal ?? "");
+      const runtimeError = runtime.getError();
+      if (runtimeError) throw new Error(runtimeError);
       const messages = runtime.getMessages();
       const final = [...messages].reverse().find((message) => message.role === "assistant");
       const response = final && "content" in final
@@ -46,6 +48,7 @@ export class AgentService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.store.finalizeRun(runId, "failed", message);
+      this.store.appendMessage(this.store.getRun(runId)!.sessionId, "assistant", `Run failed: ${message}`);
       this.publish(this.store.appendEvent(runId, "run.failed", { error: message }));
     } finally {
       this.runtimes.delete(runId);
