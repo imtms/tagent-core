@@ -100,16 +100,52 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     if (!run) return reply.code(404).send({ error: "run not found" });
     return { ...run, budget: service.getBudget(id) };
   });
+  app.post("/api/runs/:id/consumers/:consumerId/claim", async (request, reply) => {
+    const { id, consumerId } = request.params as { id: string; consumerId: string };
+    if (!service.getRun(id)) return reply.code(404).send({ error: "run not found" });
+    if (!consumerId || consumerId.length > 200) return reply.code(400).send({ error: "invalid consumer id" });
+    return store.claimEventConsumer(id, consumerId);
+  });
+  app.post("/api/runs/:id/consumers/:consumerId/ack", async (request, reply) => {
+    const { id, consumerId } = request.params as { id: string; consumerId: string };
+    const body = request.body as { generation?: number; seq?: number };
+    const status = store.ackEventConsumer(id, consumerId, Number(body?.generation), Number(body?.seq));
+    if (status === "missing") return reply.code(404).send({ error: "run not found", status });
+    if (status === "stale") return reply.code(409).send({ error: "consumer generation is stale", status });
+    if (status === "invalid") return reply.code(400).send({ error: "invalid acknowledgement sequence", status });
+    return { ok: true, status };
+  });
   app.get("/api/runs/:id/events", async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };
-    const after = Number((request.query as { after?: string }).after ?? 0);
+    const query = request.query as { after?: string; consumerId?: string; generation?: string };
+    const after = Number(query.after ?? 0);
+    const generation = Number(query.generation);
     if (!service.getRun(id)) return reply.code(404).send({ error: "run not found" });
+    const cursor = query.consumerId ? store.getEventConsumer(id, query.consumerId) : undefined;
+    if (!cursor || cursor.generation !== generation) return reply.code(409).send({ error: "consumer generation is stale" });
+    const replayAfter = Math.max(after, cursor.ackedSeq);
     reply.hijack();
     const response = reply.raw;
     response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no" });
-    const send = (event: ReturnType<typeof service.replay>[number]) => response.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`);
-    for (const event of service.replay(id, after)) send(event);
-    const unsubscribe = service.subscribe(id, send);
+    let unsubscribe = () => {};
+    let replaying = true;
+    const buffered: ReturnType<typeof service.replay> = [];
+    const send = (event: ReturnType<typeof service.replay>[number]) => {
+      if (store.getEventConsumer(id, query.consumerId!)?.generation !== generation) {
+        unsubscribe();
+        response.end();
+        return false;
+      }
+      return response.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`);
+    };
+    unsubscribe = service.subscribe(id, (event) => { if (replaying) buffered.push(event); else send(event); });
+    let deliveredSeq = replayAfter;
+    for (const event of service.replay(id, replayAfter)) {
+      if (send(event) === false) return;
+      deliveredSeq = event.seq;
+    }
+    replaying = false;
+    for (const event of buffered) if (event.seq > deliveredSeq && send(event) === false) return;
     const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), 15_000);
     request.raw.on("close", () => { clearInterval(heartbeat); unsubscribe(); });
   });

@@ -50,6 +50,7 @@ getError() -> string | undefined
 ```
 
 The runtime factory receives Run ID, workspace, system prompt, tools, and an event sink. The adapter owns pi SessionManager, SettingsManager, ModelRuntime, queue, retry, and compaction details; pi-specific classes and protocol events must not leak into AgentService or the database schema. AgentService aggregates persisted runtime events into a throttled durable Run checkpoint, keeping checkpoint semantics runtime-neutral for future RPC workers.
+Run events are consumed through Schema v5 durable consumer cursors. Each `(run, consumer)` claim increments a generation; replay starts after the durable ACK, ACKs are monotonic and bounded by the persisted event tail, and stale generations cannot advance delivery state.
 
 Pi 0.83 abort is asynchronous and does not complete until the session is idle. Runtime adapters must preserve an abort requested during initialization, and must not dispose a busy session before that abort settles. Service close must also join the AgentService execution task before closing durable storage. Intermediate `agent_end` events with `willRetry: true` are retry progress, not completed assistant messages.
 

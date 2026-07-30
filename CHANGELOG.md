@@ -2,6 +2,11 @@
 
 All notable changes to TAgent Core are documented here.
 
+## Unreleased
+
+- Add Schema v5 durable event-consumer cursors with monotonic ACKs, terminal delivery evidence, and generation fencing for stale Web/SSE connections.
+- Close the subscribe-after-replay race by buffering live events while the persisted event backlog is replayed.
+
 ## [Unreleased]
 
 ### Changed

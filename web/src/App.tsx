@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, Bot, Check, ChevronDown, ChevronRight, Circle, Command, FileText, Menu, MessageSquarePlus, PanelRight, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
 import { api, subscribe, type Message, type RunEvent, type RuntimeStatus, type Session, type TaskRun, type TranscriptItem } from "./api";
 import { Markdown } from "./Markdown";
+import { createRequestId } from "./id";
 
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
 
@@ -65,13 +66,22 @@ export function App() {
 
   useEffect(() => {
     if (!activeRun?.id || activeRun.status !== "running") return;
-    const after = activeRun.checkpoint?.active ? activeRun.checkpoint.lastEventSeq : activeRun.lastEventSeq ?? 0;
-    return subscribe(activeRun.id, after, async (event) => {
+    let closed = false;
+    let unsubscribe: () => void = () => {};
+    const consumerKey = "tagent.eventConsumerId";
+    let consumerId = localStorage.getItem(consumerKey);
+    if (!consumerId) { consumerId = `web-${createRequestId()}`; localStorage.setItem(consumerKey, consumerId); }
+    const runId = activeRun.id;
+    const checkpointAfter = activeRun.checkpoint?.active ? activeRun.checkpoint.lastEventSeq : activeRun.lastEventSeq ?? 0;
+    void api.claimConsumer(runId, consumerId).then((cursor) => {
+      if (closed) return;
+      const after = Math.max(checkpointAfter, cursor.ackedSeq);
+      unsubscribe = subscribe(runId, consumerId, cursor.generation, after, async (event) => {
       setEvents((current) => [...current.slice(-39), event]);
       if (event.type === "message.delta") setStreaming((current) => current + String(event.data.delta ?? ""));
       if (["run.completed", "run.blocked", "run.failed", "run.cancelled"].includes(event.type)) {
         setStreaming("");
-        const updated = await api.run(activeRun.id);
+        const updated = await api.run(runId);
         setActiveRun(updated.status === "running" ? updated : null);
         setSelectedRun((current) => current?.id === updated.id ? updated : current);
         setRuns(await api.runs(sessionId));
@@ -79,12 +89,15 @@ export function App() {
         setTranscript(await api.transcriptView(updated.id));
         await loadSessions();
       } else if (event.type === "run.updated" || event.type.startsWith("tool.") || event.type.startsWith("continuation.")) {
-        const updated = await api.run(activeRun.id);
+        const updated = await api.run(runId);
         setActiveRun(updated);
         setSelectedRun((current) => current?.id === updated.id ? updated : current);
         setRuns((current) => current.map((item) => item.id === updated.id ? updated : item));
       }
-    }, () => undefined);
+      if (!closed) await api.ackConsumer(runId, consumerId, cursor.generation, event.seq).catch(() => undefined);
+      }, () => undefined);
+    }).catch((cause) => { if (!closed) setError(cause instanceof Error ? cause.message : String(cause)); });
+    return () => { closed = true; unsubscribe(); };
   }, [activeRun?.id, activeRun?.status, sessionId, loadSessions]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, streaming, events]);

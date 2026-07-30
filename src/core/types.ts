@@ -24,6 +24,16 @@ export interface RunCheckpoint {
   updatedAt: number;
 }
 
+export interface EventConsumerCursor {
+  runId: RunId;
+  consumerId: string;
+  generation: number;
+  ackedSeq: number;
+  terminalAckedSeq: number | null;
+  claimedAt: number;
+  updatedAt: number;
+}
+
 export interface Message {
   id: number;
   sessionId: SessionId;

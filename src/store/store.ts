@@ -11,6 +11,7 @@ import type {
   RunEvent,
   RunId,
   RunContinuation,
+  EventConsumerCursor,
   RunPhase,
   RunStatus,
   Session,
@@ -19,7 +20,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 export class Store {
   readonly db: Database.Database;
@@ -168,6 +169,17 @@ export class Store {
         PRIMARY KEY (run_id, seq)
       );
       CREATE INDEX IF NOT EXISTS idx_transcript_run ON run_transcript(run_id, seq);
+      CREATE TABLE IF NOT EXISTS event_consumers (
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        consumer_id TEXT NOT NULL,
+        generation INTEGER NOT NULL DEFAULT 0,
+        acked_seq INTEGER NOT NULL DEFAULT 0,
+        terminal_acked_seq INTEGER,
+        claimed_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (run_id, consumer_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_event_consumers_updated ON event_consumers(updated_at);
       CREATE TABLE IF NOT EXISTS run_checkpoints (
         run_id TEXT PRIMARY KEY REFERENCES runs(id),
         attempt INTEGER NOT NULL,
@@ -733,6 +745,43 @@ export class Store {
         .run(runId, seq, type, JSON.stringify(data), createdAt);
       this.db.prepare("UPDATE runs SET last_event_seq = ?, updated_at = ? WHERE id = ?").run(seq, createdAt, runId);
       return { runId, seq, type, data, createdAt } satisfies RunEvent;
+    });
+    return transaction();
+  }
+
+  claimEventConsumer(runId: RunId, consumerId: string): EventConsumerCursor {
+    const transaction = this.db.transaction(() => {
+      if (!this.db.prepare("SELECT 1 FROM runs WHERE id = ?").get(runId)) throw new Error(`Unknown run ${runId}`);
+      const timestamp = now();
+      this.db.prepare(`INSERT INTO event_consumers
+        (run_id, consumer_id, generation, acked_seq, terminal_acked_seq, claimed_at, updated_at)
+        VALUES (?, ?, 1, 0, NULL, ?, ?)
+        ON CONFLICT(run_id, consumer_id) DO UPDATE SET generation = event_consumers.generation + 1,
+          claimed_at = excluded.claimed_at, updated_at = excluded.updated_at`).run(runId, consumerId, timestamp, timestamp);
+      return this.getEventConsumer(runId, consumerId)!;
+    });
+    return transaction();
+  }
+
+  getEventConsumer(runId: RunId, consumerId: string): EventConsumerCursor | undefined {
+    return this.db.prepare(`SELECT run_id as runId, consumer_id as consumerId, generation,
+      acked_seq as ackedSeq, terminal_acked_seq as terminalAckedSeq,
+      claimed_at as claimedAt, updated_at as updatedAt FROM event_consumers
+      WHERE run_id = ? AND consumer_id = ?`).get(runId, consumerId) as EventConsumerCursor | undefined;
+  }
+
+  ackEventConsumer(runId: RunId, consumerId: string, generation: number, seq: number) {
+    const transaction = this.db.transaction(() => {
+      const run = this.db.prepare("SELECT last_event_seq as lastEventSeq FROM runs WHERE id = ?").get(runId) as { lastEventSeq: number } | undefined;
+      if (!run) return "missing" as const;
+      const cursor = this.getEventConsumer(runId, consumerId);
+      if (!cursor || cursor.generation !== generation) return "stale" as const;
+      if (!Number.isSafeInteger(seq) || seq < cursor.ackedSeq || seq > run.lastEventSeq) return "invalid" as const;
+      const terminal = this.db.prepare(`SELECT seq FROM run_events WHERE run_id = ? AND seq <= ?
+        AND type IN ('run.completed','run.blocked','run.failed','run.cancelled') ORDER BY seq DESC LIMIT 1`).get(runId, seq) as { seq: number } | undefined;
+      this.db.prepare(`UPDATE event_consumers SET acked_seq = ?, terminal_acked_seq = COALESCE(?, terminal_acked_seq), updated_at = ?
+        WHERE run_id = ? AND consumer_id = ? AND generation = ?`).run(seq, terminal?.seq ?? null, now(), runId, consumerId, generation);
+      return "accepted" as const;
     });
     return transaction();
   }

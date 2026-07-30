@@ -6,7 +6,7 @@ describe("Web workbench state model", () => {
     const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
     expect(source).toContain("const [activeRun, setActiveRun]");
     expect(source).toContain("const [selectedRun, setSelectedRun]");
-    expect(source).toContain("subscribe(activeRun.id");
+    expect(source).toContain("subscribe(runId, consumerId, cursor.generation");
     expect(source).toContain("setSelectedRun(selected)");
     expect(source).not.toContain("const [run, setRun]");
   });
@@ -25,7 +25,7 @@ describe("Web workbench state model", () => {
   it("refreshes the active Run when structured task state changes", async () => {
     const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
     expect(source).toContain('event.type === "run.updated"');
-    expect(source).toContain("const updated = await api.run(activeRun.id)");
+    expect(source).toContain("const updated = await api.run(runId)");
   });
 
   it("restores active streaming and tools from the durable checkpoint", async () => {

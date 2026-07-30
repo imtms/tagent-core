@@ -47,4 +47,21 @@ describe("HTTP API", () => {
     const response = await app.inject({ method: "POST", url: `/api/sessions/${session.id}/messages`, payload: { content: " " } });
     expect(response.statusCode).toBe(400);
   });
+
+  it("claims consumers and rejects stale or invalid ACKs", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
+    const store = new Store(":memory:");
+    const app = createApp({ store, service: new AgentService(store, workspace), logger: false, webRoot: workspace });
+    apps.push(app);
+    const session = store.createSession();
+    const run = store.createRun(session.id, "consumer api");
+    store.appendEvent(run.id, "message.delta", { delta: "a" });
+    const first = (await app.inject({ method: "POST", url: `/api/runs/${run.id}/consumers/web/claim` })).json();
+    const second = (await app.inject({ method: "POST", url: `/api/runs/${run.id}/consumers/web/claim` })).json();
+    expect(second.generation).toBe(first.generation + 1);
+    expect((await app.inject({ method: "POST", url: `/api/runs/${run.id}/consumers/web/ack`, payload: { generation: first.generation, seq: 1 } })).statusCode).toBe(409);
+    expect((await app.inject({ method: "POST", url: `/api/runs/${run.id}/consumers/web/ack`, payload: { generation: second.generation, seq: 2 } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: `/api/runs/${run.id}/consumers/web/ack`, payload: { generation: second.generation, seq: 1 } })).json()).toEqual({ ok: true, status: "accepted" });
+  });
+
 });

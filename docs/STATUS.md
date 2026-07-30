@@ -6,7 +6,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 
 ### Core control plane
 
-- SQLite-backed sessions and ordered conversation messages.
+- SQLite-backed sessions, ordered conversation messages, and Schema v5 durable event-consumer cursors.
 - Durable TaskRun records with goal, phase, status, plan items, checks, artifacts, ordered events, and Schema v4 Run checkpoints.
 - Deterministic completion gate that prevents a model response from directly marking a run complete.
 - Request idempotency through stable `requestId` values.
@@ -67,6 +67,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Blocked and interrupted runs can be resumed from the Web workbench; the UI exposes the current attempt.
 - The right panel lists up to 50 recent TaskRuns as collapsible history and expands the current/latest Run by default.
 - Web restores active assistant text and current tool from the durable checkpoint before opening SSE from the checkpoint's covered event sequence, and shows preserved checkpoints for interrupted or terminal Run diagnostics.
+- Web event delivery now claims a persistent per-Run consumer generation, resumes from the greater of checkpoint coverage and durable ACK, advances ACKs monotonically after event handling, and records terminal-event acknowledgement evidence. A newer connection fences stale SSE streams and stale ACK writers.
 - Dynamic execution budgets scale continuation count, cumulative tokens, and idle timeout across simple/standard/complex/extended tiers; `TAGENT_RUN_HARD_TIMEOUT_MS` remains the absolute attempt ceiling.
 - A deterministic stress test completes a single durable Run after 40 automatic continuations; hundreds of model-backed turns are not yet an acceptance claim.
 

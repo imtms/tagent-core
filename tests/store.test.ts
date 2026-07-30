@@ -21,6 +21,24 @@ describe("Store", () => {
     expect(store.listMessages(session.id).map((message) => message.content)).toEqual(["hello", "world"]);
   });
 
+  it("persists event consumer ACKs and fences stale generations", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "consumer ack");
+    store.appendEvent(run.id, "message.delta", { delta: "a" });
+    store.appendEvent(run.id, "run.completed", {});
+    const first = store.claimEventConsumer(run.id, "web-client");
+    expect(first).toMatchObject({ generation: 1, ackedSeq: 0 });
+    expect(store.ackEventConsumer(run.id, "web-client", first.generation, 1)).toBe("accepted");
+    const second = store.claimEventConsumer(run.id, "web-client");
+    expect(second).toMatchObject({ generation: 2, ackedSeq: 1 });
+    expect(store.ackEventConsumer(run.id, "web-client", first.generation, 2)).toBe("stale");
+    expect(store.ackEventConsumer(run.id, "web-client", second.generation, 0)).toBe("invalid");
+    expect(store.ackEventConsumer(run.id, "web-client", second.generation, 3)).toBe("invalid");
+    expect(store.ackEventConsumer(run.id, "web-client", second.generation, 2)).toBe("accepted");
+    expect(store.getEventConsumer(run.id, "web-client")).toMatchObject({ ackedSeq: 2, terminalAckedSeq: 2 });
+  });
+
   it("does not renew an already expired continuation lease", () => {
     const store = createStore();
     const session = store.createSession();
@@ -216,17 +234,17 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(4);
+    expect(store.getSchemaVersion()).toBe(5);
   });
 
-  it("migrates an older database to schema version 4", () => {
+  it("migrates an older database to schema version 5", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(4);
-    expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('operations', 'run_checkpoints', 'tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["operations", "run_checkpoints", "tool_attempts"]);
+    expect(migrated.getSchemaVersion()).toBe(5);
+    expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('event_consumers', 'operations', 'run_checkpoints', 'tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["event_consumers", "operations", "run_checkpoints", "tool_attempts"]);
     migrated.close();
   });
 

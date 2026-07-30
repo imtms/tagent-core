@@ -16,6 +16,7 @@ export interface TaskRun {
   budget?: { tier: string; maxContinuations: number; maxTokens: number; runTimeoutMs: number };
   completionGate: { passed: boolean; failures: Array<{ kind: string; key: string; reason: string }> };
 }
+export interface EventConsumerCursor { runId: string; consumerId: string; generation: number; ackedSeq: number; terminalAckedSeq: number | null; claimedAt: number; updatedAt: number }
 export interface RunEvent { runId: string; seq: number; type: string; data: Record<string, unknown>; createdAt: number }
 export type TranscriptItem =
   | { seq: number; index?: number; attempt: number; kind: "user" | "assistant"; text: string; createdAt: number }
@@ -41,10 +42,12 @@ export const api = {
   cancel: (runId: string) => request(`/api/runs/${runId}/cancel`, { method: "POST" }),
   steer: (runId: string, content: string) => request(`/api/runs/${runId}/steer`, { method: "POST", body: JSON.stringify({ content }) }),
   resume: (runId: string) => request<TaskRun>(`/api/runs/${runId}/resume`, { method: "POST" }),
+  claimConsumer: (runId: string, consumerId: string) => request<EventConsumerCursor>(`/api/runs/${runId}/consumers/${encodeURIComponent(consumerId)}/claim`, { method: "POST" }),
+  ackConsumer: (runId: string, consumerId: string, generation: number, seq: number) => request(`/api/runs/${runId}/consumers/${encodeURIComponent(consumerId)}/ack`, { method: "POST", body: JSON.stringify({ generation, seq }) }),
 };
 
-export function subscribe(runId: string, after: number, onEvent: (event: RunEvent) => void, onError: () => void) {
-  const source = new EventSource(`/api/runs/${runId}/events?after=${after}`);
+export function subscribe(runId: string, consumerId: string, generation: number, after: number, onEvent: (event: RunEvent) => void, onError: () => void) {
+  const source = new EventSource(`/api/runs/${runId}/events?consumerId=${encodeURIComponent(consumerId)}&generation=${generation}&after=${after}`);
   source.onmessage = (message) => onEvent(JSON.parse(message.data) as RunEvent);
   source.onerror = onError;
   return () => source.close();
