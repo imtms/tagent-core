@@ -16,6 +16,7 @@ export class AgentService {
   private readonly listeners = new Map<RunId, Set<(event: RunEvent) => void>>();
   private readonly continuationOwner = randomUUID();
   private continuationRecoveryTimer?: ReturnType<typeof setTimeout>;
+  private supervisorRestartReconciled = false;
   private closing = false;
   private readonly supervisor: TaskRunSupervisor;
 
@@ -153,6 +154,11 @@ export class AgentService {
     if (this.closing) return [];
     if (this.continuationRecoveryTimer) clearTimeout(this.continuationRecoveryTimer);
     this.continuationRecoveryTimer = undefined;
+    if (!this.supervisorRestartReconciled) {
+      this.supervisorRestartReconciled = true;
+      this.store.reconcileSupervisorDecisionStatuses();
+      for (const pending of this.store.listSupervisorContinuationsNeedingReconcile()) this.queueContinuation(pending.runId);
+    }
     const recovered = this.store.recoverContinuationsAfterRestart();
     const runIds = [...new Set(recovered.map((item) => item.runId))];
     for (const runId of runIds) {
@@ -330,7 +336,7 @@ export class AgentService {
       }
       if (decision.action === "complete_taskrun") {
         const event = this.store.transitionRun(runId, ["running"], "completed", "run.completed", { response, supervisionDecisionId: decision.id, gates: review.gates }, "", attempt);
-        if (!event) return false;
+        if (!event) { this.supervisor.markExecuted(decision.id, "superseded"); return false; }
         if (response) this.store.appendMessage(current.sessionId, "assistant", response);
         this.supervisor.markExecuted(decision.id, "executed");
         this.publish(event);
@@ -339,7 +345,7 @@ export class AgentService {
       }
       const reason = review.gates.find((gate) => gate.gateType === "completion")?.failures.map((failure) => `${failure.key}: ${failure.reason}`).join("; ") || decision.rationale;
       const event = this.store.transitionRun(runId, ["running"], "blocked", "run.blocked", { response, supervisionDecisionId: decision.id, action: decision.action, gates: review.gates }, reason, attempt);
-      if (!event) return false;
+      if (!event) { this.supervisor.markExecuted(decision.id, "superseded"); return false; }
       this.supervisor.markExecuted(decision.id, "executed");
       this.publish(event);
       return decision.action === "start_continuation";
@@ -479,12 +485,19 @@ export class AgentService {
     if (this.closing) throw new Error("Service is shutting down");
     const run = this.store.spawnFromProposal(proposalId);
     if (!run) throw new Error("Proposal is not spawnable");
-    const sessionHistory = this.prepareSessionHistory(run, run.goal);
-    this.store.appendMessage(run.sessionId, "user", run.goal);
-    this.publish(this.store.appendEvent(run.id, "run.started", { goal: run.goal, source: "spawn_proposal", sessionHistoryCount: sessionHistory.messages.length }));
-    this.publishContextEvents(run.id, sessionHistory);
-    this.launch(run, run.goal, sessionHistory.messages);
-    return this.store.getRun(run.id)!;
+    try {
+      const sessionHistory = this.prepareSessionHistory(run, run.goal);
+      this.store.appendMessage(run.sessionId, "user", run.goal);
+      this.publish(this.store.appendEvent(run.id, "run.started", { goal: run.goal, source: "spawn_proposal", sessionHistoryCount: sessionHistory.messages.length }));
+      this.publishContextEvents(run.id, sessionHistory);
+      this.launch(run, run.goal, sessionHistory.messages);
+      if (!this.runtimes.has(run.id)) throw new Error("Spawned runtime did not start");
+      return this.store.getRun(run.id)!;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.store.failSpawnedRun(proposalId, run.id, message);
+      throw error;
+    }
   }
 
   resume(runId: RunId) {

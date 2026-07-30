@@ -23,7 +23,7 @@ export class TaskRunSupervisor {
     if (!event.type.startsWith("tool.") && event.type !== "tool.guard.blocked") return undefined;
     if (snapshot.consecutiveFailures < this.policy.repeatedFailureThreshold) return undefined;
     const recent = this.store.listSupervisorDecisions(runId, run.attempt);
-    const steers = recent.filter((item) => item.action === "steer" && item.status === "executed");
+    const steers = recent.filter((item) => item.action === "steer" && (item.status === "proposed" || item.status === "executed"));
     if (steers.length >= this.policy.maxSteersPerAttempt) return undefined;
     const last = steers.at(-1);
     if (last && event.seq - last.checkpointSeq < this.policy.minEventsBetweenInterventions) return undefined;
@@ -75,7 +75,7 @@ export class TaskRunSupervisor {
     const gate = (gateType: GateEvaluation["gateType"], failures: GateEvaluation["failures"]): GateEvaluation => ({ id: randomUUID(), runId: run.id, attempt: run.attempt, checkpointSeq, gateType, passed: failures.length === 0, failures, inputManifestHash, createdAt });
     const progressFailures: GateEvaluation["failures"] = [];
     const snapshot = this.store.getProgressSnapshot(run.id);
-    if (snapshot && snapshot.consecutiveFailures >= 6) progressFailures.push({ kind: "progress", key: "consecutive_failures", reason: `${snapshot.consecutiveFailures} consecutive tool failures`, disposition: "non_recoverable" });
+    if (snapshot?.attempt === run.attempt && snapshot.consecutiveFailures >= 6) progressFailures.push({ kind: "progress", key: "consecutive_failures", reason: `${snapshot.consecutiveFailures} consecutive tool failures`, disposition: "non_recoverable" });
     const evidenceFailures: GateEvaluation["failures"] = [];
     for (const check of run.checks.filter((item) => item.required && item.status === "passed")) {
       if (!check.evidence.trim()) evidenceFailures.push({ kind: "evidence", key: check.key, reason: "Required passed check has no evidence", disposition: "auto_fixable" });
@@ -85,11 +85,11 @@ export class TaskRunSupervisor {
     if (run.gateRequired) {
       const requiredPlan = run.plan.filter((item) => item.required);
       if (!requiredPlan.length) completionFailures.push({ kind: "plan", key: "plan", reason: "No required plan items", disposition: "auto_fixable" });
-      for (const item of requiredPlan) if (item.status !== "done") completionFailures.push({ kind: "plan_item", key: item.key, reason: `Required plan item is ${item.status}`, disposition: item.status === "blocked" ? "needs_user_input" : "auto_fixable" });
-      for (const check of run.checks.filter((item) => item.required)) if (check.status !== "passed") completionFailures.push({ kind: "check", key: check.key, reason: `Required check is ${check.status}`, disposition: check.status === "blocked" ? "external_dependency" : "auto_fixable" });
+      for (const item of requiredPlan) if (item.status !== "done") completionFailures.push({ kind: "plan_item", key: item.key, reason: `Required plan item is ${item.status}`, disposition: item.status === "blocked" ? "needs_user_input" : item.status === "skipped" ? "non_recoverable" : "auto_fixable" });
+      for (const check of run.checks.filter((item) => item.required)) if (check.status !== "passed") completionFailures.push({ kind: "check", key: check.key, reason: `Required check is ${check.status}`, disposition: check.status === "blocked" ? "external_dependency" : check.status === "skipped" ? "non_recoverable" : "auto_fixable" });
     }
     if (!response.trim()) completionFailures.push({ kind: "delivery", key: "response", reason: "Candidate response is empty", disposition: "auto_fixable" });
-    return [gate("progress", progressFailures), gate("evidence", evidenceFailures), gate("completion", completionFailures), gate("continuation", completionFailures.filter((item) => item.disposition !== "auto_fixable"))];
+    return [gate("progress", progressFailures), gate("evidence", evidenceFailures), gate("completion", completionFailures), gate("continuation", completionFailures.filter((item) => item.disposition === "budget_exhausted" || item.disposition === "non_recoverable" || item.disposition === "needs_user_input" || item.disposition === "needs_approval" || item.disposition === "external_dependency"))];
   }
 
   private createDecision(run: TaskRun, checkpointSeq: number, trigger: SupervisorDecision["trigger"], action: SupervisorAction, reasonCode: string, rationale: string, confidence: number, candidateResponse = "") {

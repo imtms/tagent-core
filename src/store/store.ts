@@ -452,6 +452,38 @@ export class Store {
     return row ? this.getRun(row.id) : undefined;
   }
 
+  listSupervisorContinuationsNeedingReconcile() {
+    return this.db.prepare(`SELECT d.run_id as runId, d.id as decisionId FROM supervisor_decisions d
+      JOIN runs r ON r.id = d.run_id
+      WHERE d.action = 'start_continuation' AND d.status = 'executed' AND r.status = 'blocked'
+        AND d.attempt = r.attempt
+        AND NOT EXISTS (SELECT 1 FROM run_continuations c WHERE c.run_id = d.run_id AND c.status IN ('queued','running'))
+        AND NOT EXISTS (SELECT 1 FROM run_events e WHERE e.run_id = d.run_id AND e.type = 'continuation.exhausted' AND e.created_at >= d.created_at)
+      ORDER BY d.created_at`).all() as Array<{ runId: string; decisionId: string }>;
+  }
+
+  reconcileSupervisorDecisionStatuses() {
+    const transaction = this.db.transaction(() => {
+      const proposed = this.db.prepare("SELECT id, run_id as runId, attempt FROM supervisor_decisions WHERE status = 'proposed'").all() as Array<{ id: string; runId: string; attempt: number }>;
+      let executed = 0;
+      let superseded = 0;
+      for (const decision of proposed) {
+        const event = this.db.prepare(`SELECT 1 FROM run_events WHERE run_id = ? AND type IN ('run.completed','run.blocked')
+          AND json_extract(data, '$.supervisionDecisionId') = ? LIMIT 1`).get(decision.runId, decision.id);
+        if (event) {
+          this.db.prepare("UPDATE supervisor_decisions SET status = 'executed', executed_at = COALESCE(executed_at, ?) WHERE id = ? AND status = 'proposed'").run(now(), decision.id);
+          executed += 1;
+        } else {
+          this.db.prepare("UPDATE supervisor_decisions SET status = 'superseded', error = 'Service restarted before decision execution completed' WHERE id = ? AND status = 'proposed'").run(decision.id);
+          superseded += 1;
+        }
+      }
+      return { executed, superseded };
+    });
+    return transaction();
+  }
+
+
   recoverContinuationsAfterRestart(timestamp = now()) {
     const transaction = this.db.transaction(() => {
       const active = this.db.prepare(`SELECT id, run_id as runId, ordinal FROM run_continuations
@@ -925,7 +957,8 @@ export class Store {
 
   updateProgressSnapshot(run: TaskRun, event: RunEvent): ProgressSnapshot {
     const previous = this.getProgressSnapshot(run.id);
-    const progressEvent = event.type === "run.updated" || event.type === "message.completed" || event.type === "tool.completed" && !event.data.isError;
+    const toolName = String(event.data.toolName ?? "");
+    const progressEvent = event.type === "run.updated" || event.type === "tool.completed" && !event.data.isError && ["write", "edit", "task_run"].includes(toolName);
     const failureEvent = event.type === "tool.completed" && Boolean(event.data.isError) || event.type === "tool.guard.blocked";
     const snapshot: ProgressSnapshot = { runId: run.id, attempt: run.attempt, checkpointSeq: event.seq,
       meaningfulChanges: (previous?.attempt === run.attempt ? previous.meaningfulChanges : 0) + (progressEvent ? 1 : 0),
@@ -955,6 +988,22 @@ export class Store {
   }
 
   listTaskRunEdges(runId: RunId): TaskRunEdge[] { return this.db.prepare(`SELECT from_run_id as fromRunId,to_run_id as toRunId,relation,reason,created_at as createdAt FROM taskrun_edges WHERE from_run_id=? OR to_run_id=? ORDER BY created_at`).all(runId,runId) as TaskRunEdge[]; }
+
+  failSpawnedRun(proposalId: string, runId: RunId, error: string) {
+    const transaction = this.db.transaction(() => {
+      const timestamp = now();
+      const run = this.db.prepare("SELECT last_event_seq as seq FROM runs WHERE id = ? AND status = 'running'").get(runId) as { seq: number } | undefined;
+      if (run) {
+        const seq = run.seq + 1;
+        const data = { error, reason: "spawn_launch_failed", proposalId };
+        this.db.prepare("INSERT INTO run_events (run_id,seq,type,data,created_at) VALUES (?,?,'run.failed',?,?)").run(runId, seq, JSON.stringify(data), timestamp);
+        this.db.prepare("UPDATE runs SET status = 'failed', phase = 'blocked', blocked_reason = ?, last_event_seq = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status = 'running'").run(`Spawn launch failed: ${error}`, seq, timestamp, timestamp, runId);
+      }
+      this.db.prepare("UPDATE spawn_proposals SET status = 'rejected', updated_at = ? WHERE id = ? AND spawned_run_id = ?").run(timestamp, proposalId, runId);
+      this.db.prepare("UPDATE taskrun_edges SET reason = reason || ? WHERE to_run_id = ?").run(`; launch failed: ${error}`, runId);
+    });
+    transaction();
+  }
 
   listEvents(runId: RunId, after = 0): RunEvent[] {
     const rows = this.db.prepare(`SELECT run_id as runId, seq, type, data, created_at as createdAt FROM run_events WHERE run_id = ? AND seq > ? ORDER BY seq`).all(runId, after) as Array<Omit<RunEvent, "data"> & { data: string }>;

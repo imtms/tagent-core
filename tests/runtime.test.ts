@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { AgentService } from "../src/core/agent-service.js";
 import { Store } from "../src/store/store.js";
+import { TaskRunSupervisor } from "../src/core/supervisor.js";
 import type { AgentRuntime, RuntimeFactory } from "../src/runtime/types.js";
 
 function assistantMessage(text: string): AgentMessage {
@@ -133,6 +134,21 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
+  it("compensates a spawned Run when runtime launch throws", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const parent = store.createRun(session.id, "parent");
+    store.finalizeRun(parent.id, "completed");
+    const proposal = store.createSpawnProposal(parent.id, "child", [], "follow_up");
+    const service = new AgentService(store, "/tmp", () => { throw new Error("factory failed"); });
+    expect(() => service.spawnProposal(proposal.id)).toThrow("factory failed");
+    const persisted = store.listSpawnProposals(parent.id)[0];
+    expect(persisted.status).toBe("rejected");
+    expect(store.getRun(persisted.spawnedRunId)).toMatchObject({ status: "failed", blockedReason: expect.stringContaining("factory failed") });
+    expect(store.listEvents(persisted.spawnedRunId).at(-1)).toMatchObject({ type: "run.failed", data: expect.objectContaining({ reason: "spawn_launch_failed" }) });
+    store.close();
+  });
+
   it("throttles partial checkpoints and persists tool boundaries immediately", async () => {
     const store = new Store(":memory:");
     const writes = vi.spyOn(store, "upsertCheckpoint");
@@ -216,6 +232,19 @@ describe("AgentService runtime boundary", () => {
     expect(store.getRun(run.id)).toMatchObject({ status: "completed", attempt: 3 });
     expect(store.listEvents(run.id).filter((event) => event.type === "run.completed")).toHaveLength(1);
     await service.closeRuntimes();
+    store.close();
+  });
+
+  it("runs Supervisor restart reconciliation only once per service instance", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
+    service.recoverContinuations();
+    const run = store.createRun(session.id, "active supervisor decision");
+    const decision = new TaskRunSupervisor(store, { repeatedFailureThreshold: 1, maxSteersPerAttempt: 1, minEventsBetweenInterventions: 1 }).reviewCheckpoint(run.id, { runId: run.id, seq: 1, type: "tool.completed", data: { toolName: "bash", isError: true }, createdAt: Date.now() });
+    expect(decision?.status).toBe("proposed");
+    service.recoverContinuations();
+    expect(store.listSupervisorDecisions(run.id)[0].status).toBe("proposed");
     store.close();
   });
 
@@ -418,6 +447,25 @@ describe("AgentService runtime boundary", () => {
     expect(options?.initialMessages).toEqual([user, assistant]);
     expect(runtime.prompts[0]).toContain("persisted pi transcript messages");
     expect(store.listEvents(run.id).find((event) => event.type === "run.resumed")?.data).toMatchObject({ mode: "transcript-continuation", transcriptCount: 2 });
+    store.close();
+  });
+
+  it("reconciles a persisted Supervisor continuation decision after a crash gap", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "supervisor crash gap");
+    store.upsertPlanItem(run.id, { key: "work", title: "Work", status: "pending", required: true, position: 1 });
+    const supervisor = new TaskRunSupervisor(store);
+    const review = supervisor.reviewSettled(store.getRun(run.id)!, 3, "not done");
+    expect(review.decision.action).toBe("start_continuation");
+    store.transitionRun(run.id, ["running"], "blocked", "run.blocked", {}, "work pending", 1);
+    supervisor.markExecuted(review.decision.id, "executed");
+    expect(store.listContinuations(run.id)).toHaveLength(0);
+    for (const pending of store.listSupervisorContinuationsNeedingReconcile()) {
+      expect(pending.runId).toBe(run.id);
+      store.queueContinuation(pending.runId, `Recovered Supervisor continuation decision ${pending.decisionId}`);
+    }
+    expect(store.listContinuations(run.id)).toEqual([expect.objectContaining({ status: "queued", reason: expect.stringContaining(review.decision.id) })]);
     store.close();
   });
 
