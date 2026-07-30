@@ -65,6 +65,66 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
+  it("loads session history after reopening the persistent store", async () => {
+    const directory = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp("/tmp/tagent-session-history-"));
+    const filename = `${directory}/tagent.db`;
+    const firstStore = new Store(filename);
+    const session = firstStore.createSession();
+    firstStore.appendMessage(session.id, "user", "Persistent fact: release channel is stable");
+    firstStore.appendMessage(session.id, "assistant", "The release channel is stable.");
+    firstStore.close();
+
+    const secondStore = new Store(filename);
+    let options: Parameters<RuntimeFactory>[0] | undefined;
+    const service = new AgentService(secondStore, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("stable")]); }, { maxContinuations: 0 });
+    await service.start(session.id, "Which release channel did we choose?");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(options?.initialMessages?.[0]).toMatchObject({ role: "user", content: "Persistent fact: release channel is stable" });
+    expect(options?.initialMessages?.[1]).toMatchObject({ role: "assistant", content: [{ type: "text", text: "The release channel is stable." }] });
+    secondStore.close();
+  });
+
+  it("loads prior session messages into a new run without duplicating the current query", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    store.appendMessage(session.id, "user", "Remember project codename Atlas");
+    store.appendMessage(session.id, "assistant", "The project codename is Atlas.");
+    let options: Parameters<RuntimeFactory>[0] | undefined;
+    const runtime = new FakeRuntime([assistantMessage("Atlas")]);
+    const service = new AgentService(store, "/tmp", (value) => { options = value; return runtime; }, { maxContinuations: 0 });
+
+    const run = await service.start(session.id, "What is the project codename?");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(options?.initialMessages?.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(options?.initialMessages?.[0]).toMatchObject({ role: "user", content: "Remember project codename Atlas" });
+    expect(options?.initialMessages?.[1]).toMatchObject({ role: "assistant", content: [{ type: "text", text: "The project codename is Atlas." }] });
+    expect(runtime.prompts).toEqual(["What is the project codename?"]);
+    expect(JSON.stringify(options?.initialMessages)).not.toContain("What is the project codename?");
+    expect(store.listEvents(run.id).some((event) => event.type === "context.session_loaded" && event.data.keptMessages === 2)).toBe(true);
+    store.close();
+  });
+
+  it("prunes session history by complete turns for a new run", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    store.appendMessage(session.id, "user", `old-${"A".repeat(2400)}`);
+    store.appendMessage(session.id, "assistant", `old-${"B".repeat(2400)}`);
+    store.appendMessage(session.id, "user", "latest user fact");
+    store.appendMessage(session.id, "assistant", "latest assistant answer");
+    let options: Parameters<RuntimeFactory>[0] | undefined;
+    const service = new AgentService(store, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 2_000 });
+
+    const run = await service.start(session.id, "follow up");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(options?.initialMessages?.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(options?.initialMessages?.[0]).toMatchObject({ content: "latest user fact" });
+    expect(store.listEvents(run.id).some((event) => event.type === "context.pruned" && event.data.source === "session" && event.data.originalMessages === 4 && event.data.keptMessages === 2)).toBe(true);
+    store.close();
+  });
+
   it("resumes the same durable run through a new runtime attempt", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();

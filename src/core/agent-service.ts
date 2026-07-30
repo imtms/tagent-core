@@ -34,9 +34,10 @@ export class AgentService {
     if (existing) return this.store.getRun(existing.id)!;
 
     const run = this.store.createRun(sessionId, query, requestId);
+    const sessionHistory = this.prepareSessionHistory(run, query);
     this.store.appendMessage(sessionId, "user", query);
-    this.publish(this.store.appendEvent(run.id, "run.started", { goal: query }));
-    this.launch(run, query);
+    this.publish(this.store.appendEvent(run.id, "run.started", { goal: query, sessionHistoryCount: sessionHistory.length }));
+    this.launch(run, query, sessionHistory);
     return run;
   }
 
@@ -287,6 +288,60 @@ export class AgentService {
     const kept = keptTurns.flat();
     if (kept.length < messages.length) {
       this.publish(this.store.appendEvent(runId, "context.pruned", { originalMessages: messages.length, keptMessages: kept.length, estimatedTokens: used, budget }));
+    }
+    return kept;
+  }
+
+  private prepareSessionHistory(run: TaskRun, query: string) {
+    const history = this.store.listMessages(run.sessionId, 10_000)
+      .filter((message) => message.role === "user" || message.role === "assistant")
+      .map((message): AgentMessage => message.role === "user"
+        ? { role: "user", content: message.content, timestamp: message.createdAt }
+        : {
+            role: "assistant",
+            content: [{ type: "text", text: message.content }],
+            api: "openai-completions",
+            provider: "tagent-core",
+            model: "session-history",
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: "stop",
+            timestamp: message.createdAt,
+          });
+    if (history.length === 0) return [];
+
+    const contextWindow = this.runtimeDefaults.contextWindow ?? this.runtimeDefaults.model?.contextWindow ?? 200_000;
+    const systemTokens = Math.ceil(this.buildSystemPrompt(run).length / 4);
+    const queryTokens = Math.ceil(query.length / 4);
+    const outputReserve = Math.max(1_000, Math.floor(contextWindow * 0.2));
+    const budget = Math.max(0, contextWindow - systemTokens - queryTokens - outputReserve);
+    const turns: AgentMessage[][] = [];
+    for (const message of history) {
+      if (message.role === "user" || turns.length === 0) turns.push([message]);
+      else turns.at(-1)!.push(message);
+    }
+    const keptTurns: AgentMessage[][] = [];
+    let estimatedTokens = 0;
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      const turnTokens = turns[index].reduce((sum, message) => sum + Math.ceil(JSON.stringify(message).length / 4), 0);
+      if (estimatedTokens + turnTokens > budget) break;
+      estimatedTokens += turnTokens;
+      keptTurns.unshift(turns[index]);
+    }
+    const kept = keptTurns.flat();
+    this.publish(this.store.appendEvent(run.id, "context.session_loaded", {
+      originalMessages: history.length,
+      keptMessages: kept.length,
+      estimatedTokens,
+      budget,
+    }));
+    if (kept.length < history.length) {
+      this.publish(this.store.appendEvent(run.id, "context.pruned", {
+        source: "session",
+        originalMessages: history.length,
+        keptMessages: kept.length,
+        estimatedTokens,
+        budget,
+      }));
     }
     return kept;
   }
