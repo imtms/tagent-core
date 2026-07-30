@@ -3,12 +3,14 @@ import { randomUUID } from "node:crypto";
 import type { Store } from "../store/store.js";
 import { createInProcessRuntime } from "../runtime/factory.js";
 import type { AgentRuntime, RuntimeFactory } from "../runtime/types.js";
-import type { RunEvent, SessionId, RunId, TaskRun } from "../core/types.js";
+import type { RunCheckpoint, RunEvent, SessionId, RunId, TaskRun } from "../core/types.js";
 import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 
 export class AgentService {
   private readonly runtimes = new Map<RunId, AgentRuntime>();
   private readonly executionTasks = new Map<RunId, Promise<void>>();
+  private readonly checkpointDrafts = new Map<RunId, Omit<RunCheckpoint, "updatedAt" | "lastTranscriptSeq">>();
+  private readonly checkpointTimers = new Map<RunId, ReturnType<typeof setTimeout>>();
   private readonly listeners = new Map<RunId, Set<(event: RunEvent) => void>>();
   private readonly continuationOwner = randomUUID();
   private continuationRecoveryTimer?: ReturnType<typeof setTimeout>;
@@ -21,6 +23,42 @@ export class AgentService {
     private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number; contextWindow?: number; maxContextTurns?: number; contextReserveTokens?: number; dynamicBudget?: boolean } = {},
   ) {
     this.store.markInterrupted();
+  }
+
+  private updateCheckpoint(event: RunEvent) {
+    const draft = this.checkpointDrafts.get(event.runId);
+    if (!draft) return;
+    draft.lastEventSeq = Math.max(draft.lastEventSeq, event.seq);
+    if (event.type === "message.delta") draft.assistantPartial += String(event.data.delta ?? "");
+    if (event.type === "message.retrying") draft.assistantPartial = "";
+    if (event.type === "tool.started") draft.currentTool = {
+      toolCallId: String(event.data.toolCallId ?? ""),
+      toolName: String(event.data.toolName ?? "tool"),
+    };
+    if (event.type === "tool.completed" && draft.currentTool?.toolCallId === String(event.data.toolCallId ?? "")) draft.currentTool = null;
+    const immediate = event.type.startsWith("tool.") || event.type === "message.completed" || event.type === "message.retrying";
+    if (immediate) this.flushCheckpoint(event.runId);
+    else this.scheduleCheckpoint(event.runId);
+  }
+
+  private scheduleCheckpoint(runId: RunId) {
+    if (this.checkpointTimers.has(runId) || this.closing) return;
+    const timer = setTimeout(() => {
+      this.checkpointTimers.delete(runId);
+      this.flushCheckpoint(runId);
+    }, 500);
+    timer.unref?.();
+    this.checkpointTimers.set(runId, timer);
+  }
+
+  private flushCheckpoint(runId: RunId) {
+    const draft = this.checkpointDrafts.get(runId);
+    if (!draft) return;
+    const timer = this.checkpointTimers.get(runId);
+    if (timer) clearTimeout(timer);
+    this.checkpointTimers.delete(runId);
+    const lastTranscriptSeq = this.store.getLastTranscriptSeq(runId);
+    this.store.upsertCheckpoint({ ...draft, lastTranscriptSeq });
   }
 
   private async abortRuntime(runtime: AgentRuntime, runId?: RunId) {
@@ -79,6 +117,9 @@ export class AgentService {
     this.closing = true;
     if (this.continuationRecoveryTimer) clearTimeout(this.continuationRecoveryTimer);
     this.continuationRecoveryTimer = undefined;
+    for (const timer of this.checkpointTimers.values()) clearTimeout(timer);
+    this.checkpointTimers.clear();
+    for (const runId of this.checkpointDrafts.keys()) this.flushCheckpoint(runId);
     const aborts: Promise<void>[] = [];
     for (const runtime of this.runtimes.values()) {
       aborts.push(this.abortRuntime(runtime).finally(() => runtime.dispose?.()));
@@ -111,11 +152,14 @@ export class AgentService {
     this.publish(this.store.appendEvent(run.id, "run.started", { goal: query, sessionHistoryCount: sessionHistory.messages.length }));
     this.publishContextEvents(run.id, sessionHistory);
     this.launch(run, query, sessionHistory.messages);
-    return run;
+    return this.store.getRun(run.id)!;
   }
 
   private launch(run: TaskRun, prompt: string, initialMessages: AgentMessage[] = [], continuationId?: string) {
     if (this.closing) return;
+    const checkpointBase = this.store.getRun(run.id) ?? run;
+    this.checkpointDrafts.set(run.id, { runId: run.id, attempt: run.attempt, active: true, assistantPartial: "", currentTool: null, lastEventSeq: checkpointBase.lastEventSeq });
+    this.flushCheckpoint(run.id);
     const budget = this.executionBudget(run);
     const idleTimeoutMs = budget.runTimeoutMs;
     const hardTimeoutMs = this.runtimeDefaults.runHardTimeoutMs ?? 86_400_000;
@@ -156,6 +200,7 @@ export class AgentService {
       onActivity: touchActivity,
       onEvent: (event) => {
         touchActivity();
+        this.updateCheckpoint(event);
         this.publish(event);
       },
     });
@@ -186,6 +231,10 @@ export class AgentService {
       if (this.store.getRun(run.id)?.status === "cancelled") this.repairTranscript(run.id, "cancelled");
       runtime.dispose?.();
       this.runtimes.delete(run.id);
+      const timer = this.checkpointTimers.get(run.id);
+      if (timer) clearTimeout(timer);
+      this.checkpointTimers.delete(run.id);
+      this.checkpointDrafts.delete(run.id);
       if (this.executionTasks.get(run.id) === execution) this.executionTasks.delete(run.id);
       setImmediate(() => {
         try { if (!this.closing) this.startQueuedContinuation(run.id); }
@@ -368,7 +417,7 @@ export class AgentService {
     const event = this.store.appendEvent(run.id, "run.resumed", { attempt: run.attempt, resumedAt: run.resumedAt, mode: transcript.messages.length ? "transcript-continuation" : "durable-snapshot-replay", transcriptCount: transcript.messages.length });
     this.publish(event);
     this.launch(run, prompt, transcript.messages);
-    return run;
+    return this.store.getRun(run.id)!;
   }
 
   private prepareTranscript(run: TaskRun, prompt: string) {

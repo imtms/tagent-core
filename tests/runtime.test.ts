@@ -8,6 +8,21 @@ function assistantMessage(text: string): AgentMessage {
   return { role: "assistant", content: [{ type: "text", text }], api: "openai-completions", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: Date.now() };
 }
 
+class CheckpointRuntime implements AgentRuntime {
+  private resolvePrompt?: () => void;
+  constructor(private readonly options: Parameters<RuntimeFactory>[0]) {}
+  prompt() { return new Promise<void>((resolve) => { this.resolvePrompt = resolve; }); }
+  async steer() {}
+  abort() { this.resolvePrompt?.(); }
+  getMessages() { return []; }
+  getError() { return undefined; }
+  emit(type: string, data: Record<string, unknown>) {
+    const event = this.options.store.appendEvent(this.options.runId, type, data);
+    this.options.onEvent?.(event);
+    return event;
+  }
+}
+
 class ControlledRuntime implements AgentRuntime {
   private resolvePrompt?: () => void;
   private rejectPrompt?: (error: Error) => void;
@@ -80,6 +95,50 @@ class ActiveDeferredRuntime extends DeferredRuntime {
 }
 
 describe("AgentService runtime boundary", () => {
+  it("throttles partial checkpoints and persists tool boundaries immediately", async () => {
+    const store = new Store(":memory:");
+    const writes = vi.spyOn(store, "upsertCheckpoint");
+    const session = store.createSession();
+    let runtime!: CheckpointRuntime;
+    const service = new AgentService(store, "/tmp", (options) => runtime = new CheckpointRuntime(options));
+    const run = await service.start(session.id, "checkpoint stream");
+    expect(writes).toHaveBeenCalledTimes(1);
+    runtime.emit("message.delta", { delta: "A" });
+    runtime.emit("message.delta", { delta: "B" });
+    expect(store.getCheckpoint(run.id)).toMatchObject({ active: true, assistantPartial: "", lastEventSeq: 2 });
+    expect(writes).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => setTimeout(resolve, 550));
+    expect(store.getCheckpoint(run.id)).toMatchObject({ assistantPartial: "AB", lastEventSeq: 4 });
+    expect(writes).toHaveBeenCalledTimes(2);
+    runtime.emit("tool.started", { toolCallId: "call-1", toolName: "read", args: { path: "a" } });
+    expect(store.getCheckpoint(run.id)?.currentTool).toMatchObject({ toolCallId: "call-1", toolName: "read" });
+    expect(writes).toHaveBeenCalledTimes(3);
+    runtime.emit("tool.completed", { toolCallId: "call-1", toolName: "read", isError: false });
+    expect(store.getCheckpoint(run.id)?.currentTool).toBeNull();
+    expect(writes).toHaveBeenCalledTimes(4);
+    await service.closeRuntimes();
+    expect(store.getCheckpoint(run.id)?.active).toBe(false);
+    store.close();
+  });
+
+  it("preserves partial progress across restart and resets it for resume", async () => {
+    const directory = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp("/tmp/tagent-checkpoint-restart-"));
+    const filename = `${directory}/tagent.db`;
+    const firstStore = new Store(filename);
+    const session = firstStore.createSession();
+    const run = firstStore.createRun(session.id, "restart checkpoint");
+    firstStore.upsertCheckpoint({ runId: run.id, attempt: 1, active: true, assistantPartial: "partial answer", currentTool: { toolCallId: "call-1", toolName: "bash" }, lastEventSeq: 7, lastTranscriptSeq: 2 });
+    firstStore.close();
+
+    const secondStore = new Store(filename);
+    const service = new AgentService(secondStore, "/tmp", () => new DeferredRuntime());
+    expect(secondStore.getRun(run.id)).toMatchObject({ status: "interrupted", checkpoint: { active: false, assistantPartial: "partial answer", currentTool: null, attempt: 1 } });
+    const resumed = service.resume(run.id);
+    expect(resumed).toMatchObject({ status: "running", attempt: 2, checkpoint: { active: true, assistantPartial: "", currentTool: null, attempt: 2 } });
+    await service.closeRuntimes();
+    secondStore.close();
+  });
+
   it("constructs agents through the injected runtime factory", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();

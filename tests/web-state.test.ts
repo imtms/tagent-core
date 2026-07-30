@@ -27,4 +27,12 @@ describe("Web workbench state model", () => {
     expect(source).toContain('event.type === "run.updated"');
     expect(source).toContain("const updated = await api.run(activeRun.id)");
   });
+
+  it("restores active streaming and tools from the durable checkpoint", async () => {
+    const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain("active?.checkpoint?.active ? active.checkpoint.assistantPartial");
+    expect(source).toContain("active.checkpoint.currentTool");
+    expect(source).toContain("activeRun.checkpoint?.active ? activeRun.checkpoint.lastEventSeq");
+    expect(source).not.toContain("activeRun?.lastEventSeq, sessionId");
+  });
 });

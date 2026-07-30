@@ -7,6 +7,7 @@ import type {
   Message,
   PlanItem,
   RunCheck,
+  RunCheckpoint,
   RunEvent,
   RunId,
   RunContinuation,
@@ -18,7 +19,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export class Store {
   readonly db: Database.Database;
@@ -28,6 +29,40 @@ export class Store {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
     this.migrate();
+  }
+
+  getLastTranscriptSeq(runId: RunId) {
+    return (this.db.prepare("SELECT COALESCE(MAX(seq), 0) as seq FROM run_transcript WHERE run_id = ?").get(runId) as { seq: number }).seq;
+  }
+
+  getCheckpoint(runId: RunId): RunCheckpoint | null {
+    const row = this.db.prepare(`SELECT run_id as runId, attempt, active,
+      assistant_partial as assistantPartial, current_tool_json as currentToolJson,
+      last_event_seq as lastEventSeq, last_transcript_seq as lastTranscriptSeq, updated_at as updatedAt
+      FROM run_checkpoints WHERE run_id = ?`).get(runId) as (Omit<RunCheckpoint, "active" | "currentTool"> & { active: number; currentToolJson: string }) | undefined;
+    if (!row) return null;
+    const { currentToolJson, ...checkpoint } = row;
+    return { ...checkpoint, active: Boolean(row.active), currentTool: currentToolJson ? JSON.parse(currentToolJson) as RunCheckpoint["currentTool"] : null };
+  }
+
+  upsertCheckpoint(checkpoint: Omit<RunCheckpoint, "updatedAt"> & { updatedAt?: number }) {
+    const updatedAt = checkpoint.updatedAt ?? now();
+    this.db.prepare(`INSERT INTO run_checkpoints
+      (run_id, attempt, active, assistant_partial, current_tool_json, last_event_seq, last_transcript_seq, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(run_id) DO UPDATE SET attempt = excluded.attempt, active = excluded.active,
+        assistant_partial = excluded.assistant_partial, current_tool_json = excluded.current_tool_json,
+        last_event_seq = excluded.last_event_seq, last_transcript_seq = excluded.last_transcript_seq,
+        updated_at = excluded.updated_at
+      WHERE excluded.attempt > run_checkpoints.attempt OR
+        (excluded.attempt = run_checkpoints.attempt AND EXISTS (
+          SELECT 1 FROM runs WHERE id = excluded.run_id AND status = 'running' AND attempt = excluded.attempt
+        ))`).run(
+      checkpoint.runId, checkpoint.attempt, checkpoint.active ? 1 : 0, checkpoint.assistantPartial,
+      checkpoint.currentTool ? JSON.stringify(checkpoint.currentTool) : "", checkpoint.lastEventSeq,
+      checkpoint.lastTranscriptSeq, updatedAt,
+    );
+    return this.getCheckpoint(checkpoint.runId)!;
   }
 
   nextContinuationLeaseExpiry() {
@@ -133,6 +168,16 @@ export class Store {
         PRIMARY KEY (run_id, seq)
       );
       CREATE INDEX IF NOT EXISTS idx_transcript_run ON run_transcript(run_id, seq);
+      CREATE TABLE IF NOT EXISTS run_checkpoints (
+        run_id TEXT PRIMARY KEY REFERENCES runs(id),
+        attempt INTEGER NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        assistant_partial TEXT NOT NULL DEFAULT '',
+        current_tool_json TEXT NOT NULL DEFAULT '',
+        last_event_seq INTEGER NOT NULL DEFAULT 0,
+        last_transcript_seq INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS operations (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL REFERENCES runs(id),
@@ -281,7 +326,7 @@ export class Store {
   }
 
   getRun(id: RunId): TaskRun | undefined {
-    type RunRow = Omit<TaskRun, "plan" | "checks" | "artifacts" | "continuations" | "completionGate" | "gateRequired" | "usage" | "transcriptCount"> & {
+    type RunRow = Omit<TaskRun, "plan" | "checks" | "artifacts" | "continuations" | "completionGate" | "gateRequired" | "usage" | "transcriptCount" | "checkpoint"> & {
       gateRequired: number;
       usageInput: number;
       usageOutput: number;
@@ -316,6 +361,7 @@ export class Store {
       gateRequired: Boolean(row.gateRequired),
       usage: { input: usageInput, output: usageOutput, cacheRead: usageCacheRead, cacheWrite: usageCacheWrite, totalTokens: usageTotalTokens, cost: usageCost },
       transcriptCount,
+      checkpoint: this.getCheckpoint(id),
       continuations,
       plan,
       checks,
@@ -351,6 +397,8 @@ export class Store {
           started_at = NULL, completed_at = NULL, lease_owner = '', lease_until = NULL, heartbeat_at = NULL WHERE id = ?`).run(item.id);
         this.db.prepare("UPDATE runs SET status = 'blocked', phase = 'blocked', blocked_reason = 'Continuation recovered after service restart', completed_at = NULL, updated_at = ? WHERE id = ? AND status IN ('running', 'interrupted', 'blocked')")
           .run(timestamp, item.runId);
+        this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id = ?")
+          .run(timestamp, item.runId);
       }
       return active;
     });
@@ -369,6 +417,8 @@ export class Store {
         this.db.prepare(`UPDATE runs SET status = 'blocked', phase = 'blocked', blocked_reason = ?,
           completed_at = NULL, updated_at = ? WHERE id = ? AND status IN ('running', 'interrupted', 'blocked')`)
           .run(reason, timestamp, item.runId);
+        this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id = ?")
+          .run(timestamp, item.runId);
       }
       return active;
     });
@@ -708,25 +758,46 @@ export class Store {
         last_event_seq = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status IN (${placeholders})${attemptClause}`)
         .run(nextStatus, phase, reason, seq, completedAt, createdAt, runId, ...expected, ...(expectedAttempt === undefined ? [] : [expectedAttempt]));
       if (result.changes !== 1) throw new Error("Run transition lost its compare-and-set race");
+      if (nextStatus !== "running") this.db.prepare(`UPDATE run_checkpoints SET active = 0, current_tool_json = '',
+        last_event_seq = MAX(last_event_seq, ?), updated_at = ? WHERE run_id = ? AND attempt = ?`)
+        .run(seq, createdAt, runId, row.attempt);
       return { runId, seq, type, data, createdAt } satisfies RunEvent;
     });
     return transaction();
   }
 
   finalizeRun(runId: RunId, status: Exclude<RunStatus, "running" | "interrupted" | "blocked">, reason = "") {
-    const completedAt = status === "completed" || status === "cancelled" || status === "failed" ? now() : null;
-    this.db.prepare("UPDATE runs SET status = ?, blocked_reason = ?, completed_at = ?, updated_at = ? WHERE id = ?")
-      .run(status, reason, completedAt, now(), runId);
+    const timestamp = now();
+    const completedAt = status === "completed" || status === "cancelled" || status === "failed" ? timestamp : null;
+    const transaction = this.db.transaction(() => {
+      this.db.prepare("UPDATE runs SET status = ?, blocked_reason = ?, completed_at = ?, updated_at = ? WHERE id = ?")
+        .run(status, reason, completedAt, timestamp, runId);
+      this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id = ?")
+        .run(timestamp, runId);
+    });
+    transaction();
   }
 
   blockRun(runId: RunId, reason: string) {
-    this.db.prepare("UPDATE runs SET status = 'blocked', phase = 'blocked', blocked_reason = ?, updated_at = ? WHERE id = ?")
-      .run(reason, now(), runId);
+    const timestamp = now();
+    const transaction = this.db.transaction(() => {
+      this.db.prepare("UPDATE runs SET status = 'blocked', phase = 'blocked', blocked_reason = ?, updated_at = ? WHERE id = ?")
+        .run(reason, timestamp, runId);
+      this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id = ?")
+        .run(timestamp, runId);
+    });
+    transaction();
   }
 
   markInterrupted() {
-    this.db.prepare("UPDATE runs SET status = 'interrupted', blocked_reason = 'Service restarted before the run reached a terminal state', updated_at = ? WHERE status = 'running'")
-      .run(now());
+    const timestamp = now();
+    const transaction = this.db.transaction(() => {
+      this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id IN (SELECT id FROM runs WHERE status = 'running')")
+        .run(timestamp);
+      this.db.prepare("UPDATE runs SET status = 'interrupted', blocked_reason = 'Service restarted before the run reached a terminal state', updated_at = ? WHERE status = 'running'")
+        .run(timestamp);
+    });
+    transaction();
   }
 
   resumeRun(runId: RunId) {

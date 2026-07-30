@@ -165,6 +165,10 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(22, 116, 
 .continuation-status { margin-left: auto; font-size: 9px; color: var(--muted); text-transform: capitalize; }
 .continuation-status.completed { color: var(--accent); }
 .continuation-status.blocked, .continuation-status.failed { color: var(--danger); }
+.checkpoint-card { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--panel) 82%, var(--accent) 4%); }
+.checkpoint-card > span { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.checkpoint-card > strong { font-size: 12px; }
+.checkpoint-card > p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .artifact-row { grid-template-columns: 20px minmax(0, 1fr); }
 .muted { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .mobile-only { display: none; }

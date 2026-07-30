@@ -7,7 +7,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 ### Core control plane
 
 - SQLite-backed sessions and ordered conversation messages.
-- Durable TaskRun records with goal, phase, status, plan items, checks, artifacts, and ordered events.
+- Durable TaskRun records with goal, phase, status, plan items, checks, artifacts, ordered events, and Schema v4 Run checkpoints.
 - Deterministic completion gate that prevents a model response from directly marking a run complete.
 - Request idempotency through stable `requestId` values.
 - Startup recovery that marks abandoned running tasks as interrupted.
@@ -50,6 +50,9 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Versioned SQLite schema metadata rejects newer unsupported databases and advances only after transactional migration success.
 - Resume/continuation context assembly prunes oldest complete turns to a 75% context-window budget while retaining the full transcript in SQLite.
 - New Run context reads the newest persisted Session message window in chronological order, including Sessions beyond 10,000 messages.
+- Active Runs persist a throttled checkpoint containing the current attempt, assistant partial text, current tool identity, and covered event/transcript sequences; text writes are coalesced to at most once per 500ms and tool boundaries persist immediately.
+- Terminal, blocked, interrupted, lease-recovered, and graceful-close paths archive checkpoints atomically or transactionally, preserving partial text for diagnostics without leaving a stale active checkpoint.
+- Resume and continuation attempts create a fresh active checkpoint while the full transcript remains authoritative in SQLite.
 
 ### HTTP and Web
 
@@ -63,6 +66,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Client request IDs support browsers without `crypto.randomUUID`, including `getRandomValues` and legacy fallbacks.
 - Blocked and interrupted runs can be resumed from the Web workbench; the UI exposes the current attempt.
 - The right panel lists up to 50 recent TaskRuns as collapsible history and expands the current/latest Run by default.
+- Web restores active assistant text and current tool from the durable checkpoint before opening SSE from the checkpoint's covered event sequence, and shows preserved checkpoints for interrupted or terminal Run diagnostics.
 - Dynamic execution budgets scale continuation count, cumulative tokens, and idle timeout across simple/standard/complex/extended tiers; `TAGENT_RUN_HARD_TIMEOUT_MS` remains the absolute attempt ceiling.
 - A deterministic stress test completes a single durable Run after 40 automatic continuations; hundreds of model-backed turns are not yet an acceptance claim.
 

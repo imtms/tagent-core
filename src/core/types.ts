@@ -13,6 +13,17 @@ export interface Session {
   updatedAt: number;
 }
 
+export interface RunCheckpoint {
+  runId: RunId;
+  attempt: number;
+  active: boolean;
+  assistantPartial: string;
+  currentTool: { toolCallId: string; toolName: string } | null;
+  lastEventSeq: number;
+  lastTranscriptSeq: number;
+  updatedAt: number;
+}
+
 export interface Message {
   id: number;
   sessionId: SessionId;
@@ -88,6 +99,7 @@ export interface TaskRun {
     cost: number;
   };
   transcriptCount: number;
+  checkpoint: RunCheckpoint | null;
   continuations: RunContinuation[];
   plan: PlanItem[];
   checks: RunCheck[];

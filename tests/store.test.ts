@@ -216,18 +216,37 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(3);
+    expect(store.getSchemaVersion()).toBe(4);
   });
 
-  it("migrates an older database to schema version 3", () => {
+  it("migrates an older database to schema version 4", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
-    store.db.exec("DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
+    store.db.exec("DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(3);
-    expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('operations', 'tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["operations", "tool_attempts"]);
+    expect(migrated.getSchemaVersion()).toBe(4);
+    expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('operations', 'run_checkpoints', 'tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["operations", "run_checkpoints", "tool_attempts"]);
     migrated.close();
+  });
+
+  it("persists and archives the latest Run checkpoint", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "checkpoint");
+    store.upsertCheckpoint({ runId: run.id, attempt: 1, active: true, assistantPartial: "hello", currentTool: { toolCallId: "call-1", toolName: "read" }, lastEventSeq: 3, lastTranscriptSeq: 1 });
+    expect(store.getRun(run.id)?.checkpoint).toMatchObject({ active: true, assistantPartial: "hello", currentTool: { toolName: "read" }, lastEventSeq: 3 });
+    store.transitionRun(run.id, ["running"], "cancelled", "run.cancelled", {}, "cancelled", 1);
+    expect(store.getCheckpoint(run.id)).toMatchObject({ active: false, assistantPartial: "hello", currentTool: null, lastEventSeq: 3 });
+  });
+
+  it("does not let an older attempt overwrite a newer checkpoint", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "checkpoint fence");
+    store.upsertCheckpoint({ runId: run.id, attempt: 2, active: true, assistantPartial: "new", currentTool: null, lastEventSeq: 5, lastTranscriptSeq: 2 });
+    store.upsertCheckpoint({ runId: run.id, attempt: 1, active: true, assistantPartial: "old", currentTool: null, lastEventSeq: 9, lastTranscriptSeq: 3 });
+    expect(store.getCheckpoint(run.id)).toMatchObject({ attempt: 2, assistantPartial: "new", lastEventSeq: 5 });
   });
 
   it("cancels duplicate active continuations before creating the schema v3 unique index", () => {
