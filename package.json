@@ -8,11 +8,11 @@
     "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "tsx watch src/server.ts",
     "dev:web": "vite --host 0.0.0.0",
-    "build": "tsc -p tsconfig.json && vite build",
+    "build": "tsc -p tsconfig.server.json && vite build",
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "tsc -p tsconfig.json --noEmit",
+    "check": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "lint": "eslint .",
     "preview": "vite preview --host 0.0.0.0"
   },

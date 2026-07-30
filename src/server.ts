@@ -1,5 +1,6 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
+import path from "node:path";
 import { Store } from "./store/store.js";
 import { AgentService } from "./core/agent-service.js";
 
@@ -78,6 +79,36 @@ app.get("/api/runs/:id/events", async (request: FastifyRequest, reply: FastifyRe
   const unsubscribe = service.subscribe(id, send);
   const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), 15_000);
   request.raw.on("close", () => { clearInterval(heartbeat); unsubscribe(); });
+});
+
+const webRoot = path.resolve("dist/web");
+const mimeTypes: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+};
+
+app.get("/*", async (request, reply) => {
+  const urlPath = request.url.split("?")[0];
+  const requested = urlPath === "/" ? "index.html" : urlPath.slice(1);
+  const candidate = path.resolve(webRoot, requested);
+  if (!candidate.startsWith(webRoot)) return reply.code(404).send("Not found");
+  let filename = candidate;
+  try {
+    const info = await stat(filename);
+    if (info.isDirectory()) filename = path.join(filename, "index.html");
+  } catch {
+    filename = path.join(webRoot, "index.html");
+  }
+  try {
+    const body = await readFile(filename);
+    return reply.type(mimeTypes[path.extname(filename)] ?? "application/octet-stream").send(body);
+  } catch {
+    return reply.code(404).send("Web build not found. Run npm run build.");
+  }
 });
 
 app.addHook("onClose", async () => store.close());
