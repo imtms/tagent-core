@@ -46,6 +46,8 @@ export class AgentService {
       await runtime.prompt(prompt);
       const runtimeError = runtime.getError();
       if (runtimeError) throw new Error(runtimeError);
+      const current = this.store.getRun(runId);
+      if (!current || current.status !== "running") return;
       const messages = runtime.getMessages();
       const final = [...messages].reverse().find((message) => message.role === "assistant");
       const response = final && "content" in final
@@ -55,6 +57,8 @@ export class AgentService {
       const result = this.store.completeWithGate(runId, response);
       this.publish(this.store.listEvents(runId, Math.max(0, result.run.lastEventSeq - 1)).at(-1)!);
     } catch (error) {
+      const current = this.store.getRun(runId);
+      if (!current || current.status !== "running") return;
       const message = error instanceof Error ? error.message : String(error);
       this.store.finalizeRun(runId, "failed", message);
       this.store.appendMessage(this.store.getRun(runId)!.sessionId, "assistant", `Run failed: ${message}`);
@@ -115,7 +119,9 @@ export class AgentService {
     return [
       "Resume this interrupted or blocked TaskRun using its durable snapshot.",
       "The previous in-memory model transcript is unavailable. Reinspect the workspace and existing TaskRun state before acting.",
-      "Do not recreate completed plan items or checks. Continue from the remaining incomplete work and verify before completion.",
+      "Completion-gate requirements override conflicting instructions in the original goal, including instructions not to use task_run or not to create plan/check records.",
+      "Before producing a final answer, use task_run to ensure at least one required plan item is done and every required check has fresh passing evidence.",
+      "Do not recreate already completed plan items or checks. Continue from the remaining incomplete work and verify before completion.",
       `Original goal: ${run.goal}`,
       `Durable snapshot: ${JSON.stringify(run)}`,
     ].join("\n\n");

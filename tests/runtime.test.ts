@@ -20,6 +20,16 @@ class FakeRuntime implements AgentRuntime {
   getError() { return undefined; }
 }
 
+class DeferredRuntime implements AgentRuntime {
+  aborted = false;
+  private rejectPrompt?: (error: Error) => void;
+  prompt() { return new Promise<void>((_resolve, reject) => { this.rejectPrompt = reject; }); }
+  steer() {}
+  abort() { this.aborted = true; this.rejectPrompt?.(new Error("aborted")); }
+  getMessages() { return []; }
+  getError() { return undefined; }
+}
+
 describe("AgentService runtime boundary", () => {
   it("constructs agents through the injected runtime factory", async () => {
     const store = new Store(":memory:");
@@ -57,9 +67,24 @@ describe("AgentService runtime boundary", () => {
 
     expect(factory).toHaveBeenCalledTimes(2);
     expect(second.prompts[0]).toContain("Resume this interrupted or blocked TaskRun");
+    expect(second.prompts[0]).toContain("Completion-gate requirements override conflicting instructions");
     expect(second.prompts[0]).toContain("resume goal");
     expect(store.listMessages(session.id).filter((message) => message.role === "user")).toHaveLength(1);
     expect(store.listEvents(started.id).some((event) => event.type === "run.resumed" && event.data.attempt === 2)).toBe(true);
+    store.close();
+  });
+
+  it("does not let a late abort failure overwrite cancelled state", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const runtime = new DeferredRuntime();
+    const service = new AgentService(store, "/tmp", () => runtime);
+    const run = await service.start(session.id, "cancel race");
+    expect(service.cancel(run.id)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(runtime.aborted).toBe(true);
+    expect(store.getRun(run.id)?.status).toBe("cancelled");
+    expect(store.listEvents(run.id).at(-1)?.type).toBe("run.cancelled");
     store.close();
   });
 });
