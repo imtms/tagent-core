@@ -96,6 +96,13 @@ button { color: inherit; }
 .task-row, .artifact-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; min-height: 34px; font-size: 11px; color: #4a534d; }
 .task-row svg { color: var(--accent); }
 .task-row small { color: var(--muted); text-transform: capitalize; }
+.continuation-row { min-height: 38px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #edf0ed; }
+.continuation-row > div { min-width: 0; display: flex; gap: 7px; align-items: baseline; }
+.continuation-row strong { font-size: 10px; color: var(--ink); }
+.continuation-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 9px; }
+.continuation-status { margin-left: auto; font-size: 9px; color: var(--muted); text-transform: capitalize; }
+.continuation-status.completed { color: var(--accent); }
+.continuation-status.blocked, .continuation-status.failed { color: var(--danger); }
 .artifact-row { grid-template-columns: 20px minmax(0, 1fr); }
 .muted { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .mobile-only { display: none; }

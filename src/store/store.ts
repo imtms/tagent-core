@@ -9,6 +9,7 @@ import type {
   RunCheck,
   RunEvent,
   RunId,
+  RunContinuation,
   RunPhase,
   RunStatus,
   Session,
@@ -79,6 +80,19 @@ export class Store {
         created_at INTEGER NOT NULL,
         PRIMARY KEY (run_id, seq)
       );
+      CREATE TABLE IF NOT EXISTS run_continuations (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        ordinal INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        reason TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        started_at INTEGER,
+        completed_at INTEGER,
+        UNIQUE(run_id, ordinal)
+      );
+      CREATE INDEX IF NOT EXISTS idx_continuations_run ON run_continuations(run_id, ordinal);
       CREATE TABLE IF NOT EXISTS run_transcript (
         run_id TEXT NOT NULL REFERENCES runs(id),
         seq INTEGER NOT NULL,
@@ -182,7 +196,7 @@ export class Store {
   }
 
   getRun(id: RunId): TaskRun | undefined {
-    type RunRow = Omit<TaskRun, "plan" | "checks" | "artifacts" | "completionGate" | "gateRequired" | "usage" | "transcriptCount"> & {
+    type RunRow = Omit<TaskRun, "plan" | "checks" | "artifacts" | "continuations" | "completionGate" | "gateRequired" | "usage" | "transcriptCount"> & {
       gateRequired: number;
       usageInput: number;
       usageOutput: number;
@@ -208,12 +222,14 @@ export class Store {
     const plan = this.db.prepare(`SELECT item_key as key, title, status, required, position FROM plan_items WHERE run_id = ? ORDER BY position`).all(id) as PlanItem[];
     const checks = this.db.prepare(`SELECT check_key as key, title, status, required, command, evidence, stale FROM run_checks WHERE run_id = ? ORDER BY check_key`).all(id) as RunCheck[];
     const artifacts = this.db.prepare(`SELECT id, run_id as runId, kind, title, content, uri, created_at as createdAt FROM artifacts WHERE run_id = ? ORDER BY created_at`).all(id) as Artifact[];
+    const continuations = this.listContinuations(id);
     const { usageInput, usageOutput, usageCacheRead, usageCacheWrite, usageTotalTokens, usageCost, transcriptCount, ...runRow } = row;
     const task: TaskRun = {
       ...runRow,
       gateRequired: Boolean(row.gateRequired),
       usage: { input: usageInput, output: usageOutput, cacheRead: usageCacheRead, cacheWrite: usageCacheWrite, totalTokens: usageTotalTokens, cost: usageCost },
       transcriptCount,
+      continuations,
       plan,
       checks,
       artifacts,
@@ -231,6 +247,36 @@ export class Store {
   getActiveRun(sessionId: SessionId): TaskRun | undefined {
     const row = this.db.prepare("SELECT id FROM runs WHERE session_id = ? AND status = 'running' ORDER BY updated_at DESC LIMIT 1").get(sessionId) as { id: string } | undefined;
     return row ? this.getRun(row.id) : undefined;
+  }
+
+  listContinuations(runId: RunId): RunContinuation[] {
+    return this.db.prepare(`SELECT id, run_id as runId, ordinal, status, reason, error,
+      created_at as createdAt, started_at as startedAt, completed_at as completedAt
+      FROM run_continuations WHERE run_id = ? ORDER BY ordinal`).all(runId) as RunContinuation[];
+  }
+
+  queueContinuation(runId: RunId, reason: string): RunContinuation {
+    const timestamp = now();
+    const row = this.db.prepare("SELECT COALESCE(MAX(ordinal), 0) + 1 as ordinal FROM run_continuations WHERE run_id = ?").get(runId) as { ordinal: number };
+    const continuation: RunContinuation = { id: randomUUID(), runId, ordinal: row.ordinal, status: "queued", reason, error: "", createdAt: timestamp, startedAt: null, completedAt: null };
+    this.db.prepare("INSERT INTO run_continuations (id, run_id, ordinal, status, reason, created_at) VALUES (?, ?, ?, 'queued', ?, ?)")
+      .run(continuation.id, runId, continuation.ordinal, reason, timestamp);
+    return continuation;
+  }
+
+  updateContinuation(id: string, status: RunContinuation["status"], error = "") {
+    const timestamp = now();
+    const startedAt = status === "running" ? timestamp : null;
+    const completedAt = ["completed", "blocked", "failed", "cancelled"].includes(status) ? timestamp : null;
+    this.db.prepare(`UPDATE run_continuations SET status = ?, error = ?,
+      started_at = COALESCE(started_at, ?), completed_at = COALESCE(?, completed_at) WHERE id = ?`)
+      .run(status, error, startedAt, completedAt, id);
+  }
+
+  cancelQueuedContinuations(runId: RunId, reason: string) {
+    const timestamp = now();
+    this.db.prepare("UPDATE run_continuations SET status = 'cancelled', error = ?, completed_at = ? WHERE run_id = ? AND status = 'queued'")
+      .run(reason, timestamp, runId);
   }
 
   appendTranscript(runId: RunId, attempt: number, message: AgentMessage) {

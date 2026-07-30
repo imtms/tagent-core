@@ -49,6 +49,18 @@ export interface Artifact {
   createdAt: number;
 }
 
+export interface RunContinuation {
+  id: string;
+  runId: RunId;
+  ordinal: number;
+  status: "queued" | "running" | "completed" | "blocked" | "failed" | "cancelled";
+  reason: string;
+  error: string;
+  createdAt: number;
+  startedAt: number | null;
+  completedAt: number | null;
+}
+
 export interface TaskRun {
   id: RunId;
   sessionId: SessionId;
@@ -73,6 +85,7 @@ export interface TaskRun {
     cost: number;
   };
   transcriptCount: number;
+  continuations: RunContinuation[];
   plan: PlanItem[];
   checks: RunCheck[];
   artifacts: Artifact[];

@@ -13,7 +13,7 @@ const service = new AgentService(
   store,
   config.workspace,
   resolveRuntimeFactory(config.runtime),
-  { model: createModel(config.model), apiKey: config.apiKey, providerTimeoutMs: config.providerTimeoutMs, providerMaxRetries: config.providerMaxRetries, runTimeoutMs: config.runTimeoutMs },
+  { model: createModel(config.model), apiKey: config.apiKey, providerTimeoutMs: config.providerTimeoutMs, providerMaxRetries: config.providerMaxRetries, runTimeoutMs: config.runTimeoutMs, maxContinuations: config.maxContinuations, maxRunTokens: config.maxRunTokens },
 );
 const app = createApp({ store, service, runtimeConfig: publicRuntimeConfig(config) });
 await app.listen({ host: "0.0.0.0", port: config.port });

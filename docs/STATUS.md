@@ -27,6 +27,8 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Per-run aggregate model usage for input, output, cache, total tokens, and provider-reported cost.
 - Resume loads the persisted pi transcript into the new runtime before appending the recovery instruction.
 - Provider request timeout/retry controls and a wall-clock timeout for each run attempt.
+- Persistent bounded continuations after completion-gate blocks, with queued/running/completed/blocked/failed/cancelled audit states.
+- Automatic continuation limits by count and cumulative run tokens; exhausted runs remain blocked for manual inspection.
 
 ### HTTP and Web
 
@@ -48,6 +50,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 ## In Progress
 
 - Add transcript compaction and token-budget pruning before context windows are exhausted.
+- Recover queued/running continuation records after a service restart with an explicit lease policy.
 - Define bounded retry classes that distinguish transient provider failures from deterministic request errors.
 - Prepare the worker protocol needed for a future pi RPC adapter.
 

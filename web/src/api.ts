@@ -8,12 +8,14 @@ export interface TaskRun {
   id: string; sessionId: string; requestId: string; status: string; phase: string; goal: string;
   blockedReason: string; lastEventSeq: number; attempt: number; resumedAt: number | null;
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number };
-  transcriptCount: number; plan: PlanItem[]; checks: RunCheck[];
+  transcriptCount: number;
+  continuations: Array<{ id: string; ordinal: number; status: string; reason: string; error: string; createdAt: number; startedAt: number | null; completedAt: number | null }>;
+  plan: PlanItem[]; checks: RunCheck[];
   artifacts: Array<{ id: string; title: string; kind: string; uri: string }>;
   completionGate: { passed: boolean; failures: Array<{ kind: string; key: string; reason: string }> };
 }
 export interface RunEvent { runId: string; seq: number; type: string; data: Record<string, unknown>; createdAt: number }
-export interface RuntimeStatus { runtime: string; provider: string; api: string; baseUrl: string; modelId: string; credentialConfigured: boolean; providerTimeoutMs: number; providerMaxRetries: number; runTimeoutMs: number }
+export interface RuntimeStatus { runtime: string; provider: string; api: string; baseUrl: string; modelId: string; credentialConfigured: boolean; providerTimeoutMs: number; providerMaxRetries: number; runTimeoutMs: number; maxContinuations: number; maxRunTokens: number }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });

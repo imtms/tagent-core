@@ -6,7 +6,7 @@ describe("configuration", () => {
     const config = loadConfig({});
     expect(config.runtime).toBe("in-process");
     expect(config.apiKey).toBeUndefined();
-    expect(config).toMatchObject({ providerTimeoutMs: 120_000, providerMaxRetries: 1, runTimeoutMs: 900_000 });
+    expect(config).toMatchObject({ providerTimeoutMs: 120_000, providerMaxRetries: 1, runTimeoutMs: 900_000, maxContinuations: 2, maxRunTokens: 120_000 });
     expect(config.model).toMatchObject({
       api: "openai-completions",
       baseUrl: "https://one.tms.im/v1",

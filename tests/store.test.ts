@@ -39,6 +39,18 @@ describe("Store", () => {
     expect(result.run.status).toBe("completed");
   });
 
+  it("persists continuation lifecycle records", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "continue");
+    const continuation = store.queueContinuation(run.id, "missing check");
+    expect(continuation).toMatchObject({ ordinal: 1, status: "queued", reason: "missing check" });
+    store.updateContinuation(continuation.id, "running");
+    store.updateContinuation(continuation.id, "completed");
+    expect(store.listContinuations(run.id)[0]).toMatchObject({ status: "completed", startedAt: expect.any(Number), completedAt: expect.any(Number) });
+    expect(store.getRun(run.id)?.continuations).toHaveLength(1);
+  });
+
   it("returns the latest terminal run for a session", () => {
     const store = createStore();
     const session = store.createSession();

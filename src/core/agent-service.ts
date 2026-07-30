@@ -13,7 +13,7 @@ export class AgentService {
     private readonly store: Store,
     private readonly workspace: string,
     private readonly runtimeFactory: RuntimeFactory = createInProcessRuntime,
-    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs"> = {},
+    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number } = {},
   ) {
     this.store.markInterrupted();
   }
@@ -29,14 +29,18 @@ export class AgentService {
     return run;
   }
 
-  private launch(run: TaskRun, prompt: string, initialMessages: AgentMessage[] = []) {
+  private launch(run: TaskRun, prompt: string, initialMessages: AgentMessage[] = [], continuationId?: string) {
     const runtime = this.runtimeFactory({
       store: this.store,
       runId: run.id,
       workspace: this.workspace,
       systemPrompt: this.buildSystemPrompt(run),
       initialMessages,
-      ...this.runtimeDefaults,
+      model: this.runtimeDefaults.model,
+      apiKey: this.runtimeDefaults.apiKey,
+      providerTimeoutMs: this.runtimeDefaults.providerTimeoutMs,
+      providerMaxRetries: this.runtimeDefaults.providerMaxRetries,
+      runTimeoutMs: this.runtimeDefaults.runTimeoutMs,
       onEvent: (event) => this.publish(event),
     });
     this.runtimes.set(run.id, runtime);
@@ -50,7 +54,20 @@ export class AgentService {
           this.publish(this.store.appendEvent(run.id, "run.failed", { error: message, reason: "timeout" }));
         }, this.runtimeDefaults.runTimeoutMs)
       : undefined;
-    void this.execute(run.id, runtime, prompt).finally(() => { if (timeout) clearTimeout(timeout); });
+    void this.execute(run.id, runtime, prompt).then((blocked) => {
+      if (continuationId) {
+        const status = this.store.getRun(run.id)?.status;
+        this.store.updateContinuation(continuationId, status === "completed" ? "completed" : status === "blocked" ? "blocked" : status === "cancelled" ? "cancelled" : "failed", status === "failed" ? this.store.getRun(run.id)?.blockedReason ?? "" : "");
+      }
+      if (blocked) this.queueContinuation(run.id);
+    }).finally(() => {
+      if (timeout) clearTimeout(timeout);
+      this.runtimes.delete(run.id);
+      setImmediate(() => {
+        try { this.startQueuedContinuation(run.id); }
+        catch { /* Store may be closed during shutdown. */ }
+      });
+    });
   }
 
   private async execute(runId: RunId, runtime: AgentRuntime, prompt: string) {
@@ -59,25 +76,72 @@ export class AgentService {
       const runtimeError = runtime.getError();
       if (runtimeError) throw new Error(runtimeError);
       const current = this.store.getRun(runId);
-      if (!current || current.status !== "running") return;
+      if (!current || current.status !== "running") return false;
       const messages = runtime.getMessages();
       const final = [...messages].reverse().find((message) => message.role === "assistant");
       const response = final && "content" in final
         ? (typeof final.content === "string" ? final.content : final.content.filter((part) => part.type === "text").map((part) => part.text).join(""))
         : "";
-      if (response) this.store.appendMessage(this.store.getRun(runId)!.sessionId, "assistant", response);
       const result = this.store.completeWithGate(runId, response);
+      if (result.gate.passed && response) this.store.appendMessage(result.run.sessionId, "assistant", response);
       this.publish(this.store.listEvents(runId, Math.max(0, result.run.lastEventSeq - 1)).at(-1)!);
+      return !result.gate.passed;
     } catch (error) {
       const current = this.store.getRun(runId);
-      if (!current || current.status !== "running") return;
+      if (!current || current.status !== "running") return false;
       const message = error instanceof Error ? error.message : String(error);
       this.store.finalizeRun(runId, "failed", message);
       this.store.appendMessage(this.store.getRun(runId)!.sessionId, "assistant", `Run failed: ${message}`);
       this.publish(this.store.appendEvent(runId, "run.failed", { error: message }));
-    } finally {
-      this.runtimes.delete(runId);
+      return false;
     }
+  }
+
+  private queueContinuation(runId: RunId) {
+    const run = this.store.getRun(runId);
+    if (!run || run.status !== "blocked") return;
+    const maxContinuations = this.runtimeDefaults.maxContinuations ?? 2;
+    const maxRunTokens = this.runtimeDefaults.maxRunTokens ?? 120_000;
+    if (run.continuations.length >= maxContinuations) {
+      const message = `Run remains blocked after ${maxContinuations} automatic continuation${maxContinuations === 1 ? "" : "s"}: ${run.blockedReason}`;
+      this.store.appendMessage(run.sessionId, "assistant", message);
+      this.publish(this.store.appendEvent(runId, "continuation.exhausted", { reason: "max_continuations", limit: maxContinuations }));
+      return;
+    }
+    if (run.usage.totalTokens >= maxRunTokens) {
+      const message = `Run remains blocked because the ${maxRunTokens.toLocaleString()} token continuation budget was exhausted: ${run.blockedReason}`;
+      this.store.appendMessage(run.sessionId, "assistant", message);
+      this.publish(this.store.appendEvent(runId, "continuation.exhausted", { reason: "token_budget", limit: maxRunTokens, totalTokens: run.usage.totalTokens }));
+      return;
+    }
+    const continuation = this.store.queueContinuation(runId, run.blockedReason);
+    this.publish(this.store.appendEvent(runId, "continuation.queued", { continuationId: continuation.id, ordinal: continuation.ordinal, reason: continuation.reason }));
+  }
+
+  private startQueuedContinuation(runId: RunId) {
+    if (this.runtimes.has(runId)) return;
+    const continuation = this.store.listContinuations(runId).find((item) => item.status === "queued");
+    if (!continuation) return;
+    const blocked = this.store.getRun(runId);
+    if (!blocked || blocked.status !== "blocked") {
+      this.store.updateContinuation(continuation.id, "cancelled", "Run is no longer blocked");
+      return;
+    }
+    this.store.updateContinuation(continuation.id, "running");
+    const run = this.store.resumeRun(runId);
+    const transcript = this.store.listTranscript(runId);
+    this.publish(this.store.appendEvent(runId, "continuation.started", { continuationId: continuation.id, ordinal: continuation.ordinal, attempt: run.attempt, transcriptCount: transcript.length }));
+    this.launch(run, this.buildContinuationPrompt(run, continuation.ordinal), transcript, continuation.id);
+  }
+
+  private buildContinuationPrompt(run: TaskRun, ordinal: number) {
+    return [
+      `Automatic continuation ${ordinal} is running because the completion gate blocked the previous attempt.`,
+      `Gate failures: ${run.completionGate.failures.map((failure) => `${failure.key}: ${failure.reason}`).join("; ")}`,
+      "Use the persisted transcript and TaskRun state. Resolve only the remaining gate failures, verify the result, then provide the final response.",
+      "Completion-gate requirements override conflicting instructions in the original goal.",
+      `Original goal: ${run.goal}`,
+    ].join("\n\n");
   }
 
   cancel(runId: RunId) {
@@ -120,6 +184,7 @@ export class AgentService {
 
   resume(runId: RunId) {
     if (this.runtimes.has(runId)) throw new Error("Run is already active");
+    this.store.cancelQueuedContinuations(runId, "Superseded by manual resume");
     const run = this.store.resumeRun(runId);
     const transcript = this.store.listTranscript(run.id);
     const event = this.store.appendEvent(run.id, "run.resumed", { attempt: run.attempt, resumedAt: run.resumedAt, mode: transcript.length ? "transcript-continuation" : "durable-snapshot-replay", transcriptCount: transcript.length });
