@@ -1,6 +1,12 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish
+        required: true
+        type: string
   push:
     tags:
       - "v*"
@@ -25,12 +31,15 @@ jobs:
       - run: npm audit --omit=dev --audit-level=high
       - run: npm audit --audit-level=high
       - name: Verify tag matches package version
-        run: test "${GITHUB_REF_NAME}" = "v$(node -p "require('./package.json').version")"
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
       - name: Create GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           awk -v heading="## [${VERSION}]" '$0 == heading {flag=1; next} /^## \[/ {flag=0} flag' CHANGELOG.md > release-notes.md
           test -s release-notes.md
-          gh release create "$GITHUB_REF_NAME" --prerelease --title "TAgent Core ${GITHUB_REF_NAME}" --notes-file release-notes.md
+          gh release create "$RELEASE_TAG" --prerelease --title "TAgent Core ${RELEASE_TAG}" --notes-file release-notes.md
