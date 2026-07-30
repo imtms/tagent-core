@@ -57,6 +57,9 @@ The base URL is configurable because OpenAI-compatible services are not guarante
 - `TAGENT_CONTEXT_WINDOW`: advertised context size, default `200000`
 - `TAGENT_MAX_TOKENS`: maximum output tokens, default `32768`
 - `TAGENT_REASONING`: enable reasoning metadata, default `true`
+- `TAGENT_PROVIDER_TIMEOUT_MS`: timeout for each provider request, default `120000`
+- `TAGENT_PROVIDER_MAX_RETRIES`: provider retry count, default `1`
+- `TAGENT_RUN_TIMEOUT_MS`: wall-clock limit for an entire run attempt, default `900000`
 - `OPENAI_API_KEY`: credential sent to the OpenAI-compatible provider
 - `TAGENT_DB`: SQLite path, default `./data/tagent.db`
 - `TAGENT_WORKSPACE`: tool workspace, default current directory unless configured

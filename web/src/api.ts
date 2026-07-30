@@ -6,12 +6,14 @@ export interface PlanItem { key: string; title: string; status: string; required
 export interface RunCheck { key: string; title: string; status: string; required: boolean; command: string; evidence: string; stale: boolean }
 export interface TaskRun {
   id: string; sessionId: string; requestId: string; status: string; phase: string; goal: string;
-  blockedReason: string; lastEventSeq: number; attempt: number; resumedAt: number | null; plan: PlanItem[]; checks: RunCheck[];
+  blockedReason: string; lastEventSeq: number; attempt: number; resumedAt: number | null;
+  usage: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number };
+  transcriptCount: number; plan: PlanItem[]; checks: RunCheck[];
   artifacts: Array<{ id: string; title: string; kind: string; uri: string }>;
   completionGate: { passed: boolean; failures: Array<{ kind: string; key: string; reason: string }> };
 }
 export interface RunEvent { runId: string; seq: number; type: string; data: Record<string, unknown>; createdAt: number }
-export interface RuntimeStatus { runtime: string; provider: string; api: string; baseUrl: string; modelId: string; credentialConfigured: boolean }
+export interface RuntimeStatus { runtime: string; provider: string; api: string; baseUrl: string; modelId: string; credentialConfigured: boolean; providerTimeoutMs: number; providerMaxRetries: number; runTimeoutMs: number }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });

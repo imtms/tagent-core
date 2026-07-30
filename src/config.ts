@@ -16,12 +16,21 @@ export interface AppConfig {
   workspace: string;
   runtime: "in-process";
   apiKey?: string;
+  providerTimeoutMs: number;
+  providerMaxRetries: number;
+  runTimeoutMs: number;
   model: ModelConfig;
 }
 
 function positiveInteger(value: string | undefined, fallback: number, name: string) {
   const parsed = value === undefined ? fallback : Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
+  return parsed;
+}
+
+function nonNegativeInteger(value: string | undefined, fallback: number, name: string) {
+  const parsed = value === undefined ? fallback : Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`${name} must be a non-negative integer`);
   return parsed;
 }
 
@@ -40,6 +49,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     workspace: env.TAGENT_WORKSPACE ?? process.cwd(),
     runtime,
     apiKey: env.OPENAI_API_KEY,
+    providerTimeoutMs: positiveInteger(env.TAGENT_PROVIDER_TIMEOUT_MS, 120_000, "TAGENT_PROVIDER_TIMEOUT_MS"),
+    providerMaxRetries: nonNegativeInteger(env.TAGENT_PROVIDER_MAX_RETRIES, 1, "TAGENT_PROVIDER_MAX_RETRIES"),
+    runTimeoutMs: positiveInteger(env.TAGENT_RUN_TIMEOUT_MS, 900_000, "TAGENT_RUN_TIMEOUT_MS"),
     model: {
       provider: env.TAGENT_PROVIDER ?? "openai-compatible",
       modelId: env.TAGENT_MODEL ?? "gpt-5.6-sol",
@@ -59,6 +71,9 @@ export interface PublicRuntimeConfig {
   baseUrl: string;
   modelId: string;
   credentialConfigured: boolean;
+  providerTimeoutMs: number;
+  providerMaxRetries: number;
+  runTimeoutMs: number;
 }
 
 export function publicRuntimeConfig(config: AppConfig): PublicRuntimeConfig {
@@ -69,6 +84,9 @@ export function publicRuntimeConfig(config: AppConfig): PublicRuntimeConfig {
     baseUrl: config.model.baseUrl,
     modelId: config.model.modelId,
     credentialConfigured: Boolean(config.apiKey),
+    providerTimeoutMs: config.providerTimeoutMs,
+    providerMaxRetries: config.providerMaxRetries,
+    runTimeoutMs: config.runTimeoutMs,
   };
 }
 

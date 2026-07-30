@@ -18,6 +18,10 @@ export interface RuntimeOptions {
   systemPrompt: string;
   model?: Model<any>;
   apiKey?: string;
+  initialMessages?: AgentMessage[];
+  providerTimeoutMs?: number;
+  providerMaxRetries?: number;
+  runTimeoutMs?: number;
   onEvent?: (event: RunEvent) => void;
 }
 

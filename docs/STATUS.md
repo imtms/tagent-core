@@ -23,6 +23,10 @@ Updated: 2026-07-30 (Asia/Singapore)
 - TAgent-owned tools: `read`, `write`, `edit`, `bash`, and `task_run`.
 - Workspace path containment and a minimal destructive-command policy.
 - Sequential tool execution for predictable state mutations.
+- Append-only pi transcript persistence for user, assistant, tool-call, and tool-result messages.
+- Per-run aggregate model usage for input, output, cache, total tokens, and provider-reported cost.
+- Resume loads the persisted pi transcript into the new runtime before appending the recovery instruction.
+- Provider request timeout/retry controls and a wall-clock timeout for each run attempt.
 
 ### HTTP and Web
 
@@ -43,8 +47,8 @@ Updated: 2026-07-30 (Asia/Singapore)
 
 ## In Progress
 
-- Persist enough pi transcript and tool-result state to continue a provider conversation exactly after process restart.
-- Define a bounded provider retry and timeout policy with usage persistence.
+- Add transcript compaction and token-budget pruning before context windows are exhausted.
+- Define bounded retry classes that distinguish transient provider failures from deterministic request errors.
 - Prepare the worker protocol needed for a future pi RPC adapter.
 
 ## Next Milestones
@@ -86,8 +90,8 @@ Updated: 2026-07-30 (Asia/Singapore)
 
 ## Known Limitations
 
-- The current in-process pi transcript exists only in memory during a run.
-- Resume uses durable snapshot replay in a fresh pi runtime; it does not yet continue the exact provider transcript.
+- The current transcript is persisted as complete JSON messages but is not compacted or pruned.
+- Resume continues from persisted pi messages, but provider-specific server-side session state is not guaranteed to survive.
 - Bash isolation is policy-based, not an OS-level sandbox.
 - The first Web interface does not expose model/runtime selection or provider health.
 - Multiple TAgent Core processes can currently target the same SQLite database; leader/lease enforcement is not implemented.

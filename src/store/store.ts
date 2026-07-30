@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type {
   Artifact,
   CompletionGate,
@@ -61,7 +62,13 @@ export class Store {
         updated_at INTEGER NOT NULL,
         completed_at INTEGER,
         attempt INTEGER NOT NULL DEFAULT 1,
-        resumed_at INTEGER
+        resumed_at INTEGER,
+        usage_input INTEGER NOT NULL DEFAULT 0,
+        usage_output INTEGER NOT NULL DEFAULT 0,
+        usage_cache_read INTEGER NOT NULL DEFAULT 0,
+        usage_cache_write INTEGER NOT NULL DEFAULT 0,
+        usage_total_tokens INTEGER NOT NULL DEFAULT 0,
+        usage_cost REAL NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id, updated_at);
       CREATE TABLE IF NOT EXISTS run_events (
@@ -72,6 +79,16 @@ export class Store {
         created_at INTEGER NOT NULL,
         PRIMARY KEY (run_id, seq)
       );
+      CREATE TABLE IF NOT EXISTS run_transcript (
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        seq INTEGER NOT NULL,
+        attempt INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        message_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (run_id, seq)
+      );
+      CREATE INDEX IF NOT EXISTS idx_transcript_run ON run_transcript(run_id, seq);
       CREATE TABLE IF NOT EXISTS plan_items (
         run_id TEXT NOT NULL REFERENCES runs(id),
         item_key TEXT NOT NULL,
@@ -104,6 +121,12 @@ export class Store {
     `);
     this.ensureColumn("runs", "attempt", "INTEGER NOT NULL DEFAULT 1");
     this.ensureColumn("runs", "resumed_at", "INTEGER");
+    this.ensureColumn("runs", "usage_input", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("runs", "usage_output", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("runs", "usage_cache_read", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("runs", "usage_cache_write", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("runs", "usage_total_tokens", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("runs", "usage_cost", "REAL NOT NULL DEFAULT 0");
   }
 
   private ensureColumn(table: string, column: string, definition: string) {
@@ -159,20 +182,43 @@ export class Store {
   }
 
   getRun(id: RunId): TaskRun | undefined {
-    type RunRow = Omit<TaskRun, "plan" | "checks" | "artifacts" | "completionGate" | "gateRequired"> & { gateRequired: number };
+    type RunRow = Omit<TaskRun, "plan" | "checks" | "artifacts" | "completionGate" | "gateRequired" | "usage" | "transcriptCount"> & {
+      gateRequired: number;
+      usageInput: number;
+      usageOutput: number;
+      usageCacheRead: number;
+      usageCacheWrite: number;
+      usageTotalTokens: number;
+      usageCost: number;
+      transcriptCount: number;
+    };
     const row = this.db.prepare(`
       SELECT id, session_id as sessionId, request_id as requestId, status, phase, goal,
              gate_required as gateRequired, blocked_reason as blockedReason,
              last_event_seq as lastEventSeq, created_at as createdAt,
              updated_at as updatedAt, completed_at as completedAt,
-             attempt, resumed_at as resumedAt
+             attempt, resumed_at as resumedAt,
+             usage_input as usageInput, usage_output as usageOutput,
+             usage_cache_read as usageCacheRead, usage_cache_write as usageCacheWrite,
+             usage_total_tokens as usageTotalTokens, usage_cost as usageCost,
+             (SELECT COUNT(*) FROM run_transcript t WHERE t.run_id = runs.id) as transcriptCount
       FROM runs WHERE id = ?
     `).get(id) as RunRow | undefined;
     if (!row) return undefined;
     const plan = this.db.prepare(`SELECT item_key as key, title, status, required, position FROM plan_items WHERE run_id = ? ORDER BY position`).all(id) as PlanItem[];
     const checks = this.db.prepare(`SELECT check_key as key, title, status, required, command, evidence, stale FROM run_checks WHERE run_id = ? ORDER BY check_key`).all(id) as RunCheck[];
     const artifacts = this.db.prepare(`SELECT id, run_id as runId, kind, title, content, uri, created_at as createdAt FROM artifacts WHERE run_id = ? ORDER BY created_at`).all(id) as Artifact[];
-    const task: TaskRun = { ...row, gateRequired: Boolean(row.gateRequired), plan, checks, artifacts, completionGate: { passed: true, failures: [] } };
+    const { usageInput, usageOutput, usageCacheRead, usageCacheWrite, usageTotalTokens, usageCost, transcriptCount, ...runRow } = row;
+    const task: TaskRun = {
+      ...runRow,
+      gateRequired: Boolean(row.gateRequired),
+      usage: { input: usageInput, output: usageOutput, cacheRead: usageCacheRead, cacheWrite: usageCacheWrite, totalTokens: usageTotalTokens, cost: usageCost },
+      transcriptCount,
+      plan,
+      checks,
+      artifacts,
+      completionGate: { passed: true, failures: [] },
+    };
     task.completionGate = this.evaluateGate(task);
     return task;
   }
@@ -180,6 +226,31 @@ export class Store {
   getActiveRun(sessionId: SessionId): TaskRun | undefined {
     const row = this.db.prepare("SELECT id FROM runs WHERE session_id = ? AND status = 'running' ORDER BY updated_at DESC LIMIT 1").get(sessionId) as { id: string } | undefined;
     return row ? this.getRun(row.id) : undefined;
+  }
+
+  appendTranscript(runId: RunId, attempt: number, message: AgentMessage) {
+    const transaction = this.db.transaction(() => {
+      const row = this.db.prepare("SELECT COALESCE(MAX(seq), 0) + 1 as seq FROM run_transcript WHERE run_id = ?").get(runId) as { seq: number };
+      this.db.prepare("INSERT INTO run_transcript (run_id, seq, attempt, role, message_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(runId, row.seq, attempt, message.role, JSON.stringify(message), now());
+      if (message.role === "assistant") {
+        this.db.prepare(`UPDATE runs SET
+          usage_input = usage_input + ?, usage_output = usage_output + ?,
+          usage_cache_read = usage_cache_read + ?, usage_cache_write = usage_cache_write + ?,
+          usage_total_tokens = usage_total_tokens + ?, usage_cost = usage_cost + ?, updated_at = ?
+          WHERE id = ?`).run(
+          message.usage.input, message.usage.output, message.usage.cacheRead, message.usage.cacheWrite,
+          message.usage.totalTokens, message.usage.cost.total, now(), runId,
+        );
+      }
+      return row.seq;
+    });
+    return transaction();
+  }
+
+  listTranscript(runId: RunId): AgentMessage[] {
+    const rows = this.db.prepare("SELECT message_json as messageJson FROM run_transcript WHERE run_id = ? ORDER BY seq").all(runId) as Array<{ messageJson: string }>;
+    return rows.map((row) => JSON.parse(row.messageJson) as AgentMessage);
   }
 
   setRunPhase(runId: RunId, phase: RunPhase) {

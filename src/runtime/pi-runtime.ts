@@ -1,4 +1,5 @@
 import { Agent, type AgentMessage } from "@mariozechner/pi-agent-core";
+import { streamSimple } from "@mariozechner/pi-ai";
 import { createModel, loadConfig } from "../config.js";
 import { createTools } from "../tools/tools.js";
 import type { AgentRuntime, RuntimeOptions } from "./types.js";
@@ -23,10 +24,17 @@ export class PiRuntime implements AgentRuntime {
         model,
         thinkingLevel: model.reasoning ? "medium" : "off",
         tools: createTools(options.store, options.runId, options.workspace),
+        messages: options.initialMessages ?? [],
       },
       toolExecution: "sequential",
       sessionId: options.runId,
       getApiKey: () => options.apiKey ?? process.env.OPENAI_API_KEY,
+      streamFn: (streamModel, context, streamOptions) => streamSimple(streamModel, context, {
+        ...streamOptions,
+        maxTokens: streamModel.maxTokens,
+        timeoutMs: options.providerTimeoutMs,
+        maxRetries: options.providerMaxRetries,
+      }),
       maxRetryDelayMs: 15_000,
       beforeToolCall: async ({ toolCall }) => {
         this.emit("tool.started", { toolCallId: toolCall.id, toolName: toolCall.name, args: toolCall.arguments });
@@ -38,6 +46,10 @@ export class PiRuntime implements AgentRuntime {
       },
     });
     this.agent.subscribe((event) => {
+      if (event.type === "message_end") {
+        const run = this.options.store.getRun(this.options.runId);
+        if (run) this.options.store.appendTranscript(this.options.runId, run.attempt, event.message);
+      }
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
         this.emit("message.delta", { delta: event.assistantMessageEvent.delta });
       }

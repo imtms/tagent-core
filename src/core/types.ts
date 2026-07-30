@@ -64,6 +64,15 @@ export interface TaskRun {
   completedAt: number | null;
   attempt: number;
   resumedAt: number | null;
+  usage: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+    cost: number;
+  };
+  transcriptCount: number;
   plan: PlanItem[];
   checks: RunCheck[];
   artifacts: Artifact[];

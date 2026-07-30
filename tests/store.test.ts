@@ -39,6 +39,20 @@ describe("Store", () => {
     expect(result.run.status).toBe("completed");
   });
 
+  it("persists transcript messages and aggregates assistant usage", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "usage");
+    store.appendTranscript(run.id, 1, { role: "user", content: "hello", timestamp: 1 });
+    store.appendTranscript(run.id, 1, {
+      role: "assistant", content: [{ type: "text", text: "world" }], api: "openai-completions", provider: "test", model: "test",
+      usage: { input: 10, output: 4, cacheRead: 2, cacheWrite: 1, totalTokens: 17, cost: { input: 0.1, output: 0.2, cacheRead: 0.01, cacheWrite: 0.02, total: 0.33 } },
+      stopReason: "stop", timestamp: 2,
+    });
+    expect(store.listTranscript(run.id).map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(store.getRun(run.id)).toMatchObject({ transcriptCount: 2, usage: { input: 10, output: 4, cacheRead: 2, cacheWrite: 1, totalTokens: 17, cost: 0.33 } });
+  });
+
   it("tracks resume attempts on the same run", () => {
     const store = createStore();
     const session = store.createSession();

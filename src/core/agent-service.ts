@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { randomUUID } from "node:crypto";
 import type { Store } from "../store/store.js";
 import { createInProcessRuntime } from "../runtime/factory.js";
@@ -12,7 +13,7 @@ export class AgentService {
     private readonly store: Store,
     private readonly workspace: string,
     private readonly runtimeFactory: RuntimeFactory = createInProcessRuntime,
-    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey"> = {},
+    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs"> = {},
   ) {
     this.store.markInterrupted();
   }
@@ -28,17 +29,28 @@ export class AgentService {
     return run;
   }
 
-  private launch(run: TaskRun, prompt: string) {
+  private launch(run: TaskRun, prompt: string, initialMessages: AgentMessage[] = []) {
     const runtime = this.runtimeFactory({
       store: this.store,
       runId: run.id,
       workspace: this.workspace,
       systemPrompt: this.buildSystemPrompt(run),
+      initialMessages,
       ...this.runtimeDefaults,
       onEvent: (event) => this.publish(event),
     });
     this.runtimes.set(run.id, runtime);
-    void this.execute(run.id, runtime, prompt);
+    const timeout = this.runtimeDefaults.runTimeoutMs
+      ? setTimeout(() => {
+          if (this.store.getRun(run.id)?.status !== "running") return;
+          runtime.abort();
+          const message = `Run exceeded ${this.runtimeDefaults.runTimeoutMs}ms timeout`;
+          this.store.finalizeRun(run.id, "failed", message);
+          this.store.appendMessage(run.sessionId, "assistant", `Run failed: ${message}`);
+          this.publish(this.store.appendEvent(run.id, "run.failed", { error: message, reason: "timeout" }));
+        }, this.runtimeDefaults.runTimeoutMs)
+      : undefined;
+    void this.execute(run.id, runtime, prompt).finally(() => { if (timeout) clearTimeout(timeout); });
   }
 
   private async execute(runId: RunId, runtime: AgentRuntime, prompt: string) {
@@ -109,16 +121,21 @@ export class AgentService {
   resume(runId: RunId) {
     if (this.runtimes.has(runId)) throw new Error("Run is already active");
     const run = this.store.resumeRun(runId);
-    const event = this.store.appendEvent(run.id, "run.resumed", { attempt: run.attempt, resumedAt: run.resumedAt, mode: "durable-snapshot-replay" });
+    const transcript = this.store.listTranscript(run.id);
+    const event = this.store.appendEvent(run.id, "run.resumed", { attempt: run.attempt, resumedAt: run.resumedAt, mode: transcript.length ? "transcript-continuation" : "durable-snapshot-replay", transcriptCount: transcript.length });
     this.publish(event);
-    this.launch(run, this.buildResumePrompt(run));
+    this.launch(run, this.buildResumePrompt(run, transcript.length), transcript);
     return run;
   }
 
-  private buildResumePrompt(run: TaskRun) {
+  private buildResumePrompt(run: TaskRun, transcriptCount: number) {
     return [
-      "Resume this interrupted or blocked TaskRun using its durable snapshot.",
-      "The previous in-memory model transcript is unavailable. Reinspect the workspace and existing TaskRun state before acting.",
+      transcriptCount
+        ? `Continue this TaskRun from ${transcriptCount} persisted pi transcript messages.`
+        : "Resume this interrupted or blocked TaskRun using its durable snapshot.",
+      transcriptCount
+        ? "The prior user, assistant, tool-call, and tool-result messages are already loaded into the runtime context."
+        : "The previous in-memory model transcript is unavailable. Reinspect the workspace and existing TaskRun state before acting.",
       "Completion-gate requirements override conflicting instructions in the original goal, including instructions not to use task_run or not to create plan/check records.",
       "Before producing a final answer, use task_run to ensure at least one required plan item is done and every required check has fresh passing evidence.",
       "Do not recreate already completed plan items or checks. Continue from the remaining incomplete work and verify before completion.",
