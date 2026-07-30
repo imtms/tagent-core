@@ -62,6 +62,8 @@ export interface TaskRun {
   createdAt: number;
   updatedAt: number;
   completedAt: number | null;
+  attempt: number;
+  resumedAt: number | null;
   plan: PlanItem[];
   checks: RunCheck[];
   artifacts: Artifact[];

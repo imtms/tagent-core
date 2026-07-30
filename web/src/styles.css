@@ -48,6 +48,8 @@ button { color: inherit; }
 .top-actions { margin-left: auto; display: flex; gap: 8px; }
 .icon-button { width: 34px; height: 34px; padding: 0; border: 1px solid var(--line); background: white; display: grid; place-items: center; border-radius: var(--radius); cursor: pointer; }
 .icon-button:hover { background: #f2f5f2; }
+.resume-button { height: 34px; padding: 0 11px; border: 1px solid #bdd5c8; background: var(--accent-soft); color: var(--accent); display: flex; align-items: center; gap: 6px; border-radius: var(--radius); font-size: 11px; font-weight: 700; cursor: pointer; }
+.resume-button:hover { border-color: #8db7a2; }
 .icon-button.danger { color: var(--danger); border-color: #ebcccc; }
 .message-scroll { overflow: auto; padding: 32px clamp(24px, 7vw, 88px) 18px; }
 .empty-state { width: min(480px, 100%); margin: 12vh auto 0; text-align: center; color: var(--muted); }
@@ -114,6 +116,7 @@ button { color: inherit; }
   .message.user { width: 94%; }
   .composer-wrap { padding: 10px 12px max(14px, env(safe-area-inset-bottom)); }
   .icon-button { width: 42px; height: 42px; }
+  .resume-button { height: 42px; padding: 0 10px; }
   .composer { grid-template-columns: minmax(0, 1fr) 42px; }
   .composer button { width: 42px; height: 42px; }
   .composer textarea::placeholder, .topbar p { color: #68716c; }

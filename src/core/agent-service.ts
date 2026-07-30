@@ -24,7 +24,11 @@ export class AgentService {
     const run = this.store.createRun(sessionId, query, requestId);
     this.store.appendMessage(sessionId, "user", query);
     this.publish(this.store.appendEvent(run.id, "run.started", { goal: query }));
+    this.launch(run, query);
+    return run;
+  }
 
+  private launch(run: TaskRun, prompt: string) {
     const runtime = this.runtimeFactory({
       store: this.store,
       runId: run.id,
@@ -34,14 +38,12 @@ export class AgentService {
       onEvent: (event) => this.publish(event),
     });
     this.runtimes.set(run.id, runtime);
-
-    void this.execute(run.id, runtime);
-    return run;
+    void this.execute(run.id, runtime, prompt);
   }
 
-  private async execute(runId: RunId, runtime: AgentRuntime) {
+  private async execute(runId: RunId, runtime: AgentRuntime, prompt: string) {
     try {
-      await runtime.prompt(this.store.getRun(runId)?.goal ?? "");
+      await runtime.prompt(prompt);
       const runtimeError = runtime.getError();
       if (runtimeError) throw new Error(runtimeError);
       const messages = runtime.getMessages();
@@ -101,8 +103,22 @@ export class AgentService {
   }
 
   resume(runId: RunId) {
+    if (this.runtimes.has(runId)) throw new Error("Run is already active");
     const run = this.store.resumeRun(runId);
-    return this.start(run.sessionId, run.goal, run.requestId);
+    const event = this.store.appendEvent(run.id, "run.resumed", { attempt: run.attempt, resumedAt: run.resumedAt, mode: "durable-snapshot-replay" });
+    this.publish(event);
+    this.launch(run, this.buildResumePrompt(run));
+    return run;
+  }
+
+  private buildResumePrompt(run: TaskRun) {
+    return [
+      "Resume this interrupted or blocked TaskRun using its durable snapshot.",
+      "The previous in-memory model transcript is unavailable. Reinspect the workspace and existing TaskRun state before acting.",
+      "Do not recreate completed plan items or checks. Continue from the remaining incomplete work and verify before completion.",
+      `Original goal: ${run.goal}`,
+      `Durable snapshot: ${JSON.stringify(run)}`,
+    ].join("\n\n");
   }
 
   private publish(event: RunEvent) {

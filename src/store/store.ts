@@ -59,7 +59,9 @@ export class Store {
         last_event_seq INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
-        completed_at INTEGER
+        completed_at INTEGER,
+        attempt INTEGER NOT NULL DEFAULT 1,
+        resumed_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id, updated_at);
       CREATE TABLE IF NOT EXISTS run_events (
@@ -100,6 +102,13 @@ export class Store {
         created_at INTEGER NOT NULL
       );
     `);
+    this.ensureColumn("runs", "attempt", "INTEGER NOT NULL DEFAULT 1");
+    this.ensureColumn("runs", "resumed_at", "INTEGER");
+  }
+
+  private ensureColumn(table: string, column: string, definition: string) {
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!columns.some((item) => item.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 
   createSession(title = "New workspace"): Session {
@@ -155,7 +164,8 @@ export class Store {
       SELECT id, session_id as sessionId, request_id as requestId, status, phase, goal,
              gate_required as gateRequired, blocked_reason as blockedReason,
              last_event_seq as lastEventSeq, created_at as createdAt,
-             updated_at as updatedAt, completed_at as completedAt
+             updated_at as updatedAt, completed_at as completedAt,
+             attempt, resumed_at as resumedAt
       FROM runs WHERE id = ?
     `).get(id) as RunRow | undefined;
     if (!row) return undefined;
@@ -237,8 +247,9 @@ export class Store {
   resumeRun(runId: RunId) {
     const run = this.getRun(runId);
     if (!run || !["interrupted", "blocked"].includes(run.status)) throw new Error("Run is not resumable");
-    this.db.prepare("UPDATE runs SET status = 'running', phase = CASE WHEN phase = 'blocked' THEN 'implement' ELSE phase END, blocked_reason = '', completed_at = NULL, updated_at = ? WHERE id = ?")
-      .run(now(), runId);
+    const resumedAt = now();
+    this.db.prepare("UPDATE runs SET status = 'running', phase = CASE WHEN phase = 'blocked' THEN 'implement' ELSE phase END, blocked_reason = '', completed_at = NULL, attempt = attempt + 1, resumed_at = ?, updated_at = ? WHERE id = ?")
+      .run(resumedAt, resumedAt, runId);
     return this.getRun(runId)!;
   }
 

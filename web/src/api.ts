@@ -1,10 +1,12 @@
+import { createRequestId } from "./id";
+
 export interface Session { id: string; title: string; createdAt: number; updatedAt: number }
 export interface Message { id: number; sessionId: string; role: "user" | "assistant" | "tool"; content: string; createdAt: number }
 export interface PlanItem { key: string; title: string; status: string; required: boolean; position: number }
 export interface RunCheck { key: string; title: string; status: string; required: boolean; command: string; evidence: string; stale: boolean }
 export interface TaskRun {
   id: string; sessionId: string; requestId: string; status: string; phase: string; goal: string;
-  blockedReason: string; lastEventSeq: number; plan: PlanItem[]; checks: RunCheck[];
+  blockedReason: string; lastEventSeq: number; attempt: number; resumedAt: number | null; plan: PlanItem[]; checks: RunCheck[];
   artifacts: Array<{ id: string; title: string; kind: string; uri: string }>;
   completionGate: { passed: boolean; failures: Array<{ kind: string; key: string; reason: string }> };
 }
@@ -24,9 +26,10 @@ export const api = {
   messages: (sessionId: string) => request<Message[]>(`/api/sessions/${sessionId}/messages`),
   activeRun: (sessionId: string) => request<TaskRun | null>(`/api/sessions/${sessionId}/run`),
   run: (runId: string) => request<TaskRun>(`/api/runs/${runId}`),
-  send: (sessionId: string, content: string) => request<TaskRun>(`/api/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, requestId: crypto.randomUUID() }) }),
+  send: (sessionId: string, content: string) => request<TaskRun>(`/api/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId() }) }),
   cancel: (runId: string) => request(`/api/runs/${runId}/cancel`, { method: "POST" }),
   steer: (runId: string, content: string) => request(`/api/runs/${runId}/steer`, { method: "POST", body: JSON.stringify({ content }) }),
+  resume: (runId: string) => request<TaskRun>(`/api/runs/${runId}/resume`, { method: "POST" }),
 };
 
 export function subscribe(runId: string, after: number, onEvent: (event: RunEvent) => void, onError: () => void) {

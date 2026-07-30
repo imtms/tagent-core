@@ -13,6 +13,8 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Startup recovery that marks abandoned running tasks as interrupted.
 - Cancellation and in-flight steering for active runs.
 - Explicit failure persistence for provider and pi runtime errors.
+- Resume attempts reuse the same durable Run ID and request ID, increment `attempt`, record `resumedAt`, and append `run.resumed`.
+- Resume reconstructs a fresh runtime from the durable TaskRun snapshot without duplicating the original user message.
 
 ### Agent runtime
 
@@ -28,6 +30,8 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Injectable `createApp()` factory for tests and future modules.
 - Responsive React workbench with session navigation, streaming conversation, tool activity, and TaskRun details.
 - Production server serves the built Web application without an additional static-file dependency.
+- Client request IDs support browsers without `crypto.randomUUID`, including `getRandomValues` and legacy fallbacks.
+- Blocked and interrupted runs can be resumed from the Web workbench; the UI exposes the current attempt.
 
 ### Quality baseline
 
@@ -39,11 +43,9 @@ Updated: 2026-07-30 (Asia/Singapore)
 
 ## In Progress
 
-- Replace the incorrect stock OpenAI endpoint and model lookup with an explicit OpenAI-compatible model:
-  - API base: `https://one.tms.im/v1`
-  - Model: `gpt-5.6-sol`
-- Introduce an AgentRuntime interface and factory so AgentService does not depend directly on pi's in-process implementation.
-- Document and test the runtime scheduling decision.
+- Persist enough pi transcript and tool-result state to continue a provider conversation exactly after process restart.
+- Define a bounded provider retry and timeout policy with usage persistence.
+- Prepare the worker protocol needed for a future pi RPC adapter.
 
 ## Next Milestones
 
@@ -52,8 +54,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Implement a pi RPC worker adapter behind the AgentRuntime interface.
 - Use in-process pi for the primary interactive agent and pi RPC for isolated or concurrent worker tasks.
 - Add bounded retries, provider timeouts, model usage persistence, and per-run token limits.
-- Correct resume semantics so interrupted runs continue the same durable run rather than colliding with request idempotency.
-- Persist enough runtime transcript state to support actual continuation after process restart.
+- Persist enough runtime transcript state to support exact provider conversation continuation after process restart.
 
 ### P2: Tool governance
 
@@ -86,7 +87,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 ## Known Limitations
 
 - The current in-process pi transcript exists only in memory during a run.
-- `resume` currently changes durable status but does not yet reconstruct a pi transcript.
+- Resume uses durable snapshot replay in a fresh pi runtime; it does not yet continue the exact provider transcript.
 - Bash isolation is policy-based, not an OS-level sandbox.
 - The first Web interface does not expose model/runtime selection or provider health.
 - Multiple TAgent Core processes can currently target the same SQLite database; leader/lease enforcement is not implemented.

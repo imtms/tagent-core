@@ -39,6 +39,18 @@ describe("Store", () => {
     expect(result.run.status).toBe("completed");
   });
 
+  it("tracks resume attempts on the same run", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "resume", "stable");
+    store.blockRun(run.id, "gate");
+    const resumed = store.resumeRun(run.id);
+    expect(resumed.id).toBe(run.id);
+    expect(resumed.requestId).toBe("stable");
+    expect(resumed.attempt).toBe(2);
+    expect(resumed.resumedAt).toBeTypeOf("number");
+  });
+
   it("rejects stale verification evidence", () => {
     const store = createStore();
     const session = store.createSession();
