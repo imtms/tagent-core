@@ -223,6 +223,11 @@ export class Store {
     return task;
   }
 
+  getLatestRun(sessionId: SessionId): TaskRun | undefined {
+    const row = this.db.prepare("SELECT id FROM runs WHERE session_id = ? ORDER BY updated_at DESC LIMIT 1").get(sessionId) as { id: string } | undefined;
+    return row ? this.getRun(row.id) : undefined;
+  }
+
   getActiveRun(sessionId: SessionId): TaskRun | undefined {
     const row = this.db.prepare("SELECT id FROM runs WHERE session_id = ? AND status = 'running' ORDER BY updated_at DESC LIMIT 1").get(sessionId) as { id: string } | undefined;
     return row ? this.getRun(row.id) : undefined;
@@ -248,9 +253,13 @@ export class Store {
     return transaction();
   }
 
+  listTranscriptEntries(runId: RunId) {
+    const rows = this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? ORDER BY seq").all(runId) as Array<{ seq: number; attempt: number; role: string; messageJson: string; createdAt: number }>;
+    return rows.map(({ messageJson, ...row }) => ({ ...row, message: JSON.parse(messageJson) as AgentMessage }));
+  }
+
   listTranscript(runId: RunId): AgentMessage[] {
-    const rows = this.db.prepare("SELECT message_json as messageJson FROM run_transcript WHERE run_id = ? ORDER BY seq").all(runId) as Array<{ messageJson: string }>;
-    return rows.map((row) => JSON.parse(row.messageJson) as AgentMessage);
+    return this.listTranscriptEntries(runId).map((entry) => entry.message);
   }
 
   setRunPhase(runId: RunId, phase: RunPhase) {

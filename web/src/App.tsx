@@ -29,7 +29,7 @@ export function App() {
   useEffect(() => {
     if (!sessionId) return;
     setStreaming(""); setEvents([]); setError("");
-    void Promise.all([api.messages(sessionId), api.activeRun(sessionId)]).then(([history, active]) => { setMessages(history); setRun(active); });
+    void Promise.all([api.messages(sessionId), api.latestRun(sessionId)]).then(([history, active]) => { setMessages(history); setRun(active); });
   }, [sessionId]);
 
   useEffect(() => {

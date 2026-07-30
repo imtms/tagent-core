@@ -29,7 +29,7 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
   });
   app.get("/api/sessions/:id/run", async (request) => {
     const { id } = request.params as { id: string };
-    return store.getActiveRun(id) ?? null;
+    return store.getLatestRun(id) ?? null;
   });
   app.post("/api/sessions/:id/messages", async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -54,6 +54,11 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const { id } = request.params as { id: string };
     try { return service.resume(id); }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+  app.get("/api/runs/:id/transcript", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!service.getRun(id)) return reply.code(404).send({ error: "run not found" });
+    return store.listTranscriptEntries(id);
   });
   app.get("/api/runs/:id", async (request, reply) => {
     const { id } = request.params as { id: string };

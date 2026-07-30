@@ -39,6 +39,15 @@ describe("Store", () => {
     expect(result.run.status).toBe("completed");
   });
 
+  it("returns the latest terminal run for a session", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "latest");
+    store.finalizeRun(run.id, "completed");
+    expect(store.getLatestRun(session.id)?.id).toBe(run.id);
+    expect(store.getActiveRun(session.id)).toBeUndefined();
+  });
+
   it("persists transcript messages and aggregates assistant usage", () => {
     const store = createStore();
     const session = store.createSession();

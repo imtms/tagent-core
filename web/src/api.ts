@@ -26,7 +26,7 @@ export const api = {
   sessions: () => request<Session[]>("/api/sessions"),
   createSession: (title = "New workspace") => request<Session>("/api/sessions", { method: "POST", body: JSON.stringify({ title }) }),
   messages: (sessionId: string) => request<Message[]>(`/api/sessions/${sessionId}/messages`),
-  activeRun: (sessionId: string) => request<TaskRun | null>(`/api/sessions/${sessionId}/run`),
+  latestRun: (sessionId: string) => request<TaskRun | null>(`/api/sessions/${sessionId}/run`),
   run: (runId: string) => request<TaskRun>(`/api/runs/${runId}`),
   send: (sessionId: string, content: string) => request<TaskRun>(`/api/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId() }) }),
   cancel: (runId: string) => request(`/api/runs/${runId}/cancel`, { method: "POST" }),

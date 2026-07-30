@@ -23,6 +23,8 @@ describe("HTTP API", () => {
     const sessions = (await app.inject({ method: "GET", url: "/api/sessions" })).json();
     expect(sessions).toHaveLength(1);
     expect(sessions[0].id).toBe(created.id);
+    const missingTranscript = await app.inject({ method: "GET", url: "/api/runs/missing/transcript" });
+    expect(missingTranscript.statusCode).toBe(404);
   });
 
   it("rejects empty messages before invoking the model", async () => {

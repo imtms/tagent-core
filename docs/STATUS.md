@@ -30,7 +30,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 
 ### HTTP and Web
 
-- Fastify API for sessions, messages, runs, cancellation, steering, resumption, and SSE event replay.
+- Fastify API for sessions, messages, runs, cancellation, steering, resumption, transcript audit, and SSE event replay.
 - Injectable `createApp()` factory for tests and future modules.
 - Responsive React workbench with session navigation, streaming conversation, tool activity, and TaskRun details.
 - Production server serves the built Web application without an additional static-file dependency.
