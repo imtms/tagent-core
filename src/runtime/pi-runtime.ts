@@ -8,6 +8,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { createTools } from "../tools/tools.js";
+import { classifyProviderFailure, isRetryableProviderFailure } from "./provider-errors.js";
 import type { AgentRuntime, RuntimeOptions } from "./types.js";
 
 function messageText(message: AgentMessage | undefined) {
@@ -112,6 +113,11 @@ export class PiRuntime implements AgentRuntime {
     if (event.type === "message_end") {
       const run = this.options.store.getRun(this.options.runId);
       if (run) this.options.store.appendTranscript(this.options.runId, run.attempt, event.message);
+      if (event.message.role === "assistant") {
+        const kind = classifyProviderFailure(event.message, this.options.model?.contextWindow);
+        const summary = (event.message.errorMessage ?? "").replace(/\s+/g, " ").slice(0, 500);
+        if (kind) this.emit("provider.failure", { kind, retryable: isRetryableProviderFailure(kind), summary, stopReason: event.message.stopReason });
+      }
     }
     if (event.type === "tool_execution_start") this.emit("tool.started", { toolCallId: event.toolCallId, toolName: event.toolName, args: event.args });
     if (event.type === "tool_execution_update") this.emit("tool.progress", { toolCallId: event.toolCallId, toolName: event.toolName });

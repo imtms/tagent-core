@@ -61,7 +61,10 @@ export class AgentService {
   }
 
   closeRuntimes() {
-    for (const runtime of this.runtimes.values()) runtime.abort();
+    for (const runtime of this.runtimes.values()) {
+      runtime.abort();
+      runtime.dispose?.();
+    }
     this.runtimes.clear();
     return this.store.releaseContinuationLeases(this.continuationOwner);
   }

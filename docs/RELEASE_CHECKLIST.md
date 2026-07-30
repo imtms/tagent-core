@@ -9,9 +9,9 @@ This checklist applies to source prereleases. TAgent Core is not published to np
 1. Confirm `package.json` and `package-lock.json` use the target version.
 2. Update `CHANGELOG.md`, `README.md`, `docs/STATUS.md`, and known limitations.
 3. Confirm the worktree is clean and the release commit is on `main`.
-4. Run `npm ci` from the lockfile in a clean Node.js `22.19.0` or newer environment.
+4. Run `npm ci` from the lockfile in a clean Node.js `24.18.1` and npm `12` or newer environment.
 5. Run `npm run lint`, `npm run check`, `npm test -- --run`, and `npm run build`.
-6. Run production and full dependency audits at high severity.
+6. Run production and full dependency audits at high severity. Pi's upstream shrinkwrap issue is accepted for `main` development if it recurs, but stable release remains blocked until the lockfile audits cleanly.
 7. Start the built server with a temporary SQLite database and workspace; verify `/api/health`, `/api/config/status`, session creation, run history, and the Web shell.
 8. Verify desktop and mobile layouts, Markdown, and expanded tool-call content without horizontal overflow.
 9. Confirm no credentials, `.env` files, databases, logs, screenshots, or temporary artifacts are tracked.

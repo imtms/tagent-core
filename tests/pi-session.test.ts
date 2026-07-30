@@ -53,4 +53,24 @@ describe("Pi 0.83 AgentSession integration", () => {
     runtime.dispose();
     store.close();
   });
+
+  it("uses the SDK follow-up queue after the active response settles", async () => {
+    const { store, run, runtime } = await setup([fauxAssistantMessage("active response"), fauxAssistantMessage("follow-up result")], 10);
+    const prompt = runtime.prompt("start");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await runtime.followUp("check one more thing");
+    await prompt;
+    expect(store.listEvents(run.id).some((event) => event.type === "runtime.queue" && JSON.stringify(event.data.followUp).includes("check one more thing"))).toBe(true);
+    expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "follow-up result" }] });
+    runtime.dispose();
+    store.close();
+  });
+
+  it("keeps typed final provider failure audit after SDK retries are exhausted", async () => {
+    const { store, run, runtime } = await setup([fauxAssistantMessage([], { stopReason: "error", errorMessage: "401 Unauthorized" })]);
+    await runtime.prompt("fail");
+    expect(store.listEvents(run.id).filter((event) => event.type === "provider.failure")).toEqual(expect.arrayContaining([expect.objectContaining({ data: expect.objectContaining({ retryable: false }) })]));
+    runtime.dispose();
+    store.close();
+  });
 });

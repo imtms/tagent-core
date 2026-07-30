@@ -19,4 +19,4 @@ Do not open a public issue containing exploit details or credentials. Use GitHub
 
 ## Dependency policy
 
-Release candidates must pass both `npm audit --omit=dev --audit-level=high` and `npm audit --audit-level=high`. Dependency updates are reviewed explicitly; automated force upgrades are not part of the release process.
+Release candidates must pass both `npm audit --omit=dev --audit-level=high` and `npm audit --audit-level=high`. Pi's upstream shrinkwrap issue is tracked at https://github.com/earendil-works/pi/issues/7316; it may be accepted for development commits on `main`, but it remains a stable-release blocker. Dependency updates are reviewed explicitly; automated force upgrades are not part of the release process.

@@ -2,6 +2,20 @@
 
 All notable changes to TAgent Core are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- Upgrade the in-process runtime from bare pi agent core to the controlled pi coding-agent `AgentSession` SDK.
+- Delegate streaming steering, follow-up delivery, automatic retry, and overflow/threshold compaction to pi while preserving TAgent-owned TaskRun, transcript, policy, and operation-ledger authority.
+- Use in-memory pi session/settings/model services with offline startup, disabled project resource discovery, runtime-only credentials, and TAgent custom tools only.
+- Require Node.js 24.18.1 and npm 12 for the development and release baseline.
+
+### Added
+
+- Durable queue, retry, and compaction lifecycle events plus follow-up and manual compaction HTTP endpoints.
+- Real faux-provider integration tests for controlled tools, transcript persistence, automatic retry, steering, follow-up, and terminal provider-failure audit.
+
 ## [0.1.0-alpha.1] - 2026-07-30
 
 First public source preview of the persistent TAgent control plane.

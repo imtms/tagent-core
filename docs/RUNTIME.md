@@ -6,7 +6,7 @@ Updated: 2026-07-30
 
 TAgent Core uses a hybrid runtime strategy:
 
-- The primary interactive agent continues to use pi agent core in-process.
+- The primary interactive agent uses pi coding-agent `AgentSession` in-process.
 - Isolated, concurrent, or delegated workers will use pi RPC behind the same TAgent-owned runtime interface.
 - Codex app-server is reserved for specialized high-complexity coding implementation and review, not as the universal runtime.
 
@@ -40,13 +40,16 @@ TAgent owns this minimal contract:
 
 ```text
 prompt(query) -> Promise<void>
-steer(instruction) -> void
+steer(instruction) -> Promise<void>
+followUp(instruction) -> Promise<void>
+compact(instructions?) -> Promise<void>
 abort() -> void
+dispose() -> void
 getMessages() -> AgentMessage[]
 getError() -> string | undefined
 ```
 
-The runtime factory receives Run ID, workspace, system prompt, tools, and an event sink. pi-specific classes and protocol events must not leak into AgentService or the database schema.
+The runtime factory receives Run ID, workspace, system prompt, tools, and an event sink. The adapter owns pi SessionManager, SettingsManager, ModelRuntime, queue, retry, and compaction details; pi-specific classes and protocol events must not leak into AgentService or the database schema.
 
 A later worker-oriented interface can add:
 

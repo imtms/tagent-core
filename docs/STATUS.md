@@ -11,14 +11,17 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Deterministic completion gate that prevents a model response from directly marking a run complete.
 - Request idempotency through stable `requestId` values.
 - Startup recovery that marks abandoned running tasks as interrupted.
-- Cancellation and in-flight steering for active runs.
+- Cancellation, SDK-backed in-flight steering, follow-up queueing, and manual compaction for active runs.
 - Explicit failure persistence for provider and pi runtime errors.
 - Resume attempts reuse the same durable Run ID and request ID, increment `attempt`, record `resumedAt`, and append `run.resumed`.
 - Resume reconstructs a fresh runtime from the durable TaskRun snapshot without duplicating the original user message.
 
 ### Agent runtime
 
-- In-process integration with `@mariozechner/pi-agent-core`.
+- In-process integration with `@earendil-works/pi-coding-agent` 0.83 `AgentSession`.
+- Pi owns ephemeral per-attempt steering/follow-up delivery, automatic retry, and threshold/overflow/manual compaction; TAgent remains authoritative for TaskRun state, SQLite transcript, completion gates, operation receipts, and policy.
+- Pi SessionManager and SettingsManager are in-memory, ModelRuntime starts offline with runtime-only credentials, and project Extensions, Skills, prompts, themes, and context-file discovery are disabled.
+- Only TAgent custom tools are active. Pi built-in file and shell tools stay disabled because they do not carry TAgent operation receipts, stale-check propagation, or workspace governance.
 - Streaming model deltas and tool lifecycle events persisted to the run event log.
 - TAgent-owned tools: `read`, `write`, `edit`, `bash`, and `task_run`.
 - Workspace path containment and a minimal destructive-command policy.
@@ -27,7 +30,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Cancel settlement and resume/continuation startup repair any unpaired tool calls with auditable synthetic error tool results before provider reuse.
 - Per-run aggregate model usage for input, output, cache, total tokens, and provider-reported cost.
 - Resume loads the persisted pi transcript into the new runtime before appending the recovery instruction.
-- Provider request timeout/retry controls, a progress-sensitive idle watchdog for each attempt, and a separate absolute hard timeout.
+- Pi automatic retry and provider timeout controls, a progress-sensitive idle watchdog for each attempt, and a separate absolute hard timeout.
 - Provider responses and terminal failures are audited with typed auth, invalid-request, context-overflow, rate-limit, timeout, network, server, aborted, and unknown classifications plus retryability metadata.
 - The idle watchdog is refreshed by model deltas and tool start/progress/completion events, so active tasks are no longer killed at the simple-tier five-minute mark.
 - Persistent bounded continuations after completion-gate blocks, with queued/running/completed/blocked/failed/cancelled audit states.
@@ -72,7 +75,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 ## In Progress
 
 - Add semantic or model-generated transcript summaries before old turns are pruned from runtime context.
-- Define bounded retry classes that distinguish transient provider failures from deterministic request errors.
+- Define whether durable control-plane retry policy is still needed above Pi's bounded per-session retry lifecycle.
 - Prepare the worker protocol needed for a future pi RPC adapter.
 
 ## Next Milestones
@@ -81,7 +84,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 
 - Implement a pi RPC worker adapter behind the AgentRuntime interface.
 - Use in-process pi for the primary interactive agent and pi RPC for isolated or concurrent worker tasks.
-- Move retry scheduling into the control plane, emit per-attempt retry events, honor Retry-After, and add one-shot context-overflow recovery.
+- Add durable retry policy only for failures that must survive process loss; Pi already provides per-session retry events and context-overflow compaction recovery.
 - Persist enough runtime transcript state to support exact provider conversation continuation after process restart.
 
 ### P2: Tool governance
@@ -117,6 +120,6 @@ Updated: 2026-07-30 (Asia/Singapore)
 - The first Web interface does not expose model/runtime selection or provider health.
 - Multiple TAgent Core processes must not target the same SQLite database; process-level leader enforcement is not implemented.
 - Continuation attempts heartbeat, use owner fencing, and only expire into recovery after the persisted lease deadline; process-level leader election remains absent.
-- Cancel/resume transcript repair is implemented, but steering still relies on pi's internal queue without a bounded control-plane inbox or explicit closing/full responses.
+- Cancel/resume transcript repair is implemented. Steering and follow-up now use pi's observable queue, but TAgent still lacks a bounded durable control-plane inbox and explicit closing/full responses.
 - Provider failures are typed and auditable, but retry scheduling still uses the provider SDK/pi boundary rather than a TAgent-owned retry loop.
 - The HTTP API has no authentication or multi-tenant isolation and must remain on localhost or a trusted private network for this alpha.

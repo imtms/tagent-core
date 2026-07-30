@@ -20,7 +20,7 @@ Project records:
 - Transactional single-owner continuation claims with persisted lease metadata
 - Expiry-aware continuation recovery, owner heartbeat fencing, and graceful lease release
 - Durable repeated-call and repeated-failure tool guards
-- Streaming events, cancellation, and steering
+- Streaming events, cancellation, SDK-backed steering/follow-up queues, automatic retry, and context compaction
 - Cancel/resume transcript repair for interrupted tool calls
 - Typed provider response/failure audit events with retryability metadata
 - Workspace-scoped `ls`, `read`, `write`, `edit`, `bash`, and `task_run` tools
@@ -34,7 +34,7 @@ See [Security Policy](SECURITY.md), [Changelog](CHANGELOG.md), and [Release Chec
 
 ## Run
 
-Requires Node.js `>=22.19.0` and npm `>=10`.
+Requires Node.js `>=24.18.1` and npm `>=12`.
 
 ```bash
 cp .env.example .env
@@ -97,7 +97,7 @@ Environment limits remain hard ceilings. Set `TAGENT_DYNAMIC_BUDGET=false` to us
 
 ## Runtime scheduling
 
-The primary interactive agent uses pi in-process. This keeps TAgent-owned tools, event persistence, cancellation, and TaskRun updates in one control-plane process.
+The primary interactive agent uses pi coding-agent `AgentSession` in-process with in-memory pi session/settings state, offline model startup, disabled project resource discovery, and only TAgent-owned custom tools. This keeps event persistence, cancellation, governance, and TaskRun updates in one control-plane process while delegating queueing, retry, and compaction to pi.
 
 pi RPC is planned for isolated and concurrent worker tasks. The AgentRuntime factory added to the core prevents pi-specific implementation details from leaking into AgentService. See [Agent runtime decision](docs/RUNTIME.md) for the criteria and migration gates.
 
