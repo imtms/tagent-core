@@ -199,6 +199,8 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     request.raw.on("close", () => { clearInterval(heartbeat); unsubscribe(); });
   });
 
+  app.all("/api/*", async (request, reply) => reply.code(404).send({ error: `API route not found: ${request.method} ${request.url}` }));
+
   const mimeTypes: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
   app.get("/*", async (request, reply) => {
     const requested = request.url.split("?")[0] === "/" ? "index.html" : request.url.split("?")[0].slice(1);

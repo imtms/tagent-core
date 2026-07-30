@@ -62,6 +62,16 @@ describe("HTTP API", () => {
     expect((await app.inject({ method: "GET", url: `/api/sessions/${session.id}/inbox` })).json()).toEqual([]);
   });
 
+  it("returns JSON 404 for unknown API routes instead of the SPA document", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
+    const store = new Store(":memory:");
+    const app = createApp({ store, service: new AgentService(store, workspace), logger: false, webRoot: workspace }); apps.push(app);
+    const response = await app.inject({ method: "GET", url: "/api/not-a-route" });
+    expect(response.statusCode).toBe(404);
+    expect(response.headers["content-type"]).toContain("application/json");
+    expect(response.json()).toEqual({ error: "API route not found: GET /api/not-a-route" });
+  });
+
   it("rejects empty messages before invoking the model", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
     const store = new Store(":memory:");

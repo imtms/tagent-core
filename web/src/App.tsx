@@ -43,6 +43,9 @@ export function App() {
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const activeRunIdRef = useRef("");
+
+  useEffect(() => { activeRunIdRef.current = activeRun?.id ?? ""; }, [activeRun?.id]);
 
   const loadSessions = useCallback(async () => {
     let items = await api.sessions();
@@ -55,11 +58,22 @@ export function App() {
   useEffect(() => {
     if (!sessionId) return;
     const timer = setInterval(() => {
-      void Promise.all([api.inbox(sessionId), api.runs(sessionId)]).then(([queued, runHistory]) => {
+      void Promise.all([api.inbox(sessionId), api.runs(sessionId)]).then(async ([queued, runHistory]) => {
         setInbox(queued);
         setRuns(runHistory);
         const active = runHistory.find((item) => item.status === "running") ?? null;
-        setActiveRun((current) => current?.id === active?.id ? current : active);
+        if (active?.id && active.id !== activeRunIdRef.current) {
+          const [hydrated, history, view] = await Promise.all([api.run(active.id), api.messages(sessionId), api.transcriptView(active.id)]);
+          setActiveRun(hydrated); setSelectedRun(hydrated); setExpandedRunId(hydrated.id);
+          setMessages(history); setTranscript(view); setStreaming(hydrated.checkpoint?.active ? hydrated.checkpoint.assistantPartial : "");
+          setEvents(hydrated.checkpoint?.active && hydrated.checkpoint.currentTool ? [{ runId: hydrated.id, seq: hydrated.checkpoint.lastEventSeq, type: "tool.started", data: hydrated.checkpoint.currentTool, createdAt: hydrated.checkpoint.updatedAt }] : []);
+          setError("");
+        } else if (!active && activeRunIdRef.current) {
+          setActiveRun(null); setStreaming(""); setEvents([]);
+          setMessages(await api.messages(sessionId));
+        } else if (active) {
+          setActiveRun((current) => current?.id === active.id ? { ...current, ...active } : active);
+        }
       }).catch(() => undefined);
     }, 2000);
     return () => clearInterval(timer);
@@ -88,6 +102,7 @@ export function App() {
     const checkpointAfter = activeRun.checkpoint?.active ? activeRun.checkpoint.lastEventSeq : activeRun.lastEventSeq ?? 0;
     void api.claimConsumer(runId, consumerId).then((cursor) => {
       if (closed) return;
+      setError("");
       const after = Math.max(checkpointAfter, cursor.ackedSeq);
       unsubscribe = subscribe(runId, consumerId, cursor.generation, after, async (event) => {
       setEvents((current) => [...current.slice(-39), event]);

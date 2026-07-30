@@ -31,9 +31,16 @@ export type TranscriptItem =
 export interface RuntimeStatus { runtime: string; provider: string; api: string; baseUrl: string; modelId: string; credentialConfigured: boolean; providerTimeoutMs: number; providerMaxRetries: number; runTimeoutMs: number; maxContinuations: number; maxRunTokens: number; dynamicBudget: boolean; schemaVersion?: number }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
-  if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? response.statusText);
-  return response.json() as Promise<T>;
+  const headers = new Headers(init?.headers);
+  if (init?.body != null && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const response = await fetch(url, { ...init, headers });
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    throw new Error(`TAgent API protocol mismatch at ${url}: expected JSON but received ${contentType || "an unknown content type"}. The server may need to be restarted after an upgrade.`);
+  }
+  const payload = await response.json().catch(() => null) as { error?: string } | null;
+  if (!response.ok) throw new Error(payload?.error ?? response.statusText);
+  return payload as T;
 }
 
 export const api = {
