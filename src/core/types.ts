@@ -59,6 +59,9 @@ export interface RunContinuation {
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;
+  leaseOwner: string;
+  leaseUntil: number | null;
+  heartbeatAt: number | null;
 }
 
 export interface TaskRun {

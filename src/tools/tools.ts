@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { Type, type Static } from "typebox";
@@ -7,7 +7,10 @@ import type { Store } from "../store/store.js";
 import type { RunId } from "../core/types.js";
 
 const MAX_OUTPUT = 24_000;
+const MAX_CAPTURE = 256_000;
+const MAX_LIST_ENTRIES = 500;
 const ReadSchema = Type.Object({ path: Type.String(), offset: Type.Optional(Type.Integer({ minimum: 1 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 2000 })) });
+const ListSchema = Type.Object({ path: Type.Optional(Type.String()), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_LIST_ENTRIES })) });
 const WriteSchema = Type.Object({ path: Type.String(), content: Type.String() });
 const EditSchema = Type.Object({ path: Type.String(), oldText: Type.String(), newText: Type.String() });
 const BashSchema = Type.Object({ command: Type.String(), timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })) });
@@ -24,6 +27,19 @@ const TaskRunSchema = Type.Union([
 function textResult(text: string, details: Record<string, unknown> = {}): AgentToolResult<Record<string, unknown>> {
   const clipped = text.length > MAX_OUTPUT ? `${text.slice(0, MAX_OUTPUT)}\n... output truncated` : text;
   return { content: [{ type: "text", text: clipped }], details };
+}
+
+function appendCapture(current: string, chunk: string) {
+  const next = current + chunk;
+  return next.length <= MAX_CAPTURE ? next : next.slice(-MAX_CAPTURE);
+}
+
+function firstChangedLine(before: string, after: string) {
+  const left = before.split("\n");
+  const right = after.split("\n");
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) if (left[index] !== right[index]) return index + 1;
+  return null;
 }
 
 function resolveInside(root: string, target: string) {
@@ -65,15 +81,30 @@ async function executeMutation(
 }
 
 export function createTools(store: Store, runId: RunId, workspace: string): AgentTool[] {
+  const listTool: AgentTool<typeof ListSchema, Record<string, unknown>> = {
+    name: "ls", label: "List directory", description: "List entries in a workspace directory.", parameters: ListSchema,
+    async execute(_id, params: Static<typeof ListSchema>) {
+      const target = params.path ?? ".";
+      const dirname = resolveInside(workspace, target);
+      const entries = await readdir(dirname, { withFileTypes: true });
+      const limit = params.limit ?? 200;
+      const names = entries.sort((left, right) => left.name.localeCompare(right.name)).slice(0, limit).map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`);
+      return textResult(names.join("\n") || "Directory is empty", { path: dirname, totalEntries: entries.length, returnedEntries: names.length, truncated: entries.length > limit });
+    },
+  };
+
   const readTool: AgentTool<typeof ReadSchema, Record<string, unknown>> = {
     name: "read", label: "Read file", description: "Read a UTF-8 text file inside the workspace.", parameters: ReadSchema,
     async execute(_id, params: Static<typeof ReadSchema>) {
       const filename = resolveInside(workspace, params.path);
-      const content = await readFile(filename, "utf8");
+      const file = await stat(filename);
+      const buffer = await readFile(filename);
+      if (buffer.subarray(0, Math.min(buffer.length, 8192)).includes(0)) return textResult(`Binary file: ${params.path}`, { path: filename, type: "binary", bytes: file.size });
+      const content = buffer.toString("utf8").replace(/^\uFEFF/, "");
       const lines = content.split("\n");
       const offset = params.offset ?? 1;
       const limit = params.limit ?? 300;
-      return textResult(lines.slice(offset - 1, offset - 1 + limit).join("\n"), { path: filename, totalLines: lines.length, offset, limit });
+      return textResult(lines.slice(offset - 1, offset - 1 + limit).join("\n"), { path: filename, type: "text", bytes: file.size, totalLines: lines.length, offset, limit });
     },
   };
 
@@ -95,10 +126,13 @@ export function createTools(store: Store, runId: RunId, workspace: string): Agen
       return executeMutation(store, runId, id, "tool.edit", params, async () => {
         const filename = resolveInside(workspace, params.path);
         const content = await readFile(filename, "utf8");
-        const occurrences = content.split(params.oldText).length - 1;
-        if (occurrences !== 1) throw new Error(`Expected oldText exactly once, found ${occurrences}`);
-        await writeFile(filename, content.replace(params.oldText, params.newText), "utf8");
-        return textResult(`Updated ${params.path}`, { path: filename });
+        const newContent = params.oldText === "" ? content + params.newText : (() => {
+          const occurrences = content.split(params.oldText).length - 1;
+          if (occurrences !== 1) throw new Error(`Expected oldText exactly once, found ${occurrences}`);
+          return content.replace(params.oldText, params.newText);
+        })();
+        await writeFile(filename, newContent, "utf8");
+        return textResult(`Updated ${params.path}`, { path: filename, mode: params.oldText === "" ? "append" : "replace", bytesBefore: Buffer.byteLength(content), bytesAfter: Buffer.byteLength(newContent), firstChangedLine: firstChangedLine(content, newContent) });
       });
     },
   };
@@ -109,23 +143,44 @@ export function createTools(store: Store, runId: RunId, workspace: string): Agen
       return executeMutation(store, runId, id, "tool.bash", params, async () => {
         if (/\b(rm\s+-rf|mkfs|shutdown|reboot|poweroff|git\s+reset\s+--hard|git\s+clean\s+-[a-z]*f)\b/i.test(params.command)) throw new Error("Command blocked by the minimal safety policy");
         return await new Promise<AgentToolResult<Record<string, unknown>>>((resolve, reject) => {
-          const child = spawn("bash", ["-lc", params.command], { cwd: workspace, env: process.env });
+          const child = spawn("bash", ["-lc", params.command], { cwd: workspace, env: process.env, detached: process.platform !== "win32" });
         let stdout = "";
         let stderr = "";
-        const timer = setTimeout(() => child.kill("SIGTERM"), (params.timeoutSeconds ?? 30) * 1000);
-        const abort = () => child.kill("SIGTERM");
+        let progressBuffer = "";
+        let progressTimer: ReturnType<typeof setTimeout> | undefined;
+        let killTimer: ReturnType<typeof setTimeout> | undefined;
+        const flushProgress = () => { if (progressBuffer) onUpdate?.(textResult(progressBuffer, { stream: "combined" })); progressBuffer = ""; progressTimer = undefined; };
+        const terminate = () => {
+          if (child.pid && process.platform !== "win32") { try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); } }
+          else child.kill("SIGTERM");
+          killTimer = setTimeout(() => {
+            if (child.pid && process.platform !== "win32") { try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); } }
+            else child.kill("SIGKILL");
+          }, 2_000);
+        };
+        const timer = setTimeout(terminate, (params.timeoutSeconds ?? 30) * 1000);
+        const abort = terminate;
         signal?.addEventListener("abort", abort, { once: true });
-        child.stdout.on("data", (chunk) => { stdout += chunk.toString(); onUpdate?.(textResult(chunk.toString(), { stream: "stdout" })); });
-        child.stderr.on("data", (chunk) => { stderr += chunk.toString(); onUpdate?.(textResult(chunk.toString(), { stream: "stderr" })); });
+        const capture = (stream: "stdout" | "stderr", chunk: Buffer) => {
+          const text = chunk.toString("utf8");
+          if (stream === "stdout") stdout = appendCapture(stdout, text); else stderr = appendCapture(stderr, text);
+          progressBuffer += text;
+          if (!progressTimer) progressTimer = setTimeout(flushProgress, 250);
+        };
+        child.stdout.on("data", (chunk: Buffer) => capture("stdout", chunk));
+        child.stderr.on("data", (chunk: Buffer) => capture("stderr", chunk));
         child.on("error", reject);
         child.on("close", (code, sig) => {
           clearTimeout(timer);
+          if (killTimer) clearTimeout(killTimer);
+          if (progressTimer) clearTimeout(progressTimer);
+          flushProgress();
           signal?.removeEventListener("abort", abort);
           const combined = [stdout, stderr && `STDERR:\n${stderr}`].filter(Boolean).join("\n");
           if (signal?.aborted) return reject(new Error("Command aborted"));
           if (sig) return reject(new Error(`Command terminated by ${sig}\n${combined}`));
           if (code !== 0) return reject(new Error(`Command exited with code ${code}\n${combined}`));
-          resolve(textResult(combined || "Command completed with no output", { exitCode: code }));
+          resolve(textResult(combined || "Command completed with no output", { exitCode: code, capturedBytes: Buffer.byteLength(stdout) + Buffer.byteLength(stderr), captureTruncated: stdout.length >= MAX_CAPTURE || stderr.length >= MAX_CAPTURE }));
         });
         });
       });
@@ -145,7 +200,7 @@ export function createTools(store: Store, runId: RunId, workspace: string): Agen
     },
   };
 
-  return [readTool, writeTool, editTool, bashTool, taskRunTool];
+  return [listTool, readTool, writeTool, editTool, bashTool, taskRunTool];
 }
 
 export async function ensureWorkspace(workspace: string) {

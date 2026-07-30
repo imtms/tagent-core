@@ -65,6 +65,23 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
+  it("loads the newest session window when history exceeds the store limit", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const insert = store.db.prepare("INSERT INTO messages (session_id, role, content, created_at) VALUES (?, 'user', ?, ?)");
+    const batch = store.db.transaction(() => {
+      for (let index = 0; index < 10_002; index += 1) insert.run(session.id, `message-${index}`, index);
+    });
+    batch();
+    let options: Parameters<RuntimeFactory>[0] | undefined;
+    const service = new AgentService(store, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, maxContextTurns: 2 });
+    await service.start(session.id, "latest?");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(options?.initialMessages?.at(-1)).toMatchObject({ role: "user", content: "message-10001" });
+    expect(JSON.stringify(options?.initialMessages)).not.toContain("message-0\"");
+    store.close();
+  });
+
   it("loads session history after reopening the persistent store", async () => {
     const directory = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp("/tmp/tagent-session-history-"));
     const filename = `${directory}/tagent.db`;

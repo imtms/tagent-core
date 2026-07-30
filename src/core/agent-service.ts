@@ -9,6 +9,7 @@ import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 export class AgentService {
   private readonly runtimes = new Map<RunId, AgentRuntime>();
   private readonly listeners = new Map<RunId, Set<(event: RunEvent) => void>>();
+  private readonly continuationOwner = randomUUID();
 
   constructor(
     private readonly store: Store,
@@ -49,6 +50,7 @@ export class AgentService {
     const hardTimeoutMs = this.runtimeDefaults.runHardTimeoutMs ?? 86_400_000;
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     let hardTimer: ReturnType<typeof setTimeout> | undefined;
+    let leaseTimer: ReturnType<typeof setInterval> | undefined;
     let runtime: AgentRuntime;
 
     const failTimeout = (reason: "idle_timeout" | "hard_timeout", limitMs: number) => {
@@ -87,18 +89,20 @@ export class AgentService {
       },
     });
     this.runtimes.set(run.id, runtime);
+    if (continuationId) leaseTimer = setInterval(() => this.store.renewContinuationLease(continuationId, this.continuationOwner, 30_000), 10_000);
     touchActivity();
     hardTimer = setTimeout(() => failTimeout("hard_timeout", hardTimeoutMs), hardTimeoutMs);
 
     void this.execute(run.id, runtime, prompt).then((blocked) => {
       if (continuationId) {
         const status = this.store.getRun(run.id)?.status;
-        this.store.updateContinuation(continuationId, status === "completed" ? "completed" : status === "blocked" ? "blocked" : status === "cancelled" ? "cancelled" : "failed", status === "failed" ? this.store.getRun(run.id)?.blockedReason ?? "" : "");
+        this.store.updateContinuation(continuationId, status === "completed" ? "completed" : status === "blocked" ? "blocked" : status === "cancelled" ? "cancelled" : "failed", status === "failed" ? this.store.getRun(run.id)?.blockedReason ?? "" : "", this.continuationOwner);
       }
       if (blocked) this.queueContinuation(run.id);
     }).finally(() => {
       if (idleTimer) clearTimeout(idleTimer);
       if (hardTimer) clearTimeout(hardTimer);
+      if (leaseTimer) clearInterval(leaseTimer);
       this.runtimes.delete(run.id);
       setImmediate(() => {
         try { this.startQueuedContinuation(run.id); }
@@ -187,19 +191,13 @@ export class AgentService {
 
   private startQueuedContinuation(runId: RunId) {
     if (this.runtimes.has(runId)) return;
-    const continuation = this.store.listContinuations(runId).find((item) => item.status === "queued");
-    if (!continuation) return;
-    const blocked = this.store.getRun(runId);
-    if (!blocked || blocked.status !== "blocked") {
-      this.store.updateContinuation(continuation.id, "cancelled", "Run is no longer blocked");
-      return;
-    }
-    this.store.updateContinuation(continuation.id, "running");
-    const run = this.store.resumeRun(runId);
+    const claimed = this.store.claimContinuation(runId, this.continuationOwner, 30_000);
+    if (!claimed) return;
+    const { continuation, run, event } = claimed;
     const prompt = this.buildContinuationPrompt(run, continuation.ordinal);
     const transcript = this.prepareTranscript(run, prompt);
     this.publishContextEvents(runId, transcript);
-    this.publish(this.store.appendEvent(runId, "continuation.started", { continuationId: continuation.id, ordinal: continuation.ordinal, attempt: run.attempt, transcriptCount: transcript.messages.length }));
+    this.publish(event);
     this.launch(run, prompt, transcript.messages, continuation.id);
   }
 
@@ -276,7 +274,7 @@ export class AgentService {
   }
 
   private prepareSessionHistory(run: TaskRun, query: string) {
-    const history = this.store.listMessages(run.sessionId, 10_000)
+    const history = this.store.listRecentMessages(run.sessionId, 10_000)
       .filter((message) => message.role === "user" || message.role === "assistant")
       .map((message): AgentMessage => message.role === "user"
         ? { role: "user", content: message.content, timestamp: message.createdAt }

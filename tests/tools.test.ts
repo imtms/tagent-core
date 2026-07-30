@@ -19,6 +19,47 @@ describe("workspace tools", () => {
     store.close();
   });
 
+  it("lists directories, strips UTF-8 BOM, and returns binary metadata", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-"));
+    await writeFile(path.join(workspace, "bom.txt"), "\uFEFFhello", "utf8");
+    await writeFile(path.join(workspace, "binary.bin"), Buffer.from([1, 0, 2]));
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "inspect tools");
+    const tools = createTools(store, run.id, workspace);
+    const list = tools.find((tool) => tool.name === "ls")!;
+    const read = tools.find((tool) => tool.name === "read")!;
+    expect((await list.execute("list", {}, undefined)).content[0]).toMatchObject({ type: "text", text: "binary.bin\nbom.txt" });
+    expect((await read.execute("bom", { path: "bom.txt" }, undefined)).content[0]).toMatchObject({ type: "text", text: "hello" });
+    expect((await read.execute("binary", { path: "binary.bin" }, undefined)).details).toMatchObject({ type: "binary", bytes: 3 });
+    store.close();
+  });
+
+  it("appends through edit and reports the first changed line", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-"));
+    await writeFile(path.join(workspace, "notes.txt"), "one\ntwo\n", "utf8");
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "append");
+    const edit = createTools(store, run.id, workspace).find((tool) => tool.name === "edit")!;
+    const result = await edit.execute("append-call", { path: "notes.txt", oldText: "", newText: "three\n" }, undefined);
+    expect(await readFile(path.join(workspace, "notes.txt"), "utf8")).toBe("one\ntwo\nthree\n");
+    expect(result.details).toMatchObject({ mode: "append", firstChangedLine: 3 });
+    store.close();
+  });
+
+  it("bounds bash output capture", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-"));
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "large output");
+    const bash = createTools(store, run.id, workspace).find((tool) => tool.name === "bash")!;
+    const result = await bash.execute("large-output", { command: "yes x | head -c 400000", timeoutSeconds: 10 }, undefined);
+    expect(result.details).toMatchObject({ exitCode: 0, captureTruncated: true });
+    expect((result.content[0] as { type: string; text: string }).text.length).toBeLessThanOrEqual(24_030);
+    store.close();
+  });
+
   it("replays mutating tool receipts without repeating side effects and stales checks", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-"));
     const store = new Store(":memory:");

@@ -9,7 +9,7 @@ export interface TaskRun {
   blockedReason: string; lastEventSeq: number; attempt: number; resumedAt: number | null; createdAt: number; updatedAt: number; completedAt: number | null;
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number };
   transcriptCount: number;
-  continuations: Array<{ id: string; ordinal: number; status: string; reason: string; error: string; createdAt: number; startedAt: number | null; completedAt: number | null }>;
+  continuations: Array<{ id: string; ordinal: number; status: string; reason: string; error: string; createdAt: number; startedAt: number | null; completedAt: number | null; leaseOwner: string; leaseUntil: number | null; heartbeatAt: number | null }>;
   plan: PlanItem[]; checks: RunCheck[];
   artifacts: Array<{ id: string; title: string; kind: string; uri: string }>;
   budget?: { tier: string; maxContinuations: number; maxTokens: number; runTimeoutMs: number };

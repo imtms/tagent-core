@@ -15,6 +15,7 @@ Project records:
 - Durable operation receipts for idempotent mutating tool calls and restart-safe `outcome_unknown` handling
 - Atomic compare-and-set terminal Run transitions
 - Automatic verification staleness after workspace mutations
+- Transactional single-owner continuation claims with persisted lease metadata
 - Durable repeated-call and repeated-failure tool guards
 - Streaming events, cancellation, and steering
 - Workspace-scoped `read`, `write`, `edit`, `bash`, and `task_run` tools

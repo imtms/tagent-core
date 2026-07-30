@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Check, ChevronDown, ChevronRight, Circle, Command, FileText, Menu, MessageSquarePlus, PanelRight, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
+import { Activity, Bot, Check, ChevronDown, ChevronRight, Circle, Command, FileText, Menu, MessageSquarePlus, PanelRight, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
 import { api, subscribe, type Message, type RunEvent, type RuntimeStatus, type Session, type TaskRun } from "./api";
 
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
@@ -9,7 +9,7 @@ function RunDetails({ run }: { run: TaskRun }) {
     <section className="run-summary"><div className="phase-line"><span className={`phase-badge ${run.status}`}>{run.status}</span><span>{run.phase}</span><span>attempt {run.attempt}</span></div><p>{run.goal}</p><div className="run-metrics"><span>{run.transcriptCount} messages</span><span>{run.usage.totalTokens.toLocaleString()} tokens</span><span>{run.usage.input.toLocaleString()} in / {run.usage.output.toLocaleString()} out</span>{run.budget && <span>{run.budget.tier} · {run.budget.maxContinuations} rounds · {run.budget.maxTokens.toLocaleString()} tokens</span>}</div>{run.blockedReason && <div className="blocked-note">{run.blockedReason}</div>}</section>
     <section className="panel-section"><div className="section-title"><span>Plan</span><small>{run.plan.filter((item) => item.status === "done").length}/{run.plan.length}</small></div><div className="task-list">{run.plan.length ? run.plan.map((item) => <div className="task-row" key={item.key}>{item.status === "done" ? <Check size={15} /> : <Circle size={14} />}<span>{item.title}</span><small>{item.status}</small></div>) : <p className="muted">No structured plan.</p>}</div></section>
     <section className="panel-section"><div className="section-title"><span>Checks</span><small>{run.checks.filter((item) => item.status === "passed" && !item.stale).length}/{run.checks.length}</small></div><div className="task-list">{run.checks.length ? run.checks.map((check) => <div className="task-row" key={check.key}>{check.status === "passed" && !check.stale ? <Check size={15} /> : <Circle size={14} />}<span>{check.title}</span><small>{check.stale ? "stale" : check.status}</small></div>) : <p className="muted">No required checks.</p>}</div></section>
-    <section className="panel-section"><div className="section-title"><span>Continuations</span><small>{run.continuations.length}</small></div><div className="task-list">{run.continuations.length ? run.continuations.map((item) => <div className="continuation-row" key={item.id}><div><strong>#{item.ordinal}</strong><span>{item.reason}</span></div><small className={`continuation-status ${item.status}`}>{item.status}</small></div>) : <p className="muted">No automatic continuation.</p>}</div></section>
+    <section className="panel-section"><div className="section-title"><span>Continuations</span><small>{run.continuations.length}</small></div><div className="task-list">{run.continuations.length ? run.continuations.map((item) => <div className="continuation-row" key={item.id}><div><strong>#{item.ordinal}</strong><span>{item.reason}</span></div><small className={`continuation-status ${item.status}`}>{item.status}{item.leaseUntil && item.status === "running" ? " · leased" : ""}</small></div>) : <p className="muted">No automatic continuation.</p>}</div></section>
     <section className="panel-section"><div className="section-title"><span>Artifacts</span><small>{run.artifacts.length}</small></div>{run.artifacts.map((artifact) => <div className="artifact-row" key={artifact.id}><FileText size={15} /><span>{artifact.title}</span></div>)}</section>
   </div>;
 }
@@ -19,11 +19,13 @@ export function App() {
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [sessionId, setSessionId] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
-  const [run, setRun] = useState<TaskRun | null>(null);
+  const [activeRun, setActiveRun] = useState<TaskRun | null>(null);
+  const [selectedRun, setSelectedRun] = useState<TaskRun | null>(null);
   const [runs, setRuns] = useState<TaskRun[]>([]);
   const [expandedRunId, setExpandedRunId] = useState("");
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [draft, setDraft] = useState("");
+  const [steering, setSteering] = useState(false);
   const [streaming, setStreaming] = useState("");
   const [error, setError] = useState("");
   const [leftOpen, setLeftOpen] = useState(false);
@@ -43,29 +45,32 @@ export function App() {
     setStreaming(""); setEvents([]); setError("");
     void Promise.all([api.messages(sessionId), api.runs(sessionId)]).then(([history, runHistory]) => {
       const latest = runHistory[0] ?? null;
-      setMessages(history); setRuns(runHistory); setRun(latest); setExpandedRunId(latest?.id ?? "");
+      const active = runHistory.find((item) => item.status === "running") ?? null;
+      setMessages(history); setRuns(runHistory); setActiveRun(active); setSelectedRun(latest); setExpandedRunId(latest?.id ?? "");
     });
   }, [sessionId]);
 
   useEffect(() => {
-    if (!run?.id || !["running", "interrupted"].includes(run.status)) return;
-    return subscribe(run.id, run.lastEventSeq ?? 0, async (event) => {
+    if (!activeRun?.id || activeRun.status !== "running") return;
+    return subscribe(activeRun.id, activeRun.lastEventSeq ?? 0, async (event) => {
       setEvents((current) => [...current.slice(-39), event]);
       if (event.type === "message.delta") setStreaming((current) => current + String(event.data.delta ?? ""));
       if (["run.completed", "run.blocked", "run.failed", "run.cancelled"].includes(event.type)) {
         setStreaming("");
-        const updated = await api.run(run.id);
-        setRun(updated);
+        const updated = await api.run(activeRun.id);
+        setActiveRun(updated.status === "running" ? updated : null);
+        setSelectedRun((current) => current?.id === updated.id ? updated : current);
         setRuns(await api.runs(sessionId));
         setMessages(await api.messages(sessionId));
         await loadSessions();
       } else if (event.type.startsWith("tool.") || event.type.startsWith("continuation.")) {
-        const updated = await api.run(run.id);
-        setRun(updated);
+        const updated = await api.run(activeRun.id);
+        setActiveRun(updated);
+        setSelectedRun((current) => current?.id === updated.id ? updated : current);
         setRuns((current) => current.map((item) => item.id === updated.id ? updated : item));
       }
     }, () => undefined);
-  }, [run?.id, run?.status, run?.lastEventSeq, sessionId, loadSessions]);
+  }, [activeRun?.id, activeRun?.status, activeRun?.lastEventSeq, sessionId, loadSessions]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, streaming, events]);
 
@@ -78,12 +83,17 @@ export function App() {
 
   async function submit() {
     const content = draft.trim();
-    if (!content || !sessionId || run?.status === "running") return;
+    if (!content || !sessionId) return;
     setDraft(""); setError("");
+    if (activeRun?.status === "running") {
+      try { await api.steer(activeRun.id, content); setSteering(false); }
+      catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+      return;
+    }
     setMessages((current) => [...current, { id: Date.now(), sessionId, role: "user", content, createdAt: Date.now() }]);
     try {
       const nextRun = await api.send(sessionId, content);
-      setRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setStreaming("");
+      setActiveRun(nextRun); setSelectedRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setStreaming("");
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
@@ -103,13 +113,14 @@ export function App() {
     <main className="conversation">
       <header className="topbar">
         <button className="icon-button mobile-only" onClick={() => setLeftOpen(true)} aria-label="Open sessions"><Menu size={19} /></button>
-        <div><h1>{sessions.find((session) => session.id === sessionId)?.title ?? "TAgent Core"}</h1><p>{run ? `${run.phase} · ${run.status}` : runtimeStatus ? `${runtimeStatus.modelId} · ${runtimeStatus.runtime}` : "Ready for a new task"}</p></div>
-        <div className="top-actions">{run && ["blocked", "interrupted"].includes(run.status) && <button className="resume-button" onClick={async () => { setError(""); try { setRun(await api.resume(run.id)); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}{run?.status === "running" && <button className="icon-button danger" onClick={() => void api.cancel(run.id)} title="Stop run"><Square size={17} /></button>}<button className="icon-button mobile-only" onClick={() => setRightOpen(true)} aria-label="Open task panel"><PanelRight size={19} /></button></div>
+        <div><h1>{sessions.find((session) => session.id === sessionId)?.title ?? "TAgent Core"}</h1><p>{activeRun ? `${activeRun.phase} · ${activeRun.status}` : runtimeStatus ? `${runtimeStatus.modelId} · ${runtimeStatus.runtime}` : "Ready for a new task"}</p></div>
+        <div className="top-actions">{selectedRun && ["blocked", "interrupted"].includes(selectedRun.status) && !activeRun && <button className="resume-button" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}{activeRun?.status === "running" && <button className="icon-button danger" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={17} /></button>}<button className="icon-button mobile-only" onClick={() => setRightOpen(true)} aria-label="Open task panel"><PanelRight size={19} /></button></div>
       </header>
 
       <section className="message-scroll">
         {!messages.length && !streaming && <div className="empty-state"><div className="empty-icon"><MessageSquarePlus size={25} /></div><h2>Start with an outcome</h2><p>TAgent will turn substantial work into a durable plan, execute tools, and hold completion behind checks.</p></div>}
         {messages.map((message) => <article key={message.id} className={`message ${message.role}`}><div className="message-meta"><span>{message.role === "user" ? "You" : "TAgent"}</span><time>{formatTime(message.createdAt)}</time></div><div className="message-body">{message.content}</div></article>)}
+        {activeRun && <div className="active-run-strip"><Activity size={14} /><span>Attempt {activeRun.attempt}</span><strong>{activeRun.phase}</strong><small>{activeRun.usage.totalTokens.toLocaleString()} tokens</small></div>}
         {streaming && <article className="message assistant live"><div className="message-meta"><span>TAgent</span><span className="live-label"><span className="pulse" />Working</span></div><div className="message-body">{streaming}</div></article>}
         {activeTools.length > 0 && <div className="tool-stack">{activeTools.map((event) => <div className="tool-row" key={`${event.seq}-${event.type}`}><Terminal size={14} /><span>{String(event.data.toolName ?? "tool")}</span><small>{event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "done"}</small></div>)}</div>}
         <div ref={endRef} />
@@ -117,7 +128,8 @@ export function App() {
 
       <footer className="composer-wrap">
         {error && <div className="error-banner">{error}</div>}
-        <div className="composer"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} placeholder={run?.status === "running" ? "Run in progress" : "Describe the outcome you need"} disabled={run?.status === "running"} rows={1} /><button onClick={() => void submit()} disabled={!draft.trim() || run?.status === "running"} aria-label="Send"><Send size={18} /></button></div>
+        {activeRun && <div className="composer-mode"><button className={steering ? "active" : ""} onClick={() => setSteering((value) => !value)}><Activity size={13} />Steer active run</button><span>Instructions apply at the next safe point</span></div>}
+        <div className={`composer ${activeRun ? "steer-composer" : ""}`}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} placeholder={activeRun ? "Add direction to the active run" : "Describe the outcome you need"} rows={1} /><button onClick={() => void submit()} disabled={!draft.trim()} aria-label={activeRun ? "Steer run" : "Send"}><Send size={18} /></button></div>
       </footer>
     </main>
 
@@ -128,14 +140,14 @@ export function App() {
         return <section className={`run-history-item ${expanded ? "expanded" : ""}`} key={item.id}>
           <button className="run-history-toggle" onClick={async () => {
             if (expanded) { setExpandedRunId(""); return; }
-            const selected = await api.run(item.id); setRun(selected); setExpandedRunId(item.id); setEvents([]); setStreaming("");
+            const selected = await api.run(item.id); setSelectedRun(selected); setExpandedRunId(item.id);
           }} aria-expanded={expanded}>
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
             <span className={`history-status ${item.status}`} />
             <span className="history-copy"><strong>{item.goal}</strong><small>{item.status} · attempt {item.attempt}{item.budget ? ` · ${item.budget.tier}` : ""}</small></span>
             <time>{index === 0 && item.status === "running" ? "current" : formatTime(item.updatedAt ?? item.createdAt)}</time>
           </button>
-          {expanded && <RunDetails run={run?.id === item.id ? run : item} />}
+          {expanded && <RunDetails run={selectedRun?.id === item.id ? selectedRun : item} />}
         </section>;
       })}</div>}
     </aside>

@@ -35,8 +35,10 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Run terminal status and its terminal event are committed in one compare-and-set transaction.
 - Durable tool-attempt guards block repeated identical calls and repeated failures before long continuation budgets amplify loops.
 - Startup recovery requeues queued/running continuation records, restores the Run to blocked, and resumes from the persisted transcript.
+- Continuation startup uses a transactional database claim that atomically leases one queued continuation, resumes the Run, increments its attempt, and writes `continuation.started`; a partial unique index permits only one queued/running continuation per Run.
 - Versioned SQLite schema metadata rejects newer unsupported databases and advances only after transactional migration success.
 - Resume/continuation context assembly prunes oldest complete turns to a 75% context-window budget while retaining the full transcript in SQLite.
+- New Run context reads the newest persisted Session message window in chronological order, including Sessions beyond 10,000 messages.
 
 ### HTTP and Web
 
@@ -109,3 +111,4 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Bash isolation is policy-based, not an OS-level sandbox.
 - The first Web interface does not expose model/runtime selection or provider health.
 - Multiple TAgent Core processes can currently target the same SQLite database; leader/lease enforcement is not implemented.
+- Continuation claims have lease ownership and expiry metadata, but long-running attempts do not yet heartbeat or renew the lease.

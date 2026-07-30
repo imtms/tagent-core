@@ -18,7 +18,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export class Store {
   readonly db: Database.Database;
@@ -28,6 +28,15 @@ export class Store {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
     this.migrate();
+  }
+
+  listRecentMessages(sessionId: SessionId, limit = 200): Message[] {
+    return this.db.prepare(`
+      SELECT id, sessionId, role, content, createdAt FROM (
+        SELECT id, session_id as sessionId, role, content, created_at as createdAt
+        FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?
+      ) ORDER BY id ASC
+    `).all(sessionId, limit) as Message[];
   }
 
   close() {
@@ -97,6 +106,9 @@ export class Store {
         created_at INTEGER NOT NULL,
         started_at INTEGER,
         completed_at INTEGER,
+        lease_owner TEXT NOT NULL DEFAULT '',
+        lease_until INTEGER,
+        heartbeat_at INTEGER,
         UNIQUE(run_id, ordinal)
       );
       CREATE INDEX IF NOT EXISTS idx_continuations_run ON run_continuations(run_id, ordinal);
@@ -180,6 +192,19 @@ export class Store {
     this.ensureColumn("runs", "usage_cache_write", "INTEGER NOT NULL DEFAULT 0");
     this.ensureColumn("runs", "usage_total_tokens", "INTEGER NOT NULL DEFAULT 0");
     this.ensureColumn("runs", "usage_cost", "REAL NOT NULL DEFAULT 0");
+    this.ensureColumn("run_continuations", "lease_owner", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("run_continuations", "lease_until", "INTEGER");
+    this.ensureColumn("run_continuations", "heartbeat_at", "INTEGER");
+    this.db.prepare(`UPDATE run_continuations SET status = 'cancelled',
+      error = 'Superseded while enforcing one active continuation per Run', completed_at = ?,
+      lease_owner = '', lease_until = NULL, heartbeat_at = NULL
+      WHERE status IN ('queued', 'running') AND id NOT IN (
+        SELECT id FROM run_continuations active
+        WHERE active.run_id = run_continuations.run_id AND active.status IN ('queued', 'running')
+        ORDER BY active.ordinal LIMIT 1
+      )`).run(now());
+    this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_continuations_one_active
+      ON run_continuations(run_id) WHERE status IN ('queued', 'running')`);
     this.db.prepare(`INSERT INTO schema_meta (id, version, updated_at) VALUES (1, ?, ?)
       ON CONFLICT(id) DO UPDATE SET version = excluded.version, updated_at = excluded.updated_at`)
       .run(SCHEMA_VERSION, now());
@@ -319,28 +344,73 @@ export class Store {
     return transaction();
   }
 
+  renewContinuationLease(id: string, owner: string, leaseMs: number) {
+    const timestamp = now();
+    const result = this.db.prepare(`UPDATE run_continuations SET lease_until = ?, heartbeat_at = ?
+      WHERE id = ? AND status = 'running' AND lease_owner = ?`).run(timestamp + leaseMs, timestamp, id, owner);
+    return result.changes === 1;
+  }
+
   listContinuations(runId: RunId): RunContinuation[] {
     return this.db.prepare(`SELECT id, run_id as runId, ordinal, status, reason, error,
-      created_at as createdAt, started_at as startedAt, completed_at as completedAt
+      created_at as createdAt, started_at as startedAt, completed_at as completedAt,
+      lease_owner as leaseOwner, lease_until as leaseUntil, heartbeat_at as heartbeatAt
       FROM run_continuations WHERE run_id = ? ORDER BY ordinal`).all(runId) as RunContinuation[];
   }
 
   queueContinuation(runId: RunId, reason: string): RunContinuation {
-    const timestamp = now();
-    const row = this.db.prepare("SELECT COALESCE(MAX(ordinal), 0) + 1 as ordinal FROM run_continuations WHERE run_id = ?").get(runId) as { ordinal: number };
-    const continuation: RunContinuation = { id: randomUUID(), runId, ordinal: row.ordinal, status: "queued", reason, error: "", createdAt: timestamp, startedAt: null, completedAt: null };
-    this.db.prepare("INSERT INTO run_continuations (id, run_id, ordinal, status, reason, created_at) VALUES (?, ?, ?, 'queued', ?, ?)")
-      .run(continuation.id, runId, continuation.ordinal, reason, timestamp);
-    return continuation;
+    const transaction = this.db.transaction(() => {
+      const active = this.db.prepare("SELECT id FROM run_continuations WHERE run_id = ? AND status IN ('queued', 'running')").get(runId) as { id: string } | undefined;
+      if (active) throw new Error("Run already has an active continuation");
+      const timestamp = now();
+      const row = this.db.prepare("SELECT COALESCE(MAX(ordinal), 0) + 1 as ordinal FROM run_continuations WHERE run_id = ?").get(runId) as { ordinal: number };
+      const continuation: RunContinuation = { id: randomUUID(), runId, ordinal: row.ordinal, status: "queued", reason, error: "", createdAt: timestamp, startedAt: null, completedAt: null, leaseOwner: "", leaseUntil: null, heartbeatAt: null };
+      this.db.prepare("INSERT INTO run_continuations (id, run_id, ordinal, status, reason, created_at) VALUES (?, ?, ?, 'queued', ?, ?)")
+        .run(continuation.id, runId, continuation.ordinal, reason, timestamp);
+      return continuation;
+    });
+    return transaction();
   }
 
-  updateContinuation(id: string, status: RunContinuation["status"], error = "") {
+  claimContinuation(runId: RunId, owner: string, leaseMs: number) {
+    const transaction = this.db.transaction(() => {
+      const timestamp = now();
+      const continuation = this.db.prepare(`SELECT id, ordinal FROM run_continuations
+        WHERE run_id = ? AND status = 'queued' ORDER BY ordinal LIMIT 1`).get(runId) as { id: string; ordinal: number } | undefined;
+      if (!continuation) return undefined;
+      const run = this.db.prepare("SELECT status, last_event_seq as seq FROM runs WHERE id = ?").get(runId) as { status: RunStatus; seq: number } | undefined;
+      if (!run || run.status !== "blocked") return undefined;
+      const leaseUntil = timestamp + leaseMs;
+      const claimed = this.db.prepare(`UPDATE run_continuations SET status = 'running', error = '',
+        started_at = COALESCE(started_at, ?), completed_at = NULL, lease_owner = ?, lease_until = ?, heartbeat_at = ?
+        WHERE id = ? AND status = 'queued'`).run(timestamp, owner, leaseUntil, timestamp, continuation.id);
+      if (claimed.changes !== 1) return undefined;
+      const attempt = (this.db.prepare("SELECT attempt FROM runs WHERE id = ?").get(runId) as { attempt: number }).attempt + 1;
+      const seq = run.seq + 1;
+      const data = { continuationId: continuation.id, ordinal: continuation.ordinal, attempt, leaseOwner: owner, leaseUntil };
+      this.db.prepare("INSERT INTO run_events (run_id, seq, type, data, created_at) VALUES (?, ?, 'continuation.started', ?, ?)")
+        .run(runId, seq, JSON.stringify(data), timestamp);
+      const resumed = this.db.prepare(`UPDATE runs SET status = 'running', phase = CASE WHEN phase = 'blocked' THEN 'implement' ELSE phase END,
+        blocked_reason = '', completed_at = NULL, attempt = ?, resumed_at = ?, updated_at = ?, last_event_seq = ?
+        WHERE id = ? AND status = 'blocked'`).run(attempt, timestamp, timestamp, seq, runId);
+      if (resumed.changes !== 1) throw new Error("Continuation claim lost its Run compare-and-set race");
+      return { continuation: this.listContinuations(runId).find((item) => item.id === continuation.id)!, run: this.getRun(runId)!, event: { runId, seq, type: "continuation.started", data, createdAt: timestamp } satisfies RunEvent };
+    });
+    return transaction();
+  }
+
+  updateContinuation(id: string, status: RunContinuation["status"], error = "", owner?: string) {
     const timestamp = now();
     const startedAt = status === "running" ? timestamp : null;
     const completedAt = ["completed", "blocked", "failed", "cancelled"].includes(status) ? timestamp : null;
-    this.db.prepare(`UPDATE run_continuations SET status = ?, error = ?,
-      started_at = COALESCE(started_at, ?), completed_at = COALESCE(?, completed_at) WHERE id = ?`)
-      .run(status, error, startedAt, completedAt, id);
+    const result = this.db.prepare(`UPDATE run_continuations SET status = ?, error = ?,
+      started_at = COALESCE(started_at, ?), completed_at = COALESCE(?, completed_at),
+      lease_owner = CASE WHEN ? = 'running' THEN lease_owner ELSE '' END,
+      lease_until = CASE WHEN ? = 'running' THEN lease_until ELSE NULL END,
+      heartbeat_at = CASE WHEN ? = 'running' THEN heartbeat_at ELSE NULL END
+      WHERE id = ? AND (? IS NULL OR lease_owner = ?)`)
+      .run(status, error, startedAt, completedAt, status, status, status, id, owner ?? null, owner ?? null);
+    return result.changes === 1;
   }
 
   cancelQueuedContinuations(runId: RunId, reason: string) {

@@ -21,6 +21,58 @@ describe("Store", () => {
     expect(store.listMessages(session.id).map((message) => message.content)).toEqual(["hello", "world"]);
   });
 
+  it("renews and fences continuation leases by owner", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "lease fencing");
+    store.blockRun(run.id, "gate");
+    store.queueContinuation(run.id, "gate");
+    const claimed = store.claimContinuation(run.id, "current-owner", 1_000)!;
+    const initialLease = claimed.continuation.leaseUntil!;
+    expect(store.renewContinuationLease(claimed.continuation.id, "old-owner", 60_000)).toBe(false);
+    expect(store.renewContinuationLease(claimed.continuation.id, "current-owner", 60_000)).toBe(true);
+    expect(store.listContinuations(run.id)[0].leaseUntil).toBeGreaterThan(initialLease);
+    expect(store.updateContinuation(claimed.continuation.id, "completed", "", "old-owner")).toBe(false);
+    expect(store.updateContinuation(claimed.continuation.id, "completed", "", "current-owner")).toBe(true);
+    expect(store.listContinuations(run.id)[0]).toMatchObject({ status: "completed", leaseOwner: "", leaseUntil: null });
+  });
+
+  it("atomically claims one continuation across store connections", async () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "continuation-claim.db");
+    const firstStore = new Store(filename);
+    const session = firstStore.createSession();
+    const run = firstStore.createRun(session.id, "claim continuation");
+    firstStore.blockRun(run.id, "gate");
+    firstStore.queueContinuation(run.id, "gate");
+    const secondStore = new Store(filename);
+    const claims = await Promise.all([
+      Promise.resolve().then(() => firstStore.claimContinuation(run.id, "worker-a", 30_000)),
+      Promise.resolve().then(() => secondStore.claimContinuation(run.id, "worker-b", 30_000)),
+    ]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    expect(firstStore.getRun(run.id)).toMatchObject({ status: "running", attempt: 2, lastEventSeq: 1 });
+    expect(firstStore.listContinuations(run.id)[0]).toMatchObject({ status: "running", leaseOwner: expect.stringMatching(/^worker-/), leaseUntil: expect.any(Number) });
+    expect(firstStore.listEvents(run.id)).toHaveLength(1);
+    firstStore.close();
+    secondStore.close();
+  });
+
+  it("allows only one active continuation per run", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "single active continuation");
+    store.blockRun(run.id, "gate");
+    store.queueContinuation(run.id, "first");
+    expect(() => store.queueContinuation(run.id, "second")).toThrow("active continuation");
+  });
+
+  it("returns the newest message window in chronological order", () => {
+    const store = createStore();
+    const session = store.createSession();
+    for (let index = 0; index < 6; index += 1) store.appendMessage(session.id, "user", `message-${index}`);
+    expect(store.listRecentMessages(session.id, 3).map((message) => message.content)).toEqual(["message-3", "message-4", "message-5"]);
+  });
+
   it("allocates monotonic run event sequences", () => {
     const store = createStore();
     const session = store.createSession();
@@ -44,17 +96,38 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(2);
+    expect(store.getSchemaVersion()).toBe(3);
   });
 
-  it("migrates a version 1 database to schema version 2", () => {
+  it("migrates an older database to schema version 3", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(2);
+    expect(migrated.getSchemaVersion()).toBe(3);
     expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('operations', 'tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["operations", "tool_attempts"]);
+    migrated.close();
+  });
+
+  it("cancels duplicate active continuations before creating the schema v3 unique index", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "continuation-migration.db");
+    const store = new Store(filename);
+    const session = store.createSession();
+    const run = store.createRun(session.id, "migration duplicates");
+    store.blockRun(run.id, "gate");
+    store.db.exec("DROP INDEX idx_continuations_one_active");
+    const insert = store.db.prepare("INSERT INTO run_continuations (id, run_id, ordinal, status, reason, created_at) VALUES (?, ?, ?, 'queued', 'gate', ?)");
+    insert.run("first", run.id, 1, 1);
+    insert.run("second", run.id, 2, 2);
+    store.db.prepare("UPDATE schema_meta SET version = 2 WHERE id = 1").run();
+    store.close();
+
+    const migrated = new Store(filename);
+    expect(migrated.listContinuations(run.id).map((item) => ({ id: item.id, status: item.status }))).toEqual([
+      { id: "first", status: "queued" },
+      { id: "second", status: "cancelled" },
+    ]);
     migrated.close();
   });
 
