@@ -48,6 +48,14 @@ export interface ControlInboxItem {
   completedAt: number | null;
 }
 
+export type SupervisorAction = "observe" | "steer" | "follow_up" | "request_evidence" | "pause_for_approval" | "wait_for_runtime" | "start_continuation" | "complete_taskrun" | "block_taskrun" | "spawn_taskrun";
+export interface GateFailure { kind: string; key: string; reason: string; disposition: "auto_fixable" | "needs_user_input" | "needs_approval" | "external_dependency" | "runtime_transient" | "budget_exhausted" | "non_recoverable" }
+export interface GateEvaluation { id: string; runId: RunId; attempt: number; checkpointSeq: number; gateType: "progress" | "evidence" | "completion" | "continuation" | "spawn"; passed: boolean; failures: GateFailure[]; inputManifestHash: string; createdAt: number }
+export interface ProgressSnapshot { runId: RunId; attempt: number; checkpointSeq: number; meaningfulChanges: number; consecutiveFailures: number; repeatedOperations: number; lastProgressAt: number; lastDecisionId: string; updatedAt: number }
+export interface SupervisorDecision { id: string; runId: RunId; attempt: number; checkpointSeq: number; trigger: "checkpoint" | "settled" | "attempt_terminal" | "taskrun_terminal" | "manual"; action: SupervisorAction; reasonCode: string; rationale: string; confidence: number; instruction: string; candidateResponseHash: string; status: "proposed" | "executed" | "superseded" | "failed"; error: string; createdAt: number; executedAt: number | null }
+export interface SpawnProposal { id: string; runId: RunId; goal: string; acceptanceCriteria: string[]; relation: "depends_on" | "follow_up" | "parallel" | "derived"; status: "proposed" | "approved" | "spawned" | "rejected"; spawnedRunId: string; createdAt: number; updatedAt: number }
+export interface TaskRunEdge { fromRunId: RunId; toRunId: RunId; relation: SpawnProposal["relation"] | "blocks" | "supersedes"; reason: string; createdAt: number }
+
 export interface Message {
   id: number;
   sessionId: SessionId;
@@ -129,6 +137,7 @@ export interface TaskRun {
   checks: RunCheck[];
   artifacts: Artifact[];
   completionGate: CompletionGate;
+  supervision: { latestDecision: SupervisorDecision | null; latestGates: GateEvaluation[]; progress: ProgressSnapshot | null; spawnProposals: SpawnProposal[] };
 }
 
 export interface CompletionGate {

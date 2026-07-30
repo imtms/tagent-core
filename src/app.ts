@@ -80,6 +80,24 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     try { return service.resume(id); }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
   });
+  app.get("/api/runs/:id/supervision", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const run = service.getRun(id);
+    if (!run) return reply.code(404).send({ error: "run not found" });
+    return { ...run.supervision, decisions: store.listSupervisorDecisions(id), edges: store.listTaskRunEdges(id) };
+  });
+  app.post("/api/runs/:id/spawn-proposals", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as { goal?: string; acceptanceCriteria?: string[]; relation?: "depends_on" | "follow_up" | "parallel" | "derived" };
+    if (!service.getRun(id)) return reply.code(404).send({ error: "run not found" });
+    if (!body?.goal?.trim()) return reply.code(400).send({ error: "goal is required" });
+    return store.createSpawnProposal(id, body.goal.trim(), body.acceptanceCriteria ?? [], body.relation ?? "follow_up");
+  });
+  app.post("/api/spawn-proposals/:id/spawn", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try { return service.spawnProposal(id); }
+    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
   app.get("/api/runs/:id/control-inbox", async (request, reply) => {
     const { id } = request.params as { id: string };
     if (!service.getRun(id)) return reply.code(404).send({ error: "run not found" });

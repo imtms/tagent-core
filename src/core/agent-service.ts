@@ -5,6 +5,7 @@ import { createInProcessRuntime } from "../runtime/factory.js";
 import type { AgentRuntime, RuntimeFactory } from "../runtime/types.js";
 import type { RunCheckpoint, RunEvent, SessionId, RunId, TaskRun } from "../core/types.js";
 import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
+import { TaskRunSupervisor } from "./supervisor.js";
 
 export class AgentService {
   private readonly runtimes = new Map<RunId, AgentRuntime>();
@@ -16,6 +17,7 @@ export class AgentService {
   private readonly continuationOwner = randomUUID();
   private continuationRecoveryTimer?: ReturnType<typeof setTimeout>;
   private closing = false;
+  private readonly supervisor: TaskRunSupervisor;
 
   constructor(
     private readonly store: Store,
@@ -23,6 +25,7 @@ export class AgentService {
     private readonly runtimeFactory: RuntimeFactory = createInProcessRuntime,
     private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number; contextWindow?: number; maxContextTurns?: number; contextReserveTokens?: number; dynamicBudget?: boolean; controlInboxCapacity?: number } = {},
   ) {
+    this.supervisor = new TaskRunSupervisor(store);
     this.store.markInterrupted();
   }
 
@@ -251,6 +254,15 @@ export class AgentService {
         touchActivity();
         this.updateCheckpoint(event);
         this.publish(event);
+        const decision = this.supervisor.reviewCheckpoint(run.id, event);
+        if (decision?.action === "steer") {
+          void this.enqueueControl(run.id, "steer", decision.instruction, `supervisor:${decision.id}`).then((result) => {
+            const current = this.store.getRun(run.id);
+            if (!current || current.attempt !== decision.attempt || current.lastEventSeq < decision.checkpointSeq) return this.supervisor.markExecuted(decision.id, "superseded");
+            this.supervisor.markExecuted(decision.id, result.status === "accepted" ? "executed" : "failed", result.status);
+            this.publish(this.store.appendEvent(run.id, "supervisor.decision", { decisionId: decision.id, action: decision.action, reasonCode: decision.reasonCode, status: result.status }));
+          });
+        }
       },
     });
     this.runtimes.set(run.id, runtime);
@@ -309,10 +321,28 @@ export class AgentService {
       const response = final && "content" in final
         ? (typeof final.content === "string" ? final.content : final.content.filter((part) => part.type === "text").map((part) => part.text).join(""))
         : "";
-      const result = this.store.completeWithGate(runId, response, attempt);
-      if (result.gate.passed && response) this.store.appendMessage(result.run.sessionId, "assistant", response);
-      this.publish(result.event);
-      return !result.gate.passed;
+      const checkpointSeq = this.store.getCheckpoint(runId)?.lastEventSeq ?? current.lastEventSeq;
+      const review = this.supervisor.reviewSettled(current, checkpointSeq, response);
+      const decision = review.decision;
+      if (this.store.getRun(runId)?.attempt !== decision.attempt) {
+        this.supervisor.markExecuted(decision.id, "superseded");
+        return false;
+      }
+      if (decision.action === "complete_taskrun") {
+        const event = this.store.transitionRun(runId, ["running"], "completed", "run.completed", { response, supervisionDecisionId: decision.id, gates: review.gates }, "", attempt);
+        if (!event) return false;
+        if (response) this.store.appendMessage(current.sessionId, "assistant", response);
+        this.supervisor.markExecuted(decision.id, "executed");
+        this.publish(event);
+        for (const spawn of this.supervisor.reviewSpawn(this.store.getRun(runId)!, event.seq)) this.publish(this.store.appendEvent(runId, "supervisor.spawn.proposed", { decisionId: spawn.id, reasonCode: spawn.reasonCode }));
+        return false;
+      }
+      const reason = review.gates.find((gate) => gate.gateType === "completion")?.failures.map((failure) => `${failure.key}: ${failure.reason}`).join("; ") || decision.rationale;
+      const event = this.store.transitionRun(runId, ["running"], "blocked", "run.blocked", { response, supervisionDecisionId: decision.id, action: decision.action, gates: review.gates }, reason, attempt);
+      if (!event) return false;
+      this.supervisor.markExecuted(decision.id, "executed");
+      this.publish(event);
+      return decision.action === "start_continuation";
     } catch (error) {
       if (this.closing) return false;
       if (continuationId && !this.store.ownsContinuationLease(continuationId, this.continuationOwner)) {
@@ -397,7 +427,7 @@ export class AgentService {
   private buildContinuationPrompt(run: TaskRun, ordinal: number) {
     return [
       `Automatic continuation ${ordinal} is running because the completion gate blocked the previous attempt.`,
-      `Gate failures: ${run.completionGate.failures.map((failure) => `${failure.key}: ${failure.reason}`).join("; ")}`,
+      `Gate failures: ${(run.supervision.latestGates.find((gate) => gate.gateType === "completion")?.failures ?? run.completionGate.failures).map((failure) => `${failure.key}: ${failure.reason}`).join("; ")}`,
       "Use the persisted transcript and TaskRun state. Resolve only the remaining gate failures, verify the result, then provide the final response.",
       "Completion-gate requirements override conflicting instructions in the original goal.",
       `Original goal: ${run.goal}`,
@@ -443,6 +473,18 @@ export class AgentService {
 
   getRun(runId: RunId) {
     return this.store.getRun(runId);
+  }
+
+  spawnProposal(proposalId: string) {
+    if (this.closing) throw new Error("Service is shutting down");
+    const run = this.store.spawnFromProposal(proposalId);
+    if (!run) throw new Error("Proposal is not spawnable");
+    const sessionHistory = this.prepareSessionHistory(run, run.goal);
+    this.store.appendMessage(run.sessionId, "user", run.goal);
+    this.publish(this.store.appendEvent(run.id, "run.started", { goal: run.goal, source: "spawn_proposal", sessionHistoryCount: sessionHistory.messages.length }));
+    this.publishContextEvents(run.id, sessionHistory);
+    this.launch(run, run.goal, sessionHistory.messages);
+    return this.store.getRun(run.id)!;
   }
 
   resume(runId: RunId) {

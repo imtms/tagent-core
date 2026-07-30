@@ -73,6 +73,23 @@ describe("HTTP API", () => {
     expect(inbox[0]).toMatchObject({ requestId: "request-1", kind: "steer", status: "delivered" });
   });
 
+  it("exposes supervision state and explicitly launches an approved spawn proposal", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
+    const store = new Store(":memory:");
+    const service = new AgentService(store, workspace, () => ({
+      async prompt() {}, async steer() { return "accepted" as const; }, abort() {}, getMessages() { return []; }, getError() { return undefined; },
+    }));
+    const app = createApp({ store, service, logger: false, webRoot: workspace }); apps.push(app);
+    const session = store.createSession();
+    const parent = store.createRun(session.id, "parent"); store.finalizeRun(parent.id, "completed");
+    const proposal = (await app.inject({ method: "POST", url: `/api/runs/${parent.id}/spawn-proposals`, payload: { goal: "child", acceptanceCriteria: ["done"], relation: "follow_up" } })).json();
+    const childResponse = await app.inject({ method: "POST", url: `/api/spawn-proposals/${proposal.id}/spawn` });
+    expect(childResponse.statusCode).toBe(200);
+    expect(childResponse.json()).toMatchObject({ goal: "child", status: "running" });
+    const supervision = (await app.inject({ method: "GET", url: `/api/runs/${parent.id}/supervision` })).json();
+    expect(supervision.edges).toEqual([expect.objectContaining({ relation: "follow_up", toRunId: childResponse.json().id })]);
+  });
+
   it("claims consumers and rejects stale or invalid ACKs", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
     const store = new Store(":memory:");

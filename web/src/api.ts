@@ -15,6 +15,12 @@ export interface TaskRun {
   artifacts: Array<{ id: string; title: string; kind: string; uri: string }>;
   budget?: { tier: string; maxContinuations: number; maxTokens: number; runTimeoutMs: number };
   completionGate: { passed: boolean; failures: Array<{ kind: string; key: string; reason: string }> };
+  supervision: {
+    latestDecision: { id: string; action: string; reasonCode: string; rationale: string; status: string; attempt: number; checkpointSeq: number } | null;
+    latestGates: Array<{ id: string; gateType: string; passed: boolean; failures: Array<{ kind: string; key: string; reason: string; disposition: string }> }>;
+    progress: { meaningfulChanges: number; consecutiveFailures: number; checkpointSeq: number; lastProgressAt: number } | null;
+    spawnProposals: Array<{ id: string; goal: string; relation: string; status: string }>;
+  };
 }
 export interface EventConsumerCursor { runId: string; consumerId: string; generation: number; ackedSeq: number; terminalAckedSeq: number | null; claimedAt: number; updatedAt: number }
 export interface RunEvent { runId: string; seq: number; type: string; data: Record<string, unknown>; createdAt: number }

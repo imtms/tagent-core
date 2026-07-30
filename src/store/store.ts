@@ -5,6 +5,11 @@ import type {
   Artifact,
   CompletionGate,
   ControlInboxItem,
+  GateEvaluation,
+  ProgressSnapshot,
+  SpawnProposal,
+  SupervisorDecision,
+  TaskRunEdge,
   Message,
   PlanItem,
   RunCheck,
@@ -21,7 +26,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 export class Store {
   readonly db: Database.Database;
@@ -170,6 +175,36 @@ export class Store {
         PRIMARY KEY (run_id, seq)
       );
       CREATE INDEX IF NOT EXISTS idx_transcript_run ON run_transcript(run_id, seq);
+      CREATE TABLE IF NOT EXISTS supervisor_decisions (
+        id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), attempt INTEGER NOT NULL,
+        checkpoint_seq INTEGER NOT NULL, trigger TEXT NOT NULL, action TEXT NOT NULL, reason_code TEXT NOT NULL,
+        rationale TEXT NOT NULL, confidence REAL NOT NULL, instruction TEXT NOT NULL DEFAULT '',
+        candidate_response_hash TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL, executed_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_supervisor_decisions_run ON supervisor_decisions(run_id, attempt, created_at);
+      CREATE TABLE IF NOT EXISTS gate_evaluations (
+        id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), attempt INTEGER NOT NULL,
+        checkpoint_seq INTEGER NOT NULL, gate_type TEXT NOT NULL, passed INTEGER NOT NULL,
+        failures_json TEXT NOT NULL, input_manifest_hash TEXT NOT NULL, created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_gate_evaluations_run ON gate_evaluations(run_id, attempt, created_at);
+      CREATE TABLE IF NOT EXISTS progress_snapshots (
+        run_id TEXT PRIMARY KEY REFERENCES runs(id), attempt INTEGER NOT NULL, checkpoint_seq INTEGER NOT NULL,
+        meaningful_changes INTEGER NOT NULL DEFAULT 0, consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        repeated_operations INTEGER NOT NULL DEFAULT 0, last_progress_at INTEGER NOT NULL,
+        last_decision_id TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS spawn_proposals (
+        id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), goal TEXT NOT NULL,
+        acceptance_json TEXT NOT NULL, relation TEXT NOT NULL, status TEXT NOT NULL,
+        spawned_run_id TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS taskrun_edges (
+        from_run_id TEXT NOT NULL REFERENCES runs(id), to_run_id TEXT NOT NULL REFERENCES runs(id),
+        relation TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL,
+        PRIMARY KEY(from_run_id, to_run_id, relation)
+      );
       CREATE TABLE IF NOT EXISTS control_inbox (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL REFERENCES runs(id),
@@ -355,7 +390,7 @@ export class Store {
   }
 
   getRun(id: RunId): TaskRun | undefined {
-    type RunRow = Omit<TaskRun, "plan" | "checks" | "artifacts" | "continuations" | "completionGate" | "gateRequired" | "usage" | "transcriptCount" | "checkpoint"> & {
+    type RunRow = Omit<TaskRun, "plan" | "checks" | "artifacts" | "continuations" | "completionGate" | "gateRequired" | "usage" | "transcriptCount" | "checkpoint" | "supervision"> & {
       gateRequired: number;
       usageInput: number;
       usageOutput: number;
@@ -396,6 +431,7 @@ export class Store {
       checks,
       artifacts,
       completionGate: { passed: true, failures: [] },
+      supervision: { latestDecision: this.listSupervisorDecisions(id).at(-1) ?? null, latestGates: this.listLatestGateEvaluations(id), progress: this.getProgressSnapshot(id) ?? null, spawnProposals: this.listSpawnProposals(id) },
     };
     task.completionGate = this.evaluateGate(task);
     return task;
@@ -847,6 +883,78 @@ export class Store {
     return this.db.prepare(`UPDATE control_inbox SET status = ?, error = ?, completed_at = ? WHERE id = ? AND status = 'delivering'`)
       .run(status, error, now(), id).changes === 1;
   }
+
+  recordSupervisorDecision(decision: SupervisorDecision) {
+    this.db.prepare(`INSERT INTO supervisor_decisions
+      (id,run_id,attempt,checkpoint_seq,trigger,action,reason_code,rationale,confidence,instruction,candidate_response_hash,status,error,created_at,executed_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(decision.id, decision.runId, decision.attempt, decision.checkpointSeq, decision.trigger, decision.action, decision.reasonCode, decision.rationale, decision.confidence, decision.instruction, decision.candidateResponseHash, decision.status, decision.error, decision.createdAt, decision.executedAt);
+    return decision;
+  }
+
+  listSupervisorDecisions(runId: RunId, attempt?: number): SupervisorDecision[] {
+    const rows = this.db.prepare(`SELECT id,run_id as runId,attempt,checkpoint_seq as checkpointSeq,trigger,action,reason_code as reasonCode,
+      rationale,confidence,instruction,candidate_response_hash as candidateResponseHash,status,error,created_at as createdAt,executed_at as executedAt
+      FROM supervisor_decisions WHERE run_id = ? ${attempt === undefined ? "" : "AND attempt = ?"} ORDER BY created_at,id`).all(runId, ...(attempt === undefined ? [] : [attempt])) as SupervisorDecision[];
+    return rows;
+  }
+
+  updateSupervisorDecision(id: string, status: SupervisorDecision["status"], error = "") {
+    const executedAt = status === "executed" || status === "failed" ? now() : null;
+    this.db.prepare("UPDATE supervisor_decisions SET status = ?, error = ?, executed_at = COALESCE(?, executed_at) WHERE id = ?").run(status, error, executedAt, id);
+    return this.db.prepare("SELECT run_id as runId FROM supervisor_decisions WHERE id = ?").get(id) as { runId: string } | undefined;
+  }
+
+  recordGateEvaluation(gate: GateEvaluation) {
+    this.db.prepare(`INSERT INTO gate_evaluations (id,run_id,attempt,checkpoint_seq,gate_type,passed,failures_json,input_manifest_hash,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?)`).run(gate.id, gate.runId, gate.attempt, gate.checkpointSeq, gate.gateType, Number(gate.passed), JSON.stringify(gate.failures), gate.inputManifestHash, gate.createdAt);
+    return gate;
+  }
+
+  listLatestGateEvaluations(runId: RunId): GateEvaluation[] {
+    const rows = this.db.prepare(`SELECT id,run_id as runId,attempt,checkpoint_seq as checkpointSeq,gate_type as gateType,passed,
+      failures_json as failuresJson,input_manifest_hash as inputManifestHash,created_at as createdAt FROM gate_evaluations
+      WHERE run_id = ? AND (attempt,checkpoint_seq) = (SELECT attempt,checkpoint_seq FROM gate_evaluations WHERE run_id = ? ORDER BY attempt DESC,checkpoint_seq DESC,created_at DESC LIMIT 1) ORDER BY gate_type`).all(runId, runId) as Array<Omit<GateEvaluation,"passed"|"failures"> & {passed:number;failuresJson:string}>;
+    return rows.map(({ failuresJson, ...row }) => ({ ...row, passed: Boolean(row.passed), failures: JSON.parse(failuresJson) as GateEvaluation["failures"] }));
+  }
+
+  getProgressSnapshot(runId: RunId): ProgressSnapshot | undefined {
+    return this.db.prepare(`SELECT run_id as runId,attempt,checkpoint_seq as checkpointSeq,meaningful_changes as meaningfulChanges,
+      consecutive_failures as consecutiveFailures,repeated_operations as repeatedOperations,last_progress_at as lastProgressAt,
+      last_decision_id as lastDecisionId,updated_at as updatedAt FROM progress_snapshots WHERE run_id = ?`).get(runId) as ProgressSnapshot | undefined;
+  }
+
+  updateProgressSnapshot(run: TaskRun, event: RunEvent): ProgressSnapshot {
+    const previous = this.getProgressSnapshot(run.id);
+    const progressEvent = event.type === "run.updated" || event.type === "message.completed" || event.type === "tool.completed" && !event.data.isError;
+    const failureEvent = event.type === "tool.completed" && Boolean(event.data.isError) || event.type === "tool.guard.blocked";
+    const snapshot: ProgressSnapshot = { runId: run.id, attempt: run.attempt, checkpointSeq: event.seq,
+      meaningfulChanges: (previous?.attempt === run.attempt ? previous.meaningfulChanges : 0) + (progressEvent ? 1 : 0),
+      consecutiveFailures: failureEvent ? (previous?.attempt === run.attempt ? previous.consecutiveFailures : 0) + 1 : progressEvent ? 0 : previous?.consecutiveFailures ?? 0,
+      repeatedOperations: previous?.attempt === run.attempt ? previous.repeatedOperations : 0,
+      lastProgressAt: progressEvent ? event.createdAt : previous?.lastProgressAt ?? event.createdAt,
+      lastDecisionId: previous?.lastDecisionId ?? "", updatedAt: event.createdAt };
+    this.db.prepare(`INSERT INTO progress_snapshots (run_id,attempt,checkpoint_seq,meaningful_changes,consecutive_failures,repeated_operations,last_progress_at,last_decision_id,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET attempt=excluded.attempt,checkpoint_seq=excluded.checkpoint_seq,
+      meaningful_changes=excluded.meaningful_changes,consecutive_failures=excluded.consecutive_failures,repeated_operations=excluded.repeated_operations,
+      last_progress_at=excluded.last_progress_at,last_decision_id=excluded.last_decision_id,updated_at=excluded.updated_at`).run(snapshot.runId,snapshot.attempt,snapshot.checkpointSeq,snapshot.meaningfulChanges,snapshot.consecutiveFailures,snapshot.repeatedOperations,snapshot.lastProgressAt,snapshot.lastDecisionId,snapshot.updatedAt);
+    return snapshot;
+  }
+
+  createSpawnProposal(runId: RunId, goal: string, acceptanceCriteria: string[], relation: SpawnProposal["relation"]): SpawnProposal {
+    const timestamp = now(); const proposal: SpawnProposal = { id: randomUUID(), runId, goal, acceptanceCriteria, relation, status: "proposed", spawnedRunId: "", createdAt: timestamp, updatedAt: timestamp };
+    this.db.prepare("INSERT INTO spawn_proposals (id,run_id,goal,acceptance_json,relation,status,created_at,updated_at) VALUES (?,?,?,?,?,'proposed',?,?)").run(proposal.id,runId,goal,JSON.stringify(acceptanceCriteria),relation,timestamp,timestamp); return proposal;
+  }
+
+  listSpawnProposals(runId: RunId, status?: SpawnProposal["status"]): SpawnProposal[] {
+    const rows = this.db.prepare(`SELECT id,run_id as runId,goal,acceptance_json as acceptanceJson,relation,status,spawned_run_id as spawnedRunId,created_at as createdAt,updated_at as updatedAt FROM spawn_proposals WHERE run_id = ? ${status ? "AND status = ?" : ""} ORDER BY created_at`).all(runId,...(status?[status]:[])) as Array<Omit<SpawnProposal,"acceptanceCriteria"> & {acceptanceJson:string}>;
+    return rows.map(({acceptanceJson,...row})=>({...row,acceptanceCriteria:JSON.parse(acceptanceJson) as string[]}));
+  }
+
+  spawnFromProposal(proposalId: string) {
+    const transaction = this.db.transaction(() => { const proposal = this.db.prepare("SELECT * FROM spawn_proposals WHERE id = ? AND status IN ('proposed','approved')").get(proposalId) as {id:string;run_id:string;goal:string;relation:SpawnProposal["relation"]}|undefined; if(!proposal) return undefined; const parent=this.getRun(proposal.run_id); if(!parent || (proposal.relation !== "parallel" && parent.status !== "completed")) return undefined; const child=this.createRun(parent.sessionId,proposal.goal,`spawn:${proposal.id}`); const timestamp=now(); this.db.prepare("UPDATE spawn_proposals SET status='spawned',spawned_run_id=?,updated_at=? WHERE id=?").run(child.id,timestamp,proposal.id); this.db.prepare("INSERT INTO taskrun_edges (from_run_id,to_run_id,relation,reason,created_at) VALUES (?,?,?,?,?)").run(parent.id,child.id,proposal.relation,`Spawn proposal ${proposal.id}`,timestamp); return child; }); return transaction();
+  }
+
+  listTaskRunEdges(runId: RunId): TaskRunEdge[] { return this.db.prepare(`SELECT from_run_id as fromRunId,to_run_id as toRunId,relation,reason,created_at as createdAt FROM taskrun_edges WHERE from_run_id=? OR to_run_id=? ORDER BY created_at`).all(runId,runId) as TaskRunEdge[]; }
 
   listEvents(runId: RunId, after = 0): RunEvent[] {
     const rows = this.db.prepare(`SELECT run_id as runId, seq, type, data, created_at as createdAt FROM run_events WHERE run_id = ? AND seq > ? ORDER BY seq`).all(runId, after) as Array<Omit<RunEvent, "data"> & { data: string }>;
