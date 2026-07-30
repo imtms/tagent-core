@@ -21,4 +21,10 @@ describe("Web workbench state model", () => {
     expect(markdown).toContain("target=\"_blank\"");
     expect(markdown).toContain("rel=\"noreferrer\"");
   });
+
+  it("refreshes the active Run when structured task state changes", async () => {
+    const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain('event.type === "run.updated"');
+    expect(source).toContain("const updated = await api.run(activeRun.id)");
+  });
 });

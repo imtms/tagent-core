@@ -21,6 +21,38 @@ describe("Store", () => {
     expect(store.listMessages(session.id).map((message) => message.content)).toEqual(["hello", "world"]);
   });
 
+  it("advances task phases from structured work without allowing regressions", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "phase progression");
+    expect(store.getRun(run.id)?.phase).toBe("discover");
+    store.upsertPlanItem(run.id, { key: "work", title: "Work", status: "pending", required: true, position: 1 });
+    expect(store.getRun(run.id)?.phase).toBe("plan");
+    store.upsertPlanItem(run.id, { key: "work", title: "Work", status: "in_progress", required: true, position: 1 });
+    expect(store.getRun(run.id)?.phase).toBe("implement");
+    store.upsertCheck(run.id, { key: "test", title: "Test", status: "running", required: true, command: "npm test", evidence: "", stale: false });
+    expect(store.getRun(run.id)?.phase).toBe("verify");
+    store.setRunPhase(run.id, "review");
+    store.setRunPhase(run.id, "discover");
+    expect(store.getRun(run.id)?.phase).toBe("review");
+    store.close();
+  });
+
+  it("keeps phase progression monotonic across store connections", async () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "phase-race.db");
+    const first = new Store(filename);
+    const second = new Store(filename);
+    const session = first.createSession();
+    const run = first.createRun(session.id, "phase race");
+    await Promise.all([
+      Promise.resolve().then(() => first.advanceRunPhase(run.id, "verify")),
+      Promise.resolve().then(() => second.advanceRunPhase(run.id, "plan")),
+    ]);
+    expect(first.getRun(run.id)?.phase).toBe("verify");
+    first.close();
+    second.close();
+  });
+
   it("repairs unpaired tool calls exactly once", () => {
     const store = createStore();
     const session = store.createSession();

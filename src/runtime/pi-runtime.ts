@@ -83,7 +83,7 @@ export class PiRuntime implements AgentRuntime {
       modelRuntime,
       thinkingLevel: this.options.model?.reasoning ? "medium" : "off",
       noTools: "builtin",
-      customTools: createTools(this.options.store, this.options.runId, this.options.workspace),
+      customTools: createTools(this.options.store, this.options.runId, this.options.workspace, this.options.onEvent),
       resourceLoader,
       sessionManager: SessionManager.inMemory(this.options.workspace),
       settingsManager,
@@ -92,6 +92,7 @@ export class PiRuntime implements AgentRuntime {
     session.agent.beforeToolCall = async ({ toolCall }) => {
       const run = this.options.store.getRun(this.options.runId);
       if (!run) return { block: true, reason: "Run not found" };
+      if (["write", "edit", "bash"].includes(toolCall.name)) this.options.store.advanceRunPhase(this.options.runId, "implement");
       const attempt = this.options.store.recordToolAttempt(this.options.runId, run.attempt, toolCall.id, toolCall.name, toolCall.arguments);
       if (!attempt.guard.blocked) return undefined;
       this.options.store.completeToolAttempt(this.options.runId, run.attempt, toolCall.id, false, attempt.guard.reason);

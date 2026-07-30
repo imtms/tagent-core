@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Store } from "../store/store.js";
-import type { RunId } from "../core/types.js";
+import type { RunEvent, RunId } from "../core/types.js";
 
 const MAX_OUTPUT = 24_000;
 const MAX_CAPTURE = 256_000;
@@ -70,6 +70,7 @@ async function executeMutation(
     throw new Error(`Operation ${id} cannot be replayed from status ${receipt.status}`);
   }
   try {
+    store.advanceRunPhase(runId, "implement");
     const result = await effect();
     const staleChecks = store.markChecksStale(runId);
     store.updateOperation(id, { status: "succeeded", stage: "completed", effects: [{ kind: "checks", action: "stale", count: staleChecks }], result });
@@ -80,7 +81,7 @@ async function executeMutation(
   }
 }
 
-export function createTools(store: Store, runId: RunId, workspace: string): AgentTool[] {
+export function createTools(store: Store, runId: RunId, workspace: string, onEvent?: (event: RunEvent) => void): AgentTool[] {
   const listTool: AgentTool<typeof ListSchema, Record<string, unknown>> = {
     name: "ls", label: "List directory", description: "List entries in a workspace directory.", parameters: ListSchema,
     async execute(_id, params: Static<typeof ListSchema>) {
@@ -196,7 +197,10 @@ export function createTools(store: Store, runId: RunId, workspace: string): Agen
       if (params.action === "mark_checks_stale") store.markChecksStale(runId);
       if (params.action === "operations") return textResult(JSON.stringify(store.listOperations(runId), null, 2));
       if (params.action === "artifact") store.addArtifact(runId, { id: params.id, title: params.title, kind: params.kind ?? "artifact", content: params.content ?? "", uri: params.uri ?? "" });
-      return textResult(JSON.stringify(store.getRun(runId), null, 2));
+      const changed = params.action !== "get";
+      const run = store.getRun(runId);
+      if (changed) onEvent?.(store.appendEvent(runId, "run.updated", { action: params.action, phase: run?.phase ?? "discover" }));
+      return textResult(JSON.stringify(run, null, 2));
     },
   };
 

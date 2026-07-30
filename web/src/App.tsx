@@ -74,7 +74,7 @@ export function App() {
         setMessages(await api.messages(sessionId));
         setTranscript(await api.transcriptView(updated.id));
         await loadSessions();
-      } else if (event.type.startsWith("tool.") || event.type.startsWith("continuation.")) {
+      } else if (event.type === "run.updated" || event.type.startsWith("tool.") || event.type.startsWith("continuation.")) {
         const updated = await api.run(activeRun.id);
         setActiveRun(updated);
         setSelectedRun((current) => current?.id === updated.id ? updated : current);

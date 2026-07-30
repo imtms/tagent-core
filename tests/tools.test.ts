@@ -89,4 +89,26 @@ describe("workspace tools", () => {
     await expect(bash.execute("1", { command: "rm -rf ." }, undefined)).rejects.toThrow("blocked");
     store.close();
   });
+
+  it("publishes task updates and infers phases from plan, mutation, and checks", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-"));
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "phase events");
+    const events: string[] = [];
+    const tools = createTools(store, run.id, workspace, (event) => events.push(`${event.type}:${event.data.phase}`));
+    const taskRun = tools.find((tool) => tool.name === "task_run")!;
+    const write = tools.find((tool) => tool.name === "write")!;
+    await taskRun.execute("get", { action: "get" }, undefined);
+    expect(events).toEqual([]);
+    await taskRun.execute("plan", { action: "plan", key: "work", title: "Work", status: "pending" }, undefined);
+    expect(store.getRun(run.id)?.phase).toBe("plan");
+    expect(events).toEqual(["run.updated:plan"]);
+    await write.execute("write", { path: "result.txt", content: "done" }, undefined);
+    expect(store.getRun(run.id)?.phase).toBe("implement");
+    await taskRun.execute("check", { action: "check", key: "test", title: "Test", status: "passed", evidence: "ok" }, undefined);
+    expect(store.getRun(run.id)?.phase).toBe("verify");
+    expect(events.at(-1)).toBe("run.updated:verify");
+    store.close();
+  });
 });

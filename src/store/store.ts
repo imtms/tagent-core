@@ -620,7 +620,17 @@ export class Store {
   }
 
   setRunPhase(runId: RunId, phase: RunPhase) {
-    this.db.prepare("UPDATE runs SET phase = ?, updated_at = ? WHERE id = ?").run(phase, now(), runId);
+    if (phase === "done" || phase === "blocked") return false;
+    return this.advanceRunPhase(runId, phase);
+  }
+
+  advanceRunPhase(runId: RunId, phase: Exclude<RunPhase, "done" | "blocked">) {
+    const rank: Record<Exclude<RunPhase, "done" | "blocked">, number> = { discover: 0, plan: 1, implement: 2, verify: 3, review: 4 };
+    return this.db.prepare(`UPDATE runs SET phase = ?, updated_at = ?
+      WHERE id = ? AND status = 'running' AND CASE phase
+        WHEN 'discover' THEN 0 WHEN 'plan' THEN 1 WHEN 'implement' THEN 2
+        WHEN 'verify' THEN 3 WHEN 'review' THEN 4 ELSE 99 END < ?`)
+      .run(phase, now(), runId, rank[phase]).changes === 1;
   }
 
   upsertPlanItem(runId: RunId, item: Omit<PlanItem, "runId">) {
@@ -628,7 +638,7 @@ export class Store {
       INSERT INTO plan_items (run_id, item_key, title, status, required, position) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(run_id, item_key) DO UPDATE SET title=excluded.title, status=excluded.status, required=excluded.required, position=excluded.position
     `).run(runId, item.key, item.title, item.status, Number(item.required), item.position);
-    this.db.prepare("UPDATE runs SET updated_at = ? WHERE id = ?").run(now(), runId);
+    this.advanceRunPhase(runId, item.status === "pending" ? "plan" : "implement");
   }
 
   markChecksStale(runId: RunId) {
@@ -642,7 +652,7 @@ export class Store {
       INSERT INTO run_checks (run_id, check_key, title, status, required, command, evidence, stale) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(run_id, check_key) DO UPDATE SET title=excluded.title, status=excluded.status, required=excluded.required, command=excluded.command, evidence=excluded.evidence, stale=excluded.stale
     `).run(runId, check.key, check.title, check.status, Number(check.required), check.command, check.evidence, Number(check.stale));
-    this.db.prepare("UPDATE runs SET updated_at = ? WHERE id = ?").run(now(), runId);
+    this.advanceRunPhase(runId, check.status === "pending" ? "implement" : "verify");
   }
 
   addArtifact(runId: RunId, artifact: Omit<Artifact, "runId" | "createdAt">): Artifact {
