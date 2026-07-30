@@ -9,7 +9,7 @@ export interface AgentRuntime {
   steer(instruction: string): Promise<void>;
   followUp?(instruction: string): Promise<void>;
   compact?(instructions?: string): Promise<void>;
-  abort(): void;
+  abort(): void | Promise<void>;
   dispose?(): void;
   getMessages(): AgentMessage[];
   getError(): string | undefined;

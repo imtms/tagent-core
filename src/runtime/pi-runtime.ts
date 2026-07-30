@@ -25,6 +25,8 @@ export class PiRuntime implements AgentRuntime {
   private initializing?: Promise<AgentSession>;
   private unsubscribe?: () => void;
   private disposed = false;
+  private abortRequested = false;
+  private abortPromise?: Promise<void>;
 
   constructor(private readonly options: RuntimeOptions) {}
 
@@ -148,7 +150,7 @@ export class PiRuntime implements AgentRuntime {
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") this.emit("message.delta", { delta: event.assistantMessageEvent.delta });
     if (event.type === "agent_end") {
       const final = [...event.messages].reverse().find((message) => message.role === "assistant");
-      this.emit("message.completed", { content: messageText(final), willRetry: event.willRetry });
+      this.emit(event.willRetry ? "message.retrying" : "message.completed", { content: messageText(final), willRetry: event.willRetry });
     }
     if (event.type === "queue_update") this.emit("runtime.queue", { steering: event.steering, followUp: event.followUp });
     if (event.type === "auto_retry_start") this.emit("provider.retry", { attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs, summary: event.errorMessage.replace(/\s+/g, " ").slice(0, 500) });
@@ -160,6 +162,7 @@ export class PiRuntime implements AgentRuntime {
   async prompt(query: string) {
     const session = await this.initialize();
     if (this.disposed) throw new Error("Runtime disposed");
+    if (this.abortRequested) throw new Error("Runtime aborted");
     await session.prompt(query);
   }
 
@@ -168,14 +171,30 @@ export class PiRuntime implements AgentRuntime {
     await session.steer(instruction);
   }
 
-  abort() {
-    if (this.session) void this.session.abort();
+  async abort() {
+    this.abortRequested = true;
+    if (!this.abortPromise) {
+      this.abortPromise = (async () => {
+        const session = this.session ?? await this.initializing?.catch(() => undefined);
+        if (session) await session.abort();
+      })();
+    }
+    await this.abortPromise;
   }
 
   dispose() {
     this.disposed = true;
-    this.unsubscribe?.();
-    this.session?.dispose();
+    const session = this.session;
+    if (!session) return;
+    if (session.isIdle) {
+      this.unsubscribe?.();
+      session.dispose();
+      return;
+    }
+    void this.abort().finally(() => {
+      this.unsubscribe?.();
+      session.dispose();
+    });
   }
 
   getMessages() {

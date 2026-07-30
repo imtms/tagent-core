@@ -43,13 +43,15 @@ prompt(query) -> Promise<void>
 steer(instruction) -> Promise<void>
 followUp(instruction) -> Promise<void>
 compact(instructions?) -> Promise<void>
-abort() -> void
+abort() -> void | Promise<void>
 dispose() -> void
 getMessages() -> AgentMessage[]
 getError() -> string | undefined
 ```
 
 The runtime factory receives Run ID, workspace, system prompt, tools, and an event sink. The adapter owns pi SessionManager, SettingsManager, ModelRuntime, queue, retry, and compaction details; pi-specific classes and protocol events must not leak into AgentService or the database schema.
+
+Pi 0.83 abort is asynchronous and does not complete until the session is idle. Runtime adapters must preserve an abort requested during initialization, and must not dispose a busy session before that abort settles. Intermediate `agent_end` events with `willRetry: true` are retry progress, not completed assistant messages.
 
 A later worker-oriented interface can add:
 

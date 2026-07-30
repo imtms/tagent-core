@@ -29,6 +29,47 @@ describe("Pi 0.83 AgentSession integration", () => {
     store.close();
   });
 
+  it("settles an active tool attempt before disposing an aborted session", async () => {
+    const faux = fauxProvider({ models: [{ id: "faux-abort", contextWindow: 32_000, maxTokens: 2_000 }] });
+    faux.setResponses([fauxAssistantMessage([{ type: "toolCall", id: "slow-bash", name: "bash", arguments: { command: "sleep 30" } }], { stopReason: "toolUse" })]);
+    const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "abort active tool");
+    const runtime = new PiRuntime({ store, runId: run.id, workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), modelRuntime, initialMessages: [] });
+    const prompt = runtime.prompt("start");
+    for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "tool.started"); index += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    await runtime.abort();
+    await prompt;
+    runtime.dispose();
+    expect(store.db.prepare("SELECT status FROM tool_attempts WHERE run_id = ? AND tool_call_id = 'slow-bash'").get(run.id)).toMatchObject({ status: "failed" });
+    expect(store.listOperations(run.id)[0]).toMatchObject({ status: "failed", stage: "execution_failed" });
+    store.close();
+  });
+
+  it("honors abort requested while the session is still initializing", async () => {
+    const faux = fauxProvider({ models: [{ id: "faux-init", contextWindow: 32_000, maxTokens: 2_000 }] });
+    faux.setResponses([fauxAssistantMessage("must not run")]);
+    const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const originalRefresh = modelRuntime.refresh.bind(modelRuntime);
+    modelRuntime.refresh = async (...args) => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return originalRefresh(...args);
+    };
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "abort initialization");
+    const runtime = new PiRuntime({ store, runId: run.id, workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), modelRuntime, initialMessages: [] });
+    const prompt = runtime.prompt("hello");
+    await runtime.abort();
+    await expect(prompt).rejects.toThrow("Runtime aborted");
+    expect(faux.state.callCount).toBe(0);
+    runtime.dispose();
+    store.close();
+  });
+
   it("surfaces SDK auto-retry lifecycle events and succeeds on the next attempt", async () => {
     const { faux, store, run, runtime } = await setup([
       fauxAssistantMessage([], { stopReason: "error", errorMessage: "503 Service unavailable" }),
@@ -39,6 +80,8 @@ describe("Pi 0.83 AgentSession integration", () => {
     expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "recovered" }] });
     expect(store.listEvents(run.id).some((event) => event.type === "provider.retry")).toBe(true);
     expect(store.listEvents(run.id).some((event) => event.type === "provider.retry.completed" && event.data.success === true)).toBe(true);
+    expect(store.listEvents(run.id).filter((event) => event.type === "message.completed")).toHaveLength(1);
+    expect(store.listEvents(run.id).some((event) => event.type === "message.retrying" && event.data.willRetry === true)).toBe(true);
     runtime.dispose();
     store.close();
   });

@@ -20,6 +20,17 @@ export class AgentService {
     this.store.markInterrupted();
   }
 
+  private abortRuntime(runtime: AgentRuntime, runId?: RunId) {
+    try {
+      const result = runtime.abort();
+      if (result && typeof result.then === "function") void result.catch((error) => {
+        if (runId && this.store.getRun(runId)) this.publish(this.store.appendEvent(runId, "runtime.abort.failed", { error: error instanceof Error ? error.message : String(error) }));
+      });
+    } catch (error) {
+      if (runId && this.store.getRun(runId)) this.publish(this.store.appendEvent(runId, "runtime.abort.failed", { error: error instanceof Error ? error.message : String(error) }));
+    }
+  }
+
   async followUp(runId: RunId, instruction: string) {
     const runtime = this.runtimes.get(runId);
     if (!runtime?.followUp) return "inactive" as const;
@@ -62,7 +73,7 @@ export class AgentService {
 
   closeRuntimes() {
     for (const runtime of this.runtimes.values()) {
-      runtime.abort();
+      this.abortRuntime(runtime);
       runtime.dispose?.();
     }
     this.runtimes.clear();
@@ -93,7 +104,7 @@ export class AgentService {
 
     const failTimeout = (reason: "idle_timeout" | "hard_timeout", limitMs: number) => {
       if (this.store.getRun(run.id)?.status !== "running") return;
-      runtime.abort();
+      this.abortRuntime(runtime, run.id);
       const message = reason === "idle_timeout"
         ? `Run idle for ${limitMs}ms without progress`
         : `Run exceeded ${limitMs}ms absolute hard timeout`;
@@ -255,7 +266,7 @@ export class AgentService {
   cancel(runId: RunId) {
     const runtime = this.runtimes.get(runId);
     if (!runtime) return false;
-    runtime.abort();
+    this.abortRuntime(runtime, runId);
     const event = this.store.transitionRun(runId, ["running"], "cancelled", "run.cancelled", {}, "Cancelled by user");
     if (!event) return false;
     this.publish(event);

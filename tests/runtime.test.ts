@@ -40,6 +40,13 @@ class DeferredRuntime implements AgentRuntime {
   getError() { return undefined; }
 }
 
+class RejectingAbortRuntime extends DeferredRuntime {
+  override async abort() {
+    super.abort();
+    throw new Error("abort cleanup failed");
+  }
+}
+
 class ActiveDeferredRuntime extends DeferredRuntime {
   constructor(private readonly emitActivity: () => void, private readonly intervalMs: number) { super(); }
   private timer?: ReturnType<typeof setInterval>;
@@ -62,6 +69,19 @@ describe("AgentService runtime boundary", () => {
     expect(factory).toHaveBeenCalledOnce();
     expect(runtime.prompts).toEqual(["test factory"]);
     expect(store.getRun(run.id)?.status).toBe("blocked");
+    store.close();
+  });
+
+  it("audits an asynchronous runtime abort failure without changing cancelled state", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const runtime = new RejectingAbortRuntime();
+    const service = new AgentService(store, "/tmp", () => runtime);
+    const run = await service.start(session.id, "async abort failure");
+    expect(service.cancel(run.id)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.getRun(run.id)?.status).toBe("cancelled");
+    expect(store.listEvents(run.id).some((event) => event.type === "runtime.abort.failed" && event.data.error === "abort cleanup failed")).toBe(true);
     store.close();
   });
 
