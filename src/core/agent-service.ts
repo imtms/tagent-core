@@ -13,7 +13,7 @@ export class AgentService {
     private readonly store: Store,
     private readonly workspace: string,
     private readonly runtimeFactory: RuntimeFactory = createInProcessRuntime,
-    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number; contextWindow?: number } = {},
+    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number; contextWindow?: number; dynamicBudget?: boolean } = {},
   ) {
     this.store.markInterrupted();
   }
@@ -55,15 +55,16 @@ export class AgentService {
       onEvent: (event) => this.publish(event),
     });
     this.runtimes.set(run.id, runtime);
-    const timeout = this.runtimeDefaults.runTimeoutMs
+    const attemptTimeoutMs = this.executionBudget(run).runTimeoutMs;
+    const timeout = attemptTimeoutMs
       ? setTimeout(() => {
           if (this.store.getRun(run.id)?.status !== "running") return;
           runtime.abort();
-          const message = `Run exceeded ${this.runtimeDefaults.runTimeoutMs}ms timeout`;
+          const message = `Run exceeded ${attemptTimeoutMs}ms timeout`;
           this.store.finalizeRun(run.id, "failed", message);
           this.store.appendMessage(run.sessionId, "assistant", `Run failed: ${message}`);
           this.publish(this.store.appendEvent(run.id, "run.failed", { error: message, reason: "timeout" }));
-        }, this.runtimeDefaults.runTimeoutMs)
+        }, attemptTimeoutMs)
       : undefined;
     void this.execute(run.id, runtime, prompt).then((blocked) => {
       if (continuationId) {
@@ -108,25 +109,54 @@ export class AgentService {
     }
   }
 
+  private executionBudget(run: TaskRun) {
+    const hardContinuations = this.runtimeDefaults.maxContinuations ?? 128;
+    const hardTokens = this.runtimeDefaults.maxRunTokens ?? 2_000_000;
+    if (this.runtimeDefaults.dynamicBudget === false) return { tier: "fixed", maxContinuations: hardContinuations, maxTokens: hardTokens, runTimeoutMs: this.runtimeDefaults.runTimeoutMs ?? 900_000 };
+
+    let score = Math.min(6, Math.ceil(run.goal.length / 240));
+    if (/(implement|develop|refactor|migrate|audit|debug|test|build|deploy|实现|开发|重构|迁移|审计|调试|测试|构建|部署)/i.test(run.goal)) score += 3;
+    if (/(multi|multiple|across|end[- ]to[- ]end|architecture|database|frontend|backend|多轮|多个|跨|架构|数据库|前端|后端)/i.test(run.goal)) score += 3;
+    score += Math.min(8, run.plan.filter((item) => item.required).length);
+    score += Math.min(6, run.checks.filter((item) => item.required).length * 2);
+    score += Math.min(6, run.plan.filter((item) => item.required && item.status !== "done").length);
+    score += Math.min(4, Math.floor(run.continuations.length / 3));
+
+    const tier = score >= 16 ? "extended" : score >= 10 ? "complex" : score >= 5 ? "standard" : "simple";
+    const presets = {
+      simple: { maxContinuations: 4, maxTokens: 80_000, runTimeoutMs: 300_000 },
+      standard: { maxContinuations: 12, maxTokens: 240_000, runTimeoutMs: 900_000 },
+      complex: { maxContinuations: 32, maxTokens: 640_000, runTimeoutMs: 2_700_000 },
+      extended: { maxContinuations: 96, maxTokens: 1_600_000, runTimeoutMs: 7_200_000 },
+    } as const;
+    return {
+      tier,
+      maxContinuations: Math.min(hardContinuations, presets[tier].maxContinuations),
+      maxTokens: Math.min(hardTokens, presets[tier].maxTokens),
+      runTimeoutMs: Math.min(this.runtimeDefaults.runTimeoutMs ?? 7_200_000, presets[tier].runTimeoutMs),
+    };
+  }
+
   private queueContinuation(runId: RunId) {
     const run = this.store.getRun(runId);
     if (!run || run.status !== "blocked") return;
-    const maxContinuations = this.runtimeDefaults.maxContinuations ?? 2;
-    const maxRunTokens = this.runtimeDefaults.maxRunTokens ?? 120_000;
+    const budget = this.executionBudget(run);
+    const maxContinuations = budget.maxContinuations;
+    const maxRunTokens = budget.maxTokens;
     if (run.continuations.length >= maxContinuations) {
       const message = `Run remains blocked after ${maxContinuations} automatic continuation${maxContinuations === 1 ? "" : "s"}: ${run.blockedReason}`;
       this.store.appendMessage(run.sessionId, "assistant", message);
-      this.publish(this.store.appendEvent(runId, "continuation.exhausted", { reason: "max_continuations", limit: maxContinuations }));
+      this.publish(this.store.appendEvent(runId, "continuation.exhausted", { reason: "max_continuations", tier: budget.tier, limit: maxContinuations }));
       return;
     }
     if (run.usage.totalTokens >= maxRunTokens) {
       const message = `Run remains blocked because the ${maxRunTokens.toLocaleString()} token continuation budget was exhausted: ${run.blockedReason}`;
       this.store.appendMessage(run.sessionId, "assistant", message);
-      this.publish(this.store.appendEvent(runId, "continuation.exhausted", { reason: "token_budget", limit: maxRunTokens, totalTokens: run.usage.totalTokens }));
+      this.publish(this.store.appendEvent(runId, "continuation.exhausted", { reason: "token_budget", tier: budget.tier, limit: maxRunTokens, totalTokens: run.usage.totalTokens }));
       return;
     }
     const continuation = this.store.queueContinuation(runId, run.blockedReason);
-    this.publish(this.store.appendEvent(runId, "continuation.queued", { continuationId: continuation.id, ordinal: continuation.ordinal, reason: continuation.reason }));
+    this.publish(this.store.appendEvent(runId, "continuation.queued", { continuationId: continuation.id, ordinal: continuation.ordinal, reason: continuation.reason, budget }));
   }
 
   private startQueuedContinuation(runId: RunId) {
@@ -187,6 +217,11 @@ export class AgentService {
 
   replay(runId: RunId, after = 0) {
     return this.store.listEvents(runId, after);
+  }
+
+  getBudget(runId: RunId) {
+    const run = this.store.getRun(runId);
+    return run ? this.executionBudget(run) : undefined;
   }
 
   getRun(runId: RunId) {

@@ -59,13 +59,25 @@ The base URL is configurable because OpenAI-compatible services are not guarante
 - `TAGENT_REASONING`: enable reasoning metadata, default `true`
 - `TAGENT_PROVIDER_TIMEOUT_MS`: timeout for each provider request, default `120000`
 - `TAGENT_PROVIDER_MAX_RETRIES`: provider retry count, default `1`
-- `TAGENT_RUN_TIMEOUT_MS`: wall-clock limit for an entire run attempt, default `900000`
-- `TAGENT_MAX_CONTINUATIONS`: automatic completion-gate continuations per run, default `2`
-- `TAGENT_MAX_RUN_TOKENS`: cumulative token budget before another continuation is refused, default `120000`
+- `TAGENT_RUN_TIMEOUT_MS`: hard wall-clock ceiling for a run attempt, default `7200000`
+- `TAGENT_MAX_CONTINUATIONS`: hard continuation ceiling, default `128`
+- `TAGENT_MAX_RUN_TOKENS`: hard cumulative token ceiling, default `2000000`
+- `TAGENT_DYNAMIC_BUDGET`: enable task/progress-based soft budgets, default `true`
 - `OPENAI_API_KEY`: credential sent to the OpenAI-compatible provider
 - `TAGENT_DB`: SQLite path, default `./data/tagent.db`
 - `TAGENT_WORKSPACE`: tool workspace, default current directory unless configured
 - `PORT`: API and Web port, default `3100`
+
+Dynamic budgets are recomputed from the goal, required plan/check surface, remaining work, and continuation history. The default tiers are:
+
+| Tier | Continuations | Cumulative tokens | Attempt timeout |
+| --- | ---: | ---: | ---: |
+| simple | 4 | 80,000 | 5 minutes |
+| standard | 12 | 240,000 | 15 minutes |
+| complex | 32 | 640,000 | 45 minutes |
+| extended | 96 | 1,600,000 | 120 minutes |
+
+Environment limits remain hard ceilings. Set `TAGENT_DYNAMIC_BUDGET=false` to use the hard limits directly.
 
 ## Runtime scheduling
 

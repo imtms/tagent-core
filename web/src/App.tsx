@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Check, Circle, Command, FileText, Menu, MessageSquarePlus, PanelRight, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, Circle, Command, FileText, Menu, MessageSquarePlus, PanelRight, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
 import { api, subscribe, type Message, type RunEvent, type RuntimeStatus, type Session, type TaskRun } from "./api";
 
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
+
+function RunDetails({ run }: { run: TaskRun }) {
+  return <div className="run-details">
+    <section className="run-summary"><div className="phase-line"><span className={`phase-badge ${run.status}`}>{run.status}</span><span>{run.phase}</span><span>attempt {run.attempt}</span></div><p>{run.goal}</p><div className="run-metrics"><span>{run.transcriptCount} messages</span><span>{run.usage.totalTokens.toLocaleString()} tokens</span><span>{run.usage.input.toLocaleString()} in / {run.usage.output.toLocaleString()} out</span>{run.budget && <span>{run.budget.tier} · {run.budget.maxContinuations} rounds · {run.budget.maxTokens.toLocaleString()} tokens</span>}</div>{run.blockedReason && <div className="blocked-note">{run.blockedReason}</div>}</section>
+    <section className="panel-section"><div className="section-title"><span>Plan</span><small>{run.plan.filter((item) => item.status === "done").length}/{run.plan.length}</small></div><div className="task-list">{run.plan.length ? run.plan.map((item) => <div className="task-row" key={item.key}>{item.status === "done" ? <Check size={15} /> : <Circle size={14} />}<span>{item.title}</span><small>{item.status}</small></div>) : <p className="muted">No structured plan.</p>}</div></section>
+    <section className="panel-section"><div className="section-title"><span>Checks</span><small>{run.checks.filter((item) => item.status === "passed" && !item.stale).length}/{run.checks.length}</small></div><div className="task-list">{run.checks.length ? run.checks.map((check) => <div className="task-row" key={check.key}>{check.status === "passed" && !check.stale ? <Check size={15} /> : <Circle size={14} />}<span>{check.title}</span><small>{check.stale ? "stale" : check.status}</small></div>) : <p className="muted">No required checks.</p>}</div></section>
+    <section className="panel-section"><div className="section-title"><span>Continuations</span><small>{run.continuations.length}</small></div><div className="task-list">{run.continuations.length ? run.continuations.map((item) => <div className="continuation-row" key={item.id}><div><strong>#{item.ordinal}</strong><span>{item.reason}</span></div><small className={`continuation-status ${item.status}`}>{item.status}</small></div>) : <p className="muted">No automatic continuation.</p>}</div></section>
+    <section className="panel-section"><div className="section-title"><span>Artifacts</span><small>{run.artifacts.length}</small></div>{run.artifacts.map((artifact) => <div className="artifact-row" key={artifact.id}><FileText size={15} /><span>{artifact.title}</span></div>)}</section>
+  </div>;
+}
 
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -10,6 +20,8 @@ export function App() {
   const [sessionId, setSessionId] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [run, setRun] = useState<TaskRun | null>(null);
+  const [runs, setRuns] = useState<TaskRun[]>([]);
+  const [expandedRunId, setExpandedRunId] = useState("");
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState("");
@@ -29,7 +41,10 @@ export function App() {
   useEffect(() => {
     if (!sessionId) return;
     setStreaming(""); setEvents([]); setError("");
-    void Promise.all([api.messages(sessionId), api.latestRun(sessionId)]).then(([history, active]) => { setMessages(history); setRun(active); });
+    void Promise.all([api.messages(sessionId), api.runs(sessionId)]).then(([history, runHistory]) => {
+      const latest = runHistory[0] ?? null;
+      setMessages(history); setRuns(runHistory); setRun(latest); setExpandedRunId(latest?.id ?? "");
+    });
   }, [sessionId]);
 
   useEffect(() => {
@@ -39,11 +54,15 @@ export function App() {
       if (event.type === "message.delta") setStreaming((current) => current + String(event.data.delta ?? ""));
       if (["run.completed", "run.blocked", "run.failed", "run.cancelled"].includes(event.type)) {
         setStreaming("");
-        setRun(await api.run(run.id));
+        const updated = await api.run(run.id);
+        setRun(updated);
+        setRuns(await api.runs(sessionId));
         setMessages(await api.messages(sessionId));
         await loadSessions();
-      } else if (event.type.startsWith("tool.")) {
-        setRun(await api.run(run.id));
+      } else if (event.type.startsWith("tool.") || event.type.startsWith("continuation.")) {
+        const updated = await api.run(run.id);
+        setRun(updated);
+        setRuns((current) => current.map((item) => item.id === updated.id ? updated : item));
       }
     }, () => undefined);
   }, [run?.id, run?.status, run?.lastEventSeq, sessionId, loadSessions]);
@@ -62,7 +81,10 @@ export function App() {
     if (!content || !sessionId || run?.status === "running") return;
     setDraft(""); setError("");
     setMessages((current) => [...current, { id: Date.now(), sessionId, role: "user", content, createdAt: Date.now() }]);
-    try { const nextRun = await api.send(sessionId, content); setRun(nextRun); setEvents([]); setStreaming(""); }
+    try {
+      const nextRun = await api.send(sessionId, content);
+      setRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setStreaming("");
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
 
@@ -101,13 +123,21 @@ export function App() {
 
     <aside className={`run-panel ${rightOpen ? "mobile-open" : ""}`}>
       <div className="panel-heading"><div><span className="eyebrow">TaskRun</span><h2>Execution state</h2></div><button className="icon-button mobile-only" onClick={() => setRightOpen(false)} aria-label="Close task panel"><X size={18} /></button></div>
-      {!run ? <div className="panel-empty"><Play size={20} /><p>No active task</p></div> : <>
-        <section className="run-summary"><div className="phase-line"><span className={`phase-badge ${run.status}`}>{run.status}</span><span>{run.phase}</span><span>attempt {run.attempt}</span></div><p>{run.goal}</p><div className="run-metrics"><span>{run.transcriptCount} messages</span><span>{run.usage.totalTokens.toLocaleString()} tokens</span><span>{run.usage.input.toLocaleString()} in / {run.usage.output.toLocaleString()} out</span></div>{run.blockedReason && <div className="blocked-note">{run.blockedReason}</div>}</section>
-        <section className="panel-section"><div className="section-title"><span>Plan</span><small>{run.plan.filter((item) => item.status === "done").length}/{run.plan.length}</small></div><div className="task-list">{run.plan.length ? run.plan.map((item) => <div className="task-row" key={item.key}>{item.status === "done" ? <Check size={15} /> : <Circle size={14} />}<span>{item.title}</span><small>{item.status}</small></div>) : <p className="muted">Plan appears when TAgent structures the task.</p>}</div></section>
-        <section className="panel-section"><div className="section-title"><span>Checks</span><small>{run.checks.filter((item) => item.status === "passed" && !item.stale).length}/{run.checks.length}</small></div><div className="task-list">{run.checks.length ? run.checks.map((check) => <div className="task-row" key={check.key}>{check.status === "passed" && !check.stale ? <Check size={15} /> : <Circle size={14} />}<span>{check.title}</span><small>{check.stale ? "stale" : check.status}</small></div>) : <p className="muted">Verification evidence will appear here.</p>}</div></section>
-        <section className="panel-section"><div className="section-title"><span>Continuations</span><small>{run.continuations.length}</small></div><div className="task-list">{run.continuations.length ? run.continuations.map((item) => <div className="continuation-row" key={item.id}><div><strong>#{item.ordinal}</strong><span>{item.reason}</span></div><small className={`continuation-status ${item.status}`}>{item.status}</small></div>) : <p className="muted">No automatic continuation was needed.</p>}</div></section>
-        <section className="panel-section"><div className="section-title"><span>Artifacts</span><small>{run.artifacts.length}</small></div>{run.artifacts.map((artifact) => <div className="artifact-row" key={artifact.id}><FileText size={15} /><span>{artifact.title}</span></div>)}</section>
-      </>}
+      {!runs.length ? <div className="panel-empty"><Play size={20} /><p>No TaskRuns</p></div> : <div className="run-history">{runs.map((item, index) => {
+        const expanded = item.id === expandedRunId;
+        return <section className={`run-history-item ${expanded ? "expanded" : ""}`} key={item.id}>
+          <button className="run-history-toggle" onClick={async () => {
+            if (expanded) { setExpandedRunId(""); return; }
+            const selected = await api.run(item.id); setRun(selected); setExpandedRunId(item.id); setEvents([]); setStreaming("");
+          }} aria-expanded={expanded}>
+            {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+            <span className={`history-status ${item.status}`} />
+            <span className="history-copy"><strong>{item.goal}</strong><small>{item.status} · attempt {item.attempt}{item.budget ? ` · ${item.budget.tier}` : ""}</small></span>
+            <time>{index === 0 && item.status === "running" ? "current" : formatTime(item.updatedAt ?? item.createdAt)}</time>
+          </button>
+          {expanded && <RunDetails run={run?.id === item.id ? run : item} />}
+        </section>;
+      })}</div>}
     </aside>
     {(leftOpen || rightOpen) && <button className="backdrop mobile-only" onClick={() => { setLeftOpen(false); setRightOpen(false); }} aria-label="Close panel" />}
   </div>;

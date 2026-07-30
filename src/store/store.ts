@@ -257,6 +257,11 @@ export class Store {
     return task;
   }
 
+  listRuns(sessionId: SessionId, limit = 50): TaskRun[] {
+    const rows = this.db.prepare("SELECT id FROM runs WHERE session_id = ? ORDER BY updated_at DESC LIMIT ?").all(sessionId, limit) as Array<{ id: string }>;
+    return rows.map((row) => this.getRun(row.id)!);
+  }
+
   getLatestRun(sessionId: SessionId): TaskRun | undefined {
     const row = this.db.prepare("SELECT id FROM runs WHERE session_id = ? ORDER BY updated_at DESC LIMIT 1").get(sessionId) as { id: string } | undefined;
     return row ? this.getRun(row.id) : undefined;

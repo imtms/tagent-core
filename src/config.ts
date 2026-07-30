@@ -21,6 +21,7 @@ export interface AppConfig {
   runTimeoutMs: number;
   maxContinuations: number;
   maxRunTokens: number;
+  dynamicBudget: boolean;
   model: ModelConfig;
 }
 
@@ -53,9 +54,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     apiKey: env.OPENAI_API_KEY,
     providerTimeoutMs: positiveInteger(env.TAGENT_PROVIDER_TIMEOUT_MS, 120_000, "TAGENT_PROVIDER_TIMEOUT_MS"),
     providerMaxRetries: nonNegativeInteger(env.TAGENT_PROVIDER_MAX_RETRIES, 1, "TAGENT_PROVIDER_MAX_RETRIES"),
-    runTimeoutMs: positiveInteger(env.TAGENT_RUN_TIMEOUT_MS, 900_000, "TAGENT_RUN_TIMEOUT_MS"),
-    maxContinuations: nonNegativeInteger(env.TAGENT_MAX_CONTINUATIONS, 2, "TAGENT_MAX_CONTINUATIONS"),
-    maxRunTokens: positiveInteger(env.TAGENT_MAX_RUN_TOKENS, 120_000, "TAGENT_MAX_RUN_TOKENS"),
+    runTimeoutMs: positiveInteger(env.TAGENT_RUN_TIMEOUT_MS, 7_200_000, "TAGENT_RUN_TIMEOUT_MS"),
+    maxContinuations: nonNegativeInteger(env.TAGENT_MAX_CONTINUATIONS, 128, "TAGENT_MAX_CONTINUATIONS"),
+    maxRunTokens: positiveInteger(env.TAGENT_MAX_RUN_TOKENS, 2_000_000, "TAGENT_MAX_RUN_TOKENS"),
+    dynamicBudget: env.TAGENT_DYNAMIC_BUDGET !== "false",
     model: {
       provider: env.TAGENT_PROVIDER ?? "openai-compatible",
       modelId: env.TAGENT_MODEL ?? "gpt-5.6-sol",
@@ -80,6 +82,7 @@ export interface PublicRuntimeConfig {
   runTimeoutMs: number;
   maxContinuations: number;
   maxRunTokens: number;
+  dynamicBudget: boolean;
   schemaVersion?: number;
 }
 
@@ -96,6 +99,7 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     runTimeoutMs: config.runTimeoutMs,
     maxContinuations: config.maxContinuations,
     maxRunTokens: config.maxRunTokens,
+    dynamicBudget: config.dynamicBudget,
     schemaVersion,
   };
 }

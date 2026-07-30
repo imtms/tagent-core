@@ -27,9 +27,16 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const { id } = request.params as { id: string };
     return store.listMessages(id);
   });
+  app.get("/api/sessions/:id/runs", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const limit = Math.min(200, Math.max(1, Number((request.query as { limit?: string }).limit ?? 50)));
+    if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    return store.listRuns(id, limit).map((run) => ({ ...run, budget: service.getBudget(run.id) }));
+  });
   app.get("/api/sessions/:id/run", async (request) => {
     const { id } = request.params as { id: string };
-    return store.getLatestRun(id) ?? null;
+    const run = store.getLatestRun(id);
+    return run ? { ...run, budget: service.getBudget(run.id) } : null;
   });
   app.post("/api/sessions/:id/messages", async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -64,7 +71,7 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const { id } = request.params as { id: string };
     const run = service.getRun(id);
     if (!run) return reply.code(404).send({ error: "run not found" });
-    return run;
+    return { ...run, budget: service.getBudget(id) };
   });
   app.get("/api/runs/:id/events", async (request: FastifyRequest, reply: FastifyReply) => {
     const { id } = request.params as { id: string };

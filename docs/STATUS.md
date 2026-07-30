@@ -35,12 +35,15 @@ Updated: 2026-07-30 (Asia/Singapore)
 
 ### HTTP and Web
 
-- Fastify API for sessions, messages, runs, cancellation, steering, resumption, transcript audit, and SSE event replay.
+- Fastify API for sessions, messages, run history, runs, cancellation, steering, resumption, transcript audit, and SSE event replay.
 - Injectable `createApp()` factory for tests and future modules.
 - Responsive React workbench with session navigation, streaming conversation, tool activity, and TaskRun details.
 - Production server serves the built Web application without an additional static-file dependency.
 - Client request IDs support browsers without `crypto.randomUUID`, including `getRandomValues` and legacy fallbacks.
 - Blocked and interrupted runs can be resumed from the Web workbench; the UI exposes the current attempt.
+- The right panel lists up to 50 recent TaskRuns as collapsible history and expands the current/latest Run by default.
+- Dynamic execution budgets scale continuation count, cumulative tokens, and per-attempt timeout across simple/standard/complex/extended tiers, while environment values remain hard ceilings.
+- A deterministic stress test completes a single durable Run after 40 automatic continuations; hundreds of model-backed turns are not yet an acceptance claim.
 
 ### Quality baseline
 

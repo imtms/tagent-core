@@ -145,6 +145,19 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
+  it("assigns dynamic budgets by task complexity and respects hard limits", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const service = new AgentService(store, "/tmp", () => new FakeRuntime([]), { maxContinuations: 40, maxRunTokens: 700_000, runTimeoutMs: 3_000_000 });
+    const simple = store.createRun(session.id, "Say hello");
+    expect(service.getBudget(simple.id)).toEqual({ tier: "simple", maxContinuations: 4, maxTokens: 80_000, runTimeoutMs: 300_000 });
+    const complex = store.createRun(session.id, "Implement and test a multi module frontend backend database migration architecture");
+    for (let index = 0; index < 8; index += 1) store.upsertPlanItem(complex.id, { key: `p${index}`, title: `Step ${index}`, status: "pending", required: true, position: index });
+    for (let index = 0; index < 3; index += 1) store.upsertCheck(complex.id, { key: `c${index}`, title: `Check ${index}`, status: "pending", required: true, command: "", evidence: "", stale: false });
+    expect(service.getBudget(complex.id)).toEqual({ tier: "extended", maxContinuations: 40, maxTokens: 700_000, runTimeoutMs: 3_000_000 });
+    store.close();
+  });
+
   it("automatically continues a gate-blocked run and completes it", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
@@ -170,6 +183,27 @@ describe("AgentService runtime boundary", () => {
     expect(store.listContinuations(run.id)[0]).toMatchObject({ ordinal: 1, status: "completed" });
     expect(store.listMessages(session.id).filter((message) => message.role === "assistant").map((message) => message.content)).toEqual(["done"]);
     expect(runtimes[1].prompts[0]).toContain("Automatic continuation 1");
+    store.close();
+  });
+
+  it("sustains dozens of continuations in one durable run", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let runId = "";
+    let calls = 0;
+    const service = new AgentService(store, "/tmp", () => {
+      calls += 1;
+      return new CallbackRuntime(assistantMessage(calls > 40 ? "done" : "continue"), () => {
+        if (calls > 40) store.upsertPlanItem(runId, { key: "finish", title: "Finish", status: "done", required: true, position: 1 });
+      });
+    }, { dynamicBudget: false, maxContinuations: 64, maxRunTokens: 1_000_000, runTimeoutMs: 60_000 });
+    const run = await service.start(session.id, "long durable run");
+    runId = run.id;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(calls).toBe(41);
+    expect(store.getRun(run.id)).toMatchObject({ status: "completed", attempt: 41 });
+    expect(store.listContinuations(run.id)).toHaveLength(40);
+    expect(store.listContinuations(run.id).every((item) => item.status === "completed" || item.status === "blocked")).toBe(true);
     store.close();
   });
 
