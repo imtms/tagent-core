@@ -4,6 +4,7 @@ import type { Store } from "../store/store.js";
 import { createInProcessRuntime } from "../runtime/factory.js";
 import type { AgentRuntime, RuntimeFactory } from "../runtime/types.js";
 import type { RunEvent, SessionId, RunId, TaskRun } from "../core/types.js";
+import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 
 export class AgentService {
   private readonly runtimes = new Map<RunId, AgentRuntime>();
@@ -13,7 +14,7 @@ export class AgentService {
     private readonly store: Store,
     private readonly workspace: string,
     private readonly runtimeFactory: RuntimeFactory = createInProcessRuntime,
-    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number; contextWindow?: number; dynamicBudget?: boolean } = {},
+    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number; contextWindow?: number; maxContextTurns?: number; contextReserveTokens?: number; dynamicBudget?: boolean } = {},
   ) {
     this.store.markInterrupted();
   }
@@ -36,8 +37,9 @@ export class AgentService {
     const run = this.store.createRun(sessionId, query, requestId);
     const sessionHistory = this.prepareSessionHistory(run, query);
     this.store.appendMessage(sessionId, "user", query);
-    this.publish(this.store.appendEvent(run.id, "run.started", { goal: query, sessionHistoryCount: sessionHistory.length }));
-    this.launch(run, query, sessionHistory);
+    this.publish(this.store.appendEvent(run.id, "run.started", { goal: query, sessionHistoryCount: sessionHistory.messages.length }));
+    this.publishContextEvents(run.id, sessionHistory);
+    this.launch(run, query, sessionHistory.messages);
     return run;
   }
 
@@ -194,9 +196,11 @@ export class AgentService {
     }
     this.store.updateContinuation(continuation.id, "running");
     const run = this.store.resumeRun(runId);
-    const transcript = this.prepareTranscript(runId);
-    this.publish(this.store.appendEvent(runId, "continuation.started", { continuationId: continuation.id, ordinal: continuation.ordinal, attempt: run.attempt, transcriptCount: transcript.length }));
-    this.launch(run, this.buildContinuationPrompt(run, continuation.ordinal), transcript, continuation.id);
+    const prompt = this.buildContinuationPrompt(run, continuation.ordinal);
+    const transcript = this.prepareTranscript(run, prompt);
+    this.publishContextEvents(runId, transcript);
+    this.publish(this.store.appendEvent(runId, "continuation.started", { continuationId: continuation.id, ordinal: continuation.ordinal, attempt: run.attempt, transcriptCount: transcript.messages.length }));
+    this.launch(run, prompt, transcript.messages, continuation.id);
   }
 
   private buildContinuationPrompt(run: TaskRun, ordinal: number) {
@@ -257,39 +261,18 @@ export class AgentService {
     if (this.runtimes.has(runId)) throw new Error("Run is already active");
     this.store.cancelQueuedContinuations(runId, "Superseded by manual resume");
     const run = this.store.resumeRun(runId);
-    const transcript = this.prepareTranscript(run.id);
-    const event = this.store.appendEvent(run.id, "run.resumed", { attempt: run.attempt, resumedAt: run.resumedAt, mode: transcript.length ? "transcript-continuation" : "durable-snapshot-replay", transcriptCount: transcript.length });
+    const provisionalPrompt = this.buildResumePrompt(run, this.store.listTranscript(run.id).length);
+    const transcript = this.prepareTranscript(run, provisionalPrompt);
+    const prompt = this.buildResumePrompt(run, transcript.messages.length);
+    this.publishContextEvents(run.id, transcript);
+    const event = this.store.appendEvent(run.id, "run.resumed", { attempt: run.attempt, resumedAt: run.resumedAt, mode: transcript.messages.length ? "transcript-continuation" : "durable-snapshot-replay", transcriptCount: transcript.messages.length });
     this.publish(event);
-    this.launch(run, this.buildResumePrompt(run, transcript.length), transcript);
+    this.launch(run, prompt, transcript.messages);
     return run;
   }
 
-  private prepareTranscript(runId: RunId) {
-    const messages = this.store.listTranscript(runId);
-    const contextWindow = this.runtimeDefaults.contextWindow ?? this.runtimeDefaults.model?.contextWindow ?? 200_000;
-    const budget = Math.max(1_000, Math.floor(contextWindow * 0.75));
-    const estimate = (message: AgentMessage) => {
-      const jsonTokens = Math.ceil(JSON.stringify(message).length / 4);
-      return message.role === "assistant" ? Math.max(jsonTokens, message.usage.totalTokens) : jsonTokens;
-    };
-    const turns: AgentMessage[][] = [];
-    for (const message of messages) {
-      if (message.role === "user" || turns.length === 0) turns.push([message]);
-      else turns.at(-1)!.push(message);
-    }
-    const keptTurns: AgentMessage[][] = [];
-    let used = 0;
-    for (let index = turns.length - 1; index >= 0; index -= 1) {
-      const turnTokens = turns[index].reduce((sum, message) => sum + estimate(message), 0);
-      if (used + turnTokens > budget && keptTurns.length > 0) break;
-      used += turnTokens;
-      keptTurns.unshift(turns[index]);
-    }
-    const kept = keptTurns.flat();
-    if (kept.length < messages.length) {
-      this.publish(this.store.appendEvent(runId, "context.pruned", { originalMessages: messages.length, keptMessages: kept.length, estimatedTokens: used, budget }));
-    }
-    return kept;
+  private prepareTranscript(run: TaskRun, prompt: string) {
+    return this.contextAssembler().assemble("transcript", this.store.listTranscript(run.id), this.buildSystemPrompt(run), prompt);
   }
 
   private prepareSessionHistory(run: TaskRun, query: string) {
@@ -307,43 +290,25 @@ export class AgentService {
             stopReason: "stop",
             timestamp: message.createdAt,
           });
-    if (history.length === 0) return [];
+    return this.contextAssembler().assemble("session", history, this.buildSystemPrompt(run), query);
+  }
 
+  private contextAssembler() {
     const contextWindow = this.runtimeDefaults.contextWindow ?? this.runtimeDefaults.model?.contextWindow ?? 200_000;
-    const systemTokens = Math.ceil(this.buildSystemPrompt(run).length / 4);
-    const queryTokens = Math.ceil(query.length / 4);
-    const outputReserve = Math.max(1_000, Math.floor(contextWindow * 0.2));
-    const budget = Math.max(0, contextWindow - systemTokens - queryTokens - outputReserve);
-    const turns: AgentMessage[][] = [];
-    for (const message of history) {
-      if (message.role === "user" || turns.length === 0) turns.push([message]);
-      else turns.at(-1)!.push(message);
+    return new ContextAssembler({
+      contextWindow,
+      maxOutputTokens: this.runtimeDefaults.model?.maxTokens ?? Math.min(32_768, Math.floor(contextWindow * 0.2)),
+      maxTurns: this.runtimeDefaults.maxContextTurns ?? 20,
+      reserveTokens: this.runtimeDefaults.contextReserveTokens,
+    });
+  }
+
+  private publishContextEvents(runId: RunId, assembly: ContextAssembly) {
+    const { source, ...stats } = assembly.stats;
+    this.publish(this.store.appendEvent(runId, "context.loaded", { source, ...stats }));
+    if (stats.droppedTurns > 0 || stats.compressedTurns > 0) {
+      this.publish(this.store.appendEvent(runId, "context.pruned", { source, ...stats }));
     }
-    const keptTurns: AgentMessage[][] = [];
-    let estimatedTokens = 0;
-    for (let index = turns.length - 1; index >= 0; index -= 1) {
-      const turnTokens = turns[index].reduce((sum, message) => sum + Math.ceil(JSON.stringify(message).length / 4), 0);
-      if (estimatedTokens + turnTokens > budget) break;
-      estimatedTokens += turnTokens;
-      keptTurns.unshift(turns[index]);
-    }
-    const kept = keptTurns.flat();
-    this.publish(this.store.appendEvent(run.id, "context.session_loaded", {
-      originalMessages: history.length,
-      keptMessages: kept.length,
-      estimatedTokens,
-      budget,
-    }));
-    if (kept.length < history.length) {
-      this.publish(this.store.appendEvent(run.id, "context.pruned", {
-        source: "session",
-        originalMessages: history.length,
-        keptMessages: kept.length,
-        estimatedTokens,
-        budget,
-      }));
-    }
-    return kept;
   }
 
   private buildResumePrompt(run: TaskRun, transcriptCount: number) {

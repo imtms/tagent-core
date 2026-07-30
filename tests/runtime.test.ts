@@ -102,19 +102,26 @@ describe("AgentService runtime boundary", () => {
     expect(options?.initialMessages?.[1]).toMatchObject({ role: "assistant", content: [{ type: "text", text: "The project codename is Atlas." }] });
     expect(runtime.prompts).toEqual(["What is the project codename?"]);
     expect(JSON.stringify(options?.initialMessages)).not.toContain("What is the project codename?");
-    expect(store.listEvents(run.id).some((event) => event.type === "context.session_loaded" && event.data.keptMessages === 2)).toBe(true);
+    expect(store.listEvents(run.id).some((event) => event.type === "context.loaded"
+      && event.data.source === "session"
+      && event.data.keptMessages === 2
+      && typeof event.data.systemTokens === "number"
+      && typeof event.data.promptTokens === "number"
+      && typeof event.data.outputReserveTokens === "number"
+      && typeof event.data.safetyReserveTokens === "number"
+      && typeof event.data.messageBudgetTokens === "number")).toBe(true);
     store.close();
   });
 
   it("prunes session history by complete turns for a new run", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    store.appendMessage(session.id, "user", `old-${"A".repeat(2400)}`);
-    store.appendMessage(session.id, "assistant", `old-${"B".repeat(2400)}`);
+    store.appendMessage(session.id, "user", `old-${"A".repeat(12_000)}`);
+    store.appendMessage(session.id, "assistant", `old-${"B".repeat(12_000)}`);
     store.appendMessage(session.id, "user", "latest user fact");
     store.appendMessage(session.id, "assistant", "latest assistant answer");
     let options: Parameters<RuntimeFactory>[0] | undefined;
-    const service = new AgentService(store, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 2_000 });
+    const service = new AgentService(store, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 2_000, contextReserveTokens: 200, model: { contextWindow: 2_000, maxTokens: 200 } as never });
 
     const run = await service.start(session.id, "follow up");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -207,11 +214,11 @@ describe("AgentService runtime boundary", () => {
     for (const message of [oldUser, oldAssistant, newUser, newAssistant]) store.appendTranscript(run.id, 1, message);
     store.blockRun(run.id, "gate");
     let options: Parameters<RuntimeFactory>[0] | undefined;
-    const service = new AgentService(store, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 1_000 });
+    const service = new AgentService(store, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 1_000, contextReserveTokens: 100, model: { contextWindow: 1_000, maxTokens: 100 } as never });
     service.resume(run.id);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(options?.initialMessages).toEqual([newUser, newAssistant]);
-    expect(store.listEvents(run.id).some((event) => event.type === "context.pruned" && event.data.originalMessages === 4 && event.data.keptMessages === 2)).toBe(true);
+    expect(store.listEvents(run.id).some((event) => event.type === "context.pruned" && event.data.source === "transcript" && event.data.originalMessages === 4 && event.data.keptMessages === 2)).toBe(true);
     store.close();
   });
 

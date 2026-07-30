@@ -22,6 +22,8 @@ export interface AppConfig {
   runHardTimeoutMs: number;
   maxContinuations: number;
   maxRunTokens: number;
+  maxContextTurns: number;
+  contextReserveTokens?: number;
   dynamicBudget: boolean;
   model: ModelConfig;
 }
@@ -59,6 +61,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     runHardTimeoutMs: positiveInteger(env.TAGENT_RUN_HARD_TIMEOUT_MS, 86_400_000, "TAGENT_RUN_HARD_TIMEOUT_MS"),
     maxContinuations: nonNegativeInteger(env.TAGENT_MAX_CONTINUATIONS, 128, "TAGENT_MAX_CONTINUATIONS"),
     maxRunTokens: positiveInteger(env.TAGENT_MAX_RUN_TOKENS, 2_000_000, "TAGENT_MAX_RUN_TOKENS"),
+    maxContextTurns: positiveInteger(env.TAGENT_MAX_CONTEXT_TURNS, 20, "TAGENT_MAX_CONTEXT_TURNS"),
+    contextReserveTokens: env.TAGENT_CONTEXT_RESERVE_TOKENS === undefined ? undefined : positiveInteger(env.TAGENT_CONTEXT_RESERVE_TOKENS, 10_000, "TAGENT_CONTEXT_RESERVE_TOKENS"),
     dynamicBudget: env.TAGENT_DYNAMIC_BUDGET !== "false",
     model: {
       provider: env.TAGENT_PROVIDER ?? "openai-compatible",
@@ -85,6 +89,8 @@ export interface PublicRuntimeConfig {
   runHardTimeoutMs: number;
   maxContinuations: number;
   maxRunTokens: number;
+  maxContextTurns: number;
+  contextReserveTokens?: number;
   dynamicBudget: boolean;
   schemaVersion?: number;
 }
@@ -103,6 +109,8 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     runHardTimeoutMs: config.runHardTimeoutMs,
     maxContinuations: config.maxContinuations,
     maxRunTokens: config.maxRunTokens,
+    maxContextTurns: config.maxContextTurns,
+    contextReserveTokens: config.contextReserveTokens,
     dynamicBudget: config.dynamicBudget,
     schemaVersion,
   };

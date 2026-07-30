@@ -13,7 +13,7 @@ const service = new AgentService(
   store,
   config.workspace,
   resolveRuntimeFactory(config.runtime),
-  { model: createModel(config.model), apiKey: config.apiKey, providerTimeoutMs: config.providerTimeoutMs, providerMaxRetries: config.providerMaxRetries, runTimeoutMs: config.runTimeoutMs, runHardTimeoutMs: config.runHardTimeoutMs, maxContinuations: config.maxContinuations, maxRunTokens: config.maxRunTokens, contextWindow: config.model.contextWindow, dynamicBudget: config.dynamicBudget },
+  { model: createModel(config.model), apiKey: config.apiKey, providerTimeoutMs: config.providerTimeoutMs, providerMaxRetries: config.providerMaxRetries, runTimeoutMs: config.runTimeoutMs, runHardTimeoutMs: config.runHardTimeoutMs, maxContinuations: config.maxContinuations, maxRunTokens: config.maxRunTokens, contextWindow: config.model.contextWindow, maxContextTurns: config.maxContextTurns, contextReserveTokens: config.contextReserveTokens, dynamicBudget: config.dynamicBudget },
 );
 const app = createApp({ store, service, runtimeConfig: publicRuntimeConfig(config, store.getSchemaVersion()) });
 service.recoverContinuations();
