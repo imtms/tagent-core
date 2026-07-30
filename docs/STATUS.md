@@ -6,7 +6,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 
 ### Core control plane
 
-- SQLite-backed sessions, ordered conversation messages, and Schema v5 durable event-consumer cursors.
+- SQLite-backed sessions, ordered conversation messages, Schema v5 durable event-consumer cursors, and Schema v6 durable control inbox records.
 - Durable TaskRun records with goal, phase, status, plan items, checks, artifacts, ordered events, and Schema v4 Run checkpoints.
 - Deterministic completion gate that prevents a model response from directly marking a run complete.
 - Request idempotency through stable `requestId` values.
@@ -129,6 +129,6 @@ Updated: 2026-07-30 (Asia/Singapore)
 - The first Web interface does not expose model/runtime selection or provider health.
 - Multiple TAgent Core processes must not target the same SQLite database; process-level leader enforcement is not implemented.
 - Continuation attempts heartbeat, use owner fencing, and only expire into recovery after the persisted lease deadline; process-level leader election remains absent.
-- Cancel/resume transcript repair is implemented. Steering and follow-up use Pi only while `AgentSession.isStreaming`; settled runtimes reject admission, queue snapshots and settled state are persisted, and cancellation clears/audits Pi pending input. TAgent still lacks a bounded durable control-plane inbox and explicit closing/full responses.
+- Cancel/resume transcript repair is implemented. Steering and follow-up enter a bounded, idempotent Schema v6 control inbox before serial delivery to Pi; settled runtimes reject delivery, old-attempt input is superseded, restart-ambiguous delivery becomes `outcome_unknown`, and the API returns explicit closing/full/inactive responses.
 - Provider failures are typed and auditable, but retry scheduling still uses the provider SDK/pi boundary rather than a TAgent-owned retry loop.
 - The HTTP API has no authentication or multi-tenant isolation and must remain on localhost or a trusted private network for this alpha.

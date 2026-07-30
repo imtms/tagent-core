@@ -4,6 +4,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type {
   Artifact,
   CompletionGate,
+  ControlInboxItem,
   Message,
   PlanItem,
   RunCheck,
@@ -20,7 +21,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 export class Store {
   readonly db: Database.Database;
@@ -169,6 +170,21 @@ export class Store {
         PRIMARY KEY (run_id, seq)
       );
       CREATE INDEX IF NOT EXISTS idx_transcript_run ON run_transcript(run_id, seq);
+      CREATE TABLE IF NOT EXISTS control_inbox (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        request_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('steer', 'follow_up')),
+        content TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        claimed_at INTEGER,
+        completed_at INTEGER,
+        UNIQUE(run_id, request_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_control_inbox_delivery ON control_inbox(run_id, attempt, status, created_at);
       CREATE TABLE IF NOT EXISTS event_consumers (
         run_id TEXT NOT NULL REFERENCES runs(id),
         consumer_id TEXT NOT NULL,
@@ -279,6 +295,7 @@ export class Store {
     });
     migration();
     this.db.prepare("UPDATE operations SET status = 'outcome_unknown', stage = 'service_restart', error = 'Service restarted before operation outcome was recorded', updated_at = ? WHERE status = 'running'").run(now());
+    this.db.prepare("UPDATE control_inbox SET status = 'outcome_unknown', error = 'Service restarted while Pi delivery outcome was unknown', completed_at = ? WHERE status = 'delivering'").run(now());
   }
 
   getSchemaVersion() {
@@ -784,6 +801,51 @@ export class Store {
       return "accepted" as const;
     });
     return transaction();
+  }
+
+  enqueueControl(runId: RunId, requestId: string, kind: ControlInboxItem["kind"], content: string, capacity: number) {
+    const transaction = this.db.transaction(() => {
+      const existing = this.db.prepare("SELECT id FROM control_inbox WHERE run_id = ? AND request_id = ?").get(runId, requestId) as { id: string } | undefined;
+      if (existing) return { status: "duplicate" as const, item: this.getControlItem(existing.id)! };
+      const run = this.db.prepare("SELECT status, attempt FROM runs WHERE id = ?").get(runId) as { status: RunStatus; attempt: number } | undefined;
+      if (!run || run.status !== "running") return { status: "inactive" as const };
+      const active = (this.db.prepare("SELECT COUNT(*) as count FROM control_inbox WHERE run_id = ? AND attempt = ? AND status IN ('queued','delivering')").get(runId, run.attempt) as { count: number }).count;
+      if (active >= capacity) return { status: "full" as const };
+      const item: ControlInboxItem = { id: randomUUID(), runId, requestId, attempt: run.attempt, kind, content, status: "queued", error: "", createdAt: now(), claimedAt: null, completedAt: null };
+      this.db.prepare(`INSERT INTO control_inbox (id, run_id, request_id, attempt, kind, content, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)`).run(item.id, runId, requestId, item.attempt, kind, content, item.createdAt);
+      return { status: "accepted" as const, item };
+    });
+    return transaction();
+  }
+
+  getControlItem(id: string): ControlInboxItem | undefined {
+    return this.db.prepare(`SELECT id, run_id as runId, request_id as requestId, attempt, kind, content, status, error,
+      created_at as createdAt, claimed_at as claimedAt, completed_at as completedAt FROM control_inbox WHERE id = ?`).get(id) as ControlInboxItem | undefined;
+  }
+
+  listControlInbox(runId: RunId): ControlInboxItem[] {
+    return this.db.prepare(`SELECT id, run_id as runId, request_id as requestId, attempt, kind, content, status, error,
+      created_at as createdAt, claimed_at as claimedAt, completed_at as completedAt FROM control_inbox WHERE run_id = ? ORDER BY created_at, id`).all(runId) as ControlInboxItem[];
+  }
+
+  claimControlItem(runId: RunId, attempt: number) {
+    const transaction = this.db.transaction(() => {
+      this.db.prepare(`UPDATE control_inbox SET status = 'superseded', error = 'Run attempt advanced before delivery', completed_at = ?
+        WHERE run_id = ? AND status = 'queued' AND attempt <> ?`).run(now(), runId, attempt);
+      const row = this.db.prepare(`SELECT id FROM control_inbox WHERE run_id = ? AND attempt = ? AND status = 'queued'
+        ORDER BY created_at, id LIMIT 1`).get(runId, attempt) as { id: string } | undefined;
+      if (!row) return undefined;
+      const claimedAt = now();
+      const result = this.db.prepare("UPDATE control_inbox SET status = 'delivering', claimed_at = ? WHERE id = ? AND status = 'queued'").run(claimedAt, row.id);
+      return result.changes === 1 ? this.getControlItem(row.id) : undefined;
+    });
+    return transaction();
+  }
+
+  completeControlItem(id: string, status: "delivered" | "rejected" | "superseded", error = "") {
+    return this.db.prepare(`UPDATE control_inbox SET status = ?, error = ?, completed_at = ? WHERE id = ? AND status = 'delivering'`)
+      .run(status, error, now(), id).changes === 1;
   }
 
   listEvents(runId: RunId, after = 0): RunEvent[] {

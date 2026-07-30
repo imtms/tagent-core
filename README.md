@@ -107,6 +107,7 @@ model:    gpt-5.6-sol
 | `TAGENT_MAX_CONTINUATIONS` | `128` | Hard automatic continuation ceiling |
 | `TAGENT_MAX_RUN_TOKENS` | `2000000` | Hard cumulative Run token ceiling |
 | `TAGENT_MAX_CONTEXT_TURNS` | `20` | Maximum complete turns loaded into a new runtime context |
+| `TAGENT_CONTROL_INBOX_CAPACITY` | `32` | Maximum queued/delivering steer and follow-up controls for an active Run attempt. |
 | `TAGENT_CONTEXT_RESERVE_TOKENS` | automatic | Optional explicit context safety reserve |
 | `TAGENT_DYNAMIC_BUDGET` | `true` | Enable complexity-based soft budgets |
 | `TAGENT_DB` | `./data/tagent.db` | SQLite database path |

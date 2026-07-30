@@ -48,6 +48,31 @@ describe("HTTP API", () => {
     expect(response.statusCode).toBe(400);
   });
 
+  it("exposes idempotent durable control admission and inbox inspection", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
+    const store = new Store(":memory:");
+    class ActiveRuntime {
+      private resolvePrompt?: () => void;
+      prompt() { return new Promise<void>((resolve) => { this.resolvePrompt = resolve; }); }
+      async steer() { return "accepted" as const; }
+      abort() { this.resolvePrompt?.(); }
+      getMessages() { return []; }
+      getError() { return undefined; }
+    }
+    const service = new AgentService(store, workspace, () => new ActiveRuntime());
+    const app = createApp({ store, service, logger: false, webRoot: workspace });
+    apps.push(app);
+    const session = store.createSession();
+    const run = await service.start(session.id, "control api");
+    const first = await app.inject({ method: "POST", url: `/api/runs/${run.id}/steer`, payload: { content: "change", requestId: "request-1" } });
+    const duplicate = await app.inject({ method: "POST", url: `/api/runs/${run.id}/steer`, payload: { content: "change", requestId: "request-1" } });
+    expect(first.statusCode).toBe(200);
+    expect(duplicate.statusCode).toBe(200);
+    const inbox = (await app.inject({ method: "GET", url: `/api/runs/${run.id}/control-inbox` })).json();
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]).toMatchObject({ requestId: "request-1", kind: "steer", status: "delivered" });
+  });
+
   it("claims consumers and rejects stale or invalid ACKs", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
     const store = new Store(":memory:");

@@ -38,7 +38,9 @@ The runtime adapter therefore performs the atomic runtime-level policy available
 
 This closes the short window where AgentService still owns a runtime object after Pi has settled.
 
-A future durable inbox remains a TAgent concern. It should persist control input first, claim it against a specific Run attempt, then hand it to Pi while streaming. Pi remains the queue executor; SQLite provides restart durability and admission control.
+Schema v6 implements that durable inbox. TAgent persists control input first, deduplicates by `(run, requestId)`, binds it to the current Run attempt, applies a bounded capacity, and serially claims delivery before calling Pi. Pi remains the queue executor after delivery.
+
+Delivery states are `queued → delivering → delivered/rejected`. A process restart converts `delivering` to `outcome_unknown` rather than replaying it, because Pi may already have accepted the message before the SQLite receipt was written. Queued items from an older attempt become `superseded` and are never injected into a newer attempt.
 
 ## Cancellation
 

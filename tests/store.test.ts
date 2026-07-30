@@ -21,6 +21,38 @@ describe("Store", () => {
     expect(store.listMessages(session.id).map((message) => message.content)).toEqual(["hello", "world"]);
   });
 
+  it("marks in-flight control delivery outcome unknown after restart", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "control-restart.db");
+    const first = new Store(filename);
+    const session = first.createSession();
+    const run = first.createRun(session.id, "control restart");
+    const admitted = first.enqueueControl(run.id, "request-1", "steer", "change", 4);
+    expect(first.claimControlItem(run.id, 1)).toMatchObject({ id: admitted.item!.id, status: "delivering" });
+    first.close();
+    const second = new Store(filename);
+    expect(second.getControlItem(admitted.item!.id)).toMatchObject({ status: "outcome_unknown", error: expect.stringContaining("outcome was unknown") });
+    second.close();
+  });
+
+  it("persists, deduplicates, bounds, and attempt-fences control inbox items", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "control inbox");
+    const first = store.enqueueControl(run.id, "request-1", "steer", "change", 1);
+    expect(first).toMatchObject({ status: "accepted", item: { attempt: 1, status: "queued" } });
+    expect(store.enqueueControl(run.id, "request-1", "steer", "change", 1)).toMatchObject({ status: "duplicate", item: { id: first.item!.id } });
+    expect(store.enqueueControl(run.id, "request-2", "follow_up", "later", 1)).toEqual({ status: "full" });
+    expect(store.claimControlItem(run.id, 1)).toMatchObject({ id: first.item!.id, status: "delivering" });
+    expect(store.completeControlItem(first.item!.id, "delivered")).toBe(true);
+    expect(store.listControlInbox(run.id)[0]).toMatchObject({ status: "delivered", completedAt: expect.any(Number) });
+
+    const second = store.enqueueControl(run.id, "request-2", "follow_up", "later", 1);
+    expect(second.status).toBe("accepted");
+    store.db.prepare("UPDATE runs SET attempt = 2 WHERE id = ?").run(run.id);
+    expect(store.claimControlItem(run.id, 2)).toBeUndefined();
+    expect(store.getControlItem(second.item!.id)).toMatchObject({ status: "superseded" });
+  });
+
   it("persists event consumer ACKs and fences stale generations", () => {
     const store = createStore();
     const session = store.createSession();
@@ -234,17 +266,17 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(5);
+    expect(store.getSchemaVersion()).toBe(6);
   });
 
-  it("migrates an older database to schema version 5", () => {
+  it("migrates an older database to schema version 6", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(5);
-    expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('event_consumers', 'operations', 'run_checkpoints', 'tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["event_consumers", "operations", "run_checkpoints", "tool_attempts"]);
+    expect(migrated.getSchemaVersion()).toBe(6);
+    expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('control_inbox', 'event_consumers', 'operations', 'run_checkpoints', 'tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["control_inbox", "event_consumers", "operations", "run_checkpoints", "tool_attempts"]);
     migrated.close();
   });
 

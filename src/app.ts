@@ -52,20 +52,21 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
   });
   app.post("/api/runs/:id/steer", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = request.body as { content?: string };
+    const body = request.body as { content?: string; requestId?: string };
     if (!body?.content?.trim()) return reply.code(400).send({ error: "content is required" });
-    const status = await service.steer(id, body.content.trim());
-    if (status === "inactive") return reply.code(409).send({ error: "run is not active", status });
-    if (status === "failed") return reply.code(409).send({ error: "steer was rejected", status });
-    return { ok: true, status };
+    const result = await service.steer(id, body.content.trim(), body.requestId);
+    const status = result.status;
+    if (status !== "accepted") return reply.code(status === "full" ? 429 : 409).send({ error: status === "inactive" ? "run is not active" : status === "closing" ? "service is closing" : "control inbox is full", status });
+    return { ok: true, ...result };
   });
   app.post("/api/runs/:id/follow-up", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = request.body as { content?: string };
+    const body = request.body as { content?: string; requestId?: string };
     if (!body?.content?.trim()) return reply.code(400).send({ error: "content is required" });
-    const status = await service.followUp(id, body.content.trim());
-    if (status !== "accepted") return reply.code(409).send({ error: status === "inactive" ? "run is not active" : "follow-up was rejected", status });
-    return { ok: true, status };
+    const result = await service.followUp(id, body.content.trim(), body.requestId);
+    const status = result.status;
+    if (status !== "accepted") return reply.code(status === "full" ? 429 : 409).send({ error: status === "inactive" ? "run is not active" : status === "closing" ? "service is closing" : "control inbox is full", status });
+    return { ok: true, ...result };
   });
   app.post("/api/runs/:id/compact", async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -78,6 +79,11 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const { id } = request.params as { id: string };
     try { return service.resume(id); }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+  app.get("/api/runs/:id/control-inbox", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!service.getRun(id)) return reply.code(404).send({ error: "run not found" });
+    return store.listControlInbox(id);
   });
   app.get("/api/runs/:id/operations", async (request, reply) => {
     const { id } = request.params as { id: string };

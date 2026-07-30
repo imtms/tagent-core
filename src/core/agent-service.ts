@@ -9,6 +9,7 @@ import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 export class AgentService {
   private readonly runtimes = new Map<RunId, AgentRuntime>();
   private readonly executionTasks = new Map<RunId, Promise<void>>();
+  private readonly controlDeliveryTasks = new Map<RunId, Promise<void>>();
   private readonly checkpointDrafts = new Map<RunId, Omit<RunCheckpoint, "updatedAt" | "lastTranscriptSeq">>();
   private readonly checkpointTimers = new Map<RunId, ReturnType<typeof setTimeout>>();
   private readonly listeners = new Map<RunId, Set<(event: RunEvent) => void>>();
@@ -20,7 +21,7 @@ export class AgentService {
     private readonly store: Store,
     private readonly workspace: string,
     private readonly runtimeFactory: RuntimeFactory = createInProcessRuntime,
-    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number; contextWindow?: number; maxContextTurns?: number; contextReserveTokens?: number; dynamicBudget?: boolean } = {},
+    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number; contextWindow?: number; maxContextTurns?: number; contextReserveTokens?: number; dynamicBudget?: boolean; controlInboxCapacity?: number } = {},
   ) {
     this.store.markInterrupted();
   }
@@ -69,19 +70,63 @@ export class AgentService {
     }
   }
 
-  async followUp(runId: RunId, instruction: string) {
+  async followUp(runId: RunId, instruction: string, requestId: string = randomUUID()) {
+    return this.enqueueControl(runId, "follow_up", instruction, requestId);
+  }
+
+  private async enqueueControl(runId: RunId, kind: "steer" | "follow_up", instruction: string, requestId: string) {
+    if (this.closing) return { status: "closing" as const };
+    const admission = this.store.enqueueControl(runId, requestId, kind, instruction, this.runtimeDefaults.controlInboxCapacity ?? 32);
+    if (admission.status !== "accepted" && admission.status !== "duplicate") return { status: admission.status };
+    const item = admission.item;
+    this.publish(this.store.appendEvent(runId, admission.status === "duplicate" ? "control.duplicate" : "control.accepted", { controlId: item.id, requestId, attempt: item.attempt, kind }));
+    if (admission.status === "accepted") {
+      await this.scheduleControlDelivery(runId, item.attempt);
+      if (this.store.getControlItem(item.id)?.status === "queued") await this.scheduleControlDelivery(runId, item.attempt);
+    }
+    const persisted = this.store.getControlItem(item.id)!;
+    const status = persisted.status === "delivered" ? "accepted" as const
+      : persisted.status === "queued" || persisted.status === "delivering" ? "accepted" as const
+      : "inactive" as const;
+    return { status, item: persisted };
+  }
+
+  private scheduleControlDelivery(runId: RunId, attempt: number) {
+    const active = this.controlDeliveryTasks.get(runId);
+    if (active) return active;
+    const task = this.deliverControlInbox(runId, attempt).finally(() => {
+      if (this.controlDeliveryTasks.get(runId) === task) this.controlDeliveryTasks.delete(runId);
+    });
+    this.controlDeliveryTasks.set(runId, task);
+    return task;
+  }
+
+  private async deliverControlInbox(runId: RunId, attempt: number) {
     const runtime = this.runtimes.get(runId);
-    if (!runtime?.followUp) return "inactive" as const;
-    try {
-      const result = await runtime.followUp(instruction);
-      if (result === "settled") return "inactive" as const;
+    if (!runtime || this.closing) return;
+    while (true) {
+      const current = this.store.getRun(runId);
+      if (!current || current.status !== "running" || current.attempt !== attempt) return;
+      const item = this.store.claimControlItem(runId, attempt);
+      if (!item) return;
+      this.publish(this.store.appendEvent(runId, "control.delivering", { controlId: item.id, requestId: item.requestId, attempt, kind: item.kind }));
+      try {
+        const result = item.kind === "steer" ? await runtime.steer(item.content) : runtime.followUp ? await runtime.followUp(item.content) : "settled";
+        if (result === "accepted") {
+          this.store.completeControlItem(item.id, "delivered");
+          this.publish(this.store.appendEvent(runId, "control.delivered", { controlId: item.id, requestId: item.requestId, attempt, kind: item.kind }));
+          continue;
+        }
+        this.store.completeControlItem(item.id, "rejected", "Pi session already settled");
+        this.publish(this.store.appendEvent(runId, "control.rejected", { controlId: item.id, requestId: item.requestId, attempt, kind: item.kind, reason: "pi_settled" }));
+        return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.store.completeControlItem(item.id, "rejected", message);
+        this.publish(this.store.appendEvent(runId, "control.rejected", { controlId: item.id, requestId: item.requestId, attempt, kind: item.kind, reason: message }));
+        return;
+      }
     }
-    catch (error) {
-      this.publish(this.store.appendEvent(runId, "run.follow_up.failed", { error: error instanceof Error ? error.message : String(error) }));
-      return "failed" as const;
-    }
-    this.publish(this.store.appendEvent(runId, "run.follow_up.queued", { instruction }));
-    return "accepted" as const;
   }
 
   async compact(runId: RunId, instructions?: string) {
@@ -120,6 +165,7 @@ export class AgentService {
     this.closing = true;
     if (this.continuationRecoveryTimer) clearTimeout(this.continuationRecoveryTimer);
     this.continuationRecoveryTimer = undefined;
+    await Promise.allSettled([...this.controlDeliveryTasks.values()]);
     for (const timer of this.checkpointTimers.values()) clearTimeout(timer);
     this.checkpointTimers.clear();
     for (const runId of this.checkpointDrafts.keys()) this.flushCheckpoint(runId);
@@ -369,19 +415,8 @@ export class AgentService {
     return true;
   }
 
-  async steer(runId: RunId, instruction: string) {
-    const runtime = this.runtimes.get(runId);
-    if (!runtime) return "inactive" as const;
-    try {
-      const result = await runtime.steer(instruction);
-      if (result === "settled") return "inactive" as const;
-    }
-    catch (error) {
-      this.publish(this.store.appendEvent(runId, "run.steer.failed", { error: error instanceof Error ? error.message : String(error) }));
-      return "failed" as const;
-    }
-    this.publish(this.store.appendEvent(runId, "run.steered", { instruction }));
-    return "accepted" as const;
+  async steer(runId: RunId, instruction: string, requestId: string = randomUUID()) {
+    return this.enqueueControl(runId, "steer", instruction, requestId);
   }
 
   subscribe(runId: RunId, listener: (event: RunEvent) => void) {

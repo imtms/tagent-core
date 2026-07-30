@@ -25,6 +25,7 @@ export interface AppConfig {
   maxContextTurns: number;
   contextReserveTokens?: number;
   dynamicBudget: boolean;
+  controlInboxCapacity: number;
   model: ModelConfig;
 }
 
@@ -64,6 +65,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     maxContextTurns: positiveInteger(env.TAGENT_MAX_CONTEXT_TURNS, 20, "TAGENT_MAX_CONTEXT_TURNS"),
     contextReserveTokens: env.TAGENT_CONTEXT_RESERVE_TOKENS === undefined ? undefined : positiveInteger(env.TAGENT_CONTEXT_RESERVE_TOKENS, 10_000, "TAGENT_CONTEXT_RESERVE_TOKENS"),
     dynamicBudget: env.TAGENT_DYNAMIC_BUDGET !== "false",
+    controlInboxCapacity: positiveInteger(env.TAGENT_CONTROL_INBOX_CAPACITY, 32, "TAGENT_CONTROL_INBOX_CAPACITY"),
     model: {
       provider: env.TAGENT_PROVIDER ?? "openai-compatible",
       modelId: env.TAGENT_MODEL ?? "gpt-5.6-sol",
@@ -92,6 +94,7 @@ export interface PublicRuntimeConfig {
   maxContextTurns: number;
   contextReserveTokens?: number;
   dynamicBudget: boolean;
+  controlInboxCapacity: number;
   schemaVersion?: number;
 }
 
@@ -112,6 +115,7 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     maxContextTurns: config.maxContextTurns,
     contextReserveTokens: config.contextReserveTokens,
     dynamicBudget: config.dynamicBudget,
+    controlInboxCapacity: config.controlInboxCapacity,
     schemaVersion,
   };
 }

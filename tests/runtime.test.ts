@@ -12,7 +12,7 @@ class CheckpointRuntime implements AgentRuntime {
   private resolvePrompt?: () => void;
   constructor(private readonly options: Parameters<RuntimeFactory>[0]) {}
   prompt() { return new Promise<void>((resolve) => { this.resolvePrompt = resolve; }); }
-  async steer() {}
+  async steer() { return "accepted" as const; }
   abort() { this.resolvePrompt?.(); }
   getMessages() { return []; }
   getError() { return undefined; }
@@ -28,7 +28,7 @@ class ControlledRuntime implements AgentRuntime {
   private rejectPrompt?: (error: Error) => void;
   constructor(private readonly messages: AgentMessage[]) {}
   prompt() { return new Promise<void>((resolve, reject) => { this.resolvePrompt = resolve; this.rejectPrompt = reject; }); }
-  async steer() {}
+  async steer() { return "accepted" as const; }
   abort() {}
   resolve() { this.resolvePrompt?.(); }
   reject(error: Error) { this.rejectPrompt?.(error); }
@@ -42,9 +42,20 @@ class FakeRuntime implements AgentRuntime {
   prompts: string[] = [];
   constructor(private readonly messages: AgentMessage[]) {}
   async prompt(query: string) { this.prompts.push(query); }
-  async steer(instruction: string) { this.steered.push(instruction); }
+  async steer(instruction: string) { this.steered.push(instruction); return "accepted" as const; }
   abort() { this.aborted = true; }
   getMessages() { return this.messages; }
+  getError() { return undefined; }
+}
+
+class InboxRuntime implements AgentRuntime {
+  private resolvePrompt?: () => void;
+  delivered: Array<{ kind: string; content: string }> = [];
+  prompt() { return new Promise<void>((resolve) => { this.resolvePrompt = resolve; }); }
+  async steer(content: string) { this.delivered.push({ kind: "steer", content }); return "accepted" as const; }
+  async followUp(content: string) { this.delivered.push({ kind: "follow_up", content }); return "accepted" as const; }
+  abort() { this.resolvePrompt?.(); }
+  getMessages() { return []; }
   getError() { return undefined; }
 }
 
@@ -52,7 +63,7 @@ class CallbackRuntime implements AgentRuntime {
   prompts: string[] = [];
   constructor(private readonly message: AgentMessage, private readonly onPrompt: (query: string) => void = () => {}) {}
   async prompt(query: string) { this.prompts.push(query); this.onPrompt(query); }
-  async steer() {}
+  async steer() { return "accepted" as const; }
   abort() {}
   getMessages() { return [this.message]; }
   getError() { return undefined; }
@@ -62,7 +73,7 @@ class DeferredRuntime implements AgentRuntime {
   aborted = false;
   private rejectPrompt?: (error: Error) => void;
   prompt() { return new Promise<void>((_resolve, reject) => { this.rejectPrompt = reject; }); }
-  async steer() {}
+  async steer() { return "accepted" as const; }
   abort() { this.aborted = true; this.rejectPrompt?.(new Error("aborted")); }
   getMessages() { return []; }
   getError() { return undefined; }
@@ -95,6 +106,33 @@ class ActiveDeferredRuntime extends DeferredRuntime {
 }
 
 describe("AgentService runtime boundary", () => {
+  it("persists and serially delivers idempotent control input into Pi runtime queues", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let runtime!: InboxRuntime;
+    const service = new AgentService(store, "/tmp", () => runtime = new InboxRuntime(), { controlInboxCapacity: 4 });
+    const run = await service.start(session.id, "durable controls");
+    const [first, duplicate, second] = await Promise.all([
+      service.steer(run.id, "change direction", "control-1"),
+      service.steer(run.id, "change direction", "control-1"),
+      service.followUp(run.id, "then verify", "control-2"),
+    ]);
+    expect(first.status).toBe("accepted");
+    expect(duplicate.status).toBe("accepted");
+    expect(second.status).toBe("accepted");
+    expect(runtime.delivered).toEqual([
+      { kind: "steer", content: "change direction" },
+      { kind: "follow_up", content: "then verify" },
+    ]);
+    expect(store.listControlInbox(run.id)).toEqual([
+      expect.objectContaining({ requestId: "control-1", status: "delivered", attempt: 1 }),
+      expect.objectContaining({ requestId: "control-2", status: "delivered", attempt: 1 }),
+    ]);
+    expect(store.listEvents(run.id).some((event) => event.type === "control.duplicate")).toBe(true);
+    await service.closeRuntimes();
+    store.close();
+  });
+
   it("throttles partial checkpoints and persists tool boundaries immediately", async () => {
     const store = new Store(":memory:");
     const writes = vi.spyOn(store, "upsertCheckpoint");

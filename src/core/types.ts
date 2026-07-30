@@ -34,6 +34,20 @@ export interface EventConsumerCursor {
   updatedAt: number;
 }
 
+export interface ControlInboxItem {
+  id: string;
+  runId: RunId;
+  requestId: string;
+  attempt: number;
+  kind: "steer" | "follow_up";
+  content: string;
+  status: "queued" | "delivering" | "delivered" | "rejected" | "superseded" | "outcome_unknown";
+  error: string;
+  createdAt: number;
+  claimedAt: number | null;
+  completedAt: number | null;
+}
+
 export interface Message {
   id: number;
   sessionId: SessionId;

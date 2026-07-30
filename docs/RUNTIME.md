@@ -54,6 +54,7 @@ Run events are consumed through Schema v5 durable consumer cursors. Each `(run, 
 
 Pi 0.83 abort is asynchronous and does not complete until the session is idle. Runtime adapters must preserve an abort requested during initialization, and must not dispose a busy session before that abort settles. Service close must also join the AgentService execution task before closing durable storage. Intermediate `agent_end` events with `willRetry: true` are retry progress, not completed assistant messages.
 Pi queue methods are used only while `AgentSession.isStreaming`; `agent_settled` closes admission, `queue_update` is the authoritative in-memory queue snapshot, and cancellation calls Pi `clearQueue()` before asynchronous abort. See [PI_RUNTIME_BOUNDARY.md](PI_RUNTIME_BOUNDARY.md).
+Schema v6 places a bounded durable control inbox before Pi. SQLite owns idempotent admission, attempt binding, FIFO claim, restart ambiguity, and delivery receipts; Pi still owns the actual steer/follow-up queue and turn ordering after acceptance.
 
 Pi installs Agent-level before/after tool hooks for its own runtime and extension semantics. TAgent adapters must compose those hooks rather than replace them, preserve Pi block/result transformations, and bind operation guards to Pi's prepared and validated arguments.
 
