@@ -42,7 +42,7 @@ export class AgentService {
         : "";
       if (response) this.store.appendMessage(this.store.getRun(runId)!.sessionId, "assistant", response);
       const result = this.store.completeWithGate(runId, response);
-      this.publish(this.store.appendEvent(runId, result.gate.passed ? "run.completed" : "run.blocked", { response, gate: result.gate }));
+      this.publish(this.store.listEvents(runId, Math.max(0, result.run.lastEventSeq - 1)).at(-1)!);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.store.finalizeRun(runId, "failed", message);
