@@ -13,7 +13,7 @@ export class AgentService {
     private readonly store: Store,
     private readonly workspace: string,
     private readonly runtimeFactory: RuntimeFactory = createInProcessRuntime,
-    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number; contextWindow?: number; dynamicBudget?: boolean } = {},
+    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number; contextWindow?: number; dynamicBudget?: boolean } = {},
   ) {
     this.store.markInterrupted();
   }
@@ -41,7 +41,31 @@ export class AgentService {
   }
 
   private launch(run: TaskRun, prompt: string, initialMessages: AgentMessage[] = [], continuationId?: string) {
-    const runtime = this.runtimeFactory({
+    const budget = this.executionBudget(run);
+    const idleTimeoutMs = budget.runTimeoutMs;
+    const hardTimeoutMs = this.runtimeDefaults.runHardTimeoutMs ?? 86_400_000;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let hardTimer: ReturnType<typeof setTimeout> | undefined;
+    let runtime: AgentRuntime;
+
+    const failTimeout = (reason: "idle_timeout" | "hard_timeout", limitMs: number) => {
+      if (this.store.getRun(run.id)?.status !== "running") return;
+      runtime.abort();
+      const message = reason === "idle_timeout"
+        ? `Run idle for ${limitMs}ms without progress`
+        : `Run exceeded ${limitMs}ms absolute hard timeout`;
+      const event = this.store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: message, reason, limitMs }, message);
+      if (!event) return;
+      this.store.appendMessage(run.sessionId, "assistant", `Run failed: ${message}`);
+      this.publish(event);
+    };
+    const touchActivity = () => {
+      if (!idleTimeoutMs) return;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => failTimeout("idle_timeout", idleTimeoutMs), idleTimeoutMs);
+    };
+
+    runtime = this.runtimeFactory({
       store: this.store,
       runId: run.id,
       workspace: this.workspace,
@@ -52,21 +76,17 @@ export class AgentService {
       providerTimeoutMs: this.runtimeDefaults.providerTimeoutMs,
       providerMaxRetries: this.runtimeDefaults.providerMaxRetries,
       runTimeoutMs: this.runtimeDefaults.runTimeoutMs,
-      onEvent: (event) => this.publish(event),
+      runHardTimeoutMs: this.runtimeDefaults.runHardTimeoutMs,
+      onActivity: touchActivity,
+      onEvent: (event) => {
+        touchActivity();
+        this.publish(event);
+      },
     });
     this.runtimes.set(run.id, runtime);
-    const attemptTimeoutMs = this.executionBudget(run).runTimeoutMs;
-    const timeout = attemptTimeoutMs
-      ? setTimeout(() => {
-          if (this.store.getRun(run.id)?.status !== "running") return;
-          runtime.abort();
-          const message = `Run exceeded ${attemptTimeoutMs}ms timeout`;
-          const event = this.store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: message, reason: "timeout" }, message);
-          if (!event) return;
-          this.store.appendMessage(run.sessionId, "assistant", `Run failed: ${message}`);
-          this.publish(event);
-        }, attemptTimeoutMs)
-      : undefined;
+    touchActivity();
+    hardTimer = setTimeout(() => failTimeout("hard_timeout", hardTimeoutMs), hardTimeoutMs);
+
     void this.execute(run.id, runtime, prompt).then((blocked) => {
       if (continuationId) {
         const status = this.store.getRun(run.id)?.status;
@@ -74,7 +94,8 @@ export class AgentService {
       }
       if (blocked) this.queueContinuation(run.id);
     }).finally(() => {
-      if (timeout) clearTimeout(timeout);
+      if (idleTimer) clearTimeout(idleTimer);
+      if (hardTimer) clearTimeout(hardTimer);
       this.runtimes.delete(run.id);
       setImmediate(() => {
         try { this.startQueuedContinuation(run.id); }

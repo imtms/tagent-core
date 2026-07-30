@@ -40,6 +40,16 @@ class DeferredRuntime implements AgentRuntime {
   getError() { return undefined; }
 }
 
+class ActiveDeferredRuntime extends DeferredRuntime {
+  constructor(private readonly emitActivity: () => void, private readonly intervalMs: number) { super(); }
+  private timer?: ReturnType<typeof setInterval>;
+  override prompt() {
+    this.timer = setInterval(this.emitActivity, this.intervalMs);
+    return super.prompt().finally(() => { if (this.timer) clearInterval(this.timer); });
+  }
+  override abort() { if (this.timer) clearInterval(this.timer); super.abort(); }
+}
+
 describe("AgentService runtime boundary", () => {
   it("constructs agents through the injected runtime factory", async () => {
     const store = new Store(":memory:");
@@ -235,16 +245,51 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
-  it("fails a run that exceeds its wall-clock timeout", async () => {
+  it("fails a run only after its idle watchdog sees no progress", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new DeferredRuntime();
-    const service = new AgentService(store, "/tmp", () => runtime, { runTimeoutMs: 5 });
+    const service = new AgentService(store, "/tmp", () => runtime, { runTimeoutMs: 10, runHardTimeoutMs: 1_000, dynamicBudget: false });
     const run = await service.start(session.id, "timeout");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 30));
     expect(runtime.aborted).toBe(true);
-    expect(store.getRun(run.id)).toMatchObject({ status: "failed", blockedReason: "Run exceeded 5ms timeout" });
-    expect(store.listEvents(run.id).at(-1)?.data).toMatchObject({ reason: "timeout" });
+    expect(store.getRun(run.id)).toMatchObject({ status: "failed", blockedReason: "Run idle for 10ms without progress" });
+    expect(store.listEvents(run.id).at(-1)?.data).toMatchObject({ reason: "idle_timeout", limitMs: 10 });
+    store.close();
+  });
+
+  it("refreshes the idle watchdog while the runtime keeps making progress", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let runtime!: ActiveDeferredRuntime;
+    let activityCount = 0;
+    const service = new AgentService(store, "/tmp", (options) => {
+      runtime = new ActiveDeferredRuntime(() => { activityCount += 1; options.onActivity?.(); }, 5);
+      return runtime;
+    }, { runTimeoutMs: 40, runHardTimeoutMs: 1_000, dynamicBudget: false });
+    const run = await service.start(session.id, "active long run");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(runtime.aborted).toBe(false);
+    expect(store.getRun(run.id)?.status).toBe("running");
+    expect(activityCount).toBeGreaterThan(5);
+    service.cancel(run.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    store.close();
+  });
+
+  it("enforces the absolute hard timeout even when progress continues", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let runtime!: ActiveDeferredRuntime;
+    const service = new AgentService(store, "/tmp", (options) => {
+      runtime = new ActiveDeferredRuntime(() => options.onActivity?.(), 5);
+      return runtime;
+    }, { runTimeoutMs: 40, runHardTimeoutMs: 70, dynamicBudget: false });
+    const run = await service.start(session.id, "hard timeout");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(runtime.aborted).toBe(true);
+    expect(store.getRun(run.id)).toMatchObject({ status: "failed", blockedReason: "Run exceeded 70ms absolute hard timeout" });
+    expect(store.listEvents(run.id).at(-1)?.data).toMatchObject({ reason: "hard_timeout", limitMs: 70 });
     store.close();
   });
 

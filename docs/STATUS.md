@@ -26,7 +26,8 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Append-only pi transcript persistence for user, assistant, tool-call, and tool-result messages.
 - Per-run aggregate model usage for input, output, cache, total tokens, and provider-reported cost.
 - Resume loads the persisted pi transcript into the new runtime before appending the recovery instruction.
-- Provider request timeout/retry controls and a wall-clock timeout for each run attempt.
+- Provider request timeout/retry controls, a progress-sensitive idle watchdog for each attempt, and a separate absolute hard timeout.
+- The idle watchdog is refreshed by model deltas and tool start/progress/completion events, so active tasks are no longer killed at the simple-tier five-minute mark.
 - Persistent bounded continuations after completion-gate blocks, with queued/running/completed/blocked/failed/cancelled audit states.
 - Automatic continuation limits by count and cumulative run tokens; exhausted runs remain blocked for manual inspection.
 - Persistent operation receipts make `write`, `edit`, and `bash` idempotent by Run attempt and tool-call ID; unfinished operations become `outcome_unknown` after restart.
@@ -47,7 +48,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Client request IDs support browsers without `crypto.randomUUID`, including `getRandomValues` and legacy fallbacks.
 - Blocked and interrupted runs can be resumed from the Web workbench; the UI exposes the current attempt.
 - The right panel lists up to 50 recent TaskRuns as collapsible history and expands the current/latest Run by default.
-- Dynamic execution budgets scale continuation count, cumulative tokens, and per-attempt timeout across simple/standard/complex/extended tiers, while environment values remain hard ceilings.
+- Dynamic execution budgets scale continuation count, cumulative tokens, and idle timeout across simple/standard/complex/extended tiers; `TAGENT_RUN_HARD_TIMEOUT_MS` remains the absolute attempt ceiling.
 - A deterministic stress test completes a single durable Run after 40 automatic continuations; hundreds of model-backed turns are not yet an acceptance claim.
 
 ### Quality baseline

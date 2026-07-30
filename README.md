@@ -63,7 +63,8 @@ The base URL is configurable because OpenAI-compatible services are not guarante
 - `TAGENT_REASONING`: enable reasoning metadata, default `true`
 - `TAGENT_PROVIDER_TIMEOUT_MS`: timeout for each provider request, default `120000`
 - `TAGENT_PROVIDER_MAX_RETRIES`: provider retry count, default `1`
-- `TAGENT_RUN_TIMEOUT_MS`: hard wall-clock ceiling for a run attempt, default `7200000`
+- `TAGENT_RUN_TIMEOUT_MS`: hard ceiling for inactivity within a run attempt; any model delta, tool start/progress/completion, or runtime event refreshes it. Default hard ceiling is `7200000`, while dynamic tiers may use a lower idle threshold.
+- `TAGENT_RUN_HARD_TIMEOUT_MS`: absolute wall-clock ceiling for one attempt even when activity continues, default `86400000` (24 hours).
 - `TAGENT_MAX_CONTINUATIONS`: hard continuation ceiling, default `128`
 - `TAGENT_MAX_RUN_TOKENS`: hard cumulative token ceiling, default `2000000`
 - `TAGENT_DYNAMIC_BUDGET`: enable task/progress-based soft budgets, default `true`
@@ -74,7 +75,7 @@ The base URL is configurable because OpenAI-compatible services are not guarante
 
 Dynamic budgets are recomputed from the goal, required plan/check surface, remaining work, and continuation history. The default tiers are:
 
-| Tier | Continuations | Cumulative tokens | Attempt timeout |
+| Tier | Continuations | Cumulative tokens | Idle timeout |
 | --- | ---: | ---: | ---: |
 | simple | 4 | 80,000 | 5 minutes |
 | standard | 12 | 240,000 | 15 minutes |

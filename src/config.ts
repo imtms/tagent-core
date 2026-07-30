@@ -19,6 +19,7 @@ export interface AppConfig {
   providerTimeoutMs: number;
   providerMaxRetries: number;
   runTimeoutMs: number;
+  runHardTimeoutMs: number;
   maxContinuations: number;
   maxRunTokens: number;
   dynamicBudget: boolean;
@@ -55,6 +56,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     providerTimeoutMs: positiveInteger(env.TAGENT_PROVIDER_TIMEOUT_MS, 120_000, "TAGENT_PROVIDER_TIMEOUT_MS"),
     providerMaxRetries: nonNegativeInteger(env.TAGENT_PROVIDER_MAX_RETRIES, 1, "TAGENT_PROVIDER_MAX_RETRIES"),
     runTimeoutMs: positiveInteger(env.TAGENT_RUN_TIMEOUT_MS, 7_200_000, "TAGENT_RUN_TIMEOUT_MS"),
+    runHardTimeoutMs: positiveInteger(env.TAGENT_RUN_HARD_TIMEOUT_MS, 86_400_000, "TAGENT_RUN_HARD_TIMEOUT_MS"),
     maxContinuations: nonNegativeInteger(env.TAGENT_MAX_CONTINUATIONS, 128, "TAGENT_MAX_CONTINUATIONS"),
     maxRunTokens: positiveInteger(env.TAGENT_MAX_RUN_TOKENS, 2_000_000, "TAGENT_MAX_RUN_TOKENS"),
     dynamicBudget: env.TAGENT_DYNAMIC_BUDGET !== "false",
@@ -80,6 +82,7 @@ export interface PublicRuntimeConfig {
   providerTimeoutMs: number;
   providerMaxRetries: number;
   runTimeoutMs: number;
+  runHardTimeoutMs: number;
   maxContinuations: number;
   maxRunTokens: number;
   dynamicBudget: boolean;
@@ -97,6 +100,7 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     providerTimeoutMs: config.providerTimeoutMs,
     providerMaxRetries: config.providerMaxRetries,
     runTimeoutMs: config.runTimeoutMs,
+    runHardTimeoutMs: config.runHardTimeoutMs,
     maxContinuations: config.maxContinuations,
     maxRunTokens: config.maxRunTokens,
     dynamicBudget: config.dynamicBudget,

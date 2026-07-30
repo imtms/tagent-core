@@ -56,9 +56,13 @@ export class PiRuntime implements AgentRuntime {
       },
     });
     this.agent.subscribe((event) => {
+      this.options.onActivity?.();
       if (event.type === "message_end") {
         const run = this.options.store.getRun(this.options.runId);
         if (run) this.options.store.appendTranscript(this.options.runId, run.attempt, event.message);
+      }
+      if (event.type === "tool_execution_update") {
+        this.emit("tool.progress", { toolCallId: event.toolCallId, toolName: event.toolName });
       }
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
         this.emit("message.delta", { delta: event.assistantMessageEvent.delta });

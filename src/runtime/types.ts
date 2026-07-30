@@ -22,6 +22,8 @@ export interface RuntimeOptions {
   providerTimeoutMs?: number;
   providerMaxRetries?: number;
   runTimeoutMs?: number;
+  runHardTimeoutMs?: number;
+  onActivity?: () => void;
   onEvent?: (event: RunEvent) => void;
 }
 
