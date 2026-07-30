@@ -18,8 +18,11 @@ Project records:
 - Atomic compare-and-set terminal Run transitions
 - Automatic verification staleness after workspace mutations
 - Transactional single-owner continuation claims with persisted lease metadata
+- Expiry-aware continuation recovery, owner heartbeat fencing, and graceful lease release
 - Durable repeated-call and repeated-failure tool guards
 - Streaming events, cancellation, and steering
+- Cancel/resume transcript repair for interrupted tool calls
+- Typed provider response/failure audit events with retryability metadata
 - Workspace-scoped `ls`, `read`, `write`, `edit`, `bash`, and `task_run` tools
 - Fastify HTTP/SSE API
 - Responsive React workbench for conversations and TaskRun visibility

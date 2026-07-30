@@ -24,9 +24,11 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Workspace path containment and a minimal destructive-command policy.
 - Sequential tool execution for predictable state mutations.
 - Append-only pi transcript persistence for user, assistant, tool-call, and tool-result messages.
+- Cancel settlement and resume/continuation startup repair any unpaired tool calls with auditable synthetic error tool results before provider reuse.
 - Per-run aggregate model usage for input, output, cache, total tokens, and provider-reported cost.
 - Resume loads the persisted pi transcript into the new runtime before appending the recovery instruction.
 - Provider request timeout/retry controls, a progress-sensitive idle watchdog for each attempt, and a separate absolute hard timeout.
+- Provider responses and terminal failures are audited with typed auth, invalid-request, context-overflow, rate-limit, timeout, network, server, aborted, and unknown classifications plus retryability metadata.
 - The idle watchdog is refreshed by model deltas and tool start/progress/completion events, so active tasks are no longer killed at the simple-tier five-minute mark.
 - Persistent bounded continuations after completion-gate blocks, with queued/running/completed/blocked/failed/cancelled audit states.
 - Automatic continuation limits by count and cumulative run tokens; exhausted runs remain blocked for manual inspection.
@@ -37,6 +39,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Startup recovery requeues queued/running continuation records, restores the Run to blocked, and resumes from the persisted transcript.
 - Continuation startup uses a transactional database claim that atomically leases one queued continuation, resumes the Run, increments its attempt, and writes `continuation.started`; a partial unique index permits only one queued/running continuation per Run.
 - Active continuations renew their lease every 10 seconds, and terminal continuation updates are fenced by lease owner.
+- Startup recovery only reclaims queued or expired continuation leases; live owners are not preempted, and graceful service close releases only its own leases.
 - Versioned SQLite schema metadata rejects newer unsupported databases and advances only after transactional migration success.
 - Resume/continuation context assembly prunes oldest complete turns to a 75% context-window budget while retaining the full transcript in SQLite.
 - New Run context reads the newest persisted Session message window in chronological order, including Sessions beyond 10,000 messages.
@@ -78,7 +81,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 
 - Implement a pi RPC worker adapter behind the AgentRuntime interface.
 - Use in-process pi for the primary interactive agent and pi RPC for isolated or concurrent worker tasks.
-- Add typed bounded retries, retry audit events, Retry-After handling, and one-shot context-overflow recovery.
+- Move retry scheduling into the control plane, emit per-attempt retry events, honor Retry-After, and add one-shot context-overflow recovery.
 - Persist enough runtime transcript state to support exact provider conversation continuation after process restart.
 
 ### P2: Tool governance
@@ -113,5 +116,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Bash isolation is policy-based, not an OS-level sandbox.
 - The first Web interface does not expose model/runtime selection or provider health.
 - Multiple TAgent Core processes must not target the same SQLite database; process-level leader enforcement is not implemented.
-- Continuation attempts heartbeat and use owner fencing, but startup recovery does not yet wait for a non-expired owner lease before takeover.
+- Continuation attempts heartbeat, use owner fencing, and only expire into recovery after the persisted lease deadline; process-level leader election remains absent.
+- Cancel/resume transcript repair is implemented, but steering still relies on pi's internal queue without a bounded control-plane inbox or explicit closing/full responses.
+- Provider failures are typed and auditable, but retry scheduling still uses the provider SDK/pi boundary rather than a TAgent-owned retry loop.
 - The HTTP API has no authentication or multi-tenant isolation and must remain on localhost or a trusted private network for this alpha.

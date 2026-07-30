@@ -20,15 +20,27 @@ export class AgentService {
     this.store.markInterrupted();
   }
 
+  private repairTranscript(runId: RunId, reason: "cancelled" | "resume" | "continuation") {
+    const repaired = this.store.repairTranscript(runId, reason);
+    if (repaired.length) this.publish(this.store.appendEvent(runId, "transcript.repaired", { reason, repaired }));
+    return repaired;
+  }
+
   recoverContinuations() {
     const recovered = this.store.recoverContinuationsAfterRestart();
     const runIds = [...new Set(recovered.map((item) => item.runId))];
     for (const runId of runIds) {
       const items = recovered.filter((item) => item.runId === runId);
-      this.publish(this.store.appendEvent(runId, "continuation.recovered", { reason: "service_restart", continuations: items.map((item) => ({ id: item.id, ordinal: item.ordinal })) }));
+      this.publish(this.store.appendEvent(runId, "continuation.recovered", { reason: "lease_expired_or_queued", continuations: items.map((item) => ({ id: item.id, ordinal: item.ordinal })) }));
       setImmediate(() => this.startQueuedContinuation(runId));
     }
     return runIds;
+  }
+
+  closeRuntimes() {
+    for (const runtime of this.runtimes.values()) runtime.abort();
+    this.runtimes.clear();
+    return this.store.releaseContinuationLeases(this.continuationOwner);
   }
 
   async start(sessionId: SessionId, query: string, requestId: string = randomUUID()) {
@@ -103,6 +115,7 @@ export class AgentService {
       if (idleTimer) clearTimeout(idleTimer);
       if (hardTimer) clearTimeout(hardTimer);
       if (leaseTimer) clearInterval(leaseTimer);
+      if (this.store.getRun(run.id)?.status === "cancelled") this.repairTranscript(run.id, "cancelled");
       this.runtimes.delete(run.id);
       setImmediate(() => {
         try { this.startQueuedContinuation(run.id); }
@@ -191,6 +204,7 @@ export class AgentService {
 
   private startQueuedContinuation(runId: RunId) {
     if (this.runtimes.has(runId)) return;
+    this.repairTranscript(runId, "continuation");
     const claimed = this.store.claimContinuation(runId, this.continuationOwner, 30_000);
     if (!claimed) return;
     const { continuation, run, event } = claimed;
@@ -258,6 +272,7 @@ export class AgentService {
   resume(runId: RunId) {
     if (this.runtimes.has(runId)) throw new Error("Run is already active");
     this.store.cancelQueuedContinuations(runId, "Superseded by manual resume");
+    this.repairTranscript(runId, "resume");
     const run = this.store.resumeRun(runId);
     const provisionalPrompt = this.buildResumePrompt(run, this.store.listTranscript(run.id).length);
     const transcript = this.prepareTranscript(run, provisionalPrompt);

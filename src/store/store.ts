@@ -330,14 +330,34 @@ export class Store {
     return row ? this.getRun(row.id) : undefined;
   }
 
-  recoverContinuationsAfterRestart() {
+  recoverContinuationsAfterRestart(timestamp = now()) {
     const transaction = this.db.transaction(() => {
-      const active = this.db.prepare("SELECT id, run_id as runId, ordinal FROM run_continuations WHERE status IN ('queued', 'running') ORDER BY created_at").all() as Array<{ id: string; runId: string; ordinal: number }>;
-      const timestamp = now();
+      const active = this.db.prepare(`SELECT id, run_id as runId, ordinal FROM run_continuations
+        WHERE status = 'queued' OR (status = 'running' AND (lease_until IS NULL OR lease_until <= ?))
+        ORDER BY created_at`).all(timestamp) as Array<{ id: string; runId: string; ordinal: number }>;
       for (const item of active) {
-        this.db.prepare("UPDATE run_continuations SET status = 'queued', error = 'Recovered after service restart', started_at = NULL, completed_at = NULL WHERE id = ?").run(item.id);
+        this.db.prepare(`UPDATE run_continuations SET status = 'queued', error = 'Recovered after lease expiry',
+          started_at = NULL, completed_at = NULL, lease_owner = '', lease_until = NULL, heartbeat_at = NULL WHERE id = ?`).run(item.id);
         this.db.prepare("UPDATE runs SET status = 'blocked', phase = 'blocked', blocked_reason = 'Continuation recovered after service restart', completed_at = NULL, updated_at = ? WHERE id = ? AND status IN ('running', 'interrupted', 'blocked')")
           .run(timestamp, item.runId);
+      }
+      return active;
+    });
+    return transaction();
+  }
+
+  releaseContinuationLeases(owner: string, reason = "Continuation owner stopped") {
+    const transaction = this.db.transaction(() => {
+      const timestamp = now();
+      const active = this.db.prepare(`SELECT id, run_id as runId, ordinal FROM run_continuations
+        WHERE status = 'running' AND lease_owner = ? ORDER BY created_at`).all(owner) as Array<{ id: string; runId: string; ordinal: number }>;
+      for (const item of active) {
+        this.db.prepare(`UPDATE run_continuations SET status = 'queued', error = ?, started_at = NULL,
+          completed_at = NULL, lease_owner = '', lease_until = NULL, heartbeat_at = NULL
+          WHERE id = ? AND status = 'running' AND lease_owner = ?`).run(reason, item.id, owner);
+        this.db.prepare(`UPDATE runs SET status = 'blocked', phase = 'blocked', blocked_reason = ?,
+          completed_at = NULL, updated_at = ? WHERE id = ? AND status IN ('running', 'interrupted', 'blocked')`)
+          .run(reason, timestamp, item.runId);
       }
       return active;
     });
@@ -446,6 +466,33 @@ export class Store {
 
   listTranscript(runId: RunId): AgentMessage[] {
     return this.listTranscriptEntries(runId).map((entry) => entry.message);
+  }
+
+  repairTranscript(runId: RunId, reason: "cancelled" | "resume" | "continuation") {
+    const transaction = this.db.transaction(() => {
+      const run = this.getRun(runId);
+      if (!run) throw new Error(`Unknown run ${runId}`);
+      const pending = new Map<string, string>();
+      for (const message of this.listTranscript(runId)) {
+        if (message.role === "assistant") {
+          for (const part of message.content) if (part.type === "toolCall") pending.set(part.id, part.name);
+        } else if (message.role === "toolResult") {
+          pending.delete(message.toolCallId);
+        }
+      }
+      const repaired: Array<{ toolCallId: string; toolName: string }> = [];
+      for (const [toolCallId, toolName] of pending) {
+        const message: AgentMessage = {
+          role: "toolResult", toolCallId, toolName,
+          content: [{ type: "text", text: `Tool result synthesized by TAgent Core because the ${reason} boundary interrupted this call.` }],
+          details: { synthetic: true, reason }, isError: true, timestamp: now(),
+        };
+        this.appendTranscript(runId, run.attempt, message);
+        repaired.push({ toolCallId, toolName });
+      }
+      return repaired;
+    });
+    return transaction();
   }
 
   listTranscriptView(runId: RunId) {

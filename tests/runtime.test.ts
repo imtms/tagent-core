@@ -390,4 +390,21 @@ describe("AgentService runtime boundary", () => {
     expect(store.listEvents(run.id).at(-1)?.type).toBe("run.cancelled");
     store.close();
   });
+
+  it("repairs pending transcript tool calls when a cancelled runtime settles", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const runtime = new DeferredRuntime();
+    const service = new AgentService(store, "/tmp", () => runtime);
+    const run = await service.start(session.id, "cancel repair");
+    store.appendTranscript(run.id, 1, {
+      role: "assistant", content: [{ type: "toolCall", id: "pending-call", name: "read", arguments: { path: "a.txt" } }], api: "openai-completions", provider: "test", model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: Date.now(),
+    });
+    expect(service.cancel(run.id)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.listTranscript(run.id).at(-1)).toMatchObject({ role: "toolResult", toolCallId: "pending-call", isError: true, details: { synthetic: true, reason: "cancelled" } });
+    expect(store.listEvents(run.id).some((event) => event.type === "transcript.repaired")).toBe(true);
+    store.close();
+  });
 });

@@ -109,6 +109,6 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     catch { return reply.code(404).send("Web build not found. Run npm run build."); }
   });
 
-  app.addHook("onClose", async () => store.close());
+  app.addHook("onClose", async () => { service.closeRuntimes(); store.close(); });
   return app;
 }

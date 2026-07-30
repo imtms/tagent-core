@@ -21,6 +21,55 @@ describe("Store", () => {
     expect(store.listMessages(session.id).map((message) => message.content)).toEqual(["hello", "world"]);
   });
 
+  it("repairs unpaired tool calls exactly once", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "repair");
+    store.appendTranscript(run.id, 1, {
+      role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: { command: "sleep 1" } }], api: "openai-completions", provider: "test", model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: 1,
+    });
+    expect(store.repairTranscript(run.id, "cancelled")).toEqual([{ toolCallId: "call-1", toolName: "bash" }]);
+    expect(store.repairTranscript(run.id, "resume")).toEqual([]);
+    expect(store.listTranscript(run.id).at(-1)).toMatchObject({ role: "toolResult", toolCallId: "call-1", toolName: "bash", isError: true, details: { synthetic: true, reason: "cancelled" } });
+  });
+
+  it("only recovers queued or expired continuation leases after restart", () => {
+    const store = createStore();
+    const firstSession = store.createSession();
+    const firstRun = store.createRun(firstSession.id, "expired");
+    store.db.prepare("UPDATE runs SET status = 'blocked' WHERE id = ?").run(firstRun.id);
+    store.queueContinuation(firstRun.id, "expired");
+    const expired = store.claimContinuation(firstRun.id, "dead-owner", 1)!;
+    store.db.prepare("UPDATE run_continuations SET lease_until = ? WHERE id = ?").run(100, expired.continuation.id);
+
+    const secondSession = store.createSession();
+    const secondRun = store.createRun(secondSession.id, "live");
+    store.db.prepare("UPDATE runs SET status = 'blocked' WHERE id = ?").run(secondRun.id);
+    store.queueContinuation(secondRun.id, "live");
+    const live = store.claimContinuation(secondRun.id, "live-owner", 10_000)!;
+    store.db.prepare("UPDATE run_continuations SET lease_until = ? WHERE id = ?").run(20_000, live.continuation.id);
+
+    expect(store.recoverContinuationsAfterRestart(1_000).map((item) => item.id)).toEqual([expired.continuation.id]);
+    expect(store.listContinuations(firstRun.id)[0]).toMatchObject({ status: "queued", leaseOwner: "", leaseUntil: null });
+    expect(store.listContinuations(secondRun.id)[0]).toMatchObject({ status: "running", leaseOwner: "live-owner", leaseUntil: 20_000 });
+    expect(store.getRun(secondRun.id)?.status).toBe("running");
+  });
+
+  it("releases only the stopping continuation owner's leases", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "release");
+    store.db.prepare("UPDATE runs SET status = 'blocked' WHERE id = ?").run(run.id);
+    store.queueContinuation(run.id, "release");
+    const claimed = store.claimContinuation(run.id, "owner-a", 10_000)!;
+    expect(store.releaseContinuationLeases("owner-b")).toEqual([]);
+    expect(store.listContinuations(run.id)[0].status).toBe("running");
+    expect(store.releaseContinuationLeases("owner-a")).toEqual([{ id: claimed.continuation.id, runId: run.id, ordinal: 1 }]);
+    expect(store.listContinuations(run.id)[0]).toMatchObject({ status: "queued", leaseOwner: "" });
+    expect(store.getRun(run.id)).toMatchObject({ status: "blocked", phase: "blocked" });
+  });
+
   it("normalizes assistant text and paired tool calls for the Web transcript", () => {
     const store = createStore();
     const session = store.createSession();
@@ -240,7 +289,7 @@ describe("Store", () => {
     store.markInterrupted();
     expect(store.recoverContinuationsAfterRestart()).toEqual([{ id: continuation.id, runId: run.id, ordinal: 1 }]);
     expect(store.getRun(run.id)).toMatchObject({ status: "blocked", blockedReason: "Continuation recovered after service restart" });
-    expect(store.listContinuations(run.id)[0]).toMatchObject({ status: "queued", error: "Recovered after service restart", startedAt: null });
+    expect(store.listContinuations(run.id)[0]).toMatchObject({ status: "queued", error: "Recovered after lease expiry", startedAt: null });
   });
 
   it("returns the latest terminal run for a session", () => {
