@@ -3,6 +3,7 @@ export interface RecordStorePort {
   upsertRecords(records: WarmMemory[]): Promise<void>;
   search(query: string, scopes: MemoryScope[], kinds: MemoryKind[], limit: number): Promise<Array<{ record: WarmMemory; score: number }>>;
   getByIds(ids: string[], scopes: MemoryScope[]): Promise<WarmMemory[]>;
+  getByTopicIds(topicIds: string[], scopes: MemoryScope[], kinds: MemoryKind[], limit: number): Promise<WarmMemory[]>;
   list(scopes: MemoryScope[], kinds?: MemoryKind[], limit?: number): Promise<WarmMemory[]>;
   forget(scopes: MemoryScope[], ids?: string[], topicIds?: string[]): Promise<number>;
 }
@@ -15,7 +16,7 @@ export interface TopicCatalogPort {
 export interface BlobStorePort { putImmutable(key: string, body: string, metadata: Record<string, string>): Promise<{ checksum: string; byteLength: number }>; get(key: string): Promise<string>; delete(key: string): Promise<void>; exists(key: string): Promise<boolean> }
 export interface EmbeddingPort { readonly generation: string; embed(texts: string[]): Promise<number[][]> }
 export interface ExtractorPort { extract(content: string, sourceRefs: SourceReference[], scope: MemoryScope): Promise<ExtractionProposal> }
-export interface JobQueuePort { enqueue(request: CaptureRequest): Promise<CaptureJob>; claim(owner: string, leaseMs: number): Promise<CaptureJob | null>; complete(id: string): Promise<void>; fail(id: string, errorCode: string, retryable: boolean): Promise<void> }
+export interface JobQueuePort { enqueue(request: CaptureRequest): Promise<CaptureJob>; claim(owner: string, leaseMs: number): Promise<CaptureJob | null>; complete(id: string, result?: { proposalCount: number; persistedCount: number }): Promise<void>; fail(id: string, errorCode: string, retryable: boolean): Promise<void> }
 export interface AuditPort { record(event: { action: string; subjectId: string; scope?: MemoryScope; decision: string; reasonCodes: string[]; payloadHash?: string; policyVersion: string; at: number }): Promise<void> }
 export interface SourceLoaderPort { load(access: AccessContext, refs: SourceReference[]): Promise<string> }
 export interface MemoryTransactionPort { transaction<T>(operation: () => Promise<T>): Promise<T> }

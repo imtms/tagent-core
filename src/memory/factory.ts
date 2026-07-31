@@ -46,8 +46,14 @@ export async function createMemoryRuntime(config:MemoryRuntimeConfig,store:Store
   const capture=new MemoryCaptureWorker(adapter,new StoreSourceLoader(store),new RuleBasedExtractor(),policy,service,lifecycle);
   const consolidator=new MemoryConsolidator(adapter,adapter,service,{minimumRecords:config.coldMinimumRecords}); const reconciler=new ColdStorageReconciler(adapter,blobs);
   const access:AccessContext={subjectId:"memory-maintenance",scopes:[{type:"workspace",id:config.workspaceScopeId}],purpose:"capture"};
+  // Backfill durable user messages with the same idempotency key used by live capture.
+  // This repairs upgrades from pre-memory installations without making raw chat the recall source.
+  const historicalMessages=store.db.prepare("SELECT id,content FROM messages WHERE role='user' ORDER BY id ASC").all() as Array<{id:number;content:string}>;
+  for(const message of historicalMessages)if(isExplicitProfileCue(message.content))await service.enqueueCapture({access,sourceRefs:[{sourceType:"message",sourceId:String(message.id),revision:"user"}],content:`user: ${message.content}`,idempotencyKey:`user-message:${message.id}`});
   const worker=new LocalMemoryWorker(capture,lifecycle,consolidator,reconciler,access,config.workerIntervalMs,config.maintenanceIntervalMs);
   return{service,adapter,worker,lifecycle,consolidator,reconciler,start(){worker.start();},async close(){worker.stop();if (postgresAdapter) await postgresAdapter.close();}};
 }
+
+function isExplicitProfileCue(content:string){return /记住|remember|我叫|我的名字|我的姓名|叫我|称呼我|my name is|call me|(?:我|用户).{0,20}(?:喜欢|偏好|希望|不喜欢|习惯|prefer)/i.test(content)&&!/[?？]/.test(content);}
 
 export type MemoryRuntime = Awaited<ReturnType<typeof createMemoryRuntime>>;

@@ -38,7 +38,7 @@ export interface RecallRequest { access: AccessContext; cue: string; maxCards?: 
 export interface MemoryCard { id: string; kind: MemoryKind; tier: "hot" | "warm"; title: string; content: string; score: number; topicIds: string[]; confidence: number }
 export interface RecallResult { cards: MemoryCard[]; coldTopics: ColdTopicDocument[]; promptSection: string; trace: { topicIds: string[]; candidateCount: number; deniedCount: number } }
 export interface CaptureRequest { access: AccessContext; sourceRefs: SourceReference[]; content?: string; idempotencyKey: string; requestedAt?: number }
-export interface CaptureJob { id: string; request: CaptureRequest; status: "queued" | "running" | "completed" | "retryable_failed" | "dead_letter"; attempts: number; leaseOwner?: string; leaseUntil?: number; errorCode?: string; createdAt: number; updatedAt: number }
+export interface CaptureJob { id: string; request: CaptureRequest; status: "queued" | "running" | "completed" | "completed_empty" | "retryable_failed" | "dead_letter"; attempts: number; leaseOwner?: string; leaseUntil?: number; errorCode?: string; proposalCount?: number; persistedCount?: number; createdAt: number; updatedAt: number }
 export interface ForgetRequest { access: AccessContext; scope: MemoryScope; ids?: string[]; topicIds?: string[] }
 export interface ForgetResult { records: number; topics: number; objects: number }
 export interface ExtractionProposal { records: WarmMemory[]; topics: TopicDescriptor[]; nodes: GraphNode[]; edges: GraphEdge[] }

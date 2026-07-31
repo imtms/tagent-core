@@ -265,7 +265,8 @@ export class AgentService {
   }
 
   private completeClaimedSessionLaunch(item: SessionInboxItem, run: TaskRun, sessionHistory: ContextAssembly & { recalledMemory?: string }) {
-    this.store.appendMessage(run.sessionId, "user", item.content);
+    const userMessage = this.store.appendMessage(run.sessionId, "user", item.content);
+    this.captureUserMessage(run, userMessage.id, item.content);
     this.publish(this.store.appendEvent(run.id, "run.started", { goal: item.content, source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: sessionHistory.messages.length }));
     this.publishContextEvents(run.id, sessionHistory);
     this.recalledMemory.set(run.id, sessionHistory.recalledMemory ?? "");
@@ -289,7 +290,8 @@ export class AgentService {
 
     const run = this.store.createRun(sessionId, query, requestId);
     const sessionHistory = await this.prepareSessionHistory(run, query);
-    this.store.appendMessage(sessionId, "user", query);
+    const userMessage = this.store.appendMessage(sessionId, "user", query);
+    this.captureUserMessage(run, userMessage.id, query);
     this.publish(this.store.appendEvent(run.id, "run.started", { goal: query, sessionHistoryCount: sessionHistory.messages.length }));
     this.publishContextEvents(run.id, sessionHistory);
     this.recalledMemory.set(run.id, sessionHistory.recalledMemory);
@@ -458,9 +460,15 @@ export class AgentService {
   }
 
 
+  private captureUserMessage(run: TaskRun, messageId: number, content: string) {
+    if (!this.memory) return;
+    void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "message", sourceId: String(messageId), revision: "user" }], content: `user: ${content}`, idempotencyKey: `user-message:${messageId}` }).catch(() => undefined);
+  }
+
   private captureRunBoundary(run: TaskRun, response: string, status: "completed" | "blocked" | "failed") {
     if (!this.memory) return;
-    const content = [`TaskRun ${status}`, `Goal: ${run.goal}`, response && `Outcome: ${response}`].filter(Boolean).join("\n\n");
+    if (!response.trim()) return;
+    const content = `assistant: ${response}`;
     void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "run", sourceId: run.id, revision: `${status}:${run.attempt}` }], content, idempotencyKey: `run-boundary:${run.id}:${run.attempt}:${status}` }).catch(() => undefined);
   }
 
