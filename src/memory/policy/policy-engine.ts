@@ -26,7 +26,7 @@ export class DefaultPolicyEngine implements PolicyGatePort {
       for (const match of matches) text = text.replace(new RegExp(match.pattern.source, match.pattern.flags.includes("g") ? match.pattern.flags : `${match.pattern.flags}g`), `[REDACTED:${match.code}]`);
       return this.finish(stage, access, payload, { action: "transform", payload: { ...payload, text }, labels: ["sensitive"], reasonCodes: matches.map((match) => match.code) });
     }
-    if ((stage === "read" || stage === "prompt_injection" || stage === "cold_publish") && injection.test(payload.text)) return this.finish(stage, access, payload, { action: "quarantine", labels: ["untrusted_instruction"], reasonCodes: ["stored_prompt_injection"] });
+    if ((stage === "write" || stage === "read" || stage === "prompt_injection" || stage === "cold_publish") && injection.test(payload.text)) return this.finish(stage, access, payload, { action: "quarantine", labels: ["untrusted_instruction"], reasonCodes: ["stored_prompt_injection"] });
     return this.finish(stage, access, payload, { action: "allow", payload, labels: payload.labels ?? [], reasonCodes: [] });
   }
   private async finish(stage: GateStage, access: AccessContext, original: GatePayload, decision: GateDecision) {

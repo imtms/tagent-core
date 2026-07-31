@@ -428,6 +428,7 @@ export class AgentService {
         if (response) this.store.appendMessage(current.sessionId, "assistant", response);
         this.supervisor.markExecuted(decision.id, "executed");
         this.publish(event);
+        this.captureRunBoundary(current, response, "completed");
         for (const spawn of this.supervisor.reviewSpawn(this.store.getRun(runId)!, event.seq)) this.publish(this.store.appendEvent(runId, "supervisor.spawn.proposed", { decisionId: spawn.id, reasonCode: spawn.reasonCode }));
         return false;
       }
@@ -436,6 +437,7 @@ export class AgentService {
       if (!event) { this.supervisor.markExecuted(decision.id, "superseded"); return false; }
       this.supervisor.markExecuted(decision.id, "executed");
       this.publish(event);
+      this.captureRunBoundary(current, response, "blocked");
       return decision.action === "start_continuation";
     } catch (error) {
       if (this.closing) return false;
@@ -450,8 +452,16 @@ export class AgentService {
       if (!event) return false;
       this.store.appendMessage(current.sessionId, "assistant", `Run failed: ${message}`);
       this.publish(event);
+      this.captureRunBoundary(current, message, "failed");
       return false;
     }
+  }
+
+
+  private captureRunBoundary(run: TaskRun, response: string, status: "completed" | "blocked" | "failed") {
+    if (!this.memory) return;
+    const content = [`TaskRun ${status}`, `Goal: ${run.goal}`, response && `Outcome: ${response}`].filter(Boolean).join("\n\n");
+    void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "run", sourceId: run.id, revision: `${status}:${run.attempt}` }], content, idempotencyKey: `run-boundary:${run.id}:${run.attempt}:${status}` }).catch(() => undefined);
   }
 
   private executionBudget(run: TaskRun) {

@@ -27,7 +27,7 @@ export interface AppConfig {
   dynamicBudget: boolean;
   controlInboxCapacity: number;
   model: ModelConfig;
-  memory: { enabled: boolean; backend: "memory" | "postgres"; postgresUrl?: string; coldBackend: "local" | "s3"; coldPath: string; s3Bucket?: string; s3Prefix?: string; s3Endpoint?: string; s3Region?: string; s3ForcePathStyle: boolean; workerIntervalMs: number; workspaceScopeId: string; recallTokenBudget: number; };
+  memory: { enabled: boolean; backend: "memory" | "postgres"; postgresUrl?: string; coldBackend: "local" | "s3"; coldPath: string; s3Bucket?: string; s3Prefix?: string; s3Endpoint?: string; s3Region?: string; s3ForcePathStyle: boolean; workerIntervalMs: number; maintenanceIntervalMs: number; workspaceScopeId: string; recallTokenBudget: number; coldMinimumRecords: number; warmAfterMs: number; hotTtlMs: number; };
 }
 
 function positiveInteger(value: string | undefined, fallback: number, name: string) {
@@ -76,8 +76,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       s3Bucket: env.TAGENT_MEMORY_S3_BUCKET, s3Prefix: env.TAGENT_MEMORY_S3_PREFIX, s3Endpoint: env.TAGENT_MEMORY_S3_ENDPOINT, s3Region: env.TAGENT_MEMORY_S3_REGION,
       s3ForcePathStyle: env.TAGENT_MEMORY_S3_FORCE_PATH_STYLE === "true",
       workerIntervalMs: positiveInteger(env.TAGENT_MEMORY_WORKER_INTERVAL_MS, 1_000, "TAGENT_MEMORY_WORKER_INTERVAL_MS"),
+      maintenanceIntervalMs: positiveInteger(env.TAGENT_MEMORY_MAINTENANCE_INTERVAL_MS, 60_000, "TAGENT_MEMORY_MAINTENANCE_INTERVAL_MS"),
       workspaceScopeId: env.TAGENT_MEMORY_WORKSPACE_SCOPE_ID ?? "default",
       recallTokenBudget: positiveInteger(env.TAGENT_MEMORY_RECALL_TOKEN_BUDGET, 8_000, "TAGENT_MEMORY_RECALL_TOKEN_BUDGET"),
+      coldMinimumRecords: positiveInteger(env.TAGENT_MEMORY_COLD_MINIMUM_RECORDS, 2, "TAGENT_MEMORY_COLD_MINIMUM_RECORDS"),
+      warmAfterMs: nonNegativeInteger(env.TAGENT_MEMORY_WARM_AFTER_MS, 0, "TAGENT_MEMORY_WARM_AFTER_MS"),
+      hotTtlMs: positiveInteger(env.TAGENT_MEMORY_HOT_TTL_MS, 2_592_000_000, "TAGENT_MEMORY_HOT_TTL_MS"),
     },
     model: {
       provider: env.TAGENT_PROVIDER ?? "openai-compatible",

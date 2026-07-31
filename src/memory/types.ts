@@ -41,4 +41,4 @@ export interface CaptureRequest { access: AccessContext; sourceRefs: SourceRefer
 export interface CaptureJob { id: string; request: CaptureRequest; status: "queued" | "running" | "completed" | "retryable_failed" | "dead_letter"; attempts: number; leaseOwner?: string; leaseUntil?: number; errorCode?: string; createdAt: number; updatedAt: number }
 export interface ForgetRequest { access: AccessContext; scope: MemoryScope; ids?: string[]; topicIds?: string[] }
 export interface ForgetResult { records: number; topics: number; objects: number }
-export interface ExtractionProposal { records: WarmMemory[]; topics: TopicDescriptor[] }
+export interface ExtractionProposal { records: WarmMemory[]; topics: TopicDescriptor[]; nodes: GraphNode[]; edges: GraphEdge[] }

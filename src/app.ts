@@ -20,6 +20,17 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
   const app = Fastify({ logger });
 
 
+  app.post("/api/memory/capture", async (request, reply) => {
+    if (!memory) return reply.code(503).send({ error: "memory is disabled" });
+    const body = request.body as { scope?: MemoryScope; content?: string; idempotencyKey?: string };
+    if (!body.scope || !body.content?.trim()) return reply.code(400).send({ error: "scope and content are required" });
+    return memory.enqueueCapture({ access: memoryAccess(request,[body.scope],"capture"), sourceRefs: [{ sourceType:"manual", sourceId:body.idempotencyKey??`manual:${Date.now()}` }], content:body.content.trim(), idempotencyKey:body.idempotencyKey??`manual:${Date.now()}` });
+  });
+  app.post("/api/memory/status", async (request, reply) => {
+    if (!memory) return reply.code(503).send({ error: "memory is disabled" });
+    const body=request.body as { scopes?:MemoryScope[] }; if(!body.scopes?.length)return reply.code(400).send({error:"scopes are required"});
+    return memory.status(memoryAccess(request,body.scopes,"memory_admin"));
+  });
   app.post("/api/memory/recall", async (request, reply) => {
     if (!memory) return reply.code(503).send({ error: "memory is disabled" });
     const body = request.body as { cue?: string; scopes?: MemoryScope[]; kinds?: Array<"fact"|"preference"|"episode"|"procedure">; maxCards?: number; maxColdTopics?: number };
