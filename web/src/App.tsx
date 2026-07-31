@@ -19,8 +19,33 @@ function WorkspaceRunStatus({ session }: { session: Session }) {
 
 function ToolCall({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> }) {
   return <details className={`tool-call ${item.isError ? "failed" : ""}`}>
-    <summary><Terminal size={14} /><span>{item.toolName}</span><small>{item.status}</small><ChevronRight className="tool-chevron" size={14} /></summary>
+    <summary><Terminal size={14} /><span>{item.toolName}</span><small>{item.isError ? "failed" : item.status}</small><ChevronRight className="tool-chevron" size={14} /></summary>
     <div className="tool-call-body"><div><strong>Arguments</strong><pre>{JSON.stringify(item.arguments, null, 2)}</pre></div><div><strong>Result</strong><pre>{item.result || "No result recorded"}</pre></div></div>
+  </details>;
+}
+
+function ToolHistory({ items }: { items: Extract<TranscriptItem, { kind: "tool" }>[] }) {
+  const failed = items.filter((item) => item.isError).length;
+  return <details className="tool-history">
+    <summary>
+      <span className="tool-history-icon"><Terminal size={14} /></span>
+      <span><strong>Tool activity</strong><small>{items.length} call{items.length === 1 ? "" : "s"}{failed ? ` · ${failed} failed` : ""}</small></span>
+      <span className="tool-history-status">Details</span>
+      <ChevronRight className="tool-chevron" size={14} />
+    </summary>
+    <div className="tool-history-list">{items.map((item) => <ToolCall key={`${item.seq}-${item.index}`} item={item} />)}</div>
+  </details>;
+}
+
+function LiveToolActivity({ events }: { events: RunEvent[] }) {
+  const latestByTool = new Map<string, RunEvent>();
+  for (const event of events) latestByTool.set(String(event.data.toolCallId ?? event.data.toolName ?? event.seq), event);
+  const latest = [...latestByTool.values()].slice(-5).reverse();
+  const running = latest.filter((event) => event.type === "tool.started").length;
+  const failed = latest.filter((event) => Boolean(event.data.isError)).length;
+  return <details className="live-tools">
+    <summary><Activity size={14} /><span><strong>{running ? `${running} tool${running === 1 ? "" : "s"} running` : "Recent tool activity"}</strong><small>{latest.length} recent{failed ? ` · ${failed} failed` : ""}</small></span><ChevronRight className="tool-chevron" size={14} /></summary>
+    <div className="tool-stack">{latest.map((event) => <div className="tool-row" key={`${event.seq}-${event.type}`}><Terminal size={14} /><span>{String(event.data.toolName ?? "tool")}</span><small>{event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "done"}</small></div>)}</div>
   </details>;
 }
 
@@ -100,7 +125,10 @@ export function App() {
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const messageScrollRef = useRef<HTMLElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const autoScrollRef = useRef(true);
+  const forceScrollRef = useRef(true);
   const cancelRenameRef = useRef(false);
   const renameSubmittingRef = useRef(false);
   const activeRunIdRef = useRef("");
@@ -192,9 +220,21 @@ export function App() {
     return () => { closed = true; unsubscribe(); };
   }, [activeRun?.id, activeRun?.status, sessionId, loadSessions]);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, streaming, events]);
+  useEffect(() => {
+    const viewport = messageScrollRef.current;
+    if (!viewport || (!autoScrollRef.current && !forceScrollRef.current)) return;
+    viewport.scrollTop = viewport.scrollHeight;
+    forceScrollRef.current = false;
+  }, [messages, streaming, events]);
 
-  const activeTools = useMemo(() => events.filter((event) => event.type.startsWith("tool.")).slice(-8), [events]);
+  const handleMessageScroll = useCallback(() => {
+    const viewport = messageScrollRef.current;
+    if (!viewport) return;
+    autoScrollRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 96;
+  }, []);
+
+  const activeTools = useMemo(() => events.filter((event) => event.type.startsWith("tool.")).slice(-20), [events]);
+  const transcriptTools = useMemo(() => transcript.filter((item): item is Extract<TranscriptItem, { kind: "tool" }> => item.kind === "tool"), [transcript]);
 
   async function createSession() {
     const session = await api.createSession(`Workspace ${sessions.length + 1}`);
@@ -225,7 +265,7 @@ export function App() {
   async function submit() {
     const content = draft.trim();
     if (!content || !sessionId) return;
-    setDraft(""); setError(""); setNotice("");
+    setDraft(""); setError(""); setNotice(""); forceScrollRef.current = true;
     try {
       const admission = await api.send(sessionId, content);
       setInbox(await api.inbox(sessionId));
@@ -330,14 +370,16 @@ export function App() {
         <div className="top-actions">{runtimeStatus?.memoryEnabled && <button className="memory-launch" onClick={() => setMemoryOpen(true)}><BrainCircuit size={16} /><span>Memory</span><i /></button>}{selectedRun && ["blocked", "interrupted"].includes(selectedRun.status) && !activeRun && <button className="resume-button" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}{selectedRun?.status === "failed" && selectedRun.launchRetryable && !activeRun && <button className="resume-button" onClick={() => void retryLaunch(selectedRun)} disabled={Boolean(retryingRunId)}><Play size={15} />{retryingRunId === selectedRun.id ? "Retrying…" : "Retry launch"}</button>}{activeRun?.status === "running" && <button className="icon-button danger" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={17} /></button>}<button className="icon-button mobile-only" onClick={() => setRightOpen(true)} aria-label="Open task panel"><PanelRight size={19} /></button></div>
       </header>
 
-      <section className="message-scroll">
+      <section className="message-scroll" ref={messageScrollRef} onScroll={handleMessageScroll}>
+        <div className="message-feed">
         {!messages.length && !streaming && <div className="empty-state"><div className="empty-icon"><MessageSquarePlus size={25} /></div><h2>Start with an outcome</h2><p>TAgent will turn substantial work into a durable plan, execute tools, and hold completion behind checks.</p></div>}
         {messages.map((message) => <article key={message.id} className={`message ${message.role}`}><div className="message-meta"><span>{message.role === "user" ? "You" : "TAgent"}</span><time>{formatTime(message.createdAt)}</time></div><div className="message-body"><Markdown>{message.content}</Markdown></div></article>)}
-        {selectedRun && transcript.some((item) => item.kind === "tool") && <section className="transcript-tools"><div className="transcript-heading"><span>Tool calls</span><small>{transcript.filter((item) => item.kind === "tool").length}</small></div>{transcript.filter((item): item is Extract<TranscriptItem, { kind: "tool" }> => item.kind === "tool").map((item) => <ToolCall key={`${item.seq}-${item.index}`} item={item} />)}</section>}
+        {selectedRun && transcriptTools.length > 0 && <ToolHistory items={transcriptTools} />}
         {activeRun && <div className="active-run-strip"><Activity size={14} /><span>Attempt {activeRun.attempt}</span><strong>{activeRun.phase}</strong><small>{activeRun.usage.totalTokens.toLocaleString()} tokens</small></div>}
         {streaming && <article className="message assistant live"><div className="message-meta"><span>TAgent</span><span className="live-label"><span className="pulse" />Working</span></div><div className="message-body"><Markdown>{streaming}</Markdown></div></article>}
-        {activeTools.length > 0 && <div className="tool-stack">{activeTools.map((event) => <div className="tool-row" key={`${event.seq}-${event.type}`}><Terminal size={14} /><span>{String(event.data.toolName ?? "tool")}</span><small>{event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "done"}</small></div>)}</div>}
+        {activeTools.length > 0 && <LiveToolActivity events={activeTools} />}
         <div ref={endRef} />
+        </div>
       </section>
 
       <footer className="composer-wrap">

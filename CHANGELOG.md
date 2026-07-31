@@ -6,6 +6,15 @@ All notable changes to TAgent Core are documented here.
 
 No unreleased changes.
 
+## [0.1.2] - 2026-08-01
+
+### Changed
+
+- Stabilized the mobile viewport with dynamic viewport sizing, contained scrolling, and non-animated pinned-to-bottom updates.
+- Grouped completed and live tool activity into compact, collapsed summaries so tool-heavy runs no longer dominate the conversation.
+- Added clear visual cards and separators for assistant responses, with tighter responsive spacing on phones.
+- Capped the composer/inbox area and improved mobile safe-area behavior to keep the chat viewport stable while typing.
+
 ## [0.1.1] - 2026-08-01
 
 ### Security and reliability
@@ -81,3 +90,5 @@ First public source preview of the persistent TAgent control plane.
 [0.1.0]: https://github.com/imtms/tagent-core/releases/tag/v0.1.0
 
 [0.1.1]: https://github.com/imtms/tagent-core/releases/tag/v0.1.1
+
+[0.1.2]: https://github.com/imtms/tagent-core/releases/tag/v0.1.2
