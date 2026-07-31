@@ -62,6 +62,34 @@ describe("HTTP API", () => {
     expect((await app.inject({ method: "GET", url: `/api/sessions/${session.id}/inbox` })).json()).toEqual([]);
   });
 
+  it("starts a selected queued inbox item through the manual start API and reports conflicts", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
+    const store = new Store(":memory:");
+    class WaitingRuntime {
+      private resolve?: () => void;
+      prompt() { return new Promise<void>((resolve) => { this.resolve = resolve; }); }
+      async steer() { return "accepted" as const; }
+      abort() { this.resolve?.(); }
+      getMessages() { return []; }
+      getError() { return undefined; }
+    }
+    const service = new AgentService(store, workspace, () => new WaitingRuntime());
+    const app = createApp({ store, service, logger: false, webRoot: workspace }); apps.push(app);
+    const session = store.createSession();
+    const blocked = store.createRun(session.id, "blocked"); store.blockRun(blocked.id, "gate");
+    const queued = store.enqueueSessionInbox(session.id, "run selected", "api-run-now");
+
+    const started = await app.inject({ method: "POST", url: `/api/sessions/${session.id}/inbox/${queued.id}/start` });
+    expect(started.statusCode).toBe(200);
+    expect(started.json()).toMatchObject({ status: "started", item: { id: queued.id, status: "started" }, run: { goal: "run selected", status: "running" } });
+    expect(store.getRun(blocked.id)?.status).toBe("blocked");
+
+    const second = store.enqueueSessionInbox(session.id, "conflict", "api-conflict");
+    const conflict = await app.inject({ method: "POST", url: `/api/sessions/${session.id}/inbox/${second.id}/start` });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toMatchObject({ reason: "running_taskrun" });
+  });
+
   it("returns JSON 404 for unknown API routes instead of the SPA document", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
     const store = new Store(":memory:");

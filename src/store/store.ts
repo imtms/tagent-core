@@ -455,15 +455,35 @@ ${source.content}`;
       if (active) return undefined;
       const item = this.db.prepare("SELECT id FROM session_supervisor_inbox WHERE session_id = ? AND status = 'queued' AND decision = 'pending' ORDER BY position,created_at,id LIMIT 1").get(sessionId) as { id: string } | undefined;
       if (!item) return undefined;
-      const timestamp = now();
-      const claimed = this.db.prepare("UPDATE session_supervisor_inbox SET status='claimed',decision='start_taskrun',claimed_at=?,updated_at=? WHERE id=? AND status='queued'").run(timestamp,timestamp,item.id);
-      if (claimed.changes !== 1) return undefined;
-      const inbox = this.getSessionInboxItem(item.id)!;
-      const run = this.createRun(sessionId, inbox.content, `inbox:${inbox.id}`);
-      this.db.prepare("UPDATE session_supervisor_inbox SET status='started',run_id=?,started_at=?,updated_at=? WHERE id=? AND status='claimed'").run(run.id,timestamp,timestamp,inbox.id);
-      return { item: this.getSessionInboxItem(inbox.id)!, run };
+      return this.claimSessionInboxItem(item.id, sessionId);
     });
     return transaction();
+  }
+
+  claimSessionInboxNow(itemId: string, sessionId: SessionId) {
+    const transaction = this.db.transaction(() => {
+      const item = this.db.prepare("SELECT status FROM session_supervisor_inbox WHERE id = ? AND session_id = ?").get(itemId, sessionId) as { status: SessionInboxItem["status"] } | undefined;
+      if (!item || item.status !== "queued") return { status: "not_queued" as const };
+      const running = this.db.prepare("SELECT id FROM runs WHERE session_id = ? AND status = 'running' LIMIT 1").get(sessionId) as { id: string } | undefined;
+      if (running) return { status: "running" as const, runId: running.id };
+      const continuation = this.db.prepare(`SELECT c.id FROM run_continuations c
+        JOIN runs r ON r.id = c.run_id
+        WHERE r.session_id = ? AND r.status IN ('blocked','interrupted') AND c.status IN ('queued','running') LIMIT 1`).get(sessionId) as { id: string } | undefined;
+      if (continuation) return { status: "continuation" as const, continuationId: continuation.id };
+      const claimed = this.claimSessionInboxItem(itemId, sessionId);
+      return claimed ? { status: "started" as const, ...claimed } : { status: "not_queued" as const };
+    });
+    return transaction();
+  }
+
+  private claimSessionInboxItem(itemId: string, sessionId: SessionId) {
+    const timestamp = now();
+    const claimed = this.db.prepare("UPDATE session_supervisor_inbox SET status='claimed',decision='start_taskrun',claimed_at=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'").run(timestamp,timestamp,itemId,sessionId);
+    if (claimed.changes !== 1) return undefined;
+    const inbox = this.getSessionInboxItem(itemId)!;
+    const run = this.createRun(sessionId, inbox.content, `inbox:${inbox.id}`);
+    this.db.prepare("UPDATE session_supervisor_inbox SET status='started',run_id=?,started_at=?,updated_at=? WHERE id=? AND status='claimed'").run(run.id,timestamp,timestamp,inbox.id);
+    return { item: this.getSessionInboxItem(inbox.id)!, run };
   }
 
   failSessionInboxStart(itemId: string, runId: RunId, error: string) {
@@ -652,8 +672,10 @@ ${source.content}`;
       const continuation = this.db.prepare(`SELECT id, ordinal FROM run_continuations
         WHERE run_id = ? AND status = 'queued' ORDER BY ordinal LIMIT 1`).get(runId) as { id: string; ordinal: number } | undefined;
       if (!continuation) return undefined;
-      const run = this.db.prepare("SELECT status, last_event_seq as seq FROM runs WHERE id = ?").get(runId) as { status: RunStatus; seq: number } | undefined;
+      const run = this.db.prepare("SELECT session_id as sessionId, status, last_event_seq as seq FROM runs WHERE id = ?").get(runId) as { sessionId: SessionId; status: RunStatus; seq: number } | undefined;
       if (!run || run.status !== "blocked") return undefined;
+      const otherRunning = this.db.prepare("SELECT 1 FROM runs WHERE session_id = ? AND id <> ? AND status = 'running' LIMIT 1").get(run.sessionId, runId);
+      if (otherRunning) return undefined;
       const leaseUntil = timestamp + leaseMs;
       const claimed = this.db.prepare(`UPDATE run_continuations SET status = 'running', error = '',
         started_at = COALESCE(started_at, ?), completed_at = NULL, lease_owner = ?, lease_until = ?, heartbeat_at = ?

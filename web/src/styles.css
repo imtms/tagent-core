@@ -126,7 +126,9 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(22, 116, 
 .composer textarea::placeholder { color: #8b938e; }
 .composer button { width: 38px; height: 38px; border: 0; border-radius: 5px; background: #18201b; color: white; display: grid; place-items: center; cursor: pointer; }
 .composer button:disabled { background: #cbd0cc; cursor: default; }
-.error-banner { max-width: 760px; margin: 0 auto 8px; padding: 8px 10px; background: #fff0f0; color: #983b3b; border: 1px solid #f0d1d1; border-radius: var(--radius); font-size: 11px; }
+.error-banner, .success-banner { max-width: 760px; margin: 0 auto 8px; padding: 8px 10px; border-radius: var(--radius); font-size: 11px; }
+.error-banner { background: #fff0f0; color: #983b3b; border: 1px solid #f0d1d1; }
+.success-banner { background: #eef8f2; color: #286745; border: 1px solid #cde5d6; }
 .supervisor-inbox { max-width: 760px; max-height: 196px; margin: 10px auto 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: #f8faf8; box-shadow: 0 1px 2px rgba(24,34,28,.03); }
 .inbox-heading { min-height: 34px; padding: 0 11px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); color: #4b554f; font-size: 9px; font-weight: 750; text-transform: uppercase; letter-spacing: .04em; }
 .inbox-heading small { color: var(--muted); font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -138,6 +140,8 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(22, 116, 
 .inbox-item small { color: var(--muted); font-size: 9px; }
 .inbox-actions { display: flex; gap: 8px; margin-top: 2px; }
 .inbox-actions button { width: auto !important; height: auto !important; padding: 0 !important; color: var(--accent) !important; font-size: 9px; font-weight: 700; }
+.inbox-actions button.run-now { color: #175d41 !important; }
+.inbox-actions button:disabled { opacity: .55; cursor: default; }
 .inbox-item button { width: 28px; height: 28px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 5px; background: transparent; color: #7d8781; cursor: pointer; }
 .inbox-item button:hover { background: #f3e8e8; color: var(--danger); }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; padding-bottom: 18px; border-bottom: 1px solid var(--line); }

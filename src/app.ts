@@ -50,6 +50,17 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
     return store.listSessionInbox(id);
   });
+  app.post("/api/sessions/:id/inbox/:itemId/start", async (request, reply) => {
+    const { id, itemId } = request.params as { id: string; itemId: string };
+    if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    const result = service.startSessionInputNow(id, itemId);
+    if (result.status === "started") return result;
+    if (result.status === "running") return reply.code(409).send({ error: "session already has a running TaskRun", reason: "running_taskrun", runId: result.runId });
+    if (result.status === "continuation") return reply.code(409).send({ error: "a blocked TaskRun has a queued or running continuation", reason: "active_continuation", continuationId: result.continuationId });
+    if (result.status === "closing") return reply.code(409).send({ error: "service is shutting down", reason: "service_closing" });
+    if (result.status === "failed") return reply.code(500).send({ error: "inbox TaskRun failed to start", reason: "launch_failed" });
+    return reply.code(409).send({ error: "inbox item is not queued", reason: "not_queued" });
+  });
   app.post("/api/sessions/:id/inbox/:itemId/decision", async (request, reply) => {
     const { id, itemId } = request.params as { id: string; itemId: string };
     const body = request.body as { decision?: "pending" | "defer" };

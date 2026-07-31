@@ -30,6 +30,83 @@ describe("Store", () => {
     expect(store.claimNextSessionInbox(session.id)?.item.id).toBe(third.id);
   });
 
+  it("keeps blocked Session input queued automatically but lets a user start a selected item", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const blocked = store.createRun(session.id, "blocked task");
+    store.blockRun(blocked.id, "waiting for review");
+    const first = store.enqueueSessionInbox(session.id, "first", "manual-first");
+    const second = store.enqueueSessionInbox(session.id, "second", "manual-second");
+
+    expect(store.claimNextSessionInbox(session.id)).toBeUndefined();
+    const started = store.claimSessionInboxNow(second.id, session.id);
+    expect(started).toMatchObject({ status: "started", item: { id: second.id, status: "started" }, run: { goal: "second", status: "running" } });
+    expect(store.getRun(blocked.id)).toMatchObject({ status: "blocked", blockedReason: "waiting for review" });
+    expect(store.getSessionInboxItem(first.id)).toMatchObject({ status: "queued", position: first.position });
+  });
+
+  it("rejects manual Session inbox start while another Run or continuation is active", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const queued = store.enqueueSessionInbox(session.id, "queued", "manual-conflict");
+    const running = store.createRun(session.id, "running");
+    expect(store.claimSessionInboxNow(queued.id, session.id)).toEqual({ status: "running", runId: running.id });
+    store.finalizeRun(running.id, "completed");
+
+    const blocked = store.createRun(session.id, "blocked");
+    store.blockRun(blocked.id, "gate");
+    const continuation = store.queueContinuation(blocked.id, "gate");
+    expect(store.claimSessionInboxNow(queued.id, session.id)).toEqual({ status: "continuation", continuationId: continuation.id });
+  });
+
+  it("allows terminal Runs to stop blocking automatic Session inbox dispatch", () => {
+    for (const status of ["completed", "failed", "cancelled"] as const) {
+      const store = createStore();
+      const session = store.createSession();
+      const previous = store.createRun(session.id, status);
+      store.finalizeRun(previous.id, status);
+      const queued = store.enqueueSessionInbox(session.id, `after ${status}`, `after-${status}`);
+      expect(store.claimNextSessionInbox(session.id)?.item.id).toBe(queued.id);
+    }
+  });
+
+  it("allows only one manual claimant and does not reclaim a started item after reopen", async () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-manual-inbox-")), "store.db");
+    const firstStore = new Store(filename); const secondStore = new Store(filename);
+    stores.push(firstStore, secondStore);
+    const session = firstStore.createSession();
+    const blocked = firstStore.createRun(session.id, "blocked");
+    firstStore.blockRun(blocked.id, "gate");
+    const queued = firstStore.enqueueSessionInbox(session.id, "manual", "manual-race");
+    const claims = await Promise.all([
+      Promise.resolve().then(() => firstStore.claimSessionInboxNow(queued.id, session.id)),
+      Promise.resolve().then(() => secondStore.claimSessionInboxNow(queued.id, session.id)),
+    ]);
+    expect(claims.filter((claim) => claim.status === "started")).toHaveLength(1);
+    expect(firstStore.listRuns(session.id)).toHaveLength(2);
+    firstStore.close(); secondStore.close();
+    stores.splice(0);
+
+    const reopened = new Store(filename); stores.push(reopened);
+    expect(reopened.claimNextSessionInbox(session.id)).toBeUndefined();
+    expect(reopened.listRuns(session.id)).toHaveLength(2);
+    expect(reopened.getSessionInboxItem(queued.id)).toMatchObject({ status: "started", claimedAt: expect.any(Number), startedAt: expect.any(Number) });
+  });
+
+  it("does not start a blocked continuation while a manually selected Run is running", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const blocked = store.createRun(session.id, "blocked");
+    store.blockRun(blocked.id, "gate");
+    store.queueContinuation(blocked.id, "gate");
+    store.db.prepare("UPDATE run_continuations SET status = 'cancelled' WHERE run_id = ?").run(blocked.id);
+    const queued = store.enqueueSessionInbox(session.id, "manual", "manual-fence");
+    expect(store.claimSessionInboxNow(queued.id, session.id).status).toBe("started");
+    const continuation = store.queueContinuation(blocked.id, "new gate");
+    expect(store.claimContinuation(blocked.id, "owner", 30_000)).toBeUndefined();
+    expect(store.listContinuations(blocked.id).find((item) => item.id === continuation.id)?.status).toBe("queued");
+  });
+
   it("allows only one Session inbox claimant across store connections", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-inbox-claim-")), "store.db");
     const firstStore = new Store(filename); const secondStore = new Store(filename);
