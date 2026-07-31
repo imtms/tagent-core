@@ -39,6 +39,44 @@ describe("HTTP API", () => {
     expect(transcriptView.json()).toEqual([]);
   });
 
+  it("creates Sessions idempotently with an optional requestId", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-session-request-"));
+    const store = new Store(":memory:");
+    const app = createApp({ store, service: new AgentService(store, workspace), logger: false, webRoot: workspace }); apps.push(app);
+    const first = (await app.inject({ method: "POST", url: "/api/sessions", payload: { title: "External", requestId: "session-request-1" } })).json();
+    const duplicate = (await app.inject({ method: "POST", url: "/api/sessions", payload: { title: "Changed", requestId: "session-request-1" } })).json();
+    expect(duplicate.id).toBe(first.id);
+    expect(duplicate.title).toBe("External");
+    expect(store.listSessions()).toHaveLength(1);
+    expect((await app.inject({ method: "POST", url: "/api/sessions", payload: { requestId: "" } })).statusCode).toBe(400);
+  });
+
+  it("returns a durable submission receipt and finds it by requestId", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-submission-"));
+    const store = new Store(":memory:");
+    class WaitingRuntime { private resolve?: () => void; prompt() { return new Promise<void>((resolve) => { this.resolve = resolve; }); } async steer() { return "accepted" as const; } abort() { this.resolve?.(); } getMessages() { return []; } getError() { return undefined; } }
+    const app = createApp({ store, service: new AgentService(store, workspace, () => new WaitingRuntime()), logger: false, webRoot: workspace }); apps.push(app);
+    const session = store.createSession();
+    const submitted = await app.inject({ method: "POST", url: `/api/sessions/${session.id}/messages`, payload: { content: "durable", requestId: "external-request-1" } });
+    expect(submitted.json().receipt).toMatchObject({ requestId: "external-request-1", sessionId: session.id, inboxItemId: submitted.json().item.id, status: "started", runId: submitted.json().run.id });
+    const found = await app.inject({ method: "GET", url: `/api/sessions/${session.id}/submissions/external-request-1` });
+    expect(found.json()).toEqual(submitted.json().receipt);
+    expect((await app.inject({ method: "GET", url: `/api/sessions/${session.id}/submissions/missing` })).statusCode).toBe(404);
+  });
+
+  it("authorizes service credentials by least-privilege scope", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-service-auth-"));
+    const store = new Store(":memory:");
+    const token = "gateway-service-token-1234567890";
+    const app = createApp({ store, service: new AgentService(store, workspace), logger: false, webRoot: workspace, serviceCredentials: [{ token, scopes: ["sessions:read", "sessions:write", "runs:read", "runs:control", "events:consume"] }] }); apps.push(app);
+    const bearer = { authorization: `Bearer ${token}` };
+    expect((await app.inject({ method: "POST", url: "/api/sessions", headers: bearer, payload: { title: "service" } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/sessions", headers: bearer })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/config/status", headers: bearer })).statusCode).toBe(403);
+    expect((await app.inject({ method: "GET", url: "/api/sessions" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/api/health" })).statusCode).toBe(200);
+  });
+
   it("renames a workspace through the Session API", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-rename-"));
     const store = new Store(":memory:");
