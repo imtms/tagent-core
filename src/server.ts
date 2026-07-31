@@ -4,21 +4,25 @@ import { AgentService } from "./core/agent-service.js";
 import { createApp } from "./app.js";
 import { createModel, loadConfig, publicRuntimeConfig } from "./config.js";
 import { resolveRuntimeFactory } from "./runtime/factory.js";
-import { createMemoryRuntime } from "./memory/factory.js";
+import type { MemoryRuntime } from "./memory/factory.js";
 
 const config = loadConfig();
 await mkdir(config.workspace, { recursive: true });
 await mkdir("./data", { recursive: true });
 const store = new Store(config.database);
-const memoryRuntime = await createMemoryRuntime(config.memory, store);
-memoryRuntime?.start();
+let memoryRuntime: MemoryRuntime | null = null;
+if (config.memory.enabled) {
+  const { createMemoryRuntime } = await import("./memory/factory.js");
+  memoryRuntime = await createMemoryRuntime(config.memory, store);
+  memoryRuntime.start();
+}
 const service = new AgentService(
   store,
   config.workspace,
   resolveRuntimeFactory(config.runtime),
-  { model: createModel(config.model), apiKey: config.apiKey, providerTimeoutMs: config.providerTimeoutMs, providerMaxRetries: config.providerMaxRetries, runTimeoutMs: config.runTimeoutMs, runHardTimeoutMs: config.runHardTimeoutMs, maxContinuations: config.maxContinuations, maxRunTokens: config.maxRunTokens, contextWindow: config.model.contextWindow, maxContextTurns: config.maxContextTurns, contextReserveTokens: config.contextReserveTokens, dynamicBudget: config.dynamicBudget, controlInboxCapacity: config.controlInboxCapacity, memoryRecallTokenBudget: config.memory.recallTokenBudget },
+  { model: createModel(config.model), apiKey: config.apiKey, providerTimeoutMs: config.providerTimeoutMs, providerMaxRetries: config.providerMaxRetries, runTimeoutMs: config.runTimeoutMs, runHardTimeoutMs: config.runHardTimeoutMs, maxContinuations: config.maxContinuations, maxRunTokens: config.maxRunTokens, contextWindow: config.model.contextWindow, maxContextTurns: config.maxContextTurns, contextReserveTokens: config.contextReserveTokens, dynamicBudget: config.dynamicBudget, controlInboxCapacity: config.controlInboxCapacity, memoryRecallTokenBudget: config.memory.enabled ? config.memory.recallTokenBudget : undefined },
   memoryRuntime?.service,
-  config.memory.workspaceScopeId,
+  config.memory.enabled ? config.memory.workspaceScopeId : "default",
 );
 const app = createApp({ store, service, memory: memoryRuntime?.service, runtimeConfig: publicRuntimeConfig(config, store.getSchemaVersion()) });
 service.recoverContinuations();

@@ -27,8 +27,30 @@ export interface AppConfig {
   dynamicBudget: boolean;
   controlInboxCapacity: number;
   model: ModelConfig;
-  memory: { enabled: boolean; backend: "memory" | "postgres"; postgresUrl?: string; coldBackend: "local" | "s3"; coldPath: string; s3Bucket?: string; s3Prefix?: string; s3Endpoint?: string; s3Region?: string; s3ForcePathStyle: boolean; workerIntervalMs: number; maintenanceIntervalMs: number; workspaceScopeId: string; recallTokenBudget: number; coldMinimumRecords: number; warmAfterMs: number; hotTtlMs: number; };
+  memory: MemoryConfig;
 }
+
+export type MemoryConfig =
+  | { enabled: false }
+  | {
+      enabled: true;
+      backend: "memory" | "postgres";
+      postgresUrl?: string;
+      coldBackend: "local" | "s3";
+      coldPath: string;
+      s3Bucket?: string;
+      s3Prefix?: string;
+      s3Endpoint?: string;
+      s3Region?: string;
+      s3ForcePathStyle: boolean;
+      workerIntervalMs: number;
+      maintenanceIntervalMs: number;
+      workspaceScopeId: string;
+      recallTokenBudget: number;
+      coldMinimumRecords: number;
+      warmAfterMs: number;
+      hotTtlMs: number;
+    };
 
 function positiveInteger(value: string | undefined, fallback: number, name: string) {
   const parsed = value === undefined ? fallback : Number(value);
@@ -40,6 +62,48 @@ function nonNegativeInteger(value: string | undefined, fallback: number, name: s
   const parsed = value === undefined ? fallback : Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`${name} must be a non-negative integer`);
   return parsed;
+}
+
+function enabled(value: string | undefined, name: string) {
+  if (value === undefined || value === "false") return false;
+  if (value === "true") return true;
+  throw new Error(`${name} must be true or false`);
+}
+
+function loadMemoryConfig(env: NodeJS.ProcessEnv): MemoryConfig {
+  if (!enabled(env.TAGENT_MEMORY_ENABLED, "TAGENT_MEMORY_ENABLED")) return { enabled: false };
+
+  const backend = env.TAGENT_MEMORY_BACKEND ?? "postgres";
+  if (backend !== "memory" && backend !== "postgres") throw new Error("TAGENT_MEMORY_BACKEND must be memory or postgres");
+  if (backend === "postgres" && !env.TAGENT_MEMORY_POSTGRES_URL?.trim()) {
+    throw new Error("TAGENT_MEMORY_POSTGRES_URL is required when TAGENT_MEMORY_ENABLED=true and TAGENT_MEMORY_BACKEND=postgres");
+  }
+
+  const coldBackend = env.TAGENT_MEMORY_COLD_BACKEND ?? "local";
+  if (coldBackend !== "local" && coldBackend !== "s3") throw new Error("TAGENT_MEMORY_COLD_BACKEND must be local or s3");
+  if (coldBackend === "s3" && !env.TAGENT_MEMORY_S3_BUCKET?.trim()) {
+    throw new Error("TAGENT_MEMORY_S3_BUCKET is required when TAGENT_MEMORY_COLD_BACKEND=s3");
+  }
+
+  return {
+    enabled: true,
+    backend,
+    postgresUrl: env.TAGENT_MEMORY_POSTGRES_URL?.trim() || undefined,
+    coldBackend,
+    coldPath: env.TAGENT_MEMORY_COLD_PATH ?? "./data/memory-cold",
+    s3Bucket: env.TAGENT_MEMORY_S3_BUCKET?.trim() || undefined,
+    s3Prefix: env.TAGENT_MEMORY_S3_PREFIX,
+    s3Endpoint: env.TAGENT_MEMORY_S3_ENDPOINT,
+    s3Region: env.TAGENT_MEMORY_S3_REGION,
+    s3ForcePathStyle: enabled(env.TAGENT_MEMORY_S3_FORCE_PATH_STYLE, "TAGENT_MEMORY_S3_FORCE_PATH_STYLE"),
+    workerIntervalMs: positiveInteger(env.TAGENT_MEMORY_WORKER_INTERVAL_MS, 1_000, "TAGENT_MEMORY_WORKER_INTERVAL_MS"),
+    maintenanceIntervalMs: positiveInteger(env.TAGENT_MEMORY_MAINTENANCE_INTERVAL_MS, 60_000, "TAGENT_MEMORY_MAINTENANCE_INTERVAL_MS"),
+    workspaceScopeId: env.TAGENT_MEMORY_WORKSPACE_SCOPE_ID ?? "default",
+    recallTokenBudget: positiveInteger(env.TAGENT_MEMORY_RECALL_TOKEN_BUDGET, 8_000, "TAGENT_MEMORY_RECALL_TOKEN_BUDGET"),
+    coldMinimumRecords: positiveInteger(env.TAGENT_MEMORY_COLD_MINIMUM_RECORDS, 2, "TAGENT_MEMORY_COLD_MINIMUM_RECORDS"),
+    warmAfterMs: nonNegativeInteger(env.TAGENT_MEMORY_WARM_AFTER_MS, 0, "TAGENT_MEMORY_WARM_AFTER_MS"),
+    hotTtlMs: positiveInteger(env.TAGENT_MEMORY_HOT_TTL_MS, 2_592_000_000, "TAGENT_MEMORY_HOT_TTL_MS"),
+  };
 }
 
 function normalizeBaseUrl(value: string) {
@@ -67,22 +131,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     contextReserveTokens: env.TAGENT_CONTEXT_RESERVE_TOKENS === undefined ? undefined : positiveInteger(env.TAGENT_CONTEXT_RESERVE_TOKENS, 10_000, "TAGENT_CONTEXT_RESERVE_TOKENS"),
     dynamicBudget: env.TAGENT_DYNAMIC_BUDGET !== "false",
     controlInboxCapacity: positiveInteger(env.TAGENT_CONTROL_INBOX_CAPACITY, 32, "TAGENT_CONTROL_INBOX_CAPACITY"),
-    memory: {
-      enabled: env.TAGENT_MEMORY_ENABLED === "true",
-      backend: env.TAGENT_MEMORY_BACKEND === "postgres" ? "postgres" : "memory",
-      postgresUrl: env.TAGENT_MEMORY_POSTGRES_URL,
-      coldBackend: env.TAGENT_MEMORY_COLD_BACKEND === "s3" ? "s3" : "local",
-      coldPath: env.TAGENT_MEMORY_COLD_PATH ?? "./data/memory-cold",
-      s3Bucket: env.TAGENT_MEMORY_S3_BUCKET, s3Prefix: env.TAGENT_MEMORY_S3_PREFIX, s3Endpoint: env.TAGENT_MEMORY_S3_ENDPOINT, s3Region: env.TAGENT_MEMORY_S3_REGION,
-      s3ForcePathStyle: env.TAGENT_MEMORY_S3_FORCE_PATH_STYLE === "true",
-      workerIntervalMs: positiveInteger(env.TAGENT_MEMORY_WORKER_INTERVAL_MS, 1_000, "TAGENT_MEMORY_WORKER_INTERVAL_MS"),
-      maintenanceIntervalMs: positiveInteger(env.TAGENT_MEMORY_MAINTENANCE_INTERVAL_MS, 60_000, "TAGENT_MEMORY_MAINTENANCE_INTERVAL_MS"),
-      workspaceScopeId: env.TAGENT_MEMORY_WORKSPACE_SCOPE_ID ?? "default",
-      recallTokenBudget: positiveInteger(env.TAGENT_MEMORY_RECALL_TOKEN_BUDGET, 8_000, "TAGENT_MEMORY_RECALL_TOKEN_BUDGET"),
-      coldMinimumRecords: positiveInteger(env.TAGENT_MEMORY_COLD_MINIMUM_RECORDS, 2, "TAGENT_MEMORY_COLD_MINIMUM_RECORDS"),
-      warmAfterMs: nonNegativeInteger(env.TAGENT_MEMORY_WARM_AFTER_MS, 0, "TAGENT_MEMORY_WARM_AFTER_MS"),
-      hotTtlMs: positiveInteger(env.TAGENT_MEMORY_HOT_TTL_MS, 2_592_000_000, "TAGENT_MEMORY_HOT_TTL_MS"),
-    },
+    memory: loadMemoryConfig(env),
     model: {
       provider: env.TAGENT_PROVIDER ?? "openai-compatible",
       modelId: env.TAGENT_MODEL ?? "gpt-5.6-sol",
@@ -113,6 +162,7 @@ export interface PublicRuntimeConfig {
   dynamicBudget: boolean;
   controlInboxCapacity: number;
   schemaVersion?: number;
+  memoryEnabled: boolean;
 }
 
 export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): PublicRuntimeConfig {
@@ -134,6 +184,7 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     dynamicBudget: config.dynamicBudget,
     controlInboxCapacity: config.controlInboxCapacity,
     schemaVersion,
+    memoryEnabled: config.memory.enabled,
   };
 }
 

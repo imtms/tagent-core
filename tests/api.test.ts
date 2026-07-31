@@ -10,6 +10,19 @@ const apps: Array<ReturnType<typeof createApp>> = [];
 afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close())); });
 
 describe("HTTP API", () => {
+  it("keeps the original API usable and reports memory disabled when no memory facade is configured", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
+    const store = new Store(":memory:");
+    const app = createApp({ store, service: new AgentService(store, workspace), logger: false, webRoot: workspace });
+    apps.push(app);
+
+    expect((await app.inject({ method: "GET", url: "/api/health" })).statusCode).toBe(200);
+    const session = await app.inject({ method: "POST", url: "/api/sessions", payload: { title: "without long-term memory" } });
+    expect(session.statusCode).toBe(200);
+    const memory = await app.inject({ method: "POST", url: "/api/memory/status", payload: { scopes: [{ type: "workspace", id: "default" }] } });
+    expect(memory.statusCode).toBe(503);
+    expect(memory.json()).toEqual({ error: "memory is disabled" });
+  });
   it("serves health and session CRUD", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
     const store = new Store(":memory:");

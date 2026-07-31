@@ -16,7 +16,39 @@ The current release is `0.1.0-alpha.1`. It is intended for one trusted process, 
 - Fastify HTTP/SSE API and a responsive React workbench
 - Safe Markdown and paired transcript tool-call inspection
 
-Knowledge, long-term memory, scheduling, policy, identity, multi-channel delivery, and isolated workers are intentionally outside this repository's current core.
+Long-term memory is an optional adapter-based extension and is disabled by default. Scheduling, identity, multi-channel delivery, and isolated workers remain outside this repository's current core.
+
+## Optional Long-Term Memory
+
+Long-term memory is opt-in. With the default setting below, TAgent Core does not initialize memory adapters, workers, PostgreSQL, pgvector, S3, or Local Cold storage. It retains only the original SQLite session/TaskRun history and can be installed and run without any memory service:
+
+```env
+TAGENT_MEMORY_ENABLED=false
+```
+
+To enable the persistent single-service Local Cold profile:
+
+```bash
+docker compose -f deploy/postgres/compose.yml up -d
+```
+
+```env
+TAGENT_MEMORY_ENABLED=true
+TAGENT_MEMORY_BACKEND=postgres
+TAGENT_MEMORY_POSTGRES_URL=postgresql://tagent:tagent@127.0.0.1:5432/tagent_memory
+TAGENT_MEMORY_COLD_BACKEND=local
+TAGENT_MEMORY_COLD_PATH=./data/memory-cold
+TAGENT_MEMORY_WORKSPACE_SCOPE_ID=default
+```
+
+Requirements when enabled with this profile:
+
+- PostgreSQL 17 with the `vector` extension (the supplied Compose file uses `pgvector/pgvector:pg17`);
+- a reachable database and valid `TAGENT_MEMORY_POSTGRES_URL`;
+- a writable `TAGENT_MEMORY_COLD_PATH`;
+- enough database/filesystem capacity for Hot/Warm records, vectors, graph metadata, jobs, and immutable Cold revisions.
+
+`TAGENT_MEMORY_BACKEND=memory` is available for development/testing without PostgreSQL, but its Hot/Warm metadata and indexes are not durable. `TAGENT_MEMORY_COLD_BACKEND=s3` additionally requires `TAGENT_MEMORY_S3_BUCKET` and AWS-compatible credentials/settings. Invalid or missing memory-only settings fail startup only when memory is enabled. See `docs/MEMORY_OPERATIONS.md` for details.
 
 ## Pi Integration
 
@@ -113,6 +145,7 @@ model:    gpt-5.6-sol
 | `TAGENT_DB` | `./data/tagent.db` | SQLite database path |
 | `TAGENT_WORKSPACE` | current directory | Root exposed to TAgent tools |
 | `PORT` | `3100` | HTTP, SSE, and Web port |
+| `TAGENT_MEMORY_ENABLED` | `false` | Opt in to the long-term memory platform; disabled mode requires no memory services |
 
 Dynamic budget defaults:
 

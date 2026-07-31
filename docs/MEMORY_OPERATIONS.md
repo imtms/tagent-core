@@ -1,5 +1,17 @@
 # Memory Operations
 
+## Enable or disable
+
+Long-term memory is optional and disabled by default:
+
+```env
+TAGENT_MEMORY_ENABLED=false
+```
+
+In disabled mode, no memory adapter or worker is loaded, no PostgreSQL/S3 connection is attempted, memory-only environment values are ignored, and the original SQLite-backed TAgent Core remains usable. Memory HTTP endpoints return `503 {"error":"memory is disabled"}`.
+
+To enable memory, set `TAGENT_MEMORY_ENABLED=true`. Memory adapter modules are loaded only for the selected backend; the corresponding external service and environment configuration are required only when that backend is enabled. The recommended durable Local Cold profile additionally requires `TAGENT_MEMORY_BACKEND=postgres`, `TAGENT_MEMORY_POSTGRES_URL`, PostgreSQL with pgvector, and a writable local Cold path. Configuration is validated before the memory runtime starts. For a dependency-free development adapter, use `TAGENT_MEMORY_BACKEND=memory`; it is not durable.
+
 ## Local PostgreSQL without Docker
 
 On Debian: install `postgresql`, `postgresql-contrib`, development headers, and the pgvector package when available. Create database/user `tagent_memory`/`tagent`, then set `TAGENT_MEMORY_POSTGRES_URL`. The server runs `src/memory/postgres/schema.sql` idempotently at startup.
