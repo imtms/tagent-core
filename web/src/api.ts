@@ -48,9 +48,11 @@ export interface MemoryCard { id: string; kind: MemoryKind; tier: MemoryTier; ti
 export interface RecallResult { cards: MemoryCard[]; coldTopics: ColdTopic[]; trace: { topicIds: string[]; candidateCount: number; deniedCount: number } }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  if (init?.body != null && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  const response = await fetch(url, { ...init, headers });
+  const needsRunControlRequestId = init?.method === "POST" && init.body == null && /^\/api\/runs\/[^/]+\/(cancel|resume)$/.test(url);
+  const requestInit = needsRunControlRequestId ? { ...init, body: JSON.stringify({ requestId: createRequestId() }) } : init;
+  const headers = new Headers(requestInit?.headers);
+  if (requestInit?.body != null && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const response = await fetch(url, { ...requestInit, headers });
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
     throw new Error(`TAgent API protocol mismatch at ${url}: expected JSON but received ${contentType || "an unknown content type"}. The server may need to be restarted after an upgrade.`);
