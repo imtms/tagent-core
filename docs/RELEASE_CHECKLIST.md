@@ -6,6 +6,8 @@ This checklist applies to source prereleases. TAgent Core is not published to np
 
 ## Before tagging
 
+If long-term memory is included in the release, complete [MEMORY_RELEASE_CHECKLIST.md](MEMORY_RELEASE_CHECKLIST.md) in addition to the general checks below. Memory-off compatibility is a required release gate because long-term memory is opt-in.
+
 1. Confirm `package.json` and `package-lock.json` use the target version.
 2. Update `CHANGELOG.md`, `README.md`, `docs/STATUS.md`, and known limitations.
 3. Confirm the worktree is clean and the release commit is on `main`.

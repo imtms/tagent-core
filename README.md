@@ -48,7 +48,7 @@ Requirements when enabled with this profile:
 - a writable `TAGENT_MEMORY_COLD_PATH`;
 - enough database/filesystem capacity for Hot/Warm records, vectors, graph metadata, jobs, and immutable Cold revisions.
 
-`TAGENT_MEMORY_BACKEND=memory` is available for development/testing without PostgreSQL, but its Hot/Warm metadata and indexes are not durable. `TAGENT_MEMORY_COLD_BACKEND=s3` additionally requires `TAGENT_MEMORY_S3_BUCKET` and AWS-compatible credentials/settings. Invalid or missing memory-only settings fail startup only when memory is enabled. See `docs/MEMORY_OPERATIONS.md` for details.
+`TAGENT_MEMORY_BACKEND=memory` is available for development/testing without PostgreSQL, but its Hot/Warm metadata and indexes are not durable. `TAGENT_MEMORY_COLD_BACKEND=s3` additionally requires `TAGENT_MEMORY_S3_BUCKET` and AWS-compatible credentials/settings. Invalid or missing memory-only settings fail startup only when memory is enabled. See the [memory documentation index](docs/MEMORY.md) and [operations guide](docs/MEMORY_OPERATIONS.md) for details.
 
 ## Pi Integration
 
@@ -239,9 +239,14 @@ The repository includes integration coverage for custom-provider registration, r
 
 ## Project Documents
 
+- [Long-term memory documentation](docs/MEMORY.md)
+- [Memory architecture](docs/MEMORY_ARCHITECTURE.md)
+- [Memory operations](docs/MEMORY_OPERATIONS.md)
+- [Memory API, Agent tools, and Web UI](docs/MEMORY_API.md)
+- [Memory release checklist](docs/MEMORY_RELEASE_CHECKLIST.md)
 - [Development status](docs/STATUS.md)
 - [Runtime boundary and worker direction](docs/RUNTIME.md)
-- [Release checklist](docs/RELEASE_CHECKLIST.md)
+- [General release checklist](docs/RELEASE_CHECKLIST.md)
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 

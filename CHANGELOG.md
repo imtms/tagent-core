@@ -4,6 +4,12 @@ All notable changes to TAgent Core are documented here.
 
 ## Unreleased
 
+- Add optional Hot/Warm/Cold long-term memory behind `TAGENT_MEMORY_ENABLED`, preserving the original SQLite-only behavior when disabled.
+- Add PostgreSQL/pgvector/pg_trgm storage, Fact/Preference separation, bounded entity graph routing, durable capture jobs, and immutable Local Cold Markdown Topic revisions.
+- Add deterministic and hybrid LLM extraction with conversation coreference, OpenAI-compatible semantic embeddings, lexical fallback, and LLM-assisted Cold consolidation.
+- Add sensitive-data and stored-prompt-injection gates across capture, persistence, embedding, Cold publication, recall, and prompt injection.
+- Add dynamic Agent recall, `memory_search`, `memory_topic_get`, guarded `memory_forget`, capture observability events/API, and the Web Memory Center.
+- Add maintained regressions for explicit identity, positive/negative food preferences, Chinese pronoun resolution, homes, and neighbor relationships.
 - Add Schema v8 Session Supervisor Inbox so all chat composer input is durably queued before TaskRun creation, with idempotent admission, atomic claim, serial dispatch, restart recovery, defer/resume, merge, and deletion of unstarted items.
 - Replace direct active-run steering in the Web composer with a persistent queue panel; queued input remains outside conversation history until Supervisor selection.
 - Harden TaskRun supervision against duplicate proposed steers, stale attempt progress, terminal decision crash gaps, missing continuation rows, exhausted continuation resurrection, and spawned runtime launch failures.

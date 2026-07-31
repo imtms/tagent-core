@@ -76,6 +76,18 @@ Updated: 2026-07-31 (Asia/Singapore)
 - Session navigation displays each workspace's latest TaskRun status and phase, refreshed with the Session summary rather than an application-layer per-Session query loop.
 - Session polling fully hydrates a newly started active Run without a browser refresh, including selected Run, messages, transcript, checkpoint partial, tool state, and SSE consumer handoff.
 
+### Optional long-term memory
+
+- Opt-in Hot/Warm/Cold memory platform; disabled mode loads no memory adapter/worker and preserves the original SQLite-only runtime.
+- PostgreSQL 17/pgvector/pg_trgm durable profile with separate Fact and Preference storage, Topic Descriptors, bounded entity graph, capture jobs, policy receipts, and immutable Local Cold revisions.
+- OpenAI-compatible semantic embedding with generation-aware reindex and lexical-only fallback; deterministic hash embedding remains test/development-only.
+- Deterministic safety extraction plus optional structured LLM extraction for multi-sentence context, negation, conditions, temporal changes, and Chinese coreference.
+- User-message, context-prune, Run-boundary, and manual capture triggers with queued/completed/empty/failed observability and proposal/persisted counts.
+- Hot-to-Warm promotion, duplicate/conflict handling, inferred preference promotion, LLM-assisted or deterministic Warm-to-Cold consolidation, and Local Cold reconciliation.
+- Dynamic recall across lexical, trigram, vector, Topic, and bounded graph routes; complete checksum-verified Cold pages are injected as low-authority data and never vector-chunked.
+- Agent `memory_search`, `memory_topic_get`, and guarded `memory_forget` tools plus a conditional Web Memory Center.
+- Release documentation is indexed at [MEMORY.md](MEMORY.md); deployment limits remain trusted single-service/private-network use without complete multi-tenant authentication.
+
 ### Quality baseline
 
 - TypeScript configurations separated for Node and browser builds.
@@ -111,9 +123,9 @@ Updated: 2026-07-31 (Asia/Singapore)
 
 ### P3: Context modules
 
-- Add memory and knowledge interfaces without coupling them to the core runtime.
-- Add dynamic PromptAssembler sections, evidence summaries, and prompt provenance.
-- Add source provenance and retrieval evidence to TaskRun artifacts.
+- Extend the implemented memory interfaces with formal authenticated user/scope membership and richer recall scoring traces.
+- Add recall feedback, offline quality evaluation, MMR/diversity ranking, and explicit contradiction penalties.
+- Add source provenance and retrieval evidence to TaskRun artifacts and a unified ContextAssembler token budget.
 
 ### P4: Operations
 
