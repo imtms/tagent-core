@@ -483,7 +483,6 @@ export class AgentService {
         if (response) this.store.appendMessage(current.sessionId, "assistant", response);
         this.supervisor.markExecuted(decision.id, "executed");
         this.publish(event);
-        this.captureStructuredTaskOutcome(this.store.getRun(runId)!);
         for (const spawn of this.supervisor.reviewSpawn(this.store.getRun(runId)!, event.seq)) this.publish(this.store.appendEvent(runId, "supervisor.spawn.proposed", { decisionId: spawn.id, reasonCode: spawn.reasonCode }));
         return false;
       }
@@ -516,23 +515,6 @@ export class AgentService {
     void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "message", sourceId: String(messageId), revision: "user" }], content: `<context>\n${context}\n</context>\n<focus_user>\n${content}\n</focus_user>`, idempotencyKey: `user-message:${messageId}`, provenance: userExplicitProvenance }).then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "message", sourceId: String(messageId) }))).catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "message", sourceId: String(messageId), error: error instanceof Error ? error.message : String(error) })));
   }
 
-  private captureStructuredTaskOutcome(run: TaskRun) {
-    if (!this.memory || run.status !== "completed") return;
-    const passedChecks = run.checks.filter((check) => check.status === "passed" && check.evidence.trim());
-    const artifacts = run.artifacts.filter((artifact) => artifact.content.trim() || artifact.uri.trim());
-    if (!passedChecks.length && !artifacts.length) return;
-    const lines = [
-      ...passedChecks.map((check) => `Verified check [${check.key}] ${check.title}: ${check.evidence}`),
-      ...artifacts.map((artifact) => `Published artifact [${artifact.id}] ${artifact.title}: ${artifact.uri || artifact.content}`),
-    ];
-    const sourceRefs = [
-      ...passedChecks.map((check) => ({ sourceType: "check" as const, sourceId: `${run.id}:${check.key}`, revision: String(run.attempt) })),
-      ...artifacts.map((artifact) => ({ sourceType: "artifact" as const, sourceId: artifact.id, revision: String(run.attempt) })),
-    ];
-    void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs, content: lines.join("\n"), idempotencyKey: `task-outcome:${run.id}:${run.attempt}`, provenance: taskOutcomeProvenance })
-      .then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "task_outcome" })))
-      .catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "task_outcome", error: error instanceof Error ? error.message : String(error) })));
-  }
 
 
   private executionBudget(run: TaskRun) {
@@ -775,5 +757,4 @@ function memoryMessageText(message: AgentMessage) { if (!("content" in message))
 function summarizeDurableUserContext(text: string) { return text.split(/\n+|(?<=[。！？.!?])\s*/).map((part) => part.trim()).filter((part) => part.length >= 2 && !/[?？]$/.test(part) && !/^(?:请|帮我|麻烦|检查|审计|排查|修复|实现|运行|执行|部署|合并|查看|确认|分析|调查)/i.test(part) && /(?:记住|我叫|我的名字|叫我|称呼我|我.{0,20}(?:喜欢|偏好|希望|不喜欢|习惯)|我们(?:已经|已)?(?:决定|确定|采用|改为|迁移)|以后|始终|必须|住在|家在|是邻居|my name|call me|i prefer|we decided|from now on)/i.test(part)); }
 function stableTextHash(text: string) { let hash = 2166136261; for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619); return (hash >>> 0).toString(16); }
 const userContextSummaryProvenance: MemoryProvenance = { evidenceClass: "user_context_summary", trustLevel: "medium", sourceRole: "user", verificationState: "structured" };
-const taskOutcomeProvenance: MemoryProvenance = { evidenceClass: "task_outcome", trustLevel: "high", sourceRole: "task", verificationState: "structured" };
 const userExplicitProvenance: MemoryProvenance = { evidenceClass: "user_explicit", trustLevel: "high", sourceRole: "user", verificationState: "explicit" };

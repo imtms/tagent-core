@@ -4,7 +4,13 @@ All notable changes to TAgent Core are documented here.
 
 ## Unreleased
 
-No unreleased changes.
+### Memory correctness and safety
+
+- Reject TaskRun wrappers, verification logs, artifact publication metadata, file paths/sizes, one-off questions, and malformed Chinese-negation proposals before durable persistence or embedding.
+- Stop automatic TaskRun Check/Artifact outcome capture; verified operational evidence remains in TaskRun records instead of default long-term semantic memory.
+- Route direct company reporting relationships into one canonical `knowledge.company-org-structure` Topic and apply semantic fingerprints when merging repeated facts.
+- Add intent/domain routing, lexical/vector/topic relevance thresholds, empty-result recall, identity isolation, semantic deduplication, contradiction suppression, and organization-path pruning.
+- Add reversible quarantine SQL with a dry-run report and audit snapshots for existing dirty records.
 
 ## [0.1.3] - 2026-08-01
 

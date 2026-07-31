@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ExtractorPort } from "../ports.js";
 import type { ExtractionProposal, GraphEdge, GraphNode, MemoryKind, MemoryScope, SourceReference, TopicDescriptor } from "../types.js";
+import { isControlPlaneText, isOneOffRequest } from "../quality.js";
 
 type EvidenceRole = "user" | "assistant" | "manual";
 interface EvidenceSentence { role: EvidenceRole; text: string }
@@ -43,6 +44,7 @@ export class RuleBasedExtractor implements ExtractorPort {
       // task summaries, diagnostics, and speculative answers pollute long-term memory.
       if (evidence.role === "assistant") continue;
       const sentence = evidence.text;
+      if (isControlPlaneText(sentence) || isOneOffRequest(sentence)) continue;
       const preference = /(?:我|用户|user).{0,20}(?:喜欢|偏好|希望|不要|不喜欢|习惯|prefer|always|never)/i.test(sentence);
       const procedure = /(?:以后|每次|始终|必须|务必|流程|步骤|from now on|always|must)/i.test(sentence) && !preference;
       if (!preference && !procedure && looksLikeOperationalRequest(sentence)) continue;

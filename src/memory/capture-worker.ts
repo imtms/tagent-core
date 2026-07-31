@@ -3,6 +3,7 @@ import type { PolicyGatePort } from "./policy/policy-engine.js";
 import type { MemoryService } from "./memory-service.js";
 import type { MemoryLifecycle } from "./lifecycle.js";
 import type { MemoryProvenance, SourceReference, WarmMemory } from "./types.js";
+import { isDurableMemory } from "./quality.js";
 
 const leaseMs = 30_000;
 
@@ -20,6 +21,12 @@ export class MemoryCaptureWorker {
       const decision=await this.policy.evaluate("source_egress",job.request.access,{text:content,scope});
       if(decision.action!=="allow"&&decision.action!=="transform"){await finish(()=>this.jobs.fail(job.id,this.owner,leaseToken,fencingToken,"source_policy_rejected",false));return true;}
       const proposal=applyProvenance(await this.extractor.extract(decision.payload.text,job.request.sourceRefs,scope),job.request.provenance);
+      proposal.records=proposal.records.filter(isDurableMemory);
+      const referencedTopics=new Set(proposal.records.flatMap((record)=>record.topicIds));
+      proposal.topics=proposal.topics.filter((topic)=>referencedTopics.has(topic.topicId));
+      const referencedEntities=new Set(proposal.records.flatMap((record)=>record.entityIds));
+      proposal.nodes=proposal.nodes.filter((node)=>referencedEntities.has(node.id));
+      proposal.edges=proposal.edges.filter((edge)=>referencedEntities.has(edge.fromId)&&referencedEntities.has(edge.toId));
       if(leaseLost)return true;
       const integrated=this.lifecycle?await this.lifecycle.integrate(job.request.access,proposal):proposal;
       if(leaseLost)return true;

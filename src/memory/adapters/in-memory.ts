@@ -4,7 +4,8 @@ import type { CaptureJob, CaptureRequest, ColdRevision, GraphEdge, GraphNode, Me
 const scopeKey = (scope: MemoryScope) => `${scope.type}:${scope.id}`;
 const allowed = (scope: MemoryScope, scopes: MemoryScope[]) => scopes.some((item) => scopeKey(item) === scopeKey(scope));
 const terms = (value: string) => new Set(value.toLowerCase().split(/[^\p{L}\p{N}_-]+/u).filter(Boolean));
-const textScore = (query: string, text: string) => { const q = terms(query); const t = terms(text); if (!q.size) return 0; return [...q].filter((term) => t.has(term) || text.toLowerCase().includes(term)).length / q.size; };
+const cjkBigrams = (value: string) => { const compact=value.replace(/[^\p{Script=Han}]/gu,""); return new Set(Array.from({length:Math.max(0,compact.length-1)},(_,index)=>compact.slice(index,index+2))); };
+const textScore = (query: string, text: string) => { const lower=text.toLowerCase();const q=terms(query);const t=terms(text);const lexical=q.size?[...q].filter((term)=>t.has(term)||lower.includes(term)).length/q.size:0;const qCjk=cjkBigrams(query),tCjk=cjkBigrams(text);const cjk=qCjk.size?[...qCjk].filter((term)=>tCjk.has(term)).length/qCjk.size:0;return Math.max(lexical,cjk); };
 export class InMemoryMemoryAdapter implements RecordStorePort, VectorIndexPort, GraphStorePort, TopicCatalogPort, JobQueuePort, AuditPort {
   records = new Map<string, WarmMemory>(); vectors = new Map<string, VectorDocument>(); nodes = new Map<string, GraphNode>(); edges = new Map<string, GraphEdge>(); topics = new Map<string, TopicDescriptor>(); revisions = new Map<string, ColdRevision>(); current = new Map<string, string>(); jobs = new Map<string, CaptureJob>(); audits: Parameters<AuditPort["record"]>[0][] = [];
   async upsertRecords(records: WarmMemory[]) { for (const record of records) this.records.set(record.id, structuredClone(record)); }

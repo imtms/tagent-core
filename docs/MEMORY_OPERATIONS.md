@@ -107,6 +107,28 @@ TAGENT_MEMORY_RECALL_TOKEN_BUDGET=8000
 - `COLD_MINIMUM_RECORDS` controls when a Topic becomes eligible for publication;
 - Cold pages that do not fit the recall budget are skipped rather than truncated.
 
+
+## 6.1 Write-quality boundary
+
+The default long-term semantic store rejects control-plane and one-off runtime material, including `Goal:`, `Outcome:`, TaskRun terminal wrappers, `Verified check [...]`, `Published artifact [...]`, file paths/sizes, PASS/FAIL metadata, and ordinary questions or operational requests. TaskRun Checks and Artifacts remain authoritative in the control-plane database; they are not parsed into semantic memory automatically.
+
+Hybrid extraction also validates malformed Chinese negation. Proposals such as `不仍存在`, `不与……存在冲突风险`, or a malformed subject such as `用户不` are rejected instead of receiving high confidence. Direct company reporting relations are grouped under one canonical Topic:
+
+```text
+workspace.<scope>.knowledge.company-org-structure
+```
+
+Recall first routes the query domain, applies minimum lexical/vector/topic thresholds, removes duplicates and contradictory lower-confidence cards, and permits an empty result. User identity is injected only for identity/name queries.
+
+Existing data can be reviewed and quarantined reversibly:
+
+```bash
+psql "$TAGENT_MEMORY_POSTGRES_URL" -f scripts/memory/quarantine-dirty-memory-dry-run.sql
+psql "$TAGENT_MEMORY_POSTGRES_URL" -f scripts/memory/quarantine-dirty-memory-apply.sql
+```
+
+Always inspect the dry-run first and take a database backup. The apply script writes original row snapshots to `memory.quarantine_log`. Suspected Sway/乔哲/前滩 test data is deliberately listed for review but is not modified automatically.
+
 ## 7. Extractor and embedding health
 
 At startup, enabled OpenAI-compatible embedding configuration is validated and an asynchronous reindex is attempted. If embedding fails, a warning is logged and lexical recall remains available.

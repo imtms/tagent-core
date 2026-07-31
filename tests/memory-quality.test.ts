@@ -17,3 +17,27 @@ describe("memory semantic quality",()=>{
     it("batches OpenAI-compatible embeddings and exposes a generation",async()=>{const original=globalThis.fetch;const calls:unknown[]=[];globalThis.fetch=async(_url,init)=>{calls.push(JSON.parse(String(init?.body)));return new Response(JSON.stringify({data:[{index:0,embedding:[1,0]},{index:1,embedding:[0,1]}]}),{status:200});};try{const adapter=new OpenAIEmbeddingAdapter({baseUrl:"https://embed.test/v1",apiKey:"secret",model:"semantic",batchSize:2,extraBody:{input_type:"passage"}});expect(await adapter.embed(["a","b"])).toEqual([[1,0],[0,1]]);expect(adapter.generation).toContain("semantic");expect(calls).toHaveLength(1);}finally{globalThis.fetch=original;}});
   it.skipIf(!process.env.TAGENT_TEST_LLM_BASE_URL)("resolves the reported Chinese food preference coreference with a live LLM",async()=>{const extractor=new LlmExtractor({baseUrl:process.env.TAGENT_TEST_LLM_BASE_URL!,apiKey:process.env.TAGENT_TEST_LLM_API_KEY!,model:process.env.TAGENT_TEST_LLM_MODEL!});const result=await extractor.extract("<context>user: 我爱吃西瓜，我有个朋友卢鹏程也是</context><focus_user>他说苹果也很好吃但是我不爱吃</focus_user>",[],scope);const values=result.records.filter((r)=>r.kind==="preference").map((r)=>(r as any).value).join("\n");expect(values).toContain("卢鹏程");expect(values).toContain("苹果");expect(values).toMatch(/用户.*不/);},120_000);
 });
+
+describe("memory pollution prevention",()=>{
+  it("rejects control-plane metadata and malformed Chinese negation before persistence",async()=>{
+    const {isDurableMemory}=await import("../src/memory/quality.js");const now=Date.now();
+    const base={id:"10000000-0000-4000-8000-000000000001",kind:"fact" as const,tier:"hot" as const,scope,title:"Fact",summary:"Fact",topicIds:[],entityIds:[],status:"active" as const,confidence:.99,importance:.9,sourceRefs:[],createdAt:now,updatedAt:now};
+    expect(isDurableMemory({...base,title:"Verified check [build]",content:"Verified check [build] PASS"})).toBe(false);
+    expect(isDurableMemory({...base,title:"PR #9 仍存在冲突",content:"PR #9 不仍存在冲突"})).toBe(false);
+    expect(isDurableMemory({...base,title:"PR #9 无法干净合并",content:"PR #9 不与最新main存在合并冲突风险"})).toBe(false);
+  });
+
+  it("does not infer polarity from a Chinese subject ending in 不",async()=>{
+    const original=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({items:[{kind:"fact",subject:"用户不",predicate:"评价",object:"当前记忆很混乱",polarity:"positive",summary:"用户认为当前记忆很混乱",confidence:.99}]})}}]}),{status:200});
+    try{const result=await new LlmExtractor({baseUrl:"https://extract.test/v1",apiKey:"x",model:"x"}).extract("<focus_user>记忆很混乱</focus_user>",[],scope);expect(result.records).toEqual([]);}finally{globalThis.fetch=original;}
+  });
+
+  it("routes all direct organization relationships to one canonical knowledge topic",async()=>{
+    const original=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({items:[
+      {kind:"fact",subject:"首席执行官",predicate:"管理",object:"运营总监",polarity:"positive",summary:"首席执行官管理运营总监",confidence:.99},
+      {kind:"fact",subject:"运营总监",predicate:"管理",object:"主管C",polarity:"positive",summary:"运营总监管理主管C",confidence:.99},
+      {kind:"fact",subject:"文件",predicate:"包含",object:"9个节点",polarity:"positive",summary:"文件有9个节点",confidence:.99}
+    ]})}}]}),{status:200});
+    try{const result=await new LlmExtractor({baseUrl:"https://extract.test/v1",apiKey:"x",model:"x"}).extract("<focus_user>某公司的组织架构如下：首席执行官管理运营总监，运营总监管理主管C</focus_user>",[],scope);expect(result.records).toHaveLength(2);expect(new Set(result.records.flatMap((record)=>record.topicIds))).toEqual(new Set([`${scope.type}.${scope.id}.knowledge.company-org-structure`]));expect(result.topics).toHaveLength(1);}finally{globalThis.fetch=original;}
+  });
+});
