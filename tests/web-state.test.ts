@@ -59,4 +59,28 @@ describe("Web workbench state model", () => {
     expect(source).toContain('if (event.key === "Enter") { event.preventDefault(); void renameSession(session); }');
     expect(source).toContain('if (event.key === "Escape") { event.preventDefault(); cancelRename(); event.currentTarget.blur(); }');
   });
+
+
+  it("loads conversation history in cursor pages and preserves the viewport when prepending", async () => {
+    const app = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    const api = await readFile(new URL("../web/src/api.ts", import.meta.url), "utf8");
+    expect(api).toContain("export interface MessagePage");
+    expect(api).toContain("paged=1&limit=");
+    expect(app).toContain("const MESSAGE_PAGE_SIZE = 40");
+    expect(app).toContain("api.messagePage(sessionId, oldestId, MESSAGE_PAGE_SIZE)");
+    expect(app).toContain("currentScroller.scrollTop = previousTop + currentScroller.scrollHeight - previousHeight");
+    expect(app).toContain("if (scroller.scrollTop < 160) void loadOlderMessages()");
+    expect(app).not.toContain("useEffect(() => { endRef.current?.scrollIntoView");
+  });
+
+  it("fences concurrent and stale history page requests", async () => {
+    const app = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    expect(app).toContain("olderRequestRef.current) return");
+    expect(app).toContain("historyGenerationRef.current += 1; olderRequestRef.current = null");
+    expect(app).toContain("historyGenerationRef.current !== generation");
+    expect(app).toContain("if (olderRequestRef.current === request) olderRequestRef.current = null");
+    expect(app).toContain("setMessages((current) => mergeMessages(current, page.items))");
+    expect(app).toContain("setLoadingOlderMessages(false)");
+
+  });
 });

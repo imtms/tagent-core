@@ -3,6 +3,7 @@ import { createRequestId } from "./id";
 export interface Session { id: string; title: string; createdAt: number; updatedAt: number; latestRunStatus: string | null; latestRunPhase: string | null }
 export interface SessionInboxItem { id: string; sessionId: string; requestId: string; content: string; status: "queued" | "claimed" | "started" | "deleted" | "failed"; decision: "pending" | "start_taskrun" | "defer" | "merge" | "delete"; runId: string | null; error: string; position: number; createdAt: number; updatedAt: number; claimedAt: number | null; startedAt: number | null }
 export interface Message { id: number; sessionId: string; role: "user" | "assistant" | "tool"; content: string; createdAt: number }
+export interface MessagePage { items: Message[]; hasMore: boolean; nextBeforeId: number | null }
 export interface PlanItem { key: string; title: string; status: string; required: boolean; position: number }
 export interface RunCheck { key: string; title: string; status: string; required: boolean; command: string; evidence: string; stale: boolean }
 export interface TaskRun {
@@ -66,6 +67,7 @@ export const api = {
   createSession: (title = "New workspace") => request<Session>("/api/sessions", { method: "POST", body: JSON.stringify({ title }) }),
   renameSession: (sessionId: string, title: string) => request<Session>(`/api/sessions/${sessionId}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   messages: (sessionId: string) => request<Message[]>(`/api/sessions/${sessionId}/messages`),
+  messagePage: (sessionId: string, before?: number, limit = 40) => request<MessagePage>(`/api/sessions/${sessionId}/messages?paged=1&limit=${limit}${before == null ? "" : `&before=${before}`}`),
   runs: (sessionId: string, limit = 50) => request<TaskRun[]>(`/api/sessions/${sessionId}/runs?limit=${limit}`),
   latestRun: (sessionId: string) => request<TaskRun | null>(`/api/sessions/${sessionId}/run`),
   run: (runId: string) => request<TaskRun>(`/api/runs/${runId}`),

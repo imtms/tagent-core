@@ -82,7 +82,10 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(22, 116, 
 .resume-button { height: 34px; padding: 0 11px; border: 1px solid #bdd5c8; background: var(--accent-soft); color: var(--accent); display: flex; align-items: center; gap: 6px; border-radius: var(--radius); font-size: 11px; font-weight: 700; cursor: pointer; }
 .resume-button:hover { border-color: #8db7a2; }
 .icon-button.danger { color: var(--danger); border-color: #ebcccc; }
-.message-scroll { overflow: auto; padding: 32px clamp(24px, 7vw, 88px) 18px; }
+.message-scroll { overflow: auto; padding: 32px clamp(24px, 7vw, 88px) 18px; overflow-anchor: none; }
+.message-history-loader { min-height: 36px; margin: -18px auto 18px; display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--muted); font-size: 11px; }
+.message-history-loader button { padding: 6px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); font-size: 10px; cursor: pointer; }
+.message-history-loader button:hover { border-color: #a9c9b8; color: var(--accent); background: var(--accent-soft); }
 .empty-state { width: min(420px, 100%); margin: 16vh auto 0; text-align: center; color: var(--muted); }
 .empty-icon { width: 48px; height: 48px; margin: 0 auto 18px; display: grid; place-items: center; background: #eef2ee; border: 1px solid var(--line); border-radius: var(--radius); color: #3c4941; }
 .empty-state h2 { color: var(--ink); font-size: 18px; margin: 0 0 8px; }

@@ -491,6 +491,21 @@ describe("Store", () => {
     expect(() => store.queueContinuation(run.id, "second")).toThrow("active continuation");
   });
 
+  it("pages messages from newest to oldest without gaps or duplicates", () => {
+    const store = createStore();
+    const session = store.createSession("Long history");
+    for (let index = 1; index <= 7; index += 1) store.appendMessage(session.id, "user", `message-${index}`);
+    const latest = store.listMessagePage(session.id, 3);
+    expect(latest.items.map((message) => message.content)).toEqual(["message-5", "message-6", "message-7"]);
+    expect(latest).toMatchObject({ hasMore: true, nextBeforeId: latest.items[0].id });
+    const middle = store.listMessagePage(session.id, 3, latest.nextBeforeId!);
+    expect(middle.items.map((message) => message.content)).toEqual(["message-2", "message-3", "message-4"]);
+    expect(middle.hasMore).toBe(true);
+    const oldest = store.listMessagePage(session.id, 3, middle.nextBeforeId!);
+    expect(oldest.items.map((message) => message.content)).toEqual(["message-1"]);
+    expect(oldest).toEqual(expect.objectContaining({ hasMore: false, nextBeforeId: null }));
+  });
+
   it("returns the newest message window in chronological order", () => {
     const store = createStore();
     const session = store.createSession();

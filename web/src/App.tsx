@@ -6,6 +6,12 @@ import { createRequestId } from "./id";
 import { deriveCurrentOperation } from "./current-operation";
 import { MemoryPanel } from "./MemoryPanel";
 
+const MESSAGE_PAGE_SIZE = 40;
+const mergeMessages = (current: Message[], incoming: Message[]) => {
+  const merged = new Map(current.map((message) => [message.id, message]));
+  incoming.forEach((message) => merged.set(message.id, message));
+  return [...merged.values()].sort((left, right) => left.id - right.id);
+};
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
 
 function WorkspaceRunStatus({ session }: { session: Session }) {
@@ -79,6 +85,8 @@ export function App() {
   const [renamingSessionId, setRenamingSessionId] = useState("");
   const [sessionTitleDraft, setSessionTitleDraft] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const [activeRun, setActiveRun] = useState<TaskRun | null>(null);
   const [selectedRun, setSelectedRun] = useState<TaskRun | null>(null);
   const [runs, setRuns] = useState<TaskRun[]>([]);
@@ -103,9 +111,54 @@ export function App() {
   const endRef = useRef<HTMLDivElement>(null);
   const cancelRenameRef = useRef(false);
   const renameSubmittingRef = useRef(false);
+  const messageScrollRef = useRef<HTMLElement>(null);
+  const messagesRef = useRef<Message[]>([]);
+  const sessionIdRef = useRef("");
+  const initialScrollPendingRef = useRef(false);
+  const stickToBottomRef = useRef(true);
+  const olderRequestRef = useRef<{ sessionId: string; oldestId: number } | null>(null);
+  const historyGenerationRef = useRef(0);
   const activeRunIdRef = useRef("");
 
   useEffect(() => { activeRunIdRef.current = activeRun?.id ?? ""; }, [activeRun?.id]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+
+  const refreshLatestMessages = useCallback(async (targetSessionId: string) => {
+    const page = await api.messagePage(targetSessionId, undefined, MESSAGE_PAGE_SIZE);
+    if (sessionIdRef.current !== targetSessionId) return page;
+    setMessages((current) => mergeMessages(current, page.items));
+    setHasOlderMessages((current) => messagesRef.current.length ? current : page.hasMore);
+    return page;
+  }, []);
+
+  const loadOlderMessages = useCallback(async () => {
+    const scroller = messageScrollRef.current;
+    const oldestId = messagesRef.current[0]?.id;
+    if (!scroller || !sessionId || !hasOlderMessages || oldestId == null || olderRequestRef.current) return;
+    const request = { sessionId, oldestId };
+    const generation = historyGenerationRef.current;
+    olderRequestRef.current = request;
+    setLoadingOlderMessages(true);
+    const previousHeight = scroller.scrollHeight;
+    const previousTop = scroller.scrollTop;
+    try {
+      const page = await api.messagePage(sessionId, oldestId, MESSAGE_PAGE_SIZE);
+      if (sessionIdRef.current !== sessionId || historyGenerationRef.current !== generation) return;
+      setMessages((current) => mergeMessages(current, page.items));
+      setHasOlderMessages(page.hasMore);
+      requestAnimationFrame(() => {
+        if (sessionIdRef.current !== sessionId || historyGenerationRef.current !== generation) return;
+        const currentScroller = messageScrollRef.current;
+        if (currentScroller) currentScroller.scrollTop = previousTop + currentScroller.scrollHeight - previousHeight;
+      });
+    } catch (cause) {
+      if (sessionIdRef.current === sessionId && historyGenerationRef.current === generation) setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (olderRequestRef.current === request) olderRequestRef.current = null;
+      if (sessionIdRef.current === sessionId && historyGenerationRef.current === generation) setLoadingOlderMessages(false);
+    }
+  }, [hasOlderMessages, sessionId]);
 
   const loadSessions = useCallback(async () => {
     let items = await api.sessions();
@@ -124,28 +177,32 @@ export function App() {
         setSessions(sessionItems);
         const active = runHistory.find((item) => item.status === "running") ?? null;
         if (active?.id && active.id !== activeRunIdRef.current) {
-          const [hydrated, history, view] = await Promise.all([api.run(active.id), api.messages(sessionId), api.transcriptView(active.id)]);
+          const [hydrated, page, view] = await Promise.all([api.run(active.id), api.messagePage(sessionId, undefined, MESSAGE_PAGE_SIZE), api.transcriptView(active.id)]);
+          if (sessionIdRef.current !== sessionId) return;
           setActiveRun(hydrated); setSelectedRun(hydrated); setExpandedRunId(hydrated.id);
-          setMessages(history); setTranscript(view); setStreaming(hydrated.checkpoint?.active ? hydrated.checkpoint.assistantPartial : "");
+          setMessages((current) => mergeMessages(current, page.items)); setHasOlderMessages((current) => current || page.hasMore); setTranscript(view); setStreaming(hydrated.checkpoint?.active ? hydrated.checkpoint.assistantPartial : "");
           setEvents(hydrated.checkpoint?.active && hydrated.checkpoint.currentTool ? [{ runId: hydrated.id, seq: hydrated.checkpoint.lastEventSeq, type: "tool.started", data: hydrated.checkpoint.currentTool, createdAt: hydrated.checkpoint.updatedAt }] : []);
           setError("");
         } else if (!active && activeRunIdRef.current) {
           setActiveRun(null); setStreaming(""); setEvents([]);
-          setMessages(await api.messages(sessionId));
+          await refreshLatestMessages(sessionId);
         } else if (active) {
           setActiveRun((current) => current?.id === active.id ? { ...current, ...active } : active);
         }
       }).catch(() => undefined);
     }, 2000);
     return () => clearInterval(timer);
-  }, [sessionId]);
+  }, [sessionId, refreshLatestMessages]);
   useEffect(() => {
     if (!sessionId) return;
-    setStreaming(""); setEvents([]); setError(""); setEditingInboxId(""); setInboxDraft(""); setDraggingInboxId("");
-    void Promise.all([api.messages(sessionId), api.runs(sessionId), api.inbox(sessionId)]).then(([history, runHistory, queued]) => {
+    historyGenerationRef.current += 1; olderRequestRef.current = null;
+    setMessages([]); setHasOlderMessages(false); setLoadingOlderMessages(false); setStreaming(""); setEvents([]); setError(""); setEditingInboxId(""); setInboxDraft(""); setDraggingInboxId("");
+    initialScrollPendingRef.current = true; stickToBottomRef.current = true;
+    void Promise.all([api.messagePage(sessionId, undefined, MESSAGE_PAGE_SIZE), api.runs(sessionId), api.inbox(sessionId)]).then(([page, runHistory, queued]) => {
+      if (sessionIdRef.current !== sessionId) return;
       const latest = runHistory[0] ?? null;
       const active = runHistory.find((item) => item.status === "running") ?? null;
-      setMessages(history); setRuns(runHistory); setInbox(queued); setActiveRun(active); setSelectedRun(latest); setExpandedRunId(latest?.id ?? "");
+      setMessages(page.items); setHasOlderMessages(page.hasMore); setRuns(runHistory); setInbox(queued); setActiveRun(active); setSelectedRun(latest); setExpandedRunId(latest?.id ?? "");
       setStreaming(active?.checkpoint?.active ? active.checkpoint.assistantPartial : "");
       setEvents(active?.checkpoint?.active && active.checkpoint.currentTool ? [{ runId: active.id, seq: active.checkpoint.lastEventSeq, type: "tool.started", data: active.checkpoint.currentTool, createdAt: active.checkpoint.updatedAt }] : []);
       if (latest) void api.transcriptView(latest.id).then(setTranscript); else setTranscript([]);
@@ -176,7 +233,7 @@ export function App() {
         setActiveRun(nextActive);
         setSelectedRun((current) => current?.id === updated.id ? updated : current);
         setRuns(runHistory);
-        setMessages(await api.messages(sessionId));
+        await refreshLatestMessages(sessionId);
         setInbox(await api.inbox(sessionId));
         setTranscript(await api.transcriptView(updated.id));
         await loadSessions();
@@ -190,9 +247,14 @@ export function App() {
       }, () => undefined);
     }).catch((cause) => { if (!closed) setError(cause instanceof Error ? cause.message : String(cause)); });
     return () => { closed = true; unsubscribe(); };
-  }, [activeRun?.id, activeRun?.status, sessionId, loadSessions]);
+  }, [activeRun?.id, activeRun?.status, sessionId, loadSessions, refreshLatestMessages]);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, streaming, events]);
+  useEffect(() => {
+    const scroller = messageScrollRef.current;
+    if (!scroller) return;
+    if (initialScrollPendingRef.current) { initialScrollPendingRef.current = false; scroller.scrollTop = scroller.scrollHeight; return; }
+    if (stickToBottomRef.current) endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, streaming, events]);
 
   const activeTools = useMemo(() => events.filter((event) => event.type.startsWith("tool.")).slice(-8), [events]);
 
@@ -231,7 +293,7 @@ export function App() {
       setInbox(await api.inbox(sessionId));
       if (admission.run) {
         const nextRun = admission.run;
-        setMessages(await api.messages(sessionId));
+        await refreshLatestMessages(sessionId);
         setActiveRun(nextRun); setSelectedRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setStreaming("");
       }
     }
@@ -284,7 +346,7 @@ export function App() {
     try {
       const result = await api.startInbox(sessionId, item.id);
       const nextRun = result.run;
-      setInbox(await api.inbox(sessionId)); setMessages(await api.messages(sessionId)); setActiveRun(nextRun); setSelectedRun(nextRun);
+      setInbox(await api.inbox(sessionId)); await refreshLatestMessages(sessionId); setActiveRun(nextRun); setSelectedRun(nextRun);
       setRuns((current) => [nextRun, ...current.filter((run) => run.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setStreaming("");
       setNotice("Queued prompt started.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -330,7 +392,12 @@ export function App() {
         <div className="top-actions">{runtimeStatus?.memoryEnabled && <button className="memory-launch" onClick={() => setMemoryOpen(true)}><BrainCircuit size={16} /><span>Memory</span><i /></button>}{selectedRun && ["blocked", "interrupted"].includes(selectedRun.status) && !activeRun && <button className="resume-button" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}{selectedRun?.status === "failed" && selectedRun.launchRetryable && !activeRun && <button className="resume-button" onClick={() => void retryLaunch(selectedRun)} disabled={Boolean(retryingRunId)}><Play size={15} />{retryingRunId === selectedRun.id ? "Retrying…" : "Retry launch"}</button>}{activeRun?.status === "running" && <button className="icon-button danger" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={17} /></button>}<button className="icon-button mobile-only" onClick={() => setRightOpen(true)} aria-label="Open task panel"><PanelRight size={19} /></button></div>
       </header>
 
-      <section className="message-scroll">
+      <section className="message-scroll" ref={messageScrollRef} onScroll={(event) => {
+        const scroller = event.currentTarget;
+        stickToBottomRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+        if (scroller.scrollTop < 160) void loadOlderMessages();
+      }}>
+        {(hasOlderMessages || loadingOlderMessages) && <div className="message-history-loader" aria-live="polite">{loadingOlderMessages ? <><Activity size={14} />Loading earlier messages…</> : <button onClick={() => void loadOlderMessages()}>Load earlier messages</button>}</div>}
         {!messages.length && !streaming && <div className="empty-state"><div className="empty-icon"><MessageSquarePlus size={25} /></div><h2>Start with an outcome</h2><p>TAgent will turn substantial work into a durable plan, execute tools, and hold completion behind checks.</p></div>}
         {messages.map((message) => <article key={message.id} className={`message ${message.role}`}><div className="message-meta"><span>{message.role === "user" ? "You" : "TAgent"}</span><time>{formatTime(message.createdAt)}</time></div><div className="message-body"><Markdown>{message.content}</Markdown></div></article>)}
         {selectedRun && transcript.some((item) => item.kind === "tool") && <section className="transcript-tools"><div className="transcript-heading"><span>Tool calls</span><small>{transcript.filter((item) => item.kind === "tool").length}</small></div>{transcript.filter((item): item is Extract<TranscriptItem, { kind: "tool" }> => item.kind === "tool").map((item) => <ToolCall key={`${item.seq}-${item.index}`} item={item} />)}</section>}

@@ -414,6 +414,22 @@ export class Store {
     this.db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(now(), id);
   }
 
+  listMessagePage(sessionId: SessionId, limit = 40, beforeId?: number): { items: Message[]; hasMore: boolean; nextBeforeId: number | null } {
+    const boundedLimit = Math.min(100, Math.max(1, Math.trunc(limit)));
+    const rows = (beforeId == null
+      ? this.db.prepare(`
+        SELECT id, session_id as sessionId, role, content, created_at as createdAt
+        FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?
+      `).all(sessionId, boundedLimit + 1)
+      : this.db.prepare(`
+        SELECT id, session_id as sessionId, role, content, created_at as createdAt
+        FROM messages WHERE session_id = ? AND id < ? ORDER BY id DESC LIMIT ?
+      `).all(sessionId, beforeId, boundedLimit + 1)) as Message[];
+    const hasMore = rows.length > boundedLimit;
+    const items = rows.slice(0, boundedLimit).reverse();
+    return { items, hasMore, nextBeforeId: hasMore && items.length ? items[0].id : null };
+  }
+
   listMessages(sessionId: SessionId, limit = 200): Message[] {
     return this.db.prepare(`
       SELECT id, session_id as sessionId, role, content, created_at as createdAt

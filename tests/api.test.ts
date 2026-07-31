@@ -102,6 +102,22 @@ describe("HTTP API", () => {
     expect((await app.inject({ method: "PATCH", url: "/api/sessions/missing", payload: { title: "After" } })).statusCode).toBe(404);
   });
 
+  it("serves cursor-paged message history while preserving the legacy response", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-messages-"));
+    const store = new Store(":memory:");
+    const app = createApp({ store, service: new AgentService(store, workspace), logger: false, webRoot: workspace }); apps.push(app);
+    const session = store.createSession("History");
+    for (let index = 1; index <= 5; index += 1) store.appendMessage(session.id, "user", `message-${index}`);
+    const latest = (await app.inject({ method: "GET", url: `/api/sessions/${session.id}/messages?paged=1&limit=2` })).json();
+    expect(latest.items.map((message: { content: string }) => message.content)).toEqual(["message-4", "message-5"]);
+    expect(latest).toMatchObject({ hasMore: true, nextBeforeId: latest.items[0].id });
+    const older = (await app.inject({ method: "GET", url: `/api/sessions/${session.id}/messages?paged=1&limit=2&before=${latest.nextBeforeId}` })).json();
+    expect(older.items.map((message: { content: string }) => message.content)).toEqual(["message-2", "message-3"]);
+    expect((await app.inject({ method: "GET", url: `/api/sessions/${session.id}/messages` })).json()).toHaveLength(5);
+    expect((await app.inject({ method: "GET", url: `/api/sessions/${session.id}/messages?paged=1&before=bad` })).statusCode).toBe(400);
+
+  });
+
   it("queues all message input through the Session Supervisor inbox and deletes only unstarted items", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
     const store = new Store(":memory:");
