@@ -38,7 +38,8 @@ async function listReleaseFiles(directory = root, prefix = "") {
       const target = await readlink(absolute);
       const resolved = path.resolve(path.dirname(absolute), target);
       if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) fail(`symlink escapes release root: ${relative} -> ${target}`);
-      fail(`release symlinks are not supported: ${relative}`);
+      if (!existsSync(resolved)) fail(`broken release symlink: ${relative} -> ${target}`);
+      continue;
     }
     if (entry.isDirectory()) files.push(...await listReleaseFiles(absolute, relative));
     else if (entry.isFile()) files.push(relative);

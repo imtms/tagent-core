@@ -40,6 +40,10 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           VERSION="${RELEASE_TAG#v}"
-          awk -v heading="## [${VERSION}]" '$0 == heading {flag=1; next} /^## \[/ {flag=0} flag' CHANGELOG.md > release-notes.md
+          awk -v version="$VERSION" '
+            $0 == "## [" version "]" || index($0, "## [" version "] - ") == 1 {flag=1; next}
+            index($0, "## [") == 1 && flag {exit}
+            flag
+          ' CHANGELOG.md > release-notes.md
           test -s release-notes.md
           gh release create "$RELEASE_TAG" --title "TAgent Core ${RELEASE_TAG}" --notes-file release-notes.md
