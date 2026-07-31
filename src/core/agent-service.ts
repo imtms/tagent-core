@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { Store } from "../store/store.js";
 import { createInProcessRuntime } from "../runtime/factory.js";
 import type { AgentRuntime, RuntimeFactory } from "../runtime/types.js";
-import type { RunCheckpoint, RunEvent, SessionId, RunId, TaskRun } from "../core/types.js";
+import type { RunCheckpoint, RunEvent, SessionId, SessionInboxItem, RunId, TaskRun } from "../core/types.js";
 import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 import { TaskRunSupervisor } from "./supervisor.js";
 
@@ -222,6 +222,14 @@ export class AgentService {
     return changed;
   }
 
+  startSessionInputNow(sessionId: SessionId, itemId: string) {
+    if (this.closing) return { status: "closing" as const };
+    const claimed = this.store.claimSessionInboxNow(itemId, sessionId);
+    if (claimed.status !== "started") return claimed;
+    const run = this.launchClaimedSessionInbox(claimed.item, claimed.run);
+    return run ? { status: "started" as const, item: this.store.getSessionInboxItem(claimed.item.id)!, run } : { status: "failed" as const };
+  }
+
   recoverSessionInbox() {
     if (this.closing) return [];
     const started: string[] = [];
@@ -236,10 +244,13 @@ export class AgentService {
     if (this.closing) return undefined;
     const claimed = this.store.claimNextSessionInbox(sessionId);
     if (!claimed) return undefined;
-    const { item, run } = claimed;
+    return this.launchClaimedSessionInbox(claimed.item, claimed.run);
+  }
+
+  private launchClaimedSessionInbox(item: SessionInboxItem, run: TaskRun) {
     try {
       const sessionHistory = this.prepareSessionHistory(run, item.content);
-      this.store.appendMessage(sessionId, "user", item.content);
+      this.store.appendMessage(run.sessionId, "user", item.content);
       this.publish(this.store.appendEvent(run.id, "run.started", { goal: item.content, source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: sessionHistory.messages.length }));
       this.publishContextEvents(run.id, sessionHistory);
       this.launch(run, item.content, sessionHistory.messages);
@@ -250,7 +261,7 @@ export class AgentService {
       this.store.failSessionInboxStart(item.id, run.id, message);
       const event = this.store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: message, reason: "inbox_launch_failed", inboxItemId: item.id }, message, run.attempt);
       if (event) this.publish(event);
-      setImmediate(() => { if (!this.closing) this.dispatchSessionInbox(sessionId); });
+      setImmediate(() => { if (!this.closing) this.dispatchSessionInbox(run.sessionId); });
       return undefined;
     }
   }

@@ -38,7 +38,9 @@ export function App() {
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [draft, setDraft] = useState("");
   const [inbox, setInbox] = useState<SessionInboxItem[]>([]);
+  const [startingInboxId, setStartingInboxId] = useState("");
   const [streaming, setStreaming] = useState("");
+  const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
@@ -143,7 +145,7 @@ export function App() {
   async function submit() {
     const content = draft.trim();
     if (!content || !sessionId) return;
-    setDraft(""); setError("");
+    setDraft(""); setError(""); setNotice("");
     try {
       const admission = await api.send(sessionId, content);
       setInbox(await api.inbox(sessionId));
@@ -154,6 +156,19 @@ export function App() {
       }
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  }
+
+  async function runInboxNow(item: SessionInboxItem) {
+    if (!sessionId || startingInboxId) return;
+    setStartingInboxId(item.id); setError(""); setNotice("");
+    try {
+      const result = await api.startInbox(sessionId, item.id);
+      const nextRun = result.run;
+      setInbox(await api.inbox(sessionId)); setMessages(await api.messages(sessionId)); setActiveRun(nextRun); setSelectedRun(nextRun);
+      setRuns((current) => [nextRun, ...current.filter((run) => run.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setStreaming("");
+      setNotice("Queued prompt started.");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setStartingInboxId(""); }
   }
 
   return <div className="app-shell">
@@ -187,9 +202,10 @@ export function App() {
 
       <footer className="composer-wrap">
         {error && <div className="error-banner">{error}</div>}
+        {notice && <div className="success-banner">{notice}</div>}
         <div className="composer-mode"><span><Activity size={13} />Supervisor inbox</span><span>{activeRun ? "New input waits below while the current TaskRun finishes" : "Supervisor starts the next eligible item"}</span></div>
         <div className="composer"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} placeholder="Add an outcome or instruction to the Supervisor queue" rows={1} /><button onClick={() => void submit()} disabled={!draft.trim()} aria-label="Add to Supervisor queue"><Send size={18} /></button></div>
-        {inbox.length > 0 && <section className="supervisor-inbox"><div className="inbox-heading"><span>Up next</span><small>{inbox.length} queued</small></div>{inbox.map((item, index) => <div className="inbox-item" key={item.id}><span className="inbox-position">{index + 1}</span><div><strong>{item.content}</strong><small>{item.decision === "defer" ? "Deferred by Supervisor" : "Waiting for Supervisor selection"}</small><span className="inbox-actions"><button onClick={async () => { try { await api.decideInbox(sessionId, item.id, item.decision === "defer" ? "pending" : "defer"); setInbox(await api.inbox(sessionId)); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}>{item.decision === "defer" ? "Resume" : "Defer"}</button>{index > 0 && <button onClick={async () => { try { await api.mergeInbox(sessionId, item.id, inbox[0].id); setInbox(await api.inbox(sessionId)); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}>Merge first</button>}</span></div><button onClick={async () => { try { await api.deleteInbox(sessionId, item.id); setInbox(await api.inbox(sessionId)); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }} aria-label="Remove queued input"><X size={14} /></button></div>)}</section>}
+        {inbox.length > 0 && <section className="supervisor-inbox"><div className="inbox-heading"><span>Up next</span><small>{inbox.length} queued</small></div>{inbox.map((item, index) => <div className="inbox-item" key={item.id}><span className="inbox-position">{index + 1}</span><div><strong>{item.content}</strong><small>{item.decision === "defer" ? "Deferred by Supervisor" : "Waiting for Supervisor selection"}</small><span className="inbox-actions"><button className="run-now" onClick={() => void runInboxNow(item)} disabled={Boolean(startingInboxId)}>{startingInboxId === item.id ? "Starting…" : "Run now"}</button><button onClick={async () => { setError(""); setNotice(""); try { await api.decideInbox(sessionId, item.id, item.decision === "defer" ? "pending" : "defer"); setInbox(await api.inbox(sessionId)); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }} disabled={Boolean(startingInboxId)}>{item.decision === "defer" ? "Resume" : "Defer"}</button>{index > 0 && <button onClick={async () => { setError(""); setNotice(""); try { await api.mergeInbox(sessionId, item.id, inbox[0].id); setInbox(await api.inbox(sessionId)); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }} disabled={Boolean(startingInboxId)}>Merge first</button>}</span></div><button onClick={async () => { try { await api.deleteInbox(sessionId, item.id); setInbox(await api.inbox(sessionId)); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }} aria-label="Remove queued input"><X size={14} /></button></div>)}</section>}
       </footer>
     </main>
 
