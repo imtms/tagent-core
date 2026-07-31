@@ -29,7 +29,41 @@ export interface AppConfig {
   controlInboxCapacity: number;
   serviceCredentials: ServiceCredential[];
   model: ModelConfig;
+  memory: MemoryConfig;
 }
+
+export type MemoryConfig =
+  | { enabled: false }
+  | {
+      enabled: true;
+      backend: "memory" | "postgres";
+      postgresUrl?: string;
+      coldBackend: "local" | "s3";
+      coldPath: string;
+      s3Bucket?: string;
+      s3Prefix?: string;
+      s3Endpoint?: string;
+      s3Region?: string;
+      s3ForcePathStyle: boolean;
+      workerIntervalMs: number;
+      maintenanceIntervalMs: number;
+      workspaceScopeId: string;
+      recallTokenBudget: number;
+      coldMinimumRecords: number;
+      warmAfterMs: number;
+      hotTtlMs: number;
+      embeddingProvider: "hash" | "openai" | "none";
+      embeddingBaseUrl?: string;
+      embeddingApiKey?: string;
+      embeddingModel?: string;
+      embeddingDimensions?: number;
+      embeddingBatchSize: number;
+      embeddingExtraBody?: Record<string,unknown>;
+      extractorProvider: "rule" | "hybrid";
+      extractorBaseUrl?: string;
+      extractorApiKey?: string;
+      extractorModel?: string;
+    };
 
 function positiveInteger(value: string | undefined, fallback: number, name: string) {
   const parsed = value === undefined ? fallback : Number(value);
@@ -43,10 +77,78 @@ function nonNegativeInteger(value: string | undefined, fallback: number, name: s
   return parsed;
 }
 
-function normalizeBaseUrl(value: string) {
-  const url = new URL(value);
-  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("TAGENT_API_BASE must use http or https");
-  return url.toString().replace(/\/$/, "");
+function enabled(value: string | undefined, name: string) {
+  if (value === undefined || value === "false") return false;
+  if (value === "true") return true;
+  throw new Error(`${name} must be true or false`);
+}
+
+
+function parseJsonObject(value:string|undefined,name:string){if(!value?.trim())return undefined;let parsed:unknown;try{parsed=JSON.parse(value);}catch{throw new Error(`${name} must be valid JSON`);}if(!parsed||Array.isArray(parsed)||typeof parsed!=="object")throw new Error(`${name} must be a JSON object`);return parsed as Record<string,unknown>;}
+function memoryEmbeddingProvider(env: NodeJS.ProcessEnv) {
+  const value = env.TAGENT_MEMORY_EMBEDDING_PROVIDER ?? (env.TAGENT_MEMORY_BACKEND === "memory" ? "hash" : "none");
+  if (value !== "hash" && value !== "openai" && value !== "none") throw new Error("TAGENT_MEMORY_EMBEDDING_PROVIDER must be hash, openai, or none");
+  if (value === "openai" && (!env.TAGENT_MEMORY_EMBEDDING_BASE_URL?.trim() || !env.TAGENT_MEMORY_EMBEDDING_API_KEY?.trim() || !env.TAGENT_MEMORY_EMBEDDING_MODEL?.trim())) throw new Error("OpenAI memory embeddings require TAGENT_MEMORY_EMBEDDING_BASE_URL, TAGENT_MEMORY_EMBEDDING_API_KEY, and TAGENT_MEMORY_EMBEDDING_MODEL");
+  return value;
+}
+function referencedEnvValue(env: NodeJS.ProcessEnv, name: string) {
+  const raw = env[name]?.trim();
+  if (!raw) return undefined;
+  const reference = /^\$\{([A-Z_][A-Z0-9_]*)\}$/.exec(raw)?.[1];
+  return reference ? env[reference]?.trim() || undefined : raw;
+}
+function memoryExtractorProvider(env: NodeJS.ProcessEnv) {
+  const value = env.TAGENT_MEMORY_EXTRACTOR_PROVIDER ?? "rule";
+  if (value !== "rule" && value !== "hybrid") throw new Error("TAGENT_MEMORY_EXTRACTOR_PROVIDER must be rule or hybrid");
+  if (value === "hybrid" && (!(referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_BASE_URL") || env.TAGENT_API_BASE?.trim()) || !(referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_API_KEY") || env.OPENAI_API_KEY?.trim()) || !(referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_MODEL") || env.TAGENT_MODEL?.trim()))) throw new Error("Hybrid memory extraction requires extractor or main model base URL, API key, and model");
+  return value;
+}
+
+function loadMemoryConfig(env: NodeJS.ProcessEnv): MemoryConfig {
+  if (!enabled(env.TAGENT_MEMORY_ENABLED, "TAGENT_MEMORY_ENABLED")) return { enabled: false };
+
+  const backend = env.TAGENT_MEMORY_BACKEND ?? "postgres";
+  if (backend !== "memory" && backend !== "postgres") throw new Error("TAGENT_MEMORY_BACKEND must be memory or postgres");
+  if (backend === "postgres" && !env.TAGENT_MEMORY_POSTGRES_URL?.trim()) {
+    throw new Error("TAGENT_MEMORY_POSTGRES_URL is required when TAGENT_MEMORY_ENABLED=true and TAGENT_MEMORY_BACKEND=postgres");
+  }
+
+  const coldBackend = env.TAGENT_MEMORY_COLD_BACKEND ?? "local";
+  if (coldBackend !== "local" && coldBackend !== "s3") throw new Error("TAGENT_MEMORY_COLD_BACKEND must be local or s3");
+  if (coldBackend === "s3" && !env.TAGENT_MEMORY_S3_BUCKET?.trim()) {
+    throw new Error("TAGENT_MEMORY_S3_BUCKET is required when TAGENT_MEMORY_COLD_BACKEND=s3");
+  }
+
+  return {
+    enabled: true,
+    backend,
+    postgresUrl: env.TAGENT_MEMORY_POSTGRES_URL?.trim() || undefined,
+    coldBackend,
+    coldPath: env.TAGENT_MEMORY_COLD_PATH ?? "./data/memory-cold",
+    s3Bucket: env.TAGENT_MEMORY_S3_BUCKET?.trim() || undefined,
+    s3Prefix: env.TAGENT_MEMORY_S3_PREFIX,
+    s3Endpoint: env.TAGENT_MEMORY_S3_ENDPOINT,
+    s3Region: env.TAGENT_MEMORY_S3_REGION,
+    s3ForcePathStyle: enabled(env.TAGENT_MEMORY_S3_FORCE_PATH_STYLE, "TAGENT_MEMORY_S3_FORCE_PATH_STYLE"),
+    workerIntervalMs: positiveInteger(env.TAGENT_MEMORY_WORKER_INTERVAL_MS, 1_000, "TAGENT_MEMORY_WORKER_INTERVAL_MS"),
+    maintenanceIntervalMs: positiveInteger(env.TAGENT_MEMORY_MAINTENANCE_INTERVAL_MS, 60_000, "TAGENT_MEMORY_MAINTENANCE_INTERVAL_MS"),
+    workspaceScopeId: env.TAGENT_MEMORY_WORKSPACE_SCOPE_ID ?? "default",
+    recallTokenBudget: positiveInteger(env.TAGENT_MEMORY_RECALL_TOKEN_BUDGET, 8_000, "TAGENT_MEMORY_RECALL_TOKEN_BUDGET"),
+    coldMinimumRecords: positiveInteger(env.TAGENT_MEMORY_COLD_MINIMUM_RECORDS, 2, "TAGENT_MEMORY_COLD_MINIMUM_RECORDS"),
+    warmAfterMs: nonNegativeInteger(env.TAGENT_MEMORY_WARM_AFTER_MS, 0, "TAGENT_MEMORY_WARM_AFTER_MS"),
+    hotTtlMs: positiveInteger(env.TAGENT_MEMORY_HOT_TTL_MS, 2_592_000_000, "TAGENT_MEMORY_HOT_TTL_MS"),
+    embeddingProvider: memoryEmbeddingProvider(env),
+    embeddingBaseUrl: env.TAGENT_MEMORY_EMBEDDING_BASE_URL?.trim() || undefined,
+    embeddingApiKey: env.TAGENT_MEMORY_EMBEDDING_API_KEY?.trim() || undefined,
+    embeddingModel: env.TAGENT_MEMORY_EMBEDDING_MODEL?.trim() || undefined,
+    embeddingDimensions: env.TAGENT_MEMORY_EMBEDDING_DIMENSIONS ? positiveInteger(env.TAGENT_MEMORY_EMBEDDING_DIMENSIONS, 1024, "TAGENT_MEMORY_EMBEDDING_DIMENSIONS") : undefined,
+    embeddingBatchSize: positiveInteger(env.TAGENT_MEMORY_EMBEDDING_BATCH_SIZE, 64, "TAGENT_MEMORY_EMBEDDING_BATCH_SIZE"),
+    embeddingExtraBody: parseJsonObject(env.TAGENT_MEMORY_EMBEDDING_EXTRA_BODY, "TAGENT_MEMORY_EMBEDDING_EXTRA_BODY"),
+    extractorProvider: memoryExtractorProvider(env),
+    extractorBaseUrl: referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_BASE_URL") || env.TAGENT_API_BASE?.trim() || undefined,
+    extractorApiKey: referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_API_KEY") || env.OPENAI_API_KEY?.trim() || undefined,
+    extractorModel: referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_MODEL") || env.TAGENT_MODEL?.trim() || undefined,
+  };
 }
 
 function parseServiceCredentials(value?: string): ServiceCredential[] {
@@ -62,6 +164,12 @@ function parseServiceCredentials(value?: string): ServiceCredential[] {
     if (!scopes.length || scopes.some((scope: unknown) => typeof scope !== "string" || !allowed.has(scope as ServiceScope))) throw new Error(`TAGENT_SERVICE_CREDENTIALS[${index}].scopes contains an invalid scope`);
     return { token, scopes: [...new Set(scopes as ServiceScope[])] };
   });
+}
+
+function normalizeBaseUrl(value: string) {
+  const url = new URL(value);
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("TAGENT_API_BASE must use http or https");
+  return url.toString().replace(/\/$/, "");
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -84,6 +192,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     dynamicBudget: env.TAGENT_DYNAMIC_BUDGET !== "false",
     controlInboxCapacity: positiveInteger(env.TAGENT_CONTROL_INBOX_CAPACITY, 32, "TAGENT_CONTROL_INBOX_CAPACITY"),
     serviceCredentials: parseServiceCredentials(env.TAGENT_SERVICE_CREDENTIALS),
+    memory: loadMemoryConfig(env),
     model: {
       provider: env.TAGENT_PROVIDER ?? "openai-compatible",
       modelId: env.TAGENT_MODEL ?? "gpt-5.6-sol",
@@ -115,6 +224,10 @@ export interface PublicRuntimeConfig {
   dynamicBudget: boolean;
   controlInboxCapacity: number;
   schemaVersion?: number;
+  memoryEnabled: boolean;
+  memoryWorkspaceScopeId?: string;
+  memoryBackend?: "memory" | "postgres";
+  memoryColdBackend?: "local" | "s3";
 }
 
 export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): PublicRuntimeConfig {
@@ -137,6 +250,10 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     dynamicBudget: config.dynamicBudget,
     controlInboxCapacity: config.controlInboxCapacity,
     schemaVersion,
+    memoryEnabled: config.memory.enabled,
+    memoryWorkspaceScopeId: config.memory.enabled ? config.memory.workspaceScopeId : undefined,
+    memoryBackend: config.memory.enabled ? config.memory.backend : undefined,
+    memoryColdBackend: config.memory.enabled ? config.memory.coldBackend : undefined,
   };
 }
 

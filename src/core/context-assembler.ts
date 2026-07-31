@@ -12,6 +12,7 @@ export interface ContextAssemblerOptions {
 
 export interface ContextAssembly {
   messages: AgentMessage[];
+  droppedMessages: AgentMessage[];
   stats: {
     source: ContextSource;
     contextWindow: number;
@@ -68,8 +69,11 @@ export class ContextAssembler {
     }
 
     const keptMessages = kept.flatMap((turn) => turn.messages);
+    const keptSourceTurns = Math.min(kept.length, turnLimited.length);
+    const droppedMessages = originalTurns.slice(0, originalTurns.length - keptSourceTurns).flatMap((turn) => turn.messages);
     return {
       messages: keptMessages,
+      droppedMessages,
       stats: {
         source,
         contextWindow,

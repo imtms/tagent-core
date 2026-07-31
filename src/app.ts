@@ -5,6 +5,8 @@ import path from "node:path";
 import type { PublicRuntimeConfig } from "./config.js";
 import type { Store } from "./store/store.js";
 import type { AgentService } from "./core/agent-service.js";
+import type { MemoryFacade } from "./memory/memory-service.js";
+import type { AccessContext, MemoryScope } from "./memory/types.js";
 
 export interface AppDependencies {
   store: Store;
@@ -13,9 +15,10 @@ export interface AppDependencies {
   logger?: boolean;
   runtimeConfig?: PublicRuntimeConfig;
   serviceCredentials?: ServiceCredential[];
+  memory?: MemoryFacade;
 }
 
-export function createApp({ store, service, webRoot = path.resolve("dist/web"), logger = true, runtimeConfig, serviceCredentials = [] }: AppDependencies) {
+export function createApp({ store, service, webRoot = path.resolve("dist/web"), logger = true, runtimeConfig, serviceCredentials = [], memory }: AppDependencies) {
   const app = Fastify({ logger });
 
   if (serviceCredentials.length) app.addHook("onRequest", async (request, reply) => {
@@ -29,6 +32,58 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
       if (credential) return reply.code(403).send({ error: "insufficient service credential scope", requiredScope });
     }
     return reply.code(401).send({ error: "authentication required" });
+  });
+
+  app.post("/api/memory/capture", async (request, reply) => {
+    if (!memory) return reply.code(503).send({ error: "memory is disabled" });
+    const body = request.body as { scope?: MemoryScope; content?: string; idempotencyKey?: string };
+    if (!body.scope || !body.content?.trim()) return reply.code(400).send({ error: "scope and content are required" });
+    const idempotencyKey = body.idempotencyKey ?? `manual:${Date.now()}`;
+    return memory.enqueueCapture({ access: memoryAccess(request, [body.scope], "capture"), sourceRefs: [{ sourceType: "manual", sourceId: idempotencyKey }], content: body.content.trim(), idempotencyKey });
+  });
+  app.post("/api/memory/jobs", async (request, reply) => {
+    if (!memory) return reply.code(503).send({ error: "memory is disabled" });
+    const body = request.body as { scopes?: MemoryScope[]; limit?: number };
+    if (!body.scopes?.length) return reply.code(400).send({ error: "scopes are required" });
+    return memory.listCaptureJobs?.(memoryAccess(request, body.scopes, "memory_admin"), Math.min(500, Math.max(1, body.limit ?? 100))) ?? [];
+  });
+  app.post("/api/memory/status", async (request, reply) => {
+    if (!memory) return reply.code(503).send({ error: "memory is disabled" });
+    const body = request.body as { scopes?: MemoryScope[] };
+    if (!body.scopes?.length) return reply.code(400).send({ error: "scopes are required" });
+    return memory.status(memoryAccess(request, body.scopes, "memory_admin"));
+  });
+  app.post("/api/memory/recall", async (request, reply) => {
+    if (!memory) return reply.code(503).send({ error: "memory is disabled" });
+    const body = request.body as { cue?: string; scopes?: MemoryScope[]; kinds?: Array<"fact" | "preference" | "episode" | "procedure">; maxCards?: number; maxColdTopics?: number };
+    if (!body.cue?.trim() || !body.scopes?.length) return reply.code(400).send({ error: "cue and scopes are required" });
+    return memory.recall({ access: memoryAccess(request, body.scopes, "agent_recall"), cue: body.cue.trim(), kinds: body.kinds, maxCards: body.maxCards, maxColdTopics: body.maxColdTopics });
+  });
+  app.get("/api/memory/topics/:topicId", async (request, reply) => {
+    if (!memory) return reply.code(503).send({ error: "memory is disabled" });
+    const { topicId } = request.params as { topicId: string };
+    const query = request.query as { scopeType?: MemoryScope["type"]; scopeId?: string };
+    if (!query.scopeType || !query.scopeId) return reply.code(400).send({ error: "scopeType and scopeId are required" });
+    const topic = await memory.getColdTopic(memoryAccess(request, [{ type: query.scopeType, id: query.scopeId }], "memory_admin"), topicId);
+    return topic ?? reply.code(404).send({ error: "topic not found" });
+  });
+  app.post("/api/memory/records", async (request, reply) => {
+    if (!memory) return reply.code(503).send({ error: "memory is disabled" });
+    const body = request.body as { scopes?: MemoryScope[]; records?: import("./memory/types.js").WarmMemory[]; topics?: import("./memory/types.js").TopicDescriptor[] };
+    if (!body.scopes?.length || !body.records?.length) return reply.code(400).send({ error: "scopes and records are required" });
+    return memory.upsert(memoryAccess(request, body.scopes, "memory_admin"), body.records, body.topics);
+  });
+  app.post("/api/memory/export", async (request, reply) => {
+    if (!memory) return reply.code(503).send({ error: "memory is disabled" });
+    const body = request.body as { scope?: MemoryScope };
+    if (!body.scope) return reply.code(400).send({ error: "scope is required" });
+    return memory.export(memoryAccess(request, [body.scope], "memory_admin"), body.scope);
+  });
+  app.post("/api/memory/forget", async (request, reply) => {
+    if (!memory) return reply.code(503).send({ error: "memory is disabled" });
+    const body = request.body as { scope?: MemoryScope; ids?: string[]; topicIds?: string[] };
+    if (!body.scope) return reply.code(400).send({ error: "scope is required" });
+    return memory.forget({ access: memoryAccess(request, [body.scope], "memory_admin"), scope: body.scope, ids: body.ids, topicIds: body.topicIds });
   });
 
   app.get("/api/health", async () => ({ ok: true, service: "tagent-core" }));
@@ -286,4 +341,8 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
 
   app.addHook("onClose", async () => { await service.closeRuntimes(); store.close(); });
   return app;
+}
+
+function memoryAccess(request: FastifyRequest, scopes: MemoryScope[], purpose: AccessContext["purpose"]): AccessContext {
+  return { subjectId: String(request.headers["x-tagent-subject"] ?? "local-admin"), scopes, purpose };
 }

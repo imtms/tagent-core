@@ -3,6 +3,7 @@ import type { Model } from "@earendil-works/pi-ai/compat";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Store } from "../store/store.js";
 import type { RunEvent, RunId } from "../core/types.js";
+import type { MemoryFacade } from "../memory/memory-service.js";
 
 export type RuntimeQueueResult = "accepted" | "settled";
 
@@ -33,6 +34,9 @@ export interface RuntimeOptions {
   runHardTimeoutMs?: number;
   onActivity?: () => void;
   onEvent?: (event: RunEvent) => void;
+  memory?: MemoryFacade;
+  memoryScopeId?: string;
+  memorySubjectId?: string;
 }
 
 export type RuntimeFactory = (options: RuntimeOptions) => AgentRuntime;

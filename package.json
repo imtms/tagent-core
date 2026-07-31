@@ -12,7 +12,7 @@
     "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "tsx watch src/server.ts",
     "dev:web": "vite --config ./vite.config.ts --host 0.0.0.0",
-    "build": "tsc -p tsconfig.server.json && vite build --config ./vite.config.ts",
+    "build": "tsc -p tsconfig.server.json && mkdir -p dist/memory/postgres && cp src/memory/postgres/schema.sql dist/memory/postgres/schema.sql && vite build --config ./vite.config.ts",
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -23,6 +23,8 @@
     "release:build": "bash scripts/build-release.sh"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1100.0",
+    "@aws-sdk/lib-storage": "^3.1100.0",
     "@earendil-works/pi-agent-core": "0.83.0",
     "@earendil-works/pi-ai": "0.83.0",
     "@earendil-works/pi-coding-agent": "0.83.0",
@@ -30,6 +32,7 @@
     "better-sqlite3": "12.4.1",
     "fastify": "^5.10.0",
     "lucide-react": "0.553.0",
+    "pg": "^8.22.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "typebox": "^1.1.24"
@@ -42,6 +45,7 @@
     "@eslint/js": "^10.0.1",
     "@types/better-sqlite3": "7.6.13",
     "@types/node": "24.10.1",
+    "@types/pg": "^8.20.0",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "@vitejs/plugin-react": "5.1.1",

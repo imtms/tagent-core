@@ -5,6 +5,8 @@ import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Store } from "../store/store.js";
 import type { RunEvent, RunId } from "../core/types.js";
+import type { MemoryFacade } from "../memory/memory-service.js";
+import type { MemoryKind } from "../memory/types.js";
 
 const MAX_OUTPUT = 24_000;
 const MAX_CAPTURE = 256_000;
@@ -14,6 +16,9 @@ const ListSchema = Type.Object({ path: Type.Optional(Type.String()), limit: Type
 const WriteSchema = Type.Object({ path: Type.String(), content: Type.String() });
 const EditSchema = Type.Object({ path: Type.String(), oldText: Type.String(), newText: Type.String() });
 const BashSchema = Type.Object({ command: Type.String(), timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })) });
+const MemorySearchSchema=Type.Object({query:Type.String(),kinds:Type.Optional(Type.Array(Type.Union([Type.Literal("fact"),Type.Literal("preference"),Type.Literal("episode"),Type.Literal("procedure")]))),maxResults:Type.Optional(Type.Integer({minimum:1,maximum:20}))});
+const MemoryTopicSchema=Type.Object({topicId:Type.String()});
+const MemoryForgetSchema=Type.Object({ids:Type.Optional(Type.Array(Type.String())),topicIds:Type.Optional(Type.Array(Type.String()))});
 const TaskRunSchema = Type.Union([
   Type.Object({ action: Type.Literal("get") }),
   Type.Object({ action: Type.Literal("phase"), phase: Type.Union([Type.Literal("discover"), Type.Literal("plan"), Type.Literal("implement"), Type.Literal("verify"), Type.Literal("review")]) }),
@@ -81,7 +86,7 @@ async function executeMutation(
   }
 }
 
-export function createTools(store: Store, runId: RunId, workspace: string, onEvent?: (event: RunEvent) => void): AgentTool[] {
+export function createTools(store: Store, runId: RunId, workspace: string, onEvent?: (event: RunEvent) => void, memory?:MemoryFacade, memoryScopeId="default", memorySubjectId?:string): AgentTool[] {
   const listTool: AgentTool<typeof ListSchema, Record<string, unknown>> = {
     name: "ls", label: "List directory", description: "List entries in a workspace directory.", parameters: ListSchema,
     async execute(_id, params: Static<typeof ListSchema>) {
@@ -204,7 +209,13 @@ export function createTools(store: Store, runId: RunId, workspace: string, onEve
     },
   };
 
-  return [listTool, readTool, writeTool, editTool, bashTool, taskRunTool];
+  const tools:AgentTool[]=[listTool, readTool, writeTool, editTool, bashTool, taskRunTool];
+  if(memory){const scope={type:"workspace" as const,id:memoryScopeId};const access={subjectId:memorySubjectId??`run:${runId}`,scopes:[scope],purpose:"agent_recall" as const};
+    const memorySearchTool:AgentTool<typeof MemorySearchSchema,Record<string,unknown>>={name:"memory_search",label:"Search memory",description:"Search long-term memory when automatic recall is insufficient. Returns cards, topic IDs, confidence and provenance routes.",parameters:MemorySearchSchema,async execute(_id,params:Static<typeof MemorySearchSchema>){const result=await memory.recall({access,cue:params.query,kinds:params.kinds as MemoryKind[]|undefined,maxCards:params.maxResults??8,maxColdTopics:0});return textResult(JSON.stringify({cards:result.cards,topicIds:result.trace.topicIds,trace:result.trace},null,2));}};tools.push(memorySearchTool);
+    const memoryTopicTool:AgentTool<typeof MemoryTopicSchema,Record<string,unknown>>={name:"memory_topic_get",label:"Read memory topic",description:"Read one complete canonical Cold Topic page by exact topic ID.",parameters:MemoryTopicSchema,async execute(_id,params:Static<typeof MemoryTopicSchema>){const topic=await memory.getColdTopic(access,params.topicId);if(!topic)throw new Error("Memory topic not found");return textResult(topic.body,{topicId:params.topicId,revision:topic.revision.revision,checksum:topic.revision.checksum});}};tools.push(memoryTopicTool);
+    const memoryForgetTool:AgentTool<typeof MemoryForgetSchema,Record<string,unknown>>={name:"memory_forget",label:"Forget memory",description:"Forget specified memory record IDs or Topic IDs. Use only when the user explicitly requests deletion or correction.",parameters:MemoryForgetSchema,executionMode:"sequential",async execute(id,params:Static<typeof MemoryForgetSchema>){return executeMutation(store,runId,id,"tool.memory_forget",params,async()=>textResult(JSON.stringify(await memory.forget({access:{...access,purpose:"memory_admin"},scope,ids:params.ids,topicIds:params.topicIds}),null,2)));}};tools.push(memoryForgetTool);
+  }
+  return tools;
 }
 
 export async function ensureWorkspace(workspace: string) {
