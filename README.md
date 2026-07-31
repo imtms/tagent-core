@@ -1,32 +1,129 @@
 # TAgent Core
 
-TAgent Core is a durable control plane for an in-process coding agent. It combines Pi's model and tool loop with TAgent-owned persistence, execution state, verification gates, operation receipts, and a Web workbench.
+**TAgent Core is designed by TMs and developed with AI assistance.**
 
-The current release is `0.1.0-alpha.1`. It is intended for one trusted process, one trusted workspace, and localhost or private-network deployment. It does not provide built-in API authentication, multi-tenant isolation, or an operating-system sandbox.
+TAgent Core is a durable, self-hosted control plane for an in-process coding agent. It combines Pi's model and tool loop with TAgent-owned persistence, TaskRun supervision, verification gates, operation receipts, a responsive Web workbench, scoped automation credentials, and an optional Hot/Warm/Cold long-term memory platform.
 
-## What It Provides
+Version `0.1.0` is the first stable source release for the documented **trusted single-service deployment profile**. Stable means the supported profile has passed the repository's release gates; it does not mean that the service is a public multi-tenant sandbox.
 
-- SQLite sessions, messages, transcripts, TaskRuns, events, plans, checks, artifacts, continuations, and operation receipts
-- Deterministic completion gates with fresh verification evidence
+## Highlights
+
+- Durable SQLite sessions, messages, transcripts, TaskRuns, events, plans, checks, artifacts, continuations, queues, and operation receipts
+- Deterministic completion gates with verification evidence invalidated after workspace mutations
 - Transactional continuation claims, leases, recovery, and bounded automatic continuation
 - Idempotent mutating tools with restart-safe `outcome_unknown` handling
-- Repeated-call and repeated-failure tool guards
-- Pi `0.83.0` `AgentSession` lifecycle, steering, follow-up, retry, and compaction
+- Pi `0.83.0` `AgentSession` integration for model/tool execution, retry, steering, follow-up, and compaction
 - Workspace-contained `ls`, `read`, `write`, `edit`, `bash`, and `task_run` tools
-- Fastify HTTP/SSE API and a responsive React workbench
-- Safe Markdown and paired transcript tool-call inspection
+- Fastify HTTP/SSE API and React workbench with queue management, run diagnostics, Markdown, and tool inspection
+- Optional scoped Bearer credentials for external automation clients
+- Optional PostgreSQL/pgvector memory with Local Cold Markdown pages and a Web Memory Center
 
-Long-term memory is an optional adapter-based extension and is disabled by default. Scheduling, identity, multi-channel delivery, and isolated workers remain outside this repository's current core.
+## Supported 0.1 Profile
+
+The stable `0.1.0` support boundary is:
+
+- one trusted TAgent Core process;
+- one trusted workspace;
+- one SQLite control-plane database;
+- Node.js `24.18.1` on Linux x64 for the production artifact;
+- localhost or a private network, preferably behind an authenticated reverse proxy;
+- optional memory in a single service using PostgreSQL 17, pgvector, pg_trgm, and Local Cold storage.
+
+Not included in the stable boundary:
+
+- public-Internet exposure without a separate authentication proxy;
+- browser login, CSRF protection, or complete multi-tenant user/workspace membership;
+- an operating-system sandbox for `bash`;
+- multiple processes sharing one SQLite database;
+- S3 Cold and independently deployed memory workers as release-gated production profiles.
+
+Read [SECURITY.md](SECURITY.md) before deployment.
+
+## Requirements
+
+- Node.js `>=24.18.1`
+- npm `>=12`
+- an OpenAI Chat Completions-compatible provider and `OPENAI_API_KEY`
+- a trusted workspace directory
+- optional: PostgreSQL 17 with `vector` and `pg_trgm` when persistent memory is enabled
+
+## Quick Start
+
+```bash
+cp .env.example .env
+# Edit .env and set OPENAI_API_KEY and TAGENT_WORKSPACE.
+npm ci
+npm run build
+npm start
+```
+
+Open <http://localhost:3100>.
+
+For development:
+
+```bash
+npm run dev
+```
+
+The checked-in provider defaults are examples and can be replaced:
+
+```env
+TAGENT_PROVIDER=openai-compatible
+TAGENT_API_BASE=https://one.tms.im/v1
+TAGENT_MODEL=gpt-5.6-sol
+OPENAI_API_KEY=
+```
+
+Credentials are supplied at runtime and are not written to Pi auth files, SQLite, transcripts, or source control.
+
+## Core Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | none | Runtime model credential |
+| `TAGENT_RUNTIME` | `in-process` | Runtime implementation; only `in-process` is supported |
+| `TAGENT_PROVIDER` | `openai-compatible` | Pi provider identifier |
+| `TAGENT_API_BASE` | `https://one.tms.im/v1` | OpenAI-compatible API base URL |
+| `TAGENT_MODEL` | `gpt-5.6-sol` | Upstream model identifier |
+| `TAGENT_CONTEXT_WINDOW` | `200000` | Advertised model context window |
+| `TAGENT_MAX_TOKENS` | `32768` | Maximum output tokens per provider response |
+| `TAGENT_PROVIDER_TIMEOUT_MS` | `120000` | Provider request timeout |
+| `TAGENT_PROVIDER_MAX_RETRIES` | `1` | Pi retry count per attempt |
+| `TAGENT_RUN_TIMEOUT_MS` | `7200000` | Run inactivity ceiling |
+| `TAGENT_RUN_HARD_TIMEOUT_MS` | `86400000` | Absolute Run wall-clock ceiling |
+| `TAGENT_MAX_CONTINUATIONS` | `128` | Automatic continuation ceiling |
+| `TAGENT_MAX_RUN_TOKENS` | `2000000` | Cumulative Run token ceiling |
+| `TAGENT_MAX_CONTEXT_TURNS` | `20` | Complete turns loaded into a new runtime |
+| `TAGENT_CONTROL_INBOX_CAPACITY` | `32` | Active-Run control inbox capacity |
+| `TAGENT_DYNAMIC_BUDGET` | `true` | Enable complexity-based soft budgets |
+| `TAGENT_DB` | `./data/tagent.db` | SQLite database path |
+| `TAGENT_WORKSPACE` | current directory | Workspace exposed to tools |
+| `PORT` | `3100` | HTTP, SSE, and Web port |
+| `TAGENT_SERVICE_CREDENTIALS` | none | Optional scoped Bearer credentials for automation |
+| `TAGENT_MEMORY_ENABLED` | `false` | Opt in to long-term memory |
+
+See [.env.example](.env.example) for every supported setting.
+
+### Dynamic budgets
+
+| Tier | Continuations | Cumulative tokens | Idle timeout |
+| --- | ---: | ---: | ---: |
+| simple | 4 | 80,000 | 5 minutes |
+| standard | 12 | 240,000 | 15 minutes |
+| complex | 32 | 640,000 | 45 minutes |
+| extended | 96 | 1,600,000 | 120 minutes |
+
+Environment limits remain hard ceilings. Set `TAGENT_DYNAMIC_BUDGET=false` to use them directly.
 
 ## Optional Long-Term Memory
 
-Long-term memory is opt-in. With the default setting below, TAgent Core does not initialize memory adapters, workers, PostgreSQL, pgvector, S3, or Local Cold storage. It retains only the original SQLite session/TaskRun history and can be installed and run without any memory service:
+Memory is disabled by default. In disabled mode TAgent Core does not connect to PostgreSQL, initialize memory adapters or workers, or access Local Cold/S3 storage:
 
 ```env
 TAGENT_MEMORY_ENABLED=false
 ```
 
-To enable the persistent single-service Local Cold profile:
+To run the stable persistent Local Cold profile:
 
 ```bash
 docker compose -f deploy/postgres/compose.yml up -d
@@ -39,232 +136,98 @@ TAGENT_MEMORY_POSTGRES_URL=postgresql://tagent:tagent@127.0.0.1:5432/tagent_memo
 TAGENT_MEMORY_COLD_BACKEND=local
 TAGENT_MEMORY_COLD_PATH=./data/memory-cold
 TAGENT_MEMORY_WORKSPACE_SCOPE_ID=default
+
+# Recommended semantic-quality profile
+TAGENT_MEMORY_EMBEDDING_PROVIDER=openai
+TAGENT_MEMORY_EMBEDDING_BASE_URL=https://embedding-provider.example/v1
+TAGENT_MEMORY_EMBEDDING_API_KEY=
+TAGENT_MEMORY_EMBEDDING_MODEL=
+TAGENT_MEMORY_EXTRACTOR_PROVIDER=hybrid
 ```
 
-Requirements when enabled with this profile:
-
-- PostgreSQL 17 with the `vector` extension (the supplied Compose file uses `pgvector/pgvector:pg17`);
-- a reachable database and valid `TAGENT_MEMORY_POSTGRES_URL`;
-- a writable `TAGENT_MEMORY_COLD_PATH`;
-- enough database/filesystem capacity for Hot/Warm records, vectors, graph metadata, jobs, and immutable Cold revisions.
-
-`TAGENT_MEMORY_BACKEND=memory` is available for development/testing without PostgreSQL, but its Hot/Warm metadata and indexes are not durable. `TAGENT_MEMORY_COLD_BACKEND=s3` additionally requires `TAGENT_MEMORY_S3_BUCKET` and AWS-compatible credentials/settings. Invalid or missing memory-only settings fail startup only when memory is enabled. See the [memory documentation index](docs/MEMORY.md) and [operations guide](docs/MEMORY_OPERATIONS.md) for details.
-
-## Pi Integration
-
-TAgent Core uses the current latest Pi packages:
+The design separates facts from preferences and uses:
 
 ```text
-@earendil-works/pi-ai             0.83.0
-@earendil-works/pi-agent-core     0.83.0
-@earendil-works/pi-coding-agent   0.83.0
+Hot/Warm records + lexical/vector/graph routing
+                      -> Topic ID
+                      -> complete immutable Cold Markdown page
 ```
 
-The primary runtime embeds Pi through its official SDK rather than launching the Pi CLI or RPC process.
-
-### LLM and Provider Injection
-
-The configured endpoint is an OpenAI Chat Completions-compatible custom provider. TAgent initializes it in this order:
-
-1. Create an offline `ModelRuntime` with no `models.json` path.
-2. Register the custom provider and model when the provider is not already known.
-3. Refresh the model runtime with network catalog refresh disabled.
-4. Apply `OPENAI_API_KEY` through `setRuntimeApiKey()`.
-5. Pass the same `ModelRuntime` and explicit `Model` to `createAgentSession()`.
-
-This follows Pi `0.83.0` SDK authentication precedence: runtime override, stored credential, environment variable, then custom-provider fallback. The runtime override is process-memory only and is not written to `auth.json`, `models.json`, SQLite, events, or transcripts.
-
-TAgent does not set `authHeader: true`. Pi's standard `openai-completions` implementation already turns the resolved API key into the expected Bearer authorization header. `authHeader` is reserved for providers whose non-standard API requires Pi to synthesize that header explicitly.
-
-TAgent also supplies:
-
-- `SessionManager.inMemory()` because SQLite is the durable source of truth
-- `SettingsManager.inMemory()` for bounded retry and compaction settings
-- a controlled `DefaultResourceLoader` with project extensions, skills, prompts, themes, and context-file discovery disabled
-- a per-Run system prompt through `systemPromptOverride`
-- TAgent-owned custom tools with Pi built-in tools disabled
-
-See Pi's bundled official documentation in `node_modules/@earendil-works/pi-coding-agent/docs/sdk.md`, `providers.md`, `models.md`, and `custom-provider.md`.
-
-## Requirements
-
-- Node.js `>=24.18.1`
-- npm `>=12`
-- A provider API key available as `OPENAI_API_KEY`
-- A trusted workspace directory
-
-## Quick Start
-
-```bash
-cp .env.example .env
-# Set OPENAI_API_KEY without committing it.
-npm install
-npm run build
-npm start
-```
-
-Open http://localhost:3100.
-
-For development:
-
-```bash
-npm run dev
-```
-
-The default endpoint is:
-
-```text
-provider: openai-compatible
-api:      openai-completions
-base URL: https://one.tms.im/v1
-model:    gpt-5.6-sol
-```
-
-## Configuration
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `OPENAI_API_KEY` | none | Runtime-only credential for the configured provider |
-| `TAGENT_RUNTIME` | `in-process` | Runtime implementation; only `in-process` is enabled |
-| `TAGENT_PROVIDER` | `openai-compatible` | Pi provider ID recorded in model messages |
-| `TAGENT_API_BASE` | `https://one.tms.im/v1` | OpenAI-compatible API base URL |
-| `TAGENT_MODEL` | `gpt-5.6-sol` | Upstream model ID |
-| `TAGENT_CONTEXT_WINDOW` | `200000` | Advertised model context window |
-| `TAGENT_MAX_TOKENS` | `32768` | Maximum model output tokens |
-| `TAGENT_REASONING` | `true` | Enable reasoning metadata and Pi medium thinking level |
-| `TAGENT_PROVIDER_TIMEOUT_MS` | `120000` | Timeout applied to one provider request |
-| `TAGENT_PROVIDER_MAX_RETRIES` | `1` | Pi automatic retry count per session attempt |
-| `TAGENT_RUN_TIMEOUT_MS` | `7200000` | Hard ceiling for Run inactivity; dynamic tiers may choose a lower threshold |
-| `TAGENT_RUN_HARD_TIMEOUT_MS` | `86400000` | Absolute wall-clock ceiling for one Run attempt |
-| `TAGENT_MAX_CONTINUATIONS` | `128` | Hard automatic continuation ceiling |
-| `TAGENT_MAX_RUN_TOKENS` | `2000000` | Hard cumulative Run token ceiling |
-| `TAGENT_MAX_CONTEXT_TURNS` | `20` | Maximum complete turns loaded into a new runtime context |
-| `TAGENT_CONTROL_INBOX_CAPACITY` | `32` | Maximum queued/delivering steer and follow-up controls for an active Run attempt. |
-| `TAGENT_CONTEXT_RESERVE_TOKENS` | automatic | Optional explicit context safety reserve |
-| `TAGENT_DYNAMIC_BUDGET` | `true` | Enable complexity-based soft budgets |
-| `TAGENT_DB` | `./data/tagent.db` | SQLite database path |
-| `TAGENT_WORKSPACE` | current directory | Root exposed to TAgent tools |
-| `PORT` | `3100` | HTTP, SSE, and Web port |
-| `TAGENT_MEMORY_ENABLED` | `false` | Opt in to the long-term memory platform; disabled mode requires no memory services |
-
-Dynamic budget defaults:
-
-| Tier | Continuations | Cumulative tokens | Idle timeout |
-| --- | ---: | ---: | ---: |
-| simple | 4 | 80,000 | 5 minutes |
-| standard | 12 | 240,000 | 15 minutes |
-| complex | 32 | 640,000 | 45 minutes |
-| extended | 96 | 1,600,000 | 120 minutes |
-
-Environment values remain hard ceilings. Set `TAGENT_DYNAMIC_BUDGET=false` to use the hard limits directly.
+Cold page bodies are not chunk-vectorized. Capture, persistence, embedding, publication, recall, and prompt injection pass through policy gates. The Web displays Memory Center only when memory is enabled. Start with [docs/MEMORY.md](docs/MEMORY.md).
 
 ## Execution Model
 
-Each user request creates or reuses a durable TaskRun:
+Each admitted user request is associated with a durable TaskRun:
 
 ```text
 discover -> plan -> implement -> verify -> review -> done
                                              \-> blocked
 ```
 
-Structured plan, mutation, and check actions advance the phase monotonically. The model cannot move a Run backward to an earlier phase.
+A Run completes only when its durable completion gate passes:
 
-A Run completes only when its completion gate passes:
+- at least one required plan item exists and all required items are done;
+- all required checks pass;
+- verification evidence is fresh after the last workspace mutation.
 
-- at least one required plan item exists and every required item is done
-- every required check is passed
-- passed evidence is not stale after a workspace mutation
+Pi owns the ephemeral model/tool loop inside an attempt. TAgent Core owns durable state, operation receipts, supervision, continuation policy, transcripts, queues, and terminal completion.
 
-If the gate blocks completion, TAgent may claim a persisted continuation lease and start another attempt with the transcript and TaskRun snapshot restored. Continuations stop at configured count, token, idle-time, and wall-clock limits.
+## API and Authentication
 
-Pi owns the ephemeral model/tool loop, retry, queue delivery, and context compaction within one attempt. TAgent owns durable identity, state transitions, transcript audit, operation receipts, continuation policy, and terminal completion.
+The Fastify API provides health/config status, sessions, durable submissions, runs, replayable SSE events, transcripts, operations, cancellation, controls, compaction, resume, and optional memory administration.
 
-## API Surface
+`TAGENT_SERVICE_CREDENTIALS` enables least-privilege Bearer credentials for external automation scopes such as `sessions:read`, `sessions:write`, `runs:read`, `runs:control`, and `events:consume`. These credentials intentionally do not provide administrator/Web access.
 
-The Fastify API exposes:
-
-- health and public runtime status
-- session creation and history
-- message submission and Run creation
-- Run inspection, event replay, operations, transcripts, and transcript views
-- cancellation, steering, follow-up, manual compaction, and manual resume
-
-Run events are replayable over SSE using monotonically increasing per-Run sequence numbers.
-
-The API is not authenticated in this alpha. Do not expose it directly to the public Internet.
-
-## Architecture
-
-```text
-React workbench
-      |
-Fastify HTTP + SSE
-      |
-AgentService ---------------- SQLite Store
-      |                            |
-AgentRuntime                  TaskRun gate
-      |
-Pi 0.83 AgentSession
-      |
-ModelRuntime + custom provider
-      |
-TAgent-owned tools
-```
-
-The `AgentRuntime` boundary keeps Pi-specific classes and events out of the durable control-plane schema and leaves room for isolated worker adapters later.
+The interactive Web and administrative routes do **not** include a built-in login boundary in `0.1.0`. Keep the service private or put it behind an authenticated reverse proxy. See [docs/core-api-contract.md](docs/core-api-contract.md).
 
 ## Security Boundary
 
-- Run one process against one SQLite database and one trusted workspace.
-- Bind to localhost or place the service behind an authenticated private-network reverse proxy.
 - Run under a dedicated low-privilege operating-system account.
-- Do not place credentials, SSH keys, cloud configuration, or unrelated sensitive files in the tool workspace.
-- Treat `bash` as code execution. The denylist is a guardrail, not a sandbox.
-- Keep `.env`, provider credentials, SQLite files, logs, and artifacts out of source control.
+- Do not expose port 3100/3220 directly to the public Internet.
+- Do not use a workspace containing provider keys, SSH keys, cloud credentials, or unrelated secrets.
+- Treat `bash` as code execution. The command policy is a guardrail, not a sandbox.
+- Keep `.env`, databases, Cold memory, logs, backups, and release artifacts out of Git.
+- Back up SQLite (including WAL state) and PostgreSQL/Local Cold together before upgrades.
 
-Read [SECURITY.md](SECURITY.md) before deployment.
-
-## Verification
+## Verification and Release
 
 ```bash
 npm run lint
 npm run check
 npm test -- --run
+TAGENT_TEST_POSTGRES_URL=postgresql://... npm test -- --run tests/postgres-memory.test.ts
 npm run build
 npm audit --omit=dev --audit-level=high
 npm audit --audit-level=high
+git diff --check
 ```
 
-The repository includes integration coverage for custom-provider registration, runtime credential resolution, Bearer authentication, retries, steering, follow-up, cancellation during initialization, active-tool abort, transcript persistence, continuation recovery, and completion gates.
+For immutable Linux x64 production artifacts:
 
-## Project Documents
+```bash
+npm run release:build
+```
 
-- [Long-term memory documentation](docs/MEMORY.md)
+See [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md) and [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
+
+## Documentation
+
+- [Development status](docs/STATUS.md)
+- [Runtime architecture](docs/RUNTIME.md)
+- [Pi runtime boundary](docs/PI_RUNTIME_BOUNDARY.md)
+- [Automation API contract](docs/core-api-contract.md)
+- [Long-term memory](docs/MEMORY.md)
 - [Memory architecture](docs/MEMORY_ARCHITECTURE.md)
 - [Memory operations](docs/MEMORY_OPERATIONS.md)
-- [Memory API, Agent tools, and Web UI](docs/MEMORY_API.md)
-- [Memory release checklist](docs/MEMORY_RELEASE_CHECKLIST.md)
-- [Development status](docs/STATUS.md)
-- [Runtime boundary and worker direction](docs/RUNTIME.md)
-- [General release checklist](docs/RELEASE_CHECKLIST.md)
+- [Memory API and UI](docs/MEMORY_API.md)
 - [Security policy](SECURITY.md)
+- [0.1.0 release audit](docs/RELEASE_AUDIT_0.1.0.md)
 - [Changelog](CHANGELOG.md)
 
-This repository remains an alpha control-plane core, not the complete TAgent product.
+## Authorship and License
 
-### Production memory quality profile
+TAgent Core was **designed by TMs** and **developed with AI assistance**, under TMs's direction and review. AI assistance is a development method and does not replace human project ownership or release accountability.
 
-For production retrieval, keep PostgreSQL/pgvector and select a real embedding provider plus hybrid extraction. Hash embeddings and the in-memory backend are development/test profiles only.
+Copyright (c) 2026 TMs and TAgent Core contributors.
 
-```env
-TAGENT_MEMORY_ENABLED=true
-TAGENT_MEMORY_BACKEND=postgres
-TAGENT_MEMORY_EMBEDDING_PROVIDER=openai
-TAGENT_MEMORY_EMBEDDING_BASE_URL=https://embedding-provider.example/v1
-TAGENT_MEMORY_EMBEDDING_API_KEY=...
-TAGENT_MEMORY_EMBEDDING_MODEL=...
-TAGENT_MEMORY_EXTRACTOR_PROVIDER=hybrid
-# Extractor settings fall back to TAGENT_API_BASE / OPENAI_API_KEY / TAGENT_MODEL.
-```
-
-Hybrid extraction keeps deterministic identity and explicit-preference rules as a safe fast path, then uses a structured LLM for multi-sentence relations, negation, temporal changes, and conversation coreference. Capture job outcomes are visible in Memory Center and through `/api/memory/jobs`. When memory is enabled, the Agent also receives `memory_search`, `memory_topic_get`, and guarded `memory_forget` tools.
+Licensed under the [MIT License](LICENSE).

@@ -1,6 +1,6 @@
 # Development Status
 
-Updated: 2026-07-31 (Asia/Singapore)
+Updated: 2026-08-01 (Asia/Singapore)
 
 ## Completed
 
@@ -94,7 +94,7 @@ Updated: 2026-07-31 (Asia/Singapore)
 - Store, completion gate, workspace tool, and HTTP API tests.
 - Desktop and mobile Chromium rendering checks.
 - Production dependency audit with no known vulnerabilities at the current lockfile.
-- Full production and development dependency audit with no known vulnerabilities at the `0.1.0-alpha.1` lockfile.
+- Full production and development dependency audit with no known vulnerabilities at the `0.1.0` lockfile.
 - ESLint flat configuration, release checklist, security policy, changelog, license, and tag-triggered GitHub prerelease workflow.
 - Git repository linked to `git@github.com:imtms/tagent-core.git` with incremental commits on `main`.
 - The 2026-07-31 external PR audit merged queue scheduling, manual Inbox start, and workspace status improvements after combined and post-merge validation; deployment artifact and current-operation PRs remain open for rollback/integrity and sensitive-data fixes. See [PR_AUDIT_2026-07-31.md](PR_AUDIT_2026-07-31.md).
@@ -149,4 +149,4 @@ Updated: 2026-07-31 (Asia/Singapore)
 - Continuation attempts heartbeat, use owner fencing, and only expire into recovery after the persisted lease deadline; process-level leader election remains absent.
 - Cancel/resume transcript repair is implemented. Steering and follow-up enter a bounded, idempotent Schema v6 control inbox before serial delivery to Pi; settled runtimes reject delivery, old-attempt input is superseded, restart-ambiguous delivery becomes `outcome_unknown`, and the API returns explicit closing/full/inactive responses.
 - Provider failures are typed and auditable, but retry scheduling still uses the provider SDK/pi boundary rather than a TAgent-owned retry loop.
-- The HTTP API has no authentication or multi-tenant isolation and must remain on localhost or a trusted private network for this alpha.
+- Scoped Bearer credentials are available for supported automation routes, but the Web/administrative surface has no built-in login or complete multi-tenant isolation and must remain on localhost or a trusted private network.

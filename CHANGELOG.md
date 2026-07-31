@@ -4,6 +4,14 @@ All notable changes to TAgent Core are documented here.
 
 ## Unreleased
 
+No unreleased changes.
+
+## [0.1.0] - 2026-08-01
+
+First stable source release for the documented trusted single-service deployment profile.
+
+### Added and changed
+
 - Add optional Hot/Warm/Cold long-term memory behind `TAGENT_MEMORY_ENABLED`, preserving the original SQLite-only behavior when disabled.
 - Add PostgreSQL/pgvector/pg_trgm storage, Fact/Preference separation, bounded entity graph routing, durable capture jobs, and immutable Local Cold Markdown Topic revisions.
 - Add deterministic and hybrid LLM extraction with conversation coreference, OpenAI-compatible semantic embeddings, lexical fallback, and LLM-assisted Cold consolidation.
@@ -21,7 +29,6 @@ All notable changes to TAgent Core are documented here.
 - Add Schema v5 durable event-consumer cursors with monotonic ACKs, terminal delivery evidence, and generation fencing for stale Web/SSE connections.
 - Close the subscribe-after-replay race by buffering live events while the persisted event backlog is replayed.
 
-## [Unreleased]
 
 ### Changed
 
@@ -59,3 +66,5 @@ First public source preview of the persistent TAgent control plane.
 - Runtime checkpoints, semantic context summaries, consumer ACKs, and expiry-aware continuation takeover remain future work.
 
 [0.1.0-alpha.1]: https://github.com/imtms/tagent-core/releases/tag/v0.1.0-alpha.1
+
+[0.1.0]: https://github.com/imtms/tagent-core/releases/tag/v0.1.0

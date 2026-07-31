@@ -2,7 +2,7 @@
 
 ## Scope
 
-This checklist applies to source prereleases. TAgent Core is not published to npm in `0.1.0-alpha.1`; `private: true` is intentional.
+This checklist applies to source releases. TAgent Core is not published to npm in `0.1.0`; `private: true` is intentional.
 
 ## Before tagging
 
@@ -23,8 +23,8 @@ If long-term memory is included in the release, complete [MEMORY_RELEASE_CHECKLI
 
 1. Create an annotated tag named `v<version>`.
 2. Push `main` and the tag.
-3. Let `.github/workflows/release.yml` rerun the release gate and create a prerelease using the matching changelog section.
-4. Verify the GitHub release points to the expected commit and is marked prerelease.
+3. Let `.github/workflows/release.yml` rerun the release gate and create a GitHub release using the matching changelog section.
+4. Verify the GitHub release points to the expected commit and has the intended stable/prerelease state.
 
 ## Rollback
 
