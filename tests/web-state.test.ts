@@ -17,9 +17,10 @@ describe("Web workbench state model", () => {
     expect(app).toContain("<Markdown>{message.content}</Markdown>");
     expect(app).toContain("<details className={`tool-call");
     expect(app).toContain("api.transcriptView");
-    expect(markdown).not.toContain("dangerouslySetInnerHTML");
-    expect(markdown).toContain("target=\"_blank\"");
-    expect(markdown).toContain("rel=\"noreferrer\"");
+    expect(markdown).toContain("html: false");
+    expect(markdown).toContain("dangerouslySetInnerHTML");
+    expect(markdown).toContain('tokens[index].attrSet("target", "_blank")');
+    expect(markdown).toContain('tokens[index].attrSet("rel", "noopener noreferrer")');
   });
 
   it("refreshes the active Run when structured task state changes", async () => {
