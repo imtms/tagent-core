@@ -30,7 +30,7 @@ export class PiRuntime implements AgentRuntime {
 
   constructor(private readonly options: RuntimeOptions) {}
 
-  private async initialize() {
+  async initialize() {
     if (this.session) return this.session;
     if (this.initializing) return this.initializing;
     this.initializing = this.createSession();

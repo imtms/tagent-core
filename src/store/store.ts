@@ -507,9 +507,44 @@ ${source.content}`;
     return { item: this.getSessionInboxItem(inbox.id)!, run };
   }
 
-  failSessionInboxStart(itemId: string, runId: RunId, error: string) {
+  recordSessionInboxLaunchFailure(itemId: string, runId: RunId, error: string) {
     const timestamp = now();
-    this.db.prepare("UPDATE session_supervisor_inbox SET status='failed',error=?,updated_at=? WHERE id=? AND run_id=?").run(error,timestamp,itemId,runId);
+    this.db.prepare("UPDATE session_supervisor_inbox SET status='started',error=?,updated_at=? WHERE id=? AND run_id=?").run(error,timestamp,itemId,runId);
+  }
+
+  private isInboxLaunchRetryable(runId: RunId) {
+    return Boolean(this.db.prepare(`SELECT 1 FROM session_supervisor_inbox i
+      JOIN runs r ON r.id = i.run_id
+      JOIN run_events e ON e.run_id = i.run_id
+      WHERE i.run_id = ? AND i.status = 'started' AND r.status = 'failed' AND e.type = 'run.failed'
+        AND json_extract(e.data, '$.reason') = 'runtime_initialization_failed'
+        AND json_extract(e.data, '$.retryable') = 1
+        AND NOT EXISTS (SELECT 1 FROM run_events newer WHERE newer.run_id = e.run_id AND newer.type = 'run.failed' AND newer.seq > e.seq)
+      ORDER BY e.seq DESC LIMIT 1`).get(runId));
+  }
+
+  retryInboxLaunch(runId: RunId) {
+    const transaction = this.db.transaction(() => {
+      const target = this.db.prepare(`SELECT r.id, r.session_id as sessionId, r.status, r.attempt, i.id as inboxItemId, i.content
+        FROM runs r JOIN session_supervisor_inbox i ON i.run_id = r.id
+        WHERE r.id = ? AND i.status = 'started'`).get(runId) as { id: RunId; sessionId: SessionId; status: RunStatus; attempt: number; inboxItemId: string; content: string } | undefined;
+      if (!target) return { status: "not_retryable" as const };
+      if (target.status !== "failed" || !this.isInboxLaunchRetryable(runId)) return { status: "not_retryable" as const };
+      const running = this.db.prepare("SELECT id FROM runs WHERE session_id = ? AND status = 'running' AND id <> ? LIMIT 1").get(target.sessionId, runId) as { id: string } | undefined;
+      if (running) return { status: "running" as const, runId: running.id };
+      const continuation = this.db.prepare(`SELECT c.id FROM run_continuations c
+        JOIN runs r ON r.id = c.run_id
+        WHERE r.session_id = ? AND c.run_id <> ? AND r.status IN ('blocked','interrupted') AND c.status IN ('queued','running') LIMIT 1`).get(target.sessionId, runId) as { id: string } | undefined;
+      if (continuation) return { status: "continuation" as const, continuationId: continuation.id };
+      const resumedAt = now();
+      const nextAttempt = target.attempt + 1;
+      const updated = this.db.prepare(`UPDATE runs SET status='running', phase='discover', blocked_reason='', completed_at=NULL,
+        attempt=?, resumed_at=?, updated_at=? WHERE id=? AND status='failed' AND attempt=?`).run(nextAttempt,resumedAt,resumedAt,runId,target.attempt);
+      if (updated.changes !== 1) return { status: "not_retryable" as const };
+      this.db.prepare("UPDATE session_supervisor_inbox SET error='',updated_at=? WHERE id=? AND run_id=? AND status='started'").run(resumedAt,target.inboxItemId,runId);
+      return { status: "started" as const, item: this.getSessionInboxItem(target.inboxItemId)!, run: this.getRun(runId)! };
+    });
+    return transaction();
   }
 
   listSessionsWithQueuedInbox() {
@@ -569,6 +604,7 @@ ${source.content}`;
       artifacts,
       completionGate: { passed: true, failures: [] },
       supervision: { latestDecision: this.listSupervisorDecisions(id).at(-1) ?? null, latestGates: this.listLatestGateEvaluations(id), progress: this.getProgressSnapshot(id) ?? null, spawnProposals: this.listSpawnProposals(id) },
+      launchRetryable: this.isInboxLaunchRetryable(id),
     };
     task.completionGate = this.evaluateGate(task);
     return task;

@@ -81,6 +81,17 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     if (!service.deleteSessionInput(id, itemId)) return reply.code(409).send({ error: "inbox item is not queued" });
     return { ok: true };
   });
+  app.post("/api/runs/:id/retry-launch", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!store.getRun(id)) return reply.code(404).send({ error: "run not found" });
+    const result = service.retryInboxLaunch(id);
+    if (result.status === "started") return result;
+    if (result.status === "running") return reply.code(409).send({ error: "session already has a running TaskRun", reason: "running_taskrun", runId: result.runId });
+    if (result.status === "continuation") return reply.code(409).send({ error: "a blocked TaskRun has a queued or running continuation", reason: "active_continuation", continuationId: result.continuationId });
+    if (result.status === "closing") return reply.code(409).send({ error: "service is shutting down", reason: "service_closing" });
+    if (result.status === "failed") return reply.code(500).send({ error: "inbox TaskRun failed to initialize", reason: "launch_failed" });
+    return reply.code(409).send({ error: "run does not have a retryable launch failure", reason: "not_retryable" });
+  });
   app.post("/api/runs/:id/cancel", async (request, reply) => {
     const { id } = request.params as { id: string };
     if (!service.cancel(id)) return reply.code(409).send({ error: "run is not active" });

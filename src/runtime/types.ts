@@ -7,6 +7,7 @@ import type { RunEvent, RunId } from "../core/types.js";
 export type RuntimeQueueResult = "accepted" | "settled";
 
 export interface AgentRuntime {
+  initialize?(): Promise<unknown>;
   prompt(query: string): Promise<void>;
   steer(instruction: string): Promise<RuntimeQueueResult>;
   followUp?(instruction: string): Promise<RuntimeQueueResult>;

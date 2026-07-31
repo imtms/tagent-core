@@ -56,6 +56,7 @@ function RunDetails({ run }: { run: TaskRun }) {
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
+  const [retryingRunId, setRetryingRunId] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeRun, setActiveRun] = useState<TaskRun | null>(null);
@@ -200,6 +201,18 @@ export function App() {
     finally { setStartingInboxId(""); }
   }
 
+  async function retryLaunch(run: TaskRun) {
+    if (retryingRunId) return;
+    setRetryingRunId(run.id); setError(""); setNotice("");
+    try {
+      const result = await api.retryLaunch(run.id);
+      const nextRun = result.run;
+      setActiveRun(nextRun); setSelectedRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setStreaming("");
+      setNotice("TaskRun launch retry started.");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setRetryingRunId(""); }
+  }
+
   return <div className="app-shell">
     <aside className={`session-rail ${leftOpen ? "mobile-open" : ""}`}>
       <div className="brand"><div className="brand-mark"><Bot size={18} /></div><div><strong>TAgent</strong><span>Core runtime</span></div><button className="icon-button mobile-only" onClick={() => setLeftOpen(false)} aria-label="Close sessions"><X size={18} /></button></div>
@@ -216,7 +229,7 @@ export function App() {
       <header className="topbar">
         <button className="icon-button mobile-only" onClick={() => setLeftOpen(true)} aria-label="Open sessions"><Menu size={19} /></button>
         <div><h1>{sessions.find((session) => session.id === sessionId)?.title ?? "TAgent Core"}</h1><p>{activeRun ? `${activeRun.phase} · ${activeRun.status}` : runtimeStatus ? `${runtimeStatus.modelId} · ${runtimeStatus.runtime}` : "Ready for a new task"}</p></div>
-        <div className="top-actions">{selectedRun && ["blocked", "interrupted"].includes(selectedRun.status) && !activeRun && <button className="resume-button" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}{activeRun?.status === "running" && <button className="icon-button danger" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={17} /></button>}<button className="icon-button mobile-only" onClick={() => setRightOpen(true)} aria-label="Open task panel"><PanelRight size={19} /></button></div>
+        <div className="top-actions">{selectedRun && ["blocked", "interrupted"].includes(selectedRun.status) && !activeRun && <button className="resume-button" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}{selectedRun?.status === "failed" && selectedRun.launchRetryable && !activeRun && <button className="resume-button" onClick={() => void retryLaunch(selectedRun)} disabled={Boolean(retryingRunId)}><Play size={15} />{retryingRunId === selectedRun.id ? "Retrying…" : "Retry launch"}</button>}{activeRun?.status === "running" && <button className="icon-button danger" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={17} /></button>}<button className="icon-button mobile-only" onClick={() => setRightOpen(true)} aria-label="Open task panel"><PanelRight size={19} /></button></div>
       </header>
 
       <section className="message-scroll">

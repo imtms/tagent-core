@@ -148,6 +148,68 @@ describe("Store", () => {
     expect(store.getRun(older.id)).toMatchObject({ status: "blocked", blockedReason: "waiting for review" });
   });
 
+  it("atomically retries the same inbox TaskRun after a retryable launch failure", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-launch-retry-")), "store.db");
+    const firstStore = new Store(filename); const secondStore = new Store(filename);
+    stores.push(firstStore, secondStore);
+    const session = firstStore.createSession();
+    const item = firstStore.enqueueSessionInbox(session.id, "retry me", "retry-me");
+    const claimed = firstStore.claimNextSessionInbox(session.id)!;
+    firstStore.recordSessionInboxLaunchFailure(item.id, claimed.run.id, "temporary initialization failure");
+    firstStore.transitionRun(claimed.run.id, ["running"], "failed", "run.failed", { error: "temporary initialization failure", reason: "runtime_initialization_failed", stage: "runtime_initialize", retryable: true, inboxItemId: item.id }, "temporary initialization failure", 1);
+
+    const results = [firstStore.retryInboxLaunch(claimed.run.id), secondStore.retryInboxLaunch(claimed.run.id)];
+    expect(results.filter((result) => result.status === "started")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "not_retryable")).toHaveLength(1);
+    expect(firstStore.listRuns(session.id)).toHaveLength(1);
+    expect(firstStore.getRun(claimed.run.id)).toMatchObject({ id: claimed.run.id, status: "running", attempt: 2, launchRetryable: false });
+    expect(firstStore.getSessionInboxItem(item.id)).toMatchObject({ status: "started", runId: claimed.run.id, error: "" });
+  });
+
+  it("reopens a committed launch retry as the same interrupted TaskRun", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-launch-retry-restart-")), "store.db");
+    const firstStore = new Store(filename);
+    const session = firstStore.createSession();
+    const item = firstStore.enqueueSessionInbox(session.id, "retry across restart", "retry-restart");
+    const claimed = firstStore.claimNextSessionInbox(session.id)!;
+    firstStore.recordSessionInboxLaunchFailure(item.id, claimed.run.id, "init failed");
+    firstStore.transitionRun(claimed.run.id, ["running"], "failed", "run.failed", { reason: "runtime_initialization_failed", retryable: true }, "init failed", 1);
+    expect(firstStore.retryInboxLaunch(claimed.run.id).status).toBe("started");
+    firstStore.close();
+
+    const secondStore = new Store(filename); stores.push(secondStore);
+    secondStore.markInterrupted();
+    expect(secondStore.listRuns(session.id)).toHaveLength(1);
+    expect(secondStore.getRun(claimed.run.id)).toMatchObject({ id: claimed.run.id, status: "interrupted", attempt: 2, launchRetryable: false });
+    expect(secondStore.getSessionInboxItem(item.id)).toMatchObject({ status: "started", runId: claimed.run.id });
+  });
+
+  it("rejects launch retry while another TaskRun or continuation can execute", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const item = store.enqueueSessionInbox(session.id, "retry me", "retry-conflict");
+    const claimed = store.claimNextSessionInbox(session.id)!;
+    store.recordSessionInboxLaunchFailure(item.id, claimed.run.id, "init failed");
+    store.transitionRun(claimed.run.id, ["running"], "failed", "run.failed", { reason: "runtime_initialization_failed", retryable: true }, "init failed", 1);
+    const running = store.createRun(session.id, "other");
+    expect(store.retryInboxLaunch(claimed.run.id)).toMatchObject({ status: "running", runId: running.id });
+    store.finalizeRun(running.id, "completed");
+    const blocked = store.createRun(session.id, "blocked"); store.blockRun(blocked.id, "gate");
+    const continuation = store.queueContinuation(blocked.id, "gate");
+    expect(store.retryInboxLaunch(claimed.run.id)).toMatchObject({ status: "continuation", continuationId: continuation.id });
+  });
+
+  it("does not mark ordinary execution failures as launch-retryable", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const item = store.enqueueSessionInbox(session.id, "ordinary failure", "ordinary-failure");
+    const claimed = store.claimNextSessionInbox(session.id)!;
+    store.transitionRun(claimed.run.id, ["running"], "failed", "run.failed", { error: "tool failed" }, "tool failed", 1);
+    expect(store.getRun(claimed.run.id)?.launchRetryable).toBe(false);
+    expect(store.retryInboxLaunch(claimed.run.id).status).toBe("not_retryable");
+    expect(store.getSessionInboxItem(item.id)?.status).toBe("started");
+  });
+
   it("defers queued items and merges related input before TaskRun creation", () => {
     const store = createStore();
     const session = store.createSession();

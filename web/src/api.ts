@@ -16,6 +16,7 @@ export interface TaskRun {
   artifacts: Array<{ id: string; title: string; kind: string; uri: string }>;
   budget?: { tier: string; maxContinuations: number; maxTokens: number; runTimeoutMs: number };
   completionGate: { passed: boolean; failures: Array<{ kind: string; key: string; reason: string }> };
+  launchRetryable: boolean;
   supervision: {
     latestDecision: { id: string; action: string; reasonCode: string; rationale: string; status: string; attempt: number; checkpointSeq: number } | null;
     latestGates: Array<{ id: string; gateType: string; passed: boolean; failures: Array<{ kind: string; key: string; reason: string; disposition: string }> }>;
@@ -61,6 +62,7 @@ export const api = {
   cancel: (runId: string) => request(`/api/runs/${runId}/cancel`, { method: "POST" }),
   steer: (runId: string, content: string) => request(`/api/runs/${runId}/steer`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId() }) }),
   resume: (runId: string) => request<TaskRun>(`/api/runs/${runId}/resume`, { method: "POST" }),
+  retryLaunch: (runId: string) => request<{ status: "started"; item: SessionInboxItem; run: TaskRun }>(`/api/runs/${runId}/retry-launch`, { method: "POST" }),
   claimConsumer: (runId: string, consumerId: string) => request<EventConsumerCursor>(`/api/runs/${runId}/consumers/${encodeURIComponent(consumerId)}/claim`, { method: "POST" }),
   ackConsumer: (runId: string, consumerId: string, generation: number, seq: number) => request(`/api/runs/${runId}/consumers/${encodeURIComponent(consumerId)}/ack`, { method: "POST", body: JSON.stringify({ generation, seq }) }),
 };
