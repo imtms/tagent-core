@@ -7,7 +7,8 @@ export class MemoryLifecycle {
   async integrate(access:AccessContext,proposal:ExtractionProposal){
     await this.graph?.upsertNodes(proposal.nodes); await this.graph?.upsertEdges(proposal.edges);
     const existing=await this.records.list(access.scopes,undefined,20_000); const accepted:WarmMemory[]=[];
-    for(const candidate of proposal.records){
+    for(const rawCandidate of proposal.records){
+      const candidate=rawCandidate.tier==="hot"&&!rawCandidate.expiresAt&&this.options.hotTtlMs?{...rawCandidate,expiresAt:Date.now()+this.options.hotTtlMs}:rawCandidate;
       const duplicate=existing.find((item)=>sameMemory(item,candidate));
       if(duplicate){accepted.push(mergeDuplicate(duplicate,candidate));continue;}
       const conflict=existing.find((item)=>conflicts(item,candidate));

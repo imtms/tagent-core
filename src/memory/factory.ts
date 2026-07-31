@@ -56,7 +56,7 @@ export async function createMemoryRuntime(config:MemoryRuntimeConfig,store:Store
   // Backfill durable user messages with the same idempotency key used by live capture.
   // This repairs upgrades from pre-memory installations without making raw chat the recall source.
   const historicalMessages=store.db.prepare("SELECT id,content FROM messages WHERE role='user' ORDER BY id ASC").all() as Array<{id:number;content:string}>;
-  for(const message of historicalMessages)if(isExplicitProfileCue(message.content))await service.enqueueCapture({access,sourceRefs:[{sourceType:"message",sourceId:String(message.id),revision:"user"}],content:`user: ${message.content}`,idempotencyKey:`user-message:${message.id}`});
+  for(const message of historicalMessages)if(isExplicitProfileCue(message.content))await service.enqueueCapture({access,sourceRefs:[{sourceType:"message",sourceId:String(message.id),revision:"user"}],content:`user: ${message.content}`,idempotencyKey:`user-message:${message.id}`,provenance:{evidenceClass:"user_explicit",trustLevel:"high",sourceRole:"user",verificationState:"explicit"}});
   if(embeddings)await service.reindex(access).catch((error)=>console.warn("Memory reindex failed; lexical recall remains available",error));
   const worker=new LocalMemoryWorker(capture,lifecycle,consolidator,reconciler,access,config.workerIntervalMs,config.maintenanceIntervalMs);
   return{service,adapter,worker,lifecycle,consolidator,reconciler,start(){worker.start();},async close(){await worker.stop();if (postgresAdapter) await postgresAdapter.close();}};

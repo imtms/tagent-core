@@ -6,6 +6,17 @@ All notable changes to TAgent Core are documented here.
 
 No unreleased changes.
 
+## [0.1.1] - 2026-08-01
+
+### Security and reliability
+
+- Classify memory evidence as `user_explicit`, `user_context_summary`, `tool_verified_fact`, `task_outcome`, or `assistant_inference`, with trust, source-role, and verification metadata.
+- Stop parsing assistant prose as durable memory; task outcomes are built only from passed Check evidence and published Artifacts.
+- Restore context-prune deposition through a role-aware user-only durable summary path instead of capturing mixed user/assistant history.
+- Enforce one hard token budget across Hot/Warm cards and complete Cold Topic pages.
+- Add capture-job lease heartbeat, owner token, monotonic fencing token, and CAS complete/fail operations.
+- Require PostgreSQL 17, pgvector, and pg_trgm integration tests in CI and release workflows.
+
 ## [0.1.0] - 2026-08-01
 
 First stable source release for the documented trusted single-service deployment profile.
@@ -68,3 +79,5 @@ First public source preview of the persistent TAgent control plane.
 [0.1.0-alpha.1]: https://github.com/imtms/tagent-core/releases/tag/v0.1.0-alpha.1
 
 [0.1.0]: https://github.com/imtms/tagent-core/releases/tag/v0.1.0
+
+[0.1.1]: https://github.com/imtms/tagent-core/releases/tag/v0.1.1

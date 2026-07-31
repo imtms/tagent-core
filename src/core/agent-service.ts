@@ -7,7 +7,7 @@ import type { RunCheckpoint, RunEvent, SessionId, SessionInboxItem, RunId, TaskR
 import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 import { TaskRunSupervisor } from "./supervisor.js";
 import type { MemoryFacade } from "../memory/memory-service.js";
-import type { AccessContext } from "../memory/types.js";
+import type { AccessContext, MemoryProvenance } from "../memory/types.js";
 
 export class AgentService {
   private readonly runtimes = new Map<RunId, AgentRuntime>();
@@ -477,7 +477,7 @@ export class AgentService {
         if (response) this.store.appendMessage(current.sessionId, "assistant", response);
         this.supervisor.markExecuted(decision.id, "executed");
         this.publish(event);
-        this.captureRunBoundary(current, response, "completed");
+        this.captureStructuredTaskOutcome(this.store.getRun(runId)!);
         for (const spawn of this.supervisor.reviewSpawn(this.store.getRun(runId)!, event.seq)) this.publish(this.store.appendEvent(runId, "supervisor.spawn.proposed", { decisionId: spawn.id, reasonCode: spawn.reasonCode }));
         return false;
       }
@@ -486,7 +486,6 @@ export class AgentService {
       if (!event) { this.supervisor.markExecuted(decision.id, "superseded"); return false; }
       this.supervisor.markExecuted(decision.id, "executed");
       this.publish(event);
-      this.captureRunBoundary(current, response, "blocked");
       return decision.action === "start_continuation";
     } catch (error) {
       if (this.closing) return false;
@@ -501,7 +500,6 @@ export class AgentService {
       if (!event) return false;
       this.store.appendMessage(current.sessionId, "assistant", `Run failed: ${message}`);
       this.publish(event);
-      this.captureRunBoundary(current, message, "failed");
       return false;
     }
   }
@@ -509,13 +507,27 @@ export class AgentService {
   private captureUserMessage(run: TaskRun, messageId: number, content: string) {
     if (!this.memory) return;
     const context = this.store.listRecentMessages(run.sessionId, 8).filter((message) => message.id < messageId).slice(-4).map((message) => `${message.role}: ${message.content}`).join("\n");
-    void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "message", sourceId: String(messageId), revision: "user" }], content: `<context>\n${context}\n</context>\n<focus_user>\n${content}\n</focus_user>`, idempotencyKey: `user-message:${messageId}` }).then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "message", sourceId: String(messageId) }))).catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "message", sourceId: String(messageId), error: error instanceof Error ? error.message : String(error) })));
+    void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "message", sourceId: String(messageId), revision: "user" }], content: `<context>\n${context}\n</context>\n<focus_user>\n${content}\n</focus_user>`, idempotencyKey: `user-message:${messageId}`, provenance: userExplicitProvenance }).then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "message", sourceId: String(messageId) }))).catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "message", sourceId: String(messageId), error: error instanceof Error ? error.message : String(error) })));
   }
 
-  private captureRunBoundary(run: TaskRun, response: string, status: "completed" | "blocked" | "failed") {
-    if (!this.memory || !response.trim()) return;
-    void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "run", sourceId: run.id, revision: `${status}:${run.attempt}` }], content: `assistant: ${response}`, idempotencyKey: `run-boundary:${run.id}:${run.attempt}:${status}` }).then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "run", status }))).catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "run", status, error: error instanceof Error ? error.message : String(error) })));
+  private captureStructuredTaskOutcome(run: TaskRun) {
+    if (!this.memory || run.status !== "completed") return;
+    const passedChecks = run.checks.filter((check) => check.status === "passed" && check.evidence.trim());
+    const artifacts = run.artifacts.filter((artifact) => artifact.content.trim() || artifact.uri.trim());
+    if (!passedChecks.length && !artifacts.length) return;
+    const lines = [
+      ...passedChecks.map((check) => `Verified check [${check.key}] ${check.title}: ${check.evidence}`),
+      ...artifacts.map((artifact) => `Published artifact [${artifact.id}] ${artifact.title}: ${artifact.uri || artifact.content}`),
+    ];
+    const sourceRefs = [
+      ...passedChecks.map((check) => ({ sourceType: "check" as const, sourceId: `${run.id}:${check.key}`, revision: String(run.attempt) })),
+      ...artifacts.map((artifact) => ({ sourceType: "artifact" as const, sourceId: artifact.id, revision: String(run.attempt) })),
+    ];
+    void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs, content: lines.join("\n"), idempotencyKey: `task-outcome:${run.id}:${run.attempt}`, provenance: taskOutcomeProvenance })
+      .then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "task_outcome" })))
+      .catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "task_outcome", error: error instanceof Error ? error.message : String(error) })));
   }
+
 
   private executionBudget(run: TaskRun) {
     const hardContinuations = this.runtimeDefaults.maxContinuations ?? 128;
@@ -687,11 +699,18 @@ export class AgentService {
     const access = this.memoryAccess(run);
     const recall = this.memory ? await this.memory.recall({ access, cue: query, tokenBudget: this.runtimeDefaults.memoryRecallTokenBudget ?? 8_000 }) : undefined;
     const assembly = this.contextAssembler().assemble("session", this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter), this.buildSystemPrompt(run, recall?.promptSection), query);
-    if (this.memory && assembly.droppedMessages.length) {
-      const content = assembly.droppedMessages.map((message) => `${message.role}: ${messageText(message)}`).filter((value) => !value.endsWith(": ")).join("\n\n");
-      if (content) void this.memory.enqueueCapture({ access, sourceRefs: [{ sourceType: "run", sourceId: run.id, revision: `context-prune:${run.attempt}` }], content, idempotencyKey: `context-prune:${run.id}:${run.attempt}:${hashText(content)}` }).then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "context_prune" }))).catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "context_prune", error: error instanceof Error ? error.message : String(error) })));
-    }
+    this.capturePrunedUserContext(run, assembly.droppedMessages);
     return { ...assembly, recalledMemory: recall?.promptSection ?? "" };
+  }
+
+  private capturePrunedUserContext(run: TaskRun, messages: AgentMessage[]) {
+    if (!this.memory) return;
+    const durable = messages.filter((message) => message.role === "user").flatMap((message) => summarizeDurableUserContext(memoryMessageText(message))).slice(-20);
+    if (!durable.length) return;
+    const summary = durable.map((text) => `user: ${text}`).join("\n");
+    void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "transcript", sourceId: run.id, revision: `context-prune:${run.attempt}:${stableTextHash(summary)}` }], content: summary, idempotencyKey: `context-prune:${run.id}:${run.attempt}:${stableTextHash(summary)}`, provenance: userContextSummaryProvenance })
+      .then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "user_context_summary" })))
+      .catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "user_context_summary", error: error instanceof Error ? error.message : String(error) })));
   }
 
   private memoryAccess(run: TaskRun): AccessContext { return { subjectId: `session:${run.sessionId}`, scopes: [{ type: "workspace", id: this.memoryScopeId }, { type: "session", id: run.sessionId }], purpose: "agent_recall" }; }
@@ -746,5 +765,9 @@ export class AgentService {
   }
 }
 
-function messageText(message: AgentMessage) { if (!("content" in message)) return ""; if (typeof message.content === "string") return message.content; return message.content.filter((part) => part.type === "text").map((part) => part.type === "text" ? part.text : "").join("\n"); }
-function hashText(text: string) { let hash = 2166136261; for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619); return (hash >>> 0).toString(16); }
+function memoryMessageText(message: AgentMessage) { if (!("content" in message)) return ""; if (typeof message.content === "string") return message.content.trim(); return message.content.filter((part) => part.type === "text").map((part) => part.type === "text" ? part.text : "").join("\n").trim(); }
+function summarizeDurableUserContext(text: string) { return text.split(/\n+|(?<=[。！？.!?])\s*/).map((part) => part.trim()).filter((part) => part.length >= 2 && !/[?？]$/.test(part) && !/^(?:请|帮我|麻烦|检查|审计|排查|修复|实现|运行|执行|部署|合并|查看|确认|分析|调查)/i.test(part) && /(?:记住|我叫|我的名字|叫我|称呼我|我.{0,20}(?:喜欢|偏好|希望|不喜欢|习惯)|我们(?:已经|已)?(?:决定|确定|采用|改为|迁移)|以后|始终|必须|住在|家在|是邻居|my name|call me|i prefer|we decided|from now on)/i.test(part)); }
+function stableTextHash(text: string) { let hash = 2166136261; for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619); return (hash >>> 0).toString(16); }
+const userContextSummaryProvenance: MemoryProvenance = { evidenceClass: "user_context_summary", trustLevel: "medium", sourceRole: "user", verificationState: "structured" };
+const taskOutcomeProvenance: MemoryProvenance = { evidenceClass: "task_outcome", trustLevel: "high", sourceRole: "task", verificationState: "structured" };
+const userExplicitProvenance: MemoryProvenance = { evidenceClass: "user_explicit", trustLevel: "high", sourceRole: "user", verificationState: "explicit" };

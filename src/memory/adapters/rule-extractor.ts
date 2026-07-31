@@ -39,11 +39,13 @@ export class RuleBasedExtractor implements ExtractorPort {
         continue;
       }
 
-      // Assistant outcomes may contain useful technical facts, but are not evidence for user identity, preference, or habits.
-      if (evidence.role === "assistant" && looksLikeUserProfileClaim(evidence.text)) continue;
+      // Assistant output is not durable evidence. Persist only user/manual statements; otherwise
+      // task summaries, diagnostics, and speculative answers pollute long-term memory.
+      if (evidence.role === "assistant") continue;
       const sentence = evidence.text;
-      const preference = evidence.role !== "assistant" && /(?:我|用户|user).{0,20}(?:喜欢|偏好|希望|不要|不喜欢|习惯|prefer|always|never)/i.test(sentence);
-      const procedure = evidence.role !== "assistant" && /(?:以后|每次|始终|必须|务必|流程|步骤|from now on|always|must)/i.test(sentence) && !preference;
+      const preference = /(?:我|用户|user).{0,20}(?:喜欢|偏好|希望|不要|不喜欢|习惯|prefer|always|never)/i.test(sentence);
+      const procedure = /(?:以后|每次|始终|必须|务必|流程|步骤|from now on|always|must)/i.test(sentence) && !preference;
+      if (!preference && !procedure && looksLikeOperationalRequest(sentence)) continue;
       const important = preference || procedure || /(决定|使用|采用|改为|迁移|完成|失败|依赖|选择|架构|实现|数据库|decision|uses|depends|completed|failed|migrate)/i.test(sentence);
       if (!important) continue;
       const kind: MemoryKind = preference ? "preference" : procedure ? "procedure" : /(完成|失败|讨论|上周|昨天|今天|completed|failed|discussed)/i.test(sentence) ? "episode" : "fact";
@@ -95,8 +97,11 @@ function extractIdentity(text: string): string | undefined {
   }
   return undefined;
 }
-function looksLikeUserProfileClaim(text: string) {
-  return Boolean(extractIdentity(text)) || /(?:用户|你).{0,16}(?:叫|名字|姓名|偏好|喜欢|希望|习惯)|(?:your name is|the user prefers)/i.test(text);
+function looksLikeOperationalRequest(text: string) {
+  const value = text.trim();
+  return /[?？]$/.test(value)
+    || /^(?:为什么|为何|怎么|如何|是否|能否|可否|请|帮我|麻烦|检查|审计|排查|修复|实现|运行|执行|部署|合并|查看|确认|分析|调查|why|how|can you|could you|please|check|audit|debug|fix|implement|run|deploy|merge)/i.test(value)
+    || /(?:请|帮我|麻烦).{0,12}(?:检查|审计|排查|修复|实现|运行|执行|部署|合并|查看|确认|分析|调查)/i.test(value);
 }
 function stableId(value: string) { return createHash("sha256").update(value.toLowerCase()).digest("hex").slice(0, 24); }
 function profileNode(scope: MemoryScope): GraphNode { return { id: `${scope.type}:${scope.id}:entity:user-profile`, type: "user", canonicalName: "用户", aliases: ["我", "user", "用户"], scope }; }

@@ -192,3 +192,20 @@ Changing embedding model or dimensions changes the generation. Startup reindex w
 ## 12. Optional S3 adapter
 
 `TAGENT_MEMORY_COLD_BACKEND=s3` requires bucket, region/endpoint as needed, and AWS-compatible credentials. Use a private bucket, encryption, version/lifecycle policy, no public ACL, and immutable object keys. S3 is implemented but the Local Cold profile is the primary release gate documented here.
+
+
+## 13. Provenance and capture safety
+
+Durable memory writes carry structured provenance:
+
+- `user_explicit`: direct user statements; high trust and eligible for active memory.
+- `user_context_summary`: role-aware summaries containing only durable user statements from pruned context; medium trust.
+- `tool_verified_fact`: reserved for successful operation/check/artifact evidence.
+- `task_outcome`: generated from structured passed Checks and published Artifacts, never assistant final prose.
+- `assistant_inference`: untrusted and quarantined by default.
+
+Assistant responses and mixed raw context-prune transcripts are not capture sources. One-off operational requests are excluded from semantic extraction. Capture jobs use lease heartbeat and fencing; stale workers cannot complete or fail a job after another worker has reclaimed it.
+
+The recall token budget is a hard combined ceiling for safe Hot/Warm cards plus complete Cold Topic pages. If a card or complete Cold page does not fit, it is omitted rather than overflowing the prompt or truncating Cold content.
+
+Required CI starts PostgreSQL 17 from `pgvector/pgvector:pg17`, creates a test-named database, and runs the PostgreSQL memory suite with pgvector and pg_trgm enabled.
