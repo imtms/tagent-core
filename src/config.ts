@@ -89,10 +89,16 @@ function memoryEmbeddingProvider(env: NodeJS.ProcessEnv) {
   if (value === "openai" && (!env.TAGENT_MEMORY_EMBEDDING_BASE_URL?.trim() || !env.TAGENT_MEMORY_EMBEDDING_API_KEY?.trim() || !env.TAGENT_MEMORY_EMBEDDING_MODEL?.trim())) throw new Error("OpenAI memory embeddings require TAGENT_MEMORY_EMBEDDING_BASE_URL, TAGENT_MEMORY_EMBEDDING_API_KEY, and TAGENT_MEMORY_EMBEDDING_MODEL");
   return value;
 }
+function referencedEnvValue(env: NodeJS.ProcessEnv, name: string) {
+  const raw = env[name]?.trim();
+  if (!raw) return undefined;
+  const reference = /^\$\{([A-Z_][A-Z0-9_]*)\}$/.exec(raw)?.[1];
+  return reference ? env[reference]?.trim() || undefined : raw;
+}
 function memoryExtractorProvider(env: NodeJS.ProcessEnv) {
   const value = env.TAGENT_MEMORY_EXTRACTOR_PROVIDER ?? "rule";
   if (value !== "rule" && value !== "hybrid") throw new Error("TAGENT_MEMORY_EXTRACTOR_PROVIDER must be rule or hybrid");
-  if (value === "hybrid" && (!(env.TAGENT_MEMORY_EXTRACTOR_BASE_URL?.trim() || env.TAGENT_API_BASE?.trim()) || !(env.TAGENT_MEMORY_EXTRACTOR_API_KEY?.trim() || env.OPENAI_API_KEY?.trim()) || !(env.TAGENT_MEMORY_EXTRACTOR_MODEL?.trim() || env.TAGENT_MODEL?.trim()))) throw new Error("Hybrid memory extraction requires extractor or main model base URL, API key, and model");
+  if (value === "hybrid" && (!(referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_BASE_URL") || env.TAGENT_API_BASE?.trim()) || !(referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_API_KEY") || env.OPENAI_API_KEY?.trim()) || !(referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_MODEL") || env.TAGENT_MODEL?.trim()))) throw new Error("Hybrid memory extraction requires extractor or main model base URL, API key, and model");
   return value;
 }
 
@@ -137,9 +143,9 @@ function loadMemoryConfig(env: NodeJS.ProcessEnv): MemoryConfig {
     embeddingBatchSize: positiveInteger(env.TAGENT_MEMORY_EMBEDDING_BATCH_SIZE, 64, "TAGENT_MEMORY_EMBEDDING_BATCH_SIZE"),
     embeddingExtraBody: parseJsonObject(env.TAGENT_MEMORY_EMBEDDING_EXTRA_BODY, "TAGENT_MEMORY_EMBEDDING_EXTRA_BODY"),
     extractorProvider: memoryExtractorProvider(env),
-    extractorBaseUrl: env.TAGENT_MEMORY_EXTRACTOR_BASE_URL?.trim() || env.TAGENT_API_BASE?.trim() || undefined,
-    extractorApiKey: env.TAGENT_MEMORY_EXTRACTOR_API_KEY?.trim() || env.OPENAI_API_KEY?.trim() || undefined,
-    extractorModel: env.TAGENT_MEMORY_EXTRACTOR_MODEL?.trim() || env.TAGENT_MODEL?.trim() || undefined,
+    extractorBaseUrl: referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_BASE_URL") || env.TAGENT_API_BASE?.trim() || undefined,
+    extractorApiKey: referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_API_KEY") || env.OPENAI_API_KEY?.trim() || undefined,
+    extractorModel: referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_MODEL") || env.TAGENT_MODEL?.trim() || undefined,
   };
 }
 

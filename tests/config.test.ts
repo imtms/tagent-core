@@ -62,6 +62,26 @@ describe("configuration", () => {
     expect(publicRuntimeConfig(config)).toMatchObject({ memoryEnabled: true, memoryWorkspaceScopeId: "default", memoryBackend: "memory", memoryColdBackend: "local" });
   });
 
+  it("resolves systemd-style extractor environment references", () => {
+    const config = loadConfig({
+      TAGENT_MEMORY_ENABLED: "true",
+      TAGENT_MEMORY_BACKEND: "memory",
+      TAGENT_MEMORY_EXTRACTOR_PROVIDER: "hybrid",
+      TAGENT_API_BASE: "https://example.test/v1",
+      TAGENT_MODEL: "semantic-model",
+      OPENAI_API_KEY: "secret",
+      TAGENT_MEMORY_EXTRACTOR_BASE_URL: "${TAGENT_API_BASE}",
+      TAGENT_MEMORY_EXTRACTOR_MODEL: "${TAGENT_MODEL}",
+      TAGENT_MEMORY_EXTRACTOR_API_KEY: "${OPENAI_API_KEY}",
+    });
+    expect(config.memory).toMatchObject({
+      enabled: true,
+      extractorBaseUrl: "https://example.test/v1",
+      extractorModel: "semantic-model",
+      extractorApiKey: "secret",
+    });
+  });
+
   it("rejects unsupported runtime modes", () => {
     expect(() => loadConfig({ TAGENT_RUNTIME: "rpc" })).toThrow("Unsupported TAGENT_RUNTIME");
   });
