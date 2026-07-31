@@ -35,4 +35,13 @@ describe("Web workbench state model", () => {
     expect(source).toContain("activeRun.checkpoint?.active ? activeRun.checkpoint.lastEventSeq");
     expect(source).not.toContain("activeRun?.lastEventSeq, sessionId");
   });
+
+  it("renders persisted current operation state", async () => {
+    const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain('deriveCurrentOperation(run, now)');
+    expect(source).toContain('Current operation');
+    expect(source).toContain('operation.toolName || "agent"');
+    expect(source).not.toContain('operation.progressSummary');
+    expect(source).not.toContain('operation.summary');
+  });
 });

@@ -20,7 +20,12 @@ export interface RunCheckpoint {
   attempt: number;
   active: boolean;
   assistantPartial: string;
-  currentTool: { toolCallId: string; toolName: string } | null;
+  currentTool: {
+    toolCallId: string;
+    toolName: string;
+    startedAt?: number;
+    lastActivityAt?: number;
+  } | null;
   lastEventSeq: number;
   lastTranscriptSeq: number;
   updatedAt: number;

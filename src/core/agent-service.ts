@@ -39,8 +39,14 @@ export class AgentService {
     if (event.type === "tool.started") draft.currentTool = {
       toolCallId: String(event.data.toolCallId ?? ""),
       toolName: String(event.data.toolName ?? "tool"),
+      startedAt: event.createdAt,
+      lastActivityAt: event.createdAt,
     };
-    if (event.type === "tool.completed" && draft.currentTool?.toolCallId === String(event.data.toolCallId ?? "")) draft.currentTool = null;
+    if (event.type === "tool.progress" && draft.currentTool?.toolCallId === String(event.data.toolCallId ?? "")) {
+      draft.currentTool.lastActivityAt = event.createdAt;
+    }
+    if (event.type === "provider.failure" && draft.currentTool) draft.currentTool.lastActivityAt = event.createdAt;
+    if ((event.type === "tool.completed" || event.type === "tool.failed") && draft.currentTool?.toolCallId === String(event.data.toolCallId ?? "")) draft.currentTool = null;
     const immediate = event.type.startsWith("tool.") || event.type === "message.completed" || event.type === "message.retrying";
     if (immediate) this.flushCheckpoint(event.runId);
     else this.scheduleCheckpoint(event.runId);

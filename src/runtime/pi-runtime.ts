@@ -154,7 +154,7 @@ export class PiRuntime implements AgentRuntime {
         if (kind) this.emit("provider.failure", { kind, retryable: isRetryableProviderFailure(kind), summary, stopReason: event.message.stopReason });
       }
     }
-    if (event.type === "tool_execution_start") this.emit("tool.started", { toolCallId: event.toolCallId, toolName: event.toolName, args: event.args });
+    if (event.type === "tool_execution_start") this.emit("tool.started", { toolCallId: event.toolCallId, toolName: event.toolName });
     if (event.type === "tool_execution_update") this.emit("tool.progress", { toolCallId: event.toolCallId, toolName: event.toolName });
     if (event.type === "tool_execution_end") this.emit("tool.completed", { toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError });
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") this.emit("message.delta", { delta: event.assistantMessageEvent.delta });

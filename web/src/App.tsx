@@ -3,6 +3,7 @@ import { Activity, Bot, Check, ChevronDown, ChevronRight, Circle, Command, FileT
 import { api, subscribe, type Message, type RunEvent, type RuntimeStatus, type Session, type SessionInboxItem, type TaskRun, type TranscriptItem } from "./api";
 import { Markdown } from "./Markdown";
 import { createRequestId } from "./id";
+import { deriveCurrentOperation } from "./current-operation";
 
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
 
@@ -22,8 +23,26 @@ function ToolCall({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> })
   </details>;
 }
 
+function CurrentOperationPanel({ run }: { run: TaskRun }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    if (run.status !== "running") return;
+    const timer = setInterval(() => setNow(Date.now()), 5_000);
+    return () => clearInterval(timer);
+  }, [run.id, run.status, run.updatedAt, run.checkpoint?.updatedAt]);
+  const operation = deriveCurrentOperation(run, now);
+  return <section className={`panel-section current-operation ${operation.state}`}>
+    <div className="section-title"><span>Current operation</span><small>{operation.state}</small></div>
+    <div className="checkpoint-card">
+      <strong>{operation.toolName || "agent"}</strong>
+    </div>
+  </section>;
+}
+
 function RunDetails({ run }: { run: TaskRun }) {
   return <div className="run-details">
+    <CurrentOperationPanel run={run} />
     <section className="run-summary"><div className="phase-line"><span className={`phase-badge ${run.status}`}>{run.status}</span><span>{run.phase}</span><span>attempt {run.attempt}</span></div><p>{run.goal}</p><div className="run-metrics"><span>{run.transcriptCount} messages</span><span>{run.usage.totalTokens.toLocaleString()} tokens</span><span>{run.usage.input.toLocaleString()} in / {run.usage.output.toLocaleString()} out</span>{run.budget && <span>{run.budget.tier} · {run.budget.maxContinuations} rounds · {run.budget.maxTokens.toLocaleString()} tokens</span>}</div>{run.blockedReason && <div className="blocked-note">{run.blockedReason}</div>}</section>
     {run.checkpoint && <section className="panel-section"><div className="section-title"><span>Checkpoint</span><small>{run.checkpoint.active ? "active" : "preserved"}</small></div><div className="checkpoint-card"><span>event {run.checkpoint.lastEventSeq} · transcript {run.checkpoint.lastTranscriptSeq}</span>{run.checkpoint.currentTool && <strong>{run.checkpoint.currentTool.toolName}</strong>}{run.checkpoint.assistantPartial && <p>{run.checkpoint.assistantPartial.slice(-240)}</p>}</div></section>}
     <section className="panel-section"><div className="section-title"><span>Supervisor</span><small>{run.supervision.latestDecision?.action ?? "observing"}</small></div><div className="checkpoint-card">{run.supervision.latestDecision ? <><strong>{run.supervision.latestDecision.reasonCode}</strong><p>{run.supervision.latestDecision.rationale}</p></> : <span>No intervention decision.</span>}{run.supervision.progress && <span>progress {run.supervision.progress.meaningfulChanges} · failures {run.supervision.progress.consecutiveFailures}</span>}{run.supervision.latestGates.map((gate) => <span key={gate.id}>{gate.gateType}: {gate.passed ? "passed" : `${gate.failures.length} failure(s)`}</span>)}</div></section>
