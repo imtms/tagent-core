@@ -39,6 +39,18 @@ describe("HTTP API", () => {
     expect(transcriptView.json()).toEqual([]);
   });
 
+  it("renames a workspace through the Session API", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-rename-"));
+    const store = new Store(":memory:");
+    const app = createApp({ store, service: new AgentService(store, workspace), logger: false, webRoot: workspace }); apps.push(app);
+    const session = store.createSession("Before");
+    const renamed = await app.inject({ method: "PATCH", url: `/api/sessions/${session.id}`, payload: { title: "  After  " } });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json()).toMatchObject({ id: session.id, title: "After" });
+    expect((await app.inject({ method: "PATCH", url: `/api/sessions/${session.id}`, payload: { title: " " } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "PATCH", url: "/api/sessions/missing", payload: { title: "After" } })).statusCode).toBe(404);
+  });
+
   it("queues all message input through the Session Supervisor inbox and deletes only unstarted items", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
     const store = new Store(":memory:");

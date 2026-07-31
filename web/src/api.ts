@@ -48,6 +48,7 @@ export const api = {
   status: () => request<RuntimeStatus | null>("/api/config/status"),
   sessions: () => request<Session[]>("/api/sessions"),
   createSession: (title = "New workspace") => request<Session>("/api/sessions", { method: "POST", body: JSON.stringify({ title }) }),
+  renameSession: (sessionId: string, title: string) => request<Session>(`/api/sessions/${sessionId}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   messages: (sessionId: string) => request<Message[]>(`/api/sessions/${sessionId}/messages`),
   runs: (sessionId: string, limit = 50) => request<TaskRun[]>(`/api/sessions/${sessionId}/runs?limit=${limit}`),
   latestRun: (sessionId: string) => request<TaskRun | null>(`/api/sessions/${sessionId}/run`),

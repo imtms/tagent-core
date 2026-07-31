@@ -45,9 +45,15 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(22, 116, 
 .new-session { height: 38px; border: 1px solid #cfd6d1; background: white; border-radius: var(--radius); display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13px; font-weight: 650; cursor: pointer; box-shadow: 0 1px 2px rgba(20, 30, 24, 0.04); }
 .new-session:hover { border-color: #aeb9b1; }
 .session-list { display: flex; flex-direction: column; gap: 3px; margin-top: 18px; overflow: auto; }
-.session-item { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 7px; align-items: center; min-height: 48px; padding: 7px 8px; border: 0; border-radius: var(--radius); background: transparent; text-align: left; cursor: pointer; }
+.session-item { position: relative; min-height: 48px; border-radius: var(--radius); background: transparent; }
 .session-item:hover { background: #edf0ed; }
 .session-item.active { background: #e5eae6; }
+.session-select { width: 100%; min-height: 48px; padding: 7px 34px 7px 8px; border: 0; border-radius: inherit; background: transparent; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 7px; align-items: center; text-align: left; cursor: pointer; }
+.session-editor { cursor: default; }
+.rename-session { position: absolute; top: 11px; right: 7px; width: 26px; height: 26px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; opacity: 0; }
+.session-item:hover .rename-session, .rename-session:focus-visible { opacity: 1; }
+.rename-session:hover { color: var(--accent); background: var(--white); }
+.session-title-input { width: 100%; min-width: 0; height: 25px; padding: 0 5px; border: 1px solid #82aa94; border-radius: 5px; background: var(--white); color: var(--ink); font-size: 12px; font-weight: 650; }
 .session-item strong, .session-item small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .session-item strong { font-size: 12px; font-weight: 650; }
 .session-item small { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }

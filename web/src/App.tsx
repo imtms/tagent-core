@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Bot, Check, ChevronDown, ChevronRight, Circle, Command, FileText, Menu, MessageSquarePlus, PanelRight, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
+import { Activity, Bot, Check, ChevronDown, ChevronRight, Circle, Command, FileText, Menu, MessageSquarePlus, PanelRight, Pencil, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
 import { api, subscribe, type Message, type RunEvent, type RuntimeStatus, type Session, type SessionInboxItem, type TaskRun, type TranscriptItem } from "./api";
 import { Markdown } from "./Markdown";
 import { createRequestId } from "./id";
@@ -58,6 +58,8 @@ export function App() {
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [retryingRunId, setRetryingRunId] = useState("");
   const [sessionId, setSessionId] = useState("");
+  const [renamingSessionId, setRenamingSessionId] = useState("");
+  const [sessionTitleDraft, setSessionTitleDraft] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeRun, setActiveRun] = useState<TaskRun | null>(null);
   const [selectedRun, setSelectedRun] = useState<TaskRun | null>(null);
@@ -74,6 +76,8 @@ export function App() {
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const cancelRenameRef = useRef(false);
+  const renameSubmittingRef = useRef(false);
   const activeRunIdRef = useRef("");
 
   useEffect(() => { activeRunIdRef.current = activeRun?.id ?? ""; }, [activeRun?.id]);
@@ -172,6 +176,27 @@ export function App() {
     setSessions((current) => [session, ...current]); setSessionId(session.id); setLeftOpen(false);
   }
 
+  function cancelRename() {
+    cancelRenameRef.current = true;
+    setRenamingSessionId(""); setSessionTitleDraft("");
+  }
+
+  async function renameSession(session: Session) {
+    if (cancelRenameRef.current) { cancelRenameRef.current = false; return; }
+    if (renameSubmittingRef.current) return;
+    const title = sessionTitleDraft.trim();
+    if (!title) { setError("Workspace name is required."); return; }
+    if (title === session.title) { setRenamingSessionId(""); setSessionTitleDraft(""); return; }
+    renameSubmittingRef.current = true;
+    setError("");
+    try {
+      const updated = await api.renameSession(session.id, title);
+      setSessions((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setRenamingSessionId(""); setSessionTitleDraft("");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { renameSubmittingRef.current = false; }
+  }
+
   async function submit() {
     const content = draft.trim();
     if (!content || !sessionId) return;
@@ -218,9 +243,17 @@ export function App() {
       <div className="brand"><div className="brand-mark"><Bot size={18} /></div><div><strong>TAgent</strong><span>Core runtime</span></div><button className="icon-button mobile-only" onClick={() => setLeftOpen(false)} aria-label="Close sessions"><X size={18} /></button></div>
       <button className="new-session" onClick={createSession}><Plus size={16} />New workspace</button>
       <div className="session-list">
-        {sessions.map((session) => <button key={session.id} className={`session-item ${session.id === sessionId ? "active" : ""}`} onClick={() => { setSessionId(session.id); setLeftOpen(false); }}>
-          <span className="session-icon"><Command size={15} /></span><span><strong>{session.title}</strong><span className="session-meta"><small>{formatTime(session.updatedAt)}</small><WorkspaceRunStatus session={session} /></span></span>
-        </button>)}
+        {sessions.map((session) => <div key={session.id} className={`session-item ${session.id === sessionId ? "active" : ""}`}>
+          {renamingSessionId === session.id ? <div className="session-select session-editor">
+            <span className="session-icon"><Command size={15} /></span><span><input className="session-title-input" value={sessionTitleDraft} autoFocus onChange={(event) => setSessionTitleDraft(event.target.value)} onKeyDown={(event) => {
+              if (event.key === "Enter") { event.preventDefault(); void renameSession(session); }
+              if (event.key === "Escape") { event.preventDefault(); cancelRename(); event.currentTarget.blur(); }
+            }} onBlur={() => void renameSession(session)} aria-label="Workspace name" /><span className="session-meta"><small>{formatTime(session.updatedAt)}</small><WorkspaceRunStatus session={session} /></span></span>
+          </div> : <>
+            <button className="session-select" onClick={() => { setSessionId(session.id); setLeftOpen(false); }}><span className="session-icon"><Command size={15} /></span><span><strong>{session.title}</strong><span className="session-meta"><small>{formatTime(session.updatedAt)}</small><WorkspaceRunStatus session={session} /></span></span></button>
+            <button className="rename-session" onClick={() => { setRenamingSessionId(session.id); setSessionTitleDraft(session.title); }} title="Rename workspace" aria-label="Rename workspace"><Pencil size={13} /></button>
+          </>}
+        </div>)}
       </div>
       <div className="rail-footer"><span className="status-dot" />Local control plane{runtimeStatus?.schemaVersion ? ` · db v${runtimeStatus.schemaVersion}` : ""}</div>
     </aside>

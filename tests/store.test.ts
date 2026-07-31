@@ -13,6 +13,15 @@ const createStore = () => {
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
 
 describe("Store", () => {
+  it("renames a workspace and updates its timestamp", () => {
+    const store = createStore();
+    const session = store.createSession("Before");
+    const renamed = store.renameSession(session.id, "  After  ");
+    expect(renamed).toMatchObject({ id: session.id, title: "After" });
+    expect(renamed!.updatedAt).toBeGreaterThanOrEqual(session.updatedAt);
+    expect(store.renameSession("missing", "Name")).toBeUndefined();
+  });
+
   it("exposes the latest TaskRun status with each workspace", () => {
     const store = createStore();
     const idle = store.createSession("Idle");
