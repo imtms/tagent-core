@@ -156,6 +156,7 @@ export interface TaskRun {
   artifacts: Artifact[];
   completionGate: CompletionGate;
   supervision: { latestDecision: SupervisorDecision | null; latestGates: GateEvaluation[]; progress: ProgressSnapshot | null; spawnProposals: SpawnProposal[] };
+  launchRetryable: boolean;
 }
 
 export interface CompletionGate {

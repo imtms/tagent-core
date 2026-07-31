@@ -39,6 +39,18 @@ describe("Web API request headers", () => {
     expect(source).toContain("setError(cause instanceof Error ? cause.message : String(cause))");
   });
 
+  it("calls retry-launch and renders retry feedback for retryable launch failures", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "started", item: { id: "item" }, run: { id: "run", attempt: 2 } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.retryLaunch("run");
+    expect(fetchMock).toHaveBeenCalledWith("/api/runs/run/retry-launch", expect.objectContaining({ method: "POST" }));
+    const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain("await api.retryLaunch(run.id)");
+    expect(source).toContain('selectedRun.launchRetryable');
+    expect(source).toContain('setNotice("TaskRun launch retry started.")');
+    expect(source).toContain("setError(cause instanceof Error ? cause.message : String(cause))");
+  });
+
   it("hydrates a newly discovered active Run during Session polling", async () => {
     const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
     expect(source).toContain("active.id !== activeRunIdRef.current");

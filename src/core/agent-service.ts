@@ -230,6 +230,17 @@ export class AgentService {
     return run ? { status: "started" as const, item: this.store.getSessionInboxItem(claimed.item.id)!, run } : { status: "failed" as const };
   }
 
+  retryInboxLaunch(runId: RunId) {
+    if (this.closing) return { status: "closing" as const };
+    if (this.runtimes.has(runId)) return { status: "running" as const, runId };
+    const claimed = this.store.retryInboxLaunch(runId);
+    if (claimed.status !== "started") return claimed;
+    const event = this.store.appendEvent(runId, "run.launch.retrying", { attempt: claimed.run.attempt, inboxItemId: claimed.item.id });
+    this.publish(event);
+    const run = this.launchClaimedSessionInbox(claimed.item, claimed.run, true);
+    return run ? { status: "started" as const, item: this.store.getSessionInboxItem(claimed.item.id)!, run } : { status: "failed" as const };
+  }
+
   recoverSessionInbox() {
     if (this.closing) return [];
     const started: string[] = [];
@@ -247,19 +258,22 @@ export class AgentService {
     return this.launchClaimedSessionInbox(claimed.item, claimed.run);
   }
 
-  private launchClaimedSessionInbox(item: SessionInboxItem, run: TaskRun) {
+  private launchClaimedSessionInbox(item: SessionInboxItem, run: TaskRun, retry = false) {
     try {
-      const sessionHistory = this.prepareSessionHistory(run, item.content);
-      this.store.appendMessage(run.sessionId, "user", item.content);
-      this.publish(this.store.appendEvent(run.id, "run.started", { goal: item.content, source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: sessionHistory.messages.length }));
+      const sessionHistory = this.prepareSessionHistory(run, item.content, retry ? item.startedAt ?? 0 : undefined);
+      if (!retry) {
+        this.store.appendMessage(run.sessionId, "user", item.content);
+        this.publish(this.store.appendEvent(run.id, "run.started", { goal: item.content, source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: sessionHistory.messages.length }));
+      }
       this.publishContextEvents(run.id, sessionHistory);
-      this.launch(run, item.content, sessionHistory.messages);
+      this.launch(run, item.content, sessionHistory.messages, undefined, { initialize: true, inboxItemId: item.id, retry });
       if (!this.runtimes.has(run.id)) throw new Error("Inbox TaskRun runtime did not start");
       return this.store.getRun(run.id)!;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.store.failSessionInboxStart(item.id, run.id, message);
-      const event = this.store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: message, reason: "inbox_launch_failed", inboxItemId: item.id }, message, run.attempt);
+      const retryable = !message.startsWith("Model is not allowed:");
+      this.store.recordSessionInboxLaunchFailure(item.id, run.id, message);
+      const event = this.store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: message, reason: "runtime_initialization_failed", stage: "launch_setup", retryable, inboxItemId: item.id }, message, run.attempt);
       if (event) this.publish(event);
       setImmediate(() => { if (!this.closing) this.dispatchSessionInbox(run.sessionId); });
       return undefined;
@@ -280,7 +294,7 @@ export class AgentService {
     return this.store.getRun(run.id)!;
   }
 
-  private launch(run: TaskRun, prompt: string, initialMessages: AgentMessage[] = [], continuationId?: string) {
+  private launch(run: TaskRun, prompt: string, initialMessages: AgentMessage[] = [], continuationId?: string, launchOptions?: { initialize?: boolean; inboxItemId?: string; retry?: boolean }) {
     if (this.closing) return;
     const checkpointBase = this.store.getRun(run.id) ?? run;
     this.checkpointDrafts.set(run.id, { runId: run.id, attempt: run.attempt, active: true, assistantPartial: "", currentTool: null, lastEventSeq: checkpointBase.lastEventSeq });
@@ -350,7 +364,23 @@ export class AgentService {
     touchActivity();
     hardTimer = setTimeout(() => failTimeout("hard_timeout", hardTimeoutMs), hardTimeoutMs);
 
-    const execution = this.execute(run.id, run.attempt, runtime, prompt, continuationId).then((blocked) => {
+    const execution = (async () => {
+      if (launchOptions?.initialize && runtime.initialize) {
+        try {
+          await runtime.initialize();
+          this.publish(this.store.appendEvent(run.id, "runtime.initialized", { inboxItemId: launchOptions.inboxItemId, retry: Boolean(launchOptions.retry), attempt: run.attempt }));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (!this.closing && this.store.getRun(run.id)?.status === "running") {
+            if (launchOptions.inboxItemId) this.store.recordSessionInboxLaunchFailure(launchOptions.inboxItemId, run.id, message);
+            const event = this.store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: message, reason: "runtime_initialization_failed", stage: "runtime_initialize", retryable: true, inboxItemId: launchOptions.inboxItemId }, message, run.attempt);
+            if (event) this.publish(event);
+          }
+          return false;
+        }
+      }
+      return this.execute(run.id, run.attempt, runtime, prompt, continuationId);
+    })().then((blocked) => {
       if (this.closing) return;
       if (continuationId) {
         if (!this.store.ownsContinuationLease(continuationId, this.continuationOwner)) return;
@@ -590,9 +620,13 @@ export class AgentService {
     return this.contextAssembler().assemble("transcript", this.store.listTranscript(run.id), this.buildSystemPrompt(run), prompt);
   }
 
-  private prepareSessionHistory(run: TaskRun, query: string) {
-    const history = this.store.listRecentMessages(run.sessionId, 10_000)
-      .filter((message) => message.role === "user" || message.role === "assistant")
+  private prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter?: number) {
+    const recent = this.store.listRecentMessages(run.sessionId, 10_000).filter((message) => message.role === "user" || message.role === "assistant");
+    if (excludeCurrentUserAfter !== undefined) {
+      const index = recent.findIndex((message) => message.role === "user" && message.content === query && message.createdAt >= excludeCurrentUserAfter);
+      if (index >= 0) recent.splice(index, 1);
+    }
+    const history = recent
       .map((message): AgentMessage => message.role === "user"
         ? { role: "user", content: message.content, timestamp: message.createdAt }
         : {

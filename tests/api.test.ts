@@ -91,6 +91,64 @@ describe("HTTP API", () => {
     expect(conflict.json()).toMatchObject({ reason: "running_taskrun" });
   });
 
+  it("retries a failed inbox runtime initialization on the same TaskRun", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-launch-retry-"));
+    const store = new Store(":memory:");
+    let initializationAttempts = 0;
+    class InitializingRuntime {
+      async initialize() { initializationAttempts += 1; if (initializationAttempts === 1) throw new Error("runtime unavailable"); }
+      async prompt() {}
+      async steer() { return "accepted" as const; }
+      abort() {}
+      getMessages() { return []; }
+      getError() { return undefined; }
+    }
+    const service = new AgentService(store, workspace, () => new InitializingRuntime());
+    const app = createApp({ store, service, logger: false, webRoot: workspace }); apps.push(app);
+    const session = store.createSession();
+    const admitted = (await app.inject({ method: "POST", url: `/api/sessions/${session.id}/messages`, payload: { content: "initialize", requestId: "initialize-once" } })).json();
+    await new Promise((resolve) => setImmediate(resolve));
+    const failed = store.getRun(admitted.run.id)!;
+    expect(failed).toMatchObject({ status: "failed", attempt: 1, launchRetryable: true });
+    expect(store.getSessionInboxItem(admitted.item.id)).toMatchObject({ status: "started", runId: failed.id, error: "runtime unavailable" });
+
+    const response = await app.inject({ method: "POST", url: `/api/runs/${failed.id}/retry-launch` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: "started", item: { id: admitted.item.id, status: "started" }, run: { id: failed.id, attempt: 2 } });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(store.listRuns(session.id)).toHaveLength(1);
+    expect(store.listMessages(session.id).filter((message) => message.role === "user" && message.content === "initialize")).toHaveLength(1);
+    expect(store.listEvents(failed.id).some((event) => event.type === "run.launch.retrying" && event.data.attempt === 2)).toBe(true);
+  });
+
+  it("returns a conflict when retry-launch would overlap another running TaskRun", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-launch-conflict-"));
+    const store = new Store(":memory:");
+    const service = new AgentService(store, workspace);
+    const app = createApp({ store, service, logger: false, webRoot: workspace }); apps.push(app);
+    const session = store.createSession();
+    const item = store.enqueueSessionInbox(session.id, "retry", "retry-api-conflict");
+    const claimed = store.claimNextSessionInbox(session.id)!;
+    store.recordSessionInboxLaunchFailure(item.id, claimed.run.id, "init failed");
+    store.transitionRun(claimed.run.id, ["running"], "failed", "run.failed", { reason: "runtime_initialization_failed", retryable: true }, "init failed", 1);
+    const running = store.createRun(session.id, "other running");
+    const response = await app.inject({ method: "POST", url: `/api/runs/${claimed.run.id}/retry-launch` });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ reason: "running_taskrun", runId: running.id });
+  });
+
+  it("rejects retry-launch for an ordinary failed Run", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-launch-not-retryable-"));
+    const store = new Store(":memory:");
+    const service = new AgentService(store, workspace);
+    const app = createApp({ store, service, logger: false, webRoot: workspace }); apps.push(app);
+    const session = store.createSession();
+    const run = store.createRun(session.id, "ordinary"); store.finalizeRun(run.id, "failed", "ordinary failure");
+    const response = await app.inject({ method: "POST", url: `/api/runs/${run.id}/retry-launch` });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ reason: "not_retryable" });
+  });
+
   it("returns JSON 404 for unknown API routes instead of the SPA document", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
     const store = new Store(":memory:");
