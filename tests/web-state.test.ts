@@ -35,7 +35,6 @@ describe("Web workbench state model", () => {
     expect(source).toContain("activeRun.checkpoint?.active ? activeRun.checkpoint.lastEventSeq");
     expect(source).not.toContain("activeRun?.lastEventSeq, sessionId");
   });
-
   it("renders persisted current operation state", async () => {
     const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
     expect(source).toContain('deriveCurrentOperation(run, now)');
@@ -43,5 +42,21 @@ describe("Web workbench state model", () => {
     expect(source).toContain('operation.toolName || "agent"');
     expect(source).not.toContain('operation.progressSummary');
     expect(source).not.toContain('operation.summary');
+  });
+
+  it("supports renaming workspaces from the session rail", async () => {
+    const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain("api.renameSession(session.id, title)");
+    expect(source).toContain('aria-label="Rename workspace"');
+    expect(source).toContain('className="session-title-input"');
+  });
+
+  it("cancels rename on Escape and submits Enter only once", async () => {
+    const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain("cancelRenameRef.current = true");
+    expect(source).toContain('if (cancelRenameRef.current) { cancelRenameRef.current = false; return; }');
+    expect(source).toContain("if (renameSubmittingRef.current) return;");
+    expect(source).toContain('if (event.key === "Enter") { event.preventDefault(); void renameSession(session); }');
+    expect(source).toContain('if (event.key === "Escape") { event.preventDefault(); cancelRename(); event.currentTarget.blur(); }');
   });
 });

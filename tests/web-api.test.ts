@@ -21,6 +21,13 @@ describe("Web API request headers", () => {
     expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
   });
 
+  it("renames a workspace through the Session API", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "session", title: "After", createdAt: 1, updatedAt: 2 }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.renameSession("session", "After");
+    expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session", expect.objectContaining({ method: "PATCH", body: JSON.stringify({ title: "After" }) }));
+  });
+
   it("posts the selected queued item to the manual start endpoint", async () => {
     const payload = { status: "started", item: { id: "item" }, run: { id: "run" } };
     const fetchMock = vi.fn(async () => new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } }));

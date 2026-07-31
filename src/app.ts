@@ -23,6 +23,13 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const body = (request.body ?? {}) as { title?: string };
     return store.createSession(body.title?.trim() || "New workspace");
   });
+  app.patch("/api/sessions/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { title?: string };
+    if (!body.title?.trim()) return reply.code(400).send({ error: "title is required" });
+    const session = store.renameSession(id, body.title);
+    return session ?? reply.code(404).send({ error: "session not found" });
+  });
   app.get("/api/sessions/:id/messages", async (request) => {
     const { id } = request.params as { id: string };
     return store.listMessages(id);

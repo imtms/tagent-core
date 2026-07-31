@@ -392,6 +392,13 @@ export class Store {
     `).get(id) as Session | undefined;
   }
 
+  renameSession(id: SessionId, title: string): Session | undefined {
+    const trimmed = title.trim();
+    if (!trimmed) return undefined;
+    this.db.prepare("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?").run(trimmed, now(), id);
+    return this.getSession(id);
+  }
+
   touchSession(id: SessionId) {
     this.db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(now(), id);
   }
