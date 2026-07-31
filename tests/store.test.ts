@@ -44,6 +44,19 @@ describe("Store", () => {
     expect(firstStore.listSessionInbox(session.id)).toEqual([expect.objectContaining({ content: "two", status: "queued" })]);
   });
 
+  it("does not let an older blocked Run keep the queue blocked after the latest Task succeeds", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const older = store.createRun(session.id, "older blocked work");
+    store.blockRun(older.id, "waiting for review");
+    const successful = store.createRun(session.id, "newer successful work");
+    store.finalizeRun(successful.id, "completed");
+    const queued = store.enqueueSessionInbox(session.id, "next task", "after-latest-success");
+
+    expect(store.claimNextSessionInbox(session.id)?.item.id).toBe(queued.id);
+    expect(store.getRun(older.id)).toMatchObject({ status: "blocked", blockedReason: "waiting for review" });
+  });
+
   it("defers queued items and merges related input before TaskRun creation", () => {
     const store = createStore();
     const session = store.createSession();
