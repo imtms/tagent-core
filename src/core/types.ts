@@ -21,8 +21,6 @@ export interface RunCheckpoint {
   currentTool: {
     toolCallId: string;
     toolName: string;
-    summary?: string;
-    progressSummary?: string;
     startedAt?: number;
     lastActivityAt?: number;
   } | null;

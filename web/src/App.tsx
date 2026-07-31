@@ -26,9 +26,7 @@ function CurrentOperationPanel({ run }: { run: TaskRun }) {
   return <section className={`panel-section current-operation ${operation.state}`}>
     <div className="section-title"><span>Current operation</span><small>{operation.state}</small></div>
     <div className="checkpoint-card">
-      <strong>{operation.toolName || operation.kind}</strong>
-      {operation.summary && <p>{operation.summary}</p>}
-      {operation.progressSummary && <span>{operation.progressSummary}</span>}
+      <strong>{operation.toolName || "agent"}</strong>
     </div>
   </section>;
 }

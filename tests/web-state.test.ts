@@ -40,6 +40,8 @@ describe("Web workbench state model", () => {
     const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
     expect(source).toContain('deriveCurrentOperation(run, now)');
     expect(source).toContain('Current operation');
-    expect(source).toContain('operation.progressSummary');
+    expect(source).toContain('operation.toolName || "agent"');
+    expect(source).not.toContain('operation.progressSummary');
+    expect(source).not.toContain('operation.summary');
   });
 });
