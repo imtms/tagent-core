@@ -27,6 +27,7 @@ export interface AppConfig {
   dynamicBudget: boolean;
   controlInboxCapacity: number;
   model: ModelConfig;
+  memory: { enabled: boolean; backend: "memory" | "postgres"; postgresUrl?: string; coldBackend: "local" | "s3"; coldPath: string; s3Bucket?: string; s3Prefix?: string; s3Endpoint?: string; s3Region?: string; s3ForcePathStyle: boolean; workerIntervalMs: number; workspaceScopeId: string; recallTokenBudget: number; };
 }
 
 function positiveInteger(value: string | undefined, fallback: number, name: string) {
@@ -66,6 +67,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     contextReserveTokens: env.TAGENT_CONTEXT_RESERVE_TOKENS === undefined ? undefined : positiveInteger(env.TAGENT_CONTEXT_RESERVE_TOKENS, 10_000, "TAGENT_CONTEXT_RESERVE_TOKENS"),
     dynamicBudget: env.TAGENT_DYNAMIC_BUDGET !== "false",
     controlInboxCapacity: positiveInteger(env.TAGENT_CONTROL_INBOX_CAPACITY, 32, "TAGENT_CONTROL_INBOX_CAPACITY"),
+    memory: {
+      enabled: env.TAGENT_MEMORY_ENABLED === "true",
+      backend: env.TAGENT_MEMORY_BACKEND === "postgres" ? "postgres" : "memory",
+      postgresUrl: env.TAGENT_MEMORY_POSTGRES_URL,
+      coldBackend: env.TAGENT_MEMORY_COLD_BACKEND === "s3" ? "s3" : "local",
+      coldPath: env.TAGENT_MEMORY_COLD_PATH ?? "./data/memory-cold",
+      s3Bucket: env.TAGENT_MEMORY_S3_BUCKET, s3Prefix: env.TAGENT_MEMORY_S3_PREFIX, s3Endpoint: env.TAGENT_MEMORY_S3_ENDPOINT, s3Region: env.TAGENT_MEMORY_S3_REGION,
+      s3ForcePathStyle: env.TAGENT_MEMORY_S3_FORCE_PATH_STYLE === "true",
+      workerIntervalMs: positiveInteger(env.TAGENT_MEMORY_WORKER_INTERVAL_MS, 1_000, "TAGENT_MEMORY_WORKER_INTERVAL_MS"),
+      workspaceScopeId: env.TAGENT_MEMORY_WORKSPACE_SCOPE_ID ?? "default",
+      recallTokenBudget: positiveInteger(env.TAGENT_MEMORY_RECALL_TOKEN_BUDGET, 8_000, "TAGENT_MEMORY_RECALL_TOKEN_BUDGET"),
+    },
     model: {
       provider: env.TAGENT_PROVIDER ?? "openai-compatible",
       modelId: env.TAGENT_MODEL ?? "gpt-5.6-sol",

@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: tagent
+      POSTGRES_PASSWORD: tagent
+      POSTGRES_DB: tagent_memory
+    ports: ["5432:5432"]
+    volumes: ["tagent-memory-pg:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tagent -d tagent_memory"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+volumes:
+  tagent-memory-pg: {}

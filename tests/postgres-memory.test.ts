@@ -1,0 +1,13 @@
+import crypto from "node:crypto";
+import { beforeAll,afterAll,describe,expect,it } from "vitest";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { PostgresMemoryAdapter } from "../src/memory/postgres/postgres-adapter.js";
+import { LocalBlobStore } from "../src/memory/storage/local-blob-store.js";
+import { DefaultPolicyEngine } from "../src/memory/policy/policy-engine.js";
+import { HashEmbeddingAdapter } from "../src/memory/adapters/hash-embedding.js";
+import { MemoryService } from "../src/memory/memory-service.js";
+const url=process.env.TAGENT_TEST_POSTGRES_URL;
+const suite=url?describe:describe.skip;
+suite("PostgreSQL memory adapter",()=>{let adapter:PostgresMemoryAdapter;let service:MemoryService;const scope={type:"workspace" as const,id:`test-${Date.now()}`};const access={subjectId:"integration",scopes:[scope],purpose:"agent_recall" as const};beforeAll(async()=>{adapter=new PostgresMemoryAdapter(url!);await adapter.migrate();service=new MemoryService({records:adapter,vectors:adapter,graph:adapter,topics:adapter,blobs:new LocalBlobStore(await mkdtemp(path.join(tmpdir(),"tagent-pg-cold-"))),embeddings:new HashEmbeddingAdapter(16),jobs:adapter,policy:new DefaultPolicyEngine(adapter)});});afterAll(async()=>{await adapter.close();});it("persists, vectors, publishes cold, recalls, and claims durable jobs",async()=>{const now=Date.now();await service.persistExtracted(access,[{id:crypto.randomUUID(),kind:"fact",tier:"warm",scope,title:"PostgreSQL memory",content:"tagent memory uses PostgreSQL and pgvector",summary:"PostgreSQL pgvector",topicIds:[`tagent.memory.postgres.${scope.id}`],entityIds:[],status:"active",confidence:1,importance:1,sourceRefs:[],createdAt:now,updatedAt:now}],[]);const descriptor={topicId:`tagent.memory.postgres.${scope.id}`,kind:"fact" as const,scope,title:"PostgreSQL memory",description:"PostgreSQL pgvector storage",aliases:["memory database"],entityIds:[],relatedTopicIds:[],embeddingText:"PostgreSQL pgvector memory",status:"active" as const,updatedAt:now};await service.publishColdTopic(access,descriptor,"# PostgreSQL memory\n\nCold is read in full.");const recalled=await service.recall({access,cue:"PostgreSQL pgvector",maxColdTopics:1});expect(recalled.cards[0].content).toContain("pgvector");expect(recalled.coldTopics[0].body).toContain("read in full");const queued=await service.enqueueCapture({access,sourceRefs:[],content:"User prefers concise answers",idempotencyKey:`job-${scope.id}`});const claimed=await adapter.claim("test",1000);expect(claimed?.id).toBe(queued.jobId);await adapter.complete(queued.jobId);});});

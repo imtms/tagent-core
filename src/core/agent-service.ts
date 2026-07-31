@@ -6,6 +6,8 @@ import type { AgentRuntime, RuntimeFactory } from "../runtime/types.js";
 import type { RunCheckpoint, RunEvent, SessionId, SessionInboxItem, RunId, TaskRun } from "../core/types.js";
 import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 import { TaskRunSupervisor } from "./supervisor.js";
+import type { MemoryFacade } from "../memory/memory-service.js";
+import type { AccessContext } from "../memory/types.js";
 
 export class AgentService {
   private readonly runtimes = new Map<RunId, AgentRuntime>();
@@ -14,6 +16,7 @@ export class AgentService {
   private readonly checkpointDrafts = new Map<RunId, Omit<RunCheckpoint, "updatedAt" | "lastTranscriptSeq">>();
   private readonly checkpointTimers = new Map<RunId, ReturnType<typeof setTimeout>>();
   private readonly listeners = new Map<RunId, Set<(event: RunEvent) => void>>();
+  private readonly recalledMemory = new Map<RunId, string>();
   private readonly continuationOwner = randomUUID();
   private continuationRecoveryTimer?: ReturnType<typeof setTimeout>;
   private supervisorRestartReconciled = false;
@@ -24,7 +27,9 @@ export class AgentService {
     private readonly store: Store,
     private readonly workspace: string,
     private readonly runtimeFactory: RuntimeFactory = createInProcessRuntime,
-    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number; contextWindow?: number; maxContextTurns?: number; contextReserveTokens?: number; dynamicBudget?: boolean; controlInboxCapacity?: number } = {},
+    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number; contextWindow?: number; maxContextTurns?: number; contextReserveTokens?: number; dynamicBudget?: boolean; controlInboxCapacity?: number; memoryRecallTokenBudget?: number } = {},
+    private readonly memory?: MemoryFacade,
+    private readonly memoryScopeId = "default",
   ) {
     this.supervisor = new TaskRunSupervisor(store);
     this.store.markInterrupted();
@@ -248,22 +253,33 @@ export class AgentService {
   }
 
   private launchClaimedSessionInbox(item: SessionInboxItem, run: TaskRun) {
-    try {
-      const sessionHistory = this.prepareSessionHistory(run, item.content);
-      this.store.appendMessage(run.sessionId, "user", item.content);
-      this.publish(this.store.appendEvent(run.id, "run.started", { goal: item.content, source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: sessionHistory.messages.length }));
-      this.publishContextEvents(run.id, sessionHistory);
-      this.launch(run, item.content, sessionHistory.messages);
-      if (!this.runtimes.has(run.id)) throw new Error("Inbox TaskRun runtime did not start");
-      return this.store.getRun(run.id)!;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.store.failSessionInboxStart(item.id, run.id, message);
-      const event = this.store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: message, reason: "inbox_launch_failed", inboxItemId: item.id }, message, run.attempt);
-      if (event) this.publish(event);
-      setImmediate(() => { if (!this.closing) this.dispatchSessionInbox(run.sessionId); });
-      return undefined;
+    if (!this.memory) {
+      try {
+        const sessionHistory = this.prepareSessionHistoryWithoutRecall(run, item.content);
+        this.completeClaimedSessionLaunch(item, run, sessionHistory);
+        return this.store.getRun(run.id)!;
+      } catch (error) { return this.failClaimedSessionLaunch(item, run, error); }
     }
+    void this.prepareSessionHistory(run, item.content).then((sessionHistory) => this.completeClaimedSessionLaunch(item, run, sessionHistory)).catch((error) => this.failClaimedSessionLaunch(item, run, error));
+    return this.store.getRun(run.id)!;
+  }
+
+  private completeClaimedSessionLaunch(item: SessionInboxItem, run: TaskRun, sessionHistory: ContextAssembly & { recalledMemory?: string }) {
+    this.store.appendMessage(run.sessionId, "user", item.content);
+    this.publish(this.store.appendEvent(run.id, "run.started", { goal: item.content, source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: sessionHistory.messages.length }));
+    this.publishContextEvents(run.id, sessionHistory);
+    this.recalledMemory.set(run.id, sessionHistory.recalledMemory ?? "");
+    this.launch(run, item.content, sessionHistory.messages);
+    if (!this.runtimes.has(run.id)) throw new Error("Inbox TaskRun runtime did not start");
+  }
+
+  private failClaimedSessionLaunch(item: SessionInboxItem, run: TaskRun, error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    this.store.failSessionInboxStart(item.id, run.id, message);
+    const event = this.store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: message, reason: "inbox_launch_failed", inboxItemId: item.id }, message, run.attempt);
+    if (event) this.publish(event);
+    setImmediate(() => { if (!this.closing) this.dispatchSessionInbox(run.sessionId); });
+    return undefined;
   }
 
   async start(sessionId: SessionId, query: string, requestId: string = randomUUID()) {
@@ -272,10 +288,11 @@ export class AgentService {
     if (existing) return this.store.getRun(existing.id)!;
 
     const run = this.store.createRun(sessionId, query, requestId);
-    const sessionHistory = this.prepareSessionHistory(run, query);
+    const sessionHistory = await this.prepareSessionHistory(run, query);
     this.store.appendMessage(sessionId, "user", query);
     this.publish(this.store.appendEvent(run.id, "run.started", { goal: query, sessionHistoryCount: sessionHistory.messages.length }));
     this.publishContextEvents(run.id, sessionHistory);
+    this.recalledMemory.set(run.id, sessionHistory.recalledMemory);
     this.launch(run, query, sessionHistory.messages);
     return this.store.getRun(run.id)!;
   }
@@ -314,7 +331,7 @@ export class AgentService {
       store: this.store,
       runId: run.id,
       workspace: this.workspace,
-      systemPrompt: this.buildSystemPrompt(run),
+      systemPrompt: this.buildSystemPrompt(run, this.recalledMemory.get(run.id) ?? ""),
       initialMessages,
       model: this.runtimeDefaults.model,
       apiKey: this.runtimeDefaults.apiKey,
@@ -365,6 +382,7 @@ export class AgentService {
       if (this.store.getRun(run.id)?.status === "cancelled") this.repairTranscript(run.id, "cancelled");
       runtime.dispose?.();
       this.runtimes.delete(run.id);
+      this.recalledMemory.delete(run.id);
       const timer = this.checkpointTimers.get(run.id);
       if (timer) clearTimeout(timer);
       this.checkpointTimers.delete(run.id);
@@ -555,19 +573,34 @@ export class AgentService {
     if (this.closing) throw new Error("Service is shutting down");
     const run = this.store.spawnFromProposal(proposalId);
     if (!run) throw new Error("Proposal is not spawnable");
-    try {
-      const sessionHistory = this.prepareSessionHistory(run, run.goal);
-      this.store.appendMessage(run.sessionId, "user", run.goal);
-      this.publish(this.store.appendEvent(run.id, "run.started", { goal: run.goal, source: "spawn_proposal", sessionHistoryCount: sessionHistory.messages.length }));
-      this.publishContextEvents(run.id, sessionHistory);
-      this.launch(run, run.goal, sessionHistory.messages);
-      if (!this.runtimes.has(run.id)) throw new Error("Spawned runtime did not start");
+    if (!this.memory) {
+      try {
+        const sessionHistory = this.prepareSessionHistoryWithoutRecall(run, run.goal);
+        this.completeSpawnProposal(run, sessionHistory);
+        return this.store.getRun(run.id)!;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.store.failSpawnedRun(proposalId, run.id, message);
+        throw error;
+      }
+    }
+    return this.prepareSessionHistory(run, run.goal).then((sessionHistory) => {
+      this.completeSpawnProposal(run, sessionHistory);
       return this.store.getRun(run.id)!;
-    } catch (error) {
+    }).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       this.store.failSpawnedRun(proposalId, run.id, message);
       throw error;
-    }
+    });
+  }
+
+  private completeSpawnProposal(run: TaskRun, sessionHistory: ContextAssembly & { recalledMemory?: string }) {
+    this.store.appendMessage(run.sessionId, "user", run.goal);
+    this.publish(this.store.appendEvent(run.id, "run.started", { goal: run.goal, source: "spawn_proposal", sessionHistoryCount: sessionHistory.messages.length }));
+    this.publishContextEvents(run.id, sessionHistory);
+    this.recalledMemory.set(run.id, sessionHistory.recalledMemory ?? "");
+    this.launch(run, run.goal, sessionHistory.messages);
+    if (!this.runtimes.has(run.id)) throw new Error("Spawned runtime did not start");
   }
 
   resume(runId: RunId) {
@@ -590,22 +623,34 @@ export class AgentService {
     return this.contextAssembler().assemble("transcript", this.store.listTranscript(run.id), this.buildSystemPrompt(run), prompt);
   }
 
-  private prepareSessionHistory(run: TaskRun, query: string) {
-    const history = this.store.listRecentMessages(run.sessionId, 10_000)
+  private prepareSessionHistoryWithoutRecall(run: TaskRun, query: string) {
+    const history = this.sessionHistoryMessages(run.sessionId);
+    return { ...this.contextAssembler().assemble("session", history, this.buildSystemPrompt(run), query), recalledMemory: "" };
+  }
+
+  private sessionHistoryMessages(sessionId: SessionId) {
+    return this.store.listRecentMessages(sessionId, 10_000)
       .filter((message) => message.role === "user" || message.role === "assistant")
       .map((message): AgentMessage => message.role === "user"
         ? { role: "user", content: message.content, timestamp: message.createdAt }
-        : {
-            role: "assistant",
-            content: [{ type: "text", text: message.content }],
-            api: "openai-completions",
-            provider: "tagent-core",
-            model: "session-history",
-            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-            stopReason: "stop",
-            timestamp: message.createdAt,
-          });
-    return this.contextAssembler().assemble("session", history, this.buildSystemPrompt(run), query);
+        : { role: "assistant", content: [{ type: "text", text: message.content }], api: "openai-completions", provider: "tagent-core", model: "session-history", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: message.createdAt });
+  }
+
+  private async prepareSessionHistory(run: TaskRun, query: string) {
+    const history = this.sessionHistoryMessages(run.sessionId);
+    const access = this.memoryAccess(run);
+    const recall = this.memory ? await this.memory.recall({ access, cue: query, tokenBudget: this.runtimeDefaults.memoryRecallTokenBudget ?? 8_000 }) : undefined;
+    const systemPrompt = this.buildSystemPrompt(run, recall?.promptSection);
+    const assembly = this.contextAssembler().assemble("session", history, systemPrompt, query);
+    if (this.memory && assembly.droppedMessages.length) {
+      const content = assembly.droppedMessages.map((message) => `${message.role}: ${messageText(message)}`).filter((value) => !value.endsWith(": ")).join("\n\n");
+      if (content) void this.memory.enqueueCapture({ access, sourceRefs: [{ sourceType: "run", sourceId: run.id, revision: `context-prune:${run.attempt}` }], content, idempotencyKey: `context-prune:${run.id}:${run.attempt}:${hashText(content)}` });
+    }
+    return { ...assembly, recalledMemory: recall?.promptSection ?? "" };
+  }
+
+  private memoryAccess(run: TaskRun): AccessContext {
+    return { subjectId: `session:${run.sessionId}`, scopes: [{ type: "workspace", id: this.memoryScopeId }, { type: "session", id: run.sessionId }], purpose: "agent_recall" };
   }
 
   private contextAssembler() {
@@ -646,13 +691,17 @@ export class AgentService {
     for (const listener of this.listeners.get(event.runId) ?? []) listener(event);
   }
 
-  private buildSystemPrompt(run: TaskRun) {
+  private buildSystemPrompt(run: TaskRun, recalledMemory = "") {
     return [
       "You are TAgent Core, a practical persistent software agent.",
       `Current workspace: ${this.workspace}`,
       "Use the task_run tool for substantial work. Maintain a plan and checks before claiming completion.",
       "Use read before modifying unfamiliar files. Keep changes focused and report verification evidence.",
       `Active TaskRun: ${JSON.stringify(run)}`,
-    ].join("\n\n");
+      recalledMemory,
+    ].filter(Boolean).join("\n\n");
   }
 }
+
+function messageText(message: AgentMessage) { if (!("content" in message)) return ""; if (typeof message.content === "string") return message.content; return message.content.filter((part) => part.type === "text").map((part) => part.type === "text" ? part.text : "").join("\n"); }
+function hashText(text: string) { let hash = 2166136261; for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619); return (hash >>> 0).toString(16); }
