@@ -10,7 +10,7 @@ export interface TaskRun {
   blockedReason: string; lastEventSeq: number; attempt: number; resumedAt: number | null; createdAt: number; updatedAt: number; completedAt: number | null;
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number };
   transcriptCount: number;
-  checkpoint: { runId: string; attempt: number; active: boolean; assistantPartial: string; currentTool: { toolCallId: string; toolName: string } | null; lastEventSeq: number; lastTranscriptSeq: number; updatedAt: number } | null;
+  checkpoint: { runId: string; attempt: number; active: boolean; assistantPartial: string; currentTool: { toolCallId: string; toolName: string; summary?: string; progressSummary?: string; startedAt?: number; lastActivityAt?: number } | null; lastEventSeq: number; lastTranscriptSeq: number; updatedAt: number } | null;
   continuations: Array<{ id: string; ordinal: number; status: string; reason: string; error: string; createdAt: number; startedAt: number | null; completedAt: number | null; leaseOwner: string; leaseUntil: number | null; heartbeatAt: number | null }>;
   plan: PlanItem[]; checks: RunCheck[];
   artifacts: Array<{ id: string; title: string; kind: string; uri: string }>;

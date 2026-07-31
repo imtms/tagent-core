@@ -7,6 +7,21 @@ import type { RunCheckpoint, RunEvent, SessionId, RunId, TaskRun } from "../core
 import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 import { TaskRunSupervisor } from "./supervisor.js";
 
+function summarizeToolArguments(value: unknown, limit = 500): string {
+  if (value == null) return "";
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of ["command", "path", "query", "url", "prompt", "content"]) {
+      const candidate = record[key];
+      if (typeof candidate === "string" && candidate.trim()) return candidate.replace(/\s+/g, " ").trim().slice(0, limit);
+    }
+  }
+  let text: string;
+  try { text = typeof value === "string" ? value : JSON.stringify(value); }
+  catch { text = String(value); }
+  return text.replace(/\s+/g, " ").trim().slice(0, limit);
+}
+
 export class AgentService {
   private readonly runtimes = new Map<RunId, AgentRuntime>();
   private readonly executionTasks = new Map<RunId, Promise<void>>();
@@ -39,8 +54,21 @@ export class AgentService {
     if (event.type === "tool.started") draft.currentTool = {
       toolCallId: String(event.data.toolCallId ?? ""),
       toolName: String(event.data.toolName ?? "tool"),
+      summary: summarizeToolArguments(event.data.args),
+      progressSummary: "",
+      startedAt: event.createdAt,
+      lastActivityAt: event.createdAt,
     };
-    if (event.type === "tool.completed" && draft.currentTool?.toolCallId === String(event.data.toolCallId ?? "")) draft.currentTool = null;
+    if (event.type === "tool.progress" && draft.currentTool?.toolCallId === String(event.data.toolCallId ?? "")) {
+      draft.currentTool.lastActivityAt = event.createdAt;
+      const summary = String(event.data.summary ?? "").trim();
+      if (summary) draft.currentTool.progressSummary = summary;
+    }
+    if (event.type === "provider.failure" && draft.currentTool) {
+      draft.currentTool.lastActivityAt = event.createdAt;
+      draft.currentTool.progressSummary = String(event.data.summary ?? "").trim() || draft.currentTool.progressSummary;
+    }
+    if ((event.type === "tool.completed" || event.type === "tool.failed") && draft.currentTool?.toolCallId === String(event.data.toolCallId ?? "")) draft.currentTool = null;
     const immediate = event.type.startsWith("tool.") || event.type === "message.completed" || event.type === "message.retrying";
     if (immediate) this.flushCheckpoint(event.runId);
     else this.scheduleCheckpoint(event.runId);

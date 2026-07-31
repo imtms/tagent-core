@@ -222,11 +222,14 @@ describe("AgentService runtime boundary", () => {
     expect(store.getCheckpoint(run.id)).toMatchObject({ assistantPartial: "AB", lastEventSeq: 4 });
     expect(writes).toHaveBeenCalledTimes(2);
     runtime.emit("tool.started", { toolCallId: "call-1", toolName: "read", args: { path: "a" } });
-    expect(store.getCheckpoint(run.id)?.currentTool).toMatchObject({ toolCallId: "call-1", toolName: "read" });
+    expect(store.getCheckpoint(run.id)?.currentTool).toMatchObject({ toolCallId: "call-1", toolName: "read", summary: "a", progressSummary: "", startedAt: expect.any(Number), lastActivityAt: expect.any(Number) });
     expect(writes).toHaveBeenCalledTimes(3);
+    runtime.emit("tool.progress", { toolCallId: "call-1", toolName: "read", summary: "halfway" });
+    expect(store.getCheckpoint(run.id)?.currentTool).toMatchObject({ progressSummary: "halfway", lastActivityAt: expect.any(Number) });
+    expect(writes).toHaveBeenCalledTimes(4);
     runtime.emit("tool.completed", { toolCallId: "call-1", toolName: "read", isError: false });
     expect(store.getCheckpoint(run.id)?.currentTool).toBeNull();
-    expect(writes).toHaveBeenCalledTimes(4);
+    expect(writes).toHaveBeenCalledTimes(5);
     await service.closeRuntimes();
     expect(store.getCheckpoint(run.id)?.active).toBe(false);
     store.close();
