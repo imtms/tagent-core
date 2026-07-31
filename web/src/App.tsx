@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Bot, Check, ChevronDown, ChevronRight, Circle, Command, FileText, Menu, MessageSquarePlus, PanelRight, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
+import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Command, FileText, Menu, MessageSquarePlus, PanelRight, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
 import { api, subscribe, type Message, type RunEvent, type RuntimeStatus, type Session, type SessionInboxItem, type TaskRun, type TranscriptItem } from "./api";
 import { Markdown } from "./Markdown";
 import { createRequestId } from "./id";
+import { MemoryPanel } from "./MemoryPanel";
 
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
 
@@ -53,6 +54,7 @@ export function App() {
   const [error, setError] = useState("");
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const activeRunIdRef = useRef("");
 
@@ -197,7 +199,7 @@ export function App() {
       <header className="topbar">
         <button className="icon-button mobile-only" onClick={() => setLeftOpen(true)} aria-label="Open sessions"><Menu size={19} /></button>
         <div><h1>{sessions.find((session) => session.id === sessionId)?.title ?? "TAgent Core"}</h1><p>{activeRun ? `${activeRun.phase} · ${activeRun.status}` : runtimeStatus ? `${runtimeStatus.modelId} · ${runtimeStatus.runtime}` : "Ready for a new task"}</p></div>
-        <div className="top-actions">{selectedRun && ["blocked", "interrupted"].includes(selectedRun.status) && !activeRun && <button className="resume-button" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}{activeRun?.status === "running" && <button className="icon-button danger" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={17} /></button>}<button className="icon-button mobile-only" onClick={() => setRightOpen(true)} aria-label="Open task panel"><PanelRight size={19} /></button></div>
+        <div className="top-actions">{runtimeStatus?.memoryEnabled && <button className="memory-launch" onClick={() => setMemoryOpen(true)}><BrainCircuit size={16} /><span>Memory</span><i /></button>}{selectedRun && ["blocked", "interrupted"].includes(selectedRun.status) && !activeRun && <button className="resume-button" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}{activeRun?.status === "running" && <button className="icon-button danger" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={17} /></button>}<button className="icon-button mobile-only" onClick={() => setRightOpen(true)} aria-label="Open task panel"><PanelRight size={19} /></button></div>
       </header>
 
       <section className="message-scroll">
@@ -237,6 +239,7 @@ export function App() {
         </section>;
       })}</div>}
     </aside>
+    {runtimeStatus?.memoryEnabled && memoryOpen && <MemoryPanel runtime={runtimeStatus} onClose={() => setMemoryOpen(false)} />}
     {(leftOpen || rightOpen) && <button className="backdrop mobile-only" onClick={() => { setLeftOpen(false); setRightOpen(false); }} aria-label="Close panel" />}
   </div>;
 }

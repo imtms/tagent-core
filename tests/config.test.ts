@@ -59,7 +59,7 @@ describe("configuration", () => {
 
     const config = loadConfig({ TAGENT_MEMORY_ENABLED: "true", TAGENT_MEMORY_BACKEND: "memory" });
     expect(config.memory).toMatchObject({ enabled: true, backend: "memory", coldBackend: "local" });
-    expect(publicRuntimeConfig(config).memoryEnabled).toBe(true);
+    expect(publicRuntimeConfig(config)).toMatchObject({ memoryEnabled: true, memoryWorkspaceScopeId: "default", memoryBackend: "memory", memoryColdBackend: "local" });
   });
 
   it("rejects unsupported runtime modes", () => {

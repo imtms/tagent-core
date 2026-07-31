@@ -28,7 +28,22 @@ export interface RunEvent { runId: string; seq: number; type: string; data: Reco
 export type TranscriptItem =
   | { seq: number; index?: number; attempt: number; kind: "user" | "assistant"; text: string; createdAt: number }
   | { seq: number; index: number; attempt: number; kind: "tool"; toolCallId: string; toolName: string; arguments: unknown; result: string; isError: boolean; status: string; createdAt: number };
-export interface RuntimeStatus { runtime: string; provider: string; api: string; baseUrl: string; modelId: string; credentialConfigured: boolean; providerTimeoutMs: number; providerMaxRetries: number; runTimeoutMs: number; maxContinuations: number; maxRunTokens: number; dynamicBudget: boolean; schemaVersion?: number }
+export interface RuntimeStatus { runtime: string; provider: string; api: string; baseUrl: string; modelId: string; credentialConfigured: boolean; providerTimeoutMs: number; providerMaxRetries: number; runTimeoutMs: number; maxContinuations: number; maxRunTokens: number; dynamicBudget: boolean; schemaVersion?: number; memoryEnabled: boolean; memoryWorkspaceScopeId?: string; memoryBackend?: "memory" | "postgres"; memoryColdBackend?: "local" | "s3" }
+
+export type MemoryKind = "fact" | "preference" | "episode" | "procedure";
+export type MemoryTier = "hot" | "warm";
+export type MemoryStatus = "candidate" | "active" | "superseded" | "disputed" | "quarantined" | "deleted";
+export interface MemoryScope { type: "user" | "workspace" | "project" | "session"; id: string }
+export interface MemorySourceRef { sourceType: "message" | "run" | "transcript" | "manual"; sourceId: string; revision?: string }
+export interface MemoryRecord { id: string; kind: Exclude<MemoryKind, "preference">; tier: MemoryTier; scope: MemoryScope; title: string; content: string; summary: string; topicIds: string[]; entityIds: string[]; status: MemoryStatus; confidence: number; importance: number; sourceRefs: MemorySourceRef[]; createdAt: number; updatedAt: number }
+export interface PreferenceRecord { id: string; kind: "preference"; tier: MemoryTier; scope: MemoryScope; dimension: string; value: string; summary: string; topicIds: string[]; entityIds: string[]; applicability: "global" | "workspace" | "project" | "task"; strength: number; origin: "explicit" | "repeated" | "inferred"; status: MemoryStatus; confidence: number; sourceRefs: MemorySourceRef[]; createdAt: number; updatedAt: number }
+export type WarmMemory = MemoryRecord | PreferenceRecord;
+export interface TopicDescriptor { topicId: string; kind: MemoryKind; scope: MemoryScope; title: string; description: string; aliases: string[]; entityIds: string[]; relatedTopicIds: string[]; coldRevisionId?: string; status: MemoryStatus; updatedAt: number }
+export interface ColdTopic { descriptor: TopicDescriptor; revision: { id: string; revision: number; checksum: string; tokenCount: number; createdAt: number; publishedAt?: number }; body: string }
+export interface MemoryStatusResult { records: { hot: number; warm: number; candidate: number; active: number; disputed: number }; topics: number; coldTopics: number }
+export interface MemoryExport { records: WarmMemory[]; topics: ColdTopic[] }
+export interface MemoryCard { id: string; kind: MemoryKind; tier: MemoryTier; title: string; content: string; score: number; topicIds: string[]; confidence: number }
+export interface RecallResult { cards: MemoryCard[]; coldTopics: ColdTopic[]; trace: { topicIds: string[]; candidateCount: number; deniedCount: number } }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -63,6 +78,11 @@ export const api = {
   resume: (runId: string) => request<TaskRun>(`/api/runs/${runId}/resume`, { method: "POST" }),
   claimConsumer: (runId: string, consumerId: string) => request<EventConsumerCursor>(`/api/runs/${runId}/consumers/${encodeURIComponent(consumerId)}/claim`, { method: "POST" }),
   ackConsumer: (runId: string, consumerId: string, generation: number, seq: number) => request(`/api/runs/${runId}/consumers/${encodeURIComponent(consumerId)}/ack`, { method: "POST", body: JSON.stringify({ generation, seq }) }),
+  memoryStatus: (scope: MemoryScope) => request<MemoryStatusResult>("/api/memory/status", { method: "POST", body: JSON.stringify({ scopes: [scope] }) }),
+  memoryExport: (scope: MemoryScope) => request<MemoryExport>("/api/memory/export", { method: "POST", body: JSON.stringify({ scope }) }),
+  memoryRecall: (scope: MemoryScope, cue: string, kinds?: MemoryKind[]) => request<RecallResult>("/api/memory/recall", { method: "POST", body: JSON.stringify({ scopes: [scope], cue, kinds, maxCards: 12, maxColdTopics: 4 }) }),
+  memoryCapture: (scope: MemoryScope, content: string) => request<{ jobId: string }>("/api/memory/capture", { method: "POST", body: JSON.stringify({ scope, content, idempotencyKey: createRequestId() }) }),
+  memoryForget: (scope: MemoryScope, ids?: string[], topicIds?: string[]) => request<{ records: number; topics: number; objects: number }>("/api/memory/forget", { method: "POST", body: JSON.stringify({ scope, ids, topicIds }) }),
 };
 
 export function subscribe(runId: string, consumerId: string, generation: number, after: number, onEvent: (event: RunEvent) => void, onError: () => void) {

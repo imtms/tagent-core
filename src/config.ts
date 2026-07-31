@@ -163,6 +163,9 @@ export interface PublicRuntimeConfig {
   controlInboxCapacity: number;
   schemaVersion?: number;
   memoryEnabled: boolean;
+  memoryWorkspaceScopeId?: string;
+  memoryBackend?: "memory" | "postgres";
+  memoryColdBackend?: "local" | "s3";
 }
 
 export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): PublicRuntimeConfig {
@@ -185,6 +188,9 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     controlInboxCapacity: config.controlInboxCapacity,
     schemaVersion,
     memoryEnabled: config.memory.enabled,
+    memoryWorkspaceScopeId: config.memory.enabled ? config.memory.workspaceScopeId : undefined,
+    memoryBackend: config.memory.enabled ? config.memory.backend : undefined,
+    memoryColdBackend: config.memory.enabled ? config.memory.coldBackend : undefined,
   };
 }
 
