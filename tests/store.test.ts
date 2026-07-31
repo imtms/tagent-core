@@ -715,4 +715,15 @@ describe("Store", () => {
     store.upsertCheck(run.id, { key: "test", title: "Tests", status: "passed", required: true, command: "npm test", evidence: "old", stale: true });
     expect(store.getRun(run.id)?.completionGate.failures[0]?.reason).toBe("Evidence is stale");
   });
+  it("returns the newest message window in chronological order", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    for (let index = 1; index <= 205; index += 1) store.appendMessage(session.id, "user", `message-${index}`);
+    const messages = store.listMessages(session.id, 200);
+    expect(messages).toHaveLength(200);
+    expect(messages[0].content).toBe("message-6");
+    expect(messages.at(-1)?.content).toBe("message-205");
+    store.close();
+  });
+
 });

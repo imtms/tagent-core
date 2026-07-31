@@ -4,6 +4,7 @@ import { AgentService } from "../src/core/agent-service.js";
 import { Store } from "../src/store/store.js";
 import { TaskRunSupervisor } from "../src/core/supervisor.js";
 import type { AgentRuntime, RuntimeFactory } from "../src/runtime/types.js";
+import type { MemoryFacade } from "../src/memory/memory-service.js";
 
 function assistantMessage(text: string): AgentMessage {
   return { role: "assistant", content: [{ type: "text", text }], api: "openai-completions", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: Date.now() };
@@ -107,6 +108,25 @@ class ActiveDeferredRuntime extends DeferredRuntime {
 }
 
 describe("AgentService runtime boundary", () => {
+  it("persists an admitted user message before asynchronous memory recall completes", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let finishRecall!: (value: Awaited<ReturnType<MemoryFacade["recall"]>>) => void;
+    const recall = new Promise<Awaited<ReturnType<MemoryFacade["recall"]>>>((resolve) => { finishRecall = resolve; });
+    const memory = { recall: vi.fn(() => recall), enqueueCapture: vi.fn(async () => ({ jobId: "capture-1" })) } as unknown as MemoryFacade;
+    const service = new AgentService(store, "/tmp", () => new DeferredRuntime(), {}, memory, "test-scope");
+
+    const admitted = service.enqueueSessionInput(session.id, "visible immediately", "async-memory-admission");
+
+    expect(admitted.run).toMatchObject({ goal: "visible immediately", status: "running" });
+    expect(store.listMessages(session.id)).toEqual([expect.objectContaining({ role: "user", content: "visible immediately" })]);
+    expect(memory.recall).toHaveBeenCalledOnce();
+    finishRecall({ cards: [], coldTopics: [], promptSection: "", trace: { topicIds: [], candidateCount: 0, deniedCount: 0 } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await service.closeRuntimes();
+    store.close();
+  });
+
   it("queues continuous Session input and starts the next TaskRun serially", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();

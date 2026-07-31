@@ -278,21 +278,27 @@ export class AgentService {
   }
 
   private launchClaimedSessionInbox(item: SessionInboxItem, run: TaskRun, retry = false) {
+    // Persist the accepted user turn before any asynchronous recall/provider setup.
+    // This makes the POST admission response a durable UI visibility boundary and
+    // keeps slow memory recall from hiding the message until a refresh or Run end.
+    if (!retry) {
+      const userMessage = this.store.appendMessage(run.sessionId, "user", item.content);
+      this.captureUserMessage(run, userMessage.id, item.content);
+    }
+    const currentUserAfter = item.startedAt ?? run.createdAt;
     if (!this.memory) {
       try {
-        const sessionHistory = this.prepareSessionHistoryWithoutRecall(run, item.content, retry ? item.startedAt ?? 0 : undefined);
+        const sessionHistory = this.prepareSessionHistoryWithoutRecall(run, item.content, currentUserAfter);
         this.completeClaimedSessionLaunch(item, run, sessionHistory, retry);
         return this.store.getRun(run.id)!;
       } catch (error) { return this.failClaimedSessionLaunch(item, run, error); }
     }
-    void this.prepareSessionHistory(run, item.content, retry ? item.startedAt ?? 0 : undefined).then((sessionHistory) => this.completeClaimedSessionLaunch(item, run, sessionHistory, retry)).catch((error) => this.failClaimedSessionLaunch(item, run, error));
+    void this.prepareSessionHistory(run, item.content, currentUserAfter).then((sessionHistory) => this.completeClaimedSessionLaunch(item, run, sessionHistory, retry)).catch((error) => this.failClaimedSessionLaunch(item, run, error));
     return this.store.getRun(run.id)!;
   }
 
   private completeClaimedSessionLaunch(item: SessionInboxItem, run: TaskRun, sessionHistory: ContextAssembly & { recalledMemory?: string }, retry: boolean) {
     if (!retry) {
-      const userMessage = this.store.appendMessage(run.sessionId, "user", item.content);
-      this.captureUserMessage(run, userMessage.id, item.content);
       this.publish(this.store.appendEvent(run.id, "run.started", { goal: item.content, source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: sessionHistory.messages.length }));
     }
     this.publishContextEvents(run.id, sessionHistory);

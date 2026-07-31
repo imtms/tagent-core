@@ -6,6 +6,17 @@ All notable changes to TAgent Core are documented here.
 
 No unreleased changes.
 
+## [0.1.3] - 2026-08-01
+
+### Fixed
+
+- Persist accepted user turns before asynchronous memory recall and runtime setup so newly submitted messages are immediately durable and visible.
+- Add optimistic chat rendering with duplicate reconciliation, failed-submit draft restoration, and submission locking.
+- Continuously reconcile persisted messages while a Run is active so SSE gaps or delayed startup cannot leave the conversation stale.
+- Fence Session polling and asynchronous transcript updates against workspace switches to prevent responses from an old workspace overwriting the current UI.
+- Return the newest 200 persisted messages in chronological order instead of permanently hiding messages after the first 200 in long conversations.
+- Refresh terminal Run state atomically and guard late event responses against cross-workspace state corruption.
+
 ## [0.1.2] - 2026-08-01
 
 ### Changed
@@ -92,3 +103,5 @@ First public source preview of the persistent TAgent control plane.
 [0.1.1]: https://github.com/imtms/tagent-core/releases/tag/v0.1.1
 
 [0.1.2]: https://github.com/imtms/tagent-core/releases/tag/v0.1.2
+
+[0.1.3]: https://github.com/imtms/tagent-core/releases/tag/v0.1.3

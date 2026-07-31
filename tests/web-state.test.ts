@@ -60,4 +60,14 @@ describe("Web workbench state model", () => {
     expect(source).toContain('if (event.key === "Enter") { event.preventDefault(); void renameSession(session); }');
     expect(source).toContain('if (event.key === "Escape") { event.preventDefault(); cancelRename(); event.currentTarget.blur(); }');
   });
+  it("shows submitted messages optimistically and continuously reconciles persisted chat state", async () => {
+    const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain("const [pendingUserMessage, setPendingUserMessage]");
+    expect(source).toContain("setPendingUserMessage(optimistic)");
+    expect(source).toContain('aria-label="Sending message"');
+    expect(source).toContain("api.messages(targetSessionId)");
+    expect(source).toContain("sessionIdRef.current !== targetSessionId");
+    expect(source).toContain("setDraft(content)");
+  });
+
 });

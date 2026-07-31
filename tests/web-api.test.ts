@@ -84,7 +84,8 @@ describe("Web API request headers", () => {
   it("hydrates a newly discovered active Run during Session polling", async () => {
     const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
     expect(source).toContain("active.id !== activeRunIdRef.current");
-    expect(source).toContain("Promise.all([api.run(active.id), api.messages(sessionId), api.transcriptView(active.id)])");
+    expect(source).toContain("const [hydrated, view] = await Promise.all([api.run(active.id), api.transcriptView(active.id)])");
+    expect(source).toContain("api.messages(targetSessionId)");
     expect(source).toContain("setSelectedRun(hydrated)");
     expect(source).toContain("setExpandedRunId(hydrated.id)");
   });

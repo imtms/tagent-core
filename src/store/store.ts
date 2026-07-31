@@ -416,8 +416,10 @@ export class Store {
 
   listMessages(sessionId: SessionId, limit = 200): Message[] {
     return this.db.prepare(`
-      SELECT id, session_id as sessionId, role, content, created_at as createdAt
-      FROM messages WHERE session_id = ? ORDER BY id ASC LIMIT ?
+      SELECT id, sessionId, role, content, createdAt FROM (
+        SELECT id, session_id as sessionId, role, content, created_at as createdAt
+        FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?
+      ) ORDER BY id ASC
     `).all(sessionId, limit) as Message[];
   }
 
