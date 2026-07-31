@@ -12,7 +12,7 @@
     "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "tsx watch src/server.ts",
     "dev:web": "vite --config ./vite.config.ts --host 0.0.0.0",
-    "build": "tsc -p tsconfig.server.json && vite build --config ./vite.config.ts",
+    "build": "tsc -p tsconfig.server.json && mkdir -p dist/memory/postgres && cp src/memory/postgres/schema.sql dist/memory/postgres/schema.sql && vite build --config ./vite.config.ts",
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
