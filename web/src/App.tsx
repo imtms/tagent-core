@@ -6,6 +6,15 @@ import { createRequestId } from "./id";
 
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
 
+function WorkspaceRunStatus({ session }: { session: Session }) {
+  const status = session.latestRunStatus;
+  if (!status) return <span className="workspace-run-status idle"><Circle size={8} />No tasks</span>;
+  return <span className={`workspace-run-status ${status}`} title={`${status}${session.latestRunPhase ? ` · ${session.latestRunPhase}` : ""}`}>
+    {status === "running" ? <Activity size={10} /> : <span className="workspace-status-dot" />}
+    <span>{status}</span>
+  </span>;
+}
+
 function ToolCall({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> }) {
   return <details className={`tool-call ${item.isError ? "failed" : ""}`}>
     <summary><Terminal size={14} /><span>{item.toolName}</span><small>{item.status}</small><ChevronRight className="tool-chevron" size={14} /></summary>
@@ -60,9 +69,10 @@ export function App() {
   useEffect(() => {
     if (!sessionId) return;
     const timer = setInterval(() => {
-      void Promise.all([api.inbox(sessionId), api.runs(sessionId)]).then(async ([queued, runHistory]) => {
+      void Promise.all([api.inbox(sessionId), api.runs(sessionId), api.sessions()]).then(async ([queued, runHistory, sessionItems]) => {
         setInbox(queued);
         setRuns(runHistory);
+        setSessions(sessionItems);
         const active = runHistory.find((item) => item.status === "running") ?? null;
         if (active?.id && active.id !== activeRunIdRef.current) {
           const [hydrated, history, view] = await Promise.all([api.run(active.id), api.messages(sessionId), api.transcriptView(active.id)]);
@@ -177,7 +187,7 @@ export function App() {
       <button className="new-session" onClick={createSession}><Plus size={16} />New workspace</button>
       <div className="session-list">
         {sessions.map((session) => <button key={session.id} className={`session-item ${session.id === sessionId ? "active" : ""}`} onClick={() => { setSessionId(session.id); setLeftOpen(false); }}>
-          <span className="session-icon"><Command size={15} /></span><span><strong>{session.title}</strong><small>{formatTime(session.updatedAt)}</small></span>
+          <span className="session-icon"><Command size={15} /></span><span><strong>{session.title}</strong><span className="session-meta"><small>{formatTime(session.updatedAt)}</small><WorkspaceRunStatus session={session} /></span></span>
         </button>)}
       </div>
       <div className="rail-footer"><span className="status-dot" />Local control plane{runtimeStatus?.schemaVersion ? ` · db v${runtimeStatus.schemaVersion}` : ""}</div>

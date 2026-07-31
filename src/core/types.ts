@@ -11,6 +11,8 @@ export interface Session {
   title: string;
   createdAt: number;
   updatedAt: number;
+  latestRunStatus: RunStatus | null;
+  latestRunPhase: RunPhase | null;
 }
 
 export interface RunCheckpoint {
