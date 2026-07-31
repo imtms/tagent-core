@@ -451,7 +451,14 @@ ${source.content}`;
 
   claimNextSessionInbox(sessionId: SessionId) {
     const transaction = this.db.transaction(() => {
-      const active = this.db.prepare("SELECT 1 FROM runs WHERE session_id = ? AND status IN ('running','blocked','interrupted') LIMIT 1").get(sessionId);
+      const active = this.db.prepare(`SELECT 1 FROM runs
+        WHERE session_id = ? AND (
+          status = 'running' OR (
+            status IN ('blocked','interrupted') AND id = (
+              SELECT latest.id FROM runs latest WHERE latest.session_id = ? ORDER BY latest.rowid DESC LIMIT 1
+            )
+          )
+        ) LIMIT 1`).get(sessionId, sessionId);
       if (active) return undefined;
       const item = this.db.prepare("SELECT id FROM session_supervisor_inbox WHERE session_id = ? AND status = 'queued' AND decision = 'pending' ORDER BY position,created_at,id LIMIT 1").get(sessionId) as { id: string } | undefined;
       if (!item) return undefined;
