@@ -13,6 +13,20 @@ const createStore = () => {
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
 
 describe("Store", () => {
+  it("exposes the latest TaskRun status with each workspace", () => {
+    const store = createStore();
+    const idle = store.createSession("Idle");
+    const active = store.createSession("Active");
+    const firstRun = store.createRun(active.id, "first");
+    store.finalizeRun(firstRun.id, "completed");
+    const latestRun = store.createRun(active.id, "latest");
+    store.setRunPhase(latestRun.id, "implement");
+
+    expect(store.getSession(idle.id)).toMatchObject({ latestRunStatus: null, latestRunPhase: null });
+    expect(store.getSession(active.id)).toMatchObject({ latestRunStatus: "running", latestRunPhase: "implement" });
+    expect(store.listSessions().find((item) => item.id === active.id)).toMatchObject({ latestRunStatus: "running", latestRunPhase: "implement" });
+  });
+
   it("persists, deduplicates, deletes, and atomically claims Session Supervisor inbox items", () => {
     const store = createStore();
     const session = store.createSession();

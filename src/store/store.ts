@@ -361,7 +361,7 @@ export class Store {
   }
 
   createSession(title = "New workspace"): Session {
-    const session: Session = { id: randomUUID(), title, createdAt: now(), updatedAt: now() };
+    const session: Session = { id: randomUUID(), title, createdAt: now(), updatedAt: now(), latestRunStatus: null, latestRunPhase: null };
     this.db.prepare("INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)").run(
       session.id, session.title, session.createdAt, session.updatedAt,
     );
@@ -369,13 +369,27 @@ export class Store {
   }
 
   listSessions(): Session[] {
-    return this.db.prepare("SELECT id, title, created_at as createdAt, updated_at as updatedAt FROM sessions ORDER BY updated_at DESC")
-      .all() as Session[];
+    return this.db.prepare(`
+      SELECT sessions.id, sessions.title, sessions.created_at as createdAt, sessions.updated_at as updatedAt,
+        latest.status as latestRunStatus, latest.phase as latestRunPhase
+      FROM sessions
+      LEFT JOIN runs latest ON latest.id = (
+        SELECT runs.id FROM runs WHERE runs.session_id = sessions.id ORDER BY runs.updated_at DESC, runs.rowid DESC LIMIT 1
+      )
+      ORDER BY sessions.updated_at DESC
+    `).all() as Session[];
   }
 
   getSession(id: SessionId): Session | undefined {
-    return this.db.prepare("SELECT id, title, created_at as createdAt, updated_at as updatedAt FROM sessions WHERE id = ?")
-      .get(id) as Session | undefined;
+    return this.db.prepare(`
+      SELECT sessions.id, sessions.title, sessions.created_at as createdAt, sessions.updated_at as updatedAt,
+        latest.status as latestRunStatus, latest.phase as latestRunPhase
+      FROM sessions
+      LEFT JOIN runs latest ON latest.id = (
+        SELECT runs.id FROM runs WHERE runs.session_id = sessions.id ORDER BY runs.updated_at DESC, runs.rowid DESC LIMIT 1
+      )
+      WHERE sessions.id = ?
+    `).get(id) as Session | undefined;
   }
 
   touchSession(id: SessionId) {

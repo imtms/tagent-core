@@ -50,7 +50,18 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(22, 116, 
 .session-item.active { background: #e5eae6; }
 .session-item strong, .session-item small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .session-item strong { font-size: 12px; font-weight: 650; }
-.session-item small { font-size: 10px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.session-item small { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.session-meta { display: flex; align-items: center; gap: 7px; min-width: 0; margin-top: 3px; }
+.workspace-run-status { min-width: 0; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; font-weight: 650; line-height: 1; white-space: nowrap; }
+.workspace-status-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: #8a948e; }
+.workspace-run-status.completed { color: var(--accent); }
+.workspace-run-status.completed .workspace-status-dot { background: #25a46f; }
+.workspace-run-status.failed, .workspace-run-status.cancelled, .workspace-run-status.interrupted { color: var(--danger); }
+.workspace-run-status.failed .workspace-status-dot, .workspace-run-status.cancelled .workspace-status-dot, .workspace-run-status.interrupted .workspace-status-dot { background: var(--danger); }
+.workspace-run-status.blocked { color: #a56a19; }
+.workspace-run-status.blocked .workspace-status-dot { background: #d68b26; }
+.workspace-run-status.running { color: var(--accent); }
+
 .session-icon { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid #d6dcd7; background: #fdfefd; border-radius: 5px; }
 .rail-footer { margin-top: auto; border-top: 1px solid var(--line); padding: 15px 5px 2px; color: var(--muted); font-size: 10px; display: flex; gap: 7px; align-items: center; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #25a46f; box-shadow: 0 0 0 3px #dff1e8; }
