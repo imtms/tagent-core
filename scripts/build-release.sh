@@ -29,7 +29,7 @@ npm prune --omit=dev
 
 mkdir -p "$release/scripts"
 cp -a package.json package-lock.json dist node_modules "$release/"
-cp scripts/release-manifest.mjs "$release/scripts/"
+cp scripts/release-manifest.mjs scripts/deploy-release.sh "$release/scripts/"
 RELEASE_COMMIT="$commit" node scripts/release-manifest.mjs create "$release"
 node --check "$release/dist/server.js"
 node "$release/scripts/release-manifest.mjs" verify "$release"
