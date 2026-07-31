@@ -27,7 +27,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 export class Store {
   readonly db: Database.Database;
@@ -110,6 +110,11 @@ export class Store {
         title TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS session_requests (
+        request_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        created_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -360,12 +365,18 @@ export class Store {
     if (!columns.some((item) => item.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 
-  createSession(title = "New workspace"): Session {
-    const session: Session = { id: randomUUID(), title, createdAt: now(), updatedAt: now(), latestRunStatus: null, latestRunPhase: null };
-    this.db.prepare("INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)").run(
-      session.id, session.title, session.createdAt, session.updatedAt,
-    );
-    return session;
+  createSession(title = "New workspace", requestId?: string): Session {
+    const transaction = this.db.transaction(() => {
+      if (requestId) {
+        const existing = this.db.prepare("SELECT session_id as sessionId FROM session_requests WHERE request_id = ?").get(requestId) as { sessionId: string } | undefined;
+        if (existing) return this.getSession(existing.sessionId)!;
+      }
+      const session: Session = { id: randomUUID(), title, createdAt: now(), updatedAt: now(), latestRunStatus: null, latestRunPhase: null };
+      this.db.prepare("INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)").run(session.id, session.title, session.createdAt, session.updatedAt);
+      if (requestId) this.db.prepare("INSERT INTO session_requests (request_id,session_id,created_at) VALUES (?,?,?)").run(requestId, session.id, session.createdAt);
+      return session;
+    });
+    return transaction();
   }
 
   listSessions(): Session[] {
@@ -435,6 +446,12 @@ export class Store {
   getSessionInboxItem(id: string): SessionInboxItem | undefined {
     return this.db.prepare(`SELECT id,session_id as sessionId,request_id as requestId,content,status,decision,run_id as runId,error,position,
       created_at as createdAt,updated_at as updatedAt,claimed_at as claimedAt,started_at as startedAt FROM session_supervisor_inbox WHERE id = ?`).get(id) as SessionInboxItem | undefined;
+  }
+
+  getSessionSubmission(sessionId: SessionId, requestId: string): SessionInboxItem | undefined {
+    return this.db.prepare(`SELECT id,session_id as sessionId,request_id as requestId,content,status,decision,run_id as runId,error,position,
+      created_at as createdAt,updated_at as updatedAt,claimed_at as claimedAt,started_at as startedAt
+      FROM session_supervisor_inbox WHERE session_id = ? AND request_id = ?`).get(sessionId, requestId) as SessionInboxItem | undefined;
   }
 
   listSessionInbox(sessionId: SessionId, includeTerminal = false): SessionInboxItem[] {

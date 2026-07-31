@@ -39,6 +39,17 @@ describe("configuration", () => {
     expect(JSON.stringify(status)).not.toContain("secret");
   });
 
+  it("configures scoped service credentials without exposing tokens", () => {
+    const token = "service-token-with-at-least-24-characters";
+    const config = loadConfig({ TAGENT_SERVICE_CREDENTIALS: JSON.stringify([{ token, scopes: ["sessions:read", "runs:read"] }]) });
+    expect(config.serviceCredentials).toEqual([{ token, scopes: ["sessions:read", "runs:read"] }]);
+    const status = publicRuntimeConfig(config);
+    expect(status.serviceAuthenticationConfigured).toBe(true);
+    expect(JSON.stringify(status)).not.toContain(token);
+    expect(() => loadConfig({ TAGENT_SERVICE_CREDENTIALS: JSON.stringify([{ token: "short", scopes: ["sessions:read"] }]) })).toThrow("at least 24");
+    expect(() => loadConfig({ TAGENT_SERVICE_CREDENTIALS: JSON.stringify([{ token, scopes: ["settings:admin"] }]) })).toThrow("invalid scope");
+  });
+
   it("rejects unsupported runtime modes", () => {
     expect(() => loadConfig({ TAGENT_RUNTIME: "rpc" })).toThrow("Unsupported TAGENT_RUNTIME");
   });

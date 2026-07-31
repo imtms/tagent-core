@@ -1,4 +1,5 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import { requiredServiceScope, secureEqual, type ServiceCredential } from "./auth.js";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { PublicRuntimeConfig } from "./config.js";
@@ -11,17 +12,32 @@ export interface AppDependencies {
   webRoot?: string;
   logger?: boolean;
   runtimeConfig?: PublicRuntimeConfig;
+  serviceCredentials?: ServiceCredential[];
 }
 
-export function createApp({ store, service, webRoot = path.resolve("dist/web"), logger = true, runtimeConfig }: AppDependencies) {
+export function createApp({ store, service, webRoot = path.resolve("dist/web"), logger = true, runtimeConfig, serviceCredentials = [] }: AppDependencies) {
   const app = Fastify({ logger });
+
+  if (serviceCredentials.length) app.addHook("onRequest", async (request, reply) => {
+    const requiredScope = requiredServiceScope(request.method, request.url);
+    if (requiredScope === null) return;
+    const authorization = request.headers.authorization ?? "";
+    if (authorization.startsWith("Bearer ")) {
+      const token = authorization.slice(7);
+      const credential = serviceCredentials.find((candidate) => secureEqual(token, candidate.token));
+      if (credential && requiredScope !== "admin" && credential.scopes.includes(requiredScope)) return;
+      if (credential) return reply.code(403).send({ error: "insufficient service credential scope", requiredScope });
+    }
+    return reply.code(401).send({ error: "authentication required" });
+  });
 
   app.get("/api/health", async () => ({ ok: true, service: "tagent-core" }));
   app.get("/api/config/status", async () => runtimeConfig ?? null);
   app.get("/api/sessions", async () => store.listSessions());
-  app.post("/api/sessions", async (request) => {
-    const body = (request.body ?? {}) as { title?: string };
-    return store.createSession(body.title?.trim() || "New workspace");
+  app.post("/api/sessions", async (request, reply) => {
+    const body = (request.body ?? {}) as { title?: string; requestId?: string };
+    if (body.requestId != null && (typeof body.requestId !== "string" || !body.requestId.trim() || body.requestId.length > 300)) return reply.code(400).send({ error: "invalid requestId" });
+    return store.createSession(body.title?.trim() || "New workspace", body.requestId?.trim());
   });
   app.patch("/api/sessions/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -45,12 +61,20 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const run = store.getLatestRun(id);
     return run ? { ...run, budget: service.getBudget(run.id) } : null;
   });
+  app.get("/api/sessions/:id/submissions/:requestId", async (request, reply) => {
+    const { id, requestId } = request.params as { id: string; requestId: string };
+    if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    const item = store.getSessionSubmission(id, requestId);
+    if (!item) return reply.code(404).send({ error: "submission not found" });
+    return { requestId: item.requestId, sessionId: item.sessionId, inboxItemId: item.id, status: item.status, runId: item.runId, error: item.error, createdAt: item.createdAt, updatedAt: item.updatedAt };
+  });
   app.post("/api/sessions/:id/messages", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as { content?: string; requestId?: string };
     if (!body?.content?.trim()) return reply.code(400).send({ error: "content is required" });
     if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
-    return service.enqueueSessionInput(id, body.content.trim(), body.requestId);
+    const result = service.enqueueSessionInput(id, body.content.trim(), body.requestId);
+    return { ...result, receipt: { requestId: result.item.requestId, sessionId: result.item.sessionId, inboxItemId: result.item.id, status: result.item.status, runId: result.item.runId, error: result.item.error, createdAt: result.item.createdAt, updatedAt: result.item.updatedAt } };
   });
   app.get("/api/sessions/:id/inbox", async (request, reply) => {
     const { id } = request.params as { id: string };

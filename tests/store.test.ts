@@ -13,6 +13,14 @@ const createStore = () => {
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
 
 describe("Store", () => {
+  it("creates a Session only once for an external requestId", () => {
+    const store = createStore();
+    const first = store.createSession("First", "external-session-1");
+    const duplicate = store.createSession("Changed", "external-session-1");
+    expect(duplicate).toEqual(first);
+    expect(store.listSessions()).toHaveLength(1);
+  });
+
   it("renames a workspace and updates its timestamp", () => {
     const store = createStore();
     const session = store.createSession("Before");
@@ -495,16 +503,16 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(8);
+    expect(store.getSchemaVersion()).toBe(9);
   });
 
-  it("migrates an older database to schema version 8", () => {
+  it("migrates an older database to schema version 9", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(8);
+    expect(migrated.getSchemaVersion()).toBe(9);
     expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('control_inbox','event_consumers','gate_evaluations','operations','progress_snapshots','run_checkpoints','session_supervisor_inbox','spawn_proposals','supervisor_decisions','taskrun_edges','tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["control_inbox", "event_consumers", "gate_evaluations", "operations", "progress_snapshots", "run_checkpoints", "session_supervisor_inbox", "spawn_proposals", "supervisor_decisions", "taskrun_edges", "tool_attempts"]);
     migrated.close();
   });

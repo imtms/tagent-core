@@ -1,3 +1,4 @@
+import type { ServiceCredential, ServiceScope } from "./auth.js";
 import type { Model } from "@earendil-works/pi-ai/compat";
 
 export interface ModelConfig {
@@ -26,6 +27,7 @@ export interface AppConfig {
   contextReserveTokens?: number;
   dynamicBudget: boolean;
   controlInboxCapacity: number;
+  serviceCredentials: ServiceCredential[];
   model: ModelConfig;
 }
 
@@ -47,6 +49,21 @@ function normalizeBaseUrl(value: string) {
   return url.toString().replace(/\/$/, "");
 }
 
+function parseServiceCredentials(value?: string): ServiceCredential[] {
+  if (!value?.trim()) return [];
+  const allowed = new Set<ServiceScope>(["sessions:read", "sessions:write", "runs:read", "runs:control", "events:consume"]);
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed)) throw new Error("TAGENT_SERVICE_CREDENTIALS must be a JSON array");
+  return parsed.map((item, index) => {
+    if (!item || typeof item !== "object") throw new Error(`TAGENT_SERVICE_CREDENTIALS[${index}] must be an object`);
+    const token = "token" in item && typeof item.token === "string" ? item.token.trim() : "";
+    const scopes = "scopes" in item && Array.isArray(item.scopes) ? item.scopes : [];
+    if (token.length < 24) throw new Error(`TAGENT_SERVICE_CREDENTIALS[${index}].token must be at least 24 characters`);
+    if (!scopes.length || scopes.some((scope: unknown) => typeof scope !== "string" || !allowed.has(scope as ServiceScope))) throw new Error(`TAGENT_SERVICE_CREDENTIALS[${index}].scopes contains an invalid scope`);
+    return { token, scopes: [...new Set(scopes as ServiceScope[])] };
+  });
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const runtime = env.TAGENT_RUNTIME ?? "in-process";
   if (runtime !== "in-process") throw new Error(`Unsupported TAGENT_RUNTIME: ${runtime}`);
@@ -66,6 +83,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     contextReserveTokens: env.TAGENT_CONTEXT_RESERVE_TOKENS === undefined ? undefined : positiveInteger(env.TAGENT_CONTEXT_RESERVE_TOKENS, 10_000, "TAGENT_CONTEXT_RESERVE_TOKENS"),
     dynamicBudget: env.TAGENT_DYNAMIC_BUDGET !== "false",
     controlInboxCapacity: positiveInteger(env.TAGENT_CONTROL_INBOX_CAPACITY, 32, "TAGENT_CONTROL_INBOX_CAPACITY"),
+    serviceCredentials: parseServiceCredentials(env.TAGENT_SERVICE_CREDENTIALS),
     model: {
       provider: env.TAGENT_PROVIDER ?? "openai-compatible",
       modelId: env.TAGENT_MODEL ?? "gpt-5.6-sol",
@@ -85,6 +103,7 @@ export interface PublicRuntimeConfig {
   baseUrl: string;
   modelId: string;
   credentialConfigured: boolean;
+  serviceAuthenticationConfigured: boolean;
   providerTimeoutMs: number;
   providerMaxRetries: number;
   runTimeoutMs: number;
@@ -106,6 +125,7 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     baseUrl: config.model.baseUrl,
     modelId: config.model.modelId,
     credentialConfigured: Boolean(config.apiKey),
+    serviceAuthenticationConfigured: config.serviceCredentials.length > 0,
     providerTimeoutMs: config.providerTimeoutMs,
     providerMaxRetries: config.providerMaxRetries,
     runTimeoutMs: config.runTimeoutMs,
