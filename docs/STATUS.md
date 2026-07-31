@@ -1,12 +1,15 @@
 # Development Status
 
-Updated: 2026-07-30 (Asia/Singapore)
+Updated: 2026-07-31 (Asia/Singapore)
 
 ## Completed
 
 ### Core control plane
 
-- SQLite-backed sessions, ordered conversation messages, Schema v5 durable event-consumer cursors, and Schema v6 durable control inbox records.
+- SQLite-backed sessions, ordered conversation messages, Schema v5 durable event-consumer cursors, Schema v6 durable control inbox records, Schema v7 TaskRun supervision records, and Schema v8 Session Supervisor Inbox records.
+- Session Supervisor Inbox is the normal input admission path: queued input remains outside Session messages until atomically selected, bound to a durable TaskRun, and launched.
+- Automatic Session dispatch is blocked by any running Run and by the latest blocked/interrupted Run, while older historical blocked/interrupted Runs remain auditable without permanently freezing the queue.
+- A user can explicitly start a selected queued Inbox item through a transactional `Run now` path; running Runs and active continuations retain concurrency priority and fencing.
 - Durable TaskRun records with goal, phase, status, plan items, checks, artifacts, ordered events, and Schema v4 Run checkpoints.
 - Deterministic completion gate that prevents a model response from directly marking a run complete.
 - Request idempotency through stable `requestId` values.
@@ -70,6 +73,8 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Web event delivery now claims a persistent per-Run consumer generation, resumes from the greater of checkpoint coverage and durable ACK, advances ACKs monotonically after event handling, and records terminal-event acknowledgement evidence. A newer connection fences stale SSE streams and stale ACK writers.
 - Dynamic execution budgets scale continuation count, cumulative tokens, and idle timeout across simple/standard/complex/extended tiers; `TAGENT_RUN_HARD_TIMEOUT_MS` remains the absolute attempt ceiling.
 - A deterministic stress test completes a single durable Run after 40 automatic continuations; hundreds of model-backed turns are not yet an acceptance claim.
+- Session navigation displays each workspace's latest TaskRun status and phase, refreshed with the Session summary rather than an application-layer per-Session query loop.
+- Session polling fully hydrates a newly started active Run without a browser refresh, including selected Run, messages, transcript, checkpoint partial, tool state, and SSE consumer handoff.
 
 ### Quality baseline
 
@@ -80,6 +85,7 @@ Updated: 2026-07-30 (Asia/Singapore)
 - Full production and development dependency audit with no known vulnerabilities at the `0.1.0-alpha.1` lockfile.
 - ESLint flat configuration, release checklist, security policy, changelog, license, and tag-triggered GitHub prerelease workflow.
 - Git repository linked to `git@github.com:imtms/tagent-core.git` with incremental commits on `main`.
+- The 2026-07-31 external PR audit merged queue scheduling, manual Inbox start, and workspace status improvements after combined and post-merge validation; deployment artifact and current-operation PRs remain open for rollback/integrity and sensitive-data fixes. See [PR_AUDIT_2026-07-31.md](PR_AUDIT_2026-07-31.md).
 
 ## In Progress
 
