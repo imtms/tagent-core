@@ -18,7 +18,9 @@
     "test:watch": "vitest",
     "check": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "lint": "eslint . --max-warnings=0",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "release:manifest": "node scripts/release-manifest.mjs",
+    "release:build": "bash scripts/build-release.sh"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.83.0",

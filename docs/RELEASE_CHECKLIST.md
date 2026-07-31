@@ -11,10 +11,11 @@ This checklist applies to source prereleases. TAgent Core is not published to np
 3. Confirm the worktree is clean and the release commit is on `main`.
 4. Run `npm ci` from the lockfile in a clean Node.js `24.18.1` and npm `12` or newer environment.
 5. Run `npm run lint`, `npm run check`, `npm test -- --run`, and `npm run build`.
-6. Run production and full dependency audits at high severity. Pi's upstream shrinkwrap issue is accepted for `main` development if it recurs, but stable release remains blocked until the lockfile audits cleanly.
-7. Start the built server with a temporary SQLite database and workspace; verify `/api/health`, `/api/config/status`, session creation, run history, and the Web shell.
-8. Verify desktop and mobile layouts, Markdown, and expanded tool-call content without horizontal overflow.
-9. Confirm no credentials, `.env` files, databases, logs, screenshots, or temporary artifacts are tracked.
+6. Build the production archive with `scripts/build-release.sh` on Linux x64, Node `24.18.1` / ABI `137`, in an environment that has the compiler toolchain required by native dependencies. Do not install or compile dependencies on a production host; follow [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md).
+7. Run production and full dependency audits at high severity. Pi's upstream shrinkwrap issue is accepted for `main` development if it recurs, but stable release remains blocked until the lockfile audits cleanly.
+8. Start the built server with a temporary SQLite database and workspace; verify `/api/health`, `/api/config/status`, session creation, run history, and the Web shell.
+9. Verify desktop and mobile layouts, Markdown, and expanded tool-call content without horizontal overflow.
+10. Confirm no credentials, `.env` files, databases, logs, screenshots, or temporary artifacts are tracked.
 
 ## Tag and publish
 
