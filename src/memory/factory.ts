@@ -2,6 +2,9 @@ import path from "node:path";
 import type { Store } from "../store/store.js";
 import type { MemoryConfig } from "../config.js";
 import { HashEmbeddingAdapter } from "./adapters/hash-embedding.js";
+import { OpenAIEmbeddingAdapter } from "./adapters/openai-embedding.js";
+import { HybridExtractor, LlmExtractor } from "./adapters/llm-extractor.js";
+import { LlmSemanticConsolidator } from "./adapters/llm-consolidator.js";
 import { InMemoryMemoryAdapter } from "./adapters/in-memory.js";
 import { RuleBasedExtractor } from "./adapters/rule-extractor.js";
 import { MemoryCaptureWorker } from "./capture-worker.js";
@@ -40,16 +43,21 @@ export async function createMemoryRuntime(config:MemoryRuntimeConfig,store:Store
   const blobs = config.coldBackend === "s3"
     ? new (await loadS3BlobStore()).S3BlobStore({bucket:config.s3Bucket!,prefix:config.s3Prefix,clientConfig:{endpoint:config.s3Endpoint,region:config.s3Region??"us-east-1",forcePathStyle:config.s3ForcePathStyle}})
     : new LocalBlobStore(path.resolve(config.coldPath));
-  const policy=new DefaultPolicyEngine(adapter); const embeddings=new HashEmbeddingAdapter();
+  const policy=new DefaultPolicyEngine(adapter);
+  const embeddings = config.embeddingProvider === "openai" ? new OpenAIEmbeddingAdapter({baseUrl:config.embeddingBaseUrl!,apiKey:config.embeddingApiKey!,model:config.embeddingModel!,dimensions:config.embeddingDimensions,batchSize:config.embeddingBatchSize,extraBody:config.embeddingExtraBody,maxRetries:2}) : config.embeddingProvider === "hash" ? new HashEmbeddingAdapter() : undefined;
   const service=new MemoryService({records:adapter,vectors:adapter,graph:adapter,topics:adapter,blobs,embeddings,jobs:adapter,policy});
   const lifecycle=new MemoryLifecycle(adapter,adapter,adapter,adapter,{warmAfterMs:config.warmAfterMs,hotTtlMs:config.hotTtlMs,coldMinimumRecords:config.coldMinimumRecords});
-  const capture=new MemoryCaptureWorker(adapter,new StoreSourceLoader(store),new RuleBasedExtractor(),policy,service,lifecycle);
-  const consolidator=new MemoryConsolidator(adapter,adapter,service,{minimumRecords:config.coldMinimumRecords}); const reconciler=new ColdStorageReconciler(adapter,blobs);
+  const ruleExtractor=new RuleBasedExtractor();
+  const extractor=config.extractorProvider === "hybrid" ? new HybridExtractor(ruleExtractor,new LlmExtractor({baseUrl:config.extractorBaseUrl!,apiKey:config.extractorApiKey!,model:config.extractorModel!,maxRetries:1})) : ruleExtractor;
+  const capture=new MemoryCaptureWorker(adapter,new StoreSourceLoader(store),extractor,policy,service,lifecycle,undefined,(event)=>{for(const ref of event.sourceRefs.filter((x)=>x.sourceType==="run"))if(store.getRun(ref.sourceId))store.appendEvent(ref.sourceId,event.type,event.data);});
+  const semanticConsolidator=config.extractorProvider==="hybrid"?new LlmSemanticConsolidator({baseUrl:config.extractorBaseUrl!,apiKey:config.extractorApiKey!,model:config.extractorModel!}):undefined;
+  const consolidator=new MemoryConsolidator(adapter,adapter,service,{minimumRecords:config.coldMinimumRecords},semanticConsolidator); const reconciler=new ColdStorageReconciler(adapter,blobs);
   const access:AccessContext={subjectId:"memory-maintenance",scopes:[{type:"workspace",id:config.workspaceScopeId}],purpose:"capture"};
   // Backfill durable user messages with the same idempotency key used by live capture.
   // This repairs upgrades from pre-memory installations without making raw chat the recall source.
   const historicalMessages=store.db.prepare("SELECT id,content FROM messages WHERE role='user' ORDER BY id ASC").all() as Array<{id:number;content:string}>;
   for(const message of historicalMessages)if(isExplicitProfileCue(message.content))await service.enqueueCapture({access,sourceRefs:[{sourceType:"message",sourceId:String(message.id),revision:"user"}],content:`user: ${message.content}`,idempotencyKey:`user-message:${message.id}`});
+  if(embeddings)await service.reindex(access).catch((error)=>console.warn("Memory reindex failed; lexical recall remains available",error));
   const worker=new LocalMemoryWorker(capture,lifecycle,consolidator,reconciler,access,config.workerIntervalMs,config.maintenanceIntervalMs);
   return{service,adapter,worker,lifecycle,consolidator,reconciler,start(){worker.start();},async close(){worker.stop();if (postgresAdapter) await postgresAdapter.close();}};
 }

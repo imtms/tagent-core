@@ -1,3 +1,4 @@
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE SCHEMA IF NOT EXISTS memory;
 CREATE TABLE IF NOT EXISTS memory.records (
  id uuid PRIMARY KEY, kind text NOT NULL CHECK(kind IN ('fact','episode','procedure')), tier text NOT NULL CHECK(tier IN ('hot','warm')),
@@ -9,6 +10,7 @@ CREATE TABLE IF NOT EXISTS memory.records (
 CREATE INDEX IF NOT EXISTS memory_records_scope ON memory.records(scope_type,scope_id,status);
 CREATE INDEX IF NOT EXISTS memory_records_topics ON memory.records USING gin(topic_ids);
 CREATE INDEX IF NOT EXISTS memory_records_fts ON memory.records USING gin(search_document);
+CREATE INDEX IF NOT EXISTS memory_records_trgm ON memory.records USING gin ((coalesce(title,'')||' '||coalesce(summary,'')||' '||coalesce(content,'')) gin_trgm_ops);
 CREATE TABLE IF NOT EXISTS memory.preferences (
  id uuid PRIMARY KEY, tier text NOT NULL CHECK(tier IN ('hot','warm')), scope_type text NOT NULL, scope_id text NOT NULL,
  dimension text NOT NULL, value text NOT NULL, summary text NOT NULL, topic_ids text[] NOT NULL DEFAULT '{}', entity_ids text[] NOT NULL DEFAULT '{}',
@@ -19,6 +21,7 @@ CREATE TABLE IF NOT EXISTS memory.preferences (
 CREATE INDEX IF NOT EXISTS memory_preferences_scope ON memory.preferences(scope_type,scope_id,status);
 CREATE INDEX IF NOT EXISTS memory_preferences_topics ON memory.preferences USING gin(topic_ids);
 CREATE INDEX IF NOT EXISTS memory_preferences_fts ON memory.preferences USING gin(search_document);
+CREATE INDEX IF NOT EXISTS memory_preferences_trgm ON memory.preferences USING gin ((coalesce(dimension,'')||' '||coalesce(value,'')||' '||coalesce(summary,'')) gin_trgm_ops);
 CREATE TABLE IF NOT EXISTS memory.entities (id text PRIMARY KEY,type text NOT NULL,canonical_name text NOT NULL,aliases text[] NOT NULL,scope_type text NOT NULL,scope_id text NOT NULL,updated_at bigint NOT NULL);
 CREATE INDEX IF NOT EXISTS memory_entities_scope ON memory.entities(scope_type,scope_id);
 CREATE TABLE IF NOT EXISTS memory.edges (id text PRIMARY KEY,from_id text NOT NULL,predicate text NOT NULL,to_id text NOT NULL,scope_type text NOT NULL,scope_id text NOT NULL,confidence real NOT NULL,status text NOT NULL,updated_at bigint NOT NULL);
@@ -27,6 +30,7 @@ CREATE INDEX IF NOT EXISTS memory_edges_to ON memory.edges(scope_type,scope_id,t
 CREATE TABLE IF NOT EXISTS memory.topics (topic_id text PRIMARY KEY,kind text NOT NULL,scope_type text NOT NULL,scope_id text NOT NULL,title text NOT NULL,description text NOT NULL,aliases text[] NOT NULL,entity_ids text[] NOT NULL,related_topic_ids text[] NOT NULL,current_cold_revision uuid,embedding_text text NOT NULL,status text NOT NULL,updated_at bigint NOT NULL,search_document tsvector GENERATED ALWAYS AS (to_tsvector('simple',coalesce(title,'')||' '||coalesce(description,''))) STORED);
 CREATE INDEX IF NOT EXISTS memory_topics_scope ON memory.topics(scope_type,scope_id,status);
 CREATE INDEX IF NOT EXISTS memory_topics_fts ON memory.topics USING gin(search_document);
+CREATE INDEX IF NOT EXISTS memory_topics_trgm ON memory.topics USING gin ((coalesce(title,'')||' '||coalesce(description,'')) gin_trgm_ops);
 CREATE TABLE IF NOT EXISTS memory.cold_revisions (id uuid PRIMARY KEY,topic_id text NOT NULL REFERENCES memory.topics(topic_id),kind text NOT NULL,scope_type text NOT NULL,scope_id text NOT NULL,revision integer NOT NULL,state text NOT NULL,object_key text NOT NULL UNIQUE,checksum text NOT NULL,byte_length integer NOT NULL,token_count integer NOT NULL,created_at bigint NOT NULL,published_at bigint,UNIQUE(topic_id,revision));
 ALTER TABLE memory.topics DROP CONSTRAINT IF EXISTS memory_topics_current_revision_fk;
 ALTER TABLE memory.topics ADD CONSTRAINT memory_topics_current_revision_fk FOREIGN KEY(current_cold_revision) REFERENCES memory.cold_revisions(id) DEFERRABLE INITIALLY DEFERRED;

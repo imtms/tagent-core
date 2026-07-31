@@ -40,6 +40,7 @@ export interface PreferenceRecord { id: string; kind: "preference"; tier: Memory
 export type WarmMemory = MemoryRecord | PreferenceRecord;
 export interface TopicDescriptor { topicId: string; kind: MemoryKind; scope: MemoryScope; title: string; description: string; aliases: string[]; entityIds: string[]; relatedTopicIds: string[]; coldRevisionId?: string; status: MemoryStatus; updatedAt: number }
 export interface ColdTopic { descriptor: TopicDescriptor; revision: { id: string; revision: number; checksum: string; tokenCount: number; createdAt: number; publishedAt?: number }; body: string }
+export interface CaptureJob { id:string; status:"queued"|"running"|"completed"|"completed_empty"|"retryable_failed"|"dead_letter"; attempts:number; errorCode?:string; proposalCount?:number; persistedCount?:number; createdAt:number; updatedAt:number; request:{sourceRefs:MemorySourceRef[]} }
 export interface MemoryStatusResult { records: { hot: number; warm: number; candidate: number; active: number; disputed: number }; topics: number; coldTopics: number }
 export interface MemoryExport { records: WarmMemory[]; topics: ColdTopic[] }
 export interface MemoryCard { id: string; kind: MemoryKind; tier: MemoryTier; title: string; content: string; score: number; topicIds: string[]; confidence: number }
@@ -78,6 +79,7 @@ export const api = {
   resume: (runId: string) => request<TaskRun>(`/api/runs/${runId}/resume`, { method: "POST" }),
   claimConsumer: (runId: string, consumerId: string) => request<EventConsumerCursor>(`/api/runs/${runId}/consumers/${encodeURIComponent(consumerId)}/claim`, { method: "POST" }),
   ackConsumer: (runId: string, consumerId: string, generation: number, seq: number) => request(`/api/runs/${runId}/consumers/${encodeURIComponent(consumerId)}/ack`, { method: "POST", body: JSON.stringify({ generation, seq }) }),
+  memoryJobs: (scope: MemoryScope) => request<CaptureJob[]>("/api/memory/jobs", { method: "POST", body: JSON.stringify({ scopes: [scope], limit: 100 }) }),
   memoryStatus: (scope: MemoryScope) => request<MemoryStatusResult>("/api/memory/status", { method: "POST", body: JSON.stringify({ scopes: [scope] }) }),
   memoryExport: (scope: MemoryScope) => request<MemoryExport>("/api/memory/export", { method: "POST", body: JSON.stringify({ scope }) }),
   memoryRecall: (scope: MemoryScope, cue: string, kinds?: MemoryKind[]) => request<RecallResult>("/api/memory/recall", { method: "POST", body: JSON.stringify({ scopes: [scope], cue, kinds, maxCards: 12, maxColdTopics: 4 }) }),

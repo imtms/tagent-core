@@ -109,7 +109,7 @@ export class PiRuntime implements AgentRuntime {
       modelRuntime,
       thinkingLevel: this.options.model?.reasoning ? "medium" : "off",
       noTools: "builtin",
-      customTools: createTools(this.options.store, this.options.runId, this.options.workspace, this.options.onEvent),
+      customTools: createTools(this.options.store, this.options.runId, this.options.workspace, this.options.onEvent, this.options.memory, this.options.memoryScopeId, this.options.memorySubjectId),
       resourceLoader,
       sessionManager: SessionManager.inMemory(this.options.workspace),
       settingsManager,

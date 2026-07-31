@@ -30,6 +30,15 @@ export class RuleBasedExtractor implements ExtractorPort {
         continue;
       }
 
+      const food = evidence.role !== "assistant" ? extractFoodPreferences(evidence.text, scope, sourceRefs, now) : undefined;
+      if (food?.records.length) {
+        for (const record of food.records) records.push(record);
+        for (const topic of food.topics) topics.set(topic.topicId, topic);
+        for (const node of food.nodes) nodes.set(node.id, node);
+        for (const edge of food.edges) edges.set(edge.id, edge);
+        continue;
+      }
+
       // Assistant outcomes may contain useful technical facts, but are not evidence for user identity, preference, or habits.
       if (evidence.role === "assistant" && looksLikeUserProfileClaim(evidence.text)) continue;
       const sentence = evidence.text;
@@ -102,3 +111,15 @@ function preferenceDimension(text: string) { if (/语言|中文|英文|回答|�
 function titleFor(text: string, kind: MemoryKind) { const prefix = kind === "preference" ? "Preference" : kind === "procedure" ? "Procedure" : kind === "episode" ? "Episode" : "Fact"; return `${prefix}: ${text}`.slice(0, 100); }
 function topicFrom(text: string, scope: MemoryScope, kind: MemoryKind, nodes: GraphNode[]) { const anchor = nodes[0]?.canonicalName ?? keywords(text)[0] ?? "general"; const concept = preferenceDimension(text); return `${scope.type}.${scope.id}.${kind}.${slug(anchor)}.${slug(concept)}`.slice(0, 180); }
 function slug(value: string) { return value.toLowerCase().replace(/[^\p{L}\p{N}_.-]/gu, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "general"; }
+
+function extractFoodPreferences(text:string,scope:MemoryScope,sourceRefs:SourceReference[],now:number):ExtractionProposal|undefined {
+  if(!/(爱吃|喜欢吃|不爱吃|不喜欢吃|不吃|好吃)/.test(text))return undefined;
+  const records:ExtractionProposal["records"]=[],topics:TopicDescriptor[]=[],edges:GraphEdge[]=[];
+  const people=new Map<string,GraphNode>();const add=(subject:string,food:string,negative:boolean,confidence=.94)=>{food=food.replace(/[，。！？,.!?].*$/,"").trim();if(!food||food.length>30)return;const subjectNode=subject==="用户"?profileNode(scope):namedPersonNode(subject,scope);const foodNode:GraphNode={id:`${scope.type}:${scope.id}:entity:${stableId(`food:${food}`)}`,type:"food",canonicalName:food,aliases:[food],scope};people.set(subjectNode.id,subjectNode);people.set(foodNode.id,foodNode);const topicId=`${scope.type}.${scope.id}.preference.${slug(subject)}.food`;const value=`${subject} ${negative?"不喜欢吃":"喜欢吃"} ${food}`;records.push({id:randomUUID(),kind:"preference",tier:"hot",scope,dimension:"food",value,summary:value,topicIds:[topicId],entityIds:[subjectNode.id,foodNode.id],applicability:"global",strength:.95,origin:"explicit",status:"active",confidence,sourceRefs,createdAt:now,updatedAt:now});topics.push({topicId,kind:"preference",scope,title:`${subject}的饮食偏好`,description:value,aliases:[subject,food,"饮食偏好","爱吃","不爱吃"],entityIds:[subjectNode.id,foodNode.id],relatedTopicIds:[],embeddingText:value,status:"active",updatedAt:now});edges.push({id:`${scope.type}:${scope.id}:edge:${stableId(`${subjectNode.id}:${negative?"not_prefers":"prefers"}:${foodNode.id}`)}`,fromId:subjectNode.id,predicate:negative?"not_prefers":"prefers",toId:foodNode.id,scope,confidence,status:"active"});};
+  const self=[...text.matchAll(/(?:我|用户)(不爱吃|不喜欢吃|不吃|爱吃|喜欢吃)\s*([^，。！？,.!?但是也且\s]{1,20})/g)];for(const m of self)add("用户",m[2],m[1].startsWith("不"));
+  const friendSegment=/我有个朋友\s*([^，。！？,.!?]{2,40})/u.exec(text)?.[1];if(friendSegment){const fm=/^([\p{Script=Han}]{2,6}?)(?:也)?(?:是)?(?:也)?(?:爱吃|喜欢吃)\s*([^，。！？,.!?\s]{1,20})/u.exec(friendSegment);if(fm)add(fm[1].replace(/也$/,""),fm[2],false);else{const same=/^([\p{Script=Han}]{2,6}?)(?:也)?是$/u.exec(friendSegment.trim());const selfFood=self.find((m)=>!m[1].startsWith("不"))?.[2];if(same&&selfFood)add(same[1],selfFood,false);}}
+
+  const direct=/^([\p{Script=Han}]{2,6}?)(?:爱吃|喜欢吃)\s*([^，。！？,.!?\s]{1,20})/u.exec(text);if(direct)add(direct[1],direct[2],false);
+  const named=/^([\p{Script=Han}]{2,6})觉得\s*([\p{L}]{1,20}?)(?=(?:也)?(?:很好吃|好吃))/u.exec(text);if(named)add(named[1],named[2],false,.88);
+  return records.length?{records,topics,nodes:[...people.values()],edges}:undefined;
+}

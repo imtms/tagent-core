@@ -42,7 +42,7 @@ describe("AgentService memory capture boundaries",()=>{
   const store=new Store(":memory:");const session=store.createSession();
   const runtime={prompt:async()=>{},steer:async()=>"accepted" as const,abort:()=>{},getMessages:()=>[{role:"assistant",content:[{type:"text",text:"你叫TMs。"}],api:"openai-completions",provider:"test",model:"test",usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}},stopReason:"stop",timestamp:Date.now()}] as never,getError:()=>undefined};
   const agent=new AgentService(store,"/tmp",()=>runtime,{},memory,"test-scope");await agent.start(session.id,"记住我叫TMs","capture-user");await new Promise((resolve)=>setTimeout(resolve,30));
-  expect(requests.some((request)=>request.content==="user: 记住我叫TMs"&&request.sourceRefs[0]?.sourceType==="message")).toBe(true);
+  expect(requests.some((request)=>request.content?.includes("<focus_user>\n记住我叫TMs\n</focus_user>")&&request.sourceRefs[0]?.sourceType==="message")).toBe(true);
   expect(requests.some((request)=>request.content==="assistant: 你叫TMs。"&&request.sourceRefs[0]?.sourceType==="run")).toBe(true);
   expect(requests.some((request)=>request.content?.includes("TaskRun completed")||request.content?.includes("Goal:"))).toBe(false);
   await agent.closeRuntimes();store.close();

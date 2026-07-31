@@ -341,6 +341,9 @@ export class AgentService {
       providerMaxRetries: this.runtimeDefaults.providerMaxRetries,
       runTimeoutMs: this.runtimeDefaults.runTimeoutMs,
       runHardTimeoutMs: this.runtimeDefaults.runHardTimeoutMs,
+      memory:this.memory,
+      memoryScopeId:this.memoryScopeId,
+      memorySubjectId:`session:${run.sessionId}`,
       onActivity: touchActivity,
       onEvent: (event) => {
         touchActivity();
@@ -462,14 +465,21 @@ export class AgentService {
 
   private captureUserMessage(run: TaskRun, messageId: number, content: string) {
     if (!this.memory) return;
-    void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "message", sourceId: String(messageId), revision: "user" }], content: `user: ${content}`, idempotencyKey: `user-message:${messageId}` }).catch(() => undefined);
+    const access=this.memoryAccess(run);const context=this.recentCaptureContext(run.sessionId,messageId);void this.memory.enqueueCapture({ access, sourceRefs: [{ sourceType: "message", sourceId: String(messageId), revision: "user" }], content: `<context>
+${context}
+</context>
+<focus_user>
+${content}
+</focus_user>`, idempotencyKey: `user-message:${messageId}` }).then(({jobId})=>this.publish(this.store.appendEvent(run.id,"memory.capture.queued",{jobId,sourceType:"message",sourceId:String(messageId)}))).catch((error)=>this.publish(this.store.appendEvent(run.id,"memory.capture.failed",{sourceType:"message",sourceId:String(messageId),errorCode:error instanceof Error?error.name:"capture_enqueue_error",error:error instanceof Error?error.message:String(error)})));
   }
+
+  private recentCaptureContext(sessionId:SessionId,focusMessageId:number){return this.store.listRecentMessages(sessionId,8).filter((message)=>message.id<focusMessageId).slice(-4).map((message)=>`${message.role}: ${message.content}`).join("\n");}
 
   private captureRunBoundary(run: TaskRun, response: string, status: "completed" | "blocked" | "failed") {
     if (!this.memory) return;
     if (!response.trim()) return;
     const content = `assistant: ${response}`;
-    void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "run", sourceId: run.id, revision: `${status}:${run.attempt}` }], content, idempotencyKey: `run-boundary:${run.id}:${run.attempt}:${status}` }).catch(() => undefined);
+    void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "run", sourceId: run.id, revision: `${status}:${run.attempt}` }], content, idempotencyKey: `run-boundary:${run.id}:${run.attempt}:${status}` }).then(({jobId})=>this.publish(this.store.appendEvent(run.id,"memory.capture.queued",{jobId,sourceType:"run",status}))).catch((error)=>this.publish(this.store.appendEvent(run.id,"memory.capture.failed",{sourceType:"run",status,errorCode:error instanceof Error?error.name:"capture_enqueue_error",error:error instanceof Error?error.message:String(error)})));
   }
 
   private executionBudget(run: TaskRun) {
@@ -662,7 +672,7 @@ export class AgentService {
     const assembly = this.contextAssembler().assemble("session", history, systemPrompt, query);
     if (this.memory && assembly.droppedMessages.length) {
       const content = assembly.droppedMessages.map((message) => `${message.role}: ${messageText(message)}`).filter((value) => !value.endsWith(": ")).join("\n\n");
-      if (content) void this.memory.enqueueCapture({ access, sourceRefs: [{ sourceType: "run", sourceId: run.id, revision: `context-prune:${run.attempt}` }], content, idempotencyKey: `context-prune:${run.id}:${run.attempt}:${hashText(content)}` });
+      if (content) void this.memory.enqueueCapture({ access, sourceRefs: [{ sourceType: "run", sourceId: run.id, revision: `context-prune:${run.attempt}` }], content, idempotencyKey: `context-prune:${run.id}:${run.attempt}:${hashText(content)}` }).then(({jobId})=>this.publish(this.store.appendEvent(run.id,"memory.capture.queued",{jobId,sourceType:"context_prune"}))).catch((error)=>this.publish(this.store.appendEvent(run.id,"memory.capture.failed",{sourceType:"context_prune",errorCode:error instanceof Error?error.name:"capture_enqueue_error",error:error instanceof Error?error.message:String(error)})));
     }
     return { ...assembly, recalledMemory: recall?.promptSection ?? "" };
   }

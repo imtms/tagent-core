@@ -246,3 +246,20 @@ The repository includes integration coverage for custom-provider registration, r
 - [Changelog](CHANGELOG.md)
 
 This repository remains an alpha control-plane core, not the complete TAgent product.
+
+### Production memory quality profile
+
+For production retrieval, keep PostgreSQL/pgvector and select a real embedding provider plus hybrid extraction. Hash embeddings and the in-memory backend are development/test profiles only.
+
+```env
+TAGENT_MEMORY_ENABLED=true
+TAGENT_MEMORY_BACKEND=postgres
+TAGENT_MEMORY_EMBEDDING_PROVIDER=openai
+TAGENT_MEMORY_EMBEDDING_BASE_URL=https://embedding-provider.example/v1
+TAGENT_MEMORY_EMBEDDING_API_KEY=...
+TAGENT_MEMORY_EMBEDDING_MODEL=...
+TAGENT_MEMORY_EXTRACTOR_PROVIDER=hybrid
+# Extractor settings fall back to TAGENT_API_BASE / OPENAI_API_KEY / TAGENT_MODEL.
+```
+
+Hybrid extraction keeps deterministic identity and explicit-preference rules as a safe fast path, then uses a structured LLM for multi-sentence relations, negation, temporal changes, and conversation coreference. Capture job outcomes are visible in Memory Center and through `/api/memory/jobs`. When memory is enabled, the Agent also receives `memory_search`, `memory_topic_get`, and guarded `memory_forget` tools.

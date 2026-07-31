@@ -50,6 +50,17 @@ export type MemoryConfig =
       coldMinimumRecords: number;
       warmAfterMs: number;
       hotTtlMs: number;
+      embeddingProvider: "hash" | "openai" | "none";
+      embeddingBaseUrl?: string;
+      embeddingApiKey?: string;
+      embeddingModel?: string;
+      embeddingDimensions?: number;
+      embeddingBatchSize: number;
+      embeddingExtraBody?: Record<string,unknown>;
+      extractorProvider: "rule" | "hybrid";
+      extractorBaseUrl?: string;
+      extractorApiKey?: string;
+      extractorModel?: string;
     };
 
 function positiveInteger(value: string | undefined, fallback: number, name: string) {
@@ -68,6 +79,21 @@ function enabled(value: string | undefined, name: string) {
   if (value === undefined || value === "false") return false;
   if (value === "true") return true;
   throw new Error(`${name} must be true or false`);
+}
+
+
+function parseJsonObject(value:string|undefined,name:string){if(!value?.trim())return undefined;let parsed:unknown;try{parsed=JSON.parse(value);}catch{throw new Error(`${name} must be valid JSON`);}if(!parsed||Array.isArray(parsed)||typeof parsed!=="object")throw new Error(`${name} must be a JSON object`);return parsed as Record<string,unknown>;}
+function memoryEmbeddingProvider(env: NodeJS.ProcessEnv) {
+  const value = env.TAGENT_MEMORY_EMBEDDING_PROVIDER ?? (env.TAGENT_MEMORY_BACKEND === "memory" ? "hash" : "none");
+  if (value !== "hash" && value !== "openai" && value !== "none") throw new Error("TAGENT_MEMORY_EMBEDDING_PROVIDER must be hash, openai, or none");
+  if (value === "openai" && (!env.TAGENT_MEMORY_EMBEDDING_BASE_URL?.trim() || !env.TAGENT_MEMORY_EMBEDDING_API_KEY?.trim() || !env.TAGENT_MEMORY_EMBEDDING_MODEL?.trim())) throw new Error("OpenAI memory embeddings require TAGENT_MEMORY_EMBEDDING_BASE_URL, TAGENT_MEMORY_EMBEDDING_API_KEY, and TAGENT_MEMORY_EMBEDDING_MODEL");
+  return value;
+}
+function memoryExtractorProvider(env: NodeJS.ProcessEnv) {
+  const value = env.TAGENT_MEMORY_EXTRACTOR_PROVIDER ?? "rule";
+  if (value !== "rule" && value !== "hybrid") throw new Error("TAGENT_MEMORY_EXTRACTOR_PROVIDER must be rule or hybrid");
+  if (value === "hybrid" && (!(env.TAGENT_MEMORY_EXTRACTOR_BASE_URL?.trim() || env.TAGENT_API_BASE?.trim()) || !(env.TAGENT_MEMORY_EXTRACTOR_API_KEY?.trim() || env.OPENAI_API_KEY?.trim()) || !(env.TAGENT_MEMORY_EXTRACTOR_MODEL?.trim() || env.TAGENT_MODEL?.trim()))) throw new Error("Hybrid memory extraction requires extractor or main model base URL, API key, and model");
+  return value;
 }
 
 function loadMemoryConfig(env: NodeJS.ProcessEnv): MemoryConfig {
@@ -103,6 +129,17 @@ function loadMemoryConfig(env: NodeJS.ProcessEnv): MemoryConfig {
     coldMinimumRecords: positiveInteger(env.TAGENT_MEMORY_COLD_MINIMUM_RECORDS, 2, "TAGENT_MEMORY_COLD_MINIMUM_RECORDS"),
     warmAfterMs: nonNegativeInteger(env.TAGENT_MEMORY_WARM_AFTER_MS, 0, "TAGENT_MEMORY_WARM_AFTER_MS"),
     hotTtlMs: positiveInteger(env.TAGENT_MEMORY_HOT_TTL_MS, 2_592_000_000, "TAGENT_MEMORY_HOT_TTL_MS"),
+    embeddingProvider: memoryEmbeddingProvider(env),
+    embeddingBaseUrl: env.TAGENT_MEMORY_EMBEDDING_BASE_URL?.trim() || undefined,
+    embeddingApiKey: env.TAGENT_MEMORY_EMBEDDING_API_KEY?.trim() || undefined,
+    embeddingModel: env.TAGENT_MEMORY_EMBEDDING_MODEL?.trim() || undefined,
+    embeddingDimensions: env.TAGENT_MEMORY_EMBEDDING_DIMENSIONS ? positiveInteger(env.TAGENT_MEMORY_EMBEDDING_DIMENSIONS, 1024, "TAGENT_MEMORY_EMBEDDING_DIMENSIONS") : undefined,
+    embeddingBatchSize: positiveInteger(env.TAGENT_MEMORY_EMBEDDING_BATCH_SIZE, 64, "TAGENT_MEMORY_EMBEDDING_BATCH_SIZE"),
+    embeddingExtraBody: parseJsonObject(env.TAGENT_MEMORY_EMBEDDING_EXTRA_BODY, "TAGENT_MEMORY_EMBEDDING_EXTRA_BODY"),
+    extractorProvider: memoryExtractorProvider(env),
+    extractorBaseUrl: env.TAGENT_MEMORY_EXTRACTOR_BASE_URL?.trim() || env.TAGENT_API_BASE?.trim() || undefined,
+    extractorApiKey: env.TAGENT_MEMORY_EXTRACTOR_API_KEY?.trim() || env.OPENAI_API_KEY?.trim() || undefined,
+    extractorModel: env.TAGENT_MEMORY_EXTRACTOR_MODEL?.trim() || env.TAGENT_MODEL?.trim() || undefined,
   };
 }
 
