@@ -28,6 +28,29 @@ describe("Web API request headers", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session", expect.objectContaining({ method: "PATCH", body: JSON.stringify({ title: "After" }) }));
   });
 
+  it("updates and reorders queued prompts through the Session API", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.updateInbox("session", "item", "changed");
+    await api.reorderInbox("session", ["second", "first"]);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/sessions/session/inbox/item", expect.objectContaining({ method: "PATCH", body: JSON.stringify({ content: "changed" }) }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/sessions/session/inbox/order", expect.objectContaining({ method: "PUT", body: JSON.stringify({ itemIds: ["second", "first"] }) }));
+  });
+
+  it("renders editable, draggable, and keyboard-accessible queued prompts without removing existing actions", async () => {
+    const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain("function QueuePrompt(");
+    expect(source).toContain('draggable={!busy && !editing}');
+    expect(source).toContain("await api.updateInbox(sessionId, item.id, content)");
+    expect(source).toContain("await api.reorderInbox(sessionId, next.map((item) => item.id))");
+    expect(source).toContain("api.decideInbox(sessionId, item.id");
+    expect(source).toContain("api.mergeInbox(sessionId, item.id, inbox[0].id)");
+    expect(source).toContain('aria-label={`Move queued prompt ${index + 1} up`}');
+    expect(source).toContain('aria-label={`Move queued prompt ${index + 1} down`}');
+    expect(source).toContain('item.decision === "defer" ? "Resume" : "Defer"');
+    expect(source).toContain("Merge first");
+  });
+
   it("posts the selected queued item to the manual start endpoint", async () => {
     const payload = { status: "started", item: { id: "item" }, run: { id: "run" } };
     const fetchMock = vi.fn(async () => new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } }));

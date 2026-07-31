@@ -75,6 +75,27 @@ describe("HTTP API", () => {
     expect((await app.inject({ method: "GET", url: `/api/sessions/${session.id}/inbox` })).json()).toEqual([]);
   });
 
+  it("edits and reorders queued prompts through the Session API", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-edit-inbox-"));
+    const store = new Store(":memory:");
+    const service = new AgentService(store, workspace);
+    const app = createApp({ store, service, logger: false, webRoot: workspace }); apps.push(app);
+    const session = store.createSession();
+    const blocked = store.createRun(session.id, "blocked"); store.blockRun(blocked.id, "review");
+    const first = store.enqueueSessionInbox(session.id, "first", "api-edit-first");
+    const second = store.enqueueSessionInbox(session.id, "second", "api-edit-second");
+    const third = store.enqueueSessionInbox(session.id, "third", "api-edit-third");
+
+    const edited = await app.inject({ method: "PATCH", url: `/api/sessions/${session.id}/inbox/${second.id}`, payload: { content: "  changed  " } });
+    expect(edited.statusCode).toBe(200);
+    expect(edited.json()).toMatchObject({ id: second.id, content: "changed" });
+    const reordered = await app.inject({ method: "PUT", url: `/api/sessions/${session.id}/inbox/order`, payload: { itemIds: [third.id, second.id, first.id] } });
+    expect(reordered.statusCode).toBe(200);
+    expect(reordered.json().map((item: { id: string; position: number }) => [item.id, item.position])).toEqual([[third.id, 1], [second.id, 2], [first.id, 3]]);
+    expect((await app.inject({ method: "PUT", url: `/api/sessions/${session.id}/inbox/order`, payload: { itemIds: [first.id] } })).statusCode).toBe(409);
+    expect((await app.inject({ method: "PATCH", url: `/api/sessions/${session.id}/inbox/${first.id}`, payload: { content: " " } })).statusCode).toBe(400);
+  });
+
   it("starts a selected queued inbox item through the manual start API and reports conflicts", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
     const store = new Store(":memory:");

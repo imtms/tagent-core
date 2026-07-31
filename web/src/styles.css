@@ -254,3 +254,14 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(22, 116, 
 .operation-progress summary { color:var(--muted); cursor:pointer; font-size:9px; font-weight:700; text-transform:uppercase; }
 .operation-progress p { max-height:96px; overflow:auto; margin-top:7px; white-space:pre-wrap; }
 .operation-warning { padding:8px 9px; border-left:2px solid #b65b5b; background:#fff5f5; color:#864040; font-size:9px; line-height:1.45; }
+
+/* Editable Supervisor queue */
+.inbox-item { grid-template-columns: 24px 24px minmax(0, 1fr) auto; }
+.queue-drag-handle { width:24px; height:24px; padding:0; display:grid; place-items:center; border:0; border-radius:5px; background:transparent; color:#8b9790; cursor:grab; }
+.queue-drag-handle:hover { color:var(--accent); background:var(--accent-soft); }
+.queue-drag-handle:active { cursor:grabbing; }
+.queue-drag-handle:disabled { cursor:not-allowed; opacity:.4; }
+.inbox-item.dragging { opacity:.45; }
+.queue-editor { width:100%; min-height:48px; resize:vertical; padding:7px 8px; border:1px solid #b7c8bd; border-radius:7px; background:#fff; color:var(--ink); font:inherit; line-height:1.45; }
+.queue-editor:focus { outline:2px solid rgba(22,116,84,.35); outline-offset:1px; border-color:var(--accent); }
+.inbox-actions button { display:inline-flex; align-items:center; gap:4px; }
