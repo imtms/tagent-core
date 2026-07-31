@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Bot, Check, ChevronDown, ChevronRight, Circle, Command, FileText, Menu, MessageSquarePlus, PanelRight, Pencil, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { Activity, Bot, Check, ChevronDown, ChevronRight, Circle, Command, FileText, GripVertical, Menu, MessageSquarePlus, PanelRight, Pencil, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
 import { api, subscribe, type Message, type RunEvent, type RuntimeStatus, type Session, type SessionInboxItem, type TaskRun, type TranscriptItem } from "./api";
 import { Markdown } from "./Markdown";
 import { createRequestId } from "./id";
@@ -53,6 +53,23 @@ function RunDetails({ run }: { run: TaskRun }) {
   </div>;
 }
 
+interface QueuePromptProps {
+  item: SessionInboxItem; index: number; editing: boolean; draft: string; busy: boolean; starting: boolean; dragging: boolean; canMoveUp: boolean; canMoveDown: boolean;
+  onEdit: () => void; onDraftChange: (value: string) => void; onSave: () => void; onCancelEdit: () => void; onStart: () => void; onToggleDefer: () => void; onMergeFirst: () => void; onDelete: () => void; onMoveUp: () => void; onMoveDown: () => void;
+  onDragStart: (event: DragEvent<HTMLButtonElement>) => void; onDragEnd: () => void; onDrop: (event: DragEvent<HTMLElement>) => void;
+}
+
+function QueuePrompt({ item, index, editing, draft, busy, starting, dragging, canMoveUp, canMoveDown, onEdit, onDraftChange, onSave, onCancelEdit, onStart, onToggleDefer, onMergeFirst, onDelete, onMoveUp, onMoveDown, onDragStart, onDragEnd, onDrop }: QueuePromptProps) {
+  return <article className={`inbox-item ${dragging ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={onDrop}>
+    <button className="queue-drag-handle" draggable={!busy && !editing} onDragStart={onDragStart} onDragEnd={onDragEnd} disabled={busy || editing} aria-label={`Drag prompt ${index + 1} to reorder`} title="Drag to reorder"><GripVertical size={14} /></button>
+    <span className="inbox-position">{index + 1}</span>
+    <div>{editing ? <textarea className="queue-editor" value={draft} onChange={(event) => onDraftChange(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") onCancelEdit(); if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) onSave(); }} autoFocus rows={2} aria-label="Edit queued prompt" /> : <strong>{item.content}</strong>}<small>{item.decision === "defer" ? "Deferred by Supervisor" : "Waiting for Supervisor selection"}</small>
+      <span className="inbox-actions">{editing ? <><button onClick={onSave} disabled={busy || !draft.trim()}>Save</button><button onClick={onCancelEdit} disabled={busy}>Cancel</button></> : <><button onClick={onEdit} disabled={busy}><Pencil size={12} /> Edit</button><button className="run-now" onClick={onStart} disabled={busy}>{starting ? "Starting…" : "Run now"}</button><button onClick={onToggleDefer} disabled={busy}>{item.decision === "defer" ? "Resume" : "Defer"}</button>{index > 0 && <button onClick={onMergeFirst} disabled={busy}>Merge first</button>}<button onClick={onMoveUp} disabled={busy || !canMoveUp} aria-label={`Move queued prompt ${index + 1} up`}>Move up</button><button onClick={onMoveDown} disabled={busy || !canMoveDown} aria-label={`Move queued prompt ${index + 1} down`}>Move down</button></>}</span>
+    </div>
+    <button onClick={onDelete} disabled={busy} aria-label="Remove queued input"><X size={14} /></button>
+  </article>;
+}
+
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
@@ -70,6 +87,12 @@ export function App() {
   const [draft, setDraft] = useState("");
   const [inbox, setInbox] = useState<SessionInboxItem[]>([]);
   const [startingInboxId, setStartingInboxId] = useState("");
+  const [editingInboxId, setEditingInboxId] = useState("");
+  const [inboxDraft, setInboxDraft] = useState("");
+  const [savingInboxId, setSavingInboxId] = useState("");
+  const [draggingInboxId, setDraggingInboxId] = useState("");
+  const [reorderingInbox, setReorderingInbox] = useState(false);
+  const [mutatingInboxId, setMutatingInboxId] = useState("");
   const [streaming, setStreaming] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -116,7 +139,7 @@ export function App() {
   }, [sessionId]);
   useEffect(() => {
     if (!sessionId) return;
-    setStreaming(""); setEvents([]); setError("");
+    setStreaming(""); setEvents([]); setError(""); setEditingInboxId(""); setInboxDraft(""); setDraggingInboxId("");
     void Promise.all([api.messages(sessionId), api.runs(sessionId), api.inbox(sessionId)]).then(([history, runHistory, queued]) => {
       const latest = runHistory[0] ?? null;
       const active = runHistory.find((item) => item.status === "running") ?? null;
@@ -213,6 +236,46 @@ export function App() {
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
 
+  async function saveInbox(item: SessionInboxItem) {
+    const content = inboxDraft.trim();
+    if (!content || savingInboxId) return;
+    setSavingInboxId(item.id); setError(""); setNotice("");
+    try { await api.updateInbox(sessionId, item.id, content); setInbox(await api.inbox(sessionId)); setEditingInboxId(""); setInboxDraft(""); setNotice("Queued prompt updated."); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setSavingInboxId(""); }
+  }
+
+  async function applyInboxOrder(next: SessionInboxItem[]) {
+    setReorderingInbox(true); setError(""); setNotice("");
+    try { setInbox(await api.reorderInbox(sessionId, next.map((item) => item.id))); setNotice("Queued prompts reordered."); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setInbox(await api.inbox(sessionId).catch(() => inbox)); }
+    finally { setReorderingInbox(false); setDraggingInboxId(""); }
+  }
+
+  async function reorderInbox(targetId: string) {
+    if (!draggingInboxId || draggingInboxId === targetId || reorderingInbox || mutatingInboxId) return;
+    const from = inbox.findIndex((item) => item.id === draggingInboxId); const to = inbox.findIndex((item) => item.id === targetId);
+    if (from < 0 || to < 0) return;
+    const next = [...inbox]; const [moved] = next.splice(from, 1); next.splice(to, 0, moved);
+    await applyInboxOrder(next);
+  }
+
+  async function moveInbox(itemId: string, offset: -1 | 1) {
+    if (reorderingInbox || mutatingInboxId) return;
+    const from = inbox.findIndex((item) => item.id === itemId); const to = from + offset;
+    if (from < 0 || to < 0 || to >= inbox.length) return;
+    const next = [...inbox]; const [moved] = next.splice(from, 1); next.splice(to, 0, moved);
+    await applyInboxOrder(next);
+  }
+
+  async function mutateInbox(itemId: string, operation: () => Promise<unknown>, noticeText?: string) {
+    if (mutatingInboxId || reorderingInbox || startingInboxId || savingInboxId) return;
+    setMutatingInboxId(itemId); setError(""); setNotice("");
+    try { await operation(); setInbox(await api.inbox(sessionId)); if (noticeText) setNotice(noticeText); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setMutatingInboxId(""); }
+  }
+
   async function runInboxNow(item: SessionInboxItem) {
     if (!sessionId || startingInboxId) return;
     setStartingInboxId(item.id); setError(""); setNotice("");
@@ -280,7 +343,7 @@ export function App() {
         {notice && <div className="success-banner">{notice}</div>}
         <div className="composer-mode"><span><Activity size={13} />Supervisor inbox</span><span>{activeRun ? "New input waits below while the current TaskRun finishes" : "Supervisor starts the next eligible item"}</span></div>
         <div className="composer"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} placeholder="Add an outcome or instruction to the Supervisor queue" rows={1} /><button onClick={() => void submit()} disabled={!draft.trim()} aria-label="Add to Supervisor queue"><Send size={18} /></button></div>
-        {inbox.length > 0 && <section className="supervisor-inbox"><div className="inbox-heading"><span>Up next</span><small>{inbox.length} queued</small></div>{inbox.map((item, index) => <div className="inbox-item" key={item.id}><span className="inbox-position">{index + 1}</span><div><strong>{item.content}</strong><small>{item.decision === "defer" ? "Deferred by Supervisor" : "Waiting for Supervisor selection"}</small><span className="inbox-actions"><button className="run-now" onClick={() => void runInboxNow(item)} disabled={Boolean(startingInboxId)}>{startingInboxId === item.id ? "Starting…" : "Run now"}</button><button onClick={async () => { setError(""); setNotice(""); try { await api.decideInbox(sessionId, item.id, item.decision === "defer" ? "pending" : "defer"); setInbox(await api.inbox(sessionId)); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }} disabled={Boolean(startingInboxId)}>{item.decision === "defer" ? "Resume" : "Defer"}</button>{index > 0 && <button onClick={async () => { setError(""); setNotice(""); try { await api.mergeInbox(sessionId, item.id, inbox[0].id); setInbox(await api.inbox(sessionId)); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }} disabled={Boolean(startingInboxId)}>Merge first</button>}</span></div><button onClick={async () => { try { await api.deleteInbox(sessionId, item.id); setInbox(await api.inbox(sessionId)); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }} aria-label="Remove queued input"><X size={14} /></button></div>)}</section>}
+        {inbox.length > 0 && <section className="supervisor-inbox"><div className="inbox-heading"><span>Up next</span><small>{inbox.length} queued</small></div>{inbox.map((item, index) => <QueuePrompt key={item.id} item={item} index={index} editing={editingInboxId === item.id} draft={editingInboxId === item.id ? inboxDraft : item.content} busy={Boolean(startingInboxId || savingInboxId || reorderingInbox || mutatingInboxId)} starting={startingInboxId === item.id} dragging={draggingInboxId === item.id} canMoveUp={index > 0} canMoveDown={index < inbox.length - 1} onEdit={() => { setEditingInboxId(item.id); setInboxDraft(item.content); setError(""); setNotice(""); }} onDraftChange={setInboxDraft} onSave={() => void saveInbox(item)} onCancelEdit={() => { setEditingInboxId(""); setInboxDraft(""); }} onStart={() => void runInboxNow(item)} onToggleDefer={() => void mutateInbox(item.id, () => api.decideInbox(sessionId, item.id, item.decision === "defer" ? "pending" : "defer"))} onMergeFirst={() => void mutateInbox(item.id, () => api.mergeInbox(sessionId, item.id, inbox[0].id))} onDelete={() => void mutateInbox(item.id, () => api.deleteInbox(sessionId, item.id))} onMoveUp={() => void moveInbox(item.id, -1)} onMoveDown={() => void moveInbox(item.id, 1)} onDragStart={(event) => { setDraggingInboxId(item.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); }} onDragEnd={() => setDraggingInboxId("")} onDrop={(event) => { event.preventDefault(); void reorderInbox(item.id); }} />)}</section>}
       </footer>
     </main>
 

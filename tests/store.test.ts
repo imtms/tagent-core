@@ -53,6 +53,24 @@ describe("Store", () => {
     expect(store.claimNextSessionInbox(session.id)?.item.id).toBe(third.id);
   });
 
+  it("edits and reorders only queued Session inbox items", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const first = store.enqueueSessionInbox(session.id, "first", "edit-first");
+    const second = store.enqueueSessionInbox(session.id, "second", "edit-second");
+    const third = store.enqueueSessionInbox(session.id, "third", "edit-third");
+
+    expect(store.updateSessionInboxItem(second.id, session.id, "  changed second  ")).toMatchObject({ content: "changed second" });
+    expect(store.updateSessionInboxItem(second.id, session.id, " ")).toBeUndefined();
+    expect(store.reorderSessionInbox(session.id, [third.id, first.id, second.id])?.map((item) => [item.id, item.position])).toEqual([
+      [third.id, 1], [first.id, 2], [second.id, 3],
+    ]);
+    expect(store.reorderSessionInbox(session.id, [first.id, second.id])).toBeUndefined();
+
+    expect(store.claimSessionInboxNow(third.id, session.id).status).toBe("started");
+    expect(store.updateSessionInboxItem(third.id, session.id, "too late")).toBeUndefined();
+  });
+
   it("keeps blocked Session input queued automatically but lets a user start a selected item", () => {
     const store = createStore();
     const session = store.createSession();

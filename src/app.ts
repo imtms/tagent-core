@@ -57,6 +57,24 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
     return store.listSessionInbox(id);
   });
+  app.put("/api/sessions/:id/inbox/order", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as { itemIds?: string[] };
+    if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    if (!Array.isArray(body?.itemIds) || body.itemIds.some((itemId) => typeof itemId !== "string" || !itemId)) return reply.code(400).send({ error: "itemIds must be an array of ids" });
+    const items = service.reorderSessionInputs(id, body.itemIds);
+    if (!items) return reply.code(409).send({ error: "queued prompts changed; refresh and try again" });
+    return items;
+  });
+  app.patch("/api/sessions/:id/inbox/:itemId", async (request, reply) => {
+    const { id, itemId } = request.params as { id: string; itemId: string };
+    const body = request.body as { content?: string };
+    if (!body?.content?.trim()) return reply.code(400).send({ error: "content is required" });
+    if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    const item = service.updateSessionInput(id, itemId, body.content);
+    if (!item) return reply.code(409).send({ error: "inbox item is not queued" });
+    return item;
+  });
   app.post("/api/sessions/:id/inbox/:itemId/start", async (request, reply) => {
     const { id, itemId } = request.params as { id: string; itemId: string };
     if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });

@@ -212,6 +212,14 @@ export class AgentService {
     return { item: this.store.getSessionInboxItem(item.id)!, run: run ?? null };
   }
 
+  updateSessionInput(sessionId: SessionId, itemId: string, content: string) {
+    return this.store.updateSessionInboxItem(itemId, sessionId, content);
+  }
+
+  reorderSessionInputs(sessionId: SessionId, itemIds: string[]) {
+    return this.store.reorderSessionInbox(sessionId, itemIds);
+  }
+
   deleteSessionInput(sessionId: SessionId, itemId: string) {
     return this.store.deleteSessionInboxItem(itemId, sessionId);
   }

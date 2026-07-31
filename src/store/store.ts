@@ -443,6 +443,28 @@ export class Store {
       WHERE session_id = ? ${includeTerminal ? "" : "AND status IN ('queued','claimed')"} ORDER BY position,created_at,id`).all(sessionId) as SessionInboxItem[];
   }
 
+  updateSessionInboxItem(id: string, sessionId: SessionId, content: string) {
+    const trimmed = content.trim();
+    if (!trimmed) return undefined;
+    const changed = this.db.prepare("UPDATE session_supervisor_inbox SET content=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'")
+      .run(trimmed, now(), id, sessionId).changes;
+    return changed === 1 ? this.getSessionInboxItem(id) : undefined;
+  }
+
+  reorderSessionInbox(sessionId: SessionId, itemIds: string[]) {
+    const transaction = this.db.transaction(() => {
+      const queued = this.db.prepare("SELECT id FROM session_supervisor_inbox WHERE session_id=? AND status='queued' ORDER BY position,created_at,id")
+        .all(sessionId) as Array<{ id: string }>;
+      const currentIds = queued.map((item) => item.id);
+      if (itemIds.length !== currentIds.length || new Set(itemIds).size !== itemIds.length || itemIds.some((id) => !currentIds.includes(id))) return undefined;
+      const timestamp = now();
+      const update = this.db.prepare("UPDATE session_supervisor_inbox SET position=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'");
+      itemIds.forEach((id, index) => update.run(index + 1, timestamp, id, sessionId));
+      return this.listSessionInbox(sessionId);
+    });
+    return transaction();
+  }
+
   deleteSessionInboxItem(id: string, sessionId: SessionId) {
     const timestamp = now();
     return this.db.prepare(`UPDATE session_supervisor_inbox SET status='deleted',decision='delete',updated_at=?
