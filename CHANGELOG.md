@@ -1,4 +1,12 @@
 ## [Unreleased]
+### Memory correctness and scale
+
+- separated raw capture source from extracted record evidence;
+- removed fixture-specific entities from production quality routing and added configurable domain ontology plus canonical SPO normalization;
+- added Ranking v2, MMR diversity, validity/current-state/trust scoring and Recall Trace v2;
+- added `memory_record_get`, record provenance API and Memory readiness;
+- added content-hash incremental embedding reindex and generation garbage collection.
+
 
 ### Supervisor
 

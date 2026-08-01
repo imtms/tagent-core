@@ -226,3 +226,16 @@ When memory is disabled, the entry is hidden and memory HTTP endpoints return `5
 - Recall ranking does not yet expose a full per-channel scoring trace, MMR feedback loop, or offline quality dashboard.
 
 The original broader design plan is preserved in [MEMORY_DESIGN_PLAN.md](MEMORY_DESIGN_PLAN.md).
+
+
+## Memory quality and retrieval v2 (0.1.4+)
+
+Capture provenance is split into two layers. `CaptureRequest.captureSource` describes transport/origin (`user_message`, `context_summary`, `manual_input`, `tool_result`, `task_structure`, or `assistant_message`). Evidence class and trust are assigned to each extracted record only after the extractor has identified a durable statement. A raw user message is therefore not automatically `user_explicit`.
+
+Production quality routing uses generic control-plane detection, canonical SPO normalization and a configurable `DomainOntology`. Entity names used by regression fixtures are not production routing rules.
+
+Ranking v2 combines route score, confidence/importance, time decay, authorized scope priority, provenance trust/source reliability, validity windows and current-state status. MMR reduces near-duplicate cards. Semantic SPO keys are used for deduplication and conflict groups.
+
+Recall Trace v2 reports channel scores, final score components, thresholds, policy decisions, budget drops, embedding degradation and Cold Topic route decisions. `memory_record_get` and `GET /api/memory/records/:id` provide full provenance drill-down.
+
+Embedding reindex uses content hashes and generation manifests: unchanged records are skipped, stale entries in the active generation are removed, and older generations are garbage-collected after the active generation is populated.

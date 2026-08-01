@@ -91,3 +91,15 @@ The Memory entry is rendered only when `/api/config/status` reports `memoryEnabl
 - manual memory creation and guarded deletion.
 
 The UI is an administrative view, not an authentication boundary.
+
+
+## Record and readiness APIs
+
+```text
+GET /api/memory/records/:id?scopeType=workspace&scopeId=<id>
+POST /api/memory/readiness
+```
+
+Record retrieval returns source references, provenance, status, validity and canonical semantic fields. Readiness reports backend access, worker heartbeat, capture backlog/dead letters, latest capture/consolidation timestamps, active embedding generation and index count. `/api/health` includes this readiness and returns 503 when enabled Memory is not ready.
+
+Recall responses use `trace.version = 2` and expose lexical/vector/topic/graph/canonical routes plus score breakdown and filtering outcomes.

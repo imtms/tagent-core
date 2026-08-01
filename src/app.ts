@@ -40,7 +40,7 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const body = request.body as { scope?: MemoryScope; content?: string; idempotencyKey?: string };
     if (!body.scope || !body.content?.trim()) return reply.code(400).send({ error: "scope and content are required" });
     const idempotencyKey = body.idempotencyKey ?? `manual:${Date.now()}`;
-    return memory.enqueueCapture({ access: memoryAccess(request, [body.scope], "capture"), sourceRefs: [{ sourceType: "manual", sourceId: idempotencyKey }], content: body.content.trim(), idempotencyKey });
+    return memory.enqueueCapture({ access: memoryAccess(request, [body.scope], "capture"), sourceRefs: [{ sourceType: "manual", sourceId: idempotencyKey }], content: body.content.trim(), idempotencyKey, captureSource: { kind: "manual_input", role: "user", explicitIntent: true } });
   });
   app.post("/api/memory/jobs", async (request, reply) => {
     if (!memory) return reply.code(503).send({ error: "memory is disabled" });
@@ -87,7 +87,12 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     return memory.forget({ access: memoryAccess(request, [body.scope], "memory_admin"), scope: body.scope, ids: body.ids, topicIds: body.topicIds });
   });
 
-  app.get("/api/health", async () => ({ ok: true, service: "tagent-core" }));
+  app.get("/api/health", async (_request, reply) => {
+    if(!memory)return {ok:true,service:"tagent-core"};
+    const scopeId=runtimeConfig?.memoryWorkspaceScopeId; if(!scopeId)return {ok:true,service:"tagent-core",memory:{enabled:true,ready:false,degraded:true,reasons:["memory_scope_unavailable"]}};
+    const readiness=await memory.readiness({subjectId:"health",scopes:[{type:"workspace",id:scopeId}],purpose:"memory_admin"});
+    if(!readiness.ready)reply.code(503); return {ok:readiness.ready,service:"tagent-core",memory:{enabled:true,...readiness}};
+  });
   app.get("/api/config/status", async () => runtimeConfig ?? null);
   app.get("/api/sessions", async () => store.listSessions());
   app.post("/api/sessions", async (request, reply) => {

@@ -7,7 +7,7 @@ export interface RecordStorePort {
   list(scopes: MemoryScope[], kinds?: MemoryKind[], limit?: number): Promise<WarmMemory[]>;
   forget(scopes: MemoryScope[], ids?: string[], topicIds?: string[]): Promise<number>;
 }
-export interface VectorIndexPort { upsert(documents: VectorDocument[]): Promise<void>; searchVectors(vector: number[], scopes: MemoryScope[], kinds: MemoryKind[], limit: number, generation?: string): Promise<VectorHit[]>; remove(refIds: string[]): Promise<void> }
+export interface VectorIndexPort { upsert(documents: VectorDocument[]): Promise<void>; searchVectors(vector: number[], scopes: MemoryScope[], kinds: MemoryKind[], limit: number, generation?: string): Promise<VectorHit[]>; remove(refIds: string[]): Promise<void>; contentHashes?(refs:Array<{refType:VectorDocument["refType"];refId:string;generation:string}>):Promise<Map<string,string>>; removeMissing?(generation:string,active:Set<string>,scopes:MemoryScope[]):Promise<number>; garbageCollectGenerations?(activeGeneration:string,scopes:MemoryScope[]):Promise<number>; countGeneration?(generation:string,scopes:MemoryScope[]):Promise<number> }
 export interface GraphStorePort { upsertNodes(nodes: GraphNode[]): Promise<void>; upsertEdges(edges: GraphEdge[]): Promise<void>; resolveEntities(cue: string, scopes: MemoryScope[], limit: number): Promise<GraphNode[]>; neighborhood(entityIds: string[], scopes: MemoryScope[], depth: 1 | 2, limit: number): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> }
 export interface TopicCatalogPort {
   upsertDescriptors(topics: TopicDescriptor[]): Promise<void>; searchTopics(cue: string, scopes: MemoryScope[], kinds: MemoryKind[], limit: number): Promise<Array<{ descriptor: TopicDescriptor; score: number }>>;

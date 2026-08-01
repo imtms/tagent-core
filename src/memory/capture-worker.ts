@@ -2,7 +2,7 @@ import type { ExtractorPort, JobQueuePort, SourceLoaderPort } from "./ports.js";
 import type { PolicyGatePort } from "./policy/policy-engine.js";
 import type { MemoryService } from "./memory-service.js";
 import type { MemoryLifecycle } from "./lifecycle.js";
-import type { MemoryProvenance, SourceReference, WarmMemory } from "./types.js";
+import type { CaptureRequest, MemoryProvenance, SourceReference, WarmMemory } from "./types.js";
 import { isDurableMemory } from "./quality.js";
 
 const leaseMs = 30_000;
@@ -20,7 +20,7 @@ export class MemoryCaptureWorker {
       const scope=job.request.access.scopes[0];let content=job.request.content??"";if(!content)content=await this.source.load(job.request.access,job.request.sourceRefs);
       const decision=await this.policy.evaluate("source_egress",job.request.access,{text:content,scope});
       if(decision.action!=="allow"&&decision.action!=="transform"){await finish(()=>this.jobs.fail(job.id,this.owner,leaseToken,fencingToken,"source_policy_rejected",false));return true;}
-      const proposal=applyProvenance(await this.extractor.extract(decision.payload.text,job.request.sourceRefs,scope),job.request.provenance);
+      const proposal=applyProvenance(await this.extractor.extract(decision.payload.text,job.request.sourceRefs,scope),job.request);
       proposal.records=proposal.records.filter(isDurableMemory);
       const referencedTopics=new Set(proposal.records.flatMap((record)=>record.topicIds));
       proposal.topics=proposal.topics.filter((topic)=>referencedTopics.has(topic.topicId));
@@ -38,8 +38,19 @@ export class MemoryCaptureWorker {
   }
 }
 
-function applyProvenance(proposal:{records:WarmMemory[];topics:any[];nodes:any[];edges:any[]},provenance?:MemoryProvenance){
-  if(!provenance)return proposal;
-  return{...proposal,records:proposal.records.map((record)=>({...record,provenance,status:provenance.evidenceClass==="assistant_inference"?"quarantined":record.status,confidence:Math.min(record.confidence,trustCeiling(provenance))}))};
+function applyProvenance(proposal:{records:WarmMemory[];topics:any[];nodes:any[];edges:any[]},request:CaptureRequest){
+  return{...proposal,records:proposal.records.map((record)=>{const provenance=record.provenance??deriveRecordProvenance(record,request);return{...record,provenance,status:provenance.evidenceClass==="assistant_inference"?"quarantined":record.status,confidence:Math.min(record.confidence,trustCeiling(provenance))};})};
+}
+function deriveRecordProvenance(record:WarmMemory,request:CaptureRequest):MemoryProvenance {
+  if(request.provenance)return request.provenance; // compatibility for trusted structured callers
+  const source=request.captureSource;
+  if(source?.kind==="context_summary")return{evidenceClass:"user_context_summary",trustLevel:"medium",sourceRole:"user",verificationState:"structured",sourceReliability:.75};
+  if(source?.kind==="tool_result")return{evidenceClass:"tool_verified_fact",trustLevel:"high",sourceRole:"tool",verificationState:"verified",sourceReliability:.95};
+  if(source?.kind==="task_structure")return{evidenceClass:"task_outcome",trustLevel:"high",sourceRole:"task",verificationState:"structured",sourceReliability:.9};
+  if(source?.kind==="assistant_message")return{evidenceClass:"assistant_inference",trustLevel:"untrusted",sourceRole:"assistant",verificationState:"inferred",sourceReliability:.2};
+  const explicit=record.kind==="preference"?record.origin==="explicit":record.confidence>=.75;
+  return explicit
+    ?{evidenceClass:"user_explicit",trustLevel:"high",sourceRole:"user",verificationState:"explicit",sourceReliability:source?.explicitIntent?1:.9}
+    :{evidenceClass:"assistant_inference",trustLevel:"low",sourceRole:"user",verificationState:"inferred",sourceReliability:.55};
 }
 function trustCeiling(provenance:MemoryProvenance){return provenance.trustLevel==="high"?1:provenance.trustLevel==="medium"?.85:provenance.trustLevel==="low"?.6:.3;}
