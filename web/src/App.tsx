@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Command, FileText, GripVertical, Menu, MessageSquarePlus, PanelRight, Pencil, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
+import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Command, Eye, FileText, GripVertical, Menu, MessageSquarePlus, PanelRight, Pencil, Play, Plus, Send, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import { api, subscribe, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TranscriptItem } from "./api";
 import { LiveText, Markdown } from "./Markdown";
 import { createRequestId } from "./id";
@@ -28,29 +28,45 @@ function ToolCall({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> })
   </details>;
 }
 
-function ToolHistory({ items }: { items: Extract<TranscriptItem, { kind: "tool" }>[] }) {
-  const failed = items.filter((item) => item.isError).length;
-  return <details className="tool-history">
-    <summary>
-      <span className="tool-history-icon"><Terminal size={14} /></span>
-      <span><strong>Tool activity</strong><small>{items.length} call{items.length === 1 ? "" : "s"}{failed ? ` · ${failed} failed` : ""}</small></span>
-      <span className="tool-history-status">Details</span>
-      <ChevronRight className="tool-chevron" size={14} />
-    </summary>
-    <div className="tool-history-list">{items.map((item) => <ToolCall key={`${item.seq}-${item.index}`} item={item} />)}</div>
-  </details>;
+function ToolActivityPanel({ transcriptItems, events }: { transcriptItems: Extract<TranscriptItem, { kind: "tool" }>[]; events: RunEvent[] }) {
+  const latestByTool = new Map<string, RunEvent>();
+  for (const event of events) {
+    if (!event.type.startsWith("tool.")) continue;
+    latestByTool.set(String(event.data.toolCallId ?? event.data.toolName ?? event.seq), event);
+  }
+  const live = [...latestByTool.values()].slice(-8).reverse();
+  const running = live.filter((event) => event.type === "tool.started").length;
+  const failed = transcriptItems.filter((item) => item.isError).length;
+  return <section className="panel-section tool-audit-section">
+    <div className="section-title"><span>Tool activity</span><small>{running ? `${running} running` : `${transcriptItems.length} calls`}{failed ? ` · ${failed} failed` : ""}</small></div>
+    <p className="audit-help">Operational detail is kept out of the conversation. Expand it here only when execution evidence needs inspection.</p>
+    {live.length > 0 && <details className="audit-disclosure"><summary><Activity size={13} /><span>Live and recent activity</span><small>{live.length}</small><ChevronRight className="tool-chevron" size={13} /></summary><div className="tool-stack">{live.map((event) => <div className="tool-row" key={`${event.seq}-${event.type}`}><Terminal size={14} /><span>{String(event.data.toolName ?? "tool")}</span><small>{event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "done"}</small></div>)}</div></details>}
+    <details className="audit-disclosure"><summary><Terminal size={13} /><span>Recorded tool calls</span><small>{transcriptItems.length}</small><ChevronRight className="tool-chevron" size={13} /></summary><div className="tool-history-list">{transcriptItems.length ? transcriptItems.map((item) => <ToolCall key={`${item.seq}-${item.index}`} item={item} />) : <p className="muted">No tool calls recorded for this TaskRun.</p>}</div></details>
+  </section>;
 }
 
-function LiveToolActivity({ events }: { events: RunEvent[] }) {
-  const latestByTool = new Map<string, RunEvent>();
-  for (const event of events) latestByTool.set(String(event.data.toolCallId ?? event.data.toolName ?? event.seq), event);
-  const latest = [...latestByTool.values()].slice(-5).reverse();
-  const running = latest.filter((event) => event.type === "tool.started").length;
-  const failed = latest.filter((event) => Boolean(event.data.isError)).length;
-  return <details className="live-tools">
-    <summary><Activity size={14} /><span><strong>{running ? `${running} tool${running === 1 ? "" : "s"} running` : "Recent tool activity"}</strong><small>{latest.length} recent{failed ? ` · ${failed} failed` : ""}</small></span><ChevronRight className="tool-chevron" size={14} /></summary>
-    <div className="tool-stack">{latest.map((event) => <div className="tool-row" key={`${event.seq}-${event.type}`}><Terminal size={14} /><span>{String(event.data.toolName ?? "tool")}</span><small>{event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "done"}</small></div>)}</div>
-  </details>;
+function GateAuditPanel({ run }: { run: TaskRun }) {
+  const gates = run.supervision.latestGates;
+  const failedGates = gates.filter((gate) => !gate.passed);
+  const settledCompletion = gates.find((gate) => gate.gateType === "completion");
+  const completionPassed = settledCompletion?.passed ?? run.completionGate.passed;
+  const completionFailures = settledCompletion?.failures ?? run.completionGate.failures.map((failure) => ({ ...failure, disposition: "auto_fixable" }));
+  const verdictLabel = settledCompletion ? (completionPassed ? "accepted" : `${completionFailures.length} blocker(s)`) : (completionPassed ? "structurally ready" : `${completionFailures.length} blocker(s)`);
+  return <section className="panel-section gate-audit-section">
+    <div className="section-title"><span>Gate audit</span><small className={completionPassed ? "audit-pass" : "audit-warn"}>{verdictLabel}</small></div>
+    <div className="gate-standard-grid" aria-label="Supervisor gate standards">
+      <div><ShieldCheck size={14} /><strong>Progress</strong><small>No terminal failure loop</small></div>
+      <div><ShieldCheck size={14} /><strong>Evidence</strong><small>Required checks need independent, current evidence</small></div>
+      <div><ShieldCheck size={14} /><strong>Contract</strong><small>Each acceptance criterion must be covered</small></div>
+      <div><ShieldCheck size={14} /><strong>Claims</strong><small>Completion claims require a check, receipt, or artifact</small></div>
+      <div><ShieldCheck size={14} /><strong>Approval</strong><small>Approval boundaries cannot be auto-resumed</small></div>
+      <div><ShieldCheck size={14} /><strong>Delivery</strong><small>Final response must be substantive and non-empty</small></div>
+    </div>
+    <div className={`completion-verdict ${completionPassed ? "passed" : "pending"}`}><strong>{settledCompletion ? (completionPassed ? "Settled candidate accepted" : "Settled candidate rejected") : (completionPassed ? "Structural prerequisites ready" : "Structural prerequisites incomplete")}</strong><span>{settledCompletion ? (completionPassed ? "The latest persisted Supervisor evaluation accepted progress, evidence, contract coverage, claims, and delivery." : "Supervisor must continue, request evidence, block, or seek approval before accepting delivery.") : (completionPassed ? "Plan and checks are ready; final semantic review still occurs after the candidate response settles." : "Plan or check prerequisites must be satisfied before final semantic review.")}</span></div>
+    {completionFailures.length > 0 && <div className="gate-failure-list">{completionFailures.map((failure) => <div key={`${failure.kind}:${failure.key}`}><span>{failure.kind}</span><strong>{failure.key}</strong><p>{failure.reason}</p></div>)}</div>}
+    {gates.length > 0 ? <div className="gate-evaluation-list">{gates.map((gate) => <details className={`gate-evaluation ${gate.passed ? "passed" : "failed"}`} key={gate.id}><summary><span>{gate.passed ? <Check size={13} /> : <X size={13} />}{gate.gateType}</span><small>{gate.passed ? "passed" : `${gate.failures.length} failure(s)`}</small><ChevronRight className="tool-chevron" size={13} /></summary><div>{gate.criterionCoverage?.length ? <div className="criterion-list">{gate.criterionCoverage.map((criterion) => <div className={`criterion-row ${criterion.status}`} key={criterion.criterion}><strong>{criterion.status}</strong><p>{criterion.criterion}</p><small>{criterion.reason}{criterion.evidenceRefs.length ? ` · ${criterion.evidenceRefs.join(", ")}` : ""}</small></div>)}</div> : null}{gate.failures.map((failure) => <div className="gate-detail" key={`${failure.kind}:${failure.key}`}><span>{failure.disposition.replaceAll("_", " ")}</span><strong>{failure.key}</strong><p>{failure.reason}</p></div>)}</div></details>)}</div> : <p className="muted">No settled gate evaluation yet. Standards above show what the Supervisor will review.</p>}
+    {failedGates.length > 0 && <small className="audit-footnote">Latest evaluation contains {failedGates.length} failed gate{failedGates.length === 1 ? "" : "s"}; the latest Supervisor decision determines the next action.</small>}
+  </section>;
 }
 
 function CurrentOperationPanel({ run }: { run: TaskRun }) {
@@ -91,12 +107,14 @@ function ContextManifestPanel({ run }: { run: TaskRun }) {
   return <section className="panel-section"><div className="section-title"><span>Context manifests</span><small>{manifests.length} retained</small></div><div className="checkpoint-card context-manifest-card">{manifests.length > 1 && <select value={current.id} onChange={(event) => setSelectedId(event.target.value)}>{manifests.map((item) => <option value={item.id} key={item.id}>attempt {item.attempt} · {item.source} · {new Date(item.createdAt).toLocaleTimeString()}</option>)}</select>}<strong>{selected.length} selected · {omitted.length} omitted</strong><span>{selected.reduce((sum, item) => sum + item.estimatedTokens, 0).toLocaleString()} estimated tokens · hash {current.manifestHash.slice(0, 12)}</span>{previous && <span>diff +{added.length} / -{removed.length} selected sources</span>}<details><summary>Selected sources</summary><div className="manifest-items">{selected.map((item) => <code key={`${item.kind}:${item.sourceId}`}>{item.kind} · {item.sourceId}</code>)}</div></details><details><summary>Omitted sources</summary><div className="manifest-items">{omitted.length ? omitted.map((item) => <code key={`${item.kind}:${item.sourceId}`}>{item.kind} · {item.sourceId} · {item.reason}</code>) : <small>None</small>}</div></details>{previous && <details><summary>Changes from previous manifest</summary><div className="manifest-items">{added.map((item) => <code key={`add:${item.kind}:${item.sourceId}`}>+ {item.kind} · {item.sourceId}</code>)}{removed.map((item) => <code key={`remove:${item.kind}:${item.sourceId}`}>- {item.kind} · {item.sourceId}</code>)}{!added.length && !removed.length && <small>No selected-source changes.</small>}</div></details>}{error && <small>{error}</small>}</div></section>;
 }
 
-function RunDetails({ run, onRefresh }: { run: TaskRun; onRefresh?: () => Promise<void> }) {
+function RunDetails({ run, toolEvents, transcriptTools, onRefresh }: { run: TaskRun; toolEvents: RunEvent[]; transcriptTools: Extract<TranscriptItem, { kind: "tool" }>[]; onRefresh?: () => Promise<void> }) {
   return <div className="run-details">
     <CurrentOperationPanel run={run} />
     <section className="run-summary"><div className="phase-line"><span className={`phase-badge ${run.status}`}>{run.status}</span><span>{run.phase}</span><span>attempt {run.attempt}</span></div><p>{run.goal}</p>{run.contract && <div className="run-contract"><span>{run.contract.intent.replaceAll("_", " ")} · {run.contract.relation}</span><small>{run.contract.decisionReason}</small><ul>{run.contract.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></div>}<div className="run-metrics"><span>{run.transcriptCount} messages</span><span>{run.usage.totalTokens.toLocaleString()} tokens</span><span>{run.usage.input.toLocaleString()} in / {run.usage.output.toLocaleString()} out</span><span>token usage is observational only</span></div>{run.blockedReason && <div className="blocked-note">{run.blockedReason}</div>}</section>
     {run.checkpoint && <section className="panel-section"><div className="section-title"><span>Checkpoint</span><small>{run.checkpoint.active ? "active" : "preserved"}</small></div><div className="checkpoint-card"><span>event {run.checkpoint.lastEventSeq} · transcript {run.checkpoint.lastTranscriptSeq}</span>{run.checkpoint.currentTool && <strong>{run.checkpoint.currentTool.toolName}</strong>}{run.checkpoint.assistantPartial && <p>{run.checkpoint.assistantPartial.slice(-240)}</p>}</div></section>}
-    <section className="panel-section"><div className="section-title"><span>Supervisor</span><small>{run.supervision.latestDecision?.action ?? "observing"}</small></div><div className="checkpoint-card">{run.supervision.latestDecision ? <><strong>{run.supervision.latestDecision.reasonCode}</strong><p>{run.supervision.latestDecision.rationale}</p></> : <span>No intervention decision.</span>}{run.supervision.progress && <span>progress {run.supervision.progress.meaningfulChanges} · failures {run.supervision.progress.consecutiveFailures}</span>}{run.supervision.latestGates.map((gate) => <span key={gate.id}>{gate.gateType}: {gate.passed ? "passed" : `${gate.failures.length} failure(s)`}</span>)}</div></section>
+    <section className="panel-section supervisor-audit-section"><div className="section-title"><span>Supervisor review</span><small>{run.supervision.latestDecision?.action.replaceAll("_", " ") ?? "observing"}</small></div><div className="supervisor-verdict">{run.supervision.latestDecision ? <><div><Eye size={15} /><strong>{run.supervision.latestDecision.reasonCode.replaceAll("_", " ")}</strong><span>{Math.round(run.supervision.latestDecision.confidence * 100)}% confidence · attempt {run.supervision.latestDecision.attempt}</span></div><p>{run.supervision.latestDecision.rationale}</p></> : <><div><Eye size={15} /><strong>Observing execution</strong></div><p>No intervention decision has been persisted. The Supervisor is monitoring progress and will review the settled candidate against the standards below.</p></>}{run.supervision.progress && <div className="progress-audit"><span>{run.supervision.progress.meaningfulChanges} meaningful changes</span><span>{run.supervision.progress.consecutiveFailures} consecutive failures</span><span>{run.supervision.progress.repeatedOperations} repeated operations</span></div>}</div></section>
+    <GateAuditPanel run={run} />
+    <ToolActivityPanel transcriptItems={transcriptTools} events={toolEvents} />
     <ContextManifestPanel run={run} />
     {run.supervision.approvalRequests.length > 0 && <section className="panel-section"><div className="section-title"><span>Approvals</span><small>{run.supervision.approvalRequests.filter((item) => item.status === "pending").length} pending</small></div><div className="task-list">{run.supervision.approvalRequests.map((approval) => <div className="spawn-proposal" key={approval.id}><div><strong>{approval.reason}</strong><small>{approval.status}{approval.resolution ? ` · ${approval.resolution}` : ""}</small></div>{approval.status === "pending" && <span className="proposal-actions"><button onClick={async () => { await api.approveRunApproval(approval.id); await onRefresh?.(); }}>Approve & resume</button><button onClick={async () => { await api.rejectRunApproval(approval.id); await onRefresh?.(); }}>Reject</button></span>}</div>)}</div></section>}
     <section className="panel-section"><div className="section-title"><span>Plan</span><small>{run.plan.filter((item) => item.status === "done").length}/{run.plan.length}</small></div><div className="task-list">{run.plan.length ? run.plan.map((item) => <div className="task-row" key={item.key}>{item.status === "done" ? <Check size={15} /> : <Circle size={14} />}<span>{item.title}</span><small>{item.status}</small></div>) : <p className="muted">No structured plan.</p>}</div></section>
@@ -476,10 +494,8 @@ export function App() {
         {hasOlderMessages && <button className="load-older" onClick={() => void loadOlderMessages()} disabled={loadingOlderMessages}>{loadingOlderMessages ? "Loading…" : "Load earlier messages"}</button>}
         {messages.map((message) => <ChatMessage key={message.id} message={message} />)}
         {pendingUserMessage?.sessionId === sessionId && !messages.some((message) => message.role === "user" && message.content === pendingUserMessage.content && message.createdAt >= pendingUserMessage.createdAt - 5_000) && <article className="message user pending" aria-label="Sending message"><div className="message-meta"><span>You</span><time>Sending…</time></div><div className="message-body"><Markdown>{pendingUserMessage.content}</Markdown></div></article>}
-        {selectedRun && transcriptTools.length > 0 && <ToolHistory items={transcriptTools} />}
         {activeRun && <div className="active-run-strip"><Activity size={14} /><span>Attempt {activeRun.attempt}</span><strong>{activeRun.phase}</strong><small>{activeRun.usage.totalTokens.toLocaleString()} tokens</small></div>}
         {streaming && <article className="message assistant live"><div className="message-meta"><span>TAgent</span><span className="live-label"><span className="pulse" />Working</span></div><div className="message-body"><LiveText>{streaming}</LiveText></div></article>}
-        {activeTools.length > 0 && <LiveToolActivity events={activeTools} />}
         <div ref={endRef} />
         </div>
       </section>
@@ -494,7 +510,7 @@ export function App() {
     </main>
 
     <aside className={`run-panel ${rightOpen ? "mobile-open" : ""}`}>
-      <div className="panel-heading"><div><span className="eyebrow">TaskRun</span><h2>Execution state</h2></div><button className="icon-button mobile-only" onClick={() => setRightOpen(false)} aria-label="Close task panel"><X size={18} /></button></div>
+      <div className="panel-heading"><div><span className="eyebrow">Audit workspace</span><h2>Supervisor & execution</h2></div><button className="icon-button mobile-only" onClick={() => setRightOpen(false)} aria-label="Close task panel"><X size={18} /></button></div>
       {!runs.length ? <div className="panel-empty"><Play size={20} /><p>No TaskRuns</p></div> : <div className="run-history">{runs.map((item, index) => {
         const expanded = item.id === expandedRunId;
         return <section className={`run-history-item ${expanded ? "expanded" : ""}`} key={item.id}>
@@ -507,7 +523,7 @@ export function App() {
             <span className="history-copy"><strong>{item.goal}</strong><small>{item.status} · attempt {item.attempt}</small></span>
             <time>{index === 0 && item.status === "running" ? "current" : formatTime(item.updatedAt ?? item.createdAt)}</time>
           </button>
-          {expanded && <RunDetails run={selectedRun?.id === item.id ? selectedRun : item} onRefresh={async () => { const refreshed = await api.run(item.id); setSelectedRun(refreshed); setRuns((current) => current.map((run) => run.id === refreshed.id ? refreshed : run)); }} />}
+          {expanded && <RunDetails run={selectedRun?.id === item.id ? selectedRun : item} toolEvents={activeRun?.id === item.id ? activeTools : []} transcriptTools={transcriptTools} onRefresh={async () => { const refreshed = await api.run(item.id); setSelectedRun(refreshed); setRuns((current) => current.map((run) => run.id === refreshed.id ? refreshed : run)); }} />}
         </section>;
       })}</div>}
     </aside>

@@ -10,6 +10,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Reserved the main conversation for user and assistant messages by moving historical and live/recent Tool activity into the TaskRun audit workspace, collapsed by default.
+- Expanded the right-side TaskRun panel into a Supervisor audit workspace with explicit progress, evidence, contract, claim, approval, and delivery standards; persisted gate failures; criterion coverage receipts; Supervisor rationale/confidence; and tool evidence drill-down.
+
 ### Fixed
 
 - Keep the currently visible assistant response on screen until replacement content actually arrives, rather than moving it into a repeated `earlier draft retained` placeholder at every assistant message boundary.

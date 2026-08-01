@@ -83,6 +83,18 @@ describe("Web workbench state model", () => {
     expect(source).not.toContain("setProvisionalDrafts");
   });
 
+  it("keeps tool telemetry out of the conversation and exposes auditable Supervisor gates", async () => {
+    const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    expect(source).not.toContain("<ToolHistory items={transcriptTools}");
+    expect(source).not.toContain("<LiveToolActivity events={activeTools}");
+    expect(source).toContain("<ToolActivityPanel transcriptItems={transcriptTools} events={toolEvents}");
+    expect(source).toContain("Gate audit");
+    expect(source).toContain("Each acceptance criterion must be covered");
+    expect(source).toContain("Completion claims require a check, receipt, or artifact");
+    expect(source).toContain("criterionCoverage");
+    expect(source).toContain("Supervisor & execution");
+  });
+
   it("shows submitted messages optimistically and continuously reconciles persisted chat state", async () => {
     const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
     expect(source).toContain("const [pendingUserMessage, setPendingUserMessage]");
