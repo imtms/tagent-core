@@ -46,8 +46,8 @@ Using the intended real embedding and hybrid extractor providers:
 - [ ] explicit identity is recalled exactly;
 - [ ] positive and negative preferences are distinguished;
 - [ ] conversation coreference is resolved for the maintained Chinese cases;
-- [ ] assistant guesses and TaskRun wrapper text do not become user facts;
-- [ ] unsupported input becomes observable `completed_empty`, not false success;
+- [ ] assistant guesses, assistant final prose, TaskRun wrapper text, Checks, Artifacts, file paths/sizes, and PASS/FAIL metadata do not become semantic memory;
+- [ ] unsupported low-salience input becomes observable `completed_empty`, while one-off operational requests and malformed negation are rejected by the quality boundary;
 - [ ] provider failure with no deterministic fallback becomes retry/failure, not empty success;
 - [ ] LLM Cold consolidation preserves negation/history/provenance, with deterministic fallback tested.
 
@@ -60,6 +60,8 @@ Required maintained regression examples include:
 Sway家在前滩
 乔哲家也是
 他俩住隔壁
+公司的组织架构（只召回 canonical direct-report relations）
+量子考古学火星样本（应允许 0 cards）
 ```
 
 ## 5. Security gate
@@ -75,7 +77,7 @@ Sway家在前滩
 ## 6. API, tools, and Web gate
 
 - [ ] status, capture, jobs, recall, topic-get, records, export, and forget endpoints return expected JSON;
-- [ ] Memory Center opens without HTTP 500 and renders real records/jobs/topics;
+- [ ] Memory Center opens without HTTP 500 and renders real records/jobs/topics; recall trace and empty-result states render without implying success;
 - [ ] disabled mode hides Memory Center;
 - [ ] `memory_search`, `memory_topic_get`, and guarded `memory_forget` work from the Agent;
 - [ ] UI labels distinguish queued, completed, completed-empty, and failed capture;

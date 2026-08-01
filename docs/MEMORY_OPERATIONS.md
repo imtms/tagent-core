@@ -222,8 +222,8 @@ Durable memory writes carry structured provenance:
 
 - `user_explicit`: direct user statements; high trust and eligible for active memory.
 - `user_context_summary`: role-aware summaries containing only durable user statements from pruned context; medium trust.
-- `tool_verified_fact`: reserved for successful operation/check/artifact evidence.
-- `task_outcome`: generated from structured passed Checks and published Artifacts, never assistant final prose.
+- `tool_verified_fact`: reserved for a future explicit, policy-gated import path for successful operation/check/artifact evidence; it is not captured automatically.
+- `task_outcome`: retained as a provenance type for compatibility, but rejected by the current automatic persistence quality gate.
 - `assistant_inference`: untrusted and quarantined by default.
 
 Assistant responses and mixed raw context-prune transcripts are not capture sources. One-off operational requests are excluded from semantic extraction. Capture jobs use lease heartbeat and fencing; stale workers cannot complete or fail a job after another worker has reclaimed it.

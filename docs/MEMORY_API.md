@@ -46,7 +46,7 @@ Recall returns:
 - `promptSection`: the same low-authority section suitable for Agent injection;
 - `trace`: candidate count, selected Topic IDs, and denied count.
 
-Cold Topic bodies are not vector chunks. Topic routing happens through Warm descriptors/records, graph links, aliases, and optional semantic vectors.
+Cold Topic bodies are not vector chunks. Topic routing happens through Warm descriptors/records, graph links, aliases, and optional semantic vectors. Recall first routes recognizable domains, applies minimum lexical/vector/Topic thresholds, removes semantic duplicates and lower-ranked contradictions, isolates identity memory to identity/name questions, and may return an empty result rather than filling Top-K with unrelated cards.
 
 ## Agent tools
 

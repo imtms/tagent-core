@@ -4,6 +4,8 @@ All notable changes to TAgent Core are documented here.
 
 ## Unreleased
 
+## [0.1.4] - 2026-08-01
+
 ### Run budget elasticity
 
 - Treat complexity-tier token allowances as soft guidance checkpoints instead of premature termination ceilings.
@@ -24,6 +26,11 @@ All notable changes to TAgent Core are documented here.
 - Add reversible quarantine SQL with a dry-run report and audit snapshots for existing dirty records.
 
 ## [0.1.3] - 2026-08-01
+
+### Changed
+
+- Replace the hand-written Markdown renderer with `markdown-it` and a bounded `highlight.js` language set.
+- Add tables, nested lists, fenced code highlighting, copy controls, safe external links/images, raw-HTML suppression, CJK URL handling, and responsive overflow containment.
 
 ### Fixed
 
@@ -47,8 +54,10 @@ All notable changes to TAgent Core are documented here.
 
 ### Security and reliability
 
+> Version `0.1.1` was an internal version increment whose changes shipped in the tagged `v0.1.2` release; no `v0.1.1` tag was published.
+
 - Classify memory evidence as `user_explicit`, `user_context_summary`, `tool_verified_fact`, `task_outcome`, or `assistant_inference`, with trust, source-role, and verification metadata.
-- Stop parsing assistant prose as durable memory; task outcomes are built only from passed Check evidence and published Artifacts.
+- Stop parsing assistant prose as durable memory; at this stage task outcomes were restricted to passed Check evidence and published Artifacts. Automatic TaskRun outcome capture is removed entirely in `0.1.4`.
 - Restore context-prune deposition through a role-aware user-only durable summary path instead of capturing mixed user/assistant history.
 - Enforce one hard token budget across Hot/Warm cards and complete Cold Topic pages.
 - Add capture-job lease heartbeat, owner token, monotonic fencing token, and CAS complete/fail operations.
@@ -117,8 +126,8 @@ First public source preview of the persistent TAgent control plane.
 
 [0.1.0]: https://github.com/imtms/tagent-core/releases/tag/v0.1.0
 
-[0.1.1]: https://github.com/imtms/tagent-core/releases/tag/v0.1.1
-
 [0.1.2]: https://github.com/imtms/tagent-core/releases/tag/v0.1.2
 
 [0.1.3]: https://github.com/imtms/tagent-core/releases/tag/v0.1.3
+
+[0.1.4]: https://github.com/imtms/tagent-core/releases/tag/v0.1.4

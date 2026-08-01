@@ -4,7 +4,7 @@
 
 TAgent Core is a durable, self-hosted control plane for an in-process coding agent. It combines Pi's model and tool loop with TAgent-owned persistence, TaskRun supervision, verification gates, operation receipts, a responsive Web workbench, scoped automation credentials, and an optional Hot/Warm/Cold long-term memory platform.
 
-Version `0.1.2` is the current stable source release; `0.1.0` was the first stable source release for the documented **trusted single-service deployment profile**. Stable means the supported profile has passed the repository's release gates; it does not mean that the service is a public multi-tenant sandbox.
+Version `0.1.3` is the current stable source release; `0.1.4` is prepared on `main` and remains unreleased until its tag is published. `0.1.0` was the first stable source release for the documented **trusted single-service deployment profile**. Stable means the supported profile has passed the repository's release gates; it does not mean that the service is a public multi-tenant sandbox.
 
 ## Highlights
 
@@ -20,7 +20,7 @@ Version `0.1.2` is the current stable source release; `0.1.0` was the first stab
 
 ## Supported 0.1 Profile
 
-The stable `0.1.0` support boundary is:
+The stable `0.1.x` support boundary is:
 
 - one trusted TAgent Core process;
 - one trusted workspace;
@@ -178,7 +178,7 @@ The Fastify API provides health/config status, sessions, durable submissions, ru
 
 `TAGENT_SERVICE_CREDENTIALS` enables least-privilege Bearer credentials for external automation scopes such as `sessions:read`, `sessions:write`, `runs:read`, `runs:control`, and `events:consume`. These credentials intentionally do not provide administrator/Web access.
 
-The interactive Web and administrative routes do **not** include a built-in login boundary in `0.1.0`. Keep the service private or put it behind an authenticated reverse proxy. See [docs/core-api-contract.md](docs/core-api-contract.md).
+The interactive Web and administrative routes do **not** include a built-in login boundary in `0.1.x`. Keep the service private or put it behind an authenticated reverse proxy. See [docs/core-api-contract.md](docs/core-api-contract.md).
 
 ## Security Boundary
 
@@ -222,6 +222,7 @@ See [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md) and [docs/REL
 - [Memory API and UI](docs/MEMORY_API.md)
 - [Security policy](SECURITY.md)
 - [0.1.0 release audit](docs/RELEASE_AUDIT_0.1.0.md)
+- [0.1.4 release audit](docs/RELEASE_AUDIT_0.1.4.md)
 - [Changelog](CHANGELOG.md)
 
 ## Authorship and License
