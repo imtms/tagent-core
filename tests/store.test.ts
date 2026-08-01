@@ -80,6 +80,14 @@ describe("Store", () => {
     expect(store.findMergeCandidate(session.id, analysis("Same canonical goal"))?.id).toBe(first.id);
   });
 
+  it("keeps a durable receipt when equivalent pending work is merged", () => {
+    const store = createStore(); const session = store.createSession();
+    const first = store.enqueueSessionInbox(session.id, "first wording", analysis("same canonical goal"), "dedupe-receipt-1");
+    const source = store.enqueueSessionInbox(session.id, "second wording", analysis("same canonical goal"), "dedupe-receipt-2");
+    expect(store.markSessionInboxDuplicate(source.id, first.id, session.id)).toMatchObject({ id: source.id, requestId: "dedupe-receipt-2", status: "deleted", decision: "merge", error: `Duplicate of ${first.id}` });
+    expect(store.getSessionSubmission(session.id, "dedupe-receipt-2")?.id).toBe(source.id);
+  });
+
   it("edits and reorders only queued Session inbox items", () => {
     const store = createStore();
     const session = store.createSession();
@@ -92,6 +100,7 @@ describe("Store", () => {
     expect(store.reorderSessionInbox(session.id, [third.id, first.id, second.id])?.map((item) => [item.id, item.position])).toEqual([
       [third.id, 1], [first.id, 2], [second.id, 3],
     ]);
+    expect(store.listSessionInbox(session.id).map((item) => item.id)).toEqual([third.id, first.id, second.id]);
     expect(store.reorderSessionInbox(session.id, [first.id, second.id])).toBeUndefined();
 
     expect(store.claimSessionInboxNow(third.id, session.id).status).toBe("started");

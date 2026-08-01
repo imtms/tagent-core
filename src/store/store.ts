@@ -501,7 +501,7 @@ export class Store {
 
   listSessionInbox(sessionId: SessionId, includeTerminal = false): SessionInboxItem[] {
     const rows = this.db.prepare(`${this.sessionInboxSelect(`WHERE session_id = ? ${includeTerminal ? "" : "AND status IN ('queued','claimed')"}`)} ORDER BY
-      manual_order DESC, CASE urgency WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'normal' THEN 2 ELSE 1 END DESC,
+      manual_order DESC, CASE WHEN manual_order=1 THEN position END ASC, CASE urgency WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'normal' THEN 2 ELSE 1 END DESC,
       priority DESC, position, created_at, id`).all(sessionId) as Array<Record<string, unknown>>;
     return rows.map((row) => this.hydrateSessionInbox(row)!);
   }
@@ -517,6 +517,13 @@ export class Store {
     const normalized = analysis.summary.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
     if (!normalized) return undefined;
     return this.listSessionInbox(sessionId).find((item) => item.status === "queued" && item.decision === "pending" && item.analysis.intent === analysis.intent && item.analysis.summary.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "") === normalized);
+  }
+
+  markSessionInboxDuplicate(sourceId: string, targetId: string, sessionId: SessionId) {
+    const timestamp = now();
+    const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET status='deleted',decision='merge',error=?,updated_at=?
+      WHERE id=? AND session_id=? AND status='queued'`).run(`Duplicate of ${targetId}`, timestamp, sourceId, sessionId);
+    return changed.changes === 1 ? this.getSessionInboxItem(sourceId) : undefined;
   }
 
   updateSessionInboxItem(id: string, sessionId: SessionId, content: string) {
@@ -580,7 +587,7 @@ ${source.content}`;
           )
         ) LIMIT 1`).get(sessionId, sessionId);
       if (active) return undefined;
-      const item = this.db.prepare("SELECT id FROM session_supervisor_inbox WHERE session_id = ? AND status = 'queued' AND decision = 'pending' ORDER BY manual_order DESC, CASE urgency WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'normal' THEN 2 ELSE 1 END DESC, priority DESC, position, created_at, id LIMIT 1").get(sessionId) as { id: string } | undefined;
+      const item = this.db.prepare("SELECT id FROM session_supervisor_inbox WHERE session_id = ? AND status = 'queued' AND decision = 'pending' ORDER BY manual_order DESC, CASE WHEN manual_order=1 THEN position END ASC, CASE urgency WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'normal' THEN 2 ELSE 1 END DESC, priority DESC, position, created_at, id LIMIT 1").get(sessionId) as { id: string } | undefined;
       if (!item) return undefined;
       return this.claimSessionInboxItem(item.id, sessionId);
     });

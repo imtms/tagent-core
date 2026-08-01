@@ -218,9 +218,12 @@ export class AgentService {
     if (existing) return { item: existing, run: existing.runId ? this.store.getRun(existing.runId) ?? null : null };
     const activeRun = this.store.getActiveRun(sessionId);
     const analysis = this.sessionRouter.analyze(content, activeRun);
-    const duplicate = this.store.findMergeCandidate(sessionId, analysis);
-    if (duplicate && !activeRun) return { item: duplicate, run: duplicate.runId ? this.store.getRun(duplicate.runId) ?? null : null, duplicate: true };
+    const duplicate = !activeRun ? this.store.findMergeCandidate(sessionId, analysis) : undefined;
     const item = this.store.enqueueSessionInbox(sessionId, content, analysis, requestId);
+    if (duplicate) {
+      const merged = this.store.markSessionInboxDuplicate(item.id, duplicate.id, sessionId)!;
+      return { item: merged, run: null, duplicate: true, mergedInto: duplicate.id };
+    }
 
     if (activeRun && analysis.targetRunId === activeRun.id && analysis.confidence >= 0.85) {
       const userMessage = this.store.appendMessage(sessionId, "user", content);
