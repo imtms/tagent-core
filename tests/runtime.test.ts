@@ -141,6 +141,22 @@ describe("AgentService runtime boundary", () => {
     await service.closeRuntimes(); store.close();
   });
 
+  it("splits compound active input into steer, follow-up, and parallel governance actions", async () => {
+    const store = new Store(":memory:"); const session = store.createSession(); const controls: Array<{ kind: string; content: string }> = [];
+    const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
+    const first = service.enqueueSessionInput(session.id, "修复 Supervisor", "compound-base");
+    const active = first.run!;
+    const original = service.enqueueControl.bind(service);
+    service.enqueueControl = (async (runId: string, kind: "steer" | "follow_up", content: string, requestId?: string) => { controls.push({ kind, content }); return original(runId, kind, content, requestId); }) as typeof service.enqueueControl;
+    const routed = service.enqueueSessionInput(session.id, "先不要部署。完成后更新文档。同时并行检查另一个仓库", "compound-route");
+    expect(routed.run?.id).toBe(active.id);
+    expect((routed as { proposals?: unknown[] }).proposals).toHaveLength(1);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(controls).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "steer", content: expect.stringContaining("先不要部署") }), expect.objectContaining({ kind: "follow_up", content: expect.stringContaining("完成后更新文档") })]));
+    expect(store.listSpawnProposals(active.id, "proposed")).toEqual([expect.objectContaining({ goal: expect.stringContaining("并行检查另一个仓库") })]);
+    await service.closeRuntimes(); store.close();
+  });
+
   it("keeps explicit postponed work deferred", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();

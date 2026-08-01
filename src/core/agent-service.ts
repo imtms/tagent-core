@@ -234,11 +234,19 @@ export class AgentService {
       const userMessage = this.store.appendMessage(sessionId, "user", content);
       this.captureUserMessage(activeRun, userMessage.id, content);
       if (analysis.intent === "steer_active" || analysis.intent === "update_active_context") {
-        const routed = this.store.routeSessionInboxItem(item.id, sessionId, "steer", activeRun.id)!;
-        void this.enqueueControl(activeRun.id, "steer", content, `inbox:${item.id}`).then((result) => {
-          if (result.status !== "accepted") this.store.routeSessionInboxItem(item.id, sessionId, "steer", activeRun.id, `Control delivery: ${result.status}`);
+        const currentObjectives = analysis.objectives.filter((objective) => objective.timing === "current");
+        const followUpObjectives = analysis.objectives.filter((objective) => objective.timing === "follow_up");
+        const parallelObjectives = analysis.objectives.filter((objective) => objective.timing === "parallel");
+        const steerContent = currentObjectives.length ? currentObjectives.map((objective) => objective.summary).join("\n") : content;
+        const proposals = parallelObjectives.map((objective) => this.store.createSpawnProposal(activeRun.id, objective.summary, analysis.acceptanceCriteria.filter((criterion) => criterion.includes(objective.summary)), "parallel"));
+        for (const proposal of proposals) this.publish(this.store.appendEvent(activeRun.id, "supervisor.spawn.proposed", { proposalId: proposal.id, inboxItemId: item.id, goal: proposal.goal, relation: proposal.relation }));
+        for (const objective of followUpObjectives) void this.enqueueControl(activeRun.id, "follow_up", objective.summary, `inbox:${item.id}:follow-up:${objective.id}`);
+        const routingNote = [proposals.length ? `${proposals.length} parallel proposal(s)` : "", followUpObjectives.length ? `${followUpObjectives.length} follow-up objective(s)` : ""].filter(Boolean).join("; ");
+        const routed = this.store.routeSessionInboxItem(item.id, sessionId, "steer", activeRun.id, routingNote)!;
+        void this.enqueueControl(activeRun.id, "steer", steerContent, `inbox:${item.id}`).then((result) => {
+          if (result.status !== "accepted") this.store.routeSessionInboxItem(item.id, sessionId, "steer", activeRun.id, `Control delivery: ${result.status}${routingNote ? `; ${routingNote}` : ""}`);
         });
-        return { item: routed, run: activeRun };
+        return { item: routed, run: activeRun, proposals };
       }
       if (analysis.intent === "follow_up_active") {
         const routed = this.store.routeSessionInboxItem(item.id, sessionId, "follow_up", activeRun.id)!;
