@@ -74,6 +74,16 @@ The TaskRun Supervisor distinguishes the designed terminal and runtime actions:
 
 These decisions are persisted with the `attempt_terminal` or `settled` trigger instead of converting every runtime exception directly to `run.failed`.
 
+## Candidate response governance
+
+Assistant text shown while a TaskRun is running is provisional runtime output. It is not a durable chat answer until settled review approves it.
+
+At every assistant-message boundary the runtime emits `message.started`, which resets the durable partial checkpoint and the Web live card before accepting new deltas. This prevents a steer, retry, or continuation response from being concatenated onto an earlier draft. Token-budget convergence guidance is deferred when an assistant response is already streaming, so a completed answer is not displaced by a later acknowledgement of the budget warning. If completion gates reject the candidate, the service emits `message.rejected`, retains the candidate in the Run transcript for audit, and does not append it to Session chat history.
+
+In addition to Plan, Check, evidence, progress, and non-empty delivery checks, settled review applies a conservative TaskRun contract-coverage gate. A short generic acknowledgement such as “received, completed” cannot finish a substantial contract merely because agent-authored state says that work passed. Auto-fixable delivery failures create a continuation whose prompt explicitly requires a complete standalone replacement addressing the original contract.
+
+This is a deterministic safety floor, not full semantic answer grading. Rich claim-to-evidence validation and independent semantic review remain roadmap work.
+
 ## Context Manifest
 
 Every new Run, resume, and continuation now persists an immutable per-attempt Context Manifest. It records the required system instruction, TaskRun contract, selected and omitted Session/transcript messages, Core Memory, dynamic Memory Cards, Cold Topics, current prompt, selection reasons, token estimates, and a SHA-256 manifest hash.

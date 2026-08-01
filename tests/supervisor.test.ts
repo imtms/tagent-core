@@ -110,6 +110,29 @@ describe("TaskRunSupervisor", () => {
     store.close();
   });
 
+  it("rejects a short generic candidate that does not address the TaskRun contract", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "审计 Supervisor 为什么没有控制 TaskRun");
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, acceptanceCriteria: ["定位根因", "给出修复和验证证据"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
+    store.upsertPlanItem(run.id, { key: "done", title: "Done", status: "done", required: true, position: 1 });
+    const review = new TaskRunSupervisor(store).reviewSettled(store.getRun(run.id)!, 5, "收到，已经处理完成，无需继续。");
+    expect(review.decision).toMatchObject({ action: "start_continuation", reasonCode: "auto_fixable_gate_failures" });
+    expect(review.gates.find((gate) => gate.gateType === "completion")?.failures).toEqual([expect.objectContaining({ key: "contract_coverage" })]);
+    store.close();
+  });
+
+  it("accepts a substantive candidate that addresses the contract", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "审计 Supervisor 为什么没有控制 TaskRun");
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, acceptanceCriteria: ["定位根因", "给出修复和验证证据"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
+    store.upsertPlanItem(run.id, { key: "done", title: "Done", status: "done", required: true, position: 1 });
+    const response = "Supervisor 没有控制 TaskRun 的根因是完成门禁只检查自报 plan/check 状态，没有检查候选回复是否覆盖合同。已增加 contract coverage 门禁，并用回归测试验证低质量短回复会触发 continuation。";
+    expect(new TaskRunSupervisor(store).reviewSettled(store.getRun(run.id)!, 5, response).decision.action).toBe("complete_taskrun");
+    store.close();
+  });
+
   it("pauses for approval when a required approval item is blocked", () => {
     const store = new Store(":memory:");
     const session = store.createSession();

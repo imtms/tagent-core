@@ -242,6 +242,7 @@ export function App() {
       const after = Math.max(checkpointAfter, cursor.ackedSeq);
       unsubscribe = subscribe(runId, consumerId, cursor.generation, after, async (event) => {
       setEvents((current) => [...current.slice(-39), event]);
+      if (event.type === "message.started") setStreaming("");
       if (event.type === "message.delta") setStreaming((current) => current + String(event.data.delta ?? ""));
       if (["run.completed", "run.blocked", "run.failed", "run.cancelled"].includes(event.type)) {
         const [updated, runHistory, history, queued, view, sessionItems] = await Promise.all([

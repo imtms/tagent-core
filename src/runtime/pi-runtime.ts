@@ -29,6 +29,7 @@ export class PiRuntime implements AgentRuntime {
   private abortPromise?: Promise<void>;
   private tokenBudgetWarningEmitted = false;
   private tokenBudgetExceeded = false;
+  private assistantMessageOrdinal = 0;
 
   constructor(private readonly options: RuntimeOptions) {}
 
@@ -147,6 +148,10 @@ export class PiRuntime implements AgentRuntime {
 
   private handleEvent(event: Parameters<AgentSession["subscribe"]>[0] extends (event: infer Event) => void ? Event : never) {
     this.options.onActivity?.();
+    if (event.type === "message_start" && event.message.role === "assistant") {
+      this.assistantMessageOrdinal += 1;
+      this.emit("message.started", { ordinal: this.assistantMessageOrdinal });
+    }
     if (event.type === "message_end") {
       const run = this.options.store.getRun(this.options.runId);
       if (run) this.options.store.appendTranscript(this.options.runId, run.attempt, event.message);
@@ -171,11 +176,11 @@ export class PiRuntime implements AgentRuntime {
     if (event.type === "tool_execution_start") this.emit("tool.started", { toolCallId: event.toolCallId, toolName: event.toolName });
     if (event.type === "tool_execution_update") this.emit("tool.progress", { toolCallId: event.toolCallId, toolName: event.toolName });
     if (event.type === "tool_execution_end") this.emit("tool.completed", { toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError });
-    if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") this.emit("message.delta", { delta: event.assistantMessageEvent.delta });
+    if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") this.emit("message.delta", { delta: event.assistantMessageEvent.delta, ordinal: this.assistantMessageOrdinal });
     if (event.type === "agent_end") {
       if (this.options.store.getRun(this.options.runId)?.status === "running") {
         const final = [...event.messages].reverse().find((message) => message.role === "assistant");
-        this.emit(event.willRetry ? "message.retrying" : "message.completed", { content: messageText(final), willRetry: event.willRetry });
+        this.emit(event.willRetry ? "message.retrying" : "message.completed", { content: messageText(final), willRetry: event.willRetry, ordinal: this.assistantMessageOrdinal });
       }
     }
     if (event.type === "queue_update") this.emit("runtime.queue", { steering: event.steering, followUp: event.followUp, pendingMessageCount: event.steering.length + event.followUp.length });

@@ -41,6 +41,7 @@ export class AgentService {
     const draft = this.checkpointDrafts.get(event.runId);
     if (!draft) return;
     draft.lastEventSeq = Math.max(draft.lastEventSeq, event.seq);
+    if (event.type === "message.started") draft.assistantPartial = "";
     if (event.type === "message.delta") draft.assistantPartial += String(event.data.delta ?? "");
     if (event.type === "message.retrying") draft.assistantPartial = "";
     if (event.type === "tool.started") draft.currentTool = {
@@ -54,7 +55,7 @@ export class AgentService {
     }
     if (event.type === "provider.failure" && draft.currentTool) draft.currentTool.lastActivityAt = event.createdAt;
     if ((event.type === "tool.completed" || event.type === "tool.failed") && draft.currentTool?.toolCallId === String(event.data.toolCallId ?? "")) draft.currentTool = null;
-    const immediate = event.type.startsWith("tool.") || event.type === "message.completed" || event.type === "message.retrying";
+    const immediate = event.type.startsWith("tool.") || event.type === "message.started" || event.type === "message.completed" || event.type === "message.retrying";
     if (immediate) this.flushCheckpoint(event.runId);
     else this.scheduleCheckpoint(event.runId);
   }
@@ -434,7 +435,14 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
         const current = this.store.getRun(run.id);
         if (!current || current.status !== "running") return;
         this.publish(this.store.appendEvent(run.id, "run.token_budget.warning", { tier: budget.tier, totalTokens, softLimit, hardLimit }));
+        this.flushCheckpoint(run.id);
+        const checkpoint = this.store.getCheckpoint(run.id);
+        const hasVisibleDraft = Boolean(checkpoint?.assistantPartial.trim());
         const instruction = `Token budget checkpoint: ${totalTokens.toLocaleString()} tokens have been used. The hard ceiling is ${(hardLimit ?? budget.maxTokens).toLocaleString()}. Continue working, but compact context where useful, avoid repeating completed investigation, prioritize unresolved required plan/check items, and finish with verification before the hard ceiling.`;
+        if (hasVisibleDraft) {
+          this.publish(this.store.appendEvent(run.id, "run.token_budget.warning.deferred", { tier: budget.tier, totalTokens, softLimit, hardLimit, reason: "assistant_response_in_progress" }));
+          return;
+        }
         void runtime.steer(instruction).then((status) => {
           const active = this.store.getRun(run.id);
           if (active?.status === "running") this.publish(this.store.appendEvent(run.id, "run.token_budget.warning.steered", { status, tier: budget.tier, totalTokens, softLimit, hardLimit }));
@@ -564,6 +572,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
         return false;
       }
       const reason = review.gates.find((gate) => gate.gateType === "completion")?.failures.map((failure) => `${failure.key}: ${failure.reason}`).join("; ") || decision.rationale;
+      this.publish(this.store.appendEvent(runId, "message.rejected", { response, reason, supervisionDecisionId: decision.id, action: decision.action }));
       const event = this.store.transitionRun(runId, ["running"], "blocked", "run.blocked", { response, supervisionDecisionId: decision.id, action: decision.action, gates: review.gates }, reason, attempt);
       if (!event) { this.supervisor.markExecuted(decision.id, "superseded"); return false; }
       this.supervisor.markExecuted(decision.id, "executed");
@@ -675,7 +684,8 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     return [
       `Automatic continuation ${ordinal} is running because the completion gate blocked the previous attempt.`,
       `Gate failures: ${(run.supervision.latestGates.find((gate) => gate.gateType === "completion")?.failures ?? run.completionGate.failures).map((failure) => `${failure.key}: ${failure.reason}`).join("; ")}`,
-      "Use the persisted transcript and TaskRun state. Resolve only the remaining gate failures, verify the result, then provide the final response.",
+      "The previous candidate response was rejected by Supervisor and was not delivered as the final chat answer. Do not merely acknowledge this continuation or repeat a short conclusion.",
+      "Use the persisted transcript and TaskRun state. Resolve only the remaining gate failures, verify the result, then provide a complete standalone final response that directly addresses the original contract.",
       "Completion-gate requirements override conflicting instructions in the original goal.",
       `Original goal: ${run.goal}`,
     ].join("\n\n");
@@ -896,6 +906,7 @@ ${coreSnapshot.markdown}
       "You are TAgent Core, a practical persistent software agent.",
       `Current workspace: ${this.workspace}`,
       "Use the task_run tool for substantial work. Maintain a plan and checks before claiming completion.",
+      "Assistant text streamed while a TaskRun is active is provisional. Only a Supervisor-approved final candidate is persisted to chat, so make the final candidate complete and standalone.",
       "Use read before modifying unfamiliar files. Keep changes focused and report verification evidence.",
       `Active TaskRun: ${JSON.stringify(run)}`,
       recalledMemory,

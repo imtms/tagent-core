@@ -169,7 +169,7 @@ describe("AgentService runtime boundary", () => {
     const session = store.createSession();
     const runtimes: ControlledRuntime[] = [];
     const service = new AgentService(store, "/tmp", () => {
-      const runtime = new ControlledRuntime([assistantMessage("done")]);
+      const runtime = new ControlledRuntime([assistantMessage(runtimes.length === 0 ? "The first task is complete. The requested first task was executed and its result was verified; there are no remaining blockers or incomplete acceptance criteria." : "The second task is now running and will produce its own complete verified result before TaskRun completion.")]);
       runtimes.push(runtime);
       return runtime;
     });
@@ -296,6 +296,24 @@ describe("AgentService runtime boundary", () => {
     expect(writes).toHaveBeenCalledTimes(5);
     await service.closeRuntimes();
     expect(store.getCheckpoint(run.id)?.active).toBe(false);
+    store.close();
+  });
+
+  it("resets the durable partial when a new assistant message starts", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let runtime!: CheckpointRuntime;
+    const service = new AgentService(store, "/tmp", (options) => runtime = new CheckpointRuntime(options));
+    const run = await service.start(session.id, "multi-message stream");
+    runtime.emit("message.started", { ordinal: 1 });
+    runtime.emit("message.delta", { delta: "first answer" });
+    await new Promise((resolve) => setTimeout(resolve, 550));
+    expect(store.getCheckpoint(run.id)?.assistantPartial).toBe("first answer");
+    runtime.emit("message.started", { ordinal: 2 });
+    runtime.emit("message.delta", { delta: "replacement" });
+    await new Promise((resolve) => setTimeout(resolve, 550));
+    expect(store.getCheckpoint(run.id)?.assistantPartial).toBe("replacement");
+    await service.closeRuntimes();
     store.close();
   });
 
@@ -738,6 +756,32 @@ describe("AgentService runtime boundary", () => {
     expect(store.getRun(run.id)?.status).not.toBe("blocked");
     expect(steered).toContain("hard ceiling is 700,000");
     expect(store.listEvents(run.id).some((event) => event.type === "run.token_budget.warning")).toBe(true);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("does not steer a token checkpoint into an assistant response already being streamed", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let steered = "";
+    const service = new AgentService(store, "/tmp", (options) => ({
+      async prompt() {
+        const started = options.store.appendEvent(options.runId, "message.started", { ordinal: 1 });
+        options.onEvent?.(started);
+        const delta = options.store.appendEvent(options.runId, "message.delta", { delta: "substantive answer", ordinal: 1 });
+        options.onEvent?.(delta);
+        options.onTokenBudgetWarning?.({ totalTokens: 80_000, softLimit: options.softRunTokens!, hardLimit: options.maxRunTokens });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+      async steer(instruction) { steered = instruction; return "accepted" as const; },
+      abort() {},
+      getMessages() { return []; },
+      getError() { return undefined; },
+    }), { maxRunTokens: 700_000 });
+    const run = await service.start(session.id, "Say hello");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(steered).toBe("");
+    expect(store.listEvents(run.id).some((event) => event.type === "run.token_budget.warning.deferred")).toBe(true);
     await service.closeRuntimes();
     store.close();
   });

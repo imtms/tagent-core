@@ -124,7 +124,17 @@ export class TaskRunSupervisor {
       for (const check of run.checks.filter((item) => item.required)) if (check.status !== "passed") completionFailures.push({ kind: "check", key: check.key, reason: `Required check is ${check.status}`, disposition: check.status === "blocked" ? /approval|permission|授权|审批|批准|权限/i.test(check.title) ? "needs_approval" : "external_dependency" : check.status === "skipped" ? "non_recoverable" : "auto_fixable" });
     }
     if (!response.trim()) completionFailures.push({ kind: "delivery", key: "response", reason: "Candidate response is empty", disposition: "auto_fixable" });
+    if (run.gateRequired && run.contract && !this.responseAddressesContract(run, response)) completionFailures.push({ kind: "delivery", key: "contract_coverage", reason: "Candidate response does not substantively address the TaskRun contract or report a concrete blocker", disposition: "auto_fixable" });
     return [gate("progress", progressFailures), gate("evidence", evidenceFailures), gate("completion", completionFailures), gate("continuation", completionFailures.filter((item) => item.disposition === "budget_exhausted" || item.disposition === "non_recoverable" || item.disposition === "needs_user_input" || item.disposition === "needs_approval" || item.disposition === "external_dependency"))];
+  }
+
+  private responseAddressesContract(run: TaskRun, response: string) {
+    const normalized = response.replace(/[()`*_>#{}:：,，.。!！?？/\\|+-]/g, " ").replaceAll("[", " ").replaceAll("]", " ").replace(/\s+/g, " ").trim().toLowerCase();
+    if (normalized.length < 80) return false;
+    if (/(blocked|cannot|unable|waiting|requires|缺少|无法|不能|阻塞|等待|需要用户|需要审批)/i.test(response)) return true;
+    const contractText = [run.contract?.summary ?? run.goal, ...(run.contract?.acceptanceCriteria ?? [])].join(" ");
+    const terms = [...new Set(contractText.match(/[\p{Script=Han}]{2,8}|[a-zA-Z][a-zA-Z0-9._/-]{2,}/gu) ?? [])].map((term) => term.toLowerCase()).filter((term) => !/^(完成目标|提供可验证|明确说明|结果|进行|当前|taskrun|goal|scope|original|user|input)$/.test(term));
+    return terms.some((term) => normalized.includes(term));
   }
 
   private createDecision(run: TaskRun, checkpointSeq: number, trigger: SupervisorDecision["trigger"], action: SupervisorAction, reasonCode: string, rationale: string, confidence: number, candidateResponse = "") {

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Reset provisional streaming content at every new assistant message boundary so a later steer, token-budget reminder, or continuation answer replaces the earlier draft instead of concatenating or making the visible reply appear to vanish.
+- Defer the token-budget convergence steer while an assistant response is already streaming, preventing an otherwise good final answer from being replaced by a short acknowledgement of the budget warning.
+- Emit an auditable `message.rejected` event when Supervisor rejects a candidate response; rejected prose remains in the Run transcript but is not persisted as the final chat answer.
+- Add a contract-coverage delivery gate so short generic acknowledgements cannot complete substantial TaskRuns merely because agent-authored Plan and Check rows say `done`/`passed`.
+- Strengthen continuation instructions to require a complete standalone replacement for a Supervisor-rejected candidate.
+
 ### Changed
 
 - Context Manifests now reference stable durable Session message IDs and Run transcript sequence IDs, preserving provenance through turn compression and budget omission instead of relying on timestamp/index-derived identities.
