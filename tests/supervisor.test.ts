@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { performance } from "node:perf_hooks";
 import { Store } from "../src/store/store.js";
 import { TaskRunSupervisor } from "../src/core/supervisor.js";
 import { OpenAiSupervisorReviewer, TestSupervisorReviewer, passingTestAudit, type SupervisorAudit } from "../src/core/supervisor-reviewer.js";
@@ -28,6 +29,58 @@ describe("TaskRunSupervisor LLM audit", () => {
     const review = await new TaskRunSupervisor(store, new TestSupervisorReviewer(audit)).reviewSettled(store.getRun(run.id)!, 9, "generic answer");
     expect(review.decision).toMatchObject({ action: "start_continuation", evaluator: "llm", evaluatorModel: "test-supervisor-llm" });
     expect(store.getRun(run.id)?.supervision.latestGates.find((gate) => gate.gateType === "contract")).toMatchObject({ evaluator: "llm", evaluatorModel: "test-supervisor-llm", summary: expect.any(String), criterionCoverage: [{ criterion, status: "unsupported", evidenceRefs: [], reason: expect.any(String) }] });
+    store.close();
+  });
+
+  it("skips the LLM when authoritative plan prerequisites already fail", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "incomplete plan");
+    store.upsertPlanItem(run.id, { key: "implement", title: "Implement", status: "pending", required: true, position: 1 });
+    let calls = 0;
+    const reviewer = {
+      evaluator: "llm" as const, model: "must-not-run",
+      async reviewSettled() { calls += 1; return passingTestAudit(); },
+      async reviewAttemptFailure() { return { action: "block_taskrun" as const, reasonCode: "unused", rationale: "unused", confidence: 1 }; },
+    };
+    const startedAt = performance.now();
+    const review = await new TaskRunSupervisor(store, reviewer).reviewSettled(store.getRun(run.id)!, 4, "done");
+    const latencyMs = performance.now() - startedAt;
+    expect(calls).toBe(0);
+    expect(latencyMs).toBeLessThan(100);
+    expect(review.decision).toMatchObject({ action: "start_continuation", evaluator: "system", evaluatorModel: "deterministic-prerequisite-gate", reasonCode: "deterministic_plan_incomplete" });
+    expect(review.gates.find((gate) => gate.gateType === "completion")).toMatchObject({ passed: false, evaluator: "system" });
+    store.close();
+  });
+
+  it("skips the LLM and requests evidence when only required checks fail", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "missing check evidence");
+    store.upsertPlanItem(run.id, { key: "implement", title: "Implement", status: "done", required: true, position: 1 });
+    store.upsertCheck(run.id, { key: "verify", title: "Verify", status: "passed", required: true, command: "npm test", evidence: "old", stale: true });
+    let calls = 0;
+    const reviewer = {
+      evaluator: "llm" as const, model: "must-not-run",
+      async reviewSettled() { calls += 1; return passingTestAudit(); },
+      async reviewAttemptFailure() { return { action: "block_taskrun" as const, reasonCode: "unused", rationale: "unused", confidence: 1 }; },
+    };
+    const review = await new TaskRunSupervisor(store, reviewer).reviewSettled(store.getRun(run.id)!, 5, "done");
+    expect(calls).toBe(0);
+    expect(review.decision).toMatchObject({ action: "request_evidence", evaluator: "system", reasonCode: "deterministic_check_incomplete" });
+    expect(review.gates.find((gate) => gate.gateType === "evidence")?.failures[0]).toMatchObject({ key: "verify", disposition: "auto_fixable" });
+    store.close();
+  });
+
+  it("still invokes semantic LLM review after deterministic prerequisites pass", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "semantic audit required");
+    store.upsertPlanItem(run.id, { key: "implement", title: "Implement", status: "done", required: true, position: 1 });
+    store.upsertCheck(run.id, { key: "verify", title: "Verify", status: "passed", required: true, command: "npm test", evidence: "fresh pass", stale: false });
+    let calls = 0;
+    const reviewer = {
+      evaluator: "llm" as const, model: "semantic-model",
+      async reviewSettled() { calls += 1; return passingTestAudit(); },
+      async reviewAttemptFailure() { return { action: "block_taskrun" as const, reasonCode: "unused", rationale: "unused", confidence: 1 }; },
+    };
+    const review = await new TaskRunSupervisor(store, reviewer).reviewSettled(store.getRun(run.id)!, 6, "standalone result");
+    expect(calls).toBe(1);
+    expect(review.decision).toMatchObject({ action: "complete_taskrun", evaluator: "llm", evaluatorModel: "semantic-model" });
     store.close();
   });
 

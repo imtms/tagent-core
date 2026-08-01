@@ -593,6 +593,27 @@ describe("Store", () => {
     expect(store.getCheckpoint(run.id)).toMatchObject({ active: false, assistantPartial: "hello", currentTool: null, lastEventSeq: 3 });
   });
 
+  it("does not rewrite an unchanged checkpoint", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "checkpoint dedupe");
+    const checkpoint = { runId: run.id, attempt: 1, active: true, assistantPartial: "same", currentTool: null, lastEventSeq: 2, lastTranscriptSeq: 1 };
+    const first = store.upsertCheckpoint(checkpoint);
+    const writesBefore = store.db.totalChanges;
+    const second = store.upsertCheckpoint(checkpoint);
+    expect(store.db.totalChanges).toBe(writesBefore);
+    expect(second.updatedAt).toBe(first.updatedAt);
+  });
+
+  it("counts transcript messages without parsing their JSON bodies", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "transcript count");
+    store.appendTranscript(run.id, 1, { role: "user", content: "one", timestamp: 1 });
+    store.appendTranscript(run.id, 1, { role: "user", content: "two", timestamp: 2 });
+    expect(store.getTranscriptCount(run.id)).toBe(2);
+  });
+
   it("does not let an older attempt overwrite a newer checkpoint", () => {
     const store = createStore();
     const session = store.createSession();

@@ -29,6 +29,20 @@ describe("Pi 0.83 AgentSession integration", () => {
     store.close();
   });
 
+  it("coalesces streaming text deltas while preserving exact content and completion order", async () => {
+    const text = "x".repeat(2_000);
+    const { store, run, runtime } = await setup([fauxAssistantMessage(text)], 100_000);
+    await runtime.prompt("stream");
+    const events = store.listEvents(run.id);
+    const deltas = events.filter((event) => event.type === "message.delta");
+    expect(deltas.length).toBeGreaterThan(0);
+    expect(deltas.length).toBeLessThan(100);
+    expect(deltas.map((event) => String(event.data.delta ?? "")).join("")).toBe(text);
+    expect(events.findIndex((event) => event.type === "message.completed")).toBeGreaterThan(events.findIndex((event) => event.type === "message.delta"));
+    runtime.dispose();
+    store.close();
+  });
+
   it("does not emit completion or provider failure events after a Run is cancelled", async () => {
     const faux = fauxProvider({ models: [{ id: "faux-cancel", contextWindow: 32_000, maxTokens: 2_000 }], tokensPerSecond: 10 });
     faux.setResponses([fauxAssistantMessage("late response")]);

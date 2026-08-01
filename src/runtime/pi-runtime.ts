@@ -28,6 +28,9 @@ export class PiRuntime implements AgentRuntime {
   private abortRequested = false;
   private abortPromise?: Promise<void>;
   private assistantMessageOrdinal = 0;
+  private pendingDelta = "";
+  private deltaTimer?: ReturnType<typeof setTimeout>;
+  private lastToolProgressAt = new Map<string, number>();
 
   constructor(private readonly options: RuntimeOptions) {}
 
@@ -151,6 +154,7 @@ export class PiRuntime implements AgentRuntime {
       this.emit("message.started", { ordinal: this.assistantMessageOrdinal });
     }
     if (event.type === "message_end") {
+      this.flushDelta();
       const run = this.options.store.getRun(this.options.runId);
       if (run) this.options.store.appendTranscript(this.options.runId, run.attempt, event.message);
       if (run?.status === "running" && event.message.role === "assistant") {
@@ -160,9 +164,19 @@ export class PiRuntime implements AgentRuntime {
       }
     }
     if (event.type === "tool_execution_start") this.emit("tool.started", { toolCallId: event.toolCallId, toolName: event.toolName });
-    if (event.type === "tool_execution_update") this.emit("tool.progress", { toolCallId: event.toolCallId, toolName: event.toolName });
-    if (event.type === "tool_execution_end") this.emit("tool.completed", { toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError });
-    if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") this.emit("message.delta", { delta: event.assistantMessageEvent.delta, ordinal: this.assistantMessageOrdinal });
+    if (event.type === "tool_execution_update") {
+      const timestamp = Date.now();
+      const previous = this.lastToolProgressAt.get(event.toolCallId) ?? 0;
+      if (timestamp - previous >= 1_000) {
+        this.lastToolProgressAt.set(event.toolCallId, timestamp);
+        this.emit("tool.progress", { toolCallId: event.toolCallId, toolName: event.toolName });
+      }
+    }
+    if (event.type === "tool_execution_end") {
+      this.lastToolProgressAt.delete(event.toolCallId);
+      this.emit("tool.completed", { toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError });
+    }
+    if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") this.queueDelta(event.assistantMessageEvent.delta);
     if (event.type === "agent_end") {
       if (this.options.store.getRun(this.options.runId)?.status === "running") {
         const final = [...event.messages].reverse().find((message) => message.role === "assistant");
@@ -210,6 +224,7 @@ export class PiRuntime implements AgentRuntime {
   }
 
   dispose() {
+    this.flushDelta();
     this.disposed = true;
     const session = this.session;
     if (!session) return;
@@ -234,6 +249,23 @@ export class PiRuntime implements AgentRuntime {
 
   getActiveToolNames() {
     return this.session?.getActiveToolNames() ?? [];
+  }
+
+  private queueDelta(delta: string) {
+    this.pendingDelta += delta;
+    if (this.pendingDelta.length >= 256) return this.flushDelta();
+    if (this.deltaTimer) return;
+    this.deltaTimer = setTimeout(() => this.flushDelta(), 50);
+    this.deltaTimer.unref?.();
+  }
+
+  private flushDelta() {
+    if (this.deltaTimer) clearTimeout(this.deltaTimer);
+    this.deltaTimer = undefined;
+    if (!this.pendingDelta) return;
+    const delta = this.pendingDelta;
+    this.pendingDelta = "";
+    this.emit("message.delta", { delta, ordinal: this.assistantMessageOrdinal });
   }
 
   private emit(type: string, data: Record<string, unknown>) {

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Store } from "../store/store.js";
-import type { GateEvaluation, RunEvent, SupervisorDecision, SupervisorAction, TaskRun } from "./types.js";
-import type { SupervisorReviewer } from "./supervisor-reviewer.js";
+import type { CriterionCoverage, GateEvaluation, GateFailure, RunEvent, SupervisorDecision, SupervisorAction, TaskRun } from "./types.js";
+import type { SupervisorAudit, SupervisorReviewer } from "./supervisor-reviewer.js";
 
 export interface SupervisorPolicy {
   maxSteersPerAttempt: number;
@@ -49,16 +49,67 @@ export class TaskRunSupervisor {
     }
     const operations = this.store.listOperations(run.id);
     const progress = this.store.getProgressSnapshot(run.id);
-    const audit = await this.reviewer.reviewSettled({ run, response, operations, progress });
+    // Do not spend a model round-trip proving facts already authoritatively known by the local gate.
+    // Semantic review still runs whenever deterministic prerequisites pass.
+    const deterministicAudit = this.reviewDeterministicPrerequisites(run);
+    const audit = deterministicAudit ?? await this.reviewer.reviewSettled({ run, response, operations, progress });
+    const evaluator = deterministicAudit ? "system" as const : this.reviewer.evaluator;
+    const evaluatorModel = deterministicAudit ? "deterministic-prerequisite-gate" : this.reviewer.model;
     const createdAt = Date.now();
     const manifest = { attempt: run.attempt, checkpointSeq, contract: run.contract, plan: run.plan, checks: run.checks, artifacts: run.artifacts.map(({ id, kind, uri }) => ({ id, kind, uri })), operations: operations.map(({ id, operationType, status, stage }) => ({ id, operationType, status, stage })), response, progress };
     const inputManifestHash = createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
     const gates = (["progress", "evidence", "contract", "completion", "continuation"] as const).map((gateType): GateEvaluation => {
       const reviewed = audit.gates[gateType];
-      return { id: randomUUID(), runId: run.id, attempt: run.attempt, checkpointSeq, gateType, evaluator: this.reviewer.evaluator, evaluatorModel: this.reviewer.model, summary: reviewed.summary, passed: reviewed.passed, failures: reviewed.failures, criterionCoverage: reviewed.criterionCoverage, inputManifestHash, createdAt };
+      return { id: randomUUID(), runId: run.id, attempt: run.attempt, checkpointSeq, gateType, evaluator, evaluatorModel, summary: reviewed.summary, passed: reviewed.passed, failures: reviewed.failures, criterionCoverage: reviewed.criterionCoverage, inputManifestHash, createdAt };
     });
     for (const gate of gates) this.store.recordGateEvaluation(gate);
-    return { gates, decision: this.createDecision(run, checkpointSeq, "settled", audit.action, audit.reasonCode, audit.rationale, audit.confidence, response) };
+    return { gates, decision: this.createDecision(run, checkpointSeq, "settled", audit.action, audit.reasonCode, audit.rationale, audit.confidence, response, evaluator, evaluatorModel) };
+  }
+
+  private reviewDeterministicPrerequisites(run: TaskRun): SupervisorAudit | undefined {
+    if (run.completionGate.passed) return undefined;
+    const localFailures = run.completionGate.failures;
+    // A run with no declared required plan may be a lightweight/discussion task; preserve semantic review.
+    // The fast path is only for concrete declared prerequisites whose state is authoritative.
+    if (localFailures.some((failure) => failure.kind === "plan" && failure.key === "plan")) return undefined;
+    const toFailure = (failure: (typeof localFailures)[number]): GateFailure => ({
+      ...failure,
+      disposition: "auto_fixable",
+    });
+    const planFailures = localFailures.filter((failure) => failure.kind === "plan" || failure.kind === "plan_item").map(toFailure);
+    const checkFailures = localFailures.filter((failure) => failure.kind === "check").map(toFailure);
+    // Unknown local failure kinds must still go through semantic review instead of being guessed here.
+    if (planFailures.length + checkFailures.length !== localFailures.length) return undefined;
+    const criteria = run.contract?.acceptanceCriteria ?? [];
+    const coverage: CriterionCoverage[] = criteria.map((criterion) => ({
+      criterion,
+      status: "blocked",
+      evidenceRefs: [],
+      reason: "Semantic contract audit deferred until deterministic plan and check prerequisites pass.",
+    }));
+    const contractFailures: GateFailure[] = criteria.length ? [{
+      kind: "contract", key: "semantic_review_deferred",
+      reason: "Acceptance criteria cannot be approved until deterministic plan and check prerequisites pass.",
+      disposition: "auto_fixable",
+    }] : [];
+    const completionFailures = [...planFailures, ...checkFailures, ...contractFailures];
+    const gate = (failures: GateFailure[], summary: string, criterionCoverage?: CriterionCoverage[]) => ({
+      passed: failures.length === 0, failures, summary, criterionCoverage,
+    });
+    const action: SupervisorAction = planFailures.length === 0 && checkFailures.length > 0 ? "request_evidence" : "start_continuation";
+    return {
+      action,
+      reasonCode: planFailures.length ? "deterministic_plan_incomplete" : "deterministic_check_incomplete",
+      rationale: `Skipped semantic Supervisor call because ${localFailures.length} authoritative prerequisite failure(s) require repair first.`,
+      confidence: 1,
+      gates: {
+        progress: gate(planFailures, planFailures.length ? "Required plan work is incomplete." : "Required plan work is complete."),
+        evidence: gate(checkFailures, checkFailures.length ? "Required check evidence is missing, failed, or stale." : "Required check evidence prerequisites pass."),
+        contract: gate(contractFailures, contractFailures.length ? "Semantic contract review was deferred." : "No acceptance criteria require semantic coverage.", coverage),
+        completion: gate(completionFailures, "Completion is blocked by authoritative deterministic prerequisites."),
+        continuation: gate([], "The prerequisite failures are automatically repairable."),
+      },
+    };
   }
 
   async reviewAttemptFailure(run: TaskRun, checkpointSeq: number, error: string) {
@@ -79,8 +130,11 @@ export class TaskRunSupervisor {
     return this.store.updateSupervisorDecision(id, status, error);
   }
 
-  private createDecision(run: TaskRun, checkpointSeq: number, trigger: SupervisorDecision["trigger"], action: SupervisorAction, reasonCode: string, rationale: string, confidence: number, candidateResponse = "") {
-    const decision: SupervisorDecision = { id: randomUUID(), runId: run.id, evaluator: trigger === "attempt_terminal" || (trigger === "settled" && !["wait_for_runtime"].includes(action)) ? this.reviewer.evaluator : "system", evaluatorModel: trigger === "attempt_terminal" || (trigger === "settled" && !["wait_for_runtime"].includes(action)) ? this.reviewer.model : "", attempt: run.attempt, checkpointSeq, trigger, action, reasonCode, rationale, confidence, instruction: action === "steer" || action === "follow_up" ? rationale : "", candidateResponseHash: createHash("sha256").update(candidateResponse).digest("hex"), status: "proposed", error: "", createdAt: Date.now(), executedAt: null };
+  private createDecision(run: TaskRun, checkpointSeq: number, trigger: SupervisorDecision["trigger"], action: SupervisorAction, reasonCode: string, rationale: string, confidence: number, candidateResponse = "", evaluatorOverride?: SupervisorDecision["evaluator"], evaluatorModelOverride?: string) {
+    const reviewed = trigger === "attempt_terminal" || (trigger === "settled" && !["wait_for_runtime"].includes(action));
+    const evaluator = evaluatorOverride ?? (reviewed ? this.reviewer.evaluator : "system");
+    const evaluatorModel = evaluatorModelOverride ?? (reviewed ? this.reviewer.model : "");
+    const decision: SupervisorDecision = { id: randomUUID(), runId: run.id, evaluator, evaluatorModel, attempt: run.attempt, checkpointSeq, trigger, action, reasonCode, rationale, confidence, instruction: action === "steer" || action === "follow_up" ? rationale : "", candidateResponseHash: createHash("sha256").update(candidateResponse).digest("hex"), status: "proposed", error: "", createdAt: Date.now(), executedAt: null };
     return this.store.recordSupervisorDecision(decision);
   }
 }

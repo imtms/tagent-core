@@ -17,6 +17,7 @@ export class AgentService {
   private readonly controlDeliveryTasks = new Map<RunId, Promise<void>>();
   private readonly checkpointDrafts = new Map<RunId, Omit<RunCheckpoint, "updatedAt" | "lastTranscriptSeq">>();
   private readonly checkpointTimers = new Map<RunId, ReturnType<typeof setTimeout>>();
+  private readonly lastCheckpointTranscriptSeq = new Map<RunId, number>();
   private readonly listeners = new Map<RunId, Set<(event: RunEvent) => void>>();
   private readonly recalledMemory = new Map<RunId, string>();
   private readonly continuationOwner = randomUUID();
@@ -44,6 +45,8 @@ export class AgentService {
   private updateCheckpoint(event: RunEvent) {
     const draft = this.checkpointDrafts.get(event.runId);
     if (!draft) return;
+    const relevant = event.type.startsWith("message.") || event.type.startsWith("tool.") || event.type === "provider.failure";
+    if (!relevant) return;
     draft.lastEventSeq = Math.max(draft.lastEventSeq, event.seq);
     if (event.type === "message.started") draft.assistantPartial = "";
     if (event.type === "message.delta") draft.assistantPartial += String(event.data.delta ?? "");
@@ -59,7 +62,10 @@ export class AgentService {
     }
     if (event.type === "provider.failure" && draft.currentTool) draft.currentTool.lastActivityAt = event.createdAt;
     if ((event.type === "tool.completed" || event.type === "tool.failed") && draft.currentTool?.toolCallId === String(event.data.toolCallId ?? "")) draft.currentTool = null;
-    const immediate = event.type.startsWith("tool.") || event.type === "message.started" || event.type === "message.completed" || event.type === "message.retrying";
+    const transcriptBoundary = event.type === "tool.completed" || event.type === "tool.failed" || event.type === "message.completed";
+    if (transcriptBoundary) this.lastCheckpointTranscriptSeq.set(event.runId, this.store.getLastTranscriptSeq(event.runId));
+    const immediate = event.type === "tool.started" || transcriptBoundary
+      || event.type === "message.started" || event.type === "message.retrying";
     if (immediate) this.flushCheckpoint(event.runId);
     else this.scheduleCheckpoint(event.runId);
   }
@@ -80,7 +86,8 @@ export class AgentService {
     const timer = this.checkpointTimers.get(runId);
     if (timer) clearTimeout(timer);
     this.checkpointTimers.delete(runId);
-    const lastTranscriptSeq = this.store.getLastTranscriptSeq(runId);
+    const lastTranscriptSeq = this.lastCheckpointTranscriptSeq.get(runId) ?? this.store.getLastTranscriptSeq(runId);
+    this.lastCheckpointTranscriptSeq.set(runId, lastTranscriptSeq);
     this.store.upsertCheckpoint({ ...draft, lastTranscriptSeq });
   }
 
@@ -196,6 +203,7 @@ export class AgentService {
     for (const timer of this.checkpointTimers.values()) clearTimeout(timer);
     this.checkpointTimers.clear();
     for (const runId of this.checkpointDrafts.keys()) this.flushCheckpoint(runId);
+    this.lastCheckpointTranscriptSeq.clear();
     const aborts: Promise<void>[] = [];
     for (const runtime of this.runtimes.values()) {
       aborts.push(this.abortRuntime(runtime).finally(() => runtime.dispose?.()));
@@ -408,6 +416,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     if (this.closing) return;
     const checkpointBase = this.store.getRun(run.id) ?? run;
     this.checkpointDrafts.set(run.id, { runId: run.id, attempt: run.attempt, active: true, assistantPartial: "", currentTool: null, lastEventSeq: checkpointBase.lastEventSeq });
+    this.lastCheckpointTranscriptSeq.set(run.id, checkpointBase.checkpoint?.lastTranscriptSeq ?? this.store.getLastTranscriptSeq(run.id));
     this.flushCheckpoint(run.id);
     const idleTimeoutMs = this.runtimeDefaults.runTimeoutMs ?? 7_200_000;
     const hardTimeoutMs = this.runtimeDefaults.runHardTimeoutMs ?? 86_400_000;
@@ -512,6 +521,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       if (timer) clearTimeout(timer);
       this.checkpointTimers.delete(run.id);
       this.checkpointDrafts.delete(run.id);
+      this.lastCheckpointTranscriptSeq.delete(run.id);
       if (this.executionTasks.get(run.id) === execution) this.executionTasks.delete(run.id);
       setImmediate(() => {
         try {
@@ -743,7 +753,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     this.store.cancelQueuedContinuations(runId, "Superseded by manual resume");
     this.repairTranscript(runId, "resume");
     const run = this.store.resumeRun(runId);
-    const provisionalPrompt = this.buildResumePrompt(run, this.store.listTranscript(run.id).length);
+    const provisionalPrompt = this.buildResumePrompt(run, this.store.getTranscriptCount(run.id));
     const transcript = this.prepareTranscript(run, provisionalPrompt);
     const prompt = this.buildResumePrompt(run, transcript.messages.length);
     this.publishContextEvents(run.id, transcript);

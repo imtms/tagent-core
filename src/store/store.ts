@@ -47,6 +47,10 @@ export class Store {
     return (this.db.prepare("SELECT COALESCE(MAX(seq), 0) as seq FROM run_transcript WHERE run_id = ?").get(runId) as { seq: number }).seq;
   }
 
+  getTranscriptCount(runId: RunId) {
+    return (this.db.prepare("SELECT COUNT(*) as count FROM run_transcript WHERE run_id = ?").get(runId) as { count: number }).count;
+  }
+
   getCheckpoint(runId: RunId): RunCheckpoint | null {
     const row = this.db.prepare(`SELECT run_id as runId, attempt, active,
       assistant_partial as assistantPartial, current_tool_json as currentToolJson,
@@ -58,6 +62,13 @@ export class Store {
   }
 
   upsertCheckpoint(checkpoint: Omit<RunCheckpoint, "updatedAt"> & { updatedAt?: number }) {
+    const existing = this.getCheckpoint(checkpoint.runId);
+    if (existing && existing.attempt === checkpoint.attempt
+      && existing.active === checkpoint.active
+      && existing.assistantPartial === checkpoint.assistantPartial
+      && JSON.stringify(existing.currentTool) === JSON.stringify(checkpoint.currentTool)
+      && existing.lastEventSeq === checkpoint.lastEventSeq
+      && existing.lastTranscriptSeq === checkpoint.lastTranscriptSeq) return existing;
     const updatedAt = checkpoint.updatedAt ?? now();
     this.db.prepare(`INSERT INTO run_checkpoints
       (run_id, attempt, active, assistant_partial, current_tool_json, last_event_seq, last_transcript_seq, updated_at)
