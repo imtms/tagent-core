@@ -378,6 +378,19 @@ export class AgentService {
       memory: this.memory,
       memoryScopeId: this.memoryScopeId,
       memorySubjectId: `session:${run.sessionId}`,
+      maxRunTokens: budget.maxTokens,
+      onTokenBudgetExceeded: ({ totalTokens, limit }) => {
+        const current = this.store.getRun(run.id);
+        if (!current || current.status !== "running") return;
+        const message = `Run stopped after reaching the ${limit.toLocaleString()} token budget (${totalTokens.toLocaleString()} used)`;
+        const event = this.store.transitionRun(run.id, ["running"], "blocked", "run.blocked", { reason: "token_budget", limit, totalTokens }, message, run.attempt);
+        if (event) {
+          this.store.appendMessage(run.sessionId, "assistant", message);
+          this.publish(event);
+          this.publish(this.store.appendEvent(run.id, "continuation.exhausted", { reason: "token_budget", tier: budget.tier, limit, totalTokens }));
+        }
+        void this.abortRuntime(runtime, run.id);
+      },
       onActivity: touchActivity,
       onEvent: (event) => {
         touchActivity();
@@ -525,12 +538,10 @@ export class AgentService {
     let score = Math.min(6, Math.ceil(run.goal.length / 240));
     if (/(implement|develop|refactor|migrate|audit|debug|test|build|deploy|实现|开发|重构|迁移|审计|调试|测试|构建|部署)/i.test(run.goal)) score += 3;
     if (/(multi|multiple|across|end[- ]to[- ]end|architecture|database|frontend|backend|多轮|多个|跨|架构|数据库|前端|后端)/i.test(run.goal)) score += 3;
-    score += Math.min(8, run.plan.filter((item) => item.required).length);
-    score += Math.min(6, run.checks.filter((item) => item.required).length * 2);
-    score += Math.min(6, run.plan.filter((item) => item.required && item.status !== "done").length);
-    score += Math.min(4, Math.floor(run.continuations.length / 3));
-
-    const tier = score >= 16 ? "extended" : score >= 10 ? "complex" : score >= 5 ? "standard" : "simple";
+    // Budget classification must depend only on immutable admission data.
+    // Plans, checks, and continuations are agent-controlled mutable state; using
+    // them here allowed a Run to enlarge its own token ceiling while executing.
+    const tier = score >= 10 ? "extended" : score >= 7 ? "complex" : score >= 4 ? "standard" : "simple";
     const presets = {
       simple: { maxContinuations: 4, maxTokens: 80_000, runTimeoutMs: 300_000 },
       standard: { maxContinuations: 12, maxTokens: 240_000, runTimeoutMs: 900_000 },

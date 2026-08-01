@@ -34,6 +34,8 @@ export interface RuntimeOptions {
   runHardTimeoutMs?: number;
   onActivity?: () => void;
   onEvent?: (event: RunEvent) => void;
+  maxRunTokens?: number;
+  onTokenBudgetExceeded?: (usage: { totalTokens: number; limit: number }) => void;
   memory?: MemoryFacade;
   memoryScopeId?: string;
   memorySubjectId?: string;

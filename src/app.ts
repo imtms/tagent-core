@@ -127,8 +127,10 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const { id } = request.params as { id: string };
     const body = request.body as { content?: string; requestId?: string };
     if (!body?.content?.trim()) return reply.code(400).send({ error: "content is required" });
+    const content = body.content.trim();
+    if (isOpaqueAutomationMarker(content)) return reply.code(422).send({ error: "opaque automation marker is not an executable task", reason: "non_actionable_prompt" });
     if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
-    const result = service.enqueueSessionInput(id, body.content.trim(), body.requestId);
+    const result = service.enqueueSessionInput(id, content, body.requestId);
     return { ...result, receipt: { requestId: result.item.requestId, sessionId: result.item.sessionId, inboxItemId: result.item.id, status: result.item.status, runId: result.item.runId, error: result.item.error, createdAt: result.item.createdAt, updatedAt: result.item.updatedAt } };
   });
   app.get("/api/sessions/:id/inbox", async (request, reply) => {
@@ -345,4 +347,8 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
 
 function memoryAccess(request: FastifyRequest, scopes: MemoryScope[], purpose: AccessContext["purpose"]): AccessContext {
   return { subjectId: String(request.headers["x-tagent-subject"] ?? "local-admin"), scopes, purpose };
+}
+
+function isOpaqueAutomationMarker(content: string) {
+  return /^(?:(?:final-)?ui-sync|release)-[a-z0-9._-]*\d{10,}$/i.test(content) && !/[\s：:，,。.!?？]/.test(content);
 }

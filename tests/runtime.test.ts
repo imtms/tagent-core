@@ -596,9 +596,11 @@ describe("AgentService runtime boundary", () => {
     const simple = store.createRun(session.id, "Say hello");
     expect(service.getBudget(simple.id)).toEqual({ tier: "simple", maxContinuations: 4, maxTokens: 80_000, runTimeoutMs: 300_000 });
     const complex = store.createRun(session.id, "Implement and test a multi module frontend backend database migration architecture");
+    const admittedBudget = service.getBudget(complex.id);
     for (let index = 0; index < 8; index += 1) store.upsertPlanItem(complex.id, { key: `p${index}`, title: `Step ${index}`, status: "pending", required: true, position: index });
     for (let index = 0; index < 3; index += 1) store.upsertCheck(complex.id, { key: `c${index}`, title: `Check ${index}`, status: "pending", required: true, command: "", evidence: "", stale: false });
-    expect(service.getBudget(complex.id)).toEqual({ tier: "extended", maxContinuations: 40, maxTokens: 700_000, runTimeoutMs: 3_000_000 });
+    expect(admittedBudget).toEqual({ tier: "complex", maxContinuations: 32, maxTokens: 640_000, runTimeoutMs: 2_700_000 });
+    expect(service.getBudget(complex.id)).toEqual(admittedBudget);
     store.close();
   });
 
@@ -664,6 +666,32 @@ describe("AgentService runtime boundary", () => {
     expect(store.getRun(run.id)?.status).toBe("blocked");
     expect(store.listContinuations(run.id)).toHaveLength(1);
     expect(store.listEvents(run.id).some((event) => event.type === "continuation.exhausted" && event.data.reason === "max_continuations")).toBe(true);
+    store.close();
+  });
+
+  it("aborts an active runtime as soon as cumulative usage crosses its token budget", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let aborted = false;
+    const service = new AgentService(store, "/tmp", (options) => ({
+      async prompt() {
+        const costly = assistantMessage("still working");
+        if (costly.role === "assistant") costly.usage.totalTokens = 12;
+        store.appendTranscript(options.runId, store.getRun(options.runId)!.attempt, costly);
+        options.onTokenBudgetExceeded?.({ totalTokens: 12, limit: options.maxRunTokens! });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+      async steer() { return "accepted" as const; },
+      abort() { aborted = true; },
+      getMessages() { return []; },
+      getError() { return undefined; },
+    }), { dynamicBudget: false, maxContinuations: 2, maxRunTokens: 10 });
+    const run = await service.start(session.id, "bounded active run");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(aborted).toBe(true);
+    expect(store.getRun(run.id)).toMatchObject({ status: "blocked", blockedReason: expect.stringContaining("token budget") });
+    expect(store.listContinuations(run.id)).toHaveLength(0);
+    expect(store.listEvents(run.id).some((event) => event.type === "continuation.exhausted" && event.data.reason === "token_budget")).toBe(true);
     store.close();
   });
 

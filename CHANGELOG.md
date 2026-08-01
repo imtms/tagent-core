@@ -4,6 +4,12 @@ All notable changes to TAgent Core are documented here.
 
 ## Unreleased
 
+### Run admission and budget safety
+
+- Reject opaque `release-*`, `ui-sync-*`, and `final-ui-sync-*` synchronization markers as non-actionable prompts instead of starting autonomous TaskRuns.
+- Freeze dynamic Run budget classification to immutable admission data so agent-created plans/checks cannot raise their own token ceiling.
+- Enforce the cumulative token ceiling during active runtime execution and abort immediately when usage crosses the limit, rather than checking only before an automatic continuation.
+
 ### Memory correctness and safety
 
 - Reject TaskRun wrappers, verification logs, artifact publication metadata, file paths/sizes, one-off questions, and malformed Chinese-negation proposals before durable persistence or embedding.

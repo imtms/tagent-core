@@ -64,6 +64,22 @@ describe("HTTP API", () => {
     expect((await app.inject({ method: "POST", url: "/api/sessions", payload: { requestId: "" } })).statusCode).toBe(400);
   });
 
+  it("rejects opaque UI and release synchronization markers instead of starting autonomous work", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-marker-"));
+    const store = new Store(":memory:");
+    const app = createApp({ store, service: new AgentService(store, workspace), logger: false, webRoot: workspace }); apps.push(app);
+    const session = store.createSession();
+    for (const content of ["release-013-1785530015196", "ui-sync-1785529628478", "final-ui-sync-1785529817867"]) {
+      const response = await app.inject({ method: "POST", url: `/api/sessions/${session.id}/messages`, payload: { content } });
+      expect(response.statusCode).toBe(422);
+      expect(response.json()).toMatchObject({ reason: "non_actionable_prompt" });
+    }
+    expect(store.listRuns(session.id)).toHaveLength(0);
+    expect(store.listMessages(session.id)).toHaveLength(0);
+    const actionable = await app.inject({ method: "POST", url: `/api/sessions/${session.id}/messages`, payload: { content: "Please prepare release 0.1.4" } });
+    expect(actionable.statusCode).toBe(200);
+  });
+
   it("returns a durable submission receipt and finds it by requestId", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-submission-"));
     const store = new Store(":memory:");

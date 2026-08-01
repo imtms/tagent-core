@@ -27,6 +27,7 @@ export class PiRuntime implements AgentRuntime {
   private disposed = false;
   private abortRequested = false;
   private abortPromise?: Promise<void>;
+  private tokenBudgetExceeded = false;
 
   constructor(private readonly options: RuntimeOptions) {}
 
@@ -149,6 +150,13 @@ export class PiRuntime implements AgentRuntime {
       const run = this.options.store.getRun(this.options.runId);
       if (run) this.options.store.appendTranscript(this.options.runId, run.attempt, event.message);
       if (run?.status === "running" && event.message.role === "assistant") {
+        const current = this.options.store.getRun(this.options.runId);
+        const limit = this.options.maxRunTokens;
+        if (!this.tokenBudgetExceeded && limit && current && current.usage.totalTokens >= limit) {
+          this.tokenBudgetExceeded = true;
+          this.emit("run.token_budget.exhausted", { totalTokens: current.usage.totalTokens, limit });
+          this.options.onTokenBudgetExceeded?.({ totalTokens: current.usage.totalTokens, limit });
+        }
         const kind = classifyProviderFailure(event.message, this.options.model?.contextWindow);
         const summary = (event.message.errorMessage ?? "").replace(/\s+/g, " ").slice(0, 500);
         if (kind) this.emit("provider.failure", { kind, retryable: isRetryableProviderFailure(kind), summary, stopReason: event.message.stopReason });
