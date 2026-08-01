@@ -15,6 +15,9 @@ export interface AttemptFailureAudit { action: "pause_for_approval" | "block_tas
 export class SupervisorReviewError extends Error {
   constructor(message: string) { super(message); this.name = "SupervisorReviewError"; }
 }
+class SupervisorRequestError extends Error {
+  constructor(message: string) { super(message); this.name = "SupervisorRequestError"; }
+}
 
 export interface SupervisorReviewer {
   readonly evaluator: "llm";
@@ -66,19 +69,27 @@ function parseGate(value: unknown, type: AuditedGateType, criteria: string[], va
 export class OpenAiSupervisorReviewer implements SupervisorReviewer {
   readonly evaluator = "llm" as const;
   readonly model: string;
-  constructor(private readonly options: { model: Model<"openai-completions">; apiKey: string; timeoutMs?: number }) { this.model = options.model.id; }
+  constructor(private readonly options: { model: Model<"openai-completions">; fallbackModel?: Model<"openai-completions">; apiKey: string; timeoutMs?: number }) { this.model = options.model.id; }
 
   async reviewSettled(input: { run: TaskRun; response: string; operations: ReturnType<Store["listOperations"]>; progress: ReturnType<Store["getProgressSnapshot"]> }): Promise<SupervisorAudit> {
     const criteria = input.run.contract?.acceptanceCriteria ?? [];
     const payload = {
       goal: input.run.goal,
-      contract: input.run.contract,
+      contract: input.run.contract ? {
+        summary: input.run.contract.summary,
+        objectives: input.run.contract.objectives,
+        acceptanceCriteria: input.run.contract.acceptanceCriteria,
+        nonGoals: input.run.contract.nonGoals,
+        intent: input.run.contract.intent,
+        relation: input.run.contract.relation,
+      } : null,
       requiredPlan: input.run.plan.filter((item) => item.required),
       requiredChecks: input.run.checks.filter((item) => item.required),
-      artifacts: input.run.artifacts.map(({ id, title, kind, content, uri }) => ({ id, title, kind, content, uri })),
-      operations: input.operations.map(({ id, operationType, status, stage, error }) => ({ id, operationType, status, stage, error })),
+      artifacts: input.run.artifacts.map(({ id, title, kind, content, uri }) => ({ id, title, kind, content: content.slice(0, 4_000), contentTruncated: content.length > 4_000, uri })),
+      operations: input.operations.map(({ id, operationType, status, stage, error }) => ({ id, operationType, status, stage, error: error.slice(0, 1_000) })),
       progress: input.progress,
-      candidateResponse: input.response,
+      candidateResponse: input.response.slice(0, 16_000),
+      candidateResponseTruncated: input.response.length > 16_000,
     };
     const validEvidenceRefs = new Set([
       ...input.run.checks.map((item) => `check:${item.key}`),
@@ -109,8 +120,9 @@ Action must agree with the completion failures. TASKRUN_DATA=${JSON.stringify(pa
         const correction = auditAttempt === 1 ? "" : `
 
 Your previous audit response failed schema validation: ${lastError instanceof Error ? lastError.message : String(lastError)}. Regenerate the entire JSON object. Do not repeat criterionCoverage outside the contract gate.`;
-        return this.parseSettledAudit(await this.request(basePrompt + correction), criteria, validEvidenceRefs);
+        return this.parseSettledAudit(await this.request(basePrompt + correction, auditAttempt === 3), criteria, validEvidenceRefs);
       } catch (error) {
+        if (error instanceof SupervisorRequestError) throw new SupervisorReviewError(error.message);
         lastError = error;
       }
     }
@@ -143,19 +155,35 @@ Your previous audit response failed schema validation: ${lastError instanceof Er
     return { action, reasonCode: text(result.reasonCode, "reasonCode"), rationale: text(result.rationale, "rationale"), confidence: confidence(result.confidence) };
   }
 
-  private async request(prompt: string): Promise<unknown> {
+  private async request(prompt: string, preferFallback = false): Promise<unknown> {
+    const primary = preferFallback && this.options.fallbackModel ? this.options.fallbackModel : this.options.model;
+    const fallback = primary === this.options.model ? this.options.fallbackModel : undefined;
+    try { return await this.requestModel(prompt, primary); }
+    catch (error) {
+      if (!(error instanceof SupervisorRequestError) || !fallback) throw error;
+      return this.requestModel(prompt, fallback);
+    }
+  }
+
+  private async requestModel(prompt: string, model: Model<"openai-completions">): Promise<unknown> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 120_000);
+    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 30_000);
     try {
-      const response = await fetch(`${this.options.model.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${this.options.apiKey}` }, body: JSON.stringify({ model: this.options.model.id, messages: [{ role: "system", content: prompt }], temperature: 0, response_format: { type: "json_object" } }), signal: controller.signal });
+      const response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${this.options.apiKey}` }, body: JSON.stringify({ model: model.id, messages: [{ role: "system", content: prompt }], temperature: 0, response_format: { type: "json_object" } }), signal: controller.signal });
       const body = await response.text();
-      if (!response.ok) throw new Error(`Supervisor LLM API ${response.status}: ${body.slice(0, 500)}`);
+      if (!response.ok) throw new SupervisorRequestError(`Supervisor LLM API ${response.status} (${model.id}): ${body.slice(0, 500)}`);
       const envelope = JSON.parse(body) as { choices?: Array<{ message?: { content?: string } }> };
       const content = envelope.choices?.[0]?.message?.content;
       if (!content) throw new Error("Supervisor LLM returned no JSON content");
       return JSON.parse(content);
+    } catch (error) {
+      if (error instanceof SupervisorRequestError) throw error;
+      if (controller.signal.aborted) throw new SupervisorRequestError(`Supervisor LLM request timed out after ${this.options.timeoutMs ?? 30_000}ms (${model.id})`);
+      if (error instanceof SyntaxError) throw error;
+      throw new SupervisorRequestError(`Supervisor LLM request failed (${model.id}): ${error instanceof Error ? error.message : String(error)}`);
     } finally { clearTimeout(timer); }
   }
+
 }
 
 /** Explicit structured dependency double used only by automated tests. */

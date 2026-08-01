@@ -154,7 +154,7 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const content = body.content.trim();
     if (isOpaqueAutomationMarker(content)) return reply.code(422).send({ error: "opaque automation marker is not an executable task", reason: "non_actionable_prompt" });
     if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
-    const result = service.enqueueSessionInput(id, content, body.requestId);
+    const result = await service.enqueueSessionInput(id, content, body.requestId);
     return { ...result, receipt: { requestId: result.item.requestId, sessionId: result.item.sessionId, inboxItemId: result.item.id, status: result.item.status, runId: result.item.runId, error: result.item.error, createdAt: result.item.createdAt, updatedAt: result.item.updatedAt } };
   });
   app.get("/api/sessions/:id/inbox", async (request, reply) => {
@@ -176,7 +176,7 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const body = request.body as { content?: string };
     if (!body?.content?.trim()) return reply.code(400).send({ error: "content is required" });
     if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
-    const item = service.updateSessionInput(id, itemId, body.content);
+    const item = await service.updateSessionInput(id, itemId, body.content);
     if (!item) return reply.code(409).send({ error: "inbox item is not queued" });
     return item;
   });

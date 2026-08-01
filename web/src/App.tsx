@@ -267,8 +267,23 @@ export function App() {
     let consumerId = localStorage.getItem(consumerKey);
     if (!consumerId) { consumerId = `web-${createRequestId()}`; localStorage.setItem(consumerKey, consumerId); }
     const runId = activeRun.id;
+    let ackTimer: ReturnType<typeof setTimeout> | undefined;
+    let highestAckSeq = 0;
+    let ackGeneration = 0;
+    const flushAck = () => {
+      if (closed || !highestAckSeq || !ackGeneration) return;
+      const seq = highestAckSeq;
+      highestAckSeq = 0;
+      void api.ackConsumer(runId, consumerId!, ackGeneration, seq).catch(() => undefined);
+    };
+    const scheduleAck = (seq: number) => {
+      highestAckSeq = Math.max(highestAckSeq, seq);
+      if (ackTimer) return;
+      ackTimer = setTimeout(() => { ackTimer = undefined; flushAck(); }, 500);
+    };
     const checkpointAfter = activeRun.checkpoint?.active ? activeRun.checkpoint.lastEventSeq : activeRun.lastEventSeq ?? 0;
     void api.claimConsumer(runId, consumerId).then((cursor) => {
+      ackGeneration = cursor.generation;
       if (closed) return;
       setError("");
       const after = Math.max(checkpointAfter, cursor.ackedSeq);
@@ -304,17 +319,17 @@ export function App() {
           const older = current.filter((message) => !history.some((latest) => latest.id === message.id) && message.id < (history[0]?.id ?? Number.MAX_SAFE_INTEGER));
           return [...older, ...history];
         }); setInbox(queued); setTranscript(view); setSessions(sessionItems);
-      } else if (event.type === "run.updated" || event.type.startsWith("tool.") || event.type.startsWith("continuation.") || event.type.startsWith("supervisor.")) {
+      } else if (event.type === "run.updated" || event.type.startsWith("continuation.") || event.type.startsWith("supervisor.")) {
         const updated = await api.run(runId);
         if (closed || sessionIdRef.current !== sessionId) return;
         setActiveRun(updated);
         setSelectedRun((current) => current?.id === updated.id ? updated : current);
         setRuns((current) => current.map((item) => item.id === updated.id ? updated : item));
       }
-      if (!closed) await api.ackConsumer(runId, consumerId, cursor.generation, event.seq).catch(() => undefined);
+      if (!closed) scheduleAck(event.seq);
       }, () => undefined);
     }).catch((cause) => { if (!closed) setError(cause instanceof Error ? cause.message : String(cause)); });
-    return () => { closed = true; unsubscribe(); };
+    return () => { flushAck(); closed = true; if (ackTimer) clearTimeout(ackTimer); unsubscribe(); };
   }, [activeRun?.id, activeRun?.status, sessionId, loadSessions]);
 
   useEffect(() => {

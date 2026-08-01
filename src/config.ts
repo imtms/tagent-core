@@ -19,6 +19,8 @@ export interface AppConfig {
   apiKey?: string;
   providerTimeoutMs: number;
   providerMaxRetries: number;
+  routerTimeoutMs: number;
+  supervisorTimeoutMs: number;
   runTimeoutMs: number;
   runHardTimeoutMs: number;
   maxContinuations: number;
@@ -26,6 +28,8 @@ export interface AppConfig {
   controlInboxCapacity: number;
   serviceCredentials: ServiceCredential[];
   model: ModelConfig;
+  routerModel: ModelConfig;
+  supervisorModel: ModelConfig;
   memory: MemoryConfig;
 }
 
@@ -198,6 +202,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     apiKey: env.OPENAI_API_KEY,
     providerTimeoutMs: positiveInteger(env.TAGENT_PROVIDER_TIMEOUT_MS, 120_000, "TAGENT_PROVIDER_TIMEOUT_MS"),
     providerMaxRetries: nonNegativeInteger(env.TAGENT_PROVIDER_MAX_RETRIES, 1, "TAGENT_PROVIDER_MAX_RETRIES"),
+    routerTimeoutMs: positiveInteger(env.TAGENT_ROUTER_TIMEOUT_MS, 15_000, "TAGENT_ROUTER_TIMEOUT_MS"),
+    supervisorTimeoutMs: positiveInteger(env.TAGENT_SUPERVISOR_TIMEOUT_MS, 30_000, "TAGENT_SUPERVISOR_TIMEOUT_MS"),
     runTimeoutMs: positiveInteger(env.TAGENT_RUN_TIMEOUT_MS, 7_200_000, "TAGENT_RUN_TIMEOUT_MS"),
     runHardTimeoutMs: positiveInteger(env.TAGENT_RUN_HARD_TIMEOUT_MS, 86_400_000, "TAGENT_RUN_HARD_TIMEOUT_MS"),
     maxContinuations: nonNegativeInteger(env.TAGENT_MAX_CONTINUATIONS, 128, "TAGENT_MAX_CONTINUATIONS"),
@@ -214,6 +220,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       maxTokens: positiveInteger(env.TAGENT_MAX_TOKENS, 32_768, "TAGENT_MAX_TOKENS"),
       reasoning: env.TAGENT_REASONING !== "false",
     },
+    routerModel: {
+      provider: env.TAGENT_ROUTER_PROVIDER?.trim() || env.TAGENT_PROVIDER || "openai-compatible",
+      modelId: env.TAGENT_ROUTER_MODEL ?? "gpt-5.6-luna",
+      api: "openai-completions",
+      baseUrl: normalizeBaseUrl(env.TAGENT_ROUTER_API_BASE?.trim() || env.TAGENT_API_BASE || "https://one.tms.im/v1"),
+      contextWindow: positiveInteger(env.TAGENT_ROUTER_CONTEXT_WINDOW, 64_000, "TAGENT_ROUTER_CONTEXT_WINDOW"),
+      maxTokens: positiveInteger(env.TAGENT_ROUTER_MAX_TOKENS, 2_048, "TAGENT_ROUTER_MAX_TOKENS"),
+      reasoning: env.TAGENT_ROUTER_REASONING === "true",
+    },
+    supervisorModel: {
+      provider: env.TAGENT_SUPERVISOR_PROVIDER?.trim() || env.TAGENT_PROVIDER || "openai-compatible",
+      modelId: env.TAGENT_SUPERVISOR_MODEL ?? "gpt-5.6-luna",
+      api: "openai-completions",
+      baseUrl: normalizeBaseUrl(env.TAGENT_SUPERVISOR_API_BASE?.trim() || env.TAGENT_API_BASE || "https://one.tms.im/v1"),
+      contextWindow: positiveInteger(env.TAGENT_SUPERVISOR_CONTEXT_WINDOW, 64_000, "TAGENT_SUPERVISOR_CONTEXT_WINDOW"),
+      maxTokens: positiveInteger(env.TAGENT_SUPERVISOR_MAX_TOKENS, 4_096, "TAGENT_SUPERVISOR_MAX_TOKENS"),
+      reasoning: env.TAGENT_SUPERVISOR_REASONING === "true",
+    },
   };
 }
 
@@ -227,6 +251,10 @@ export interface PublicRuntimeConfig {
   serviceAuthenticationConfigured: boolean;
   providerTimeoutMs: number;
   providerMaxRetries: number;
+  routerModelId: string;
+  routerTimeoutMs: number;
+  supervisorModelId: string;
+  supervisorTimeoutMs: number;
   runTimeoutMs: number;
   runHardTimeoutMs: number;
   maxContinuations: number;
@@ -250,6 +278,10 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     serviceAuthenticationConfigured: config.serviceCredentials.length > 0,
     providerTimeoutMs: config.providerTimeoutMs,
     providerMaxRetries: config.providerMaxRetries,
+    routerModelId: config.routerModel.modelId,
+    routerTimeoutMs: config.routerTimeoutMs,
+    supervisorModelId: config.supervisorModel.modelId,
+    supervisorTimeoutMs: config.supervisorTimeoutMs,
     runTimeoutMs: config.runTimeoutMs,
     runHardTimeoutMs: config.runHardTimeoutMs,
     maxContinuations: config.maxContinuations,

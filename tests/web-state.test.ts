@@ -105,4 +105,11 @@ describe("Web workbench state model", () => {
     expect(source).toContain("setDraft(content)");
   });
 
+  it("debounces SSE acknowledgements and avoids full Run refreshes for routine tool events", async () => {
+    const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain("scheduleAck(event.seq)");
+    expect(source).toContain("setTimeout(() => { ackTimer = undefined; flushAck(); }, 500)");
+    expect(source).not.toContain('event.type.startsWith("tool.") || event.type.startsWith("continuation.")');
+  });
+
 });

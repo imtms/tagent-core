@@ -101,7 +101,11 @@ describe("workspace tools", () => {
     const write = tools.find((tool) => tool.name === "write")!;
     await taskRun.execute("get", { action: "get" }, undefined);
     expect(events).toEqual([]);
-    await taskRun.execute("plan", { action: "plan", key: "work", title: "Work", status: "pending" }, undefined);
+    const mutationResult = await taskRun.execute("plan", { action: "plan", key: "work", title: "Work", status: "pending" }, undefined);
+    const mutationText = mutationResult.content.find((item) => item.type === "text")?.text ?? "";
+    expect(mutationText.length).toBeLessThan(1_000);
+    expect(JSON.parse(mutationText)).toMatchObject({ ok: true, action: "plan", runId: run.id, phase: "plan", counts: { plan: 1 } });
+    expect(mutationText).not.toContain('"contract"');
     expect(store.getRun(run.id)?.phase).toBe("plan");
     expect(events).toEqual(["run.updated:plan"]);
     await write.execute("write", { path: "result.txt", content: "done" }, undefined);

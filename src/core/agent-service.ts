@@ -24,19 +24,20 @@ export class AgentService {
   private supervisorRestartReconciled = false;
   private closing = false;
   private readonly supervisor: TaskRunSupervisor;
-  private readonly sessionRouter = new SessionInputRouter();
+  private readonly sessionRouter: SessionInputRouter;
 
   constructor(
     private readonly store: Store,
     private readonly workspace: string,
     private readonly runtimeFactory: RuntimeFactory = createInProcessRuntime,
-    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { maxContinuations?: number; contextWindow?: number; maxContextTurns?: number; controlInboxCapacity?: number; supervisorReviewer?: SupervisorReviewer } = {},
+    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { routerModel?: import("@earendil-works/pi-ai/compat").Model<"openai-completions">; routerTimeoutMs?: number; supervisorModel?: import("@earendil-works/pi-ai/compat").Model<"openai-completions">; supervisorTimeoutMs?: number; maxContinuations?: number; contextWindow?: number; maxContextTurns?: number; controlInboxCapacity?: number; supervisorReviewer?: SupervisorReviewer } = {},
     private readonly memory?: MemoryFacade,
     private readonly memoryScopeId = "default",
   ) {
-    const reviewer = runtimeDefaults.supervisorReviewer ?? (runtimeDefaults.model && runtimeDefaults.apiKey ? new OpenAiSupervisorReviewer({ model: runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions">, apiKey: runtimeDefaults.apiKey, timeoutMs: runtimeDefaults.providerTimeoutMs }) : process.env.VITEST ? new TestSupervisorReviewer() : undefined);
+    const reviewer = runtimeDefaults.supervisorReviewer ?? (runtimeDefaults.model && runtimeDefaults.apiKey ? new OpenAiSupervisorReviewer({ model: runtimeDefaults.supervisorModel ?? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions">, fallbackModel: runtimeDefaults.supervisorModel ? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions"> : undefined, apiKey: runtimeDefaults.apiKey, timeoutMs: runtimeDefaults.supervisorTimeoutMs ?? runtimeDefaults.providerTimeoutMs }) : process.env.VITEST ? new TestSupervisorReviewer() : undefined);
     if (!reviewer) throw new Error("LLM Supervisor reviewer requires a configured model and API key");
     this.supervisor = new TaskRunSupervisor(store, reviewer);
+    this.sessionRouter = new SessionInputRouter({ model: runtimeDefaults.routerModel ?? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions"> | undefined, apiKey: runtimeDefaults.apiKey, timeoutMs: runtimeDefaults.routerTimeoutMs ?? 15_000 });
     this.store.markInterrupted();
   }
 
@@ -216,12 +217,19 @@ export class AgentService {
     this.continuationRecoveryTimer.unref?.();
   }
 
-  enqueueSessionInput(sessionId: SessionId, content: string, requestId: string = randomUUID()) {
+  private sessionRouterContext(sessionId: SessionId) {
+    return {
+      recentMessages: this.store.listRecentMessages(sessionId, 12),
+      recentRuns: this.store.listRuns(sessionId, 5),
+    };
+  }
+
+  async enqueueSessionInput(sessionId: SessionId, content: string, requestId: string = randomUUID()) {
     if (this.closing) throw new Error("Service is shutting down");
     const existing = this.store.getSessionSubmission(sessionId, requestId);
     if (existing) return { item: existing, run: existing.runId ? this.store.getRun(existing.runId) ?? null : null };
     const activeRun = this.store.getActiveRun(sessionId);
-    const analysis = this.sessionRouter.analyze(content, activeRun);
+    const analysis = await this.sessionRouter.analyze(content, activeRun, this.sessionRouterContext(sessionId));
     const duplicate = !activeRun ? this.store.findMergeCandidate(sessionId, analysis) : undefined;
     const item = this.store.enqueueSessionInbox(sessionId, content, analysis, requestId);
     if (analysis.intent === "defer") {
@@ -268,11 +276,11 @@ export class AgentService {
     return { item: this.store.getSessionInboxItem(item.id)!, run: run ?? null };
   }
 
-  updateSessionInput(sessionId: SessionId, itemId: string, content: string) {
+  async updateSessionInput(sessionId: SessionId, itemId: string, content: string) {
     const item = this.store.getSessionInboxItem(itemId);
     if (!item || item.sessionId !== sessionId || item.status !== "queued") return undefined;
     const activeRun = this.store.getActiveRun(sessionId);
-    return this.store.updateSessionInboxItem(itemId, sessionId, content, this.sessionRouter.analyze(content, activeRun));
+    return this.store.updateSessionInboxItem(itemId, sessionId, content, await this.sessionRouter.analyze(content, activeRun, this.sessionRouterContext(sessionId)));
   }
 
   reorderSessionInputs(sessionId: SessionId, itemIds: string[]) {

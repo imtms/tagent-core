@@ -196,7 +196,7 @@ export function createTools(store: Store, runId: RunId, workspace: string, onEve
   };
 
   const taskRunTool: AgentTool<typeof TaskRunSchema, Record<string, unknown>> = {
-    name: "task_run", label: "Update task", description: "Inspect or update the current durable TaskRun plan, phase, checks, artifacts, and proposed derived TaskRuns.", parameters: TaskRunSchema, executionMode: "sequential",
+    name: "task_run", label: "Update task", description: "Inspect or update the current durable TaskRun. Mutations return a compact receipt; use action=get only when the full state is needed.", parameters: TaskRunSchema, executionMode: "sequential",
     async execute(_id, params: Static<typeof TaskRunSchema>) {
       if (params.action === "phase") store.setRunPhase(runId, params.phase);
       if (params.action === "plan") store.upsertPlanItem(runId, { key: params.key, title: params.title, status: params.status, required: params.required ?? true, position: params.position ?? 0 });
@@ -208,7 +208,12 @@ export function createTools(store: Store, runId: RunId, workspace: string, onEve
       const changed = params.action !== "get";
       const run = store.getRun(runId);
       if (changed) onEvent?.(store.appendEvent(runId, "run.updated", { action: params.action, phase: run?.phase ?? "discover" }));
-      return textResult(JSON.stringify(run, null, 2));
+      if (!changed) return textResult(JSON.stringify(run, null, 2));
+      return textResult(JSON.stringify({
+        ok: true, action: params.action, runId, status: run?.status, phase: run?.phase,
+        completionGate: run?.completionGate,
+        counts: { plan: run?.plan.length ?? 0, checks: run?.checks.length ?? 0, artifacts: run?.artifacts.length ?? 0 },
+      }), { compact: true });
     },
   };
 

@@ -14,6 +14,22 @@ describe("configuration", () => {
       modelId: "gpt-5.6-sol",
       provider: "openai-compatible",
     });
+    expect(config.routerModel).toMatchObject({ modelId: "gpt-5.6-luna", reasoning: false });
+    expect(config.supervisorModel).toMatchObject({ modelId: "gpt-5.6-luna", reasoning: false });
+    expect(config).toMatchObject({ routerTimeoutMs: 15_000, supervisorTimeoutMs: 30_000 });
+  });
+
+  it("allows independent lightweight Router and Supervisor models", () => {
+    const config = loadConfig({
+      TAGENT_MODEL: "main-model",
+      TAGENT_ROUTER_MODEL: "router-small",
+      TAGENT_SUPERVISOR_MODEL: "supervisor-small",
+      TAGENT_SUPERVISOR_TIMEOUT_MS: "9000",
+    });
+    expect(config.model.modelId).toBe("main-model");
+    expect(config.routerModel.modelId).toBe("router-small");
+    expect(config.supervisorModel.modelId).toBe("supervisor-small");
+    expect(publicRuntimeConfig(config)).toMatchObject({ routerModelId: "router-small", supervisorModelId: "supervisor-small", supervisorTimeoutMs: 9_000 });
   });
 
   it("normalizes custom base URLs and constructs a pi model", () => {

@@ -125,7 +125,7 @@ describe("AgentService runtime boundary", () => {
     const memory = { recall: vi.fn(() => recall), enqueueCapture: vi.fn(async () => ({ jobId: "capture-1" })) } as unknown as MemoryFacade;
     const service = new AgentService(store, "/tmp", () => new DeferredRuntime(), {}, memory, "test-scope");
 
-    const admitted = service.enqueueSessionInput(session.id, "visible immediately", "async-memory-admission");
+    const admitted = await service.enqueueSessionInput(session.id, "visible immediately", "async-memory-admission");
 
     expect(admitted.run).toMatchObject({ goal: "visible immediately", status: "running" });
     expect(store.listMessages(session.id)).toEqual([expect.objectContaining({ role: "user", content: "visible immediately" })]);
@@ -141,8 +141,8 @@ describe("AgentService runtime boundary", () => {
     const session = store.createSession();
     const runtime = new InboxRuntime();
     const service = new AgentService(store, "/tmp", () => runtime, { controlInboxCapacity: 4 });
-    const first = service.enqueueSessionInput(session.id, "发布 0.1.4", "route-base");
-    const routed = service.enqueueSessionInput(session.id, "不要重启服务，端口改成 3220", "route-steer");
+    const first = await service.enqueueSessionInput(session.id, "发布 0.1.4", "route-base");
+    const routed = await service.enqueueSessionInput(session.id, "不要重启服务，端口改成 3220", "route-steer");
     await new Promise((resolve) => setImmediate(resolve));
     expect(store.listRuns(session.id)).toHaveLength(1);
     expect(routed.item).toMatchObject({ status: "routed", decision: "steer", runId: first.run!.id, analysis: { intent: "steer_active" } });
@@ -153,11 +153,11 @@ describe("AgentService runtime boundary", () => {
   it("splits compound active input into steer, follow-up, and parallel governance actions", async () => {
     const store = new Store(":memory:"); const session = store.createSession(); const controls: Array<{ kind: string; content: string }> = [];
     const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
-    const first = service.enqueueSessionInput(session.id, "修复 Supervisor", "compound-base");
+    const first = await service.enqueueSessionInput(session.id, "修复 Supervisor", "compound-base");
     const active = first.run!;
     const original = service.enqueueControl.bind(service);
     service.enqueueControl = (async (runId: string, kind: "steer" | "follow_up", content: string, requestId?: string) => { controls.push({ kind, content }); return original(runId, kind, content, requestId); }) as typeof service.enqueueControl;
-    const routed = service.enqueueSessionInput(session.id, "先不要部署。完成后更新文档。同时并行检查另一个仓库", "compound-route");
+    const routed = await service.enqueueSessionInput(session.id, "先不要部署。完成后更新文档。同时并行检查另一个仓库", "compound-route");
     expect(routed.run?.id).toBe(active.id);
     expect((routed as { proposals?: unknown[] }).proposals).toHaveLength(1);
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -170,7 +170,7 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
-    const routed = service.enqueueSessionInput(session.id, "暂时不做", "defer-one");
+    const routed = await service.enqueueSessionInput(session.id, "暂时不做", "defer-one");
     expect(routed.run).toBeNull();
     expect(routed.item).toMatchObject({ decision: "defer", analysis: { intent: "defer" } });
     expect(store.listRuns(session.id)).toHaveLength(0);
@@ -181,8 +181,8 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
-    const first = service.enqueueSessionInput(session.id, "修复 Web UI", "parallel-base");
-    const routed = service.enqueueSessionInput(session.id, "同时并行设计另一个独立的移动端客户端", "parallel-child");
+    const first = await service.enqueueSessionInput(session.id, "修复 Web UI", "parallel-base");
+    const routed = await service.enqueueSessionInput(session.id, "同时并行设计另一个独立的移动端客户端", "parallel-child");
     expect(store.listRuns(session.id)).toHaveLength(1);
     expect(routed.item).toMatchObject({ status: "routed", decision: "spawn_proposal", runId: first.run!.id });
     expect(store.listSpawnProposals(first.run!.id)).toEqual([expect.objectContaining({ relation: "parallel", status: "proposed" })]);
@@ -198,8 +198,8 @@ describe("AgentService runtime boundary", () => {
       runtimes.push(runtime);
       return runtime;
     });
-    const first = service.enqueueSessionInput(session.id, "first task", "inbox-1");
-    const second = service.enqueueSessionInput(session.id, "second task", "inbox-2");
+    const first = await service.enqueueSessionInput(session.id, "first task", "inbox-1");
+    const second = await service.enqueueSessionInput(session.id, "second task", "inbox-2");
     expect(first.run).toMatchObject({ goal: "first task", status: "running" });
     expect(second.run).toBeNull();
     expect(store.listSessionInbox(session.id)).toEqual([expect.objectContaining({ content: "second task", status: "queued" })]);
@@ -223,8 +223,8 @@ describe("AgentService runtime boundary", () => {
       runtimes.push(runtime);
       return runtime;
     }, { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit()) });
-    service.enqueueSessionInput(session.id, "blocked task", "blocked-1");
-    service.enqueueSessionInput(session.id, "later task", "blocked-2");
+    await service.enqueueSessionInput(session.id, "blocked task", "blocked-1");
+    await service.enqueueSessionInput(session.id, "later task", "blocked-2");
     runtimes[0].resolve();
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(store.listRuns(session.id)).toHaveLength(1);
