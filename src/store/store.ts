@@ -461,13 +461,14 @@ export class Store {
     this.db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(now(), id);
   }
 
-  listMessages(sessionId: SessionId, limit = 200): Message[] {
+  listMessages(sessionId: SessionId, limit = 200, beforeId?: number): Message[] {
+    const boundary = beforeId && Number.isFinite(beforeId) ? Math.max(1, Math.floor(beforeId)) : Number.MAX_SAFE_INTEGER;
     return this.db.prepare(`
       SELECT id, sessionId, role, content, createdAt FROM (
         SELECT id, session_id as sessionId, role, content, created_at as createdAt
-        FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?
+        FROM messages WHERE session_id = ? AND id < ? ORDER BY id DESC LIMIT ?
       ) ORDER BY id ASC
-    `).all(sessionId, limit) as Message[];
+    `).all(sessionId, boundary, limit) as Message[];
   }
 
   appendMessage(sessionId: SessionId, role: Message["role"], content: string): Message {

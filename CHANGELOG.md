@@ -1,5 +1,11 @@
 # Changelog
 
+### Fixed
+
+- Preserve earlier streamed assistant drafts when a later assistant message starts, and only clear live text after the approved response is confirmed in persisted chat history.
+- Page long chat history by stable message ID, stop refetching and reparsing messages on every status poll, memoize persisted Markdown, and use lightweight plain-text rendering while streaming.
+
+
 ## [Unreleased]
 
 ### Changed

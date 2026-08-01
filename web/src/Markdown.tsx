@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from "react";
+import { memo, useCallback, useMemo, useRef } from "react";
 import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
 import type StateCore from "markdown-it/lib/rules_core/state_core.mjs";
@@ -143,7 +143,7 @@ export function renderMarkdown(content: string) {
   return markdownRenderer.render(content || "");
 }
 
-export function Markdown({ children }: { children: string }) {
+export const Markdown = memo(function Markdown({ children }: { children: string }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const html = useMemo(() => renderMarkdown(children), [children]);
 
@@ -166,4 +166,8 @@ export function Markdown({ children }: { children: string }) {
   }, []);
 
   return <div ref={rootRef} className="markdown" onClick={handleClick} dangerouslySetInnerHTML={{ __html: html }} />;
-}
+});
+
+export const LiveText = memo(function LiveText({ children }: { children: string }) {
+  return <div className="markdown live-text">{children}</div>;
+});

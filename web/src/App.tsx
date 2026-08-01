@@ -1,12 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Command, FileText, GripVertical, Menu, MessageSquarePlus, PanelRight, Pencil, Play, Plus, Send, Square, Terminal, X } from "lucide-react";
 import { api, subscribe, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TranscriptItem } from "./api";
-import { Markdown } from "./Markdown";
+import { LiveText, Markdown } from "./Markdown";
 import { createRequestId } from "./id";
 import { deriveCurrentOperation } from "./current-operation";
 import { MemoryPanel } from "./MemoryPanel";
 
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
+
+const ChatMessage = memo(function ChatMessage({ message }: { message: Message }) {
+  return <article className={`message ${message.role}`}><div className="message-meta"><span>{message.role === "user" ? "You" : "TAgent"}</span><time>{formatTime(message.createdAt)}</time></div><div className="message-body"><Markdown>{message.content}</Markdown></div></article>;
+});
 
 function WorkspaceRunStatus({ session }: { session: Session }) {
   const status = session.latestRunStatus;
@@ -128,6 +132,9 @@ export function App() {
   const [renamingSessionId, setRenamingSessionId] = useState("");
   const [sessionTitleDraft, setSessionTitleDraft] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const [provisionalDrafts, setProvisionalDrafts] = useState<string[]>([]);
   const [pendingUserMessage, setPendingUserMessage] = useState<{ sessionId: string; content: string; createdAt: number } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [activeRun, setActiveRun] = useState<TaskRun | null>(null);
@@ -180,14 +187,13 @@ export function App() {
       if (closed || polling) return;
       polling = true;
       try {
-        const [queued, runHistory, sessionItems, history] = await Promise.all([
-          api.inbox(targetSessionId), api.runs(targetSessionId), api.sessions(), api.messages(targetSessionId),
+        const [queued, runHistory, sessionItems] = await Promise.all([
+          api.inbox(targetSessionId), api.runs(targetSessionId), api.sessions(),
         ]);
         if (closed || sessionIdRef.current !== targetSessionId) return;
         setInbox(queued);
         setRuns(runHistory);
         setSessions(sessionItems);
-        setMessages(history);
         const active = runHistory.find((item) => item.status === "running") ?? null;
         if (active?.id && active.id !== activeRunIdRef.current) {
           const [hydrated, view] = await Promise.all([api.run(active.id), api.transcriptView(active.id)]);
@@ -205,19 +211,19 @@ export function App() {
         // SSE remains authoritative while polling provides eventual UI recovery.
       } finally { polling = false; }
     };
-    const timer = setInterval(() => void refresh(), 2000);
+    const timer = setInterval(() => void refresh(), 5000);
     return () => { closed = true; clearInterval(timer); };
   }, [sessionId]);
   useEffect(() => {
     if (!sessionId) return;
     const targetSessionId = sessionId;
     let closed = false;
-    setStreaming(""); setEvents([]); setError(""); setEditingInboxId(""); setInboxDraft(""); setDraggingInboxId(""); setPendingUserMessage(null);
+    setStreaming(""); setProvisionalDrafts([]); setEvents([]); setError(""); setEditingInboxId(""); setInboxDraft(""); setDraggingInboxId(""); setPendingUserMessage(null);
     void Promise.all([api.messages(targetSessionId), api.runs(targetSessionId), api.inbox(targetSessionId)]).then(async ([history, runHistory, queued]) => {
       if (closed || sessionIdRef.current !== targetSessionId) return;
       const latest = runHistory[0] ?? null;
       const active = runHistory.find((item) => item.status === "running") ?? null;
-      setMessages(history); setRuns(runHistory); setInbox(queued); setActiveRun(active); setSelectedRun(latest); setExpandedRunId(latest?.id ?? "");
+      setMessages(history); setHasOlderMessages(history.length === 80); setRuns(runHistory); setInbox(queued); setActiveRun(active); setSelectedRun(latest); setExpandedRunId(latest?.id ?? "");
       setStreaming(active?.checkpoint?.active ? active.checkpoint.assistantPartial : "");
       setEvents(active?.checkpoint?.active && active.checkpoint.currentTool ? [{ runId: active.id, seq: active.checkpoint.lastEventSeq, type: "tool.started", data: active.checkpoint.currentTool, createdAt: active.checkpoint.updatedAt }] : []);
       if (!latest) { setTranscript([]); return; }
@@ -242,7 +248,10 @@ export function App() {
       const after = Math.max(checkpointAfter, cursor.ackedSeq);
       unsubscribe = subscribe(runId, consumerId, cursor.generation, after, async (event) => {
       setEvents((current) => [...current.slice(-39), event]);
-      if (event.type === "message.started") setStreaming("");
+      if (event.type === "message.started") setStreaming((current) => {
+        if (current.trim()) setProvisionalDrafts((drafts) => [...drafts.slice(-2), current]);
+        return "";
+      });
       if (event.type === "message.delta") setStreaming((current) => current + String(event.data.delta ?? ""));
       if (["run.completed", "run.blocked", "run.failed", "run.cancelled"].includes(event.type)) {
         const [updated, runHistory, history, queued, view, sessionItems] = await Promise.all([
@@ -250,9 +259,17 @@ export function App() {
         ]);
         if (closed || sessionIdRef.current !== sessionId) return;
         const nextActive = runHistory.find((item) => item.status === "running") ?? null;
-        setStreaming(""); setActiveRun(nextActive);
+        setStreaming((current) => {
+          const response = String(event.data.response ?? "").trim();
+          const persisted = !current.trim() || history.some((message) => message.role === "assistant" && (message.content === current || (response && message.content === response)));
+          return persisted ? "" : current;
+        });
+        setProvisionalDrafts([]); setActiveRun(nextActive);
         setSelectedRun((current) => current?.id === updated.id ? updated : current);
-        setRuns(runHistory); setMessages(history); setInbox(queued); setTranscript(view); setSessions(sessionItems);
+        setRuns(runHistory); setMessages((current) => {
+          const older = current.filter((message) => !history.some((latest) => latest.id === message.id) && message.id < (history[0]?.id ?? Number.MAX_SAFE_INTEGER));
+          return [...older, ...history];
+        }); setInbox(queued); setTranscript(view); setSessions(sessionItems);
       } else if (event.type === "run.updated" || event.type.startsWith("tool.") || event.type.startsWith("continuation.") || event.type.startsWith("supervisor.")) {
         const updated = await api.run(runId);
         if (closed || sessionIdRef.current !== sessionId) return;
@@ -271,7 +288,7 @@ export function App() {
     if (!viewport || (!autoScrollRef.current && !forceScrollRef.current)) return;
     viewport.scrollTop = viewport.scrollHeight;
     forceScrollRef.current = false;
-  }, [messages, pendingUserMessage, streaming, events]);
+  }, [messages, pendingUserMessage, streaming]);
 
   const handleMessageScroll = useCallback(() => {
     const viewport = messageScrollRef.current;
@@ -281,6 +298,20 @@ export function App() {
 
   const activeTools = useMemo(() => events.filter((event) => event.type.startsWith("tool.")).slice(-20), [events]);
   const transcriptTools = useMemo(() => transcript.filter((item): item is Extract<TranscriptItem, { kind: "tool" }> => item.kind === "tool"), [transcript]);
+
+  async function loadOlderMessages() {
+    if (!sessionId || loadingOlderMessages || !messages.length) return;
+    const viewport = messageScrollRef.current;
+    const previousHeight = viewport?.scrollHeight ?? 0;
+    setLoadingOlderMessages(true);
+    try {
+      const older = await api.messages(sessionId, 80, messages[0].id);
+      setMessages((current) => [...older.filter((item) => !current.some((existing) => existing.id === item.id)), ...current]);
+      setHasOlderMessages(older.length === 80);
+      requestAnimationFrame(() => { if (viewport) viewport.scrollTop += viewport.scrollHeight - previousHeight; });
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setLoadingOlderMessages(false); }
+  }
 
   async function createSession() {
     const session = await api.createSession(`Workspace ${sessions.length + 1}`);
@@ -321,7 +352,7 @@ export function App() {
       const [queued, history] = await Promise.all([api.inbox(targetSessionId), api.messages(targetSessionId)]);
       if (sessionIdRef.current !== targetSessionId) return;
       const persisted = history.some((message) => message.role === "user" && message.content === content && message.createdAt >= optimistic.createdAt - 5_000);
-      setInbox(queued); setMessages(history); setPendingUserMessage(persisted ? null : admission.run ? optimistic : null);
+      setInbox(queued); setMessages(history); setHasOlderMessages(history.length === 80); setPendingUserMessage(persisted ? null : admission.run ? optimistic : null);
       if (admission.run) {
         const nextRun = admission.run;
         setActiveRun(nextRun); setSelectedRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setStreaming("");
@@ -377,7 +408,7 @@ export function App() {
     try {
       const result = await api.startInbox(sessionId, item.id);
       const nextRun = result.run;
-      setInbox(await api.inbox(sessionId)); setMessages(await api.messages(sessionId)); setActiveRun(nextRun); setSelectedRun(nextRun);
+      setInbox(await api.inbox(sessionId)); const history = await api.messages(sessionId); setMessages(history); setHasOlderMessages(history.length === 80); setActiveRun(nextRun); setSelectedRun(nextRun);
       setRuns((current) => [nextRun, ...current.filter((run) => run.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setStreaming("");
       setNotice("Queued prompt started.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -426,11 +457,13 @@ export function App() {
       <section className="message-scroll" ref={messageScrollRef} onScroll={handleMessageScroll}>
         <div className="message-feed">
         {!messages.length && !streaming && pendingUserMessage?.sessionId !== sessionId && <div className="empty-state"><div className="empty-icon"><MessageSquarePlus size={25} /></div><h2>Start with an outcome</h2><p>TAgent will turn substantial work into a durable plan, execute tools, and hold completion behind checks.</p></div>}
-        {messages.map((message) => <article key={message.id} className={`message ${message.role}`}><div className="message-meta"><span>{message.role === "user" ? "You" : "TAgent"}</span><time>{formatTime(message.createdAt)}</time></div><div className="message-body"><Markdown>{message.content}</Markdown></div></article>)}
+        {hasOlderMessages && <button className="load-older" onClick={() => void loadOlderMessages()} disabled={loadingOlderMessages}>{loadingOlderMessages ? "Loading…" : "Load earlier messages"}</button>}
+        {messages.map((message) => <ChatMessage key={message.id} message={message} />)}
         {pendingUserMessage?.sessionId === sessionId && !messages.some((message) => message.role === "user" && message.content === pendingUserMessage.content && message.createdAt >= pendingUserMessage.createdAt - 5_000) && <article className="message user pending" aria-label="Sending message"><div className="message-meta"><span>You</span><time>Sending…</time></div><div className="message-body"><Markdown>{pendingUserMessage.content}</Markdown></div></article>}
         {selectedRun && transcriptTools.length > 0 && <ToolHistory items={transcriptTools} />}
         {activeRun && <div className="active-run-strip"><Activity size={14} /><span>Attempt {activeRun.attempt}</span><strong>{activeRun.phase}</strong><small>{activeRun.usage.totalTokens.toLocaleString()} tokens</small></div>}
-        {streaming && <article className="message assistant live"><div className="message-meta"><span>TAgent</span><span className="live-label"><span className="pulse" />Working</span></div><div className="message-body"><Markdown>{streaming}</Markdown></div></article>}
+        {provisionalDrafts.length > 0 && <details className="provisional-drafts"><summary>{provisionalDrafts.length} earlier draft{provisionalDrafts.length === 1 ? "" : "s"} retained</summary>{provisionalDrafts.map((item, index) => <pre key={`${index}-${item.length}`}>{item}</pre>)}</details>}
+        {streaming && <article className="message assistant live"><div className="message-meta"><span>TAgent</span><span className="live-label"><span className="pulse" />Working</span></div><div className="message-body"><LiveText>{streaming}</LiveText></div></article>}
         {activeTools.length > 0 && <LiveToolActivity events={activeTools} />}
         <div ref={endRef} />
         </div>

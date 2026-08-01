@@ -86,6 +86,21 @@ describe("HTTP API", () => {
     expect(actionable.statusCode).toBe(200);
   });
 
+  it("pages long chat history and validates the cursor", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-message-page-"));
+    const store = new Store(":memory:");
+    const app = createApp({ store, service: new AgentService(store, workspace), logger: false, webRoot: workspace }); apps.push(app);
+    const session = store.createSession();
+    for (let index = 1; index <= 100; index += 1) store.appendMessage(session.id, index % 2 ? "user" : "assistant", `message-${index}`);
+    const latest = (await app.inject({ method: "GET", url: `/api/sessions/${session.id}/messages?limit=20` })).json();
+    expect(latest).toHaveLength(20);
+    expect(latest[0].content).toBe("message-81");
+    const older = (await app.inject({ method: "GET", url: `/api/sessions/${session.id}/messages?limit=20&beforeId=${latest[0].id}` })).json();
+    expect(older).toHaveLength(20);
+    expect(older.at(-1).id).toBeLessThan(latest[0].id);
+    expect((await app.inject({ method: "GET", url: `/api/sessions/${session.id}/messages?beforeId=bad` })).statusCode).toBe(400);
+  });
+
   it("returns a durable submission receipt and finds it by requestId", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-submission-"));
     const store = new Store(":memory:");

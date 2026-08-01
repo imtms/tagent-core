@@ -120,9 +120,14 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const session = store.renameSession(id, body.title);
     return session ?? reply.code(404).send({ error: "session not found" });
   });
-  app.get("/api/sessions/:id/messages", async (request) => {
+  app.get("/api/sessions/:id/messages", async (request, reply) => {
     const { id } = request.params as { id: string };
-    return store.listMessages(id);
+    if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    const query = request.query as { limit?: string; beforeId?: string };
+    const limit = Math.min(200, Math.max(1, Number(query.limit ?? 80)));
+    const beforeId = query.beforeId == null ? undefined : Number(query.beforeId);
+    if (beforeId != null && (!Number.isFinite(beforeId) || beforeId <= 0)) return reply.code(400).send({ error: "beforeId must be a positive message id" });
+    return store.listMessages(id, limit, beforeId);
   });
   app.get("/api/sessions/:id/runs", async (request, reply) => {
     const { id } = request.params as { id: string };

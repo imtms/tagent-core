@@ -61,6 +61,25 @@ describe("Web workbench state model", () => {
     expect(source).toContain('if (event.key === "Enter") { event.preventDefault(); void renameSession(session); }');
     expect(source).toContain('if (event.key === "Escape") { event.preventDefault(); cancelRename(); event.currentTarget.blur(); }');
   });
+  it("paginates and isolates expensive rendering in long chats", async () => {
+    const app = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    const markdown = await readFile(new URL("../web/src/Markdown.tsx", import.meta.url), "utf8");
+    const styles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
+    expect(app).toContain("loadOlderMessages");
+    expect(app).toContain("<ChatMessage key={message.id}");
+    expect(app).toContain("<LiveText>{streaming}</LiveText>");
+    expect(app).not.toContain("api.sessions(), api.messages(targetSessionId)");
+    expect(markdown).toContain("export const Markdown = memo");
+    expect(styles).toContain("content-visibility: auto");
+  });
+
+  it("retains a streamed draft when a replacement assistant message starts", async () => {
+    const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain("setProvisionalDrafts((drafts) => [...drafts.slice(-2), current])");
+    expect(source).toContain('className="provisional-drafts"');
+    expect(source).toContain('history.some((message) => message.role === "assistant"');
+  });
+
   it("shows submitted messages optimistically and continuously reconciles persisted chat state", async () => {
     const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
     expect(source).toContain("const [pendingUserMessage, setPendingUserMessage]");

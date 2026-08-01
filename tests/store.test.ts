@@ -304,6 +304,19 @@ describe("Store", () => {
     expect(store.listMessages(session.id).map((message) => message.content)).toEqual(["hello", "world"]);
   });
 
+  it("pages older chat messages by stable id without overlap", () => {
+    const store = createStore();
+    const session = store.createSession("Long chat");
+    for (let index = 1; index <= 205; index += 1) store.appendMessage(session.id, index % 2 ? "user" : "assistant", `message-${index}`);
+    const latest = store.listMessages(session.id, 80);
+    const older = store.listMessages(session.id, 80, latest[0].id);
+    expect(latest).toHaveLength(80);
+    expect(older).toHaveLength(80);
+    expect(latest[0].content).toBe("message-126");
+    expect(older[0].content).toBe("message-46");
+    expect(older.at(-1)!.id).toBeLessThan(latest[0].id);
+  });
+
   it("marks in-flight control delivery outcome unknown after restart", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "control-restart.db");
     const first = new Store(filename);
