@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Context Manifests now reference stable durable Session message IDs and Run transcript sequence IDs, preserving provenance through turn compression and budget omission instead of relying on timestamp/index-derived identities.
+- The Web TaskRun panel now provides Context Manifest history, selected/omitted source drill-down, and selected-source diffs between attempts.
+
 ### Added
 
 - Immutable per-attempt Supervisor Context Manifests for Run start, resume, and continuation, including selected and omitted Session/transcript messages, TaskRun contracts, Memory inputs, selection reasons, token estimates, and stable hashes.

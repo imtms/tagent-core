@@ -33,15 +33,20 @@ export interface ContextAssembly {
   };
 }
 
+interface ContextEntry {
+  message: AgentMessage;
+  sourceId: string;
+}
+
 interface Turn {
-  messages: AgentMessage[];
+  entries: ContextEntry[];
   compressed: boolean;
 }
 
 export class ContextAssembler {
   constructor(private readonly options: ContextAssemblerOptions) {}
 
-  assemble(source: ContextSource, messages: AgentMessage[], systemPrompt: string, prompt: string): ContextAssembly {
+  assemble(source: ContextSource, messages: AgentMessage[], systemPrompt: string, prompt: string, sourceIds: string[] = []): ContextAssembly {
     const contextWindow = this.options.contextWindow;
     const systemTokens = estimateTextTokens(systemPrompt);
     const promptTokens = estimateTextTokens(prompt);
@@ -52,7 +57,8 @@ export class ContextAssembler {
       configuredReserve ?? Math.max(10_000, Math.min(200_000, Math.floor(contextWindow * 0.1))),
     );
     const messageBudgetTokens = Math.max(0, contextWindow - systemTokens - promptTokens - outputReserveTokens - safetyReserveTokens);
-    const originalTurns = identifyTurns(messages);
+    const entries = messages.map((message, index) => ({ message, sourceId: sourceIds[index] || legacyMessageIdentity(message, index) }));
+    const originalTurns = identifyTurns(entries);
     const turnLimited = originalTurns.slice(-Math.max(1, this.options.maxTurns));
     const prepared = turnLimited.map((turn, index) => this.prepareHistoricalTurn(turn, index === turnLimited.length - 1));
     const kept: Turn[] = [];
@@ -70,17 +76,17 @@ export class ContextAssembler {
       estimatedMessageTokens += turnTokens;
     }
 
-    const keptMessages = kept.flatMap((turn) => turn.messages);
+    const keptEntries = kept.flatMap((turn) => turn.entries);
     const keptSourceTurns = Math.min(kept.length, turnLimited.length);
-    const droppedMessages = originalTurns.slice(0, originalTurns.length - keptSourceTurns).flatMap((turn) => turn.messages);
+    const droppedEntries = originalTurns.slice(0, originalTurns.length - keptSourceTurns).flatMap((turn) => turn.entries);
     const selectedKind: ContextManifestItem["kind"] = source === "session" ? "session_message" : "transcript_message";
     const contextItems: ContextManifestItem[] = [
-      ...keptMessages.map((message, index) => ({ kind: selectedKind, sourceId: messageIdentity(message, index), role: message.role, selected: true, reason: "selected within recent-turn and token budget", estimatedTokens: estimateMessageTokens(message) })),
-      ...droppedMessages.map((message, index) => ({ kind: selectedKind, sourceId: messageIdentity(message, keptMessages.length + index), role: message.role, selected: false, reason: "dropped by turn or token budget", estimatedTokens: estimateMessageTokens(message) })),
+      ...keptEntries.map(({ message, sourceId }) => ({ kind: selectedKind, sourceId, role: message.role, selected: true, reason: "selected within recent-turn and token budget", estimatedTokens: estimateMessageTokens(message) })),
+      ...droppedEntries.map(({ message, sourceId }) => ({ kind: selectedKind, sourceId, role: message.role, selected: false, reason: "dropped by turn or token budget", estimatedTokens: estimateMessageTokens(message) })),
     ];
     return {
-      messages: keptMessages,
-      droppedMessages,
+      messages: keptEntries.map((entry) => entry.message),
+      droppedMessages: droppedEntries.map((entry) => entry.message),
       contextItems,
       stats: {
         source,
@@ -92,7 +98,7 @@ export class ContextAssembler {
         messageBudgetTokens,
         originalMessages: messages.length,
         originalTurns: originalTurns.length,
-        keptMessages: keptMessages.length,
+        keptMessages: keptEntries.length,
         keptTurns: kept.length,
         estimatedMessageTokens,
         compressedTurns: kept.filter((turn) => turn.compressed).length,
@@ -106,7 +112,7 @@ export class ContextAssembler {
     const limit = this.options.historicalToolResultChars ?? 20_000;
     return {
       compressed: turn.compressed,
-      messages: turn.messages.map((message) => truncateToolContent(message, limit)),
+      entries: turn.entries.map((entry) => ({ ...entry, message: truncateToolContent(entry.message, limit) })),
     };
   }
 }
@@ -132,17 +138,17 @@ export function estimateMessageTokens(message: AgentMessage): number {
   return Math.max(1, total);
 }
 
-function identifyTurns(messages: AgentMessage[]): Turn[] {
+function identifyTurns(entries: ContextEntry[]): Turn[] {
   const turns: Turn[] = [];
-  for (const message of messages) {
-    if (message.role === "user" || turns.length === 0) turns.push({ messages: [message], compressed: false });
-    else turns.at(-1)!.messages.push(message);
+  for (const entry of entries) {
+    if (entry.message.role === "user" || turns.length === 0) turns.push({ entries: [entry], compressed: false });
+    else turns.at(-1)!.entries.push(entry);
   }
   return turns;
 }
 
 function estimateTurnTokens(turn: Turn) {
-  return turn.messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
+  return turn.entries.reduce((sum, entry) => sum + estimateMessageTokens(entry.message), 0);
 }
 
 function messageText(message: AgentMessage) {
@@ -156,10 +162,13 @@ function messageText(message: AgentMessage) {
 }
 
 function compressTurnToText(turn: Turn): Turn {
-  const user = turn.messages.find((message) => message.role === "user");
-  const assistant = [...turn.messages].reverse().find((message) => message.role === "assistant" && messageText(message));
-  const compressed = [user && textOnlyMessage(user, 10_000), assistant && textOnlyMessage(assistant, 10_000)].filter(Boolean) as AgentMessage[];
-  return { messages: compressed, compressed: true };
+  const user = turn.entries.find((entry) => entry.message.role === "user");
+  const assistant = [...turn.entries].reverse().find((entry) => entry.message.role === "assistant" && messageText(entry.message));
+  const entries = [
+    user && { ...user, message: textOnlyMessage(user.message, 10_000) },
+    assistant && { ...assistant, message: textOnlyMessage(assistant.message, 10_000) },
+  ].filter(Boolean) as ContextEntry[];
+  return { entries, compressed: true };
 }
 
 function textOnlyMessage(message: AgentMessage, limit: number): AgentMessage {
@@ -183,7 +192,7 @@ function truncateToolContent(message: AgentMessage, limit: number): AgentMessage
   return changed ? { ...message, content } as AgentMessage : message;
 }
 
-function messageIdentity(message: AgentMessage, index: number) {
+function legacyMessageIdentity(message: AgentMessage, index: number) {
   const timestamp = "timestamp" in message && typeof message.timestamp === "number" ? message.timestamp : 0;
-  return `${message.role}:${timestamp}:${index}`;
+  return `legacy:${message.role}:${timestamp}:${index}`;
 }

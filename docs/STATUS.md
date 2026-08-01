@@ -54,7 +54,7 @@ Updated: 2026-08-01 (Asia/Singapore)
 - Resume/continuation context assembly prunes oldest complete turns to a 75% context-window budget while retaining the full transcript in SQLite.
 - New Run context reads the newest persisted Session message window in chronological order, including Sessions beyond 10,000 messages.
 - Active Runs persist a throttled checkpoint containing the current attempt, assistant partial text, current tool identity, and covered event/transcript sequences; text writes are coalesced to at most once per 500ms and tool boundaries persist immediately.
-- Every Run start, resume, and continuation persists an immutable Context Manifest with selected/omitted messages, TaskRun contract, Memory inputs, selection reasons, token estimates, and a stable hash; API and Web expose the latest diagnostics.
+- Every Run start, resume, and continuation persists an immutable Context Manifest with selected/omitted messages, TaskRun contract, Memory inputs, selection reasons, token estimates, stable SQLite message/transcript source IDs, and a stable hash; API and Web expose the latest diagnostics.
 - Terminal, blocked, interrupted, lease-recovered, and graceful-close paths archive checkpoints atomically or transactionally, preserving partial text for diagnostics without leaving a stale active checkpoint.
 - Resume and continuation attempts create a fresh active checkpoint while the full transcript remains authoritative in SQLite.
 

@@ -17,7 +17,7 @@ The implementation is approaching the original design, but Topic orchestration, 
 - Expose manifests through API and Web diagnostics.
 - Prove that a manifest can explain a wrong or missing-context answer without reading process memory.
 
-**Status:** foundation complete on `main`; Topic links and richer message IDs remain.
+**Status:** stable SQLite message IDs and transcript sequence IDs are persisted in Context Manifests, with Web history/drill-down and cross-attempt selected-source diffs on `main`; Topic links and cross-Session reconstruction remain.
 
 ### 2. First-class Topic graph
 

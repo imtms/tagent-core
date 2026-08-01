@@ -27,6 +27,27 @@ describe("ContextAssembler", () => {
     expect(result.stats.messageBudgetTokens).toBe(20_000 - result.stats.systemTokens - result.stats.promptTokens - 4_000 - 2_000);
   });
 
+  it("preserves stable durable source IDs through selection and omission", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "old", timestamp: 1 }, assistant("old answer"),
+      { role: "user", content: "new", timestamp: 2 }, assistant("new answer"),
+    ];
+    const result = new ContextAssembler({ contextWindow: 50_000, maxOutputTokens: 1_000, maxTurns: 1, reserveTokens: 1_000 })
+      .assemble("session", messages, "system", "prompt", ["message:10", "message:11", "message:12", "message:13"]);
+    expect(result.contextItems.filter((item) => item.selected).map((item) => item.sourceId)).toEqual(["message:12", "message:13"]);
+    expect(result.contextItems.filter((item) => !item.selected).map((item) => item.sourceId)).toEqual(["message:10", "message:11"]);
+  });
+
+  it("keeps original source IDs when a tool-heavy turn is compressed", () => {
+    const result = new ContextAssembler({ contextWindow: 2_500, maxOutputTokens: 500, maxTurns: 20, reserveTokens: 500 })
+      .assemble("transcript", [{ role: "user", content: "question", timestamp: 1 }, assistant("final", [
+        { type: "thinking", thinking: "R".repeat(2_000) },
+        { type: "toolCall", id: "call-1", name: "write", arguments: { content: "X".repeat(8_000) } },
+        { type: "text", text: "final" },
+      ])], "system", "prompt", ["transcript:run-1:7", "transcript:run-1:8"]);
+    expect(result.contextItems.map((item) => item.sourceId)).toEqual(["transcript:run-1:7", "transcript:run-1:8"]);
+  });
+
   it("enforces the maximum complete-turn limit", () => {
     const messages: AgentMessage[] = [];
     for (let index = 0; index < 5; index += 1) messages.push({ role: "user", content: `u${index}`, timestamp: index }, assistant(`a${index}`));

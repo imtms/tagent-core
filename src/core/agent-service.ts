@@ -785,17 +785,28 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
   }
 
   private prepareTranscript(run: TaskRun, prompt: string) {
-    return this.contextAssembler().assemble("transcript", this.store.listTranscript(run.id), this.buildSystemPrompt(run), prompt);
+    const entries = this.store.listTranscriptEntries(run.id);
+    return this.contextAssembler().assemble(
+      "transcript",
+      entries.map((entry) => entry.message),
+      this.buildSystemPrompt(run),
+      prompt,
+      entries.map((entry) => `transcript:${run.id}:${entry.seq}`),
+    );
   }
 
   private sessionHistoryMessages(sessionId: SessionId, query?: string, excludeCurrentUserAfter?: number) {
     const recent = this.store.listRecentMessages(sessionId, 10_000).filter((message) => message.role === "user" || message.role === "assistant");
     if (query !== undefined && excludeCurrentUserAfter !== undefined) { const index = recent.findIndex((message) => message.role === "user" && message.content === query && message.createdAt >= excludeCurrentUserAfter); if (index >= 0) recent.splice(index, 1); }
-    return recent.map((message): AgentMessage => message.role === "user" ? { role: "user", content: message.content, timestamp: message.createdAt } : { role: "assistant", content: [{ type: "text", text: message.content }], api: "openai-completions", provider: "tagent-core", model: "session-history", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: message.createdAt });
+    return {
+      messages: recent.map((message): AgentMessage => message.role === "user" ? { role: "user", content: message.content, timestamp: message.createdAt } : { role: "assistant", content: [{ type: "text", text: message.content }], api: "openai-completions", provider: "tagent-core", model: "session-history", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: message.createdAt }),
+      sourceIds: recent.map((message) => `message:${message.id}`),
+    };
   }
 
   private prepareSessionHistoryWithoutRecall(run: TaskRun, query: string, excludeCurrentUserAfter?: number) {
-    return { ...this.contextAssembler().assemble("session", this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter), this.buildSystemPrompt(run), query), recalledMemory: "", memoryContextItems: [] as ContextManifestItem[] };
+    const history = this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter);
+    return { ...this.contextAssembler().assemble("session", history.messages, this.buildSystemPrompt(run), query, history.sourceIds), recalledMemory: "", memoryContextItems: [] as ContextManifestItem[] };
   }
 
   private async prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter?: number) {
@@ -805,7 +816,8 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
 ${coreSnapshot.markdown}
 </core_memory>`:"";
     const memorySection=[coreSection,recall?.promptSection].filter(Boolean).join("\n\n");
-    const assembly = this.contextAssembler().assemble("session", this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter), this.buildSystemPrompt(run, memorySection), query);
+    const history = this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter);
+    const assembly = this.contextAssembler().assemble("session", history.messages, this.buildSystemPrompt(run, memorySection), query, history.sourceIds);
     this.capturePrunedUserContext(run, assembly.droppedMessages);
     const memoryContextItems: ContextManifestItem[] = [
       ...(coreSnapshot?.markdown ? [{ kind: "core_memory" as const, sourceId: `${coreSnapshot.scope.type}:${coreSnapshot.scope.id}:revision:${coreSnapshot.revision}`, selected: true, reason: "stable core-memory injection", estimatedTokens: coreSnapshot.tokenCount, metadata: { revision: coreSnapshot.revision, sourceRecordIds: coreSnapshot.sourceRecordIds } }] : []),
