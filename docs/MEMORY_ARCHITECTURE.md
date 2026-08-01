@@ -239,3 +239,27 @@ Ranking v2 combines route score, confidence/importance, time decay, authorized s
 Recall Trace v2 reports channel scores, final score components, thresholds, policy decisions, budget drops, embedding degradation and Cold Topic route decisions. `memory_record_get` and `GET /api/memory/records/:id` provide full provenance drill-down.
 
 Embedding reindex uses content hashes and generation manifests: unchanged records are skipped, stale entries in the active generation are removed, and older generations are garbage-collected after the active generation is populated.
+
+
+## Continuous lifecycle governance
+
+Memory is maintained as evidence that changes over time, not as an append-only chat archive.
+
+Each Hot/Warm record may carry a `lifecycle` envelope:
+
+- `firstSeenAt` and `lastSeenAt` distinguish initial capture from the latest semantic confirmation;
+- `confirmationCount` grows when the same canonical SPO is observed again;
+- `lastRecalledAt` and `recallCount` measure use without pretending that recall reconfirms truth;
+- `staleAt` records when evidence stops being current;
+- `deletedAt`, `purgeAfter`, `deleteReason`, and `previousStatus` implement reversible tombstones.
+
+The maintenance worker applies kind-specific retention. Episodes age fastest, procedures next, while durable facts and preferences are retained longer. Explicit high-confidence identity, preference, and high-importance facts do not become stale merely because time passed. `validTo`, superseding evidence, repeated confirmation, and user correction take precedence over generic age.
+
+The lifecycle is:
+
+```text
+candidate -> active -> stale -> deleted tombstone -> physical purge
+                  \-> superseded -> deleted tombstone
+```
+
+A repeated canonical fact reactivates a stale record and adds provenance instead of creating a duplicate. A conflicting current fact supersedes the old record, closes its validity interval where applicable, and keeps it as history. Cold Topic consolidation uses active evidence for current state and stale/superseded/disputed evidence for a separate history section.

@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS memory.records (
  scope_type text NOT NULL, scope_id text NOT NULL, title text NOT NULL, content text NOT NULL, summary text NOT NULL,
  topic_ids text[] NOT NULL DEFAULT '{}', entity_ids text[] NOT NULL DEFAULT '{}', status text NOT NULL, confidence real NOT NULL,
  importance real NOT NULL, source_refs jsonb NOT NULL, provenance jsonb, valid_from bigint, valid_to bigint, supersedes_id uuid, expires_at bigint,
- created_at bigint NOT NULL, updated_at bigint NOT NULL, semantic jsonb, search_document tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(title,'')||' '||coalesce(summary,'')||' '||coalesce(content,''))) STORED
+ created_at bigint NOT NULL, updated_at bigint NOT NULL, semantic jsonb, lifecycle jsonb, search_document tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(title,'')||' '||coalesce(summary,'')||' '||coalesce(content,''))) STORED
 );
 ALTER TABLE memory.records ADD COLUMN IF NOT EXISTS provenance jsonb;
 CREATE INDEX IF NOT EXISTS memory_records_scope ON memory.records(scope_type,scope_id,status);
@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS memory.preferences (
  id uuid PRIMARY KEY, tier text NOT NULL CHECK(tier IN ('hot','warm')), scope_type text NOT NULL, scope_id text NOT NULL,
  dimension text NOT NULL, value text NOT NULL, summary text NOT NULL, topic_ids text[] NOT NULL DEFAULT '{}', entity_ids text[] NOT NULL DEFAULT '{}',
  applicability text NOT NULL, strength real NOT NULL, origin text NOT NULL, status text NOT NULL, confidence real NOT NULL,
- source_refs jsonb NOT NULL, provenance jsonb, supersedes_id uuid, expires_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL, semantic jsonb,
+ source_refs jsonb NOT NULL, provenance jsonb, supersedes_id uuid, expires_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL, semantic jsonb, lifecycle jsonb,
  search_document tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(dimension,'')||' '||coalesce(value,'')||' '||coalesce(summary,''))) STORED
 );
 ALTER TABLE memory.preferences ADD COLUMN IF NOT EXISTS provenance jsonb;
@@ -51,3 +51,6 @@ CREATE TABLE IF NOT EXISTS memory.outbox (id bigserial PRIMARY KEY,event_type te
 ALTER TABLE memory.records ADD COLUMN IF NOT EXISTS semantic jsonb;
 ALTER TABLE memory.preferences ADD COLUMN IF NOT EXISTS semantic jsonb;
 ALTER TABLE memory.embeddings ADD COLUMN IF NOT EXISTS content_hash text;
+
+ALTER TABLE memory.records ADD COLUMN IF NOT EXISTS lifecycle jsonb;
+ALTER TABLE memory.preferences ADD COLUMN IF NOT EXISTS lifecycle jsonb;

@@ -1,6 +1,6 @@
 export type MemoryKind = "fact" | "preference" | "episode" | "procedure";
 export type MemoryTier = "hot" | "warm" | "cold";
-export type MemoryStatus = "candidate" | "active" | "superseded" | "disputed" | "quarantined" | "deleted";
+export type MemoryStatus = "candidate" | "active" | "stale" | "superseded" | "disputed" | "quarantined" | "deleted";
 export type ScopeType = "user" | "workspace" | "project" | "session";
 
 export interface MemoryScope { type: ScopeType; id: string }
@@ -14,10 +14,22 @@ export type MemoryVerificationState = "explicit" | "verified" | "structured" | "
 export interface SourceReference { sourceType: "message" | "run" | "transcript" | "manual" | "check" | "artifact" | "operation"; sourceId: string; revision?: string }
 export interface MemoryProvenance { evidenceClass: MemoryEvidenceClass; trustLevel: MemoryTrustLevel; sourceRole: MemorySourceRole; verificationState: MemoryVerificationState; sourceReliability?: number }
 export interface CanonicalSPO { subject: string; predicate: string; object: string; polarity: "positive" | "negative" | "unknown" }
+export interface MemoryLifecycleState {
+  firstSeenAt: number;
+  lastSeenAt: number;
+  confirmationCount: number;
+  lastRecalledAt?: number;
+  recallCount?: number;
+  staleAt?: number;
+  deletedAt?: number;
+  purgeAfter?: number;
+  deleteReason?: string;
+  previousStatus?: Exclude<MemoryStatus, "deleted">;
+}
 export interface MemoryRecord {
   id: string; kind: Exclude<MemoryKind, "preference">; tier: Exclude<MemoryTier, "cold">; scope: MemoryScope;
   title: string; content: string; summary: string; topicIds: string[]; entityIds: string[];
-  status: MemoryStatus; confidence: number; importance: number; sourceRefs: SourceReference[]; provenance?: MemoryProvenance; semantic?: CanonicalSPO;
+  status: MemoryStatus; confidence: number; importance: number; sourceRefs: SourceReference[]; provenance?: MemoryProvenance; semantic?: CanonicalSPO; lifecycle?: MemoryLifecycleState;
   validFrom?: number; validTo?: number; supersedesId?: string; expiresAt?: number; createdAt: number; updatedAt: number;
 }
 export interface PreferenceRecord {
@@ -25,7 +37,7 @@ export interface PreferenceRecord {
   dimension: string; value: string; summary: string; topicIds: string[]; entityIds: string[];
   applicability: "global" | "workspace" | "project" | "task"; strength: number;
   origin: "explicit" | "repeated" | "inferred"; status: MemoryStatus; confidence: number;
-  sourceRefs: SourceReference[]; provenance?: MemoryProvenance; semantic?: CanonicalSPO; supersedesId?: string; expiresAt?: number; createdAt: number; updatedAt: number;
+  sourceRefs: SourceReference[]; provenance?: MemoryProvenance; semantic?: CanonicalSPO; lifecycle?: MemoryLifecycleState; supersedesId?: string; expiresAt?: number; createdAt: number; updatedAt: number;
 }
 export type WarmMemory = MemoryRecord | PreferenceRecord;
 export interface TopicDescriptor {
@@ -51,6 +63,9 @@ export interface RecallTrace { version: 2; topicIds: string[]; candidateCount: n
 export interface RecallResult { cards: MemoryCard[]; coldTopics: ColdTopicDocument[]; promptSection: string; trace: RecallTrace }
 export interface CaptureRequest { access: AccessContext; sourceRefs: SourceReference[]; content?: string; idempotencyKey: string; requestedAt?: number; captureSource?: CaptureSource; /** @deprecated record evidence is assigned after extraction */ provenance?: MemoryProvenance }
 export interface CaptureJob { id: string; request: CaptureRequest; status: "queued" | "running" | "completed" | "completed_empty" | "retryable_failed" | "dead_letter"; attempts: number; leaseOwner?: string; leaseUntil?: number; leaseToken?: string; fencingToken?: number; errorCode?: string; proposalCount?: number; persistedCount?: number; createdAt: number; updatedAt: number }
-export interface ForgetRequest { access: AccessContext; scope: MemoryScope; ids?: string[]; topicIds?: string[] }
-export interface ForgetResult { records: number; topics: number; objects: number }
+export interface ForgetRequest { access: AccessContext; scope: MemoryScope; ids?: string[]; topicIds?: string[]; reason?: string; gracePeriodMs?: number }
+export interface ForgetResult { records: number; topics: number; objects: number; purgeAfter?: number }
+export interface RestoreMemoryRequest { access: AccessContext; scope: MemoryScope; ids: string[] }
+export interface RestoreMemoryResult { records: number }
+export interface MemoryMaintenanceResult { updated: number; stale: number; expired: number; purged: number }
 export interface ExtractionProposal { records: WarmMemory[]; topics: TopicDescriptor[]; nodes: GraphNode[]; edges: GraphEdge[] }

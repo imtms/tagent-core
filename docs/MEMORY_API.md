@@ -103,3 +103,32 @@ POST /api/memory/readiness
 Record retrieval returns source references, provenance, status, validity and canonical semantic fields. Readiness reports backend access, worker heartbeat, capture backlog/dead letters, latest capture/consolidation timestamps, active embedding generation and index count. `/api/health` includes this readiness and returns 503 when enabled Memory is not ready.
 
 Recall responses use `trace.version = 2` and expose lexical/vector/topic/graph/canonical routes plus score breakdown and filtering outcomes.
+
+
+## Reversible forget and restore
+
+`POST /api/memory/forget` accepts optional `reason` and `gracePeriodMs`. It returns `purgeAfter`; records are tombstoned and excluded from recall immediately, but Cold objects are not synchronously destroyed.
+
+```json
+{
+  "scope": { "type": "workspace", "id": "default" },
+  "ids": ["record-id"],
+  "reason": "user correction",
+  "gracePeriodMs": 2592000000
+}
+```
+
+Restore before the deadline:
+
+```http
+POST /api/memory/restore
+```
+
+```json
+{
+  "scope": { "type": "workspace", "id": "default" },
+  "ids": ["record-id"]
+}
+```
+
+A successful restore reinstates the pre-delete status. Once maintenance physically purges the tombstone, restore returns zero restored records. Record-ID forget is reversible; Topic-ID forget remains an administrative destructive operation for the current Cold revision and should require explicit confirmation.
