@@ -1,6 +1,6 @@
 # Development Status
 
-Updated: 2026-08-01 (Asia/Singapore)
+Updated: 2026-08-02 (Asia/Singapore)
 
 ## Completed
 
@@ -8,10 +8,12 @@ Updated: 2026-08-01 (Asia/Singapore)
 
 - SQLite-backed sessions, ordered conversation messages, Schema v5 durable event-consumer cursors, Schema v6 durable control inbox records, Schema v7 TaskRun supervision records, and Schema v12 semantic Session Supervisor Inbox, TaskRun contracts, durable approval requests, and immutable Context Manifests.
 - Session Input Router is the normal admission path: input is summarized, classified, prioritized, and either routed to the active Run, converted to a gated spawn proposal, or atomically bound to a durable TaskRun contract.
+- Router analysis receives bounded recent Session messages, recent TaskRun summaries, and the active contract; Router and Supervisor have independent low-latency model/time/token configuration and default to `gpt-5.6-luna`.
 - Automatic Session dispatch is blocked by any running Run and by the latest blocked/interrupted Run, while older historical blocked/interrupted Runs remain auditable without permanently freezing the queue.
 - A user can explicitly start a selected queued Inbox item through a transactional `Run now` path; running Runs and active continuations retain concurrency priority and fencing.
 - Durable TaskRun records with goal, phase, status, plan items, checks, artifacts, ordered events, and Schema v4 Run checkpoints.
 - Deterministic completion gate that prevents a model response from directly marking a run complete.
+- Structured LLM Supervisor audits semantic contract coverage and final delivery after authoritative local prerequisites pass; incomplete plans and missing/failed/stale checks take a deterministic sub-100ms path without an unnecessary model request.
 - Request idempotency through stable `requestId` values.
 - Startup recovery that marks abandoned running tasks as interrupted.
 - Cancellation, SDK-backed in-flight steering, follow-up queueing, and manual compaction for active runs.
@@ -27,6 +29,7 @@ Updated: 2026-08-01 (Asia/Singapore)
 - Only TAgent custom tools are active. Pi built-in file and shell tools stay disabled because they do not carry TAgent operation receipts, stale-check propagation, or workspace governance.
 - TAgent composes Pi's installed before/after tool hooks instead of replacing them, and records prepared/validated arguments so future controlled Pi hook behavior remains intact.
 - Streaming model deltas and tool lifecycle events persisted to the run event log.
+- Runtime persistence is traffic-shaped without losing audit boundaries: text deltas are coalesced, tool progress is rate-limited, checkpoints only follow recovery-relevant events, unchanged checkpoints are skipped, and transcript sequence/count lookups avoid repeated full parsing.
 - TAgent-owned tools: `read`, `write`, `edit`, `bash`, and `task_run`.
 - Workspace path containment and a minimal destructive-command policy.
 - Sequential tool execution for predictable state mutations.

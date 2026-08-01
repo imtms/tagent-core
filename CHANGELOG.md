@@ -1,14 +1,29 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.1.6] - 2026-08-02
+
+### Performance and control-plane efficiency
+
+- Added independent low-latency Router and Supervisor model budgets, defaulting both structured control-plane decisions to `gpt-5.6-luna` while retaining the primary Agent model for task execution and a bounded Supervisor fallback.
+- Gave the LLM Session Input Router bounded recent Session, TaskRun, and active-contract context so references such as “continue with the previous plan” resolve semantically without turning background specifications into spurious objectives.
+- Reduced Agent context growth by returning compact receipts for TaskRun mutations, debouncing Web SSE acknowledgements, and avoiding full-Run refreshes for ordinary tool progress events.
+- Coalesced streamed `message.delta` events, rate-limited `tool.progress`, restricted checkpoint updates to recovery-relevant events, deduplicated unchanged checkpoints, cached transcript sequence cursors, and replaced full transcript parsing with count queries where only counts are needed.
+
+### Supervisor and Gate decisions
+
+- Replaced brittle lexical completion judgments with structured LLM Supervisor audits covering progress, evidence freshness, acceptance-criterion coverage, blockers, continuation viability, runtime failures, and final delivery quality.
+- Added deterministic prerequisite fast paths: incomplete required plans and failed, missing, or stale required checks now produce auditable continuation/evidence decisions without an unnecessary LLM call; semantic delivery review still runs after local prerequisites pass.
+- Bounded malformed-output correction and transport fallback behavior so Supervisor failures terminate predictably instead of repeating already-finished Agent attempts or waiting through redundant retries.
+- Persisted evaluator/model identity, criterion-level evidence receipts, structured failures, rationale, confidence, and Context Manifest provenance for explainable Gate outcomes.
+
 ### Fixed
 
 - Prevent completed TaskRuns from entering redundant continuations when criterion-level coverage already passes but a second brittle whole-contract phrase matcher rejects harmless wording differences.
 - Require explicit parallel language instead of treating discourse markers such as “另外” / “another” alone as proof of independent parallel work, and classify deploy/restart/pull operations as concrete change objectives.
 - Preserve earlier streamed assistant drafts when a later assistant message starts, and only clear live text after the approved response is confirmed in persisted chat history.
 - Page long chat history by stable message ID, stop refetching and reparsing messages on every status poll, memoize persisted Markdown, and use lightweight plain-text rendering while streaming.
-
-
-## [Unreleased]
 
 ### Fixed
 
@@ -219,3 +234,5 @@ First public source preview of the persistent TAgent control plane.
 
 
 [0.1.5]: https://github.com/imtms/tagent-core/releases/tag/v0.1.5
+
+[0.1.6]: https://github.com/imtms/tagent-core/releases/tag/v0.1.6
