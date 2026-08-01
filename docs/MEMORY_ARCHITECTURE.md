@@ -1,6 +1,6 @@
 # TAgent Core Long-Term Memory Architecture
 
-Status: implemented on `feat/memory-platform` for the single-service PostgreSQL/pgvector + Local Cold profile.
+Status: implemented on `main` for the trusted single-service PostgreSQL/pgvector/pg_trgm + Local Cold profile.
 
 ## 1. Scope and compatibility
 
@@ -105,10 +105,11 @@ PostgreSQL is authoritative for the current published revision. Readers verify S
 
 Capture triggers include:
 
-- each persisted user message, with a bounded local conversation context for coreference;
-- complete turns removed from the working context;
-- completed, blocked, and failed Run boundaries;
+- each persisted user message, with bounded local conversation context used only for coreference;
+- role-aware summaries of durable user statements from complete turns removed from working context;
 - manual capture through the HTTP API.
+
+Assistant final responses, TaskRun terminal wrappers, Checks, Artifacts, file metadata, and ordinary one-off operational requests are not automatic semantic-memory sources. They remain in the control-plane audit store.
 
 Flow:
 
@@ -118,8 +119,8 @@ source reference/content
   -> durable idempotent capture job
   -> lease/claim
   -> deterministic + optional LLM extraction
-  -> schema/role/scope validation
-  -> lifecycle deduplication and conflict handling
+  -> schema/role/scope and long-term-value quality validation
+  -> canonical topic/fingerprint deduplication and conflict handling
   -> write policy gate
   -> Hot/Warm records, topics, graph
   -> embedding_egress gate and optional vector index
@@ -167,13 +168,13 @@ cue read gate
   -> entity resolution and depth-2 graph expansion
   -> Topic ID routing
   -> load records attached to routed topics
-  -> rank/deduplicate cards
+  -> domain filtering, minimum relevance thresholds, contradiction suppression, and deduplication
   -> exact published Cold Topic load within budget
   -> checksum and prompt-injection gate
   -> recalled_memory prompt section
 ```
 
-Cold pages are selected as complete units. If a page does not fit the memory token budget, the loader skips it rather than truncating it.
+Hot/Warm cards and complete Cold pages share one hard memory token budget. Cards are admitted in rank order; a complete Cold page is skipped rather than truncated when it cannot fit. Recall may legitimately return zero cards instead of filling Top-K with unrelated memory.
 
 Automatic recall is complemented by Agent tools:
 
@@ -225,3 +226,16 @@ When memory is disabled, the entry is hidden and memory HTTP endpoints return `5
 - Recall ranking does not yet expose a full per-channel scoring trace, MMR feedback loop, or offline quality dashboard.
 
 The original broader design plan is preserved in [MEMORY_DESIGN_PLAN.md](MEMORY_DESIGN_PLAN.md).
+
+
+## Memory quality and retrieval v2 (0.1.4+)
+
+Capture provenance is split into two layers. `CaptureRequest.captureSource` describes transport/origin (`user_message`, `context_summary`, `manual_input`, `tool_result`, `task_structure`, or `assistant_message`). Evidence class and trust are assigned to each extracted record only after the extractor has identified a durable statement. A raw user message is therefore not automatically `user_explicit`.
+
+Production quality routing uses generic control-plane detection, canonical SPO normalization and a configurable `DomainOntology`. Entity names used by regression fixtures are not production routing rules.
+
+Ranking v2 combines route score, confidence/importance, time decay, authorized scope priority, provenance trust/source reliability, validity windows and current-state status. MMR reduces near-duplicate cards. Semantic SPO keys are used for deduplication and conflict groups.
+
+Recall Trace v2 reports channel scores, final score components, thresholds, policy decisions, budget drops, embedding degradation and Cold Topic route decisions. `memory_record_get` and `GET /api/memory/records/:id` provide full provenance drill-down.
+
+Embedding reindex uses content hashes and generation manifests: unchanged records are skipped, stale entries in the active generation are removed, and older generations are garbage-collected after the active generation is populated.

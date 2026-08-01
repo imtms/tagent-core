@@ -27,6 +27,8 @@ export class PiRuntime implements AgentRuntime {
   private disposed = false;
   private abortRequested = false;
   private abortPromise?: Promise<void>;
+  private tokenBudgetWarningEmitted = false;
+  private tokenBudgetExceeded = false;
 
   constructor(private readonly options: RuntimeOptions) {}
 
@@ -149,6 +151,18 @@ export class PiRuntime implements AgentRuntime {
       const run = this.options.store.getRun(this.options.runId);
       if (run) this.options.store.appendTranscript(this.options.runId, run.attempt, event.message);
       if (run?.status === "running" && event.message.role === "assistant") {
+        const current = this.options.store.getRun(this.options.runId);
+        const softLimit = this.options.softRunTokens;
+        const hardLimit = this.options.maxRunTokens;
+        if (!this.tokenBudgetWarningEmitted && softLimit && current && current.usage.totalTokens >= softLimit && (!hardLimit || current.usage.totalTokens < hardLimit)) {
+          this.tokenBudgetWarningEmitted = true;
+          this.options.onTokenBudgetWarning?.({ totalTokens: current.usage.totalTokens, softLimit, hardLimit });
+        }
+        if (!this.tokenBudgetExceeded && hardLimit && current && current.usage.totalTokens >= hardLimit) {
+          this.tokenBudgetExceeded = true;
+          this.emit("run.token_budget.exhausted", { totalTokens: current.usage.totalTokens, limit: hardLimit });
+          this.options.onTokenBudgetExceeded?.({ totalTokens: current.usage.totalTokens, limit: hardLimit });
+        }
         const kind = classifyProviderFailure(event.message, this.options.model?.contextWindow);
         const summary = (event.message.errorMessage ?? "").replace(/\s+/g, " ").slice(0, 500);
         if (kind) this.emit("provider.failure", { kind, retryable: isRetryableProviderFailure(kind), summary, stopReason: event.message.stopReason });

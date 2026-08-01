@@ -17,6 +17,7 @@ const WriteSchema = Type.Object({ path: Type.String(), content: Type.String() })
 const EditSchema = Type.Object({ path: Type.String(), oldText: Type.String(), newText: Type.String() });
 const BashSchema = Type.Object({ command: Type.String(), timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })) });
 const MemorySearchSchema=Type.Object({query:Type.String(),kinds:Type.Optional(Type.Array(Type.Union([Type.Literal("fact"),Type.Literal("preference"),Type.Literal("episode"),Type.Literal("procedure")]))),maxResults:Type.Optional(Type.Integer({minimum:1,maximum:20}))});
+const MemoryRecordSchema=Type.Object({id:Type.String()});
 const MemoryTopicSchema=Type.Object({topicId:Type.String()});
 const MemoryForgetSchema=Type.Object({ids:Type.Optional(Type.Array(Type.String())),topicIds:Type.Optional(Type.Array(Type.String()))});
 const TaskRunSchema = Type.Union([
@@ -27,6 +28,7 @@ const TaskRunSchema = Type.Union([
   Type.Object({ action: Type.Literal("mark_checks_stale") }),
   Type.Object({ action: Type.Literal("operations") }),
   Type.Object({ action: Type.Literal("artifact"), id: Type.String(), title: Type.String(), kind: Type.Optional(Type.String()), content: Type.Optional(Type.String()), uri: Type.Optional(Type.String()) }),
+  Type.Object({ action: Type.Literal("spawn_proposal"), goal: Type.String(), acceptanceCriteria: Type.Array(Type.String()), relation: Type.Optional(Type.Union([Type.Literal("depends_on"), Type.Literal("follow_up"), Type.Literal("parallel"), Type.Literal("derived")])) }),
 ]);
 
 function textResult(text: string, details: Record<string, unknown> = {}): AgentToolResult<Record<string, unknown>> {
@@ -194,7 +196,7 @@ export function createTools(store: Store, runId: RunId, workspace: string, onEve
   };
 
   const taskRunTool: AgentTool<typeof TaskRunSchema, Record<string, unknown>> = {
-    name: "task_run", label: "Update task", description: "Inspect or update the current durable TaskRun plan, phase, checks, and artifacts.", parameters: TaskRunSchema, executionMode: "sequential",
+    name: "task_run", label: "Update task", description: "Inspect or update the current durable TaskRun plan, phase, checks, artifacts, and proposed derived TaskRuns.", parameters: TaskRunSchema, executionMode: "sequential",
     async execute(_id, params: Static<typeof TaskRunSchema>) {
       if (params.action === "phase") store.setRunPhase(runId, params.phase);
       if (params.action === "plan") store.upsertPlanItem(runId, { key: params.key, title: params.title, status: params.status, required: params.required ?? true, position: params.position ?? 0 });
@@ -202,6 +204,7 @@ export function createTools(store: Store, runId: RunId, workspace: string, onEve
       if (params.action === "mark_checks_stale") store.markChecksStale(runId);
       if (params.action === "operations") return textResult(JSON.stringify(store.listOperations(runId), null, 2));
       if (params.action === "artifact") store.addArtifact(runId, { id: params.id, title: params.title, kind: params.kind ?? "artifact", content: params.content ?? "", uri: params.uri ?? "" });
+      if (params.action === "spawn_proposal") store.createSpawnProposal(runId, params.goal.trim(), params.acceptanceCriteria, params.relation ?? "derived");
       const changed = params.action !== "get";
       const run = store.getRun(runId);
       if (changed) onEvent?.(store.appendEvent(runId, "run.updated", { action: params.action, phase: run?.phase ?? "discover" }));
@@ -213,6 +216,7 @@ export function createTools(store: Store, runId: RunId, workspace: string, onEve
   if(memory){const scope={type:"workspace" as const,id:memoryScopeId};const access={subjectId:memorySubjectId??`run:${runId}`,scopes:[scope],purpose:"agent_recall" as const};
     const memorySearchTool:AgentTool<typeof MemorySearchSchema,Record<string,unknown>>={name:"memory_search",label:"Search memory",description:"Search long-term memory when automatic recall is insufficient. Returns cards, topic IDs, confidence and provenance routes.",parameters:MemorySearchSchema,async execute(_id,params:Static<typeof MemorySearchSchema>){const result=await memory.recall({access,cue:params.query,kinds:params.kinds as MemoryKind[]|undefined,maxCards:params.maxResults??8,maxColdTopics:0});return textResult(JSON.stringify({cards:result.cards,topicIds:result.trace.topicIds,trace:result.trace},null,2));}};tools.push(memorySearchTool);
     const memoryTopicTool:AgentTool<typeof MemoryTopicSchema,Record<string,unknown>>={name:"memory_topic_get",label:"Read memory topic",description:"Read one complete canonical Cold Topic page by exact topic ID.",parameters:MemoryTopicSchema,async execute(_id,params:Static<typeof MemoryTopicSchema>){const topic=await memory.getColdTopic(access,params.topicId);if(!topic)throw new Error("Memory topic not found");return textResult(topic.body,{topicId:params.topicId,revision:topic.revision.revision,checksum:topic.revision.checksum});}};tools.push(memoryTopicTool);
+    const memoryRecordTool:AgentTool<typeof MemoryRecordSchema,Record<string,unknown>>={name:"memory_record_get",label:"Read memory record",description:"Read one full memory record including source references, provenance, status, validity and canonical semantics.",parameters:MemoryRecordSchema,async execute(_id,params:Static<typeof MemoryRecordSchema>){const record=await memory.getRecord(access,params.id);if(!record)throw new Error("Memory record not found");return textResult(JSON.stringify(record,null,2));}};tools.push(memoryRecordTool);
     const memoryForgetTool:AgentTool<typeof MemoryForgetSchema,Record<string,unknown>>={name:"memory_forget",label:"Forget memory",description:"Forget specified memory record IDs or Topic IDs. Use only when the user explicitly requests deletion or correction.",parameters:MemoryForgetSchema,executionMode:"sequential",async execute(id,params:Static<typeof MemoryForgetSchema>){return executeMutation(store,runId,id,"tool.memory_forget",params,async()=>textResult(JSON.stringify(await memory.forget({access:{...access,purpose:"memory_admin"},scope,ids:params.ids,topicIds:params.topicIds}),null,2)));}};tools.push(memoryForgetTool);
   }
   return tools;

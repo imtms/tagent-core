@@ -6,8 +6,9 @@ import type { AgentRuntime, RuntimeFactory } from "../runtime/types.js";
 import type { RunCheckpoint, RunEvent, SessionId, SessionInboxItem, RunId, TaskRun } from "../core/types.js";
 import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 import { TaskRunSupervisor } from "./supervisor.js";
+import { SessionInputRouter } from "./session-input-router.js";
 import type { MemoryFacade } from "../memory/memory-service.js";
-import type { AccessContext } from "../memory/types.js";
+import type { AccessContext, MemoryProvenance } from "../memory/types.js";
 
 export class AgentService {
   private readonly runtimes = new Map<RunId, AgentRuntime>();
@@ -22,6 +23,7 @@ export class AgentService {
   private supervisorRestartReconciled = false;
   private closing = false;
   private readonly supervisor: TaskRunSupervisor;
+  private readonly sessionRouter = new SessionInputRouter();
 
   constructor(
     private readonly store: Store,
@@ -212,13 +214,53 @@ export class AgentService {
 
   enqueueSessionInput(sessionId: SessionId, content: string, requestId: string = randomUUID()) {
     if (this.closing) throw new Error("Service is shutting down");
-    const item = this.store.enqueueSessionInbox(sessionId, content, requestId);
+    const existing = this.store.getSessionSubmission(sessionId, requestId);
+    if (existing) return { item: existing, run: existing.runId ? this.store.getRun(existing.runId) ?? null : null };
+    const activeRun = this.store.getActiveRun(sessionId);
+    const analysis = this.sessionRouter.analyze(content, activeRun);
+    const duplicate = !activeRun ? this.store.findMergeCandidate(sessionId, analysis) : undefined;
+    const item = this.store.enqueueSessionInbox(sessionId, content, analysis, requestId);
+    if (analysis.intent === "defer") {
+      this.store.decideSessionInboxItem(item.id, sessionId, "defer");
+      return { item: this.store.getSessionInboxItem(item.id)!, run: null };
+    }
+    if (duplicate) {
+      const merged = this.store.markSessionInboxDuplicate(item.id, duplicate.id, sessionId)!;
+      return { item: merged, run: null, duplicate: true, mergedInto: duplicate.id };
+    }
+
+    if (activeRun && analysis.targetRunId === activeRun.id && analysis.confidence >= 0.85) {
+      const userMessage = this.store.appendMessage(sessionId, "user", content);
+      this.captureUserMessage(activeRun, userMessage.id, content);
+      if (analysis.intent === "steer_active" || analysis.intent === "update_active_context") {
+        const routed = this.store.routeSessionInboxItem(item.id, sessionId, "steer", activeRun.id)!;
+        void this.enqueueControl(activeRun.id, "steer", content, `inbox:${item.id}`).then((result) => {
+          if (result.status !== "accepted") this.store.routeSessionInboxItem(item.id, sessionId, "steer", activeRun.id, `Control delivery: ${result.status}`);
+        });
+        return { item: routed, run: activeRun };
+      }
+      if (analysis.intent === "follow_up_active") {
+        const routed = this.store.routeSessionInboxItem(item.id, sessionId, "follow_up", activeRun.id)!;
+        void this.enqueueControl(activeRun.id, "follow_up", content, `inbox:${item.id}`);
+        return { item: routed, run: activeRun };
+      }
+      if (analysis.intent === "parallel_task") {
+        const proposal = this.store.createSpawnProposal(activeRun.id, analysis.summary, analysis.acceptanceCriteria, "parallel");
+        const routed = this.store.routeSessionInboxItem(item.id, sessionId, "spawn_proposal", activeRun.id, `Proposal ${proposal.id}`)!;
+        this.publish(this.store.appendEvent(activeRun.id, "supervisor.spawn.proposed", { proposalId: proposal.id, inboxItemId: item.id, goal: proposal.goal, relation: proposal.relation }));
+        return { item: routed, run: activeRun, proposal };
+      }
+    }
+
     const run = this.dispatchSessionInbox(sessionId);
     return { item: this.store.getSessionInboxItem(item.id)!, run: run ?? null };
   }
 
   updateSessionInput(sessionId: SessionId, itemId: string, content: string) {
-    return this.store.updateSessionInboxItem(itemId, sessionId, content);
+    const item = this.store.getSessionInboxItem(itemId);
+    if (!item || item.sessionId !== sessionId || item.status !== "queued") return undefined;
+    const activeRun = this.store.getActiveRun(sessionId);
+    return this.store.updateSessionInboxItem(itemId, sessionId, content, this.sessionRouter.analyze(content, activeRun));
   }
 
   reorderSessionInputs(sessionId: SessionId, itemIds: string[]) {
@@ -278,27 +320,41 @@ export class AgentService {
   }
 
   private launchClaimedSessionInbox(item: SessionInboxItem, run: TaskRun, retry = false) {
+    // Persist the accepted user turn before any asynchronous recall/provider setup.
+    // This makes the POST admission response a durable UI visibility boundary and
+    // keeps slow memory recall from hiding the message until a refresh or Run end.
+    if (!retry) {
+      const userMessage = this.store.appendMessage(run.sessionId, "user", item.content);
+      this.captureUserMessage(run, userMessage.id, item.content);
+    }
+    const currentUserAfter = item.startedAt ?? run.createdAt;
     if (!this.memory) {
       try {
-        const sessionHistory = this.prepareSessionHistoryWithoutRecall(run, item.content, retry ? item.startedAt ?? 0 : undefined);
+        const sessionHistory = this.prepareSessionHistoryWithoutRecall(run, item.content, currentUserAfter);
         this.completeClaimedSessionLaunch(item, run, sessionHistory, retry);
         return this.store.getRun(run.id)!;
       } catch (error) { return this.failClaimedSessionLaunch(item, run, error); }
     }
-    void this.prepareSessionHistory(run, item.content, retry ? item.startedAt ?? 0 : undefined).then((sessionHistory) => this.completeClaimedSessionLaunch(item, run, sessionHistory, retry)).catch((error) => this.failClaimedSessionLaunch(item, run, error));
+    void this.prepareSessionHistory(run, item.content, currentUserAfter).then((sessionHistory) => this.completeClaimedSessionLaunch(item, run, sessionHistory, retry)).catch((error) => this.failClaimedSessionLaunch(item, run, error));
     return this.store.getRun(run.id)!;
   }
 
   private completeClaimedSessionLaunch(item: SessionInboxItem, run: TaskRun, sessionHistory: ContextAssembly & { recalledMemory?: string }, retry: boolean) {
     if (!retry) {
-      const userMessage = this.store.appendMessage(run.sessionId, "user", item.content);
-      this.captureUserMessage(run, userMessage.id, item.content);
-      this.publish(this.store.appendEvent(run.id, "run.started", { goal: item.content, source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: sessionHistory.messages.length }));
+      this.publish(this.store.appendEvent(run.id, "run.started", { goal: run.goal, sourceInput: item.content, contract: run.contract, source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: sessionHistory.messages.length }));
     }
     this.publishContextEvents(run.id, sessionHistory);
     this.recalledMemory.set(run.id, sessionHistory.recalledMemory ?? "");
-    this.launch(run, item.content, sessionHistory.messages, undefined, { initialize: true, inboxItemId: item.id, retry });
+    this.launch(run, this.buildContractPrompt(run, item.content), sessionHistory.messages, undefined, { initialize: true, inboxItemId: item.id, retry });
     if (!this.runtimes.has(run.id)) throw new Error("Inbox TaskRun runtime did not start");
+  }
+
+  private buildContractPrompt(run: TaskRun, sourceInput: string) {
+    if (!run.contract) return sourceInput;
+    return [`TaskRun goal: ${run.contract.summary}`, `Scope: ${run.contract.scope}`, run.contract.nonGoals.length ? `Non-goals:
+${run.contract.nonGoals.map((item) => `- ${item}`).join("\n")}` : "", `Acceptance criteria:
+${run.contract.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`, `Original user input:
+${sourceInput}`].filter(Boolean).join("\n\n");
   }
 
   private failClaimedSessionLaunch(item: SessionInboxItem, run: TaskRun, error: unknown) {
@@ -372,6 +428,33 @@ export class AgentService {
       memory: this.memory,
       memoryScopeId: this.memoryScopeId,
       memorySubjectId: `session:${run.sessionId}`,
+      softRunTokens: run.usage.totalTokens < budget.softTokens ? budget.softTokens : undefined,
+      maxRunTokens: budget.maxTokens,
+      onTokenBudgetWarning: ({ totalTokens, softLimit, hardLimit }) => {
+        const current = this.store.getRun(run.id);
+        if (!current || current.status !== "running") return;
+        this.publish(this.store.appendEvent(run.id, "run.token_budget.warning", { tier: budget.tier, totalTokens, softLimit, hardLimit }));
+        const instruction = `Token budget checkpoint: ${totalTokens.toLocaleString()} tokens have been used. The hard ceiling is ${(hardLimit ?? budget.maxTokens).toLocaleString()}. Continue working, but compact context where useful, avoid repeating completed investigation, prioritize unresolved required plan/check items, and finish with verification before the hard ceiling.`;
+        void runtime.steer(instruction).then((status) => {
+          const active = this.store.getRun(run.id);
+          if (active?.status === "running") this.publish(this.store.appendEvent(run.id, "run.token_budget.warning.steered", { status, tier: budget.tier, totalTokens, softLimit, hardLimit }));
+        }).catch((error: unknown) => {
+          const active = this.store.getRun(run.id);
+          if (active?.status === "running") this.publish(this.store.appendEvent(run.id, "run.token_budget.warning.delivery_failed", { error: error instanceof Error ? error.message : String(error) }));
+        });
+      },
+      onTokenBudgetExceeded: ({ totalTokens, limit }) => {
+        const current = this.store.getRun(run.id);
+        if (!current || current.status !== "running") return;
+        const message = `Run stopped after reaching the ${limit.toLocaleString()} token budget (${totalTokens.toLocaleString()} used)`;
+        const event = this.store.transitionRun(run.id, ["running"], "blocked", "run.blocked", { reason: "token_budget", limit, totalTokens }, message, run.attempt);
+        if (event) {
+          this.store.appendMessage(run.sessionId, "assistant", message);
+          this.publish(event);
+          this.publish(this.store.appendEvent(run.id, "continuation.exhausted", { reason: "token_budget", tier: budget.tier, limit, totalTokens }));
+        }
+        void this.abortRuntime(runtime, run.id);
+      },
       onActivity: touchActivity,
       onEvent: (event) => {
         touchActivity();
@@ -477,7 +560,6 @@ export class AgentService {
         if (response) this.store.appendMessage(current.sessionId, "assistant", response);
         this.supervisor.markExecuted(decision.id, "executed");
         this.publish(event);
-        this.captureRunBoundary(current, response, "completed");
         for (const spawn of this.supervisor.reviewSpawn(this.store.getRun(runId)!, event.seq)) this.publish(this.store.appendEvent(runId, "supervisor.spawn.proposed", { decisionId: spawn.id, reasonCode: spawn.reasonCode }));
         return false;
       }
@@ -486,8 +568,7 @@ export class AgentService {
       if (!event) { this.supervisor.markExecuted(decision.id, "superseded"); return false; }
       this.supervisor.markExecuted(decision.id, "executed");
       this.publish(event);
-      this.captureRunBoundary(current, response, "blocked");
-      return decision.action === "start_continuation";
+      return decision.action === "start_continuation" || decision.action === "request_evidence";
     } catch (error) {
       if (this.closing) return false;
       if (continuationId && !this.store.ownsContinuationLease(continuationId, this.continuationOwner)) {
@@ -497,50 +578,51 @@ export class AgentService {
       const current = this.store.getRun(runId);
       if (!current || current.status !== "running") return false;
       const message = error instanceof Error ? error.message : String(error);
-      const event = this.store.transitionRun(runId, ["running"], "failed", "run.failed", { error: message }, message, attempt);
-      if (!event) return false;
-      this.store.appendMessage(current.sessionId, "assistant", `Run failed: ${message}`);
+      const checkpointSeq = this.store.getCheckpoint(runId)?.lastEventSeq ?? current.lastEventSeq;
+      const decision = this.supervisor.reviewAttemptFailure(current, checkpointSeq, message);
+      const recoverable = decision.action === "start_continuation";
+      const event = this.store.transitionRun(runId, ["running"], "blocked", "run.blocked", {
+        error: message, reason: decision.reasonCode, action: decision.action, supervisionDecisionId: decision.id,
+      }, message, attempt);
+      if (!event) { this.supervisor.markExecuted(decision.id, "superseded"); return false; }
+      this.supervisor.markExecuted(decision.id, "executed");
+      this.store.appendMessage(current.sessionId, "assistant", decision.action === "pause_for_approval" ? `Run paused for approval: ${message}` : `Run blocked: ${message}`);
       this.publish(event);
-      this.captureRunBoundary(current, message, "failed");
-      return false;
+      return recoverable;
     }
   }
 
   private captureUserMessage(run: TaskRun, messageId: number, content: string) {
     if (!this.memory) return;
     const context = this.store.listRecentMessages(run.sessionId, 8).filter((message) => message.id < messageId).slice(-4).map((message) => `${message.role}: ${message.content}`).join("\n");
-    void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "message", sourceId: String(messageId), revision: "user" }], content: `<context>\n${context}\n</context>\n<focus_user>\n${content}\n</focus_user>`, idempotencyKey: `user-message:${messageId}` }).then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "message", sourceId: String(messageId) }))).catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "message", sourceId: String(messageId), error: error instanceof Error ? error.message : String(error) })));
+    void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "message", sourceId: String(messageId), revision: "user" }], content: `<context>\n${context}\n</context>\n<focus_user>\n${content}\n</focus_user>`, idempotencyKey: `user-message:${messageId}`, captureSource: { kind: "user_message", role: "user" } }).then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "message", sourceId: String(messageId) }))).catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "message", sourceId: String(messageId), error: error instanceof Error ? error.message : String(error) })));
   }
 
-  private captureRunBoundary(run: TaskRun, response: string, status: "completed" | "blocked" | "failed") {
-    if (!this.memory || !response.trim()) return;
-    void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "run", sourceId: run.id, revision: `${status}:${run.attempt}` }], content: `assistant: ${response}`, idempotencyKey: `run-boundary:${run.id}:${run.attempt}:${status}` }).then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "run", status }))).catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "run", status, error: error instanceof Error ? error.message : String(error) })));
-  }
+
 
   private executionBudget(run: TaskRun) {
     const hardContinuations = this.runtimeDefaults.maxContinuations ?? 128;
-    const hardTokens = this.runtimeDefaults.maxRunTokens ?? 2_000_000;
-    if (this.runtimeDefaults.dynamicBudget === false) return { tier: "fixed", maxContinuations: hardContinuations, maxTokens: hardTokens, runTimeoutMs: this.runtimeDefaults.runTimeoutMs ?? 900_000 };
+    const hardTokens = this.runtimeDefaults.maxRunTokens ?? 8_000_000;
+    if (this.runtimeDefaults.dynamicBudget === false) return { tier: "fixed", softTokens: hardTokens, maxContinuations: hardContinuations, maxTokens: hardTokens, runTimeoutMs: this.runtimeDefaults.runTimeoutMs ?? 900_000 };
 
     let score = Math.min(6, Math.ceil(run.goal.length / 240));
     if (/(implement|develop|refactor|migrate|audit|debug|test|build|deploy|实现|开发|重构|迁移|审计|调试|测试|构建|部署)/i.test(run.goal)) score += 3;
     if (/(multi|multiple|across|end[- ]to[- ]end|architecture|database|frontend|backend|多轮|多个|跨|架构|数据库|前端|后端)/i.test(run.goal)) score += 3;
-    score += Math.min(8, run.plan.filter((item) => item.required).length);
-    score += Math.min(6, run.checks.filter((item) => item.required).length * 2);
-    score += Math.min(6, run.plan.filter((item) => item.required && item.status !== "done").length);
-    score += Math.min(4, Math.floor(run.continuations.length / 3));
-
-    const tier = score >= 16 ? "extended" : score >= 10 ? "complex" : score >= 5 ? "standard" : "simple";
+    // Budget classification must depend only on immutable admission data.
+    // Plans, checks, and continuations are agent-controlled mutable state; using
+    // them here allowed a Run to enlarge its own token ceiling while executing.
+    const tier = score >= 10 ? "extended" : score >= 7 ? "complex" : score >= 4 ? "standard" : "simple";
     const presets = {
-      simple: { maxContinuations: 4, maxTokens: 80_000, runTimeoutMs: 300_000 },
-      standard: { maxContinuations: 12, maxTokens: 240_000, runTimeoutMs: 900_000 },
-      complex: { maxContinuations: 32, maxTokens: 640_000, runTimeoutMs: 2_700_000 },
-      extended: { maxContinuations: 96, maxTokens: 1_600_000, runTimeoutMs: 7_200_000 },
+      simple: { softTokens: 80_000, runTimeoutMs: 300_000 },
+      standard: { softTokens: 240_000, runTimeoutMs: 900_000 },
+      complex: { softTokens: 640_000, runTimeoutMs: 2_700_000 },
+      extended: { softTokens: 1_600_000, runTimeoutMs: 7_200_000 },
     } as const;
     return {
       tier,
-      maxContinuations: Math.min(hardContinuations, presets[tier].maxContinuations),
-      maxTokens: Math.min(hardTokens, presets[tier].maxTokens),
+      softTokens: Math.min(hardTokens, presets[tier].softTokens),
+      maxContinuations: hardContinuations,
+      maxTokens: hardTokens,
       runTimeoutMs: Math.min(this.runtimeDefaults.runTimeoutMs ?? 7_200_000, presets[tier].runTimeoutMs),
     };
   }
@@ -632,6 +714,16 @@ export class AgentService {
     return this.store.getRun(runId);
   }
 
+  approveSpawnProposal(proposalId: string) {
+    if (!this.store.updateSpawnProposalStatus(proposalId, "approved")) throw new Error("Proposal is not pending approval");
+    return { ok: true as const };
+  }
+
+  rejectSpawnProposal(proposalId: string) {
+    if (!this.store.updateSpawnProposalStatus(proposalId, "rejected")) throw new Error("Proposal is not pending approval");
+    return { ok: true as const };
+  }
+
   spawnProposal(proposalId: string) {
     if (this.closing) throw new Error("Service is shutting down");
     const run = this.store.spawnFromProposal(proposalId);
@@ -687,11 +779,18 @@ export class AgentService {
     const access = this.memoryAccess(run);
     const recall = this.memory ? await this.memory.recall({ access, cue: query, tokenBudget: this.runtimeDefaults.memoryRecallTokenBudget ?? 8_000 }) : undefined;
     const assembly = this.contextAssembler().assemble("session", this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter), this.buildSystemPrompt(run, recall?.promptSection), query);
-    if (this.memory && assembly.droppedMessages.length) {
-      const content = assembly.droppedMessages.map((message) => `${message.role}: ${messageText(message)}`).filter((value) => !value.endsWith(": ")).join("\n\n");
-      if (content) void this.memory.enqueueCapture({ access, sourceRefs: [{ sourceType: "run", sourceId: run.id, revision: `context-prune:${run.attempt}` }], content, idempotencyKey: `context-prune:${run.id}:${run.attempt}:${hashText(content)}` }).then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "context_prune" }))).catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "context_prune", error: error instanceof Error ? error.message : String(error) })));
-    }
+    this.capturePrunedUserContext(run, assembly.droppedMessages);
     return { ...assembly, recalledMemory: recall?.promptSection ?? "" };
+  }
+
+  private capturePrunedUserContext(run: TaskRun, messages: AgentMessage[]) {
+    if (!this.memory) return;
+    const durable = messages.filter((message) => message.role === "user").flatMap((message) => summarizeDurableUserContext(memoryMessageText(message))).slice(-20);
+    if (!durable.length) return;
+    const summary = durable.map((text) => `user: ${text}`).join("\n");
+    void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "transcript", sourceId: run.id, revision: `context-prune:${run.attempt}:${stableTextHash(summary)}` }], content: summary, idempotencyKey: `context-prune:${run.id}:${run.attempt}:${stableTextHash(summary)}`, provenance: userContextSummaryProvenance })
+      .then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "user_context_summary" })))
+      .catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "user_context_summary", error: error instanceof Error ? error.message : String(error) })));
   }
 
   private memoryAccess(run: TaskRun): AccessContext { return { subjectId: `session:${run.sessionId}`, scopes: [{ type: "workspace", id: this.memoryScopeId }, { type: "session", id: run.sessionId }], purpose: "agent_recall" }; }
@@ -746,5 +845,7 @@ export class AgentService {
   }
 }
 
-function messageText(message: AgentMessage) { if (!("content" in message)) return ""; if (typeof message.content === "string") return message.content; return message.content.filter((part) => part.type === "text").map((part) => part.type === "text" ? part.text : "").join("\n"); }
-function hashText(text: string) { let hash = 2166136261; for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619); return (hash >>> 0).toString(16); }
+function memoryMessageText(message: AgentMessage) { if (!("content" in message)) return ""; if (typeof message.content === "string") return message.content.trim(); return message.content.filter((part) => part.type === "text").map((part) => part.type === "text" ? part.text : "").join("\n").trim(); }
+function summarizeDurableUserContext(text: string) { return text.split(/\n+|(?<=[。！？.!?])\s*/).map((part) => part.trim()).filter((part) => part.length >= 2 && !/[?？]$/.test(part) && !/^(?:请|帮我|麻烦|检查|审计|排查|修复|实现|运行|执行|部署|合并|查看|确认|分析|调查)/i.test(part) && /(?:记住|我叫|我的名字|叫我|称呼我|我.{0,20}(?:喜欢|偏好|希望|不喜欢|习惯)|我们(?:已经|已)?(?:决定|确定|采用|改为|迁移)|以后|始终|必须|住在|家在|是邻居|my name|call me|i prefer|we decided|from now on)/i.test(part)); }
+function stableTextHash(text: string) { let hash = 2166136261; for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619); return (hash >>> 0).toString(16); }
+const userContextSummaryProvenance: MemoryProvenance = { evidenceClass: "user_context_summary", trustLevel: "medium", sourceRole: "user", verificationState: "structured" };

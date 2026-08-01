@@ -15,7 +15,34 @@ permissions:
   contents: write
 
 jobs:
+  postgres-memory-required:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: tagent_test
+          POSTGRES_PASSWORD: tagent_test
+          POSTGRES_DB: tagent_memory_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U tagent_test -d tagent_memory_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.1
+          cache: npm
+      - run: npm ci
+      - env:
+          TAGENT_TEST_POSTGRES_URL: postgresql://tagent_test:tagent_test@127.0.0.1:5432/tagent_memory_test
+        run: npx vitest run tests/postgres-memory.test.ts
+
   verify-and-release:
+    needs: postgres-memory-required
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,12 +61,16 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
-      - name: Create GitHub prerelease
+      - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           VERSION="${RELEASE_TAG#v}"
-          awk -v heading="## [${VERSION}]" '$0 == heading {flag=1; next} /^## \[/ {flag=0} flag' CHANGELOG.md > release-notes.md
+          awk -v version="$VERSION" '
+            $0 == "## [" version "]" || index($0, "## [" version "] - ") == 1 {flag=1; next}
+            index($0, "## [") == 1 && flag {exit}
+            flag
+          ' CHANGELOG.md > release-notes.md
           test -s release-notes.md
-          gh release create "$RELEASE_TAG" --prerelease --title "TAgent Core ${RELEASE_TAG}" --notes-file release-notes.md
+          gh release create "$RELEASE_TAG" --title "TAgent Core ${RELEASE_TAG}" --notes-file release-notes.md

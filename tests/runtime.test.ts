@@ -4,6 +4,7 @@ import { AgentService } from "../src/core/agent-service.js";
 import { Store } from "../src/store/store.js";
 import { TaskRunSupervisor } from "../src/core/supervisor.js";
 import type { AgentRuntime, RuntimeFactory } from "../src/runtime/types.js";
+import type { MemoryFacade } from "../src/memory/memory-service.js";
 
 function assistantMessage(text: string): AgentMessage {
   return { role: "assistant", content: [{ type: "text", text }], api: "openai-completions", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: Date.now() };
@@ -107,6 +108,62 @@ class ActiveDeferredRuntime extends DeferredRuntime {
 }
 
 describe("AgentService runtime boundary", () => {
+  it("persists an admitted user message before asynchronous memory recall completes", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let finishRecall!: (value: Awaited<ReturnType<MemoryFacade["recall"]>>) => void;
+    const recall = new Promise<Awaited<ReturnType<MemoryFacade["recall"]>>>((resolve) => { finishRecall = resolve; });
+    const memory = { recall: vi.fn(() => recall), enqueueCapture: vi.fn(async () => ({ jobId: "capture-1" })) } as unknown as MemoryFacade;
+    const service = new AgentService(store, "/tmp", () => new DeferredRuntime(), {}, memory, "test-scope");
+
+    const admitted = service.enqueueSessionInput(session.id, "visible immediately", "async-memory-admission");
+
+    expect(admitted.run).toMatchObject({ goal: "visible immediately", status: "running" });
+    expect(store.listMessages(session.id)).toEqual([expect.objectContaining({ role: "user", content: "visible immediately" })]);
+    expect(memory.recall).toHaveBeenCalledOnce();
+    finishRecall({ cards: [], coldTopics: [], promptSection: "", trace: { topicIds: [], candidateCount: 0, deniedCount: 0 } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("routes active-run corrections into steer instead of a new TaskRun", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const runtime = new InboxRuntime();
+    const service = new AgentService(store, "/tmp", () => runtime, { controlInboxCapacity: 4 });
+    const first = service.enqueueSessionInput(session.id, "发布 0.1.4", "route-base");
+    const routed = service.enqueueSessionInput(session.id, "不要重启服务，端口改成 3220", "route-steer");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(store.listRuns(session.id)).toHaveLength(1);
+    expect(routed.item).toMatchObject({ status: "routed", decision: "steer", runId: first.run!.id, analysis: { intent: "steer_active" } });
+    expect(runtime.delivered).toContainEqual({ kind: "steer", content: "不要重启服务，端口改成 3220" });
+    await service.closeRuntimes(); store.close();
+  });
+
+  it("keeps explicit postponed work deferred", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
+    const routed = service.enqueueSessionInput(session.id, "暂时不做", "defer-one");
+    expect(routed.run).toBeNull();
+    expect(routed.item).toMatchObject({ decision: "defer", analysis: { intent: "defer" } });
+    expect(store.listRuns(session.id)).toHaveLength(0);
+    await service.closeRuntimes(); store.close();
+  });
+
+  it("turns explicit parallel input into a spawn proposal", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
+    const first = service.enqueueSessionInput(session.id, "修复 Web UI", "parallel-base");
+    const routed = service.enqueueSessionInput(session.id, "同时并行设计另一个独立的移动端客户端", "parallel-child");
+    expect(store.listRuns(session.id)).toHaveLength(1);
+    expect(routed.item).toMatchObject({ status: "routed", decision: "spawn_proposal", runId: first.run!.id });
+    expect(store.listSpawnProposals(first.run!.id)).toEqual([expect.objectContaining({ relation: "parallel", status: "proposed" })]);
+    await service.closeRuntimes(); store.close();
+  });
+
   it("queues continuous Session input and starts the next TaskRun serially", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
@@ -155,7 +212,11 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const blocking = store.createRun(session.id, "old run");
-    store.enqueueSessionInbox(session.id, "recover me", "recover-inbox");
+    store.enqueueSessionInbox(session.id, "recover me", {
+      summary: "recover me", intent: "new_task", targetRunId: null, priority: 500,
+      urgency: "normal", relation: "independent", acceptanceCriteria: ["recover me"],
+      scope: "recover me", nonGoals: [], confidence: 1, reason: "test", routerVersion: "test",
+    }, "recover-inbox");
     store.finalizeRun(blocking.id, "completed");
     const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
     expect(service.recoverSessionInbox()).toHaveLength(1);
@@ -197,6 +258,7 @@ describe("AgentService runtime boundary", () => {
     const parent = store.createRun(session.id, "parent");
     store.finalizeRun(parent.id, "completed");
     const proposal = store.createSpawnProposal(parent.id, "child", [], "follow_up");
+    store.updateSpawnProposalStatus(proposal.id, "approved");
     const service = new AgentService(store, "/tmp", () => { throw new Error("factory failed"); });
     expect(() => service.spawnProposal(proposal.id)).toThrow("factory failed");
     const persisted = store.listSpawnProposals(parent.id)[0];
@@ -574,11 +636,13 @@ describe("AgentService runtime boundary", () => {
     const session = store.createSession();
     const service = new AgentService(store, "/tmp", () => new FakeRuntime([]), { maxContinuations: 40, maxRunTokens: 700_000, runTimeoutMs: 3_000_000 });
     const simple = store.createRun(session.id, "Say hello");
-    expect(service.getBudget(simple.id)).toEqual({ tier: "simple", maxContinuations: 4, maxTokens: 80_000, runTimeoutMs: 300_000 });
+    expect(service.getBudget(simple.id)).toEqual({ tier: "simple", softTokens: 80_000, maxContinuations: 40, maxTokens: 700_000, runTimeoutMs: 300_000 });
     const complex = store.createRun(session.id, "Implement and test a multi module frontend backend database migration architecture");
+    const admittedBudget = service.getBudget(complex.id);
     for (let index = 0; index < 8; index += 1) store.upsertPlanItem(complex.id, { key: `p${index}`, title: `Step ${index}`, status: "pending", required: true, position: index });
     for (let index = 0; index < 3; index += 1) store.upsertCheck(complex.id, { key: `c${index}`, title: `Check ${index}`, status: "pending", required: true, command: "", evidence: "", stale: false });
-    expect(service.getBudget(complex.id)).toEqual({ tier: "extended", maxContinuations: 40, maxTokens: 700_000, runTimeoutMs: 3_000_000 });
+    expect(admittedBudget).toEqual({ tier: "complex", softTokens: 640_000, maxContinuations: 40, maxTokens: 700_000, runTimeoutMs: 2_700_000 });
+    expect(service.getBudget(complex.id)).toEqual(admittedBudget);
     store.close();
   });
 
@@ -644,6 +708,63 @@ describe("AgentService runtime boundary", () => {
     expect(store.getRun(run.id)?.status).toBe("blocked");
     expect(store.listContinuations(run.id)).toHaveLength(1);
     expect(store.listEvents(run.id).some((event) => event.type === "continuation.exhausted" && event.data.reason === "max_continuations")).toBe(true);
+    store.close();
+  });
+
+  it("treats the dynamic token tier as guidance while preserving the configured hard ceiling", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let captured: Parameters<RuntimeFactory>[0] | undefined;
+    let aborted = false;
+    let steered = "";
+    const service = new AgentService(store, "/tmp", (options) => {
+      captured = options;
+      return {
+        async prompt() {
+          options.onTokenBudgetWarning?.({ totalTokens: 80_000, softLimit: options.softRunTokens!, hardLimit: options.maxRunTokens });
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        },
+        async steer(instruction) { steered = instruction; return "accepted" as const; },
+        abort() { aborted = true; },
+        getMessages() { return []; },
+        getError() { return undefined; },
+      };
+    }, { maxContinuations: 40, maxRunTokens: 700_000, runTimeoutMs: 3_000_000 });
+    const run = await service.start(session.id, "Say hello");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(captured?.softRunTokens).toBe(80_000);
+    expect(captured?.maxRunTokens).toBe(700_000);
+    expect(aborted).toBe(false);
+    expect(store.getRun(run.id)?.status).not.toBe("blocked");
+    expect(steered).toContain("hard ceiling is 700,000");
+    expect(store.listEvents(run.id).some((event) => event.type === "run.token_budget.warning")).toBe(true);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("aborts an active runtime as soon as cumulative usage crosses its token budget", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let aborted = false;
+    const service = new AgentService(store, "/tmp", (options) => ({
+      async prompt() {
+        const costly = assistantMessage("still working");
+        if (costly.role === "assistant") costly.usage.totalTokens = 12;
+        store.appendTranscript(options.runId, store.getRun(options.runId)!.attempt, costly);
+        options.onTokenBudgetExceeded?.({ totalTokens: 12, limit: options.maxRunTokens! });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+      async steer() { return "accepted" as const; },
+      abort() { aborted = true; },
+      getMessages() { return []; },
+      getError() { return undefined; },
+    }), { dynamicBudget: false, maxContinuations: 2, maxRunTokens: 10 });
+    const run = await service.start(session.id, "bounded active run");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(aborted).toBe(true);
+    expect(store.getRun(run.id)).toMatchObject({ status: "blocked", blockedReason: expect.stringContaining("token budget") });
+    expect(store.listContinuations(run.id)).toHaveLength(0);
+    expect(store.listEvents(run.id).some((event) => event.type === "continuation.exhausted" && event.data.reason === "token_budget")).toBe(true);
     store.close();
   });
 

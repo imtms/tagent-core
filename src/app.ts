@@ -16,9 +16,10 @@ export interface AppDependencies {
   runtimeConfig?: PublicRuntimeConfig;
   serviceCredentials?: ServiceCredential[];
   memory?: MemoryFacade;
+  closeResources?: () => Promise<void>;
 }
 
-export function createApp({ store, service, webRoot = path.resolve("dist/web"), logger = true, runtimeConfig, serviceCredentials = [], memory }: AppDependencies) {
+export function createApp({ store, service, webRoot = path.resolve("dist/web"), logger = true, runtimeConfig, serviceCredentials = [], memory, closeResources }: AppDependencies) {
   const app = Fastify({ logger });
 
   if (serviceCredentials.length) app.addHook("onRequest", async (request, reply) => {
@@ -39,7 +40,7 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const body = request.body as { scope?: MemoryScope; content?: string; idempotencyKey?: string };
     if (!body.scope || !body.content?.trim()) return reply.code(400).send({ error: "scope and content are required" });
     const idempotencyKey = body.idempotencyKey ?? `manual:${Date.now()}`;
-    return memory.enqueueCapture({ access: memoryAccess(request, [body.scope], "capture"), sourceRefs: [{ sourceType: "manual", sourceId: idempotencyKey }], content: body.content.trim(), idempotencyKey });
+    return memory.enqueueCapture({ access: memoryAccess(request, [body.scope], "capture"), sourceRefs: [{ sourceType: "manual", sourceId: idempotencyKey }], content: body.content.trim(), idempotencyKey, captureSource: { kind: "manual_input", role: "user", explicitIntent: true } });
   });
   app.post("/api/memory/jobs", async (request, reply) => {
     if (!memory) return reply.code(503).send({ error: "memory is disabled" });
@@ -86,7 +87,12 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     return memory.forget({ access: memoryAccess(request, [body.scope], "memory_admin"), scope: body.scope, ids: body.ids, topicIds: body.topicIds });
   });
 
-  app.get("/api/health", async () => ({ ok: true, service: "tagent-core" }));
+  app.get("/api/health", async (_request, reply) => {
+    if(!memory)return {ok:true,service:"tagent-core"};
+    const scopeId=runtimeConfig?.memoryWorkspaceScopeId; if(!scopeId)return {ok:true,service:"tagent-core",memory:{enabled:true,ready:false,degraded:true,reasons:["memory_scope_unavailable"]}};
+    const readiness=await memory.readiness({subjectId:"health",scopes:[{type:"workspace",id:scopeId}],purpose:"memory_admin"});
+    if(!readiness.ready)reply.code(503); return {ok:readiness.ready,service:"tagent-core",memory:{enabled:true,...readiness}};
+  });
   app.get("/api/config/status", async () => runtimeConfig ?? null);
   app.get("/api/sessions", async () => store.listSessions());
   app.post("/api/sessions", async (request, reply) => {
@@ -135,8 +141,10 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const { id } = request.params as { id: string };
     const body = request.body as { content?: string; requestId?: string };
     if (!body?.content?.trim()) return reply.code(400).send({ error: "content is required" });
+    const content = body.content.trim();
+    if (isOpaqueAutomationMarker(content)) return reply.code(422).send({ error: "opaque automation marker is not an executable task", reason: "non_actionable_prompt" });
     if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
-    const result = service.enqueueSessionInput(id, body.content.trim(), body.requestId);
+    const result = service.enqueueSessionInput(id, content, body.requestId);
     return { ...result, receipt: { requestId: result.item.requestId, sessionId: result.item.sessionId, inboxItemId: result.item.id, status: result.item.status, runId: result.item.runId, error: result.item.error, createdAt: result.item.createdAt, updatedAt: result.item.updatedAt } };
   });
   app.get("/api/sessions/:id/inbox", async (request, reply) => {
@@ -252,6 +260,16 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     if (!body?.goal?.trim()) return reply.code(400).send({ error: "goal is required" });
     return store.createSpawnProposal(id, body.goal.trim(), body.acceptanceCriteria ?? [], body.relation ?? "follow_up");
   });
+  app.post("/api/spawn-proposals/:id/approve", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try { return service.approveSpawnProposal(id); }
+    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+  app.post("/api/spawn-proposals/:id/reject", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try { return service.rejectSpawnProposal(id); }
+    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
   app.post("/api/spawn-proposals/:id/spawn", async (request, reply) => {
     const { id } = request.params as { id: string };
     try { return service.spawnProposal(id); }
@@ -347,10 +365,14 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     catch { return reply.code(404).send("Web build not found. Run npm run build."); }
   });
 
-  app.addHook("onClose", async () => { await service.closeRuntimes(); store.close(); });
+  app.addHook("onClose", async () => { await service.closeRuntimes(); await closeResources?.(); store.close(); });
   return app;
 }
 
 function memoryAccess(request: FastifyRequest, scopes: MemoryScope[], purpose: AccessContext["purpose"]): AccessContext {
   return { subjectId: String(request.headers["x-tagent-subject"] ?? "local-admin"), scopes, purpose };
+}
+
+function isOpaqueAutomationMarker(content: string) {
+  return /^(?:(?:final-)?ui-sync|release)-[a-z0-9._-]*\d{10,}$/i.test(content) && !/[\s：:，,。.!?？]/.test(content);
 }

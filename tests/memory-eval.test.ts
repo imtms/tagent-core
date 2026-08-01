@@ -1,0 +1,8 @@
+import {describe,it,expect} from "vitest";
+import {InMemoryMemoryAdapter} from "../src/memory/adapters/in-memory.js";
+import {MemoryService} from "../src/memory/memory-service.js";
+import {DefaultPolicyEngine} from "../src/memory/policy/policy-engine.js";
+import {LocalBlobStore} from "../src/memory/storage/local-blob-store.js";
+import {mkdtemp} from "node:fs/promises";import {tmpdir} from "node:os";import path from "node:path";
+const scope={type:"workspace" as const,id:"eval"},access={subjectId:"eval",scopes:[scope],purpose:"agent_recall" as const};
+describe("memory retrieval benchmark fixture",()=>{it("reports deterministic recall metrics for identity, zero-result and contradiction cases",async()=>{const a=new InMemoryMemoryAdapter(),s=new MemoryService({records:a,topics:a,graph:a,vectors:a,jobs:a,policy:new DefaultPolicyEngine(a),blobs:new LocalBlobStore(await mkdtemp(path.join(tmpdir(),"memory-eval-")))}),now=Date.now();await s.upsert({...access,purpose:"capture"},[{id:"eval-id",kind:"fact",tier:"warm",scope,title:"User profile: name",content:"用户姓名或称呼是 TMs",summary:"用户叫TMs",topicIds:[`${scope.type}.${scope.id}.fact.user-profile.identity`],entityIds:[],status:"active",confidence:1,importance:1,sourceRefs:[],createdAt:now,updatedAt:now}]);const cases=[{q:"我叫什么",expected:"TMs"},{q:"what is my name",expected:"TMs"},{q:"从未记录的量子考古主题",expected:""}];let hits=0,rr=0,zero=0;for(const c of cases){const r=await s.recall({access,cue:c.q,maxColdTopics:0});const rank=r.cards.findIndex(x=>x.content.includes(c.expected));if(c.expected){if(rank>=0){hits++;rr+=1/(rank+1);}}else if(!r.cards.length)zero++;}expect({recallAtK:hits/2,mrr:rr/2,zeroResultAccuracy:zero}).toEqual({recallAtK:1,mrr:1,zeroResultAccuracy:1});});});

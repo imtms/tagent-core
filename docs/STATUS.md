@@ -1,13 +1,13 @@
 # Development Status
 
-Updated: 2026-07-31 (Asia/Singapore)
+Updated: 2026-08-01 (Asia/Singapore)
 
 ## Completed
 
 ### Core control plane
 
-- SQLite-backed sessions, ordered conversation messages, Schema v5 durable event-consumer cursors, Schema v6 durable control inbox records, Schema v7 TaskRun supervision records, and Schema v8 Session Supervisor Inbox records.
-- Session Supervisor Inbox is the normal input admission path: queued input remains outside Session messages until atomically selected, bound to a durable TaskRun, and launched.
+- SQLite-backed sessions, ordered conversation messages, Schema v5 durable event-consumer cursors, Schema v6 durable control inbox records, Schema v7 TaskRun supervision records, and Schema v10 semantic Session Supervisor Inbox and TaskRun contract records.
+- Session Input Router is the normal admission path: input is summarized, classified, prioritized, and either routed to the active Run, converted to a gated spawn proposal, or atomically bound to a durable TaskRun contract.
 - Automatic Session dispatch is blocked by any running Run and by the latest blocked/interrupted Run, while older historical blocked/interrupted Runs remain auditable without permanently freezing the queue.
 - A user can explicitly start a selected queued Inbox item through a transactional `Run now` path; running Runs and active continuations retain concurrency priority and fencing.
 - Durable TaskRun records with goal, phase, status, plan items, checks, artifacts, ordered events, and Schema v4 Run checkpoints.
@@ -71,7 +71,7 @@ Updated: 2026-07-31 (Asia/Singapore)
 - The right panel lists up to 50 recent TaskRuns as collapsible history and expands the current/latest Run by default.
 - Web restores active assistant text and current tool from the durable checkpoint before opening SSE from the checkpoint's covered event sequence, and shows preserved checkpoints for interrupted or terminal Run diagnostics.
 - Web event delivery now claims a persistent per-Run consumer generation, resumes from the greater of checkpoint coverage and durable ACK, advances ACKs monotonically after event handling, and records terminal-event acknowledgement evidence. A newer connection fences stale SSE streams and stale ACK writers.
-- Dynamic execution budgets scale continuation count, cumulative tokens, and idle timeout across simple/standard/complex/extended tiers; `TAGENT_RUN_HARD_TIMEOUT_MS` remains the absolute attempt ceiling.
+- Dynamic execution tiers provide immutable-admission soft token checkpoints and tiered idle timeouts; `TAGENT_MAX_RUN_TOKENS`, `TAGENT_MAX_CONTINUATIONS`, and `TAGENT_RUN_HARD_TIMEOUT_MS` remain the hard ceilings. Crossing a soft checkpoint steers the active agent to compact and converge without terminating a progressing Run.
 - A deterministic stress test completes a single durable Run after 40 automatic continuations; hundreds of model-backed turns are not yet an acceptance claim.
 - Session navigation displays each workspace's latest TaskRun status and phase, refreshed with the Session summary rather than an application-layer per-Session query loop.
 - Session polling fully hydrates a newly started active Run without a browser refresh, including selected Run, messages, transcript, checkpoint partial, tool state, and SSE consumer handoff.
@@ -82,9 +82,9 @@ Updated: 2026-07-31 (Asia/Singapore)
 - PostgreSQL 17/pgvector/pg_trgm durable profile with separate Fact and Preference storage, Topic Descriptors, bounded entity graph, capture jobs, policy receipts, and immutable Local Cold revisions.
 - OpenAI-compatible semantic embedding with generation-aware reindex and lexical-only fallback; deterministic hash embedding remains test/development-only.
 - Deterministic safety extraction plus optional structured LLM extraction for multi-sentence context, negation, conditions, temporal changes, and Chinese coreference.
-- User-message, context-prune, Run-boundary, and manual capture triggers with queued/completed/empty/failed observability and proposal/persisted counts.
+- User-message, role-aware user-only context-prune summary, and manual capture triggers with queued/completed/empty/failed observability and proposal/persisted counts. Assistant final prose and TaskRun Check/Artifact wrappers are not automatic semantic-memory sources.
 - Hot-to-Warm promotion, duplicate/conflict handling, inferred preference promotion, LLM-assisted or deterministic Warm-to-Cold consolidation, and Local Cold reconciliation.
-- Dynamic recall across lexical, trigram, vector, Topic, and bounded graph routes; complete checksum-verified Cold pages are injected as low-authority data and never vector-chunked.
+- Dynamic recall across lexical, trigram, vector, Topic, and bounded graph routes, with domain routing, relevance thresholds, empty-result behavior, identity isolation, semantic deduplication, and contradiction suppression; complete checksum-verified Cold pages are injected as low-authority data and never vector-chunked.
 - Agent `memory_search`, `memory_topic_get`, and guarded `memory_forget` tools plus a conditional Web Memory Center.
 - Release documentation is indexed at [MEMORY.md](MEMORY.md); deployment limits remain trusted single-service/private-network use without complete multi-tenant authentication.
 
@@ -94,8 +94,8 @@ Updated: 2026-07-31 (Asia/Singapore)
 - Store, completion gate, workspace tool, and HTTP API tests.
 - Desktop and mobile Chromium rendering checks.
 - Production dependency audit with no known vulnerabilities at the current lockfile.
-- Full production and development dependency audit with no known vulnerabilities at the `0.1.0-alpha.1` lockfile.
-- ESLint flat configuration, release checklist, security policy, changelog, license, and tag-triggered GitHub prerelease workflow.
+- Full production and development dependency audit with no known vulnerabilities at the `0.1.0` lockfile.
+- ESLint flat configuration, release checklist, security policy, changelog, license, required PostgreSQL memory CI, and tag-triggered stable GitHub Release workflows.
 - Git repository linked to `git@github.com:imtms/tagent-core.git` with incremental commits on `main`.
 - The 2026-07-31 external PR audit merged queue scheduling, manual Inbox start, and workspace status improvements after combined and post-merge validation; deployment artifact and current-operation PRs remain open for rollback/integrity and sensitive-data fixes. See [PR_AUDIT_2026-07-31.md](PR_AUDIT_2026-07-31.md).
 
@@ -149,4 +149,6 @@ Updated: 2026-07-31 (Asia/Singapore)
 - Continuation attempts heartbeat, use owner fencing, and only expire into recovery after the persisted lease deadline; process-level leader election remains absent.
 - Cancel/resume transcript repair is implemented. Steering and follow-up enter a bounded, idempotent Schema v6 control inbox before serial delivery to Pi; settled runtimes reject delivery, old-attempt input is superseded, restart-ambiguous delivery becomes `outcome_unknown`, and the API returns explicit closing/full/inactive responses.
 - Provider failures are typed and auditable, but retry scheduling still uses the provider SDK/pi boundary rather than a TAgent-owned retry loop.
-- The HTTP API has no authentication or multi-tenant isolation and must remain on localhost or a trusted private network for this alpha.
+- Scoped Bearer credentials are available for supported automation routes, but the Web/administrative surface has no built-in login or complete multi-tenant isolation and must remain on localhost or a trusted private network.
+
+- Supervisor v2 adds edit reclassification, structured merge, explicit defer, attempt-terminal classification, request-evidence/approval actions, and approved derived TaskRun spawning.

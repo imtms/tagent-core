@@ -8,10 +8,11 @@ import { MemoryPanel } from "./MemoryPanel";
 
 const MESSAGE_PAGE_SIZE = 40;
 const mergeMessages = (current: Message[], incoming: Message[]) => {
-  const merged = new Map(current.map((message) => [message.id, message]));
-  incoming.forEach((message) => merged.set(message.id, message));
-  return [...merged.values()].sort((left, right) => left.id - right.id);
+  const byId = new Map(current.map((message) => [message.id, message]));
+  for (const message of incoming) byId.set(message.id, message);
+  return [...byId.values()].sort((left, right) => left.id - right.id);
 };
+
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
 
 function WorkspaceRunStatus({ session }: { session: Session }) {
@@ -25,8 +26,33 @@ function WorkspaceRunStatus({ session }: { session: Session }) {
 
 function ToolCall({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> }) {
   return <details className={`tool-call ${item.isError ? "failed" : ""}`}>
-    <summary><Terminal size={14} /><span>{item.toolName}</span><small>{item.status}</small><ChevronRight className="tool-chevron" size={14} /></summary>
+    <summary><Terminal size={14} /><span>{item.toolName}</span><small>{item.isError ? "failed" : item.status}</small><ChevronRight className="tool-chevron" size={14} /></summary>
     <div className="tool-call-body"><div><strong>Arguments</strong><pre>{JSON.stringify(item.arguments, null, 2)}</pre></div><div><strong>Result</strong><pre>{item.result || "No result recorded"}</pre></div></div>
+  </details>;
+}
+
+function ToolHistory({ items }: { items: Extract<TranscriptItem, { kind: "tool" }>[] }) {
+  const failed = items.filter((item) => item.isError).length;
+  return <details className="tool-history">
+    <summary>
+      <span className="tool-history-icon"><Terminal size={14} /></span>
+      <span><strong>Tool activity</strong><small>{items.length} call{items.length === 1 ? "" : "s"}{failed ? ` · ${failed} failed` : ""}</small></span>
+      <span className="tool-history-status">Details</span>
+      <ChevronRight className="tool-chevron" size={14} />
+    </summary>
+    <div className="tool-history-list">{items.map((item) => <ToolCall key={`${item.seq}-${item.index}`} item={item} />)}</div>
+  </details>;
+}
+
+function LiveToolActivity({ events }: { events: RunEvent[] }) {
+  const latestByTool = new Map<string, RunEvent>();
+  for (const event of events) latestByTool.set(String(event.data.toolCallId ?? event.data.toolName ?? event.seq), event);
+  const latest = [...latestByTool.values()].slice(-5).reverse();
+  const running = latest.filter((event) => event.type === "tool.started").length;
+  const failed = latest.filter((event) => Boolean(event.data.isError)).length;
+  return <details className="live-tools">
+    <summary><Activity size={14} /><span><strong>{running ? `${running} tool${running === 1 ? "" : "s"} running` : "Recent tool activity"}</strong><small>{latest.length} recent{failed ? ` · ${failed} failed` : ""}</small></span><ChevronRight className="tool-chevron" size={14} /></summary>
+    <div className="tool-stack">{latest.map((event) => <div className="tool-row" key={`${event.seq}-${event.type}`}><Terminal size={14} /><span>{String(event.data.toolName ?? "tool")}</span><small>{event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "done"}</small></div>)}</div>
   </details>;
 }
 
@@ -47,15 +73,16 @@ function CurrentOperationPanel({ run }: { run: TaskRun }) {
   </section>;
 }
 
-function RunDetails({ run }: { run: TaskRun }) {
+function RunDetails({ run, onRefresh }: { run: TaskRun; onRefresh?: () => Promise<void> }) {
   return <div className="run-details">
     <CurrentOperationPanel run={run} />
-    <section className="run-summary"><div className="phase-line"><span className={`phase-badge ${run.status}`}>{run.status}</span><span>{run.phase}</span><span>attempt {run.attempt}</span></div><p>{run.goal}</p><div className="run-metrics"><span>{run.transcriptCount} messages</span><span>{run.usage.totalTokens.toLocaleString()} tokens</span><span>{run.usage.input.toLocaleString()} in / {run.usage.output.toLocaleString()} out</span>{run.budget && <span>{run.budget.tier} · {run.budget.maxContinuations} rounds · {run.budget.maxTokens.toLocaleString()} tokens</span>}</div>{run.blockedReason && <div className="blocked-note">{run.blockedReason}</div>}</section>
+    <section className="run-summary"><div className="phase-line"><span className={`phase-badge ${run.status}`}>{run.status}</span><span>{run.phase}</span><span>attempt {run.attempt}</span></div><p>{run.goal}</p>{run.contract && <div className="run-contract"><span>{run.contract.intent.replaceAll("_", " ")} · {run.contract.relation}</span><small>{run.contract.decisionReason}</small><ul>{run.contract.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></div>}<div className="run-metrics"><span>{run.transcriptCount} messages</span><span>{run.usage.totalTokens.toLocaleString()} tokens</span><span>{run.usage.input.toLocaleString()} in / {run.usage.output.toLocaleString()} out</span>{run.budget && <span>{run.budget.tier}{run.budget.softTokens && run.budget.softTokens < run.budget.maxTokens ? ` · ${run.budget.softTokens.toLocaleString()} checkpoint` : ""} · {run.budget.maxContinuations} rounds max · {run.budget.maxTokens.toLocaleString()} tokens max</span>}</div>{run.blockedReason && <div className="blocked-note">{run.blockedReason}</div>}</section>
     {run.checkpoint && <section className="panel-section"><div className="section-title"><span>Checkpoint</span><small>{run.checkpoint.active ? "active" : "preserved"}</small></div><div className="checkpoint-card"><span>event {run.checkpoint.lastEventSeq} · transcript {run.checkpoint.lastTranscriptSeq}</span>{run.checkpoint.currentTool && <strong>{run.checkpoint.currentTool.toolName}</strong>}{run.checkpoint.assistantPartial && <p>{run.checkpoint.assistantPartial.slice(-240)}</p>}</div></section>}
     <section className="panel-section"><div className="section-title"><span>Supervisor</span><small>{run.supervision.latestDecision?.action ?? "observing"}</small></div><div className="checkpoint-card">{run.supervision.latestDecision ? <><strong>{run.supervision.latestDecision.reasonCode}</strong><p>{run.supervision.latestDecision.rationale}</p></> : <span>No intervention decision.</span>}{run.supervision.progress && <span>progress {run.supervision.progress.meaningfulChanges} · failures {run.supervision.progress.consecutiveFailures}</span>}{run.supervision.latestGates.map((gate) => <span key={gate.id}>{gate.gateType}: {gate.passed ? "passed" : `${gate.failures.length} failure(s)`}</span>)}</div></section>
     <section className="panel-section"><div className="section-title"><span>Plan</span><small>{run.plan.filter((item) => item.status === "done").length}/{run.plan.length}</small></div><div className="task-list">{run.plan.length ? run.plan.map((item) => <div className="task-row" key={item.key}>{item.status === "done" ? <Check size={15} /> : <Circle size={14} />}<span>{item.title}</span><small>{item.status}</small></div>) : <p className="muted">No structured plan.</p>}</div></section>
     <section className="panel-section"><div className="section-title"><span>Checks</span><small>{run.checks.filter((item) => item.status === "passed" && !item.stale).length}/{run.checks.length}</small></div><div className="task-list">{run.checks.length ? run.checks.map((check) => <div className="task-row" key={check.key}>{check.status === "passed" && !check.stale ? <Check size={15} /> : <Circle size={14} />}<span>{check.title}</span><small>{check.stale ? "stale" : check.status}</small></div>) : <p className="muted">No required checks.</p>}</div></section>
     <section className="panel-section"><div className="section-title"><span>Continuations</span><small>{run.continuations.length}</small></div><div className="task-list">{run.continuations.length ? run.continuations.map((item) => <div className="continuation-row" key={item.id}><div><strong>#{item.ordinal}</strong><span>{item.reason}</span></div><small className={`continuation-status ${item.status}`}>{item.status}{item.leaseUntil && item.status === "running" ? " · leased" : ""}</small></div>) : <p className="muted">No automatic continuation.</p>}</div></section>
+    <section className="panel-section"><div className="section-title"><span>Spawn proposals</span><small>{run.supervision.spawnProposals.length}</small></div><div className="task-list">{run.supervision.spawnProposals.length ? run.supervision.spawnProposals.map((proposal) => <div className="spawn-proposal" key={proposal.id}><div><strong>{proposal.goal}</strong><small>{proposal.relation} · {proposal.status}</small></div><span className="proposal-actions">{proposal.status === "proposed" && <><button onClick={async () => { await api.approveSpawn(proposal.id); await onRefresh?.(); }}>Approve</button><button onClick={async () => { await api.rejectSpawn(proposal.id); await onRefresh?.(); }}>Reject</button></>}{proposal.status === "approved" && <button onClick={async () => { await api.spawnProposal(proposal.id); await onRefresh?.(); }}>Start TaskRun</button>}</span></div>) : <p className="muted">No derived TaskRun proposals.</p>}</div></section>
     <section className="panel-section"><div className="section-title"><span>Artifacts</span><small>{run.artifacts.length}</small></div>{run.artifacts.map((artifact) => <div className="artifact-row" key={artifact.id}><FileText size={15} /><span>{artifact.title}</span></div>)}</section>
   </div>;
 }
@@ -70,7 +97,7 @@ function QueuePrompt({ item, index, editing, draft, busy, starting, dragging, ca
   return <article className={`inbox-item ${dragging ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={onDrop}>
     <button className="queue-drag-handle" draggable={!busy && !editing} onDragStart={onDragStart} onDragEnd={onDragEnd} disabled={busy || editing} aria-label={`Drag prompt ${index + 1} to reorder`} title="Drag to reorder"><GripVertical size={14} /></button>
     <span className="inbox-position">{index + 1}</span>
-    <div>{editing ? <textarea className="queue-editor" value={draft} onChange={(event) => onDraftChange(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") onCancelEdit(); if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) onSave(); }} autoFocus rows={2} aria-label="Edit queued prompt" /> : <strong>{item.content}</strong>}<small>{item.decision === "defer" ? "Deferred by Supervisor" : "Waiting for Supervisor selection"}</small>
+    <div>{editing ? <textarea className="queue-editor" value={draft} onChange={(event) => onDraftChange(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") onCancelEdit(); if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) onSave(); }} autoFocus rows={2} aria-label="Edit queued prompt" /> : <><strong>{item.analysis.summary || item.content}</strong>{item.analysis.summary !== item.content && <p className="inbox-source">{item.content}</p>}</>}<div className="inbox-routing"><span className={`intent-badge ${item.analysis.intent}`}>{item.analysis.intent.replaceAll("_", " ")}</span><span>{item.analysis.urgency} · priority {item.analysis.priority}</span><span>{Math.round(item.analysis.confidence * 100)}% confidence</span>{item.analysis.targetRunId && <span>→ run {item.analysis.targetRunId.slice(0, 8)}</span>}</div><small>{item.decision === "defer" ? "Deferred by user override" : item.analysis.reason}</small>{item.analysis.acceptanceCriteria.length > 0 && <details className="inbox-contract"><summary>Acceptance criteria</summary><ul>{item.analysis.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></details>}
       <span className="inbox-actions">{editing ? <><button onClick={onSave} disabled={busy || !draft.trim()}>Save</button><button onClick={onCancelEdit} disabled={busy}>Cancel</button></> : <><button onClick={onEdit} disabled={busy}><Pencil size={12} /> Edit</button><button className="run-now" onClick={onStart} disabled={busy}>{starting ? "Starting…" : "Run now"}</button><button onClick={onToggleDefer} disabled={busy}>{item.decision === "defer" ? "Resume" : "Defer"}</button>{index > 0 && <button onClick={onMergeFirst} disabled={busy}>Merge first</button>}<button onClick={onMoveUp} disabled={busy || !canMoveUp} aria-label={`Move queued prompt ${index + 1} up`}>Move up</button><button onClick={onMoveDown} disabled={busy || !canMoveDown} aria-label={`Move queued prompt ${index + 1} down`}>Move down</button></>}</span>
     </div>
     <button onClick={onDelete} disabled={busy} aria-label="Remove queued input"><X size={14} /></button>
@@ -85,6 +112,8 @@ export function App() {
   const [renamingSessionId, setRenamingSessionId] = useState("");
   const [sessionTitleDraft, setSessionTitleDraft] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [pendingUserMessage, setPendingUserMessage] = useState<{ sessionId: string; content: string; createdAt: number } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const [activeRun, setActiveRun] = useState<TaskRun | null>(null);
@@ -108,51 +137,47 @@ export function App() {
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
-  const endRef = useRef<HTMLDivElement>(null);
-  const cancelRenameRef = useRef(false);
-  const renameSubmittingRef = useRef(false);
   const messageScrollRef = useRef<HTMLElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+  const autoScrollRef = useRef(true);
+  const forceScrollRef = useRef(true);
   const messagesRef = useRef<Message[]>([]);
-  const sessionIdRef = useRef("");
-  const initialScrollPendingRef = useRef(false);
-  const stickToBottomRef = useRef(true);
   const olderRequestRef = useRef<{ sessionId: string; oldestId: number } | null>(null);
   const historyGenerationRef = useRef(0);
+  const prependingHistoryRef = useRef(false);
+  const cancelRenameRef = useRef(false);
+  const renameSubmittingRef = useRef(false);
   const activeRunIdRef = useRef("");
+  const sessionIdRef = useRef("");
 
   useEffect(() => { activeRunIdRef.current = activeRun?.id ?? ""; }, [activeRun?.id]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
-  const refreshLatestMessages = useCallback(async (targetSessionId: string) => {
-    const page = await api.messagePage(targetSessionId, undefined, MESSAGE_PAGE_SIZE);
-    if (sessionIdRef.current !== targetSessionId) return page;
-    setMessages((current) => mergeMessages(current, page.items));
-    setHasOlderMessages((current) => messagesRef.current.length ? current : page.hasMore);
-    return page;
-  }, []);
-
   const loadOlderMessages = useCallback(async () => {
-    const scroller = messageScrollRef.current;
+    const viewport = messageScrollRef.current;
     const oldestId = messagesRef.current[0]?.id;
-    if (!scroller || !sessionId || !hasOlderMessages || oldestId == null || olderRequestRef.current) return;
+    if (!viewport || !sessionId || !hasOlderMessages || oldestId == null || olderRequestRef.current) return;
     const request = { sessionId, oldestId };
     const generation = historyGenerationRef.current;
     olderRequestRef.current = request;
     setLoadingOlderMessages(true);
-    const previousHeight = scroller.scrollHeight;
-    const previousTop = scroller.scrollTop;
+    const previousHeight = viewport.scrollHeight;
+    const previousTop = viewport.scrollTop;
     try {
       const page = await api.messagePage(sessionId, oldestId, MESSAGE_PAGE_SIZE);
       if (sessionIdRef.current !== sessionId || historyGenerationRef.current !== generation) return;
+      prependingHistoryRef.current = true;
       setMessages((current) => mergeMessages(current, page.items));
       setHasOlderMessages(page.hasMore);
       requestAnimationFrame(() => {
         if (sessionIdRef.current !== sessionId || historyGenerationRef.current !== generation) return;
-        const currentScroller = messageScrollRef.current;
-        if (currentScroller) currentScroller.scrollTop = previousTop + currentScroller.scrollHeight - previousHeight;
+        const currentViewport = messageScrollRef.current;
+        if (currentViewport) currentViewport.scrollTop = previousTop + currentViewport.scrollHeight - previousHeight;
+        prependingHistoryRef.current = false;
       });
     } catch (cause) {
+      prependingHistoryRef.current = false;
       if (sessionIdRef.current === sessionId && historyGenerationRef.current === generation) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       if (olderRequestRef.current === request) olderRequestRef.current = null;
@@ -170,43 +195,61 @@ export function App() {
   useEffect(() => { void loadSessions(); void api.status().then(setRuntimeStatus); }, [loadSessions]);
   useEffect(() => {
     if (!sessionId) return;
-    const timer = setInterval(() => {
-      void Promise.all([api.inbox(sessionId), api.runs(sessionId), api.sessions()]).then(async ([queued, runHistory, sessionItems]) => {
+    const targetSessionId = sessionId;
+    let closed = false;
+    let polling = false;
+    const refresh = async () => {
+      if (closed || polling) return;
+      polling = true;
+      try {
+        const [queued, runHistory, sessionItems, page] = await Promise.all([
+          api.inbox(targetSessionId), api.runs(targetSessionId), api.sessions(), api.messagePage(targetSessionId, undefined, MESSAGE_PAGE_SIZE),
+        ]);
+        if (closed || sessionIdRef.current !== targetSessionId) return;
         setInbox(queued);
         setRuns(runHistory);
         setSessions(sessionItems);
+        setMessages((current) => mergeMessages(current, page.items));
+        setHasOlderMessages((current) => messagesRef.current.length ? current : page.hasMore);
         const active = runHistory.find((item) => item.status === "running") ?? null;
         if (active?.id && active.id !== activeRunIdRef.current) {
-          const [hydrated, page, view] = await Promise.all([api.run(active.id), api.messagePage(sessionId, undefined, MESSAGE_PAGE_SIZE), api.transcriptView(active.id)]);
-          if (sessionIdRef.current !== sessionId) return;
+          const [hydrated, view] = await Promise.all([api.run(active.id), api.transcriptView(active.id)]);
+          if (closed || sessionIdRef.current !== targetSessionId) return;
           setActiveRun(hydrated); setSelectedRun(hydrated); setExpandedRunId(hydrated.id);
-          setMessages((current) => mergeMessages(current, page.items)); setHasOlderMessages((current) => current || page.hasMore); setTranscript(view); setStreaming(hydrated.checkpoint?.active ? hydrated.checkpoint.assistantPartial : "");
+          setTranscript(view); setStreaming(hydrated.checkpoint?.active ? hydrated.checkpoint.assistantPartial : "");
           setEvents(hydrated.checkpoint?.active && hydrated.checkpoint.currentTool ? [{ runId: hydrated.id, seq: hydrated.checkpoint.lastEventSeq, type: "tool.started", data: hydrated.checkpoint.currentTool, createdAt: hydrated.checkpoint.updatedAt }] : []);
           setError("");
         } else if (!active && activeRunIdRef.current) {
           setActiveRun(null); setStreaming(""); setEvents([]);
-          await refreshLatestMessages(sessionId);
         } else if (active) {
           setActiveRun((current) => current?.id === active.id ? { ...current, ...active } : active);
         }
-      }).catch(() => undefined);
-    }, 2000);
-    return () => clearInterval(timer);
-  }, [sessionId, refreshLatestMessages]);
+      } catch {
+        // SSE remains authoritative while polling provides eventual UI recovery.
+      } finally { polling = false; }
+    };
+    const timer = setInterval(() => void refresh(), 2000);
+    return () => { closed = true; clearInterval(timer); };
+  }, [sessionId]);
   useEffect(() => {
     if (!sessionId) return;
-    historyGenerationRef.current += 1; olderRequestRef.current = null;
-    setMessages([]); setHasOlderMessages(false); setLoadingOlderMessages(false); setStreaming(""); setEvents([]); setError(""); setEditingInboxId(""); setInboxDraft(""); setDraggingInboxId("");
-    initialScrollPendingRef.current = true; stickToBottomRef.current = true;
-    void Promise.all([api.messagePage(sessionId, undefined, MESSAGE_PAGE_SIZE), api.runs(sessionId), api.inbox(sessionId)]).then(([page, runHistory, queued]) => {
-      if (sessionIdRef.current !== sessionId) return;
+    const targetSessionId = sessionId;
+    let closed = false;
+    historyGenerationRef.current += 1; olderRequestRef.current = null; prependingHistoryRef.current = false;
+    setMessages([]); setHasOlderMessages(false); setLoadingOlderMessages(false); setStreaming(""); setEvents([]); setError(""); setEditingInboxId(""); setInboxDraft(""); setDraggingInboxId(""); setPendingUserMessage(null);
+    autoScrollRef.current = true; forceScrollRef.current = true;
+    void Promise.all([api.messagePage(targetSessionId, undefined, MESSAGE_PAGE_SIZE), api.runs(targetSessionId), api.inbox(targetSessionId)]).then(async ([page, runHistory, queued]) => {
+      if (closed || sessionIdRef.current !== targetSessionId) return;
       const latest = runHistory[0] ?? null;
       const active = runHistory.find((item) => item.status === "running") ?? null;
       setMessages(page.items); setHasOlderMessages(page.hasMore); setRuns(runHistory); setInbox(queued); setActiveRun(active); setSelectedRun(latest); setExpandedRunId(latest?.id ?? "");
       setStreaming(active?.checkpoint?.active ? active.checkpoint.assistantPartial : "");
       setEvents(active?.checkpoint?.active && active.checkpoint.currentTool ? [{ runId: active.id, seq: active.checkpoint.lastEventSeq, type: "tool.started", data: active.checkpoint.currentTool, createdAt: active.checkpoint.updatedAt }] : []);
-      if (latest) void api.transcriptView(latest.id).then(setTranscript); else setTranscript([]);
-    });
+      if (!latest) { setTranscript([]); return; }
+      const view = await api.transcriptView(latest.id);
+      if (!closed && sessionIdRef.current === targetSessionId) setTranscript(view);
+    }).catch((cause) => { if (!closed && sessionIdRef.current === targetSessionId) setError(cause instanceof Error ? cause.message : String(cause)); });
+    return () => { closed = true; };
   }, [sessionId]);
 
   useEffect(() => {
@@ -226,19 +269,17 @@ export function App() {
       setEvents((current) => [...current.slice(-39), event]);
       if (event.type === "message.delta") setStreaming((current) => current + String(event.data.delta ?? ""));
       if (["run.completed", "run.blocked", "run.failed", "run.cancelled"].includes(event.type)) {
-        setStreaming("");
-        const updated = await api.run(runId);
-        const runHistory = await api.runs(sessionId);
+        const [updated, runHistory, page, queued, view, sessionItems] = await Promise.all([
+          api.run(runId), api.runs(sessionId), api.messagePage(sessionId, undefined, MESSAGE_PAGE_SIZE), api.inbox(sessionId), api.transcriptView(runId), api.sessions(),
+        ]);
+        if (closed || sessionIdRef.current !== sessionId) return;
         const nextActive = runHistory.find((item) => item.status === "running") ?? null;
-        setActiveRun(nextActive);
+        setStreaming(""); setActiveRun(nextActive);
         setSelectedRun((current) => current?.id === updated.id ? updated : current);
-        setRuns(runHistory);
-        await refreshLatestMessages(sessionId);
-        setInbox(await api.inbox(sessionId));
-        setTranscript(await api.transcriptView(updated.id));
-        await loadSessions();
+        setRuns(runHistory); setMessages((current) => mergeMessages(current, page.items)); setHasOlderMessages((current) => messagesRef.current.length ? current : page.hasMore); setInbox(queued); setTranscript(view); setSessions(sessionItems);
       } else if (event.type === "run.updated" || event.type.startsWith("tool.") || event.type.startsWith("continuation.") || event.type.startsWith("supervisor.")) {
         const updated = await api.run(runId);
+        if (closed || sessionIdRef.current !== sessionId) return;
         setActiveRun(updated);
         setSelectedRun((current) => current?.id === updated.id ? updated : current);
         setRuns((current) => current.map((item) => item.id === updated.id ? updated : item));
@@ -247,16 +288,24 @@ export function App() {
       }, () => undefined);
     }).catch((cause) => { if (!closed) setError(cause instanceof Error ? cause.message : String(cause)); });
     return () => { closed = true; unsubscribe(); };
-  }, [activeRun?.id, activeRun?.status, sessionId, loadSessions, refreshLatestMessages]);
+  }, [activeRun?.id, activeRun?.status, sessionId, loadSessions]);
 
   useEffect(() => {
-    const scroller = messageScrollRef.current;
-    if (!scroller) return;
-    if (initialScrollPendingRef.current) { initialScrollPendingRef.current = false; scroller.scrollTop = scroller.scrollHeight; return; }
-    if (stickToBottomRef.current) endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streaming, events]);
+    const viewport = messageScrollRef.current;
+    if (!viewport || prependingHistoryRef.current || (!autoScrollRef.current && !forceScrollRef.current)) return;
+    viewport.scrollTop = viewport.scrollHeight;
+    forceScrollRef.current = false;
+  }, [messages, pendingUserMessage, streaming, events]);
 
-  const activeTools = useMemo(() => events.filter((event) => event.type.startsWith("tool.")).slice(-8), [events]);
+  const handleMessageScroll = useCallback(() => {
+    const viewport = messageScrollRef.current;
+    if (!viewport) return;
+    autoScrollRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 96;
+    if (viewport.scrollTop < 160) void loadOlderMessages();
+  }, [loadOlderMessages]);
+
+  const activeTools = useMemo(() => events.filter((event) => event.type.startsWith("tool.")).slice(-20), [events]);
+  const transcriptTools = useMemo(() => transcript.filter((item): item is Extract<TranscriptItem, { kind: "tool" }> => item.kind === "tool"), [transcript]);
 
   async function createSession() {
     const session = await api.createSession(`Workspace ${sessions.length + 1}`);
@@ -286,18 +335,25 @@ export function App() {
 
   async function submit() {
     const content = draft.trim();
-    if (!content || !sessionId) return;
-    setDraft(""); setError(""); setNotice("");
+    const targetSessionId = sessionId;
+    if (!content || !targetSessionId || submitting) return;
+    const optimistic = { sessionId: targetSessionId, content, createdAt: Date.now() };
+    setSubmitting(true); setDraft(""); setError(""); setNotice(""); forceScrollRef.current = true;
     try {
-      const admission = await api.send(sessionId, content);
-      setInbox(await api.inbox(sessionId));
+      const admission = await api.send(targetSessionId, content);
+      if (sessionIdRef.current !== targetSessionId) return;
+      if (admission.run) setPendingUserMessage(optimistic);
+      const [queued, page] = await Promise.all([api.inbox(targetSessionId), api.messagePage(targetSessionId, undefined, MESSAGE_PAGE_SIZE)]);
+      if (sessionIdRef.current !== targetSessionId) return;
+      const persisted = page.items.some((message) => message.role === "user" && message.content === content && message.createdAt >= optimistic.createdAt - 5_000);
+      setInbox(queued); setMessages((current) => mergeMessages(current, page.items)); setHasOlderMessages((current) => messagesRef.current.length ? current : page.hasMore); setPendingUserMessage(persisted ? null : admission.run ? optimistic : null);
       if (admission.run) {
         const nextRun = admission.run;
-        await refreshLatestMessages(sessionId);
         setActiveRun(nextRun); setSelectedRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setStreaming("");
       }
-    }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    } catch (cause) {
+      if (sessionIdRef.current === targetSessionId) { setPendingUserMessage(null); setDraft(content); setError(cause instanceof Error ? cause.message : String(cause)); }
+    } finally { setSubmitting(false); }
   }
 
   async function saveInbox(item: SessionInboxItem) {
@@ -346,7 +402,8 @@ export function App() {
     try {
       const result = await api.startInbox(sessionId, item.id);
       const nextRun = result.run;
-      setInbox(await api.inbox(sessionId)); await refreshLatestMessages(sessionId); setActiveRun(nextRun); setSelectedRun(nextRun);
+      const [queued, page] = await Promise.all([api.inbox(sessionId), api.messagePage(sessionId, undefined, MESSAGE_PAGE_SIZE)]);
+      setInbox(queued); setMessages((current) => mergeMessages(current, page.items)); setHasOlderMessages((current) => messagesRef.current.length ? current : page.hasMore); setActiveRun(nextRun); setSelectedRun(nextRun);
       setRuns((current) => [nextRun, ...current.filter((run) => run.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setStreaming("");
       setNotice("Queued prompt started.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -392,26 +449,25 @@ export function App() {
         <div className="top-actions">{runtimeStatus?.memoryEnabled && <button className="memory-launch" onClick={() => setMemoryOpen(true)}><BrainCircuit size={16} /><span>Memory</span><i /></button>}{selectedRun && ["blocked", "interrupted"].includes(selectedRun.status) && !activeRun && <button className="resume-button" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}{selectedRun?.status === "failed" && selectedRun.launchRetryable && !activeRun && <button className="resume-button" onClick={() => void retryLaunch(selectedRun)} disabled={Boolean(retryingRunId)}><Play size={15} />{retryingRunId === selectedRun.id ? "Retrying…" : "Retry launch"}</button>}{activeRun?.status === "running" && <button className="icon-button danger" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={17} /></button>}<button className="icon-button mobile-only" onClick={() => setRightOpen(true)} aria-label="Open task panel"><PanelRight size={19} /></button></div>
       </header>
 
-      <section className="message-scroll" ref={messageScrollRef} onScroll={(event) => {
-        const scroller = event.currentTarget;
-        stickToBottomRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
-        if (scroller.scrollTop < 160) void loadOlderMessages();
-      }}>
+      <section className="message-scroll" ref={messageScrollRef} onScroll={handleMessageScroll}>
+        <div className="message-feed">
         {(hasOlderMessages || loadingOlderMessages) && <div className="message-history-loader" aria-live="polite">{loadingOlderMessages ? <><Activity size={14} />Loading earlier messages…</> : <button onClick={() => void loadOlderMessages()}>Load earlier messages</button>}</div>}
-        {!messages.length && !streaming && <div className="empty-state"><div className="empty-icon"><MessageSquarePlus size={25} /></div><h2>Start with an outcome</h2><p>TAgent will turn substantial work into a durable plan, execute tools, and hold completion behind checks.</p></div>}
+        {!messages.length && !streaming && pendingUserMessage?.sessionId !== sessionId && <div className="empty-state"><div className="empty-icon"><MessageSquarePlus size={25} /></div><h2>Start with an outcome</h2><p>TAgent will turn substantial work into a durable plan, execute tools, and hold completion behind checks.</p></div>}
         {messages.map((message) => <article key={message.id} className={`message ${message.role}`}><div className="message-meta"><span>{message.role === "user" ? "You" : "TAgent"}</span><time>{formatTime(message.createdAt)}</time></div><div className="message-body"><Markdown>{message.content}</Markdown></div></article>)}
-        {selectedRun && transcript.some((item) => item.kind === "tool") && <section className="transcript-tools"><div className="transcript-heading"><span>Tool calls</span><small>{transcript.filter((item) => item.kind === "tool").length}</small></div>{transcript.filter((item): item is Extract<TranscriptItem, { kind: "tool" }> => item.kind === "tool").map((item) => <ToolCall key={`${item.seq}-${item.index}`} item={item} />)}</section>}
+        {pendingUserMessage?.sessionId === sessionId && !messages.some((message) => message.role === "user" && message.content === pendingUserMessage.content && message.createdAt >= pendingUserMessage.createdAt - 5_000) && <article className="message user pending" aria-label="Sending message"><div className="message-meta"><span>You</span><time>Sending…</time></div><div className="message-body"><Markdown>{pendingUserMessage.content}</Markdown></div></article>}
+        {selectedRun && transcriptTools.length > 0 && <ToolHistory items={transcriptTools} />}
         {activeRun && <div className="active-run-strip"><Activity size={14} /><span>Attempt {activeRun.attempt}</span><strong>{activeRun.phase}</strong><small>{activeRun.usage.totalTokens.toLocaleString()} tokens</small></div>}
         {streaming && <article className="message assistant live"><div className="message-meta"><span>TAgent</span><span className="live-label"><span className="pulse" />Working</span></div><div className="message-body"><Markdown>{streaming}</Markdown></div></article>}
-        {activeTools.length > 0 && <div className="tool-stack">{activeTools.map((event) => <div className="tool-row" key={`${event.seq}-${event.type}`}><Terminal size={14} /><span>{String(event.data.toolName ?? "tool")}</span><small>{event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "done"}</small></div>)}</div>}
+        {activeTools.length > 0 && <LiveToolActivity events={activeTools} />}
         <div ref={endRef} />
+        </div>
       </section>
 
       <footer className="composer-wrap">
         {error && <div className="error-banner">{error}</div>}
         {notice && <div className="success-banner">{notice}</div>}
-        <div className="composer-mode"><span><Activity size={13} />Supervisor inbox</span><span>{activeRun ? "New input waits below while the current TaskRun finishes" : "Supervisor starts the next eligible item"}</span></div>
-        <div className="composer"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} placeholder="Add an outcome or instruction to the Supervisor queue" rows={1} /><button onClick={() => void submit()} disabled={!draft.trim()} aria-label="Add to Supervisor queue"><Send size={18} /></button></div>
+        <div className="composer-mode"><span><Activity size={13} />Supervisor inbox</span><span>{activeRun ? "New input is classified as steer, context, follow-up, parallel work, or a new TaskRun" : "Supervisor summarizes, prioritizes, and starts the next eligible contract"}</span></div>
+        <div className="composer"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} placeholder="Add a task, correction, constraint, context update, or follow-up" rows={1} /><button onClick={() => void submit()} disabled={!draft.trim() || submitting} aria-label="Add to Supervisor queue">{submitting ? <Activity className="spin" size={18} /> : <Send size={18} />}</button></div>
         {inbox.length > 0 && <section className="supervisor-inbox"><div className="inbox-heading"><span>Up next</span><small>{inbox.length} queued</small></div>{inbox.map((item, index) => <QueuePrompt key={item.id} item={item} index={index} editing={editingInboxId === item.id} draft={editingInboxId === item.id ? inboxDraft : item.content} busy={Boolean(startingInboxId || savingInboxId || reorderingInbox || mutatingInboxId)} starting={startingInboxId === item.id} dragging={draggingInboxId === item.id} canMoveUp={index > 0} canMoveDown={index < inbox.length - 1} onEdit={() => { setEditingInboxId(item.id); setInboxDraft(item.content); setError(""); setNotice(""); }} onDraftChange={setInboxDraft} onSave={() => void saveInbox(item)} onCancelEdit={() => { setEditingInboxId(""); setInboxDraft(""); }} onStart={() => void runInboxNow(item)} onToggleDefer={() => void mutateInbox(item.id, () => api.decideInbox(sessionId, item.id, item.decision === "defer" ? "pending" : "defer"))} onMergeFirst={() => void mutateInbox(item.id, () => api.mergeInbox(sessionId, item.id, inbox[0].id))} onDelete={() => void mutateInbox(item.id, () => api.deleteInbox(sessionId, item.id))} onMoveUp={() => void moveInbox(item.id, -1)} onMoveDown={() => void moveInbox(item.id, 1)} onDragStart={(event) => { setDraggingInboxId(item.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); }} onDragEnd={() => setDraggingInboxId("")} onDrop={(event) => { event.preventDefault(); void reorderInbox(item.id); }} />)}</section>}
       </footer>
     </main>
@@ -430,7 +486,7 @@ export function App() {
             <span className="history-copy"><strong>{item.goal}</strong><small>{item.status} · attempt {item.attempt}{item.budget ? ` · ${item.budget.tier}` : ""}</small></span>
             <time>{index === 0 && item.status === "running" ? "current" : formatTime(item.updatedAt ?? item.createdAt)}</time>
           </button>
-          {expanded && <RunDetails run={selectedRun?.id === item.id ? selectedRun : item} />}
+          {expanded && <RunDetails run={selectedRun?.id === item.id ? selectedRun : item} onRefresh={async () => { const refreshed = await api.run(item.id); setSelectedRun(refreshed); setRuns((current) => current.map((run) => run.id === refreshed.id ? refreshed : run)); }} />}
         </section>;
       })}</div>}
     </aside>

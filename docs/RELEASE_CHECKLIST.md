@@ -2,7 +2,7 @@
 
 ## Scope
 
-This checklist applies to source prereleases. TAgent Core is not published to npm in `0.1.0-alpha.1`; `private: true` is intentional.
+This checklist applies to source releases. TAgent Core is not published to npm in `0.1.x`; `private: true` is intentional.
 
 ## Before tagging
 
@@ -16,15 +16,17 @@ If long-term memory is included in the release, complete [MEMORY_RELEASE_CHECKLI
 6. Build the production archive with `scripts/build-release.sh` on Linux x64, Node `24.18.1` / ABI `137`, in an environment that has the compiler toolchain required by native dependencies. Do not install or compile dependencies on a production host; follow [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md).
 7. Run production and full dependency audits at high severity. Pi's upstream shrinkwrap issue is accepted for `main` development if it recurs, but stable release remains blocked until the lockfile audits cleanly.
 8. Start the built server with a temporary SQLite database and workspace; verify `/api/health`, `/api/config/status`, session creation, run history, and the Web shell.
-9. Verify desktop and mobile layouts, Markdown, and expanded tool-call content without horizontal overflow.
-10. Confirm no credentials, `.env` files, databases, logs, screenshots, or temporary artifacts are tracked.
+9. Verify desktop and mobile layouts, immediate optimistic message visibility, workspace-switch fencing, safe Markdown, collapsed/expanded tool activity, and no horizontal overflow.
+10. Submit representative opaque automation markers (`release-<digits>`, `ui-sync-<digits>`) and confirm HTTP 422 with no Message or TaskRun persistence; confirm a natural-language release request is still admitted.
+11. Confirm dynamic token tiers are guidance checkpoints, the configured hard ceiling remains enforced, and the Web labels checkpoint versus maximum correctly.
+12. Confirm no credentials, `.env` files, databases, logs, screenshots, or temporary artifacts are tracked.
 
 ## Tag and publish
 
 1. Create an annotated tag named `v<version>`.
 2. Push `main` and the tag.
-3. Let `.github/workflows/release.yml` rerun the release gate and create a prerelease using the matching changelog section.
-4. Verify the GitHub release points to the expected commit and is marked prerelease.
+3. Let `.github/workflows/release.yml` rerun the release gate and create a GitHub release using the matching changelog section.
+4. Verify the GitHub release points to the expected commit and has the intended stable/prerelease state.
 
 ## Rollback
 

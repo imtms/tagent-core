@@ -111,4 +111,16 @@ describe("workspace tools", () => {
     expect(events.at(-1)).toBe("run.updated:verify");
     store.close();
   });
+  it("lets the agent propose a derived TaskRun without launching it", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-"));
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "discover follow-up");
+    const taskRun = createTools(store, run.id, workspace).find((tool) => tool.name === "task_run")!;
+    await taskRun.execute("spawn", { action: "spawn_proposal", goal: "Deploy the verified build", acceptanceCriteria: ["Health check passes"], relation: "follow_up" }, undefined);
+    expect(store.listSpawnProposals(run.id)).toEqual([expect.objectContaining({ goal: "Deploy the verified build", status: "proposed", relation: "follow_up" })]);
+    expect(store.listRuns(session.id)).toHaveLength(1);
+    store.close();
+  });
+
 });

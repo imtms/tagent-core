@@ -17,9 +17,10 @@ describe("Web workbench state model", () => {
     expect(app).toContain("<Markdown>{message.content}</Markdown>");
     expect(app).toContain("<details className={`tool-call");
     expect(app).toContain("api.transcriptView");
-    expect(markdown).not.toContain("dangerouslySetInnerHTML");
-    expect(markdown).toContain("target=\"_blank\"");
-    expect(markdown).toContain("rel=\"noreferrer\"");
+    expect(markdown).toContain("html: false");
+    expect(markdown).toContain("dangerouslySetInnerHTML");
+    expect(markdown).toContain('tokens[index].attrSet("target", "_blank")');
+    expect(markdown).toContain('tokens[index].attrSet("rel", "noopener noreferrer")');
   });
 
   it("refreshes the active Run when structured task state changes", async () => {
@@ -59,21 +60,36 @@ describe("Web workbench state model", () => {
     expect(source).toContain('if (event.key === "Enter") { event.preventDefault(); void renameSession(session); }');
     expect(source).toContain('if (event.key === "Escape") { event.preventDefault(); cancelRename(); event.currentTarget.blur(); }');
   });
+  it("shows submitted messages optimistically and continuously reconciles persisted chat state", async () => {
+    const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain("const [pendingUserMessage, setPendingUserMessage]");
+    expect(source).toContain("setPendingUserMessage(optimistic)");
+    expect(source).toContain('aria-label="Sending message"');
+    expect(source).toContain("api.messagePage(targetSessionId, undefined, MESSAGE_PAGE_SIZE)");
+    expect(source).toContain("sessionIdRef.current !== targetSessionId");
+    expect(source).toContain("setDraft(content)");
+  });
 
 
-  it("loads conversation history in cursor pages and preserves the viewport when prepending", async () => {
+  it("loads conversation history in cursor pages without replacing the current scroll model", async () => {
     const app = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
     const api = await readFile(new URL("../web/src/api.ts", import.meta.url), "utf8");
+    const styles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
     expect(api).toContain("export interface MessagePage");
     expect(api).toContain("paged=1&limit=");
     expect(app).toContain("const MESSAGE_PAGE_SIZE = 40");
     expect(app).toContain("api.messagePage(sessionId, oldestId, MESSAGE_PAGE_SIZE)");
-    expect(app).toContain("currentScroller.scrollTop = previousTop + currentScroller.scrollHeight - previousHeight");
-    expect(app).toContain("if (scroller.scrollTop < 160) void loadOlderMessages()");
-    expect(app).not.toContain("useEffect(() => { endRef.current?.scrollIntoView");
+    expect(app).toContain("currentViewport.scrollTop = previousTop + currentViewport.scrollHeight - previousHeight");
+    expect(app).toContain("if (viewport.scrollTop < 160) void loadOlderMessages()");
+    expect(app).toContain("prependingHistoryRef.current || (!autoScrollRef.current && !forceScrollRef.current)");
+    expect(app).toContain("autoScrollRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 96");
+    expect(app).toContain("forceScrollRef.current = true");
+    expect(app).toContain('<div className="message-feed">');
+    expect(styles).toContain("overscroll-behavior: contain");
+    expect(styles).toContain("scrollbar-gutter: stable");
   });
 
-  it("fences concurrent and stale history page requests", async () => {
+  it("fences concurrent and stale history page requests and permits retry after failure", async () => {
     const app = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
     expect(app).toContain("olderRequestRef.current) return");
     expect(app).toContain("historyGenerationRef.current += 1; olderRequestRef.current = null");
@@ -81,6 +97,6 @@ describe("Web workbench state model", () => {
     expect(app).toContain("if (olderRequestRef.current === request) olderRequestRef.current = null");
     expect(app).toContain("setMessages((current) => mergeMessages(current, page.items))");
     expect(app).toContain("setLoadingOlderMessages(false)");
-
   });
+
 });

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Store } from "../src/store/store.js";
 
 const stores: Store[] = [];
+const analysis = (summary: string, priority = 500) => ({ summary, intent: "new_task" as const, targetRunId: null, priority, urgency: "normal" as const, relation: "independent" as const, acceptanceCriteria: [`Complete ${summary}`], scope: summary, nonGoals: [], confidence: 1, reason: "test", routerVersion: "test" });
 const createStore = () => {
   const store = new Store(":memory:");
   stores.push(store);
@@ -47,10 +48,10 @@ describe("Store", () => {
   it("persists, deduplicates, deletes, and atomically claims Session Supervisor inbox items", () => {
     const store = createStore();
     const session = store.createSession();
-    const first = store.enqueueSessionInbox(session.id, "first", "request-1");
-    expect(store.enqueueSessionInbox(session.id, "duplicate body", "request-1").id).toBe(first.id);
-    const second = store.enqueueSessionInbox(session.id, "second", "request-2");
-    const third = store.enqueueSessionInbox(session.id, "third", "request-3");
+    const first = store.enqueueSessionInbox(session.id, "first", analysis("first"), "request-1");
+    expect(store.enqueueSessionInbox(session.id, "duplicate body", analysis("duplicate body"), "request-1").id).toBe(first.id);
+    const second = store.enqueueSessionInbox(session.id, "second", analysis("second"), "request-2");
+    const third = store.enqueueSessionInbox(session.id, "third", analysis("third"), "request-3");
     expect(store.deleteSessionInboxItem(second.id, session.id)).toBe(true);
     expect(store.deleteSessionInboxItem(second.id, session.id)).toBe(false);
     const claimed = store.claimNextSessionInbox(session.id)!;
@@ -61,18 +62,45 @@ describe("Store", () => {
     expect(store.claimNextSessionInbox(session.id)?.item.id).toBe(third.id);
   });
 
+  it("prioritizes analyzed inbox work and persists a TaskRun contract", () => {
+    const store = createStore(); const session = store.createSession();
+    const low = store.enqueueSessionInbox(session.id, "low work", analysis("Concise low goal", 100), "priority-low");
+    const urgentAnalysis = { ...analysis("Critical correction", 950), urgency: "critical" as const, acceptanceCriteria: ["Do the critical work", "Verify it"] };
+    const high = store.enqueueSessionInbox(session.id, "long raw critical input that should not become the goal", urgentAnalysis, "priority-high");
+    expect(store.listSessionInbox(session.id).map((item) => item.id)).toEqual([high.id, low.id]);
+    const claimed = store.claimNextSessionInbox(session.id)!;
+    expect(claimed.item.id).toBe(high.id);
+    expect(claimed.run.goal).toBe("Critical correction");
+    expect(claimed.run.contract).toMatchObject({ sourceInput: "long raw critical input that should not become the goal", summary: "Critical correction", acceptanceCriteria: ["Do the critical work", "Verify it"], sourceInboxIds: [high.id] });
+  });
+
+  it("deduplicates equivalent pending analyzed work", () => {
+    const store = createStore(); const session = store.createSession();
+    const first = store.enqueueSessionInbox(session.id, "first wording", analysis("same canonical goal"), "dedupe-1");
+    expect(store.findMergeCandidate(session.id, analysis("Same canonical goal"))?.id).toBe(first.id);
+  });
+
+  it("keeps a durable receipt when equivalent pending work is merged", () => {
+    const store = createStore(); const session = store.createSession();
+    const first = store.enqueueSessionInbox(session.id, "first wording", analysis("same canonical goal"), "dedupe-receipt-1");
+    const source = store.enqueueSessionInbox(session.id, "second wording", analysis("same canonical goal"), "dedupe-receipt-2");
+    expect(store.markSessionInboxDuplicate(source.id, first.id, session.id)).toMatchObject({ id: source.id, requestId: "dedupe-receipt-2", status: "deleted", decision: "merge", error: `Duplicate of ${first.id}` });
+    expect(store.getSessionSubmission(session.id, "dedupe-receipt-2")?.id).toBe(source.id);
+  });
+
   it("edits and reorders only queued Session inbox items", () => {
     const store = createStore();
     const session = store.createSession();
-    const first = store.enqueueSessionInbox(session.id, "first", "edit-first");
-    const second = store.enqueueSessionInbox(session.id, "second", "edit-second");
-    const third = store.enqueueSessionInbox(session.id, "third", "edit-third");
+    const first = store.enqueueSessionInbox(session.id, "first", analysis("first"), "edit-first");
+    const second = store.enqueueSessionInbox(session.id, "second", analysis("second"), "edit-second");
+    const third = store.enqueueSessionInbox(session.id, "third", analysis("third"), "edit-third");
 
     expect(store.updateSessionInboxItem(second.id, session.id, "  changed second  ")).toMatchObject({ content: "changed second" });
     expect(store.updateSessionInboxItem(second.id, session.id, " ")).toBeUndefined();
     expect(store.reorderSessionInbox(session.id, [third.id, first.id, second.id])?.map((item) => [item.id, item.position])).toEqual([
       [third.id, 1], [first.id, 2], [second.id, 3],
     ]);
+    expect(store.listSessionInbox(session.id).map((item) => item.id)).toEqual([third.id, first.id, second.id]);
     expect(store.reorderSessionInbox(session.id, [first.id, second.id])).toBeUndefined();
 
     expect(store.claimSessionInboxNow(third.id, session.id).status).toBe("started");
@@ -84,8 +112,8 @@ describe("Store", () => {
     const session = store.createSession();
     const blocked = store.createRun(session.id, "blocked task");
     store.blockRun(blocked.id, "waiting for review");
-    const first = store.enqueueSessionInbox(session.id, "first", "manual-first");
-    const second = store.enqueueSessionInbox(session.id, "second", "manual-second");
+    const first = store.enqueueSessionInbox(session.id, "first", analysis("first"), "manual-first");
+    const second = store.enqueueSessionInbox(session.id, "second", analysis("second"), "manual-second");
 
     expect(store.claimNextSessionInbox(session.id)).toBeUndefined();
     const started = store.claimSessionInboxNow(second.id, session.id);
@@ -97,7 +125,7 @@ describe("Store", () => {
   it("rejects manual Session inbox start while another Run or continuation is active", () => {
     const store = createStore();
     const session = store.createSession();
-    const queued = store.enqueueSessionInbox(session.id, "queued", "manual-conflict");
+    const queued = store.enqueueSessionInbox(session.id, "queued", analysis("queued"), "manual-conflict");
     const running = store.createRun(session.id, "running");
     expect(store.claimSessionInboxNow(queued.id, session.id)).toEqual({ status: "running", runId: running.id });
     store.finalizeRun(running.id, "completed");
@@ -114,7 +142,7 @@ describe("Store", () => {
       const session = store.createSession();
       const previous = store.createRun(session.id, status);
       store.finalizeRun(previous.id, status);
-      const queued = store.enqueueSessionInbox(session.id, `after ${status}`, `after-${status}`);
+      const queued = store.enqueueSessionInbox(session.id, `after ${status}`, analysis(`after ${status}`), `after-${status}`);
       expect(store.claimNextSessionInbox(session.id)?.item.id).toBe(queued.id);
     }
   });
@@ -126,7 +154,7 @@ describe("Store", () => {
     const session = firstStore.createSession();
     const blocked = firstStore.createRun(session.id, "blocked");
     firstStore.blockRun(blocked.id, "gate");
-    const queued = firstStore.enqueueSessionInbox(session.id, "manual", "manual-race");
+    const queued = firstStore.enqueueSessionInbox(session.id, "manual", analysis("manual"), "manual-race");
     const claims = await Promise.all([
       Promise.resolve().then(() => firstStore.claimSessionInboxNow(queued.id, session.id)),
       Promise.resolve().then(() => secondStore.claimSessionInboxNow(queued.id, session.id)),
@@ -149,7 +177,7 @@ describe("Store", () => {
     store.blockRun(blocked.id, "gate");
     store.queueContinuation(blocked.id, "gate");
     store.db.prepare("UPDATE run_continuations SET status = 'cancelled' WHERE run_id = ?").run(blocked.id);
-    const queued = store.enqueueSessionInbox(session.id, "manual", "manual-fence");
+    const queued = store.enqueueSessionInbox(session.id, "manual", analysis("manual"), "manual-fence");
     expect(store.claimSessionInboxNow(queued.id, session.id).status).toBe("started");
     const continuation = store.queueContinuation(blocked.id, "new gate");
     expect(store.claimContinuation(blocked.id, "owner", 30_000)).toBeUndefined();
@@ -161,8 +189,8 @@ describe("Store", () => {
     const firstStore = new Store(filename); const secondStore = new Store(filename);
     stores.push(firstStore, secondStore);
     const session = firstStore.createSession();
-    firstStore.enqueueSessionInbox(session.id, "one", "claim-one");
-    firstStore.enqueueSessionInbox(session.id, "two", "claim-two");
+    firstStore.enqueueSessionInbox(session.id, "one", analysis("one"), "claim-one");
+    firstStore.enqueueSessionInbox(session.id, "two", analysis("two"), "claim-two");
     const first = firstStore.claimNextSessionInbox(session.id);
     const second = secondStore.claimNextSessionInbox(session.id);
     expect([first, second].filter(Boolean)).toHaveLength(1);
@@ -177,7 +205,7 @@ describe("Store", () => {
     store.blockRun(older.id, "waiting for review");
     const successful = store.createRun(session.id, "newer successful work");
     store.finalizeRun(successful.id, "completed");
-    const queued = store.enqueueSessionInbox(session.id, "next task", "after-latest-success");
+    const queued = store.enqueueSessionInbox(session.id, "next task", analysis("next task"), "after-latest-success");
 
     expect(store.claimNextSessionInbox(session.id)?.item.id).toBe(queued.id);
     expect(store.getRun(older.id)).toMatchObject({ status: "blocked", blockedReason: "waiting for review" });
@@ -188,7 +216,7 @@ describe("Store", () => {
     const firstStore = new Store(filename); const secondStore = new Store(filename);
     stores.push(firstStore, secondStore);
     const session = firstStore.createSession();
-    const item = firstStore.enqueueSessionInbox(session.id, "retry me", "retry-me");
+    const item = firstStore.enqueueSessionInbox(session.id, "retry me", analysis("retry me"), "retry-me");
     const claimed = firstStore.claimNextSessionInbox(session.id)!;
     firstStore.recordSessionInboxLaunchFailure(item.id, claimed.run.id, "temporary initialization failure");
     firstStore.transitionRun(claimed.run.id, ["running"], "failed", "run.failed", { error: "temporary initialization failure", reason: "runtime_initialization_failed", stage: "runtime_initialize", retryable: true, inboxItemId: item.id }, "temporary initialization failure", 1);
@@ -205,7 +233,7 @@ describe("Store", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-launch-retry-restart-")), "store.db");
     const firstStore = new Store(filename);
     const session = firstStore.createSession();
-    const item = firstStore.enqueueSessionInbox(session.id, "retry across restart", "retry-restart");
+    const item = firstStore.enqueueSessionInbox(session.id, "retry across restart", analysis("retry across restart"), "retry-restart");
     const claimed = firstStore.claimNextSessionInbox(session.id)!;
     firstStore.recordSessionInboxLaunchFailure(item.id, claimed.run.id, "init failed");
     firstStore.transitionRun(claimed.run.id, ["running"], "failed", "run.failed", { reason: "runtime_initialization_failed", retryable: true }, "init failed", 1);
@@ -222,7 +250,7 @@ describe("Store", () => {
   it("rejects launch retry while another TaskRun or continuation can execute", () => {
     const store = createStore();
     const session = store.createSession();
-    const item = store.enqueueSessionInbox(session.id, "retry me", "retry-conflict");
+    const item = store.enqueueSessionInbox(session.id, "retry me", analysis("retry me"), "retry-conflict");
     const claimed = store.claimNextSessionInbox(session.id)!;
     store.recordSessionInboxLaunchFailure(item.id, claimed.run.id, "init failed");
     store.transitionRun(claimed.run.id, ["running"], "failed", "run.failed", { reason: "runtime_initialization_failed", retryable: true }, "init failed", 1);
@@ -237,7 +265,7 @@ describe("Store", () => {
   it("does not mark ordinary execution failures as launch-retryable", () => {
     const store = createStore();
     const session = store.createSession();
-    const item = store.enqueueSessionInbox(session.id, "ordinary failure", "ordinary-failure");
+    const item = store.enqueueSessionInbox(session.id, "ordinary failure", analysis("ordinary failure"), "ordinary-failure");
     const claimed = store.claimNextSessionInbox(session.id)!;
     store.transitionRun(claimed.run.id, ["running"], "failed", "run.failed", { error: "tool failed" }, "tool failed", 1);
     expect(store.getRun(claimed.run.id)?.launchRetryable).toBe(false);
@@ -248,13 +276,13 @@ describe("Store", () => {
   it("defers queued items and merges related input before TaskRun creation", () => {
     const store = createStore();
     const session = store.createSession();
-    const first = store.enqueueSessionInbox(session.id, "primary", "merge-1");
-    const second = store.enqueueSessionInbox(session.id, "detail", "merge-2");
+    const first = store.enqueueSessionInbox(session.id, "primary", analysis("primary"), "merge-1");
+    const second = store.enqueueSessionInbox(session.id, "detail", analysis("detail"), "merge-2");
     expect(store.decideSessionInboxItem(first.id, session.id, "defer")).toBe(true);
     expect(store.claimNextSessionInbox(session.id)?.item.id).toBe(second.id);
     store.finalizeRun(store.getActiveRun(session.id)!.id, "completed");
     expect(store.decideSessionInboxItem(first.id, session.id, "pending")).toBe(true);
-    const third = store.enqueueSessionInbox(session.id, "extra", "merge-3");
+    const third = store.enqueueSessionInbox(session.id, "extra", analysis("extra"), "merge-3");
     expect(store.mergeSessionInboxItems(third.id, first.id, session.id)).toBe(true);
     expect(store.getSessionInboxItem(first.id)?.content).toContain("Additional queued instruction:\nextra");
     expect(store.getSessionInboxItem(third.id)).toMatchObject({ status: "deleted", decision: "merge" });
@@ -264,7 +292,7 @@ describe("Store", () => {
     const store = createStore();
     const session = store.createSession();
     store.appendMessage(session.id, "assistant", "history");
-    store.enqueueSessionInbox(session.id, "future task", "future");
+    store.enqueueSessionInbox(session.id, "future task", analysis("future task"), "future");
     expect(store.listMessages(session.id).map((item) => item.content)).toEqual(["history"]);
   });
 
@@ -536,16 +564,16 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(9);
+    expect(store.getSchemaVersion()).toBe(10);
   });
 
-  it("migrates an older database to schema version 9", () => {
+  it("migrates an older database to schema version 10", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(9);
+    expect(migrated.getSchemaVersion()).toBe(10);
     expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('control_inbox','event_consumers','gate_evaluations','operations','progress_snapshots','run_checkpoints','session_supervisor_inbox','spawn_proposals','supervisor_decisions','taskrun_edges','tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["control_inbox", "event_consumers", "gate_evaluations", "operations", "progress_snapshots", "run_checkpoints", "session_supervisor_inbox", "spawn_proposals", "supervisor_decisions", "taskrun_edges", "tool_attempts"]);
     migrated.close();
   });
@@ -730,4 +758,15 @@ describe("Store", () => {
     store.upsertCheck(run.id, { key: "test", title: "Tests", status: "passed", required: true, command: "npm test", evidence: "old", stale: true });
     expect(store.getRun(run.id)?.completionGate.failures[0]?.reason).toBe("Evidence is stale");
   });
+  it("returns the newest message window in chronological order", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    for (let index = 1; index <= 205; index += 1) store.appendMessage(session.id, "user", `message-${index}`);
+    const messages = store.listMessages(session.id, 200);
+    expect(messages).toHaveLength(200);
+    expect(messages[0].content).toBe("message-6");
+    expect(messages.at(-1)?.content).toBe("message-205");
+    store.close();
+  });
+
 });

@@ -1,13 +1,15 @@
 import { createRequestId } from "./id";
 
 export interface Session { id: string; title: string; createdAt: number; updatedAt: number; latestRunStatus: string | null; latestRunPhase: string | null }
-export interface SessionInboxItem { id: string; sessionId: string; requestId: string; content: string; status: "queued" | "claimed" | "started" | "deleted" | "failed"; decision: "pending" | "start_taskrun" | "defer" | "merge" | "delete"; runId: string | null; error: string; position: number; createdAt: number; updatedAt: number; claimedAt: number | null; startedAt: number | null }
+export interface SessionInputAnalysis { summary: string; intent: "steer_active" | "follow_up_active" | "update_active_context" | "new_task" | "parallel_task" | "merge_candidate" | "discussion" | "clarification" | "defer"; targetRunId: string | null; priority: number; urgency: "low" | "normal" | "high" | "critical"; relation: "same_goal" | "correction" | "constraint" | "follow_up" | "parallel" | "independent"; acceptanceCriteria: string[]; scope: string; nonGoals: string[]; confidence: number; reason: string; routerVersion: string }
+export interface TaskRunContract { sourceInput: string; summary: string; acceptanceCriteria: string[]; scope: string; nonGoals: string[]; sourceInboxIds: string[]; parentRunId: string | null; relation: SessionInputAnalysis["relation"]; intent: SessionInputAnalysis["intent"]; decisionReason: string; routerVersion: string }
+export interface SessionInboxItem { id: string; sessionId: string; requestId: string; content: string; status: "queued" | "claimed" | "started" | "routed" | "deleted" | "failed"; decision: "pending" | "start_taskrun" | "steer" | "follow_up" | "spawn_proposal" | "discussion" | "defer" | "merge" | "delete"; runId: string | null; error: string; position: number; createdAt: number; updatedAt: number; claimedAt: number | null; startedAt: number | null; analysis: SessionInputAnalysis; manualOrder: boolean }
 export interface Message { id: number; sessionId: string; role: "user" | "assistant" | "tool"; content: string; createdAt: number }
 export interface MessagePage { items: Message[]; hasMore: boolean; nextBeforeId: number | null }
 export interface PlanItem { key: string; title: string; status: string; required: boolean; position: number }
 export interface RunCheck { key: string; title: string; status: string; required: boolean; command: string; evidence: string; stale: boolean }
 export interface TaskRun {
-  id: string; sessionId: string; requestId: string; status: string; phase: string; goal: string;
+  id: string; sessionId: string; requestId: string; status: string; phase: string; goal: string; contract: TaskRunContract | null;
   blockedReason: string; lastEventSeq: number; attempt: number; resumedAt: number | null; createdAt: number; updatedAt: number; completedAt: number | null;
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number };
   transcriptCount: number;
@@ -15,14 +17,14 @@ export interface TaskRun {
   continuations: Array<{ id: string; ordinal: number; status: string; reason: string; error: string; createdAt: number; startedAt: number | null; completedAt: number | null; leaseOwner: string; leaseUntil: number | null; heartbeatAt: number | null }>;
   plan: PlanItem[]; checks: RunCheck[];
   artifacts: Array<{ id: string; title: string; kind: string; uri: string }>;
-  budget?: { tier: string; maxContinuations: number; maxTokens: number; runTimeoutMs: number };
+  budget?: { tier: string; softTokens?: number; maxContinuations: number; maxTokens: number; runTimeoutMs: number };
   completionGate: { passed: boolean; failures: Array<{ kind: string; key: string; reason: string }> };
   launchRetryable: boolean;
   supervision: {
     latestDecision: { id: string; action: string; reasonCode: string; rationale: string; status: string; attempt: number; checkpointSeq: number } | null;
     latestGates: Array<{ id: string; gateType: string; passed: boolean; failures: Array<{ kind: string; key: string; reason: string; disposition: string }> }>;
     progress: { meaningfulChanges: number; consecutiveFailures: number; checkpointSeq: number; lastProgressAt: number } | null;
-    spawnProposals: Array<{ id: string; goal: string; relation: string; status: string }>;
+    spawnProposals: Array<{ id: string; goal: string; relation: string; status: "proposed" | "approved" | "spawned" | "rejected"; acceptanceCriteria?: string[] }>;
   };
 }
 export interface EventConsumerCursor { runId: string; consumerId: string; generation: number; ackedSeq: number; terminalAckedSeq: number | null; claimedAt: number; updatedAt: number }
@@ -49,9 +51,11 @@ export interface MemoryCard { id: string; kind: MemoryKind; tier: MemoryTier; ti
 export interface RecallResult { cards: MemoryCard[]; coldTopics: ColdTopic[]; trace: { topicIds: string[]; candidateCount: number; deniedCount: number } }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  if (init?.body != null && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  const response = await fetch(url, { ...init, headers });
+  const needsRunControlRequestId = init?.method === "POST" && init.body == null && /^\/api\/runs\/[^/]+\/(cancel|resume)$/.test(url);
+  const requestInit = needsRunControlRequestId ? { ...init, body: JSON.stringify({ requestId: createRequestId() }) } : init;
+  const headers = new Headers(requestInit?.headers);
+  if (requestInit?.body != null && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const response = await fetch(url, { ...requestInit, headers });
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
     throw new Error(`TAgent API protocol mismatch at ${url}: expected JSON but received ${contentType || "an unknown content type"}. The server may need to be restarted after an upgrade.`);
@@ -83,6 +87,9 @@ export const api = {
   cancel: (runId: string) => request(`/api/runs/${runId}/cancel`, { method: "POST" }),
   steer: (runId: string, content: string) => request(`/api/runs/${runId}/steer`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId() }) }),
   resume: (runId: string) => request<TaskRun>(`/api/runs/${runId}/resume`, { method: "POST" }),
+  approveSpawn: (proposalId: string) => request<{ ok: true }>(`/api/spawn-proposals/${proposalId}/approve`, { method: "POST" }),
+  rejectSpawn: (proposalId: string) => request<{ ok: true }>(`/api/spawn-proposals/${proposalId}/reject`, { method: "POST" }),
+  spawnProposal: (proposalId: string) => request<TaskRun>(`/api/spawn-proposals/${proposalId}/spawn`, { method: "POST" }),
   retryLaunch: (runId: string) => request<{ status: "started"; item: SessionInboxItem; run: TaskRun }>(`/api/runs/${runId}/retry-launch`, { method: "POST" }),
   claimConsumer: (runId: string, consumerId: string) => request<EventConsumerCursor>(`/api/runs/${runId}/consumers/${encodeURIComponent(consumerId)}/claim`, { method: "POST" }),
   ackConsumer: (runId: string, consumerId: string, generation: number, seq: number) => request(`/api/runs/${runId}/consumers/${encodeURIComponent(consumerId)}/ack`, { method: "POST", body: JSON.stringify({ generation, seq }) }),

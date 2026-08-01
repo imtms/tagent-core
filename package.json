@@ -1,6 +1,6 @@
 {
   "name": "tagent-core",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.4",
   "private": true,
   "description": "A persistent TAgent control plane built around the pi coding-agent SDK.",
   "type": "module",
@@ -31,7 +31,9 @@
     "@fastify/cors": "^11.3.0",
     "better-sqlite3": "12.4.1",
     "fastify": "^5.10.0",
+    "highlight.js": "^11.11.1",
     "lucide-react": "0.553.0",
+    "markdown-it": "^14.3.0",
     "pg": "^8.22.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
@@ -44,6 +46,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/better-sqlite3": "7.6.13",
+    "@types/markdown-it": "^14.1.2",
     "@types/node": "24.10.1",
     "@types/pg": "^8.20.0",
     "@types/react": "19.2.2",
@@ -64,5 +67,15 @@
     "esbuild@0.28.1": true,
     "protobufjs@7.6.5": true,
     "@google/genai": false
+  },
+  "license": "MIT",
+  "author": "TMs (design), with AI-assisted development",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imtms/tagent-core.git"
+  },
+  "homepage": "https://github.com/imtms/tagent-core#readme",
+  "bugs": {
+    "url": "https://github.com/imtms/tagent-core/issues"
   }
 }

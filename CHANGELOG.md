@@ -1,8 +1,102 @@
+## [Unreleased]
+### Memory correctness and scale
+
+- separated raw capture source from extracted record evidence;
+- removed fixture-specific entities from production quality routing and added configurable domain ontology plus canonical SPO normalization;
+- added Ranking v2, MMR diversity, validity/current-state/trust scoring and Recall Trace v2;
+- added `memory_record_get`, record provenance API and Memory readiness;
+- added content-hash incremental embedding reindex and generation garbage collection.
+
+
+### Supervisor
+
+- Reclassify edited Inbox items and structurally merge summaries, scopes, acceptance criteria, urgency, and priority.
+- Persist explicit postponement as deferred work and distinguish lightweight discussion from clarification.
+- Classify attempt-terminal failures into transient continuation, user-input block, approval pause, or non-transient block.
+- Emit `request_evidence` for evidence-only completion failures and `pause_for_approval` for blocked approval requirements.
+- Allow Agents to propose derived TaskRuns through the durable `task_run` tool.
+- Require an explicit proposed -> approved -> spawned transition, with Web approval, rejection, and start controls.
+
 # Changelog
 
 All notable changes to TAgent Core are documented here.
 
 ## Unreleased
+
+### Supervisor orchestration
+
+- Add a conservative Session Input Router that summarizes and classifies input as active-run steer/context, follow-up, parallel spawn proposal, discussion, or independent work.
+- Persist priority, urgency, target Run, relation, confidence, routing rationale, acceptance criteria, and router version with every Inbox item.
+- Generate durable TaskRun contracts instead of copying the entire original prompt into `runs.goal`.
+- Prioritize eligible work by manual override, urgency, priority, and age; deduplicate equivalent pending summaries.
+- Route high-confidence corrections and parameters into the active Pi control queue and convert explicit parallel work into a gated Spawn Proposal.
+- Show Supervisor summaries, classifications, target Runs, confidence, reasons, and TaskRun acceptance criteria in the Web UI.
+
+
+## [0.1.4] - 2026-08-01
+
+### Run budget elasticity
+
+- Treat complexity-tier token allowances as soft guidance checkpoints instead of premature termination ceilings.
+- Keep `TAGENT_MAX_RUN_TOKENS` as the single cumulative hard token ceiling, raise its default from 2,000,000 to 8,000,000 tokens, and steer active agents to compact and finish when crossing a soft checkpoint.
+
+### Run admission and budget safety
+
+- Reject opaque `release-*`, `ui-sync-*`, and `final-ui-sync-*` synchronization markers as non-actionable prompts instead of starting autonomous TaskRuns.
+- Freeze dynamic Run budget classification to immutable admission data so agent-created plans/checks cannot raise their own token ceiling.
+- Enforce the cumulative token ceiling during active runtime execution and abort immediately when usage crosses the limit, rather than checking only before an automatic continuation.
+
+### Memory correctness and safety
+
+- Reject TaskRun wrappers, verification logs, artifact publication metadata, file paths/sizes, one-off questions, and malformed Chinese-negation proposals before durable persistence or embedding.
+- Stop automatic TaskRun Check/Artifact outcome capture; verified operational evidence remains in TaskRun records instead of default long-term semantic memory.
+- Route direct company reporting relationships into one canonical `knowledge.company-org-structure` Topic and apply semantic fingerprints when merging repeated facts.
+- Add intent/domain routing, lexical/vector/topic relevance thresholds, empty-result recall, identity isolation, semantic deduplication, contradiction suppression, and organization-path pruning.
+- Add reversible quarantine SQL with a dry-run report and audit snapshots for existing dirty records.
+
+## [0.1.3] - 2026-08-01
+
+### Changed
+
+- Replace the hand-written Markdown renderer with `markdown-it` and a bounded `highlight.js` language set.
+- Add tables, nested lists, fenced code highlighting, copy controls, safe external links/images, raw-HTML suppression, CJK URL handling, and responsive overflow containment.
+
+### Fixed
+
+- Persist accepted user turns before asynchronous memory recall and runtime setup so newly submitted messages are immediately durable and visible.
+- Add optimistic chat rendering with duplicate reconciliation, failed-submit draft restoration, and submission locking.
+- Continuously reconcile persisted messages while a Run is active so SSE gaps or delayed startup cannot leave the conversation stale.
+- Fence Session polling and asynchronous transcript updates against workspace switches to prevent responses from an old workspace overwriting the current UI.
+- Return the newest 200 persisted messages in chronological order instead of permanently hiding messages after the first 200 in long conversations.
+- Refresh terminal Run state atomically and guard late event responses against cross-workspace state corruption.
+
+## [0.1.2] - 2026-08-01
+
+### Changed
+
+- Stabilized the mobile viewport with dynamic viewport sizing, contained scrolling, and non-animated pinned-to-bottom updates.
+- Grouped completed and live tool activity into compact, collapsed summaries so tool-heavy runs no longer dominate the conversation.
+- Added clear visual cards and separators for assistant responses, with tighter responsive spacing on phones.
+- Capped the composer/inbox area and improved mobile safe-area behavior to keep the chat viewport stable while typing.
+
+## [0.1.1] - 2026-08-01
+
+### Security and reliability
+
+> Version `0.1.1` was an internal version increment whose changes shipped in the tagged `v0.1.2` release; no `v0.1.1` tag was published.
+
+- Classify memory evidence as `user_explicit`, `user_context_summary`, `tool_verified_fact`, `task_outcome`, or `assistant_inference`, with trust, source-role, and verification metadata.
+- Stop parsing assistant prose as durable memory; at this stage task outcomes were restricted to passed Check evidence and published Artifacts. Automatic TaskRun outcome capture is removed entirely in `0.1.4`.
+- Restore context-prune deposition through a role-aware user-only durable summary path instead of capturing mixed user/assistant history.
+- Enforce one hard token budget across Hot/Warm cards and complete Cold Topic pages.
+- Add capture-job lease heartbeat, owner token, monotonic fencing token, and CAS complete/fail operations.
+- Require PostgreSQL 17, pgvector, and pg_trgm integration tests in CI and release workflows.
+
+## [0.1.0] - 2026-08-01
+
+First stable source release for the documented trusted single-service deployment profile.
+
+### Added and changed
 
 - Add optional Hot/Warm/Cold long-term memory behind `TAGENT_MEMORY_ENABLED`, preserving the original SQLite-only behavior when disabled.
 - Add PostgreSQL/pgvector/pg_trgm storage, Fact/Preference separation, bounded entity graph routing, durable capture jobs, and immutable Local Cold Markdown Topic revisions.
@@ -21,7 +115,6 @@ All notable changes to TAgent Core are documented here.
 - Add Schema v5 durable event-consumer cursors with monotonic ACKs, terminal delivery evidence, and generation fencing for stale Web/SSE connections.
 - Close the subscribe-after-replay race by buffering live events while the persisted event backlog is replayed.
 
-## [Unreleased]
 
 ### Changed
 
@@ -59,3 +152,11 @@ First public source preview of the persistent TAgent control plane.
 - Runtime checkpoints, semantic context summaries, consumer ACKs, and expiry-aware continuation takeover remain future work.
 
 [0.1.0-alpha.1]: https://github.com/imtms/tagent-core/releases/tag/v0.1.0-alpha.1
+
+[0.1.0]: https://github.com/imtms/tagent-core/releases/tag/v0.1.0
+
+[0.1.2]: https://github.com/imtms/tagent-core/releases/tag/v0.1.2
+
+[0.1.3]: https://github.com/imtms/tagent-core/releases/tag/v0.1.3
+
+[0.1.4]: https://github.com/imtms/tagent-core/releases/tag/v0.1.4
