@@ -80,7 +80,7 @@ export class ContextAssembler {
 
   private prepareHistoricalTurn(turn: Turn, isLatest: boolean): Turn {
     if (isLatest) return turn;
-    const limit = this.options.historicalToolResultChars ?? 20_000;
+    const limit = this.options.historicalToolResultChars ?? 8_000;
     return {
       compressed: turn.compressed,
       entries: turn.entries.map((entry) => ({ ...entry, message: truncateToolContent(entry.message, limit) })),
@@ -126,11 +126,17 @@ function truncateToolContent(message: AgentMessage, limit: number): AgentMessage
   if (!("content" in message) || typeof message.content === "string") return message;
   let changed = false;
   const content = message.content.map((part) => {
-    if (part.type !== "toolCall") return part;
-    const argumentsJson = JSON.stringify(part.arguments);
-    if (argumentsJson.length <= limit) return part;
-    changed = true;
-    return { ...part, arguments: { truncated: `${argumentsJson.slice(0, limit)}\n[Historical tool arguments truncated: ${argumentsJson.length} chars]` } };
+    if (part.type === "toolCall") {
+      const argumentsJson = JSON.stringify(part.arguments);
+      if (argumentsJson.length <= limit) return part;
+      changed = true;
+      return { ...part, arguments: { truncated: `${argumentsJson.slice(0, limit)}\n[Historical tool arguments truncated: ${argumentsJson.length} chars]` } };
+    }
+    if (message.role === "toolResult" && part.type === "text" && part.text.length > limit) {
+      changed = true;
+      return { ...part, text: `${part.text.slice(0, limit)}\n[Historical tool result truncated: ${part.text.length} chars; full result remains in durable transcript]` };
+    }
+    return part;
   });
   return changed ? { ...message, content } as AgentMessage : message;
 }

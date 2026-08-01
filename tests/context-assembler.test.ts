@@ -71,3 +71,20 @@ describe("ContextAssembler", () => {
     expect(result.stats.estimatedMessageTokens).toBeGreaterThan(1_000);
   });
 });
+
+describe("historical tool-result projection", () => {
+  const toolResult = (text: string): AgentMessage => ({ role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text }], details: {}, isError: false, timestamp: 2 });
+
+  it("truncates old tool results while preserving the latest turn", () => {
+    const large = "X".repeat(20_000);
+    const messages: AgentMessage[] = [
+      { role: "user", content: "old", timestamp: 1 }, assistant("calling", [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }]), toolResult(large),
+      { role: "user", content: "latest", timestamp: 3 }, assistant("calling latest", [{ type: "toolCall", id: "call-2", name: "read", arguments: {} }]), { ...toolResult(large), toolCallId: "call-2", timestamp: 4 },
+    ];
+    const result = new ContextAssembler({ contextWindow: 100_000, maxOutputTokens: 1_000, maxTurns: 10, historicalToolResultChars: 1_000 }).assemble("transcript", messages, "system", "prompt");
+    const oldResult = result.messages[2] as Extract<AgentMessage, { role: "toolResult" }>;
+    const latestResult = result.messages[5] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(oldResult.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("Historical tool result truncated") });
+    expect((latestResult.content[0] as { type: "text"; text: string }).text).toHaveLength(20_000);
+  });
+});

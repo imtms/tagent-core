@@ -201,4 +201,39 @@ describe("TaskRunSupervisor LLM audit", () => {
     } finally { globalThis.fetch = original; store.close(); }
   });
 
+  it("bounds the Supervisor request body and removes redundant contract fields", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "G".repeat(8_000));
+    const contract = { sourceInput: "S".repeat(20_000), summary: "summary", objectives: [], acceptanceCriteria: [], scope: "scope", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "D".repeat(10_000), routerVersion: "test" };
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify(contract), run.id);
+    store.upsertCheck(run.id, { key: "verify", title: "Verify", status: "passed", required: true, command: "C".repeat(10_000), evidence: "E".repeat(20_000), stale: false });
+    store.addArtifact(run.id, { id: "large", title: "Large", kind: "report", content: "A".repeat(20_000), uri: "artifact://large" });
+    const valid = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } } };
+    let requestBody = "";
+    const original = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => { requestBody = String(init?.body); return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(valid) } }] }), { status: 200 }); };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "R".repeat(40_000), operations: [], progress: undefined });
+      expect(new TextEncoder().encode(requestBody).byteLength).toBeLessThan(30_000);
+      const prompt = String((JSON.parse(requestBody) as { messages: Array<{ content: string }> }).messages[0].content);
+      expect(prompt).not.toContain("sourceInput");
+      expect(prompt).not.toContain("decisionReason");
+      expect(prompt).toContain('"key":"verify"');
+      expect(prompt).toContain('"id":"large"');
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("does not resend an HTTP 413 payload to the fallback model", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "too large");
+    const models: string[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => { models.push(String(JSON.parse(String(init?.body)).model)); return new Response("body too large", { status: 413 }); };
+    try {
+      const light = { id: "gpt-5.6-luna", baseUrl: "https://audit.test/v1" } as never;
+      const main = { id: "gpt-5.6-sol", baseUrl: "https://audit.test/v1" } as never;
+      await expect(new OpenAiSupervisorReviewer({ model: light, fallbackModel: main, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("API 413");
+      expect(models).toEqual(["gpt-5.6-luna"]);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
 });

@@ -5,6 +5,7 @@ import { createInProcessRuntime } from "../runtime/factory.js";
 import type { AgentRuntime, RuntimeFactory } from "../runtime/types.js";
 import type { ContextManifestItem, RunCheckpoint, RunEvent, SessionId, SessionInboxItem, RunId, TaskRun } from "../core/types.js";
 import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
+import { runtimeRunContext } from "./llm-payload.js";
 import { TaskRunSupervisor } from "./supervisor.js";
 import { OpenAiSupervisorReviewer, SupervisorReviewError, TestSupervisorReviewer, type SupervisorReviewer } from "./supervisor-reviewer.js";
 import { SessionInputRouter } from "./session-input-router.js";
@@ -861,7 +862,7 @@ ${coreSnapshot.markdown}
       "Before producing a final answer, use task_run to ensure at least one required plan item is done and every required check has fresh passing evidence.",
       "Do not recreate already completed plan items or checks. Continue from the remaining incomplete work and verify before completion.",
       `Original goal: ${run.goal}`,
-      `Durable snapshot: ${JSON.stringify(run)}`,
+      `Durable snapshot: ${JSON.stringify(runtimeRunContext(run))}`,
     ].join("\n\n");
   }
 
@@ -876,7 +877,7 @@ ${coreSnapshot.markdown}
       "Use the task_run tool for substantial work. Maintain a plan and checks before claiming completion.",
       "Assistant text streamed while a TaskRun is active is provisional. Only a Supervisor-approved final candidate is persisted to chat, so make the final candidate complete and standalone.",
       "Use read before modifying unfamiliar files. Keep changes focused and report verification evidence.",
-      `Active TaskRun: ${JSON.stringify(run)}`,
+      `Active TaskRun: ${JSON.stringify(runtimeRunContext(run))}`,
       recalledMemory,
     ].filter(Boolean).join("\n\n");
   }

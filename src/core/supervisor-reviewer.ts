@@ -1,6 +1,7 @@
 import type { Model } from "@earendil-works/pi-ai/compat";
 import type { CriterionCoverage, GateFailure, SupervisorAction, TaskRun } from "./types.js";
 import type { Store } from "../store/store.js";
+import { truncateUtf8 } from "./llm-payload.js";
 
 export type AuditedGateType = "progress" | "evidence" | "contract" | "completion" | "continuation";
 export interface AuditedGate { passed: boolean; failures: GateFailure[]; criterionCoverage?: CriterionCoverage[]; summary: string }
@@ -16,7 +17,7 @@ export class SupervisorReviewError extends Error {
   constructor(message: string) { super(message); this.name = "SupervisorReviewError"; }
 }
 class SupervisorRequestError extends Error {
-  constructor(message: string) { super(message); this.name = "SupervisorRequestError"; }
+  constructor(message: string, readonly retryable = true) { super(message); this.name = "SupervisorRequestError"; }
 }
 
 export interface SupervisorReviewer {
@@ -73,23 +74,25 @@ export class OpenAiSupervisorReviewer implements SupervisorReviewer {
 
   async reviewSettled(input: { run: TaskRun; response: string; operations: ReturnType<Store["listOperations"]>; progress: ReturnType<Store["getProgressSnapshot"]> }): Promise<SupervisorAudit> {
     const criteria = input.run.contract?.acceptanceCriteria ?? [];
+    const recentOperations = input.operations.slice(-50);
     const payload = {
-      goal: input.run.goal,
+      goal: truncateUtf8(input.run.goal, 2_000),
       contract: input.run.contract ? {
-        summary: input.run.contract.summary,
-        objectives: input.run.contract.objectives,
+        summary: truncateUtf8(input.run.contract.summary, 2_000),
+        objectives: input.run.contract.objectives.slice(0, 20).map((item) => ({ ...item, summary: truncateUtf8(item.summary, 1_000) })),
         acceptanceCriteria: input.run.contract.acceptanceCriteria,
-        nonGoals: input.run.contract.nonGoals,
+        nonGoals: input.run.contract.nonGoals.slice(0, 20).map((item) => truncateUtf8(item, 500)),
         intent: input.run.contract.intent,
         relation: input.run.contract.relation,
       } : null,
-      requiredPlan: input.run.plan.filter((item) => item.required),
-      requiredChecks: input.run.checks.filter((item) => item.required),
-      artifacts: input.run.artifacts.map(({ id, title, kind, content, uri }) => ({ id, title, kind, content: content.slice(0, 4_000), contentTruncated: content.length > 4_000, uri })),
-      operations: input.operations.map(({ id, operationType, status, stage, error }) => ({ id, operationType, status, stage, error: error.slice(0, 1_000) })),
-      progress: input.progress,
-      candidateResponse: input.response.slice(0, 16_000),
-      candidateResponseTruncated: input.response.length > 16_000,
+      requiredPlan: input.run.plan.filter((item) => item.required).map(({ key, title, status, required, position }) => ({ key, title: truncateUtf8(title, 500), status, required, position })),
+      requiredChecks: input.run.checks.filter((item) => item.required).map(({ key, title, status, required, command, evidence, stale }) => ({ key, title: truncateUtf8(title, 500), status, required, command: truncateUtf8(command, 1_000), evidence: truncateUtf8(evidence, 2_000), stale })),
+      artifacts: input.run.artifacts.map(({ id, title, kind, content, uri }) => ({ id, title: truncateUtf8(title, 500), kind, content: truncateUtf8(content, 2_000), contentTruncated: new TextEncoder().encode(content).byteLength > 2_000, uri: truncateUtf8(uri, 1_000) })),
+      operations: recentOperations.map(({ id, operationType, status, stage, error }) => ({ id, operationType, status, stage, error: truncateUtf8(error, 500) })),
+      operationsOmitted: input.operations.length - recentOperations.length,
+      progress: input.progress ? { meaningfulChanges: input.progress.meaningfulChanges, consecutiveFailures: input.progress.consecutiveFailures, repeatedOperations: input.progress.repeatedOperations } : null,
+      candidateResponse: truncateUtf8(input.response, 12_000),
+      candidateResponseTruncated: new TextEncoder().encode(input.response).byteLength > 12_000,
     };
     const validEvidenceRefs = new Set([
       ...input.run.checks.map((item) => `check:${item.key}`),
@@ -160,7 +163,7 @@ Your previous audit response failed schema validation: ${lastError instanceof Er
     const fallback = primary === this.options.model ? this.options.fallbackModel : undefined;
     try { return await this.requestModel(prompt, primary); }
     catch (error) {
-      if (!(error instanceof SupervisorRequestError) || !fallback) throw error;
+      if (!(error instanceof SupervisorRequestError) || !error.retryable || !fallback) throw error;
       return this.requestModel(prompt, fallback);
     }
   }
@@ -171,7 +174,7 @@ Your previous audit response failed schema validation: ${lastError instanceof Er
     try {
       const response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${this.options.apiKey}` }, body: JSON.stringify({ model: model.id, messages: [{ role: "system", content: prompt }], temperature: 0, response_format: { type: "json_object" } }), signal: controller.signal });
       const body = await response.text();
-      if (!response.ok) throw new SupervisorRequestError(`Supervisor LLM API ${response.status} (${model.id}): ${body.slice(0, 500)}`);
+      if (!response.ok) throw new SupervisorRequestError(`Supervisor LLM API ${response.status} (${model.id}): ${body.slice(0, 500)}`, response.status === 408 || response.status === 429 || response.status >= 500);
       const envelope = JSON.parse(body) as { choices?: Array<{ message?: { content?: string } }> };
       const content = envelope.choices?.[0]?.message?.content;
       if (!content) throw new Error("Supervisor LLM returned no JSON content");
