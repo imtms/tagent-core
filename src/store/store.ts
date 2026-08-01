@@ -31,7 +31,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 
 export class Store {
   readonly db: Database.Database;
@@ -201,6 +201,7 @@ export class Store {
         claimed_at INTEGER,
         started_at INTEGER,
         summary TEXT NOT NULL DEFAULT '',
+        objectives_json TEXT NOT NULL DEFAULT '[]',
         intent TEXT NOT NULL DEFAULT 'new_task',
         target_run_id TEXT,
         priority INTEGER NOT NULL DEFAULT 500,
@@ -370,6 +371,7 @@ export class Store {
     this.ensureColumn("run_continuations", "heartbeat_at", "INTEGER");
     this.ensureColumn("runs", "contract_json", "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn("session_supervisor_inbox", "summary", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("session_supervisor_inbox", "objectives_json", "TEXT NOT NULL DEFAULT '[]'");
     this.ensureColumn("session_supervisor_inbox", "intent", "TEXT NOT NULL DEFAULT 'new_task'");
     this.ensureColumn("session_supervisor_inbox", "target_run_id", "TEXT");
     this.ensureColumn("session_supervisor_inbox", "priority", "INTEGER NOT NULL DEFAULT 500");
@@ -484,8 +486,8 @@ export class Store {
       const position = (this.db.prepare("SELECT COALESCE(MAX(position),0)+1 as position FROM session_supervisor_inbox WHERE session_id = ? AND status = 'queued'").get(sessionId) as { position: number }).position;
       const id = randomUUID();
       this.db.prepare(`INSERT INTO session_supervisor_inbox
-        (id,session_id,request_id,content,status,decision,position,created_at,updated_at,summary,intent,target_run_id,priority,urgency,relation,acceptance_json,scope,non_goals_json,confidence,decision_reason,router_version)
-        VALUES (?,?,?,?,'queued','pending',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, sessionId, requestId, content, position, timestamp, timestamp, analysis.summary, analysis.intent, analysis.targetRunId, analysis.priority, analysis.urgency, analysis.relation, JSON.stringify(analysis.acceptanceCriteria), analysis.scope, JSON.stringify(analysis.nonGoals), analysis.confidence, analysis.reason, analysis.routerVersion);
+        (id,session_id,request_id,content,status,decision,position,created_at,updated_at,summary,objectives_json,intent,target_run_id,priority,urgency,relation,acceptance_json,scope,non_goals_json,confidence,decision_reason,router_version)
+        VALUES (?,?,?,?,'queued','pending',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, sessionId, requestId, content, position, timestamp, timestamp, analysis.summary, JSON.stringify(analysis.objectives ?? [{ id: "objective-1", summary: analysis.summary, timing: "current", kind: "other" }]), analysis.intent, analysis.targetRunId, analysis.priority, analysis.urgency, analysis.relation, JSON.stringify(analysis.acceptanceCriteria), analysis.scope, JSON.stringify(analysis.nonGoals), analysis.confidence, analysis.reason, analysis.routerVersion);
       return this.getSessionInboxItem(id)!;
     });
     return transaction();
@@ -495,13 +497,15 @@ export class Store {
     if (!row) return undefined;
     const acceptanceCriteria = JSON.parse(String(row.acceptanceJson || "[]")) as string[];
     const nonGoals = JSON.parse(String(row.nonGoalsJson || "[]")) as string[];
-    return { ...row, manualOrder: Boolean(row.manualOrder), analysis: { summary: String(row.summary || row.content || ""), intent: row.intent, targetRunId: row.targetRunId || null, priority: Number(row.priority || 0), urgency: row.urgency, relation: row.relation, acceptanceCriteria, scope: String(row.scope || row.summary || ""), nonGoals, confidence: Number(row.confidence || 0), reason: String(row.decisionReason || ""), routerVersion: String(row.routerVersion || "") } } as SessionInboxItem;
+    const objectives = JSON.parse(String(row.objectivesJson || "[]")) as import("../core/types.js").TaskObjective[];
+    const fallbackObjective = { id: "objective-1", summary: String(row.summary || row.content || ""), timing: row.relation === "parallel" ? "parallel" : row.relation === "follow_up" ? "follow_up" : "current", kind: "other" } as const;
+    return { ...row, manualOrder: Boolean(row.manualOrder), analysis: { summary: String(row.summary || row.content || ""), objectives: objectives.length ? objectives : [fallbackObjective], intent: row.intent, targetRunId: row.targetRunId || null, priority: Number(row.priority || 0), urgency: row.urgency, relation: row.relation, acceptanceCriteria, scope: String(row.scope || row.summary || ""), nonGoals, confidence: Number(row.confidence || 0), reason: String(row.decisionReason || ""), routerVersion: String(row.routerVersion || "") } } as SessionInboxItem;
   }
 
   private sessionInboxSelect(where: string) {
     return `SELECT id,session_id as sessionId,request_id as requestId,content,status,decision,run_id as runId,error,position,
       created_at as createdAt,updated_at as updatedAt,claimed_at as claimedAt,started_at as startedAt,
-      summary,intent,target_run_id as targetRunId,priority,urgency,relation,acceptance_json as acceptanceJson,scope,
+      summary,objectives_json as objectivesJson,intent,target_run_id as targetRunId,priority,urgency,relation,acceptance_json as acceptanceJson,scope,
       non_goals_json as nonGoalsJson,confidence,decision_reason as decisionReason,router_version as routerVersion,manual_order as manualOrder
       FROM session_supervisor_inbox ${where}`;
   }
@@ -545,10 +549,10 @@ export class Store {
     const trimmed = content.trim();
     if (!trimmed) return undefined;
     const resolved = analysis ?? { ...this.getSessionInboxItem(id)?.analysis, summary: trimmed.slice(0, 120), scope: trimmed.slice(0, 120) } as SessionInputAnalysis;
-    const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET content=?,summary=?,intent=?,target_run_id=?,priority=?,urgency=?,relation=?,
+    const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET content=?,summary=?,objectives_json=?,intent=?,target_run_id=?,priority=?,urgency=?,relation=?,
       acceptance_json=?,scope=?,non_goals_json=?,confidence=?,decision_reason=?,router_version=?,updated_at=?
       WHERE id=? AND session_id=? AND status='queued'`)
-      .run(trimmed, resolved.summary, resolved.intent, resolved.targetRunId, resolved.priority, resolved.urgency, resolved.relation,
+      .run(trimmed, resolved.summary, JSON.stringify(resolved.objectives), resolved.intent, resolved.targetRunId, resolved.priority, resolved.urgency, resolved.relation,
         JSON.stringify(resolved.acceptanceCriteria), resolved.scope, JSON.stringify(resolved.nonGoals), resolved.confidence, resolved.reason,
         resolved.routerVersion, now(), id, sessionId).changes;
     return changed === 1 ? this.getSessionInboxItem(id) : undefined;
@@ -645,7 +649,7 @@ ${source.content}`;
     const claimed = this.db.prepare("UPDATE session_supervisor_inbox SET status='claimed',decision='start_taskrun',claimed_at=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'").run(timestamp,timestamp,itemId,sessionId);
     if (claimed.changes !== 1) return undefined;
     const inbox = this.getSessionInboxItem(itemId)!;
-    const contract: TaskRunContract = { sourceInput: inbox.content, summary: inbox.analysis.summary, acceptanceCriteria: inbox.analysis.acceptanceCriteria, scope: inbox.analysis.scope, nonGoals: inbox.analysis.nonGoals, sourceInboxIds: [inbox.id], parentRunId: inbox.analysis.targetRunId, relation: inbox.analysis.relation, intent: inbox.analysis.intent, decisionReason: inbox.analysis.reason, routerVersion: inbox.analysis.routerVersion };
+    const contract: TaskRunContract = { sourceInput: inbox.content, summary: inbox.analysis.summary, objectives: inbox.analysis.objectives, acceptanceCriteria: inbox.analysis.acceptanceCriteria, scope: inbox.analysis.scope, nonGoals: inbox.analysis.nonGoals, sourceInboxIds: [inbox.id], parentRunId: inbox.analysis.targetRunId, relation: inbox.analysis.relation, intent: inbox.analysis.intent, decisionReason: inbox.analysis.reason, routerVersion: inbox.analysis.routerVersion };
     const run = this.createRun(sessionId, inbox.analysis.summary || inbox.content, `inbox:${inbox.id}`, contract);
     this.db.prepare("UPDATE session_supervisor_inbox SET status='started',run_id=?,started_at=?,updated_at=? WHERE id=? AND status='claimed'").run(run.id,timestamp,timestamp,inbox.id);
     return { item: this.getSessionInboxItem(inbox.id)!, run };

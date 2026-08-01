@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Store } from "../store/store.js";
-import type { GateEvaluation, RunEvent, SupervisorDecision, SupervisorAction, TaskRun } from "./types.js";
+import type { CriterionCoverage, GateEvaluation, RunEvent, SupervisorDecision, SupervisorAction, TaskRun } from "./types.js";
 
 export interface SupervisorPolicy {
   maxSteersPerAttempt: number;
@@ -57,7 +57,7 @@ export class TaskRunSupervisor {
       const failures = completion.failures;
       const needsApproval = failures.some((failure) => failure.disposition === "needs_approval");
       const needsInput = failures.some((failure) => failure.disposition === "needs_user_input" || failure.disposition === "external_dependency");
-      const exhausted = failures.some((failure) => failure.disposition === "budget_exhausted" || failure.disposition === "non_recoverable");
+      const exhausted = failures.some((failure) => failure.disposition === "non_recoverable");
       const evidenceOnly = failures.length > 0 && failures.every((failure) => failure.kind === "evidence" && failure.disposition === "auto_fixable");
       if (needsApproval) {
         action = "pause_for_approval";
@@ -105,15 +105,17 @@ export class TaskRunSupervisor {
 
   private evaluateGates(run: TaskRun, checkpointSeq: number, response: string): GateEvaluation[] {
     const createdAt = Date.now();
-    const manifest = { attempt: run.attempt, checkpointSeq, plan: run.plan, checks: run.checks, artifacts: run.artifacts.map(({ id, kind, uri }) => ({ id, kind, uri })), responseLength: response.length, usage: run.usage };
+    const operations = this.store.listOperations(run.id);
+    const manifest = { attempt: run.attempt, checkpointSeq, contract: run.contract, plan: run.plan, checks: run.checks, artifacts: run.artifacts.map(({ id, kind, uri }) => ({ id, kind, uri })), operations: operations.map(({ id, operationType, status, stage }) => ({ id, operationType, status, stage })), responseLength: response.length, usage: run.usage };
     const inputManifestHash = createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
-    const gate = (gateType: GateEvaluation["gateType"], failures: GateEvaluation["failures"]): GateEvaluation => ({ id: randomUUID(), runId: run.id, attempt: run.attempt, checkpointSeq, gateType, passed: failures.length === 0, failures, inputManifestHash, createdAt });
+    const gate = (gateType: GateEvaluation["gateType"], failures: GateEvaluation["failures"], criterionCoverage?: CriterionCoverage[]): GateEvaluation => ({ id: randomUUID(), runId: run.id, attempt: run.attempt, checkpointSeq, gateType, passed: failures.length === 0, failures, criterionCoverage, inputManifestHash, createdAt });
     const progressFailures: GateEvaluation["failures"] = [];
     const snapshot = this.store.getProgressSnapshot(run.id);
     if (snapshot?.attempt === run.attempt && snapshot.consecutiveFailures >= 6) progressFailures.push({ kind: "progress", key: "consecutive_failures", reason: `${snapshot.consecutiveFailures} consecutive tool failures`, disposition: "non_recoverable" });
     const evidenceFailures: GateEvaluation["failures"] = [];
     for (const check of run.checks.filter((item) => item.required && item.status === "passed")) {
       if (!check.evidence.trim()) evidenceFailures.push({ kind: "evidence", key: check.key, reason: "Required passed check has no evidence", disposition: "auto_fixable" });
+      else if (!this.isIndependentCheckEvidence(check.command, check.evidence, run)) evidenceFailures.push({ kind: "evidence", key: check.key, reason: "Required check evidence is only an unverified assertion; provide a command, Operation receipt, or Artifact reference", disposition: "auto_fixable" });
       if (check.stale) evidenceFailures.push({ kind: "evidence", key: check.key, reason: "Required evidence is stale", disposition: "auto_fixable" });
     }
     const completionFailures: GateEvaluation["failures"] = [...progressFailures, ...evidenceFailures];
@@ -124,8 +126,54 @@ export class TaskRunSupervisor {
       for (const check of run.checks.filter((item) => item.required)) if (check.status !== "passed") completionFailures.push({ kind: "check", key: check.key, reason: `Required check is ${check.status}`, disposition: check.status === "blocked" ? /approval|permission|授权|审批|批准|权限/i.test(check.title) ? "needs_approval" : "external_dependency" : check.status === "skipped" ? "non_recoverable" : "auto_fixable" });
     }
     if (!response.trim()) completionFailures.push({ kind: "delivery", key: "response", reason: "Candidate response is empty", disposition: "auto_fixable" });
-    if (run.gateRequired && run.contract && !this.responseAddressesContract(run, response)) completionFailures.push({ kind: "delivery", key: "contract_coverage", reason: "Candidate response does not substantively address the TaskRun contract or report a concrete blocker", disposition: "auto_fixable" });
-    return [gate("progress", progressFailures), gate("evidence", evidenceFailures), gate("completion", completionFailures), gate("continuation", completionFailures.filter((item) => item.disposition === "budget_exhausted" || item.disposition === "non_recoverable" || item.disposition === "needs_user_input" || item.disposition === "needs_approval" || item.disposition === "external_dependency"))];
+    const criterionCoverage = this.evaluateContractCoverage(run, response);
+    const contractFailures: GateEvaluation["failures"] = criterionCoverage.filter((item) => item.status === "unsupported" || item.status === "contradicted").map((item, index) => ({ kind: "contract", key: `criterion_${index + 1}`, reason: `${item.criterion}: ${item.reason}`, disposition: "auto_fixable" }));
+    if (run.gateRequired && run.contract && (!this.responseAddressesContract(run, response) || contractFailures.length)) completionFailures.push(...(contractFailures.length ? contractFailures : [{ kind: "delivery", key: "contract_coverage", reason: "Candidate response does not substantively address the TaskRun contract or report a concrete blocker", disposition: "auto_fixable" } as const]));
+    const claimFailures = this.validateCompletionClaims(run, response, operations);
+    completionFailures.push(...claimFailures);
+    return [gate("progress", progressFailures), gate("evidence", evidenceFailures), gate("contract", contractFailures, criterionCoverage), gate("completion", completionFailures, criterionCoverage), gate("continuation", completionFailures.filter((item) => item.disposition === "non_recoverable" || item.disposition === "needs_user_input" || item.disposition === "needs_approval" || item.disposition === "external_dependency"))];
+  }
+
+
+  private evaluateContractCoverage(run: TaskRun, response: string): CriterionCoverage[] {
+    const criteria = run.contract?.acceptanceCriteria ?? [];
+    const normalized = this.normalizeSemanticText(response);
+    const evidenceRefs = [
+      ...run.checks.filter((item) => item.status === "passed" && item.evidence.trim()).map((item) => `check:${item.key}`),
+      ...run.artifacts.map((item) => `artifact:${item.id}`),
+      ...this.store.listOperations(run.id).filter((item) => item.status === "succeeded").map((item) => `operation:${item.id}`),
+    ];
+    return criteria.map((criterion) => {
+      const terms = this.semanticTerms(criterion);
+      const covered = terms.length === 0 || terms.some((term) => normalized.includes(term)) || (/根因/.test(criterion) && /根因|原因|问题在于|because|caused by/i.test(response)) || (/验证|测试/.test(criterion) && /验证|测试|test|check|passed/i.test(response)) || (/修复|改进|实现/.test(criterion) && /修复|改进|增加|实现|fixed|implemented/i.test(response));
+      const blocked = /(blocked|cannot|unable|waiting|requires|缺少|无法|不能|阻塞|等待|需要用户|需要审批)/i.test(response);
+      return { criterion, status: covered ? "covered" : blocked ? "blocked" : "unsupported", evidenceRefs: covered ? evidenceRefs : [], reason: covered ? (evidenceRefs.length ? "Response coverage is backed by structured Run evidence." : "Response explicitly addresses this criterion.") : blocked ? "Response reports a concrete blocker." : "No criterion-specific result was found in the candidate response." };
+    });
+  }
+
+  private validateCompletionClaims(run: TaskRun, response: string, operations: ReturnType<Store["listOperations"]>): GateEvaluation["failures"] {
+    const claimsCompletion = /(已完成|完成了|已修复|已实现|已发布|已部署|测试通过|验证通过|passed|completed|fixed|implemented|released|deployed)/i.test(response);
+    if (!claimsCompletion) return [];
+    const verifiedCheck = run.checks.some((item) => item.required && item.status === "passed" && !item.stale && this.isIndependentCheckEvidence(item.command, item.evidence, run));
+    const receipt = operations.some((item) => item.status === "succeeded");
+    const artifact = run.artifacts.some((item) => Boolean(item.uri.trim() || item.content.trim()));
+    if (verifiedCheck || receipt || artifact) return [];
+    return [{ kind: "claim", key: "completion_evidence", reason: "Candidate claims completed, fixed, tested, deployed, or released work without an independent Check, Operation receipt, or Artifact", disposition: "auto_fixable" }];
+  }
+
+  private isIndependentCheckEvidence(command: string, evidence: string, run: TaskRun) {
+    if (command.trim() && evidence.trim().length >= 8) return true;
+    if (/\b(?:exit|status|http|sha|commit|tests?|passed|failed|build|lint)\b|通过|失败|状态码|提交|构建/i.test(evidence) && evidence.trim().length >= 20) return true;
+    return run.artifacts.length > 0 || this.store.listOperations(run.id).some((item) => item.status === "succeeded");
+  }
+
+  private normalizeSemanticText(value: string) { return value.replace(/[()`*_>#{}:：,，.。!！?？/|+\-=]/g, " ").replaceAll("[", " ").replaceAll("]", " ").replace(/\s+/g, " ").trim().toLowerCase(); }
+  private semanticTerms(value: string) {
+    const normalized = this.normalizeSemanticText(value).replace(/^(?:交付目标结果|完成目标|提供|报告|给出|说明)/, "");
+    const words = normalized.match(/[a-zA-Z][a-zA-Z0-9._/-]{2,}/g) ?? [];
+    const han = normalized.match(/[\p{Script=Han}]{2,}/gu) ?? [];
+    const fragments = han.flatMap((term) => term.length <= 4 ? [term] : Array.from({ length: term.length - 1 }, (_, index) => term.slice(index, index + 2)));
+    return [...new Set([...words, ...fragments])].filter((term) => !/^(相关|提供|实际|结果|进行|当前|完成|目标)$/.test(term));
   }
 
   private responseAddressesContract(run: TaskRun, response: string) {

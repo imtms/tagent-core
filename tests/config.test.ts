@@ -6,8 +6,7 @@ describe("configuration", () => {
     const config = loadConfig({});
     expect(config.runtime).toBe("in-process");
     expect(config.apiKey).toBeUndefined();
-    expect(config).toMatchObject({ providerTimeoutMs: 120_000, providerMaxRetries: 1, runTimeoutMs: 7_200_000, runHardTimeoutMs: 86_400_000, maxContinuations: 128, maxRunTokens: 8_000_000, maxContextTurns: 20, dynamicBudget: true });
-    expect(config.contextReserveTokens).toBeUndefined();
+    expect(config).toMatchObject({ providerTimeoutMs: 120_000, providerMaxRetries: 1, runTimeoutMs: 7_200_000, runHardTimeoutMs: 86_400_000, maxContinuations: 128, maxContextTurns: 20 });
     expect(config.memory).toEqual({ enabled: false });
     expect(config.model).toMatchObject({
       api: "openai-completions",

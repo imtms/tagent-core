@@ -20,7 +20,7 @@ const service = new AgentService(
   store,
   config.workspace,
   resolveRuntimeFactory(config.runtime),
-  { model: createModel(config.model), apiKey: config.apiKey, providerTimeoutMs: config.providerTimeoutMs, providerMaxRetries: config.providerMaxRetries, runTimeoutMs: config.runTimeoutMs, runHardTimeoutMs: config.runHardTimeoutMs, maxContinuations: config.maxContinuations, maxRunTokens: config.maxRunTokens, contextWindow: config.model.contextWindow, maxContextTurns: config.maxContextTurns, contextReserveTokens: config.contextReserveTokens, dynamicBudget: config.dynamicBudget, controlInboxCapacity: config.controlInboxCapacity, memoryRecallTokenBudget: config.memory.enabled ? config.memory.recallTokenBudget : undefined },
+  { model: createModel(config.model), apiKey: config.apiKey, providerTimeoutMs: config.providerTimeoutMs, providerMaxRetries: config.providerMaxRetries, runTimeoutMs: config.runTimeoutMs, runHardTimeoutMs: config.runHardTimeoutMs, maxContinuations: config.maxContinuations, contextWindow: config.model.contextWindow, maxContextTurns: config.maxContextTurns, controlInboxCapacity: config.controlInboxCapacity },
   memoryRuntime?.service,
   config.memory.enabled ? config.memory.workspaceScopeId : "default",
 );

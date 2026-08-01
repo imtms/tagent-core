@@ -213,7 +213,7 @@ describe("AgentService runtime boundary", () => {
     const session = store.createSession();
     const blocking = store.createRun(session.id, "old run");
     store.enqueueSessionInbox(session.id, "recover me", {
-      summary: "recover me", intent: "new_task", targetRunId: null, priority: 500,
+      summary: "recover me", objectives: [{ id: "objective-1", summary: "recover me", timing: "current", kind: "other" }], intent: "new_task", targetRunId: null, priority: 500,
       urgency: "normal", relation: "independent", acceptanceCriteria: ["recover me"],
       scope: "recover me", nonGoals: [], confidence: 1, reason: "test", routerVersion: "test",
     }, "recover-inbox");
@@ -515,9 +515,7 @@ describe("AgentService runtime boundary", () => {
       && event.data.keptMessages === 2
       && typeof event.data.systemTokens === "number"
       && typeof event.data.promptTokens === "number"
-      && typeof event.data.outputReserveTokens === "number"
-      && typeof event.data.safetyReserveTokens === "number"
-      && typeof event.data.messageBudgetTokens === "number")).toBe(true);
+      && typeof event.data.estimatedMessageTokens === "number")).toBe(true);
     store.close();
   });
 
@@ -529,7 +527,7 @@ describe("AgentService runtime boundary", () => {
     store.appendMessage(session.id, "user", "latest user fact");
     store.appendMessage(session.id, "assistant", "latest assistant answer");
     let options: Parameters<RuntimeFactory>[0] | undefined;
-    const service = new AgentService(store, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 2_000, contextReserveTokens: 200, model: { contextWindow: 2_000, maxTokens: 200 } as never });
+    const service = new AgentService(store, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 2_000, maxContextTurns: 1, model: { contextWindow: 2_000, maxTokens: 200 } as never });
 
     const run = await service.start(session.id, "follow up");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -621,7 +619,7 @@ describe("AgentService runtime boundary", () => {
     store.resumeRun(run.id);
     const service = new AgentService(store, "/tmp", () => new CallbackRuntime(assistantMessage("recovered"), () => {
       store.upsertPlanItem(run.id, { key: "recover", title: "Recover", status: "done", required: true, position: 1 });
-    }), { maxContinuations: 2, maxRunTokens: 1000 });
+    }), { maxContinuations: 2 });
     expect(service.recoverContinuations()).toEqual([run.id]);
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(store.getRun(run.id)).toMatchObject({ status: "completed", attempt: 3 });
@@ -641,26 +639,11 @@ describe("AgentService runtime boundary", () => {
     for (const message of [oldUser, oldAssistant, newUser, newAssistant]) store.appendTranscript(run.id, 1, message);
     store.blockRun(run.id, "gate");
     let options: Parameters<RuntimeFactory>[0] | undefined;
-    const service = new AgentService(store, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 1_000, contextReserveTokens: 100, model: { contextWindow: 1_000, maxTokens: 100 } as never });
+    const service = new AgentService(store, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 1_000, maxContextTurns: 1, model: { contextWindow: 1_000, maxTokens: 100 } as never });
     service.resume(run.id);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(options?.initialMessages).toEqual([newUser, newAssistant]);
     expect(store.listEvents(run.id).some((event) => event.type === "context.pruned" && event.data.source === "transcript" && event.data.originalMessages === 4 && event.data.keptMessages === 2)).toBe(true);
-    store.close();
-  });
-
-  it("assigns dynamic budgets by task complexity and respects hard limits", () => {
-    const store = new Store(":memory:");
-    const session = store.createSession();
-    const service = new AgentService(store, "/tmp", () => new FakeRuntime([]), { maxContinuations: 40, maxRunTokens: 700_000, runTimeoutMs: 3_000_000 });
-    const simple = store.createRun(session.id, "Say hello");
-    expect(service.getBudget(simple.id)).toEqual({ tier: "simple", softTokens: 80_000, maxContinuations: 40, maxTokens: 700_000, runTimeoutMs: 300_000 });
-    const complex = store.createRun(session.id, "Implement and test a multi module frontend backend database migration architecture");
-    const admittedBudget = service.getBudget(complex.id);
-    for (let index = 0; index < 8; index += 1) store.upsertPlanItem(complex.id, { key: `p${index}`, title: `Step ${index}`, status: "pending", required: true, position: index });
-    for (let index = 0; index < 3; index += 1) store.upsertCheck(complex.id, { key: `c${index}`, title: `Check ${index}`, status: "pending", required: true, command: "", evidence: "", stale: false });
-    expect(admittedBudget).toEqual({ tier: "complex", softTokens: 640_000, maxContinuations: 40, maxTokens: 700_000, runTimeoutMs: 2_700_000 });
-    expect(service.getBudget(complex.id)).toEqual(admittedBudget);
     store.close();
   });
 
@@ -675,12 +658,12 @@ describe("AgentService runtime boundary", () => {
       const runtime = new CallbackRuntime(assistantMessage(calls === 1 ? "blocked" : "done"), () => {
         if (calls === 2) {
           store.upsertPlanItem(runId, { key: "work", title: "Finish work", status: "done", required: true, position: 1 });
-          store.upsertCheck(runId, { key: "verify", title: "Verify work", status: "passed", required: true, command: "test", evidence: "passed", stale: false });
+          store.upsertCheck(runId, { key: "verify", title: "Verify work", status: "passed", required: true, command: "test", evidence: "1 test passed", stale: false });
         }
       });
       runtimes.push(runtime);
       return runtime;
-    }, { maxContinuations: 2, maxRunTokens: 1000 });
+    }, { maxContinuations: 2 });
     const run = await service.start(session.id, "auto continue");
     runId = run.id;
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -702,7 +685,7 @@ describe("AgentService runtime boundary", () => {
       return new CallbackRuntime(assistantMessage(calls > 40 ? "done" : "continue"), () => {
         if (calls > 40) store.upsertPlanItem(runId, { key: "finish", title: "Finish", status: "done", required: true, position: 1 });
       });
-    }, { dynamicBudget: false, maxContinuations: 64, maxRunTokens: 1_000_000, runTimeoutMs: 60_000 });
+    }, { maxContinuations: 64, runTimeoutMs: 60_000 });
     const run = await service.start(session.id, "long durable run");
     runId = run.id;
     for (let index = 0; index < 200 && store.getRun(run.id)?.status !== "completed"; index += 1) {
@@ -719,7 +702,7 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let calls = 0;
-    const service = new AgentService(store, "/tmp", () => { calls += 1; return new CallbackRuntime(assistantMessage("blocked")); }, { maxContinuations: 1, maxRunTokens: 1000 });
+    const service = new AgentService(store, "/tmp", () => { calls += 1; return new CallbackRuntime(assistantMessage("blocked")); }, { maxContinuations: 1 });
     const run = await service.start(session.id, "stay blocked");
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(calls).toBe(2);
@@ -729,108 +712,19 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
-  it("treats the dynamic token tier as guidance while preserving the configured hard ceiling", async () => {
-    const store = new Store(":memory:");
-    const session = store.createSession();
-    let captured: Parameters<RuntimeFactory>[0] | undefined;
-    let aborted = false;
-    let steered = "";
-    const service = new AgentService(store, "/tmp", (options) => {
-      captured = options;
-      return {
-        async prompt() {
-          options.onTokenBudgetWarning?.({ totalTokens: 80_000, softLimit: options.softRunTokens!, hardLimit: options.maxRunTokens });
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        },
-        async steer(instruction) { steered = instruction; return "accepted" as const; },
-        abort() { aborted = true; },
-        getMessages() { return []; },
-        getError() { return undefined; },
-      };
-    }, { maxContinuations: 40, maxRunTokens: 700_000, runTimeoutMs: 3_000_000 });
-    const run = await service.start(session.id, "Say hello");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(captured?.softRunTokens).toBe(80_000);
-    expect(captured?.maxRunTokens).toBe(700_000);
-    expect(aborted).toBe(false);
-    expect(store.getRun(run.id)?.status).not.toBe("blocked");
-    expect(steered).toContain("hard ceiling is 700,000");
-    expect(store.listEvents(run.id).some((event) => event.type === "run.token_budget.warning")).toBe(true);
-    await service.closeRuntimes();
-    store.close();
-  });
-
-  it("does not steer a token checkpoint into an assistant response already being streamed", async () => {
-    const store = new Store(":memory:");
-    const session = store.createSession();
-    let steered = "";
-    const service = new AgentService(store, "/tmp", (options) => ({
-      async prompt() {
-        const started = options.store.appendEvent(options.runId, "message.started", { ordinal: 1 });
-        options.onEvent?.(started);
-        const delta = options.store.appendEvent(options.runId, "message.delta", { delta: "substantive answer", ordinal: 1 });
-        options.onEvent?.(delta);
-        options.onTokenBudgetWarning?.({ totalTokens: 80_000, softLimit: options.softRunTokens!, hardLimit: options.maxRunTokens });
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      },
-      async steer(instruction) { steered = instruction; return "accepted" as const; },
-      abort() {},
-      getMessages() { return []; },
-      getError() { return undefined; },
-    }), { maxRunTokens: 700_000 });
-    const run = await service.start(session.id, "Say hello");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(steered).toBe("");
-    expect(store.listEvents(run.id).some((event) => event.type === "run.token_budget.warning.deferred")).toBe(true);
-    await service.closeRuntimes();
-    store.close();
-  });
-
-  it("aborts an active runtime as soon as cumulative usage crosses its token budget", async () => {
-    const store = new Store(":memory:");
-    const session = store.createSession();
-    let aborted = false;
-    const service = new AgentService(store, "/tmp", (options) => ({
-      async prompt() {
-        const costly = assistantMessage("still working");
-        if (costly.role === "assistant") costly.usage.totalTokens = 12;
-        store.appendTranscript(options.runId, store.getRun(options.runId)!.attempt, costly);
-        options.onTokenBudgetExceeded?.({ totalTokens: 12, limit: options.maxRunTokens! });
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      },
-      async steer() { return "accepted" as const; },
-      abort() { aborted = true; },
-      getMessages() { return []; },
-      getError() { return undefined; },
-    }), { dynamicBudget: false, maxContinuations: 2, maxRunTokens: 10 });
-    const run = await service.start(session.id, "bounded active run");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(aborted).toBe(true);
-    expect(store.getRun(run.id)).toMatchObject({ status: "blocked", blockedReason: expect.stringContaining("token budget") });
-    expect(store.listContinuations(run.id)).toHaveLength(0);
-    expect(store.listEvents(run.id).some((event) => event.type === "continuation.exhausted" && event.data.reason === "token_budget")).toBe(true);
-    store.close();
-  });
-
-  it("does not queue continuation when the token budget is exhausted", async () => {
-    const store = new Store(":memory:");
-    const session = store.createSession();
-    const costly = assistantMessage("blocked");
-    if (costly.role === "assistant") costly.usage.totalTokens = 10;
-    const service = new AgentService(store, "/tmp", () => new CallbackRuntime(costly), { maxContinuations: 2, maxRunTokens: 10 });
-    const run = await service.start(session.id, "token budget");
-    store.appendTranscript(run.id, 1, costly);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(store.listContinuations(run.id)).toHaveLength(0);
-    expect(store.listEvents(run.id).some((event) => event.type === "continuation.exhausted" && event.data.reason === "token_budget")).toBe(true);
-    store.close();
+  it("keeps token use observational and does not install Core token controls", async () => {
+    const store = new Store(":memory:"); const session = store.createSession(); let captured: Parameters<RuntimeFactory>[0] | undefined;
+    const service = new AgentService(store, "/tmp", (options) => { captured = options; return new CallbackRuntime(assistantMessage("observed usage only")); });
+    await service.start(session.id, "observe token usage"); await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(captured).not.toHaveProperty("maxRunTokens"); expect(captured).not.toHaveProperty("softRunTokens");
+    expect(store.listEvents(store.getLatestRun(session.id)!.id).some((event) => event.type.includes("token_budget"))).toBe(false); store.close();
   });
 
   it("fails a run only after its idle watchdog sees no progress", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new DeferredRuntime();
-    const service = new AgentService(store, "/tmp", () => runtime, { runTimeoutMs: 10, runHardTimeoutMs: 1_000, dynamicBudget: false });
+    const service = new AgentService(store, "/tmp", () => runtime, { runTimeoutMs: 10, runHardTimeoutMs: 1_000 });
     const run = await service.start(session.id, "timeout");
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(runtime.aborted).toBe(true);
@@ -847,7 +741,7 @@ describe("AgentService runtime boundary", () => {
     const service = new AgentService(store, "/tmp", (options) => {
       runtime = new ActiveDeferredRuntime(() => { activityCount += 1; options.onActivity?.(); }, 5);
       return runtime;
-    }, { runTimeoutMs: 40, runHardTimeoutMs: 1_000, dynamicBudget: false });
+    }, { runTimeoutMs: 40, runHardTimeoutMs: 1_000 });
     const run = await service.start(session.id, "active long run");
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(runtime.aborted).toBe(false);
@@ -865,7 +759,7 @@ describe("AgentService runtime boundary", () => {
     const service = new AgentService(store, "/tmp", (options) => {
       runtime = new ActiveDeferredRuntime(() => options.onActivity?.(), 5);
       return runtime;
-    }, { runTimeoutMs: 40, runHardTimeoutMs: 70, dynamicBudget: false });
+    }, { runTimeoutMs: 40, runHardTimeoutMs: 70 });
     const run = await service.start(session.id, "hard timeout");
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(runtime.aborted).toBe(true);

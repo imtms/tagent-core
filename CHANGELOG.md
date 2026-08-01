@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Removed all TAgent Core token-budget control paths: no soft checkpoints, hard cumulative token ceiling, token-driven steer, token-driven continuation suppression, Memory recall token budget, or context reserve budget remains. Provider usage is observational only.
+- Upgraded Session supervision to `semantic-rules-v3`, decomposing compound user input into persisted semantic objectives, timing, work kind, scope, and criterion-specific TaskRun contracts rather than carrying raw Inbox prose as the goal.
+- Added criterion-by-criterion Contract Gate receipts and completion-claim validation against independent Check evidence, successful Operation receipts, or Artifacts. Agent-authored `done`/`passed` labels alone no longer establish completion.
+- Context selection is governed by explicit recent-turn count and provenance, not a Core token budget; Memory recall is governed by relevance, policy, diversity, and result count.
+
 ### Fixed
 
 - Reset provisional streaming content at every new assistant message boundary so a later steer, token-budget reminder, or continuation answer replaces the earlier draft instead of concatenating or making the visible reply appear to vanish.

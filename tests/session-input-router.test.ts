@@ -28,7 +28,8 @@ describe("SessionInputRouter", () => {
   it("summarizes new tasks instead of using the full raw prompt as their goal", () => {
     const result = router.analyze("请审计当前 Supervisor 的实现差异。然后给出可验证的建议。", undefined);
     expect(result.intent).toBe("new_task");
-    expect(result.summary).toBe("审计当前 Supervisor 的实现差异。");
-    expect(result.acceptanceCriteria).toHaveLength(2);
+    expect(result.summary).toContain("审计当前 Supervisor 的实现差异");
+    expect(result.objectives.map((item) => item.summary)).toEqual(["审计当前 Supervisor 的实现差异", "给出可验证的建议"]);
+    expect(result.acceptanceCriteria.length).toBeGreaterThanOrEqual(3);
   });
 });

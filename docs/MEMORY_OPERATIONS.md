@@ -99,7 +99,6 @@ TAGENT_MEMORY_MAINTENANCE_INTERVAL_MS=60000
 TAGENT_MEMORY_WARM_AFTER_MS=0
 TAGENT_MEMORY_HOT_TTL_MS=2592000000
 TAGENT_MEMORY_COLD_MINIMUM_RECORDS=2
-TAGENT_MEMORY_RECALL_TOKEN_BUDGET=8000
 ```
 
 - capture and maintenance loops use independent locks;
@@ -228,7 +227,7 @@ Durable memory writes carry structured provenance:
 
 Assistant responses and mixed raw context-prune transcripts are not capture sources. One-off operational requests are excluded from semantic extraction. Capture jobs use lease heartbeat and fencing; stale workers cannot complete or fail a job after another worker has reclaimed it.
 
-The recall token budget is a hard combined ceiling for safe Hot/Warm cards plus complete Cold Topic pages. If a card or complete Cold page does not fit, it is omitted rather than overflowing the prompt or truncating Cold content.
+Recall selection is based on relevance, policy, domain routing, MMR diversity, and configured card/topic counts. TAgent Core no longer omits otherwise relevant Memory because of a local token budget; token estimates remain visible in Recall Trace and Context Manifest for observation.
 
 Required CI starts PostgreSQL 17 from `pgvector/pgvector:pg17`, creates a test-named database, and runs the PostgreSQL memory suite with pgvector and pg_trgm enabled.
 

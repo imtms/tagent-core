@@ -118,7 +118,7 @@ describe("TaskRunSupervisor", () => {
     store.upsertPlanItem(run.id, { key: "done", title: "Done", status: "done", required: true, position: 1 });
     const review = new TaskRunSupervisor(store).reviewSettled(store.getRun(run.id)!, 5, "收到，已经处理完成，无需继续。");
     expect(review.decision).toMatchObject({ action: "start_continuation", reasonCode: "auto_fixable_gate_failures" });
-    expect(review.gates.find((gate) => gate.gateType === "completion")?.failures).toEqual([expect.objectContaining({ key: "contract_coverage" })]);
+    expect(review.gates.find((gate) => gate.gateType === "contract")?.failures).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "contract" })]));
     store.close();
   });
 
@@ -128,6 +128,7 @@ describe("TaskRunSupervisor", () => {
     const run = store.createRun(session.id, "审计 Supervisor 为什么没有控制 TaskRun");
     store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, acceptanceCriteria: ["定位根因", "给出修复和验证证据"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
     store.upsertPlanItem(run.id, { key: "done", title: "Done", status: "done", required: true, position: 1 });
+    store.upsertCheck(run.id, { key: "verify", title: "Verify", status: "passed", required: true, command: "npm test", evidence: "269 tests passed", stale: false });
     const response = "Supervisor 没有控制 TaskRun 的根因是完成门禁只检查自报 plan/check 状态，没有检查候选回复是否覆盖合同。已增加 contract coverage 门禁，并用回归测试验证低质量短回复会触发 continuation。";
     expect(new TaskRunSupervisor(store).reviewSettled(store.getRun(run.id)!, 5, response).decision.action).toBe("complete_taskrun");
     store.close();

@@ -22,10 +22,7 @@ export interface AppConfig {
   runTimeoutMs: number;
   runHardTimeoutMs: number;
   maxContinuations: number;
-  maxRunTokens: number;
   maxContextTurns: number;
-  contextReserveTokens?: number;
-  dynamicBudget: boolean;
   controlInboxCapacity: number;
   serviceCredentials: ServiceCredential[];
   model: ModelConfig;
@@ -48,7 +45,6 @@ export type MemoryConfig =
       workerIntervalMs: number;
       maintenanceIntervalMs: number;
       workspaceScopeId: string;
-      recallTokenBudget: number;
       coldMinimumRecords: number;
       warmAfterMs: number;
       hotTtlMs: number;
@@ -143,7 +139,6 @@ function loadMemoryConfig(env: NodeJS.ProcessEnv): MemoryConfig {
     workerIntervalMs: positiveInteger(env.TAGENT_MEMORY_WORKER_INTERVAL_MS, 1_000, "TAGENT_MEMORY_WORKER_INTERVAL_MS"),
     maintenanceIntervalMs: positiveInteger(env.TAGENT_MEMORY_MAINTENANCE_INTERVAL_MS, 60_000, "TAGENT_MEMORY_MAINTENANCE_INTERVAL_MS"),
     workspaceScopeId: env.TAGENT_MEMORY_WORKSPACE_SCOPE_ID ?? "default",
-    recallTokenBudget: positiveInteger(env.TAGENT_MEMORY_RECALL_TOKEN_BUDGET, 8_000, "TAGENT_MEMORY_RECALL_TOKEN_BUDGET"),
     coldMinimumRecords: positiveInteger(env.TAGENT_MEMORY_COLD_MINIMUM_RECORDS, 2, "TAGENT_MEMORY_COLD_MINIMUM_RECORDS"),
     warmAfterMs: nonNegativeInteger(env.TAGENT_MEMORY_WARM_AFTER_MS, 0, "TAGENT_MEMORY_WARM_AFTER_MS"),
     hotTtlMs: positiveInteger(env.TAGENT_MEMORY_HOT_TTL_MS, 2_592_000_000, "TAGENT_MEMORY_HOT_TTL_MS"),
@@ -206,10 +201,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     runTimeoutMs: positiveInteger(env.TAGENT_RUN_TIMEOUT_MS, 7_200_000, "TAGENT_RUN_TIMEOUT_MS"),
     runHardTimeoutMs: positiveInteger(env.TAGENT_RUN_HARD_TIMEOUT_MS, 86_400_000, "TAGENT_RUN_HARD_TIMEOUT_MS"),
     maxContinuations: nonNegativeInteger(env.TAGENT_MAX_CONTINUATIONS, 128, "TAGENT_MAX_CONTINUATIONS"),
-    maxRunTokens: positiveInteger(env.TAGENT_MAX_RUN_TOKENS, 8_000_000, "TAGENT_MAX_RUN_TOKENS"),
     maxContextTurns: positiveInteger(env.TAGENT_MAX_CONTEXT_TURNS, 20, "TAGENT_MAX_CONTEXT_TURNS"),
-    contextReserveTokens: env.TAGENT_CONTEXT_RESERVE_TOKENS === undefined ? undefined : positiveInteger(env.TAGENT_CONTEXT_RESERVE_TOKENS, 10_000, "TAGENT_CONTEXT_RESERVE_TOKENS"),
-    dynamicBudget: env.TAGENT_DYNAMIC_BUDGET !== "false",
     controlInboxCapacity: positiveInteger(env.TAGENT_CONTROL_INBOX_CAPACITY, 32, "TAGENT_CONTROL_INBOX_CAPACITY"),
     serviceCredentials: parseServiceCredentials(env.TAGENT_SERVICE_CREDENTIALS),
     memory: loadMemoryConfig(env),
@@ -238,10 +230,7 @@ export interface PublicRuntimeConfig {
   runTimeoutMs: number;
   runHardTimeoutMs: number;
   maxContinuations: number;
-  maxRunTokens: number;
   maxContextTurns: number;
-  contextReserveTokens?: number;
-  dynamicBudget: boolean;
   controlInboxCapacity: number;
   schemaVersion?: number;
   memoryEnabled: boolean;
@@ -264,10 +253,7 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     runTimeoutMs: config.runTimeoutMs,
     runHardTimeoutMs: config.runHardTimeoutMs,
     maxContinuations: config.maxContinuations,
-    maxRunTokens: config.maxRunTokens,
     maxContextTurns: config.maxContextTurns,
-    contextReserveTokens: config.contextReserveTokens,
-    dynamicBudget: config.dynamicBudget,
     controlInboxCapacity: config.controlInboxCapacity,
     schemaVersion,
     memoryEnabled: config.memory.enabled,

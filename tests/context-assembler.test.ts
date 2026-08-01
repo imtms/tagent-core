@@ -20,11 +20,10 @@ describe("ContextAssembler", () => {
     expect(estimateTextTokens("中文中文中文中文")).toBeGreaterThan(estimateTextTokens("abcdefgh"));
   });
 
-  it("subtracts system, prompt, model output, and safety reserves", () => {
-    const result = new ContextAssembler({ contextWindow: 20_000, maxOutputTokens: 4_000, maxTurns: 20, reserveTokens: 2_000 })
-      .assemble("session", [], "S".repeat(400), "Q".repeat(200));
-    expect(result.stats).toMatchObject({ contextWindow: 20_000, outputReserveTokens: 4_000, safetyReserveTokens: 2_000 });
-    expect(result.stats.messageBudgetTokens).toBe(20_000 - result.stats.systemTokens - result.stats.promptTokens - 4_000 - 2_000);
+  it("reports context usage without enforcing a Core token budget", () => {
+    const result = new ContextAssembler({ contextWindow: 20_000, maxOutputTokens: 4_000, maxTurns: 10 }).assemble("session", [], "S".repeat(400), "Q".repeat(200));
+    expect(result.stats).toMatchObject({ contextWindow: 20_000, originalMessages: 0, keptMessages: 0 });
+    expect(result.stats).not.toHaveProperty("messageBudgetTokens");
   });
 
   it("preserves stable durable source IDs through selection and omission", () => {
@@ -32,14 +31,14 @@ describe("ContextAssembler", () => {
       { role: "user", content: "old", timestamp: 1 }, assistant("old answer"),
       { role: "user", content: "new", timestamp: 2 }, assistant("new answer"),
     ];
-    const result = new ContextAssembler({ contextWindow: 50_000, maxOutputTokens: 1_000, maxTurns: 1, reserveTokens: 1_000 })
+    const result = new ContextAssembler({ contextWindow: 50_000, maxOutputTokens: 1_000, maxTurns: 1 })
       .assemble("session", messages, "system", "prompt", ["message:10", "message:11", "message:12", "message:13"]);
     expect(result.contextItems.filter((item) => item.selected).map((item) => item.sourceId)).toEqual(["message:12", "message:13"]);
     expect(result.contextItems.filter((item) => !item.selected).map((item) => item.sourceId)).toEqual(["message:10", "message:11"]);
   });
 
   it("keeps original source IDs when a tool-heavy turn is compressed", () => {
-    const result = new ContextAssembler({ contextWindow: 2_500, maxOutputTokens: 500, maxTurns: 20, reserveTokens: 500 })
+    const result = new ContextAssembler({ contextWindow: 2_500, maxOutputTokens: 500, maxTurns: 20 })
       .assemble("transcript", [{ role: "user", content: "question", timestamp: 1 }, assistant("final", [
         { type: "thinking", thinking: "R".repeat(2_000) },
         { type: "toolCall", id: "call-1", name: "write", arguments: { content: "X".repeat(8_000) } },
@@ -51,28 +50,24 @@ describe("ContextAssembler", () => {
   it("enforces the maximum complete-turn limit", () => {
     const messages: AgentMessage[] = [];
     for (let index = 0; index < 5; index += 1) messages.push({ role: "user", content: `u${index}`, timestamp: index }, assistant(`a${index}`));
-    const result = new ContextAssembler({ contextWindow: 50_000, maxOutputTokens: 1_000, maxTurns: 3, reserveTokens: 1_000 })
+    const result = new ContextAssembler({ contextWindow: 50_000, maxOutputTokens: 1_000, maxTurns: 3 })
       .assemble("session", messages, "system", "prompt");
     expect(result.messages).toHaveLength(6);
     expect(result.messages[0]).toMatchObject({ role: "user", content: "u2" });
     expect(result.stats).toMatchObject({ originalTurns: 5, keptTurns: 3, droppedTurns: 2 });
     expect(result.contextItems.filter((item) => item.selected)).toHaveLength(6);
     expect(result.contextItems.filter((item) => !item.selected)).toHaveLength(4);
-    expect(result.contextItems.find((item) => !item.selected)?.reason).toContain("budget");
+    expect(result.contextItems.find((item) => !item.selected)?.reason).toContain("turn limit");
   });
 
-  it("compresses a tool-heavy turn to user and final assistant text before dropping it", () => {
-    const toolHeavy = assistant("", [
-      { type: "thinking", thinking: "R".repeat(2_000) },
-      { type: "toolCall", id: "call-1", name: "write", arguments: { content: "X".repeat(8_000) } },
-      { type: "text", text: "final answer" },
-    ]);
-    const messages: AgentMessage[] = [{ role: "user", content: "keep this question", timestamp: 1 }, toolHeavy];
-    const result = new ContextAssembler({ contextWindow: 2_500, maxOutputTokens: 500, maxTurns: 20, reserveTokens: 500 })
-      .assemble("transcript", messages, "system", "prompt");
+  it("preserves the selected recent turn while observing its token use", () => {
+    const messages = [
+      { role: "user", content: "do work", timestamp: 1 },
+      assistant("final answer", [{ type: "thinking", thinking: "R".repeat(2_000) }, { type: "toolCall", id: "call-1", name: "write", arguments: { content: "X".repeat(5_000) } }, { type: "text", text: "final answer" }]),
+    ] as AgentMessage[];
+    const result = new ContextAssembler({ contextWindow: 1_000, maxOutputTokens: 100, maxTurns: 1 }).assemble("transcript", messages, "system", "prompt");
     expect(result.messages).toHaveLength(2);
-    expect(result.messages[1]).toMatchObject({ role: "assistant", content: [{ type: "text", text: "final answer" }] });
-    expect(result.stats.compressedTurns).toBe(1);
-    expect(JSON.stringify(result.messages)).not.toContain("toolCall");
+    expect(result.stats.keptTurns).toBe(1);
+    expect(result.stats.estimatedMessageTokens).toBeGreaterThan(1_000);
   });
 });

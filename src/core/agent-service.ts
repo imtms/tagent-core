@@ -29,7 +29,7 @@ export class AgentService {
     private readonly store: Store,
     private readonly workspace: string,
     private readonly runtimeFactory: RuntimeFactory = createInProcessRuntime,
-    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { maxContinuations?: number; maxRunTokens?: number; contextWindow?: number; maxContextTurns?: number; contextReserveTokens?: number; dynamicBudget?: boolean; controlInboxCapacity?: number; memoryRecallTokenBudget?: number } = {},
+    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { maxContinuations?: number; contextWindow?: number; maxContextTurns?: number; controlInboxCapacity?: number } = {},
     private readonly memory?: MemoryFacade,
     private readonly memoryScopeId = "default",
   ) {
@@ -352,7 +352,8 @@ export class AgentService {
 
   private buildContractPrompt(run: TaskRun, sourceInput: string) {
     if (!run.contract) return sourceInput;
-    return [`TaskRun goal: ${run.contract.summary}`, `Scope: ${run.contract.scope}`, run.contract.nonGoals.length ? `Non-goals:
+    return [`TaskRun goal: ${run.contract.summary}`, `Semantic objectives:
+${run.contract.objectives.map((item) => `- [${item.timing}/${item.kind}] ${item.summary}`).join("\n")}`, `Scope: ${run.contract.scope}`, run.contract.nonGoals.length ? `Non-goals:
 ${run.contract.nonGoals.map((item) => `- ${item}`).join("\n")}` : "", `Acceptance criteria:
 ${run.contract.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`, `Original user input:
 ${sourceInput}`].filter(Boolean).join("\n\n");
@@ -389,8 +390,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     const checkpointBase = this.store.getRun(run.id) ?? run;
     this.checkpointDrafts.set(run.id, { runId: run.id, attempt: run.attempt, active: true, assistantPartial: "", currentTool: null, lastEventSeq: checkpointBase.lastEventSeq });
     this.flushCheckpoint(run.id);
-    const budget = this.executionBudget(run);
-    const idleTimeoutMs = budget.runTimeoutMs;
+    const idleTimeoutMs = this.runtimeDefaults.runTimeoutMs ?? 7_200_000;
     const hardTimeoutMs = this.runtimeDefaults.runHardTimeoutMs ?? 86_400_000;
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     let hardTimer: ReturnType<typeof setTimeout> | undefined;
@@ -429,40 +429,6 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       memory: this.memory,
       memoryScopeId: this.memoryScopeId,
       memorySubjectId: `session:${run.sessionId}`,
-      softRunTokens: run.usage.totalTokens < budget.softTokens ? budget.softTokens : undefined,
-      maxRunTokens: budget.maxTokens,
-      onTokenBudgetWarning: ({ totalTokens, softLimit, hardLimit }) => {
-        const current = this.store.getRun(run.id);
-        if (!current || current.status !== "running") return;
-        this.publish(this.store.appendEvent(run.id, "run.token_budget.warning", { tier: budget.tier, totalTokens, softLimit, hardLimit }));
-        this.flushCheckpoint(run.id);
-        const checkpoint = this.store.getCheckpoint(run.id);
-        const hasVisibleDraft = Boolean(checkpoint?.assistantPartial.trim());
-        const instruction = `Token budget checkpoint: ${totalTokens.toLocaleString()} tokens have been used. The hard ceiling is ${(hardLimit ?? budget.maxTokens).toLocaleString()}. Continue working, but compact context where useful, avoid repeating completed investigation, prioritize unresolved required plan/check items, and finish with verification before the hard ceiling.`;
-        if (hasVisibleDraft) {
-          this.publish(this.store.appendEvent(run.id, "run.token_budget.warning.deferred", { tier: budget.tier, totalTokens, softLimit, hardLimit, reason: "assistant_response_in_progress" }));
-          return;
-        }
-        void runtime.steer(instruction).then((status) => {
-          const active = this.store.getRun(run.id);
-          if (active?.status === "running") this.publish(this.store.appendEvent(run.id, "run.token_budget.warning.steered", { status, tier: budget.tier, totalTokens, softLimit, hardLimit }));
-        }).catch((error: unknown) => {
-          const active = this.store.getRun(run.id);
-          if (active?.status === "running") this.publish(this.store.appendEvent(run.id, "run.token_budget.warning.delivery_failed", { error: error instanceof Error ? error.message : String(error) }));
-        });
-      },
-      onTokenBudgetExceeded: ({ totalTokens, limit }) => {
-        const current = this.store.getRun(run.id);
-        if (!current || current.status !== "running") return;
-        const message = `Run stopped after reaching the ${limit.toLocaleString()} token budget (${totalTokens.toLocaleString()} used)`;
-        const event = this.store.transitionRun(run.id, ["running"], "blocked", "run.blocked", { reason: "token_budget", limit, totalTokens }, message, run.attempt);
-        if (event) {
-          this.store.appendMessage(run.sessionId, "assistant", message);
-          this.publish(event);
-          this.publish(this.store.appendEvent(run.id, "continuation.exhausted", { reason: "token_budget", tier: budget.tier, limit, totalTokens }));
-        }
-        void this.abortRuntime(runtime, run.id);
-      },
       onActivity: touchActivity,
       onEvent: (event) => {
         touchActivity();
@@ -617,53 +583,18 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
 
 
 
-  private executionBudget(run: TaskRun) {
-    const hardContinuations = this.runtimeDefaults.maxContinuations ?? 128;
-    const hardTokens = this.runtimeDefaults.maxRunTokens ?? 8_000_000;
-    if (this.runtimeDefaults.dynamicBudget === false) return { tier: "fixed", softTokens: hardTokens, maxContinuations: hardContinuations, maxTokens: hardTokens, runTimeoutMs: this.runtimeDefaults.runTimeoutMs ?? 900_000 };
-
-    let score = Math.min(6, Math.ceil(run.goal.length / 240));
-    if (/(implement|develop|refactor|migrate|audit|debug|test|build|deploy|实现|开发|重构|迁移|审计|调试|测试|构建|部署)/i.test(run.goal)) score += 3;
-    if (/(multi|multiple|across|end[- ]to[- ]end|architecture|database|frontend|backend|多轮|多个|跨|架构|数据库|前端|后端)/i.test(run.goal)) score += 3;
-    // Budget classification must depend only on immutable admission data.
-    // Plans, checks, and continuations are agent-controlled mutable state; using
-    // them here allowed a Run to enlarge its own token ceiling while executing.
-    const tier = score >= 10 ? "extended" : score >= 7 ? "complex" : score >= 4 ? "standard" : "simple";
-    const presets = {
-      simple: { softTokens: 80_000, runTimeoutMs: 300_000 },
-      standard: { softTokens: 240_000, runTimeoutMs: 900_000 },
-      complex: { softTokens: 640_000, runTimeoutMs: 2_700_000 },
-      extended: { softTokens: 1_600_000, runTimeoutMs: 7_200_000 },
-    } as const;
-    return {
-      tier,
-      softTokens: Math.min(hardTokens, presets[tier].softTokens),
-      maxContinuations: hardContinuations,
-      maxTokens: hardTokens,
-      runTimeoutMs: Math.min(this.runtimeDefaults.runTimeoutMs ?? 7_200_000, presets[tier].runTimeoutMs),
-    };
-  }
-
   private queueContinuation(runId: RunId) {
     const run = this.store.getRun(runId);
     if (!run || run.status !== "blocked") return;
-    const budget = this.executionBudget(run);
-    const maxContinuations = budget.maxContinuations;
-    const maxRunTokens = budget.maxTokens;
+    const maxContinuations = this.runtimeDefaults.maxContinuations ?? 128;
     if (run.continuations.length >= maxContinuations) {
       const message = `Run remains blocked after ${maxContinuations} automatic continuation${maxContinuations === 1 ? "" : "s"}: ${run.blockedReason}`;
       this.store.appendMessage(run.sessionId, "assistant", message);
-      this.publish(this.store.appendEvent(runId, "continuation.exhausted", { reason: "max_continuations", tier: budget.tier, limit: maxContinuations }));
-      return;
-    }
-    if (run.usage.totalTokens >= maxRunTokens) {
-      const message = `Run remains blocked because the ${maxRunTokens.toLocaleString()} token continuation budget was exhausted: ${run.blockedReason}`;
-      this.store.appendMessage(run.sessionId, "assistant", message);
-      this.publish(this.store.appendEvent(runId, "continuation.exhausted", { reason: "token_budget", tier: budget.tier, limit: maxRunTokens, totalTokens: run.usage.totalTokens }));
+      this.publish(this.store.appendEvent(runId, "continuation.exhausted", { reason: "max_continuations", limit: maxContinuations }));
       return;
     }
     const continuation = this.store.queueContinuation(runId, run.blockedReason);
-    this.publish(this.store.appendEvent(runId, "continuation.queued", { continuationId: continuation.id, ordinal: continuation.ordinal, reason: continuation.reason, budget }));
+    this.publish(this.store.appendEvent(runId, "continuation.queued", { continuationId: continuation.id, ordinal: continuation.ordinal, reason: continuation.reason }));
   }
 
   private startQueuedContinuation(runId: RunId) {
@@ -721,11 +652,6 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
 
   replay(runId: RunId, after = 0) {
     return this.store.listEvents(runId, after);
-  }
-
-  getBudget(runId: RunId) {
-    const run = this.store.getRun(runId);
-    return run ? this.executionBudget(run) : undefined;
   }
 
   getRun(runId: RunId) {
@@ -821,7 +747,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
 
   private async prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter?: number) {
     const access = this.memoryAccess(run);
-    const [recall,coreSnapshot] = this.memory ? await Promise.all([this.memory.recall({ access, cue: query, tokenBudget: this.runtimeDefaults.memoryRecallTokenBudget ?? 8_000 }),this.memory.getCoreSnapshot?.(access)]) : [undefined,undefined];
+    const [recall,coreSnapshot] = this.memory ? await Promise.all([this.memory.recall({ access, cue: query }),this.memory.getCoreSnapshot?.(access)]) : [undefined,undefined];
     const coreSection=coreSnapshot?.markdown?`<core_memory revision="${coreSnapshot.revision}">
 ${coreSnapshot.markdown}
 </core_memory>`:"";
@@ -832,7 +758,7 @@ ${coreSnapshot.markdown}
     const memoryContextItems: ContextManifestItem[] = [
       ...(coreSnapshot?.markdown ? [{ kind: "core_memory" as const, sourceId: `${coreSnapshot.scope.type}:${coreSnapshot.scope.id}:revision:${coreSnapshot.revision}`, selected: true, reason: "stable core-memory injection", estimatedTokens: coreSnapshot.tokenCount, metadata: { revision: coreSnapshot.revision, sourceRecordIds: coreSnapshot.sourceRecordIds } }] : []),
       ...(recall?.cards.map((card) => ({ kind: "memory_card" as const, sourceId: card.id, selected: true, reason: `selected by Recall Trace v${recall.trace.version}`, estimatedTokens: estimateContextTokens(`${card.title}: ${card.content}`), metadata: { score: card.score, channels: card.retrievalChannels, topicIds: card.topicIds } })) ?? []),
-      ...(recall?.coldTopics.map((topic) => ({ kind: "cold_topic" as const, sourceId: topic.descriptor.topicId, selected: true, reason: "selected by topic routing and memory budget", estimatedTokens: topic.revision.tokenCount, metadata: { revision: topic.revision.revision } })) ?? []),
+      ...(recall?.coldTopics.map((topic) => ({ kind: "cold_topic" as const, sourceId: topic.descriptor.topicId, selected: true, reason: "selected by topic routing", estimatedTokens: topic.revision.tokenCount, metadata: { revision: topic.revision.revision } })) ?? []),
       ...(recall?.trace?.candidates?.filter((candidate) => candidate.outcome !== "selected").map((candidate) => ({ kind: "memory_card" as const, sourceId: candidate.id, selected: false, reason: candidate.reason ?? candidate.outcome, estimatedTokens: 0, metadata: { outcome: candidate.outcome, channels: candidate.channels, finalScore: candidate.finalScore } })) ?? []),
     ];
     return { ...assembly, recalledMemory: memorySection, memoryContextItems };
@@ -856,7 +782,6 @@ ${coreSnapshot.markdown}
       contextWindow,
       maxOutputTokens: this.runtimeDefaults.model?.maxTokens ?? Math.min(32_768, Math.floor(contextWindow * 0.2)),
       maxTurns: this.runtimeDefaults.maxContextTurns ?? 20,
-      reserveTokens: this.runtimeDefaults.contextReserveTokens,
     });
   }
 

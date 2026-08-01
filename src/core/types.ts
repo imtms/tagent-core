@@ -56,8 +56,9 @@ export interface ControlInboxItem {
 }
 
 export type SupervisorAction = "observe" | "steer" | "follow_up" | "request_evidence" | "pause_for_approval" | "wait_for_runtime" | "start_continuation" | "complete_taskrun" | "block_taskrun" | "spawn_taskrun";
-export interface GateFailure { kind: string; key: string; reason: string; disposition: "auto_fixable" | "needs_user_input" | "needs_approval" | "external_dependency" | "runtime_transient" | "budget_exhausted" | "non_recoverable" }
-export interface GateEvaluation { id: string; runId: RunId; attempt: number; checkpointSeq: number; gateType: "progress" | "evidence" | "completion" | "continuation" | "spawn"; passed: boolean; failures: GateFailure[]; inputManifestHash: string; createdAt: number }
+export interface GateFailure { kind: string; key: string; reason: string; disposition: "auto_fixable" | "needs_user_input" | "needs_approval" | "external_dependency" | "runtime_transient" | "non_recoverable" }
+export interface CriterionCoverage { criterion: string; status: "covered" | "unsupported" | "contradicted" | "blocked"; evidenceRefs: string[]; reason: string }
+export interface GateEvaluation { id: string; runId: RunId; attempt: number; checkpointSeq: number; gateType: "progress" | "evidence" | "contract" | "completion" | "continuation" | "spawn"; passed: boolean; failures: GateFailure[]; criterionCoverage?: CriterionCoverage[]; inputManifestHash: string; createdAt: number }
 export interface ProgressSnapshot { runId: RunId; attempt: number; checkpointSeq: number; meaningfulChanges: number; consecutiveFailures: number; repeatedOperations: number; lastProgressAt: number; lastDecisionId: string; updatedAt: number }
 export interface SupervisorDecision { id: string; runId: RunId; attempt: number; checkpointSeq: number; trigger: "checkpoint" | "settled" | "attempt_terminal" | "taskrun_terminal" | "manual"; action: SupervisorAction; reasonCode: string; rationale: string; confidence: number; instruction: string; candidateResponseHash: string; status: "proposed" | "executed" | "superseded" | "failed"; error: string; createdAt: number; executedAt: number | null }
 export interface SpawnProposal { id: string; runId: RunId; goal: string; acceptanceCriteria: string[]; relation: "depends_on" | "follow_up" | "parallel" | "derived"; status: "proposed" | "approved" | "spawned" | "rejected"; spawnedRunId: string; createdAt: number; updatedAt: number }
@@ -82,8 +83,10 @@ export interface ContextManifest {
 }
 
 export type SessionInputIntent = "steer_active" | "follow_up_active" | "update_active_context" | "new_task" | "parallel_task" | "merge_candidate" | "discussion" | "clarification" | "defer";
+export interface TaskObjective { id: string; summary: string; timing: "current" | "follow_up" | "parallel"; kind: "change" | "investigate" | "verify" | "document" | "release" | "answer" | "other" }
 export interface SessionInputAnalysis {
   summary: string;
+  objectives: TaskObjective[];
   intent: SessionInputIntent;
   targetRunId: RunId | null;
   priority: number;
@@ -99,6 +102,7 @@ export interface SessionInputAnalysis {
 export interface TaskRunContract {
   sourceInput: string;
   summary: string;
+  objectives: TaskObjective[];
   acceptanceCriteria: string[];
   scope: string;
   nonGoals: string[];

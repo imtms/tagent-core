@@ -34,10 +34,6 @@ export interface RuntimeOptions {
   runHardTimeoutMs?: number;
   onActivity?: () => void;
   onEvent?: (event: RunEvent) => void;
-  softRunTokens?: number;
-  maxRunTokens?: number;
-  onTokenBudgetWarning?: (usage: { totalTokens: number; softLimit: number; hardLimit?: number }) => void;
-  onTokenBudgetExceeded?: (usage: { totalTokens: number; limit: number }) => void;
   memory?: MemoryFacade;
   memoryScopeId?: string;
   memorySubjectId?: string;

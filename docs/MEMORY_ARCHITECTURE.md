@@ -174,7 +174,7 @@ cue read gate
   -> recalled_memory prompt section
 ```
 
-Hot/Warm cards and complete Cold pages share one hard memory token budget. Cards are admitted in rank order; a complete Cold page is skipped rather than truncated when it cannot fit. Recall may legitimately return zero cards instead of filling Top-K with unrelated memory.
+Hot/Warm cards and complete Cold pages are selected by relevance thresholds, policy, diversity, domain routing, and configured result counts. TAgent Core does not apply a Memory token budget. Recall may legitimately return zero cards instead of filling Top-K with unrelated memory; upstream context-window handling remains a provider/runtime concern.
 
 Automatic recall is complemented by Agent tools:
 

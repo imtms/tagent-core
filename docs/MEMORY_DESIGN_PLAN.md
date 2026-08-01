@@ -832,7 +832,7 @@ export interface RecallRequest {
 4. Merge candidates using stable IDs and kind-specific ranking.
 5. Convert candidates to Topic IDs through direct links and Topic Descriptors.
 6. Apply read gates before any Cold load.
-7. Select at most the configured number of Cold topics under token budget.
+7. Select at most the configured number of Cold topics by relevance and policy; token use is observed, not controlled by Core.
 8. Resolve catalog revisions and read each complete page.
 9. Verify checksum, scope, state, and page size.
 10. Apply prompt-injection gate and build delimited prompt sections.
@@ -1040,7 +1040,7 @@ For a new Run:
 
 1. load and budget recent Session messages with the existing `ContextAssembler`;
 2. call `memory.recall()` with the current user cue, active TaskRun, and trusted access context;
-3. reserve a separate memory token budget;
+3. record estimated memory token use for observability without enforcing a Core budget;
 4. append a generated recalled-memory section to the system/prompt assembly;
 5. persist `memory.recall.completed` with counts and reference hashes, not bodies;
 6. start the Pi runtime.
@@ -1259,7 +1259,7 @@ Implement:
 
 - inject optional `MemoryFacade` into `AgentService`;
 - trusted `AccessContext` factory;
-- memory token budgets in prompt assembly;
+- observed memory token usage in prompt assembly;
 - recall before runtime launch;
 - recall events and provenance trace;
 - `memory_search` and `memory_get` tools.

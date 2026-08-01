@@ -16,7 +16,7 @@ Every composer submission is persisted with a structured analysis:
 - acceptance criteria;
 - confidence, reason, and router version.
 
-The current deterministic router uses conservative, auditable rules (`rules-v2`). It does not let an LLM directly mutate durable state.
+The current deterministic semantic router uses auditable rules (`semantic-rules-v3`). It decomposes compound input into persisted objectives with timing and work-kind metadata before policy selects the durable action. It does not let an LLM directly mutate durable state.
 
 | Input class | Durable action |
 |---|---|
@@ -78,11 +78,11 @@ These decisions are persisted with the `attempt_terminal` or `settled` trigger i
 
 Assistant text shown while a TaskRun is running is provisional runtime output. It is not a durable chat answer until settled review approves it.
 
-At every assistant-message boundary the runtime emits `message.started`, which resets the durable partial checkpoint and the Web live card before accepting new deltas. This prevents a steer, retry, or continuation response from being concatenated onto an earlier draft. Token-budget convergence guidance is deferred when an assistant response is already streaming, so a completed answer is not displaced by a later acknowledgement of the budget warning. If completion gates reject the candidate, the service emits `message.rejected`, retains the candidate in the Run transcript for audit, and does not append it to Session chat history.
+At every assistant-message boundary the runtime emits `message.started`, which resets the durable partial checkpoint and the Web live card before accepting new deltas. This prevents a steer, retry, or continuation response from being concatenated onto an earlier draft. If completion gates reject the candidate, the service emits `message.rejected`, retains the candidate in the Run transcript for audit, and does not append it to Session chat history.
 
-In addition to Plan, Check, evidence, progress, and non-empty delivery checks, settled review applies a conservative TaskRun contract-coverage gate. A short generic acknowledgement such as “received, completed” cannot finish a substantial contract merely because agent-authored state says that work passed. Auto-fixable delivery failures create a continuation whose prompt explicitly requires a complete standalone replacement addressing the original contract.
+In addition to Plan, Check, evidence, progress, and non-empty delivery checks, settled review now produces criterion-by-criterion contract coverage and validates completion claims against independent Check evidence, successful Operation receipts, or published Artifacts. A short generic acknowledgement such as “received, completed” cannot finish a substantial contract merely because agent-authored state says that work passed. Auto-fixable delivery failures create a continuation whose prompt explicitly requires a complete standalone replacement addressing the original contract.
 
-This is a deterministic safety floor, not full semantic answer grading. Rich claim-to-evidence validation and independent semantic review remain roadmap work.
+This is a deterministic, independently evidenced safety floor rather than a second free-form agent. Criterion receipts expose covered, unsupported, contradicted, and blocked outcomes; unsupported completion claims trigger continuation instead of durable delivery.
 
 ## Context Manifest
 
@@ -98,7 +98,7 @@ This closes the basic explainability gap between Context Assembler decisions and
 
 ## Current boundary
 
-The deterministic router covers the high-confidence safety and orchestration paths required for stable operation. Durable Run approval requests and their Approve/Reject Web flow are implemented. Future versions may add a schema-validated classifier for ambiguous multi-intent input, semantic clustering beyond canonical summary equality, dedicated lightweight discussion turns, dependency-aware parallel execution, and cross-Session Topic routing.
+The semantic-rules-v3 router covers high-confidence safety paths and decomposes compound requests into explicit objectives, acceptance criteria, timing, scope, and relation metadata. Durable Run approval requests and their Approve/Reject Web flow are implemented. Future versions may add a schema-validated classifier for ambiguous multi-intent input, semantic clustering beyond canonical summary equality, dedicated lightweight discussion turns, dependency-aware parallel execution, and cross-Session Topic routing.
 
 
 ## Design alignment audit
@@ -107,7 +107,7 @@ The current implementation covers the durable Session Inbox, high-confidence inp
 
 - Topic is not yet a first-class cross-Session graph with message/Run links, confidence, merge, split, and correction receipts.
 - Context Manifests now persist Session/transcript, TaskRun, prompt, and Memory selection. First-class Supervisor Topic links and stable cross-Session message identities remain incomplete.
-- Ambiguous multi-intent routing is deterministic only; there is no schema-validated semantic classifier or human confirmation path for low-confidence analysis.
+- Multi-intent decomposition is deterministic and persisted, but ambiguous low-confidence classification still lacks an optional schema-validated model adjudicator and explicit user confirmation UI.
 - Discussion and clarification still use a lightweight TaskRun contract rather than a dedicated conversation-only runtime.
 - Parallel proposals require explicit approval and manual start; there is no dependency-aware concurrent scheduler.
 - Safety approvals currently govern Supervisor pauses and spawn proposals, not every high-risk operation through one capability-policy system.

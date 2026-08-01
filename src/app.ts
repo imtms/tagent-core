@@ -128,12 +128,12 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const { id } = request.params as { id: string };
     const limit = Math.min(200, Math.max(1, Number((request.query as { limit?: string }).limit ?? 50)));
     if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
-    return store.listRuns(id, limit).map((run) => ({ ...run, budget: service.getBudget(run.id) }));
+    return store.listRuns(id, limit).map((run) => run);
   });
   app.get("/api/sessions/:id/run", async (request) => {
     const { id } = request.params as { id: string };
     const run = store.getLatestRun(id);
-    return run ? { ...run, budget: service.getBudget(run.id) } : null;
+    return run ?? null;
   });
   app.get("/api/sessions/:id/submissions/:requestId", async (request, reply) => {
     const { id, requestId } = request.params as { id: string; requestId: string };
@@ -322,7 +322,7 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const { id } = request.params as { id: string };
     const run = service.getRun(id);
     if (!run) return reply.code(404).send({ error: "run not found" });
-    return { ...run, budget: service.getBudget(id) };
+    return run;
   });
   app.post("/api/runs/:id/consumers/:consumerId/claim", async (request, reply) => {
     const { id, consumerId } = request.params as { id: string; consumerId: string };
