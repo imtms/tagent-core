@@ -1,4 +1,10 @@
 ## [Unreleased]
+
+### Changed
+- Added continuous Memory lifecycle metadata for first/last confirmation, confirmation counts, recall usage, staleness, tombstones, grace periods, and purge scheduling.
+- Added kind-specific retention for facts, preferences, episodes, and procedures; repeated evidence now reactivates stale canonical records.
+- Cold Topic consolidation now separates active current state from stale, superseded, and disputed history.
+- Memory forget is now reversible during a configurable grace period through `POST /api/memory/restore`; physical purge is asynchronous.
 ### Memory correctness and scale
 
 - separated raw capture source from extracted record evidence;

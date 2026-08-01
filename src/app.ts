@@ -82,9 +82,16 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
   });
   app.post("/api/memory/forget", async (request, reply) => {
     if (!memory) return reply.code(503).send({ error: "memory is disabled" });
-    const body = request.body as { scope?: MemoryScope; ids?: string[]; topicIds?: string[] };
+    const body = request.body as { scope?: MemoryScope; ids?: string[]; topicIds?: string[]; reason?: string; gracePeriodMs?: number };
     if (!body.scope) return reply.code(400).send({ error: "scope is required" });
-    return memory.forget({ access: memoryAccess(request, [body.scope], "memory_admin"), scope: body.scope, ids: body.ids, topicIds: body.topicIds });
+    return memory.forget({ access: memoryAccess(request, [body.scope], "memory_admin"), scope: body.scope, ids: body.ids, topicIds: body.topicIds, reason: body.reason, gracePeriodMs: body.gracePeriodMs });
+  });
+
+  app.post("/api/memory/restore", async (request, reply) => {
+    if (!memory) return reply.code(503).send({ error: "memory is disabled" });
+    const body = request.body as { scope?: MemoryScope; ids?: string[] };
+    if (!body.scope || !body.ids?.length) return reply.code(400).send({ error: "scope and ids are required" });
+    return memory.restore({ access: memoryAccess(request, [body.scope], "memory_admin"), scope: body.scope, ids: body.ids });
   });
 
   app.get("/api/health", async (_request, reply) => {

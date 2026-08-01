@@ -52,6 +52,16 @@ export type MemoryConfig =
       coldMinimumRecords: number;
       warmAfterMs: number;
       hotTtlMs: number;
+      candidateTtlMs: number;
+      deletedGracePeriodMs: number;
+      retentionFactStaleMs: number;
+      retentionFactDeleteMs: number;
+      retentionPreferenceStaleMs: number;
+      retentionPreferenceDeleteMs: number;
+      retentionEpisodeStaleMs: number;
+      retentionEpisodeDeleteMs: number;
+      retentionProcedureStaleMs: number;
+      retentionProcedureDeleteMs: number;
       embeddingProvider: "hash" | "openai" | "none";
       embeddingBaseUrl?: string;
       embeddingApiKey?: string;
@@ -137,6 +147,16 @@ function loadMemoryConfig(env: NodeJS.ProcessEnv): MemoryConfig {
     coldMinimumRecords: positiveInteger(env.TAGENT_MEMORY_COLD_MINIMUM_RECORDS, 2, "TAGENT_MEMORY_COLD_MINIMUM_RECORDS"),
     warmAfterMs: nonNegativeInteger(env.TAGENT_MEMORY_WARM_AFTER_MS, 0, "TAGENT_MEMORY_WARM_AFTER_MS"),
     hotTtlMs: positiveInteger(env.TAGENT_MEMORY_HOT_TTL_MS, 2_592_000_000, "TAGENT_MEMORY_HOT_TTL_MS"),
+    candidateTtlMs: positiveInteger(env.TAGENT_MEMORY_CANDIDATE_TTL_MS, 7_776_000_000, "TAGENT_MEMORY_CANDIDATE_TTL_MS"),
+    deletedGracePeriodMs: positiveInteger(env.TAGENT_MEMORY_DELETED_GRACE_PERIOD_MS, 2_592_000_000, "TAGENT_MEMORY_DELETED_GRACE_PERIOD_MS"),
+    retentionFactStaleMs: positiveInteger(env.TAGENT_MEMORY_FACT_STALE_MS, 31_536_000_000, "TAGENT_MEMORY_FACT_STALE_MS"),
+    retentionFactDeleteMs: positiveInteger(env.TAGENT_MEMORY_FACT_DELETE_MS, 63_072_000_000, "TAGENT_MEMORY_FACT_DELETE_MS"),
+    retentionPreferenceStaleMs: positiveInteger(env.TAGENT_MEMORY_PREFERENCE_STALE_MS, 31_536_000_000, "TAGENT_MEMORY_PREFERENCE_STALE_MS"),
+    retentionPreferenceDeleteMs: positiveInteger(env.TAGENT_MEMORY_PREFERENCE_DELETE_MS, 63_072_000_000, "TAGENT_MEMORY_PREFERENCE_DELETE_MS"),
+    retentionEpisodeStaleMs: positiveInteger(env.TAGENT_MEMORY_EPISODE_STALE_MS, 7_776_000_000, "TAGENT_MEMORY_EPISODE_STALE_MS"),
+    retentionEpisodeDeleteMs: positiveInteger(env.TAGENT_MEMORY_EPISODE_DELETE_MS, 15_552_000_000, "TAGENT_MEMORY_EPISODE_DELETE_MS"),
+    retentionProcedureStaleMs: positiveInteger(env.TAGENT_MEMORY_PROCEDURE_STALE_MS, 15_552_000_000, "TAGENT_MEMORY_PROCEDURE_STALE_MS"),
+    retentionProcedureDeleteMs: positiveInteger(env.TAGENT_MEMORY_PROCEDURE_DELETE_MS, 31_536_000_000, "TAGENT_MEMORY_PROCEDURE_DELETE_MS"),
     embeddingProvider: memoryEmbeddingProvider(env),
     embeddingBaseUrl: env.TAGENT_MEMORY_EMBEDDING_BASE_URL?.trim() || undefined,
     embeddingApiKey: env.TAGENT_MEMORY_EMBEDDING_API_KEY?.trim() || undefined,

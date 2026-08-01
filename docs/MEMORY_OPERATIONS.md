@@ -231,3 +231,25 @@ Assistant responses and mixed raw context-prune transcripts are not capture sour
 The recall token budget is a hard combined ceiling for safe Hot/Warm cards plus complete Cold Topic pages. If a card or complete Cold page does not fit, it is omitted rather than overflowing the prompt or truncating Cold content.
 
 Required CI starts PostgreSQL 17 from `pgvector/pgvector:pg17`, creates a test-named database, and runs the PostgreSQL memory suite with pgvector and pg_trgm enabled.
+
+
+## Aging, retention, and reversible forgetting
+
+The maintenance interval runs promotion, aging, consolidation, reconciliation, and purge checks. Defaults are deliberately conservative:
+
+```env
+TAGENT_MEMORY_CANDIDATE_TTL_MS=7776000000
+TAGENT_MEMORY_DELETED_GRACE_PERIOD_MS=2592000000
+TAGENT_MEMORY_FACT_STALE_MS=31536000000
+TAGENT_MEMORY_FACT_DELETE_MS=63072000000
+TAGENT_MEMORY_PREFERENCE_STALE_MS=31536000000
+TAGENT_MEMORY_PREFERENCE_DELETE_MS=63072000000
+TAGENT_MEMORY_EPISODE_STALE_MS=7776000000
+TAGENT_MEMORY_EPISODE_DELETE_MS=15552000000
+TAGENT_MEMORY_PROCEDURE_STALE_MS=15552000000
+TAGENT_MEMORY_PROCEDURE_DELETE_MS=31536000000
+```
+
+Values are milliseconds. A record is not physically removed when `memory_forget` is called. It becomes a tombstone, disappears from recall and vectors immediately, and remains restorable until `purgeAfter`. Use `POST /api/memory/restore` during the grace period. Physical purge is asynchronous and bounded during maintenance.
+
+Retention is a safety net rather than the primary truth-update mechanism. Prefer explicit `validFrom`/`validTo`, canonical SPO supersession, and user correction. Recall activity updates usage counters only; it does not refresh `lastSeenAt` or extend the semantic lifetime of a fact.

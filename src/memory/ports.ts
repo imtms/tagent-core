@@ -5,7 +5,10 @@ export interface RecordStorePort {
   getByIds(ids: string[], scopes: MemoryScope[]): Promise<WarmMemory[]>;
   getByTopicIds(topicIds: string[], scopes: MemoryScope[], kinds: MemoryKind[], limit: number): Promise<WarmMemory[]>;
   list(scopes: MemoryScope[], kinds?: MemoryKind[], limit?: number): Promise<WarmMemory[]>;
-  forget(scopes: MemoryScope[], ids?: string[], topicIds?: string[]): Promise<number>;
+  forget(scopes: MemoryScope[], ids?: string[], topicIds?: string[], options?: { reason?: string; purgeAfter?: number }): Promise<number>;
+  restore?(scopes: MemoryScope[], ids: string[]): Promise<number>;
+  purgeDeleted?(scopes: MemoryScope[], now: number, limit: number): Promise<string[]>;
+  noteRecall?(ids: string[], scopes: MemoryScope[], at: number): Promise<void>;
 }
 export interface VectorIndexPort { upsert(documents: VectorDocument[]): Promise<void>; searchVectors(vector: number[], scopes: MemoryScope[], kinds: MemoryKind[], limit: number, generation?: string): Promise<VectorHit[]>; remove(refIds: string[]): Promise<void>; contentHashes?(refs:Array<{refType:VectorDocument["refType"];refId:string;generation:string}>):Promise<Map<string,string>>; removeMissing?(generation:string,active:Set<string>,scopes:MemoryScope[]):Promise<number>; garbageCollectGenerations?(activeGeneration:string,scopes:MemoryScope[]):Promise<number>; countGeneration?(generation:string,scopes:MemoryScope[]):Promise<number> }
 export interface GraphStorePort { upsertNodes(nodes: GraphNode[]): Promise<void>; upsertEdges(edges: GraphEdge[]): Promise<void>; resolveEntities(cue: string, scopes: MemoryScope[], limit: number): Promise<GraphNode[]>; neighborhood(entityIds: string[], scopes: MemoryScope[], depth: 1 | 2, limit: number): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> }
