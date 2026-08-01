@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ContextManifestItem } from "./types.js";
 
 export type ContextSource = "session" | "transcript";
 
@@ -13,6 +14,7 @@ export interface ContextAssemblerOptions {
 export interface ContextAssembly {
   messages: AgentMessage[];
   droppedMessages: AgentMessage[];
+  contextItems: ContextManifestItem[];
   stats: {
     source: ContextSource;
     contextWindow: number;
@@ -71,9 +73,15 @@ export class ContextAssembler {
     const keptMessages = kept.flatMap((turn) => turn.messages);
     const keptSourceTurns = Math.min(kept.length, turnLimited.length);
     const droppedMessages = originalTurns.slice(0, originalTurns.length - keptSourceTurns).flatMap((turn) => turn.messages);
+    const selectedKind: ContextManifestItem["kind"] = source === "session" ? "session_message" : "transcript_message";
+    const contextItems: ContextManifestItem[] = [
+      ...keptMessages.map((message, index) => ({ kind: selectedKind, sourceId: messageIdentity(message, index), role: message.role, selected: true, reason: "selected within recent-turn and token budget", estimatedTokens: estimateMessageTokens(message) })),
+      ...droppedMessages.map((message, index) => ({ kind: selectedKind, sourceId: messageIdentity(message, keptMessages.length + index), role: message.role, selected: false, reason: "dropped by turn or token budget", estimatedTokens: estimateMessageTokens(message) })),
+    ];
     return {
       messages: keptMessages,
       droppedMessages,
+      contextItems,
       stats: {
         source,
         contextWindow,
@@ -173,4 +181,9 @@ function truncateToolContent(message: AgentMessage, limit: number): AgentMessage
     return { ...part, arguments: { truncated: `${argumentsJson.slice(0, limit)}\n[Historical tool arguments truncated: ${argumentsJson.length} chars]` } };
   });
   return changed ? { ...message, content } as AgentMessage : message;
+}
+
+function messageIdentity(message: AgentMessage, index: number) {
+  const timestamp = "timestamp" in message && typeof message.timestamp === "number" ? message.timestamp : 0;
+  return `${message.role}:${timestamp}:${index}`;
 }

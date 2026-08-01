@@ -74,6 +74,18 @@ The TaskRun Supervisor distinguishes the designed terminal and runtime actions:
 
 These decisions are persisted with the `attempt_terminal` or `settled` trigger instead of converting every runtime exception directly to `run.failed`.
 
+## Context Manifest
+
+Every new Run, resume, and continuation now persists an immutable per-attempt Context Manifest. It records the required system instruction, TaskRun contract, selected and omitted Session/transcript messages, Core Memory, dynamic Memory Cards, Cold Topics, current prompt, selection reasons, token estimates, and a SHA-256 manifest hash.
+
+The latest manifest is visible in the TaskRun panel, and the full history is available from:
+
+```http
+GET /api/runs/:id/context-manifests
+```
+
+This closes the basic explainability gap between Context Assembler decisions and durable Supervisor diagnostics. The current manifest uses derived message identities; stable Message/Transcript IDs and Supervisor Topic links are part of the 0.2 roadmap.
+
 ## Current boundary
 
 The deterministic router covers the high-confidence safety and orchestration paths required for stable operation. Durable Run approval requests and their Approve/Reject Web flow are implemented. Future versions may add a schema-validated classifier for ambiguous multi-intent input, semantic clustering beyond canonical summary equality, dedicated lightweight discussion turns, dependency-aware parallel execution, and cross-Session Topic routing.
@@ -84,10 +96,13 @@ The deterministic router covers the high-confidence safety and orchestration pat
 The current implementation covers the durable Session Inbox, high-confidence input routing, TaskRun contracts, checkpoint/settled/attempt-terminal reviews, completion/evidence/continuation gates, explicit approval receipts, and approved spawn proposals. Compared with the original Session/Topic/TaskRun design, the following remain intentionally incomplete:
 
 - Topic is not yet a first-class cross-Session graph with message/Run links, confidence, merge, split, and correction receipts.
-- Context assembly does not yet persist a per-turn Context Manifest explaining every selected Session, TaskRun, Topic, and Memory item.
+- Context Manifests now persist Session/transcript, TaskRun, prompt, and Memory selection. First-class Supervisor Topic links and stable cross-Session message identities remain incomplete.
 - Ambiguous multi-intent routing is deterministic only; there is no schema-validated semantic classifier or human confirmation path for low-confidence analysis.
 - Discussion and clarification still use a lightweight TaskRun contract rather than a dedicated conversation-only runtime.
 - Parallel proposals require explicit approval and manual start; there is no dependency-aware concurrent scheduler.
 - Safety approvals currently govern Supervisor pauses and spawn proposals, not every high-risk operation through one capability-policy system.
 
 These are architectural roadmap items rather than claims of completed functionality.
+
+
+The explicit promotion criteria for the next minor version are maintained in [Roadmap to 0.2.0](ROADMAP_0.2.md).

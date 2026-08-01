@@ -35,6 +35,9 @@ describe("ContextAssembler", () => {
     expect(result.messages).toHaveLength(6);
     expect(result.messages[0]).toMatchObject({ role: "user", content: "u2" });
     expect(result.stats).toMatchObject({ originalTurns: 5, keptTurns: 3, droppedTurns: 2 });
+    expect(result.contextItems.filter((item) => item.selected)).toHaveLength(6);
+    expect(result.contextItems.filter((item) => !item.selected)).toHaveLength(4);
+    expect(result.contextItems.find((item) => !item.selected)?.reason).toContain("budget");
   });
 
   it("compresses a tool-heavy turn to user and final assistant text before dropping it", () => {

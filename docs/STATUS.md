@@ -6,7 +6,7 @@ Updated: 2026-08-01 (Asia/Singapore)
 
 ### Core control plane
 
-- SQLite-backed sessions, ordered conversation messages, Schema v5 durable event-consumer cursors, Schema v6 durable control inbox records, Schema v7 TaskRun supervision records, and Schema v11 semantic Session Supervisor Inbox, TaskRun contract, and durable approval-request records.
+- SQLite-backed sessions, ordered conversation messages, Schema v5 durable event-consumer cursors, Schema v6 durable control inbox records, Schema v7 TaskRun supervision records, and Schema v12 semantic Session Supervisor Inbox, TaskRun contracts, durable approval requests, and immutable Context Manifests.
 - Session Input Router is the normal admission path: input is summarized, classified, prioritized, and either routed to the active Run, converted to a gated spawn proposal, or atomically bound to a durable TaskRun contract.
 - Automatic Session dispatch is blocked by any running Run and by the latest blocked/interrupted Run, while older historical blocked/interrupted Runs remain auditable without permanently freezing the queue.
 - A user can explicitly start a selected queued Inbox item through a transactional `Run now` path; running Runs and active continuations retain concurrency priority and fencing.
@@ -54,6 +54,7 @@ Updated: 2026-08-01 (Asia/Singapore)
 - Resume/continuation context assembly prunes oldest complete turns to a 75% context-window budget while retaining the full transcript in SQLite.
 - New Run context reads the newest persisted Session message window in chronological order, including Sessions beyond 10,000 messages.
 - Active Runs persist a throttled checkpoint containing the current attempt, assistant partial text, current tool identity, and covered event/transcript sequences; text writes are coalesced to at most once per 500ms and tool boundaries persist immediately.
+- Every Run start, resume, and continuation persists an immutable Context Manifest with selected/omitted messages, TaskRun contract, Memory inputs, selection reasons, token estimates, and a stable hash; API and Web expose the latest diagnostics.
 - Terminal, blocked, interrupted, lease-recovered, and graceful-close paths archive checkpoints atomically or transactionally, preserving partial text for diagnostics without leaving a stale active checkpoint.
 - Resume and continuation attempts create a fresh active checkpoint while the full transcript remains authoritative in SQLite.
 
@@ -152,3 +153,8 @@ Updated: 2026-08-01 (Asia/Singapore)
 - Scoped Bearer credentials are available for supported automation routes, but the Web/administrative surface has no built-in login or complete multi-tenant isolation and must remain on localhost or a trusted private network.
 
 - Supervisor v3 adds edit reclassification, structured merge, explicit defer, attempt-terminal classification, request-evidence, wait-for-runtime, durable approval decisions, repeated-operation intervention, and approved derived TaskRun spawning.
+
+
+## Version trajectory
+
+The project remains on the `0.1.x` line while Topic orchestration, multi-intent supervision, unified capability approval, and dependency-aware scheduling are incomplete. See [Roadmap to 0.2.0](ROADMAP_0.2.md) for the required promotion gates.

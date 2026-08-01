@@ -258,6 +258,12 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     if (!run) return reply.code(404).send({ error: "run not found" });
     return { ...run.supervision, decisions: store.listSupervisorDecisions(id), edges: store.listTaskRunEdges(id) };
   });
+  app.get("/api/runs/:id/context-manifests", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!service.getRun(id)) return reply.code(404).send({ error: "run not found" });
+    const query = request.query as { limit?: string };
+    return store.listContextManifests(id, Math.min(100, Math.max(1, Number(query.limit ?? 20) || 20)));
+  });
   app.post("/api/approval-requests/:id/approve", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = (request.body ?? {}) as { resolution?: string };

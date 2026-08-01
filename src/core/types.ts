@@ -64,6 +64,23 @@ export interface SpawnProposal { id: string; runId: RunId; goal: string; accepta
 export interface TaskRunEdge { fromRunId: RunId; toRunId: RunId; relation: SpawnProposal["relation"] | "blocks" | "supersedes"; reason: string; createdAt: number }
 export interface ApprovalRequest { id: string; runId: RunId; decisionId: string; reason: string; status: "pending" | "approved" | "rejected" | "superseded"; requestedAt: number; resolvedAt: number | null; resolvedBy: string; resolution: string }
 
+export type ContextManifestSource = "session" | "transcript";
+export type ContextManifestItemKind = "system_prompt" | "taskrun_contract" | "session_message" | "transcript_message" | "core_memory" | "memory_card" | "cold_topic" | "user_prompt";
+export interface ContextManifestItem {
+  kind: ContextManifestItemKind;
+  sourceId: string;
+  role?: string;
+  selected: boolean;
+  reason: string;
+  estimatedTokens: number;
+  metadata?: Record<string, unknown>;
+}
+export interface ContextManifest {
+  id: string; runId: RunId; attempt: number; source: ContextManifestSource;
+  items: ContextManifestItem[]; stats: Record<string, number | string>;
+  manifestHash: string; createdAt: number;
+}
+
 export type SessionInputIntent = "steer_active" | "follow_up_active" | "update_active_context" | "new_task" | "parallel_task" | "merge_candidate" | "discussion" | "clarification" | "defer";
 export interface SessionInputAnalysis {
   summary: string;
@@ -193,7 +210,7 @@ export interface TaskRun {
   checks: RunCheck[];
   artifacts: Artifact[];
   completionGate: CompletionGate;
-  supervision: { latestDecision: SupervisorDecision | null; latestGates: GateEvaluation[]; progress: ProgressSnapshot | null; spawnProposals: SpawnProposal[]; approvalRequests: ApprovalRequest[] };
+  supervision: { latestDecision: SupervisorDecision | null; latestGates: GateEvaluation[]; progress: ProgressSnapshot | null; spawnProposals: SpawnProposal[]; approvalRequests: ApprovalRequest[]; latestContextManifest: ContextManifest | null };
   launchRetryable: boolean;
 }
 

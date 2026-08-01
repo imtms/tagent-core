@@ -214,6 +214,7 @@ See [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md) and [docs/REL
 ## Documentation
 
 - [Development status](docs/STATUS.md)
+- [Roadmap to 0.2.0](docs/ROADMAP_0.2.md)
 - [Runtime architecture](docs/RUNTIME.md)
 - [Pi runtime boundary](docs/PI_RUNTIME_BOUNDARY.md)
 - [Automation API contract](docs/core-api-contract.md)

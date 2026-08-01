@@ -25,6 +25,7 @@ export interface TaskRun {
     progress: { meaningfulChanges: number; consecutiveFailures: number; checkpointSeq: number; lastProgressAt: number } | null;
     spawnProposals: Array<{ id: string; goal: string; relation: string; status: "proposed" | "approved" | "spawned" | "rejected"; acceptanceCriteria?: string[] }>;
     approvalRequests: Array<{ id: string; decisionId: string; reason: string; status: "pending" | "approved" | "rejected" | "superseded"; requestedAt: number; resolvedAt: number | null; resolvedBy: string; resolution: string }>;
+    latestContextManifest: { id: string; source: "session" | "transcript"; attempt: number; manifestHash: string; createdAt: number; items: Array<{ kind: string; sourceId: string; selected: boolean; reason: string; estimatedTokens: number }> } | null;
   };
 }
 export interface EventConsumerCursor { runId: string; consumerId: string; generation: number; ackedSeq: number; terminalAckedSeq: number | null; claimedAt: number; updatedAt: number }

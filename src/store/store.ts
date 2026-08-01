@@ -6,6 +6,7 @@ import type {
   Artifact,
   CompletionGate,
   ControlInboxItem,
+  ContextManifest,
   GateEvaluation,
   ProgressSnapshot,
   SpawnProposal,
@@ -30,7 +31,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 12;
 
 export class Store {
   readonly db: Database.Database;
@@ -252,6 +253,12 @@ export class Store {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_requests_pending ON approval_requests(run_id) WHERE status = 'pending';
       CREATE INDEX IF NOT EXISTS idx_approval_requests_run ON approval_requests(run_id, requested_at);
+      CREATE TABLE IF NOT EXISTS context_manifests (
+        id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), attempt INTEGER NOT NULL,
+        source TEXT NOT NULL, items_json TEXT NOT NULL, stats_json TEXT NOT NULL,
+        manifest_hash TEXT NOT NULL, created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_context_manifests_run ON context_manifests(run_id, attempt, created_at);
       CREATE TABLE IF NOT EXISTS control_inbox (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL REFERENCES runs(id),
@@ -741,7 +748,7 @@ ${source.content}`;
       checks,
       artifacts,
       completionGate: { passed: true, failures: [] },
-      supervision: { latestDecision: this.listSupervisorDecisions(id).at(-1) ?? null, latestGates: this.listLatestGateEvaluations(id), progress: this.getProgressSnapshot(id) ?? null, spawnProposals: this.listSpawnProposals(id), approvalRequests: this.listApprovalRequests(id) },
+      supervision: { latestDecision: this.listSupervisorDecisions(id).at(-1) ?? null, latestGates: this.listLatestGateEvaluations(id), progress: this.getProgressSnapshot(id) ?? null, spawnProposals: this.listSpawnProposals(id), approvalRequests: this.listApprovalRequests(id), latestContextManifest: this.getLatestContextManifest(id) ?? null },
       launchRetryable: this.isInboxLaunchRetryable(id),
     };
     task.completionGate = this.evaluateGate(task);
@@ -1228,6 +1235,20 @@ ${source.content}`;
     return this.db.prepare(`UPDATE control_inbox SET status = ?, error = ?, completed_at = ? WHERE id = ? AND status = 'delivering'`)
       .run(status, error, now(), id).changes === 1;
   }
+
+  recordContextManifest(manifest: ContextManifest) {
+    this.db.prepare(`INSERT INTO context_manifests (id,run_id,attempt,source,items_json,stats_json,manifest_hash,created_at) VALUES (?,?,?,?,?,?,?,?)`).run(
+      manifest.id, manifest.runId, manifest.attempt, manifest.source, JSON.stringify(manifest.items), JSON.stringify(manifest.stats), manifest.manifestHash, manifest.createdAt,
+    );
+    return manifest;
+  }
+
+  listContextManifests(runId: RunId, limit = 20): ContextManifest[] {
+    const rows = this.db.prepare(`SELECT id,run_id as runId,attempt,source,items_json as itemsJson,stats_json as statsJson,manifest_hash as manifestHash,created_at as createdAt FROM context_manifests WHERE run_id = ? ORDER BY created_at DESC,id DESC LIMIT ?`).all(runId, limit) as Array<Omit<ContextManifest,"items"|"stats"> & {itemsJson:string;statsJson:string}>;
+    return rows.map(({itemsJson,statsJson,...row}) => ({...row,items:JSON.parse(itemsJson) as ContextManifest["items"],stats:JSON.parse(statsJson) as ContextManifest["stats"]}));
+  }
+
+  getLatestContextManifest(runId: RunId) { return this.listContextManifests(runId, 1)[0]; }
 
   recordSupervisorDecision(decision: SupervisorDecision) {
     this.db.prepare(`INSERT INTO supervisor_decisions

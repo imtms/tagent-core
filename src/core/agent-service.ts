@@ -1,9 +1,9 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Store } from "../store/store.js";
 import { createInProcessRuntime } from "../runtime/factory.js";
 import type { AgentRuntime, RuntimeFactory } from "../runtime/types.js";
-import type { RunCheckpoint, RunEvent, SessionId, SessionInboxItem, RunId, TaskRun } from "../core/types.js";
+import type { ContextManifestItem, RunCheckpoint, RunEvent, SessionId, SessionInboxItem, RunId, TaskRun } from "../core/types.js";
 import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 import { TaskRunSupervisor } from "./supervisor.js";
 import { SessionInputRouter } from "./session-input-router.js";
@@ -339,7 +339,7 @@ export class AgentService {
     return this.store.getRun(run.id)!;
   }
 
-  private completeClaimedSessionLaunch(item: SessionInboxItem, run: TaskRun, sessionHistory: ContextAssembly & { recalledMemory?: string }, retry: boolean) {
+  private completeClaimedSessionLaunch(item: SessionInboxItem, run: TaskRun, sessionHistory: ContextAssembly & { recalledMemory?: string; memoryContextItems?: ContextManifestItem[] }, retry: boolean) {
     if (!retry) {
       this.publish(this.store.appendEvent(run.id, "run.started", { goal: run.goal, sourceInput: item.content, contract: run.contract, source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: sessionHistory.messages.length }));
     }
@@ -743,7 +743,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     return this.prepareSessionHistory(run, run.goal).then((history) => { this.completeSpawnProposal(run, history); return this.store.getRun(run.id)!; }).catch((error) => { this.store.failSpawnedRun(proposalId, run.id, error instanceof Error ? error.message : String(error)); throw error; });
   }
 
-  private completeSpawnProposal(run: TaskRun, history: ContextAssembly & { recalledMemory?: string }) {
+  private completeSpawnProposal(run: TaskRun, history: ContextAssembly & { recalledMemory?: string; memoryContextItems?: ContextManifestItem[] }) {
     const userMessage = this.store.appendMessage(run.sessionId, "user", run.goal);
     this.captureUserMessage(run, userMessage.id, run.goal);
     this.publish(this.store.appendEvent(run.id, "run.started", { goal: run.goal, source: "spawn_proposal", sessionHistoryCount: history.messages.length }));
@@ -795,7 +795,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
   }
 
   private prepareSessionHistoryWithoutRecall(run: TaskRun, query: string, excludeCurrentUserAfter?: number) {
-    return { ...this.contextAssembler().assemble("session", this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter), this.buildSystemPrompt(run), query), recalledMemory: "" };
+    return { ...this.contextAssembler().assemble("session", this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter), this.buildSystemPrompt(run), query), recalledMemory: "", memoryContextItems: [] as ContextManifestItem[] };
   }
 
   private async prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter?: number) {
@@ -807,7 +807,13 @@ ${coreSnapshot.markdown}
     const memorySection=[coreSection,recall?.promptSection].filter(Boolean).join("\n\n");
     const assembly = this.contextAssembler().assemble("session", this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter), this.buildSystemPrompt(run, memorySection), query);
     this.capturePrunedUserContext(run, assembly.droppedMessages);
-    return { ...assembly, recalledMemory: memorySection };
+    const memoryContextItems: ContextManifestItem[] = [
+      ...(coreSnapshot?.markdown ? [{ kind: "core_memory" as const, sourceId: `${coreSnapshot.scope.type}:${coreSnapshot.scope.id}:revision:${coreSnapshot.revision}`, selected: true, reason: "stable core-memory injection", estimatedTokens: coreSnapshot.tokenCount, metadata: { revision: coreSnapshot.revision, sourceRecordIds: coreSnapshot.sourceRecordIds } }] : []),
+      ...(recall?.cards.map((card) => ({ kind: "memory_card" as const, sourceId: card.id, selected: true, reason: `selected by Recall Trace v${recall.trace.version}`, estimatedTokens: estimateContextTokens(`${card.title}: ${card.content}`), metadata: { score: card.score, channels: card.retrievalChannels, topicIds: card.topicIds } })) ?? []),
+      ...(recall?.coldTopics.map((topic) => ({ kind: "cold_topic" as const, sourceId: topic.descriptor.topicId, selected: true, reason: "selected by topic routing and memory budget", estimatedTokens: topic.revision.tokenCount, metadata: { revision: topic.revision.revision } })) ?? []),
+      ...(recall?.trace?.candidates?.filter((candidate) => candidate.outcome !== "selected").map((candidate) => ({ kind: "memory_card" as const, sourceId: candidate.id, selected: false, reason: candidate.reason ?? candidate.outcome, estimatedTokens: 0, metadata: { outcome: candidate.outcome, channels: candidate.channels, finalScore: candidate.finalScore } })) ?? []),
+    ];
+    return { ...assembly, recalledMemory: memorySection, memoryContextItems };
   }
 
   private capturePrunedUserContext(run: TaskRun, messages: AgentMessage[]) {
@@ -832,8 +838,21 @@ ${coreSnapshot.markdown}
     });
   }
 
-  private publishContextEvents(runId: RunId, assembly: ContextAssembly) {
+  private publishContextEvents(runId: RunId, assembly: ContextAssembly & { memoryContextItems?: ContextManifestItem[] }) {
     const { source, ...stats } = assembly.stats;
+    const run = this.store.getRun(runId);
+    if (run) {
+      const items: ContextManifestItem[] = [
+        { kind: "system_prompt", sourceId: `run:${runId}:attempt:${run.attempt}`, selected: true, reason: "required runtime instruction", estimatedTokens: stats.systemTokens },
+        ...(run.contract ? [{ kind: "taskrun_contract" as const, sourceId: run.requestId, selected: true, reason: "active TaskRun execution contract", estimatedTokens: estimateContextTokens(JSON.stringify(run.contract)) }] : []),
+        ...assembly.contextItems,
+        ...(assembly.memoryContextItems ?? []),
+        { kind: "user_prompt", sourceId: `run:${runId}:attempt:${run.attempt}:prompt`, selected: true, reason: "current runtime instruction", estimatedTokens: stats.promptTokens },
+      ];
+      const manifestHash = createHash("sha256").update(JSON.stringify({ runId, attempt: run.attempt, source, items, stats })).digest("hex");
+      const manifest = this.store.recordContextManifest({ id: randomUUID(), runId, attempt: run.attempt, source, items, stats: { source, ...stats }, manifestHash, createdAt: Date.now() });
+      void manifest;
+    }
     this.publish(this.store.appendEvent(runId, "context.loaded", { source, ...stats }));
     if (stats.droppedTurns > 0 || stats.compressedTurns > 0) {
       this.publish(this.store.appendEvent(runId, "context.pruned", { source, ...stats }));
@@ -876,3 +895,5 @@ function memoryMessageText(message: AgentMessage) { if (!("content" in message))
 function summarizeDurableUserContext(text: string) { return text.split(/\n+|(?<=[。！？.!?])\s*/).map((part) => part.trim()).filter((part) => part.length >= 2 && !/[?？]$/.test(part) && !/^(?:请|帮我|麻烦|检查|审计|排查|修复|实现|运行|执行|部署|合并|查看|确认|分析|调查)/i.test(part) && /(?:记住|我叫|我的名字|叫我|称呼我|我.{0,20}(?:喜欢|偏好|希望|不喜欢|习惯)|我们(?:已经|已)?(?:决定|确定|采用|改为|迁移)|以后|始终|必须|住在|家在|是邻居|my name|call me|i prefer|we decided|from now on)/i.test(part)); }
 function stableTextHash(text: string) { let hash = 2166136261; for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619); return (hash >>> 0).toString(16); }
 const userContextSummaryProvenance: MemoryProvenance = { evidenceClass: "user_context_summary", trustLevel: "medium", sourceRole: "user", verificationState: "structured" };
+
+function estimateContextTokens(text: string) { if (!text) return 0; let nonAscii = 0; for (const character of text) if (character.charCodeAt(0) > 127) nonAscii += 1; return Math.max(1, Math.ceil(nonAscii * 1.5 + (text.length - nonAscii) * 0.25)); }

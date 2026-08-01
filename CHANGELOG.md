@@ -4,6 +4,12 @@
 
 ### Added
 
+- Immutable per-attempt Supervisor Context Manifests for Run start, resume, and continuation, including selected and omitted Session/transcript messages, TaskRun contracts, Memory inputs, selection reasons, token estimates, and stable hashes.
+- Context Manifest diagnostics in the TaskRun Web panel and `GET /api/runs/:id/context-manifests`.
+- An explicit capability and evidence roadmap defining when the architecture warrants promotion to `0.2.0`.
+
+### Added
+
 - Durable Supervisor approval requests with explicit Approve & Resume / Reject actions in the API and Web task panel.
 
 ### Changed

@@ -52,6 +52,10 @@ describe("HTTP API", () => {
     expect(missingTranscript.statusCode).toBe(404);
     const transcriptView = await app.inject({ method: "GET", url: `/api/runs/${secondRun.id}/transcript-view` });
     expect(transcriptView.json()).toEqual([]);
+    store.recordContextManifest({ id: "api-manifest", runId: secondRun.id, attempt: 1, source: "session", items: [], stats: {}, manifestHash: "hash", createdAt: 1 });
+    const manifests = await app.inject({ method: "GET", url: `/api/runs/${secondRun.id}/context-manifests` });
+    expect(manifests.json()).toEqual([expect.objectContaining({ id: "api-manifest", manifestHash: "hash" })]);
+    expect((await app.inject({ method: "GET", url: "/api/runs/missing/context-manifests" })).statusCode).toBe(404);
   });
 
   it("creates Sessions idempotently with an optional requestId", async () => {
