@@ -44,11 +44,21 @@ export class TaskRunSupervisor {
       rationale = "Required plan, verification, evidence, progress and delivery conditions passed.";
     } else {
       const failures = completion.failures;
-      const needsInput = failures.some((failure) => failure.disposition === "needs_user_input" || failure.disposition === "needs_approval" || failure.disposition === "external_dependency");
+      const needsApproval = failures.some((failure) => failure.disposition === "needs_approval");
+      const needsInput = failures.some((failure) => failure.disposition === "needs_user_input" || failure.disposition === "external_dependency");
       const exhausted = failures.some((failure) => failure.disposition === "budget_exhausted" || failure.disposition === "non_recoverable");
-      if (needsInput || exhausted) {
+      const evidenceOnly = failures.length > 0 && failures.every((failure) => failure.kind === "evidence" && failure.disposition === "auto_fixable");
+      if (needsApproval) {
+        action = "pause_for_approval";
+        reasonCode = "approval_required";
+        rationale = failures.map((item) => item.reason).join("; ");
+      } else if (needsInput || exhausted) {
         action = "block_taskrun";
         reasonCode = needsInput ? "human_or_external_dependency" : "continuation_not_viable";
+        rationale = failures.map((item) => item.reason).join("; ");
+      } else if (evidenceOnly) {
+        action = "request_evidence";
+        reasonCode = "verification_evidence_required";
         rationale = failures.map((item) => item.reason).join("; ");
       } else {
         action = "start_continuation";
@@ -59,9 +69,23 @@ export class TaskRunSupervisor {
     return { gates, decision: this.createDecision(run, checkpointSeq, "settled", action, reasonCode, rationale, 1, response) };
   }
 
+  reviewAttemptFailure(run: TaskRun, checkpointSeq: number, error: string) {
+    const normalized = error.toLowerCase();
+    if (/(approval|permission|forbidden|policy|授权|审批|批准|权限)/i.test(error)) {
+      return this.createDecision(run, checkpointSeq, "attempt_terminal", "pause_for_approval", "approval_required", error, 0.95);
+    }
+    if (/(credential|api key|token missing|user input|需要用户|缺少参数|请提供)/i.test(error)) {
+      return this.createDecision(run, checkpointSeq, "attempt_terminal", "block_taskrun", "user_input_required", error, 0.92);
+    }
+    if (/(timeout|timed out|econnreset|econnrefused|socket hang up|network|rate limit|429|502|503|504|provider)/i.test(normalized)) {
+      return this.createDecision(run, checkpointSeq, "attempt_terminal", "start_continuation", "transient_runtime_failure", error, 0.9);
+    }
+    return this.createDecision(run, checkpointSeq, "attempt_terminal", "block_taskrun", "runtime_failure", error, 0.8);
+  }
+
   reviewSpawn(run: TaskRun, checkpointSeq: number) {
     const proposals = this.store.listSpawnProposals(run.id, "proposed");
-    return proposals.map((proposal) => this.createDecision(run, checkpointSeq, "taskrun_terminal", "spawn_taskrun", "approved_explicit_proposal", `Spawn proposal ${proposal.id}: ${proposal.goal}`, 1));
+    return proposals.map((proposal) => this.createDecision(run, checkpointSeq, "taskrun_terminal", "spawn_taskrun", "pending_explicit_proposal", `Spawn proposal ${proposal.id}: ${proposal.goal}`, 1));
   }
 
   markExecuted(id: string, status: "executed" | "superseded" | "failed", error = "") {
@@ -85,8 +109,8 @@ export class TaskRunSupervisor {
     if (run.gateRequired) {
       const requiredPlan = run.plan.filter((item) => item.required);
       if (!requiredPlan.length) completionFailures.push({ kind: "plan", key: "plan", reason: "No required plan items", disposition: "auto_fixable" });
-      for (const item of requiredPlan) if (item.status !== "done") completionFailures.push({ kind: "plan_item", key: item.key, reason: `Required plan item is ${item.status}`, disposition: item.status === "blocked" ? "needs_user_input" : item.status === "skipped" ? "non_recoverable" : "auto_fixable" });
-      for (const check of run.checks.filter((item) => item.required)) if (check.status !== "passed") completionFailures.push({ kind: "check", key: check.key, reason: `Required check is ${check.status}`, disposition: check.status === "blocked" ? "external_dependency" : check.status === "skipped" ? "non_recoverable" : "auto_fixable" });
+      for (const item of requiredPlan) if (item.status !== "done") completionFailures.push({ kind: "plan_item", key: item.key, reason: `Required plan item is ${item.status}`, disposition: item.status === "blocked" ? /approval|permission|授权|审批|批准|权限/i.test(item.title) ? "needs_approval" : "needs_user_input" : item.status === "skipped" ? "non_recoverable" : "auto_fixable" });
+      for (const check of run.checks.filter((item) => item.required)) if (check.status !== "passed") completionFailures.push({ kind: "check", key: check.key, reason: `Required check is ${check.status}`, disposition: check.status === "blocked" ? /approval|permission|授权|审批|批准|权限/i.test(check.title) ? "needs_approval" : "external_dependency" : check.status === "skipped" ? "non_recoverable" : "auto_fixable" });
     }
     if (!response.trim()) completionFailures.push({ kind: "delivery", key: "response", reason: "Candidate response is empty", disposition: "auto_fixable" });
     return [gate("progress", progressFailures), gate("evidence", evidenceFailures), gate("completion", completionFailures), gate("continuation", completionFailures.filter((item) => item.disposition === "budget_exhausted" || item.disposition === "non_recoverable" || item.disposition === "needs_user_input" || item.disposition === "needs_approval" || item.disposition === "external_dependency"))];

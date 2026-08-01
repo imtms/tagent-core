@@ -220,6 +220,10 @@ export class AgentService {
     const analysis = this.sessionRouter.analyze(content, activeRun);
     const duplicate = !activeRun ? this.store.findMergeCandidate(sessionId, analysis) : undefined;
     const item = this.store.enqueueSessionInbox(sessionId, content, analysis, requestId);
+    if (analysis.intent === "defer") {
+      this.store.decideSessionInboxItem(item.id, sessionId, "defer");
+      return { item: this.store.getSessionInboxItem(item.id)!, run: null };
+    }
     if (duplicate) {
       const merged = this.store.markSessionInboxDuplicate(item.id, duplicate.id, sessionId)!;
       return { item: merged, run: null, duplicate: true, mergedInto: duplicate.id };
@@ -253,7 +257,10 @@ export class AgentService {
   }
 
   updateSessionInput(sessionId: SessionId, itemId: string, content: string) {
-    return this.store.updateSessionInboxItem(itemId, sessionId, content);
+    const item = this.store.getSessionInboxItem(itemId);
+    if (!item || item.sessionId !== sessionId || item.status !== "queued") return undefined;
+    const activeRun = this.store.getActiveRun(sessionId);
+    return this.store.updateSessionInboxItem(itemId, sessionId, content, this.sessionRouter.analyze(content, activeRun));
   }
 
   reorderSessionInputs(sessionId: SessionId, itemIds: string[]) {
@@ -561,7 +568,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       if (!event) { this.supervisor.markExecuted(decision.id, "superseded"); return false; }
       this.supervisor.markExecuted(decision.id, "executed");
       this.publish(event);
-      return decision.action === "start_continuation";
+      return decision.action === "start_continuation" || decision.action === "request_evidence";
     } catch (error) {
       if (this.closing) return false;
       if (continuationId && !this.store.ownsContinuationLease(continuationId, this.continuationOwner)) {
@@ -571,11 +578,17 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       const current = this.store.getRun(runId);
       if (!current || current.status !== "running") return false;
       const message = error instanceof Error ? error.message : String(error);
-      const event = this.store.transitionRun(runId, ["running"], "failed", "run.failed", { error: message }, message, attempt);
-      if (!event) return false;
-      this.store.appendMessage(current.sessionId, "assistant", `Run failed: ${message}`);
+      const checkpointSeq = this.store.getCheckpoint(runId)?.lastEventSeq ?? current.lastEventSeq;
+      const decision = this.supervisor.reviewAttemptFailure(current, checkpointSeq, message);
+      const recoverable = decision.action === "start_continuation";
+      const event = this.store.transitionRun(runId, ["running"], "blocked", "run.blocked", {
+        error: message, reason: decision.reasonCode, action: decision.action, supervisionDecisionId: decision.id,
+      }, message, attempt);
+      if (!event) { this.supervisor.markExecuted(decision.id, "superseded"); return false; }
+      this.supervisor.markExecuted(decision.id, "executed");
+      this.store.appendMessage(current.sessionId, "assistant", decision.action === "pause_for_approval" ? `Run paused for approval: ${message}` : `Run blocked: ${message}`);
       this.publish(event);
-      return false;
+      return recoverable;
     }
   }
 
@@ -699,6 +712,16 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
 
   getRun(runId: RunId) {
     return this.store.getRun(runId);
+  }
+
+  approveSpawnProposal(proposalId: string) {
+    if (!this.store.updateSpawnProposalStatus(proposalId, "approved")) throw new Error("Proposal is not pending approval");
+    return { ok: true as const };
+  }
+
+  rejectSpawnProposal(proposalId: string) {
+    if (!this.store.updateSpawnProposalStatus(proposalId, "rejected")) throw new Error("Proposal is not pending approval");
+    return { ok: true as const };
   }
 
   spawnProposal(proposalId: string) {

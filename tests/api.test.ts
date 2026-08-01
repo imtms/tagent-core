@@ -305,6 +305,9 @@ describe("HTTP API", () => {
     const session = store.createSession();
     const parent = store.createRun(session.id, "parent"); store.finalizeRun(parent.id, "completed");
     const proposal = (await app.inject({ method: "POST", url: `/api/runs/${parent.id}/spawn-proposals`, payload: { goal: "child", acceptanceCriteria: ["done"], relation: "follow_up" } })).json();
+    const rejectedBeforeApproval = await app.inject({ method: "POST", url: `/api/spawn-proposals/${proposal.id}/spawn` });
+    expect(rejectedBeforeApproval.statusCode).toBe(409);
+    expect((await app.inject({ method: "POST", url: `/api/spawn-proposals/${proposal.id}/approve` })).statusCode).toBe(200);
     const childResponse = await app.inject({ method: "POST", url: `/api/spawn-proposals/${proposal.id}/spawn` });
     expect(childResponse.statusCode).toBe(200);
     expect(childResponse.json()).toMatchObject({ goal: "child", status: "running" });

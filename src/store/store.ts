@@ -526,11 +526,16 @@ export class Store {
     return changed.changes === 1 ? this.getSessionInboxItem(sourceId) : undefined;
   }
 
-  updateSessionInboxItem(id: string, sessionId: SessionId, content: string) {
+  updateSessionInboxItem(id: string, sessionId: SessionId, content: string, analysis?: SessionInputAnalysis) {
     const trimmed = content.trim();
     if (!trimmed) return undefined;
-    const changed = this.db.prepare("UPDATE session_supervisor_inbox SET content=?,summary=?,scope=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'")
-      .run(trimmed, trimmed.slice(0, 120), trimmed.slice(0, 120), now(), id, sessionId).changes;
+    const resolved = analysis ?? { ...this.getSessionInboxItem(id)?.analysis, summary: trimmed.slice(0, 120), scope: trimmed.slice(0, 120) } as SessionInputAnalysis;
+    const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET content=?,summary=?,intent=?,target_run_id=?,priority=?,urgency=?,relation=?,
+      acceptance_json=?,scope=?,non_goals_json=?,confidence=?,decision_reason=?,router_version=?,updated_at=?
+      WHERE id=? AND session_id=? AND status='queued'`)
+      .run(trimmed, resolved.summary, resolved.intent, resolved.targetRunId, resolved.priority, resolved.urgency, resolved.relation,
+        JSON.stringify(resolved.acceptanceCriteria), resolved.scope, JSON.stringify(resolved.nonGoals), resolved.confidence, resolved.reason,
+        resolved.routerVersion, now(), id, sessionId).changes;
     return changed === 1 ? this.getSessionInboxItem(id) : undefined;
   }
 
@@ -569,7 +574,17 @@ export class Store {
 Additional queued instruction:
 ${source.content}`;
       const timestamp = now();
-      this.db.prepare("UPDATE session_supervisor_inbox SET content=?,decision='pending',updated_at=? WHERE id=? AND status='queued'").run(content,timestamp,targetId);
+      const mergedCriteria = [...new Set([...target.analysis.acceptanceCriteria, ...source.analysis.acceptanceCriteria])];
+      const mergedSources = [target.analysis.summary, source.analysis.summary].filter(Boolean);
+      const summary = mergedSources.join(" + ").slice(0, 120);
+      const scope = [target.analysis.scope, source.analysis.scope].filter(Boolean).join("; ");
+      const priority = Math.max(target.analysis.priority, source.analysis.priority);
+      const urgencyOrder = { low: 1, normal: 2, high: 3, critical: 4 } as const;
+      const urgency = urgencyOrder[source.analysis.urgency] > urgencyOrder[target.analysis.urgency] ? source.analysis.urgency : target.analysis.urgency;
+      this.db.prepare(`UPDATE session_supervisor_inbox SET content=?,summary=?,acceptance_json=?,scope=?,priority=?,urgency=?,
+        confidence=?,decision_reason=?,decision='pending',updated_at=? WHERE id=? AND status='queued'`)
+        .run(content, summary, JSON.stringify(mergedCriteria), scope, priority, urgency,
+          Math.min(target.analysis.confidence, source.analysis.confidence), `Merged queued instructions ${target.id} and ${source.id}`, timestamp, targetId);
       this.db.prepare("UPDATE session_supervisor_inbox SET status='deleted',decision='merge',error=?,updated_at=? WHERE id=? AND status='queued'").run(`Merged into ${targetId}`,timestamp,sourceId);
       return true;
     });
@@ -1263,6 +1278,11 @@ ${source.content}`;
     return snapshot;
   }
 
+  updateSpawnProposalStatus(id: string, status: "approved" | "rejected") {
+    const changed = this.db.prepare("UPDATE spawn_proposals SET status=?,updated_at=? WHERE id=? AND status='proposed'").run(status, now(), id);
+    return changed.changes === 1;
+  }
+
   createSpawnProposal(runId: RunId, goal: string, acceptanceCriteria: string[], relation: SpawnProposal["relation"]): SpawnProposal {
     const timestamp = now(); const proposal: SpawnProposal = { id: randomUUID(), runId, goal, acceptanceCriteria, relation, status: "proposed", spawnedRunId: "", createdAt: timestamp, updatedAt: timestamp };
     this.db.prepare("INSERT INTO spawn_proposals (id,run_id,goal,acceptance_json,relation,status,created_at,updated_at) VALUES (?,?,?,?,?,'proposed',?,?)").run(proposal.id,runId,goal,JSON.stringify(acceptanceCriteria),relation,timestamp,timestamp); return proposal;
@@ -1274,7 +1294,7 @@ ${source.content}`;
   }
 
   spawnFromProposal(proposalId: string) {
-    const transaction = this.db.transaction(() => { const proposal = this.db.prepare("SELECT * FROM spawn_proposals WHERE id = ? AND status IN ('proposed','approved')").get(proposalId) as {id:string;run_id:string;goal:string;relation:SpawnProposal["relation"]}|undefined; if(!proposal) return undefined; const parent=this.getRun(proposal.run_id); if(!parent || (proposal.relation !== "parallel" && parent.status !== "completed")) return undefined; const child=this.createRun(parent.sessionId,proposal.goal,`spawn:${proposal.id}`); const timestamp=now(); this.db.prepare("UPDATE spawn_proposals SET status='spawned',spawned_run_id=?,updated_at=? WHERE id=?").run(child.id,timestamp,proposal.id); this.db.prepare("INSERT INTO taskrun_edges (from_run_id,to_run_id,relation,reason,created_at) VALUES (?,?,?,?,?)").run(parent.id,child.id,proposal.relation,`Spawn proposal ${proposal.id}`,timestamp); return child; }); return transaction();
+    const transaction = this.db.transaction(() => { const proposal = this.db.prepare("SELECT * FROM spawn_proposals WHERE id = ? AND status = 'approved'").get(proposalId) as {id:string;run_id:string;goal:string;relation:SpawnProposal["relation"]}|undefined; if(!proposal) return undefined; const parent=this.getRun(proposal.run_id); if(!parent || (proposal.relation !== "parallel" && parent.status !== "completed")) return undefined; const child=this.createRun(parent.sessionId,proposal.goal,`spawn:${proposal.id}`); const timestamp=now(); this.db.prepare("UPDATE spawn_proposals SET status='spawned',spawned_run_id=?,updated_at=? WHERE id=?").run(child.id,timestamp,proposal.id); this.db.prepare("INSERT INTO taskrun_edges (from_run_id,to_run_id,relation,reason,created_at) VALUES (?,?,?,?,?)").run(parent.id,child.id,proposal.relation,`Spawn proposal ${proposal.id}`,timestamp); return child; }); return transaction();
   }
 
   listTaskRunEdges(runId: RunId): TaskRunEdge[] { return this.db.prepare(`SELECT from_run_id as fromRunId,to_run_id as toRunId,relation,reason,created_at as createdAt FROM taskrun_edges WHERE from_run_id=? OR to_run_id=? ORDER BY created_at`).all(runId,runId) as TaskRunEdge[]; }

@@ -1,3 +1,14 @@
+## [Unreleased]
+
+### Supervisor
+
+- Reclassify edited Inbox items and structurally merge summaries, scopes, acceptance criteria, urgency, and priority.
+- Persist explicit postponement as deferred work and distinguish lightweight discussion from clarification.
+- Classify attempt-terminal failures into transient continuation, user-input block, approval pause, or non-transient block.
+- Emit `request_evidence` for evidence-only completion failures and `pause_for_approval` for blocked approval requirements.
+- Allow Agents to propose derived TaskRuns through the durable `task_run` tool.
+- Require an explicit proposed -> approved -> spawned transition, with Web approval, rejection, and start controls.
+
 # Changelog
 
 All notable changes to TAgent Core are documented here.

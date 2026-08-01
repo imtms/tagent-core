@@ -23,7 +23,7 @@ export interface TaskRun {
     latestDecision: { id: string; action: string; reasonCode: string; rationale: string; status: string; attempt: number; checkpointSeq: number } | null;
     latestGates: Array<{ id: string; gateType: string; passed: boolean; failures: Array<{ kind: string; key: string; reason: string; disposition: string }> }>;
     progress: { meaningfulChanges: number; consecutiveFailures: number; checkpointSeq: number; lastProgressAt: number } | null;
-    spawnProposals: Array<{ id: string; goal: string; relation: string; status: string }>;
+    spawnProposals: Array<{ id: string; goal: string; relation: string; status: "proposed" | "approved" | "spawned" | "rejected"; acceptanceCriteria?: string[] }>;
   };
 }
 export interface EventConsumerCursor { runId: string; consumerId: string; generation: number; ackedSeq: number; terminalAckedSeq: number | null; claimedAt: number; updatedAt: number }
@@ -85,6 +85,9 @@ export const api = {
   cancel: (runId: string) => request(`/api/runs/${runId}/cancel`, { method: "POST" }),
   steer: (runId: string, content: string) => request(`/api/runs/${runId}/steer`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId() }) }),
   resume: (runId: string) => request<TaskRun>(`/api/runs/${runId}/resume`, { method: "POST" }),
+  approveSpawn: (proposalId: string) => request<{ ok: true }>(`/api/spawn-proposals/${proposalId}/approve`, { method: "POST" }),
+  rejectSpawn: (proposalId: string) => request<{ ok: true }>(`/api/spawn-proposals/${proposalId}/reject`, { method: "POST" }),
+  spawnProposal: (proposalId: string) => request<TaskRun>(`/api/spawn-proposals/${proposalId}/spawn`, { method: "POST" }),
   retryLaunch: (runId: string) => request<{ status: "started"; item: SessionInboxItem; run: TaskRun }>(`/api/runs/${runId}/retry-launch`, { method: "POST" }),
   claimConsumer: (runId: string, consumerId: string) => request<EventConsumerCursor>(`/api/runs/${runId}/consumers/${encodeURIComponent(consumerId)}/claim`, { method: "POST" }),
   ackConsumer: (runId: string, consumerId: string, generation: number, seq: number) => request(`/api/runs/${runId}/consumers/${encodeURIComponent(consumerId)}/ack`, { method: "POST", body: JSON.stringify({ generation, seq }) }),

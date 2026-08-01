@@ -247,6 +247,16 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     if (!body?.goal?.trim()) return reply.code(400).send({ error: "goal is required" });
     return store.createSpawnProposal(id, body.goal.trim(), body.acceptanceCriteria ?? [], body.relation ?? "follow_up");
   });
+  app.post("/api/spawn-proposals/:id/approve", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try { return service.approveSpawnProposal(id); }
+    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+  app.post("/api/spawn-proposals/:id/reject", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try { return service.rejectSpawnProposal(id); }
+    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
   app.post("/api/spawn-proposals/:id/spawn", async (request, reply) => {
     const { id } = request.params as { id: string };
     try { return service.spawnProposal(id); }

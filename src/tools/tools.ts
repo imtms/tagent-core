@@ -27,6 +27,7 @@ const TaskRunSchema = Type.Union([
   Type.Object({ action: Type.Literal("mark_checks_stale") }),
   Type.Object({ action: Type.Literal("operations") }),
   Type.Object({ action: Type.Literal("artifact"), id: Type.String(), title: Type.String(), kind: Type.Optional(Type.String()), content: Type.Optional(Type.String()), uri: Type.Optional(Type.String()) }),
+  Type.Object({ action: Type.Literal("spawn_proposal"), goal: Type.String(), acceptanceCriteria: Type.Array(Type.String()), relation: Type.Optional(Type.Union([Type.Literal("depends_on"), Type.Literal("follow_up"), Type.Literal("parallel"), Type.Literal("derived")])) }),
 ]);
 
 function textResult(text: string, details: Record<string, unknown> = {}): AgentToolResult<Record<string, unknown>> {
@@ -194,7 +195,7 @@ export function createTools(store: Store, runId: RunId, workspace: string, onEve
   };
 
   const taskRunTool: AgentTool<typeof TaskRunSchema, Record<string, unknown>> = {
-    name: "task_run", label: "Update task", description: "Inspect or update the current durable TaskRun plan, phase, checks, and artifacts.", parameters: TaskRunSchema, executionMode: "sequential",
+    name: "task_run", label: "Update task", description: "Inspect or update the current durable TaskRun plan, phase, checks, artifacts, and proposed derived TaskRuns.", parameters: TaskRunSchema, executionMode: "sequential",
     async execute(_id, params: Static<typeof TaskRunSchema>) {
       if (params.action === "phase") store.setRunPhase(runId, params.phase);
       if (params.action === "plan") store.upsertPlanItem(runId, { key: params.key, title: params.title, status: params.status, required: params.required ?? true, position: params.position ?? 0 });
@@ -202,6 +203,7 @@ export function createTools(store: Store, runId: RunId, workspace: string, onEve
       if (params.action === "mark_checks_stale") store.markChecksStale(runId);
       if (params.action === "operations") return textResult(JSON.stringify(store.listOperations(runId), null, 2));
       if (params.action === "artifact") store.addArtifact(runId, { id: params.id, title: params.title, kind: params.kind ?? "artifact", content: params.content ?? "", uri: params.uri ?? "" });
+      if (params.action === "spawn_proposal") store.createSpawnProposal(runId, params.goal.trim(), params.acceptanceCriteria, params.relation ?? "derived");
       const changed = params.action !== "get";
       const run = store.getRun(runId);
       if (changed) onEvent?.(store.appendEvent(runId, "run.updated", { action: params.action, phase: run?.phase ?? "discover" }));

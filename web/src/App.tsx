@@ -66,7 +66,7 @@ function CurrentOperationPanel({ run }: { run: TaskRun }) {
   </section>;
 }
 
-function RunDetails({ run }: { run: TaskRun }) {
+function RunDetails({ run, onRefresh }: { run: TaskRun; onRefresh?: () => Promise<void> }) {
   return <div className="run-details">
     <CurrentOperationPanel run={run} />
     <section className="run-summary"><div className="phase-line"><span className={`phase-badge ${run.status}`}>{run.status}</span><span>{run.phase}</span><span>attempt {run.attempt}</span></div><p>{run.goal}</p>{run.contract && <div className="run-contract"><span>{run.contract.intent.replaceAll("_", " ")} · {run.contract.relation}</span><small>{run.contract.decisionReason}</small><ul>{run.contract.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></div>}<div className="run-metrics"><span>{run.transcriptCount} messages</span><span>{run.usage.totalTokens.toLocaleString()} tokens</span><span>{run.usage.input.toLocaleString()} in / {run.usage.output.toLocaleString()} out</span>{run.budget && <span>{run.budget.tier}{run.budget.softTokens && run.budget.softTokens < run.budget.maxTokens ? ` · ${run.budget.softTokens.toLocaleString()} checkpoint` : ""} · {run.budget.maxContinuations} rounds max · {run.budget.maxTokens.toLocaleString()} tokens max</span>}</div>{run.blockedReason && <div className="blocked-note">{run.blockedReason}</div>}</section>
@@ -75,6 +75,7 @@ function RunDetails({ run }: { run: TaskRun }) {
     <section className="panel-section"><div className="section-title"><span>Plan</span><small>{run.plan.filter((item) => item.status === "done").length}/{run.plan.length}</small></div><div className="task-list">{run.plan.length ? run.plan.map((item) => <div className="task-row" key={item.key}>{item.status === "done" ? <Check size={15} /> : <Circle size={14} />}<span>{item.title}</span><small>{item.status}</small></div>) : <p className="muted">No structured plan.</p>}</div></section>
     <section className="panel-section"><div className="section-title"><span>Checks</span><small>{run.checks.filter((item) => item.status === "passed" && !item.stale).length}/{run.checks.length}</small></div><div className="task-list">{run.checks.length ? run.checks.map((check) => <div className="task-row" key={check.key}>{check.status === "passed" && !check.stale ? <Check size={15} /> : <Circle size={14} />}<span>{check.title}</span><small>{check.stale ? "stale" : check.status}</small></div>) : <p className="muted">No required checks.</p>}</div></section>
     <section className="panel-section"><div className="section-title"><span>Continuations</span><small>{run.continuations.length}</small></div><div className="task-list">{run.continuations.length ? run.continuations.map((item) => <div className="continuation-row" key={item.id}><div><strong>#{item.ordinal}</strong><span>{item.reason}</span></div><small className={`continuation-status ${item.status}`}>{item.status}{item.leaseUntil && item.status === "running" ? " · leased" : ""}</small></div>) : <p className="muted">No automatic continuation.</p>}</div></section>
+    <section className="panel-section"><div className="section-title"><span>Spawn proposals</span><small>{run.supervision.spawnProposals.length}</small></div><div className="task-list">{run.supervision.spawnProposals.length ? run.supervision.spawnProposals.map((proposal) => <div className="spawn-proposal" key={proposal.id}><div><strong>{proposal.goal}</strong><small>{proposal.relation} · {proposal.status}</small></div><span className="proposal-actions">{proposal.status === "proposed" && <><button onClick={async () => { await api.approveSpawn(proposal.id); await onRefresh?.(); }}>Approve</button><button onClick={async () => { await api.rejectSpawn(proposal.id); await onRefresh?.(); }}>Reject</button></>}{proposal.status === "approved" && <button onClick={async () => { await api.spawnProposal(proposal.id); await onRefresh?.(); }}>Start TaskRun</button>}</span></div>) : <p className="muted">No derived TaskRun proposals.</p>}</div></section>
     <section className="panel-section"><div className="section-title"><span>Artifacts</span><small>{run.artifacts.length}</small></div>{run.artifacts.map((artifact) => <div className="artifact-row" key={artifact.id}><FileText size={15} /><span>{artifact.title}</span></div>)}</section>
   </div>;
 }
@@ -434,7 +435,7 @@ export function App() {
             <span className="history-copy"><strong>{item.goal}</strong><small>{item.status} · attempt {item.attempt}{item.budget ? ` · ${item.budget.tier}` : ""}</small></span>
             <time>{index === 0 && item.status === "running" ? "current" : formatTime(item.updatedAt ?? item.createdAt)}</time>
           </button>
-          {expanded && <RunDetails run={selectedRun?.id === item.id ? selectedRun : item} />}
+          {expanded && <RunDetails run={selectedRun?.id === item.id ? selectedRun : item} onRefresh={async () => { const refreshed = await api.run(item.id); setSelectedRun(refreshed); setRuns((current) => current.map((run) => run.id === refreshed.id ? refreshed : run)); }} />}
         </section>;
       })}</div>}
     </aside>

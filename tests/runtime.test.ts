@@ -141,6 +141,17 @@ describe("AgentService runtime boundary", () => {
     await service.closeRuntimes(); store.close();
   });
 
+  it("keeps explicit postponed work deferred", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
+    const routed = service.enqueueSessionInput(session.id, "暂时不做", "defer-one");
+    expect(routed.run).toBeNull();
+    expect(routed.item).toMatchObject({ decision: "defer", analysis: { intent: "defer" } });
+    expect(store.listRuns(session.id)).toHaveLength(0);
+    await service.closeRuntimes(); store.close();
+  });
+
   it("turns explicit parallel input into a spawn proposal", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
@@ -247,6 +258,7 @@ describe("AgentService runtime boundary", () => {
     const parent = store.createRun(session.id, "parent");
     store.finalizeRun(parent.id, "completed");
     const proposal = store.createSpawnProposal(parent.id, "child", [], "follow_up");
+    store.updateSpawnProposalStatus(proposal.id, "approved");
     const service = new AgentService(store, "/tmp", () => { throw new Error("factory failed"); });
     expect(() => service.spawnProposal(proposal.id)).toThrow("factory failed");
     const persisted = store.listSpawnProposals(parent.id)[0];

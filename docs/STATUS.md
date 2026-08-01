@@ -150,3 +150,5 @@ Updated: 2026-08-01 (Asia/Singapore)
 - Cancel/resume transcript repair is implemented. Steering and follow-up enter a bounded, idempotent Schema v6 control inbox before serial delivery to Pi; settled runtimes reject delivery, old-attempt input is superseded, restart-ambiguous delivery becomes `outcome_unknown`, and the API returns explicit closing/full/inactive responses.
 - Provider failures are typed and auditable, but retry scheduling still uses the provider SDK/pi boundary rather than a TAgent-owned retry loop.
 - Scoped Bearer credentials are available for supported automation routes, but the Web/administrative surface has no built-in login or complete multi-tenant isolation and must remain on localhost or a trusted private network.
+
+- Supervisor v2 adds edit reclassification, structured merge, explicit defer, attempt-terminal classification, request-evidence/approval actions, and approved derived TaskRun spawning.

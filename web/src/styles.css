@@ -457,3 +457,9 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(22, 116, 
 .run-contract { display:grid; gap:4px; margin:8px 0; padding:8px; border:1px solid var(--line); border-radius:7px; background:#f8faf8; }
 .run-contract > span { color:var(--accent); font-size:10px; font-weight:750; text-transform:uppercase; }
 .run-contract > small { color:var(--muted); line-height:1.4; }
+
+.spawn-proposal { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .65rem 0; border-bottom: 1px solid var(--line); }
+.spawn-proposal > div { display: grid; gap: .2rem; min-width: 0; }
+.spawn-proposal strong { overflow-wrap: anywhere; }
+.proposal-actions { display: flex; gap: .35rem; flex-shrink: 0; }
+.proposal-actions button { border: 1px solid var(--line); border-radius: .45rem; background: var(--surface-strong); color: inherit; padding: .3rem .55rem; cursor: pointer; }

@@ -104,9 +104,28 @@ describe("TaskRunSupervisor", () => {
     store.upsertCheck(run.id, { key: "test", title: "Test", status: "passed", required: true, command: "npm test", evidence: "", stale: false });
     const supervisor = new TaskRunSupervisor(store);
     const review = supervisor.reviewSettled(store.getRun(run.id)!, 10, "done");
-    expect(review.decision.action).toBe("start_continuation");
+    expect(review.decision.action).toBe("request_evidence");
     expect(review.gates.find((gate) => gate.gateType === "evidence")?.failures).toEqual([expect.objectContaining({ key: "test", disposition: "auto_fixable" })]);
     expect(store.getRun(run.id)?.supervision.latestDecision?.id).toBe(review.decision.id);
+    store.close();
+  });
+
+  it("pauses for approval when a required approval item is blocked", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "production deploy");
+    store.upsertPlanItem(run.id, { key: "approval", title: "Production deployment approval", status: "blocked", required: true, position: 1 });
+    const review = new TaskRunSupervisor(store).reviewSettled(store.getRun(run.id)!, 5, "waiting");
+    expect(review.decision).toMatchObject({ action: "pause_for_approval", reasonCode: "approval_required" });
+    store.close();
+  });
+
+  it("classifies transient attempt failures for continuation", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "provider retry");
+    const decision = new TaskRunSupervisor(store).reviewAttemptFailure(run, 9, "Provider timeout 503");
+    expect(decision).toMatchObject({ trigger: "attempt_terminal", action: "start_continuation", reasonCode: "transient_runtime_failure" });
     store.close();
   });
 
@@ -147,6 +166,8 @@ describe("TaskRunSupervisor", () => {
     const parent = store.createRun(session.id, "implement feature");
     store.finalizeRun(parent.id, "completed");
     const proposal = store.createSpawnProposal(parent.id, "deploy feature", ["health check passes"], "follow_up");
+    expect(store.spawnFromProposal(proposal.id)).toBeUndefined();
+    expect(store.updateSpawnProposalStatus(proposal.id, "approved")).toBe(true);
     const child = store.spawnFromProposal(proposal.id)!;
     expect(child.goal).toBe("deploy feature");
     expect(store.listSpawnProposals(parent.id)[0]).toMatchObject({ status: "spawned", spawnedRunId: child.id });
