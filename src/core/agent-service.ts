@@ -777,10 +777,14 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
 
   private async prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter?: number) {
     const access = this.memoryAccess(run);
-    const recall = this.memory ? await this.memory.recall({ access, cue: query, tokenBudget: this.runtimeDefaults.memoryRecallTokenBudget ?? 8_000 }) : undefined;
-    const assembly = this.contextAssembler().assemble("session", this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter), this.buildSystemPrompt(run, recall?.promptSection), query);
+    const [recall,coreSnapshot] = this.memory ? await Promise.all([this.memory.recall({ access, cue: query, tokenBudget: this.runtimeDefaults.memoryRecallTokenBudget ?? 8_000 }),this.memory.getCoreSnapshot?.(access)]) : [undefined,undefined];
+    const coreSection=coreSnapshot?.markdown?`<core_memory revision="${coreSnapshot.revision}">
+${coreSnapshot.markdown}
+</core_memory>`:"";
+    const memorySection=[coreSection,recall?.promptSection].filter(Boolean).join("\n\n");
+    const assembly = this.contextAssembler().assemble("session", this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter), this.buildSystemPrompt(run, memorySection), query);
     this.capturePrunedUserContext(run, assembly.droppedMessages);
-    return { ...assembly, recalledMemory: recall?.promptSection ?? "" };
+    return { ...assembly, recalledMemory: memorySection };
   }
 
   private capturePrunedUserContext(run: TaskRun, messages: AgentMessage[]) {

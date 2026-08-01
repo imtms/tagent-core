@@ -39,6 +39,17 @@ All notable changes to TAgent Core are documented here.
 - Show Supervisor summaries, classifications, target Runs, confidence, reasons, and TaskRun acceptance criteria in the Web UI.
 
 
+## [0.1.5] - 2026-08-01
+
+### Memory operations and governance
+
+- Added durable embedding reindex jobs with checkpoints, leases, fencing tokens, crash recovery, progress APIs, generation staging/ready/active states, and Memory Center progress controls.
+- Added real embedding/extractor probes, persistent worker heartbeats, backlog age, latency/error metrics, reindex completeness, and degraded-event readiness reporting.
+- Unified Topic and Record forgetting with tombstones, grace-period restore, delayed Cold object purge, and immutable revision preservation.
+- Added recall feedback receipts that influence Ranking v2 and governance receipts for Candidate approve/reject/correct and Disputed resolution.
+- Added a revisioned, human-editable Core Memory Markdown projection generated across high-value active records and deterministically injected each turn.
+- Expanded deterministic memory evaluation across preferences, temporal state, organization, project decisions, residence relations, cross-language paraphrase, scope isolation, stale/current selection, and false positives.
+
 ## [0.1.4] - 2026-08-01
 
 ### Run budget elasticity

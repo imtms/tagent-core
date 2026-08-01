@@ -4,7 +4,7 @@
 
 TAgent Core is a durable, self-hosted control plane for an in-process coding agent. It combines Pi's model and tool loop with TAgent-owned persistence, TaskRun supervision, verification gates, operation receipts, a responsive Web workbench, scoped automation credentials, and an optional Hot/Warm/Cold long-term memory platform.
 
-Version `0.1.3` is the current stable source release; `0.1.4` is prepared on `main` and remains unreleased until its tag is published. `0.1.0` was the first stable source release for the documented **trusted single-service deployment profile**. Stable means the supported profile has passed the repository's release gates; it does not mean that the service is a public multi-tenant sandbox.
+Version `0.1.3` is the current tagged stable release; `0.1.5` is prepared on `main` and remains unreleased until its tag is published. It includes the accumulated `0.1.4` memory/supervisor hardening plus durable memory operations and governance. `0.1.0` was the first stable source release for the documented **trusted single-service deployment profile**. Stable means the supported profile has passed the repository's release gates; it does not mean that the service is a public multi-tenant sandbox.
 
 ## Highlights
 
@@ -17,6 +17,7 @@ Version `0.1.3` is the current stable source release; `0.1.4` is prepared on `ma
 - Fastify HTTP/SSE API and React workbench with queue management, run diagnostics, Markdown, and tool inspection
 - Optional scoped Bearer credentials for external automation clients
 - Optional PostgreSQL/pgvector memory with Local Cold Markdown pages and a Web Memory Center
+- Durable memory reindex/readiness, lifecycle governance and feedback, plus a revisioned human-editable Core Memory Markdown snapshot
 
 ## Supported 0.1 Profile
 

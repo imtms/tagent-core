@@ -89,11 +89,17 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
 
   app.post("/api/memory/restore", async (request, reply) => {
     if (!memory) return reply.code(503).send({ error: "memory is disabled" });
-    const body = request.body as { scope?: MemoryScope; ids?: string[] };
-    if (!body.scope || !body.ids?.length) return reply.code(400).send({ error: "scope and ids are required" });
-    return memory.restore({ access: memoryAccess(request, [body.scope], "memory_admin"), scope: body.scope, ids: body.ids });
+    const body = request.body as { scope?: MemoryScope; ids?: string[]; topicIds?: string[] };
+    if (!body.scope || (!body.ids?.length&&!body.topicIds?.length)) return reply.code(400).send({ error: "scope and ids or topicIds are required" });
+    return memory.restore({ access: memoryAccess(request, [body.scope], "memory_admin"), scope: body.scope, ids: body.ids, topicIds: body.topicIds });
   });
 
+
+  app.post("/api/memory/reindex", async (request, reply) => { if(!memory?.enqueueReindex)return reply.code(503).send({error:"durable reindex unavailable"});const body=request.body as {scope?:MemoryScope};if(!body.scope)return reply.code(400).send({error:"scope is required"});return memory.enqueueReindex(memoryAccess(request,[body.scope],"memory_admin")); });
+  app.post("/api/memory/reindex/jobs", async (request, reply) => { if(!memory?.listReindexJobs)return reply.code(503).send({error:"durable reindex unavailable"});const body=request.body as {scopes?:MemoryScope[];limit?:number};if(!body.scopes?.length)return reply.code(400).send({error:"scopes are required"});return memory.listReindexJobs(memoryAccess(request,body.scopes,"memory_admin"),body.limit); });
+  app.post("/api/memory/govern", async (request, reply) => { if(!memory?.govern)return reply.code(503).send({error:"memory governance unavailable"});const body=request.body as {scope?:MemoryScope;id?:string;action?:import("./memory/types.js").MemoryGovernanceAction;content?:string;title?:string;reason?:string;resolution?:"accept"|"reject"};if(!body.scope||!body.id||!body.action)return reply.code(400).send({error:"scope, id and action are required"});return memory.govern({access:memoryAccess(request,[body.scope],"memory_admin"),scope:body.scope,id:body.id,action:body.action,content:body.content,title:body.title,reason:body.reason,resolution:body.resolution}); });
+  app.post("/api/memory/feedback", async (request, reply) => { if(!memory?.feedback)return reply.code(503).send({error:"memory feedback unavailable"});const body=request.body as {scope?:MemoryScope;recordId?:string;signal?:import("./memory/types.js").RecallFeedbackSignal;runId?:string;note?:string};if(!body.scope||!body.recordId||!body.signal)return reply.code(400).send({error:"scope, recordId and signal are required"});return memory.feedback(memoryAccess(request,[body.scope],"memory_admin"),body.scope,body.recordId,body.signal,{runId:body.runId,note:body.note}); });
+  app.post("/api/memory/core-snapshot", async (request, reply) => { if(!memory?.getCoreSnapshot)return reply.code(503).send({error:"core snapshot unavailable"});const body=request.body as {scope?:MemoryScope;generate?:boolean;markdown?:string};if(!body.scope)return reply.code(400).send({error:"scope is required"});const access=memoryAccess(request,[body.scope],"memory_admin");if(typeof body.markdown==="string")return memory.updateCoreSnapshot!(access,body.markdown);if(body.generate)return memory.generateCoreSnapshot!(access);return memory.getCoreSnapshot(access); });
   app.get("/api/health", async (_request, reply) => {
     if(!memory)return {ok:true,service:"tagent-core"};
     const scopeId=runtimeConfig?.memoryWorkspaceScopeId; if(!scopeId)return {ok:true,service:"tagent-core",memory:{enabled:true,ready:false,degraded:true,reasons:["memory_scope_unavailable"]}};

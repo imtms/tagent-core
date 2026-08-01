@@ -35,7 +35,7 @@ export interface RuntimeStatus { runtime: string; provider: string; api: string;
 
 export type MemoryKind = "fact" | "preference" | "episode" | "procedure";
 export type MemoryTier = "hot" | "warm";
-export type MemoryStatus = "candidate" | "active" | "superseded" | "disputed" | "quarantined" | "deleted";
+export type MemoryStatus = "candidate" | "active" | "stale" | "superseded" | "disputed" | "quarantined" | "deleted";
 export interface MemoryScope { type: "user" | "workspace" | "project" | "session"; id: string }
 export interface MemorySourceRef { sourceType: "message" | "run" | "transcript" | "manual"; sourceId: string; revision?: string }
 export interface MemoryRecord { id: string; kind: Exclude<MemoryKind, "preference">; tier: MemoryTier; scope: MemoryScope; title: string; content: string; summary: string; topicIds: string[]; entityIds: string[]; status: MemoryStatus; confidence: number; importance: number; sourceRefs: MemorySourceRef[]; createdAt: number; updatedAt: number }
@@ -44,7 +44,9 @@ export type WarmMemory = MemoryRecord | PreferenceRecord;
 export interface TopicDescriptor { topicId: string; kind: MemoryKind; scope: MemoryScope; title: string; description: string; aliases: string[]; entityIds: string[]; relatedTopicIds: string[]; coldRevisionId?: string; status: MemoryStatus; updatedAt: number }
 export interface ColdTopic { descriptor: TopicDescriptor; revision: { id: string; revision: number; checksum: string; tokenCount: number; createdAt: number; publishedAt?: number }; body: string }
 export interface CaptureJob { id:string; status:"queued"|"running"|"completed"|"completed_empty"|"retryable_failed"|"dead_letter"; attempts:number; errorCode?:string; proposalCount?:number; persistedCount?:number; createdAt:number; updatedAt:number; request:{sourceRefs:MemorySourceRef[]} }
-export interface MemoryStatusResult { records: { hot: number; warm: number; candidate: number; active: number; disputed: number }; topics: number; coldTopics: number }
+export interface MemoryStatusResult { records: { hot: number; warm: number; candidate: number; active: number; disputed: number }; topics: number; coldTopics: number; readiness?: any }
+export interface ReindexJob {id:string;generation:string;status:string;checkpoint:{processed:number;indexed:number;skipped:number;failed:number;total?:number;phase:string};createdAt:number;updatedAt:number}
+export interface CoreMemorySnapshot {revision:number;markdown:string;sourceRecordIds:string[];tokenCount:number;generatedAt:number;editedAt?:number}
 export interface MemoryExport { records: WarmMemory[]; topics: ColdTopic[] }
 export interface MemoryCard { id: string; kind: MemoryKind; tier: MemoryTier; title: string; content: string; score: number; topicIds: string[]; confidence: number }
 export interface RecallResult { cards: MemoryCard[]; coldTopics: ColdTopic[]; trace: { topicIds: string[]; candidateCount: number; deniedCount: number } }
@@ -96,6 +98,12 @@ export const api = {
   memoryExport: (scope: MemoryScope) => request<MemoryExport>("/api/memory/export", { method: "POST", body: JSON.stringify({ scope }) }),
   memoryRecall: (scope: MemoryScope, cue: string, kinds?: MemoryKind[]) => request<RecallResult>("/api/memory/recall", { method: "POST", body: JSON.stringify({ scopes: [scope], cue, kinds, maxCards: 12, maxColdTopics: 4 }) }),
   memoryCapture: (scope: MemoryScope, content: string) => request<{ jobId: string }>("/api/memory/capture", { method: "POST", body: JSON.stringify({ scope, content, idempotencyKey: createRequestId() }) }),
+  memoryReindex: (scope:MemoryScope)=>request<ReindexJob>("/api/memory/reindex",{method:"POST",body:JSON.stringify({scope})}),
+  memoryReindexJobs: (scope:MemoryScope)=>request<ReindexJob[]>("/api/memory/reindex/jobs",{method:"POST",body:JSON.stringify({scopes:[scope],limit:20})}),
+  memoryGovern: (scope:MemoryScope,id:string,action:"approve"|"reject"|"correct"|"resolve",options:Record<string,unknown>={})=>request<any>("/api/memory/govern",{method:"POST",body:JSON.stringify({scope,id,action,...options})}),
+  memoryFeedback: (scope:MemoryScope,recordId:string,signal:string)=>request<any>("/api/memory/feedback",{method:"POST",body:JSON.stringify({scope,recordId,signal})}),
+  memoryCoreSnapshot: (scope:MemoryScope,options:Record<string,unknown>={})=>request<CoreMemorySnapshot|null>("/api/memory/core-snapshot",{method:"POST",body:JSON.stringify({scope,...options})}),
+  memoryRestore: (scope:MemoryScope,ids?:string[],topicIds?:string[])=>request<any>("/api/memory/restore",{method:"POST",body:JSON.stringify({scope,ids,topicIds})}),
   memoryForget: (scope: MemoryScope, ids?: string[], topicIds?: string[]) => request<{ records: number; topics: number; objects: number }>("/api/memory/forget", { method: "POST", body: JSON.stringify({ scope, ids, topicIds }) }),
 };
 

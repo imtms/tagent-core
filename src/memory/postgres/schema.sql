@@ -54,3 +54,43 @@ ALTER TABLE memory.embeddings ADD COLUMN IF NOT EXISTS content_hash text;
 
 ALTER TABLE memory.records ADD COLUMN IF NOT EXISTS lifecycle jsonb;
 ALTER TABLE memory.preferences ADD COLUMN IF NOT EXISTS lifecycle jsonb;
+
+ALTER TABLE memory.topics ADD COLUMN IF NOT EXISTS lifecycle jsonb;
+CREATE TABLE IF NOT EXISTS memory.reindex_jobs (
+ id uuid PRIMARY KEY, scope_type text NOT NULL, scope_id text NOT NULL, generation text NOT NULL,
+ status text NOT NULL, checkpoint jsonb NOT NULL, lease_owner text, lease_until bigint, lease_token uuid,
+ fencing_token bigint NOT NULL DEFAULT 0, error_code text, created_at bigint NOT NULL, updated_at bigint NOT NULL, completed_at bigint,
+ UNIQUE(scope_type,scope_id,generation,status) DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX IF NOT EXISTS memory_reindex_claim ON memory.reindex_jobs(status,lease_until,created_at);
+CREATE TABLE IF NOT EXISTS memory.embedding_generations (
+ scope_type text NOT NULL, scope_id text NOT NULL, generation text NOT NULL, status text NOT NULL,
+ expected integer NOT NULL DEFAULT 0, indexed integer NOT NULL DEFAULT 0, skipped integer NOT NULL DEFAULT 0,
+ activated_at bigint, updated_at bigint NOT NULL, PRIMARY KEY(scope_type,scope_id,generation)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS memory_one_active_generation ON memory.embedding_generations(scope_type,scope_id) WHERE status='active';
+CREATE TABLE IF NOT EXISTS memory.worker_heartbeats (
+ worker_id text NOT NULL, scope_type text NOT NULL, scope_id text NOT NULL, kind text NOT NULL,
+ heartbeat_at bigint NOT NULL, metadata jsonb NOT NULL DEFAULT '{}', PRIMARY KEY(worker_id,scope_type,scope_id,kind)
+);
+CREATE TABLE IF NOT EXISTS memory.metrics (
+ id bigserial PRIMARY KEY, scope_type text NOT NULL, scope_id text NOT NULL, name text NOT NULL, value double precision NOT NULL, created_at bigint NOT NULL
+);
+CREATE INDEX IF NOT EXISTS memory_metrics_lookup ON memory.metrics(scope_type,scope_id,name,created_at DESC);
+CREATE TABLE IF NOT EXISTS memory.degraded_events (
+ id bigserial PRIMARY KEY, scope_type text NOT NULL, scope_id text NOT NULL, reason text NOT NULL, created_at bigint NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memory.recall_feedback (
+ id uuid PRIMARY KEY, record_id uuid NOT NULL, scope_type text NOT NULL, scope_id text NOT NULL, signal text NOT NULL,
+ weight real NOT NULL, run_id text, note text, actor_id text NOT NULL, created_at bigint NOT NULL
+);
+CREATE INDEX IF NOT EXISTS memory_feedback_record ON memory.recall_feedback(record_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS memory.governance_receipts (
+ id uuid PRIMARY KEY, record_id uuid NOT NULL, scope_type text NOT NULL, scope_id text NOT NULL, action text NOT NULL,
+ previous_status text NOT NULL, next_status text NOT NULL, reason text NOT NULL, actor_id text NOT NULL, created_at bigint NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memory.core_snapshots (
+ scope_type text NOT NULL, scope_id text NOT NULL, revision integer NOT NULL, markdown text NOT NULL,
+ source_record_ids text[] NOT NULL, checksum text NOT NULL, token_count integer NOT NULL, generated_at bigint NOT NULL, edited_at bigint,
+ PRIMARY KEY(scope_type,scope_id,revision)
+);

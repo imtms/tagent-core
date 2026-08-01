@@ -40,10 +40,11 @@ export interface PreferenceRecord {
   sourceRefs: SourceReference[]; provenance?: MemoryProvenance; semantic?: CanonicalSPO; lifecycle?: MemoryLifecycleState; supersedesId?: string; expiresAt?: number; createdAt: number; updatedAt: number;
 }
 export type WarmMemory = MemoryRecord | PreferenceRecord;
+export interface TopicLifecycleState { deletedAt?: number; purgeAfter?: number; deleteReason?: string; previousStatus?: Exclude<MemoryStatus, "deleted"> }
 export interface TopicDescriptor {
   topicId: string; kind: MemoryKind; scope: MemoryScope; title: string; description: string;
   aliases: string[]; entityIds: string[]; relatedTopicIds: string[]; coldRevisionId?: string;
-  embeddingText: string; status: MemoryStatus; updatedAt: number;
+  embeddingText: string; status: MemoryStatus; lifecycle?: TopicLifecycleState; updatedAt: number;
 }
 export interface ColdRevision {
   id: string; topicId: string; kind: MemoryKind; scope: MemoryScope; revision: number; state: "staged" | "published" | "superseded";
@@ -65,7 +66,17 @@ export interface CaptureRequest { access: AccessContext; sourceRefs: SourceRefer
 export interface CaptureJob { id: string; request: CaptureRequest; status: "queued" | "running" | "completed" | "completed_empty" | "retryable_failed" | "dead_letter"; attempts: number; leaseOwner?: string; leaseUntil?: number; leaseToken?: string; fencingToken?: number; errorCode?: string; proposalCount?: number; persistedCount?: number; createdAt: number; updatedAt: number }
 export interface ForgetRequest { access: AccessContext; scope: MemoryScope; ids?: string[]; topicIds?: string[]; reason?: string; gracePeriodMs?: number }
 export interface ForgetResult { records: number; topics: number; objects: number; purgeAfter?: number }
-export interface RestoreMemoryRequest { access: AccessContext; scope: MemoryScope; ids: string[] }
-export interface RestoreMemoryResult { records: number }
+export interface RestoreMemoryRequest { access: AccessContext; scope: MemoryScope; ids?: string[]; topicIds?: string[] }
+export interface RestoreMemoryResult { records: number; topics: number }
+export type MemoryGovernanceAction = "approve" | "reject" | "correct" | "resolve";
+export interface MemoryGovernanceRequest { access: AccessContext; scope: MemoryScope; id: string; action: MemoryGovernanceAction; content?: string; title?: string; reason?: string; resolution?: "accept" | "reject" }
+export interface MemoryGovernanceReceipt { id: string; recordId: string; action: MemoryGovernanceAction; previousStatus: MemoryStatus; nextStatus: MemoryStatus; reason: string; actorId: string; createdAt: number }
+export type RecallFeedbackSignal = "cited" | "helpful" | "confirmed" | "corrected" | "harmful" | "task_success" | "task_failure";
+export interface RecallFeedbackReceipt { id: string; recordId: string; signal: RecallFeedbackSignal; weight: number; runId?: string; note?: string; actorId: string; createdAt: number }
+export interface ReindexCheckpoint { phase: "scan_records" | "scan_topics" | "embed" | "activate" | "cleanup"; recordOffset: number; topicOffset: number; processed: number; indexed: number; skipped: number; failed: number; total?: number; rateLimitUntil?: number }
+export interface ReindexJob { id: string; scope: MemoryScope; generation: string; status: "queued" | "running" | "ready" | "active" | "failed" | "cancelled"; checkpoint: ReindexCheckpoint; leaseOwner?: string; leaseUntil?: number; leaseToken?: string; fencingToken: number; errorCode?: string; createdAt: number; updatedAt: number; completedAt?: number }
+export interface EmbeddingGenerationState { scope: MemoryScope; generation: string; status: "staging" | "ready" | "active" | "retired" | "failed"; expected: number; indexed: number; skipped: number; activatedAt?: number; updatedAt: number }
+export interface CoreMemorySnapshot { scope: MemoryScope; revision: number; markdown: string; sourceRecordIds: string[]; checksum: string; tokenCount: number; generatedAt: number; editedAt?: number }
+
 export interface MemoryMaintenanceResult { updated: number; stale: number; expired: number; purged: number }
 export interface ExtractionProposal { records: WarmMemory[]; topics: TopicDescriptor[]; nodes: GraphNode[]; edges: GraphEdge[] }

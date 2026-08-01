@@ -132,3 +132,12 @@ POST /api/memory/restore
 ```
 
 A successful restore reinstates the pre-delete status. Once maintenance physically purges the tombstone, restore returns zero restored records. Record-ID forget is reversible; Topic-ID forget remains an administrative destructive operation for the current Cold revision and should require explicit confirmation.
+
+## 0.1.5 operations and governance
+
+- `POST /api/memory/reindex` queues a durable scope reindex.
+- `POST /api/memory/reindex/jobs` lists progress and checkpoint state.
+- `POST /api/memory/govern` performs Candidate approve/reject/correct or Disputed resolution.
+- `POST /api/memory/feedback` records cited/helpful/confirmed/corrected/harmful/task success/failure receipts.
+- `POST /api/memory/core-snapshot` reads, generates, or updates the revisioned Markdown projection.
+- `POST /api/memory/restore` accepts record `ids`, Topic `topicIds`, or both.

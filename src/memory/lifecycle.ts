@@ -42,8 +42,8 @@ export class MemoryLifecycle {
       if((record.status==="stale"||record.status==="superseded")&&age>=retention.deleteAfterMs){updates.push(tombstone(record,now,record.status==="stale"?"retention_expired":"superseded_retention_expired",grace));removed.add(record.id);expired++;}
     }
     if(updates.length)await this.records.upsertRecords(updates);if(removed.size)await this.vectors?.remove([...removed]);
-    const purged=await this.records.purgeDeleted?.(access.scopes,now,1000)??[];if(purged.length)await this.vectors?.remove(purged);
-    return{updated:updates.length,stale,expired,purged:purged.length};
+    const purged=await this.records.purgeDeleted?.(access.scopes,now,1000)??[];if(purged.length)await this.vectors?.remove(purged);const purgedTopics=await this.topics.purgeDeletedTopics?.(access.scopes,now,100)??[];if(purgedTopics.length)await this.vectors?.remove(purgedTopics.map(x=>x.topicId));
+    return{updated:updates.length,stale,expired,purged:purged.length+purgedTopics.length};
   }
   async topicCandidates(access:AccessContext){const topics=await this.topics.listDescriptors(access.scopes,["fact","preference","episode","procedure"],20_000);const all=await this.records.list(access.scopes,undefined,50_000);const minimum=this.options.coldMinimumRecords??2,confidence=this.options.minimumColdConfidence??0.7;return topics.filter((topic)=>all.filter((r)=>r.topicIds.includes(topic.topicId)&&r.tier==="warm"&&r.status==="active"&&r.confidence>=confidence).length>=minimum);}
 }

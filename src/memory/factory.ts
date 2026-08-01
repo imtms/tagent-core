@@ -14,6 +14,8 @@ import { MemoryService } from "./memory-service.js";
 import { DefaultPolicyEngine } from "./policy/policy-engine.js";
 import { ColdStorageReconciler } from "./reconciler.js";
 import { LocalMemoryWorker } from "./runtime-worker.js";
+import { DurableReindexWorker } from "./reindex-worker.js";
+import { CoreMemorySnapshotService } from "./core-snapshot.js";
 import { LocalBlobStore } from "./storage/local-blob-store.js";
 import type { AccessContext, SourceReference } from "./types.js";
 import type { SourceLoaderPort } from "./ports.js";
@@ -44,21 +46,24 @@ export async function createMemoryRuntime(config:MemoryRuntimeConfig,store:Store
     ? new (await loadS3BlobStore()).S3BlobStore({bucket:config.s3Bucket!,prefix:config.s3Prefix,clientConfig:{endpoint:config.s3Endpoint,region:config.s3Region??"us-east-1",forcePathStyle:config.s3ForcePathStyle}})
     : new LocalBlobStore(path.resolve(config.coldPath));
   const policy=new DefaultPolicyEngine(adapter);
+  const access:AccessContext={subjectId:"memory-maintenance",scopes:[{type:"workspace",id:config.workspaceScopeId}],purpose:"capture"};
   const embeddings = config.embeddingProvider === "openai" ? new OpenAIEmbeddingAdapter({baseUrl:config.embeddingBaseUrl!,apiKey:config.embeddingApiKey!,model:config.embeddingModel!,dimensions:config.embeddingDimensions,batchSize:config.embeddingBatchSize,extraBody:config.embeddingExtraBody,maxRetries:2}) : config.embeddingProvider === "hash" ? new HashEmbeddingAdapter() : undefined;
-  const service=new MemoryService({records:adapter,vectors:adapter,graph:adapter,topics:adapter,blobs,embeddings,jobs:adapter,policy});
+  const probe=embeddings?{probe:async()=>{const started=Date.now();try{await embeddings.embed(["readiness probe"]);return{ok:true,latencyMs:Date.now()-started};}catch(error){return{ok:false,latencyMs:Date.now()-started,error:String(error)}}}}:undefined;
+  let extractorProbe:import("./ports.js").ProbePort|undefined;
+  const core=new CoreMemorySnapshotService(adapter,adapter);
+  const service=new MemoryService({records:adapter,vectors:adapter,graph:adapter,topics:adapter,blobs,embeddings,jobs:adapter,policy,reindex:adapter,operations:adapter,embeddingProbe:probe,coreSnapshots:{get:a=>core.get(a),generate:a=>core.generate(a),update:(a,m)=>core.update(a,m)}});
   const lifecycle=new MemoryLifecycle(adapter,adapter,adapter,adapter,{warmAfterMs:config.warmAfterMs,hotTtlMs:config.hotTtlMs,coldMinimumRecords:config.coldMinimumRecords,candidateTtlMs:config.candidateTtlMs,deletedGracePeriodMs:config.deletedGracePeriodMs,retention:{fact:{staleAfterMs:config.retentionFactStaleMs,deleteAfterMs:config.retentionFactDeleteMs},preference:{staleAfterMs:config.retentionPreferenceStaleMs,deleteAfterMs:config.retentionPreferenceDeleteMs},episode:{staleAfterMs:config.retentionEpisodeStaleMs,deleteAfterMs:config.retentionEpisodeDeleteMs},procedure:{staleAfterMs:config.retentionProcedureStaleMs,deleteAfterMs:config.retentionProcedureDeleteMs}}});
   const ruleExtractor=new RuleBasedExtractor();
-  const extractor=config.extractorProvider === "hybrid" ? new HybridExtractor(ruleExtractor,new LlmExtractor({baseUrl:config.extractorBaseUrl!,apiKey:config.extractorApiKey!,model:config.extractorModel!,maxRetries:1})) : ruleExtractor;
+  const llmExtractor=config.extractorProvider === "hybrid"?new LlmExtractor({baseUrl:config.extractorBaseUrl!,apiKey:config.extractorApiKey!,model:config.extractorModel!,maxRetries:1}):undefined; const extractor=config.extractorProvider === "hybrid" ? new HybridExtractor(ruleExtractor,llmExtractor) : ruleExtractor; extractorProbe=llmExtractor?{probe:async()=>{const started=Date.now();try{await llmExtractor.extract("user: readiness probe, do not persist",[],access.scopes[0]);return{ok:true,latencyMs:Date.now()-started};}catch(error){return{ok:false,latencyMs:Date.now()-started,error:String(error)}}}}:undefined; (service as any).deps.extractorProbe=extractorProbe;
   const capture=new MemoryCaptureWorker(adapter,new StoreSourceLoader(store),extractor,policy,service,lifecycle,undefined,(event)=>{for(const ref of event.sourceRefs.filter((x)=>x.sourceType==="run"))if(store.getRun(ref.sourceId))store.appendEvent(ref.sourceId,event.type,event.data);});
   const semanticConsolidator=config.extractorProvider==="hybrid"?new LlmSemanticConsolidator({baseUrl:config.extractorBaseUrl!,apiKey:config.extractorApiKey!,model:config.extractorModel!}):undefined;
   const consolidator=new MemoryConsolidator(adapter,adapter,service,{minimumRecords:config.coldMinimumRecords},semanticConsolidator); const reconciler=new ColdStorageReconciler(adapter,blobs);
-  const access:AccessContext={subjectId:"memory-maintenance",scopes:[{type:"workspace",id:config.workspaceScopeId}],purpose:"capture"};
   // Backfill durable user messages with the same idempotency key used by live capture.
   // This repairs upgrades from pre-memory installations without making raw chat the recall source.
   const historicalMessages=store.db.prepare("SELECT id,content FROM messages WHERE role='user' ORDER BY id ASC").all() as Array<{id:number;content:string}>;
   for(const message of historicalMessages)if(isExplicitProfileCue(message.content))await service.enqueueCapture({access,sourceRefs:[{sourceType:"message",sourceId:String(message.id),revision:"user"}],content:`user: ${message.content}`,idempotencyKey:`user-message:${message.id}`,captureSource:{kind:"user_message",role:"user",explicitIntent:true}});
-  if(embeddings)await service.reindex(access).catch((error)=>console.warn("Memory reindex failed; lexical recall remains available",error));
-  const worker=new LocalMemoryWorker(capture,lifecycle,consolidator,reconciler,access,config.workerIntervalMs,config.maintenanceIntervalMs,()=>service.noteWorkerHeartbeat(),()=>service.noteConsolidation());
+  const reindex=embeddings?new DurableReindexWorker(adapter,adapter,adapter,embeddings,adapter,access,config.embeddingBatchSize):undefined;if(reindex){await reindex.enqueue();}
+  const worker=new LocalMemoryWorker(capture,lifecycle,consolidator,reconciler,access,config.workerIntervalMs,config.maintenanceIntervalMs,()=>{service.noteWorkerHeartbeat();void adapter.heartbeat("local-memory",access.scopes[0],"memory",Date.now());},()=>service.noteConsolidation(),reindex,core,adapter,blobs);
   return{service,adapter,worker,lifecycle,consolidator,reconciler,start(){worker.start();},async close(){await worker.stop();if (postgresAdapter) await postgresAdapter.close();}};
 }
 
