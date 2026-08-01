@@ -6,8 +6,8 @@ Updated: 2026-08-01 (Asia/Singapore)
 
 ### Core control plane
 
-- SQLite-backed sessions, ordered conversation messages, Schema v5 durable event-consumer cursors, Schema v6 durable control inbox records, Schema v7 TaskRun supervision records, and Schema v8 Session Supervisor Inbox records.
-- Session Supervisor Inbox is the normal input admission path: queued input remains outside Session messages until atomically selected, bound to a durable TaskRun, and launched.
+- SQLite-backed sessions, ordered conversation messages, Schema v5 durable event-consumer cursors, Schema v6 durable control inbox records, Schema v7 TaskRun supervision records, and Schema v10 semantic Session Supervisor Inbox and TaskRun contract records.
+- Session Input Router is the normal admission path: input is summarized, classified, prioritized, and either routed to the active Run, converted to a gated spawn proposal, or atomically bound to a durable TaskRun contract.
 - Automatic Session dispatch is blocked by any running Run and by the latest blocked/interrupted Run, while older historical blocked/interrupted Runs remain auditable without permanently freezing the queue.
 - A user can explicitly start a selected queued Inbox item through a transactional `Run now` path; running Runs and active continuations retain concurrency priority and fencing.
 - Durable TaskRun records with goal, phase, status, plan items, checks, artifacts, ordered events, and Schema v4 Run checkpoints.

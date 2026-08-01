@@ -1,12 +1,14 @@
 import { createRequestId } from "./id";
 
 export interface Session { id: string; title: string; createdAt: number; updatedAt: number; latestRunStatus: string | null; latestRunPhase: string | null }
-export interface SessionInboxItem { id: string; sessionId: string; requestId: string; content: string; status: "queued" | "claimed" | "started" | "deleted" | "failed"; decision: "pending" | "start_taskrun" | "defer" | "merge" | "delete"; runId: string | null; error: string; position: number; createdAt: number; updatedAt: number; claimedAt: number | null; startedAt: number | null }
+export interface SessionInputAnalysis { summary: string; intent: "steer_active" | "follow_up_active" | "update_active_context" | "new_task" | "parallel_task" | "merge_candidate" | "discussion" | "clarification" | "defer"; targetRunId: string | null; priority: number; urgency: "low" | "normal" | "high" | "critical"; relation: "same_goal" | "correction" | "constraint" | "follow_up" | "parallel" | "independent"; acceptanceCriteria: string[]; scope: string; nonGoals: string[]; confidence: number; reason: string; routerVersion: string }
+export interface TaskRunContract { sourceInput: string; summary: string; acceptanceCriteria: string[]; scope: string; nonGoals: string[]; sourceInboxIds: string[]; parentRunId: string | null; relation: SessionInputAnalysis["relation"]; intent: SessionInputAnalysis["intent"]; decisionReason: string; routerVersion: string }
+export interface SessionInboxItem { id: string; sessionId: string; requestId: string; content: string; status: "queued" | "claimed" | "started" | "routed" | "deleted" | "failed"; decision: "pending" | "start_taskrun" | "steer" | "follow_up" | "spawn_proposal" | "discussion" | "defer" | "merge" | "delete"; runId: string | null; error: string; position: number; createdAt: number; updatedAt: number; claimedAt: number | null; startedAt: number | null; analysis: SessionInputAnalysis; manualOrder: boolean }
 export interface Message { id: number; sessionId: string; role: "user" | "assistant" | "tool"; content: string; createdAt: number }
 export interface PlanItem { key: string; title: string; status: string; required: boolean; position: number }
 export interface RunCheck { key: string; title: string; status: string; required: boolean; command: string; evidence: string; stale: boolean }
 export interface TaskRun {
-  id: string; sessionId: string; requestId: string; status: string; phase: string; goal: string;
+  id: string; sessionId: string; requestId: string; status: string; phase: string; goal: string; contract: TaskRunContract | null;
   blockedReason: string; lastEventSeq: number; attempt: number; resumedAt: number | null; createdAt: number; updatedAt: number; completedAt: number | null;
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number };
   transcriptCount: number;

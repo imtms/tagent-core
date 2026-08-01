@@ -6,6 +6,7 @@ import type { AgentRuntime, RuntimeFactory } from "../runtime/types.js";
 import type { RunCheckpoint, RunEvent, SessionId, SessionInboxItem, RunId, TaskRun } from "../core/types.js";
 import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 import { TaskRunSupervisor } from "./supervisor.js";
+import { SessionInputRouter } from "./session-input-router.js";
 import type { MemoryFacade } from "../memory/memory-service.js";
 import type { AccessContext, MemoryProvenance } from "../memory/types.js";
 
@@ -22,6 +23,7 @@ export class AgentService {
   private supervisorRestartReconciled = false;
   private closing = false;
   private readonly supervisor: TaskRunSupervisor;
+  private readonly sessionRouter = new SessionInputRouter();
 
   constructor(
     private readonly store: Store,
@@ -212,7 +214,37 @@ export class AgentService {
 
   enqueueSessionInput(sessionId: SessionId, content: string, requestId: string = randomUUID()) {
     if (this.closing) throw new Error("Service is shutting down");
-    const item = this.store.enqueueSessionInbox(sessionId, content, requestId);
+    const existing = this.store.getSessionSubmission(sessionId, requestId);
+    if (existing) return { item: existing, run: existing.runId ? this.store.getRun(existing.runId) ?? null : null };
+    const activeRun = this.store.getActiveRun(sessionId);
+    const analysis = this.sessionRouter.analyze(content, activeRun);
+    const duplicate = this.store.findMergeCandidate(sessionId, analysis);
+    if (duplicate && !activeRun) return { item: duplicate, run: duplicate.runId ? this.store.getRun(duplicate.runId) ?? null : null, duplicate: true };
+    const item = this.store.enqueueSessionInbox(sessionId, content, analysis, requestId);
+
+    if (activeRun && analysis.targetRunId === activeRun.id && analysis.confidence >= 0.85) {
+      const userMessage = this.store.appendMessage(sessionId, "user", content);
+      this.captureUserMessage(activeRun, userMessage.id, content);
+      if (analysis.intent === "steer_active" || analysis.intent === "update_active_context") {
+        const routed = this.store.routeSessionInboxItem(item.id, sessionId, "steer", activeRun.id)!;
+        void this.enqueueControl(activeRun.id, "steer", content, `inbox:${item.id}`).then((result) => {
+          if (result.status !== "accepted") this.store.routeSessionInboxItem(item.id, sessionId, "steer", activeRun.id, `Control delivery: ${result.status}`);
+        });
+        return { item: routed, run: activeRun };
+      }
+      if (analysis.intent === "follow_up_active") {
+        const routed = this.store.routeSessionInboxItem(item.id, sessionId, "follow_up", activeRun.id)!;
+        void this.enqueueControl(activeRun.id, "follow_up", content, `inbox:${item.id}`);
+        return { item: routed, run: activeRun };
+      }
+      if (analysis.intent === "parallel_task") {
+        const proposal = this.store.createSpawnProposal(activeRun.id, analysis.summary, analysis.acceptanceCriteria, "parallel");
+        const routed = this.store.routeSessionInboxItem(item.id, sessionId, "spawn_proposal", activeRun.id, `Proposal ${proposal.id}`)!;
+        this.publish(this.store.appendEvent(activeRun.id, "supervisor.spawn.proposed", { proposalId: proposal.id, inboxItemId: item.id, goal: proposal.goal, relation: proposal.relation }));
+        return { item: routed, run: activeRun, proposal };
+      }
+    }
+
     const run = this.dispatchSessionInbox(sessionId);
     return { item: this.store.getSessionInboxItem(item.id)!, run: run ?? null };
   }
@@ -299,12 +331,20 @@ export class AgentService {
 
   private completeClaimedSessionLaunch(item: SessionInboxItem, run: TaskRun, sessionHistory: ContextAssembly & { recalledMemory?: string }, retry: boolean) {
     if (!retry) {
-      this.publish(this.store.appendEvent(run.id, "run.started", { goal: item.content, source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: sessionHistory.messages.length }));
+      this.publish(this.store.appendEvent(run.id, "run.started", { goal: run.goal, sourceInput: item.content, contract: run.contract, source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: sessionHistory.messages.length }));
     }
     this.publishContextEvents(run.id, sessionHistory);
     this.recalledMemory.set(run.id, sessionHistory.recalledMemory ?? "");
-    this.launch(run, item.content, sessionHistory.messages, undefined, { initialize: true, inboxItemId: item.id, retry });
+    this.launch(run, this.buildContractPrompt(run, item.content), sessionHistory.messages, undefined, { initialize: true, inboxItemId: item.id, retry });
     if (!this.runtimes.has(run.id)) throw new Error("Inbox TaskRun runtime did not start");
+  }
+
+  private buildContractPrompt(run: TaskRun, sourceInput: string) {
+    if (!run.contract) return sourceInput;
+    return [`TaskRun goal: ${run.contract.summary}`, `Scope: ${run.contract.scope}`, run.contract.nonGoals.length ? `Non-goals:
+${run.contract.nonGoals.map((item) => `- ${item}`).join("\n")}` : "", `Acceptance criteria:
+${run.contract.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`, `Original user input:
+${sourceInput}`].filter(Boolean).join("\n\n");
   }
 
   private failClaimedSessionLaunch(item: SessionInboxItem, run: TaskRun, error: unknown) {

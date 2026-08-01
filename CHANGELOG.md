@@ -4,6 +4,16 @@ All notable changes to TAgent Core are documented here.
 
 ## Unreleased
 
+### Supervisor orchestration
+
+- Add a conservative Session Input Router that summarizes and classifies input as active-run steer/context, follow-up, parallel spawn proposal, discussion, or independent work.
+- Persist priority, urgency, target Run, relation, confidence, routing rationale, acceptance criteria, and router version with every Inbox item.
+- Generate durable TaskRun contracts instead of copying the entire original prompt into `runs.goal`.
+- Prioritize eligible work by manual override, urgency, priority, and age; deduplicate equivalent pending summaries.
+- Route high-confidence corrections and parameters into the active Pi control queue and convert explicit parallel work into a gated Spawn Proposal.
+- Show Supervisor summaries, classifications, target Runs, confidence, reasons, and TaskRun acceptance criteria in the Web UI.
+
+
 ## [0.1.4] - 2026-08-01
 
 ### Run budget elasticity

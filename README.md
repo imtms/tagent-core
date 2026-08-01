@@ -8,7 +8,7 @@ Version `0.1.3` is the current stable source release; `0.1.4` is prepared on `ma
 
 ## Highlights
 
-- Durable SQLite sessions, messages, transcripts, TaskRuns, events, plans, checks, artifacts, continuations, queues, and operation receipts
+- Durable SQLite sessions, messages, transcripts, TaskRuns, structured TaskRun contracts, events, plans, checks, artifacts, continuations, queues, and operation receipts
 - Deterministic completion gates with verification evidence invalidated after workspace mutations
 - Transactional continuation claims, leases, recovery, and bounded automatic continuation
 - Idempotent mutating tools with restart-safe `outcome_unknown` handling

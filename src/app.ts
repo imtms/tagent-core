@@ -16,9 +16,10 @@ export interface AppDependencies {
   runtimeConfig?: PublicRuntimeConfig;
   serviceCredentials?: ServiceCredential[];
   memory?: MemoryFacade;
+  closeResources?: () => Promise<void>;
 }
 
-export function createApp({ store, service, webRoot = path.resolve("dist/web"), logger = true, runtimeConfig, serviceCredentials = [], memory }: AppDependencies) {
+export function createApp({ store, service, webRoot = path.resolve("dist/web"), logger = true, runtimeConfig, serviceCredentials = [], memory, closeResources }: AppDependencies) {
   const app = Fastify({ logger });
 
   if (serviceCredentials.length) app.addHook("onRequest", async (request, reply) => {
@@ -341,7 +342,7 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     catch { return reply.code(404).send("Web build not found. Run npm run build."); }
   });
 
-  app.addHook("onClose", async () => { await service.closeRuntimes(); store.close(); });
+  app.addHook("onClose", async () => { await service.closeRuntimes(); await closeResources?.(); store.close(); });
   return app;
 }
 

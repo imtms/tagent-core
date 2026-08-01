@@ -127,6 +127,32 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
+  it("routes active-run corrections into steer instead of a new TaskRun", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const runtime = new InboxRuntime();
+    const service = new AgentService(store, "/tmp", () => runtime, { controlInboxCapacity: 4 });
+    const first = service.enqueueSessionInput(session.id, "发布 0.1.4", "route-base");
+    const routed = service.enqueueSessionInput(session.id, "不要重启服务，端口改成 3220", "route-steer");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(store.listRuns(session.id)).toHaveLength(1);
+    expect(routed.item).toMatchObject({ status: "routed", decision: "steer", runId: first.run!.id, analysis: { intent: "steer_active" } });
+    expect(runtime.delivered).toContainEqual({ kind: "steer", content: "不要重启服务，端口改成 3220" });
+    await service.closeRuntimes(); store.close();
+  });
+
+  it("turns explicit parallel input into a spawn proposal", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
+    const first = service.enqueueSessionInput(session.id, "修复 Web UI", "parallel-base");
+    const routed = service.enqueueSessionInput(session.id, "同时并行设计另一个独立的移动端客户端", "parallel-child");
+    expect(store.listRuns(session.id)).toHaveLength(1);
+    expect(routed.item).toMatchObject({ status: "routed", decision: "spawn_proposal", runId: first.run!.id });
+    expect(store.listSpawnProposals(first.run!.id)).toEqual([expect.objectContaining({ relation: "parallel", status: "proposed" })]);
+    await service.closeRuntimes(); store.close();
+  });
+
   it("queues continuous Session input and starts the next TaskRun serially", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
@@ -175,7 +201,11 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const blocking = store.createRun(session.id, "old run");
-    store.enqueueSessionInbox(session.id, "recover me", "recover-inbox");
+    store.enqueueSessionInbox(session.id, "recover me", {
+      summary: "recover me", intent: "new_task", targetRunId: null, priority: 500,
+      urgency: "normal", relation: "independent", acceptanceCriteria: ["recover me"],
+      scope: "recover me", nonGoals: [], confidence: 1, reason: "test", routerVersion: "test",
+    }, "recover-inbox");
     store.finalizeRun(blocking.id, "completed");
     const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
     expect(service.recoverSessionInbox()).toHaveLength(1);

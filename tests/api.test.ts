@@ -7,6 +7,7 @@ import { AgentService } from "../src/core/agent-service.js";
 import { createApp } from "../src/app.js";
 
 const apps: Array<ReturnType<typeof createApp>> = [];
+const inboxAnalysis = (summary: string) => ({ summary, intent: "new_task" as const, targetRunId: null, priority: 500, urgency: "normal" as const, relation: "independent" as const, acceptanceCriteria: [summary], scope: summary, nonGoals: [], confidence: 1, reason: "test", routerVersion: "test" });
 afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close())); });
 
 describe("HTTP API", () => {
@@ -149,9 +150,9 @@ describe("HTTP API", () => {
     const app = createApp({ store, service, logger: false, webRoot: workspace }); apps.push(app);
     const session = store.createSession();
     const blocked = store.createRun(session.id, "blocked"); store.blockRun(blocked.id, "review");
-    const first = store.enqueueSessionInbox(session.id, "first", "api-edit-first");
-    const second = store.enqueueSessionInbox(session.id, "second", "api-edit-second");
-    const third = store.enqueueSessionInbox(session.id, "third", "api-edit-third");
+    const first = store.enqueueSessionInbox(session.id, "first", inboxAnalysis("first"), "api-edit-first");
+    const second = store.enqueueSessionInbox(session.id, "second", inboxAnalysis("second"), "api-edit-second");
+    const third = store.enqueueSessionInbox(session.id, "third", inboxAnalysis("third"), "api-edit-third");
 
     const edited = await app.inject({ method: "PATCH", url: `/api/sessions/${session.id}/inbox/${second.id}`, payload: { content: "  changed  " } });
     expect(edited.statusCode).toBe(200);
@@ -178,14 +179,14 @@ describe("HTTP API", () => {
     const app = createApp({ store, service, logger: false, webRoot: workspace }); apps.push(app);
     const session = store.createSession();
     const blocked = store.createRun(session.id, "blocked"); store.blockRun(blocked.id, "gate");
-    const queued = store.enqueueSessionInbox(session.id, "run selected", "api-run-now");
+    const queued = store.enqueueSessionInbox(session.id, "run selected", inboxAnalysis("run selected"), "api-run-now");
 
     const started = await app.inject({ method: "POST", url: `/api/sessions/${session.id}/inbox/${queued.id}/start` });
     expect(started.statusCode).toBe(200);
     expect(started.json()).toMatchObject({ status: "started", item: { id: queued.id, status: "started" }, run: { goal: "run selected", status: "running" } });
     expect(store.getRun(blocked.id)?.status).toBe("blocked");
 
-    const second = store.enqueueSessionInbox(session.id, "conflict", "api-conflict");
+    const second = store.enqueueSessionInbox(session.id, "conflict", inboxAnalysis("conflict"), "api-conflict");
     const conflict = await app.inject({ method: "POST", url: `/api/sessions/${session.id}/inbox/${second.id}/start` });
     expect(conflict.statusCode).toBe(409);
     expect(conflict.json()).toMatchObject({ reason: "running_taskrun" });
@@ -227,7 +228,7 @@ describe("HTTP API", () => {
     const service = new AgentService(store, workspace);
     const app = createApp({ store, service, logger: false, webRoot: workspace }); apps.push(app);
     const session = store.createSession();
-    const item = store.enqueueSessionInbox(session.id, "retry", "retry-api-conflict");
+    const item = store.enqueueSessionInbox(session.id, "retry", inboxAnalysis("retry"), "retry-api-conflict");
     const claimed = store.claimNextSessionInbox(session.id)!;
     store.recordSessionInboxLaunchFailure(item.id, claimed.run.id, "init failed");
     store.transitionRun(claimed.run.id, ["running"], "failed", "run.failed", { reason: "runtime_initialization_failed", retryable: true }, "init failed", 1);

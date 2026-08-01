@@ -24,7 +24,7 @@ const service = new AgentService(
   memoryRuntime?.service,
   config.memory.enabled ? config.memory.workspaceScopeId : "default",
 );
-const app = createApp({ store, service, runtimeConfig: publicRuntimeConfig(config, store.getSchemaVersion()), serviceCredentials: config.serviceCredentials, memory: memoryRuntime?.service });
+const app = createApp({ store, service, runtimeConfig: publicRuntimeConfig(config, store.getSchemaVersion()), serviceCredentials: config.serviceCredentials, memory: memoryRuntime?.service, closeResources: () => memoryRuntime?.close() ?? Promise.resolve() });
 service.recoverContinuations();
 service.recoverSessionInbox();
 await app.listen({ host: "0.0.0.0", port: config.port });
@@ -36,7 +36,7 @@ const closeServer = async (signal: NodeJS.Signals) => {
   if (closing) return;
   closing = true;
   console.log(`Received ${signal}; closing TAgent Core`);
-  try { await app.close(); await memoryRuntime?.close(); }
+  try { await app.close(); }
   catch (error) {
     console.error("TAgent Core close failed", error);
     process.exitCode = 1;

@@ -22,12 +22,14 @@ import type {
   RunStatus,
   Session,
   SessionInboxItem,
+  SessionInputAnalysis,
+  TaskRunContract,
   SessionId,
   TaskRun,
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 export class Store {
   readonly db: Database.Database;
@@ -144,7 +146,8 @@ export class Store {
         usage_cache_read INTEGER NOT NULL DEFAULT 0,
         usage_cache_write INTEGER NOT NULL DEFAULT 0,
         usage_total_tokens INTEGER NOT NULL DEFAULT 0,
-        usage_cost REAL NOT NULL DEFAULT 0
+        usage_cost REAL NOT NULL DEFAULT 0,
+        contract_json TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id, updated_at);
       CREATE TABLE IF NOT EXISTS run_events (
@@ -195,6 +198,19 @@ export class Store {
         updated_at INTEGER NOT NULL,
         claimed_at INTEGER,
         started_at INTEGER,
+        summary TEXT NOT NULL DEFAULT '',
+        intent TEXT NOT NULL DEFAULT 'new_task',
+        target_run_id TEXT,
+        priority INTEGER NOT NULL DEFAULT 500,
+        urgency TEXT NOT NULL DEFAULT 'normal',
+        relation TEXT NOT NULL DEFAULT 'independent',
+        acceptance_json TEXT NOT NULL DEFAULT '[]',
+        scope TEXT NOT NULL DEFAULT '',
+        non_goals_json TEXT NOT NULL DEFAULT '[]',
+        confidence REAL NOT NULL DEFAULT 0,
+        decision_reason TEXT NOT NULL DEFAULT '',
+        router_version TEXT NOT NULL DEFAULT '',
+        manual_order INTEGER NOT NULL DEFAULT 0,
         UNIQUE(session_id, request_id)
       );
       CREATE INDEX IF NOT EXISTS idx_session_supervisor_inbox_queue ON session_supervisor_inbox(session_id,status,position,created_at);
@@ -337,6 +353,20 @@ export class Store {
     this.ensureColumn("run_continuations", "lease_owner", "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn("run_continuations", "lease_until", "INTEGER");
     this.ensureColumn("run_continuations", "heartbeat_at", "INTEGER");
+    this.ensureColumn("runs", "contract_json", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("session_supervisor_inbox", "summary", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("session_supervisor_inbox", "intent", "TEXT NOT NULL DEFAULT 'new_task'");
+    this.ensureColumn("session_supervisor_inbox", "target_run_id", "TEXT");
+    this.ensureColumn("session_supervisor_inbox", "priority", "INTEGER NOT NULL DEFAULT 500");
+    this.ensureColumn("session_supervisor_inbox", "urgency", "TEXT NOT NULL DEFAULT 'normal'");
+    this.ensureColumn("session_supervisor_inbox", "relation", "TEXT NOT NULL DEFAULT 'independent'");
+    this.ensureColumn("session_supervisor_inbox", "acceptance_json", "TEXT NOT NULL DEFAULT '[]'");
+    this.ensureColumn("session_supervisor_inbox", "scope", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("session_supervisor_inbox", "non_goals_json", "TEXT NOT NULL DEFAULT '[]'");
+    this.ensureColumn("session_supervisor_inbox", "confidence", "REAL NOT NULL DEFAULT 0");
+    this.ensureColumn("session_supervisor_inbox", "decision_reason", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("session_supervisor_inbox", "router_version", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("session_supervisor_inbox", "manual_order", "INTEGER NOT NULL DEFAULT 0");
     this.db.prepare(`UPDATE run_continuations SET status = 'cancelled',
       error = 'Superseded while enforcing one active continuation per Run', completed_at = ?,
       lease_owner = '', lease_until = NULL, heartbeat_at = NULL
@@ -431,42 +461,69 @@ export class Store {
     return { id: Number(result.lastInsertRowid), sessionId, role, content, createdAt };
   }
 
-  enqueueSessionInbox(sessionId: SessionId, content: string, requestId: string = randomUUID()): SessionInboxItem {
+  enqueueSessionInbox(sessionId: SessionId, content: string, analysis: SessionInputAnalysis, requestId: string = randomUUID()): SessionInboxItem {
     const transaction = this.db.transaction(() => {
       const existing = this.db.prepare("SELECT id FROM session_supervisor_inbox WHERE session_id = ? AND request_id = ?").get(sessionId, requestId) as { id: string } | undefined;
       if (existing) return this.getSessionInboxItem(existing.id)!;
       const timestamp = now();
       const position = (this.db.prepare("SELECT COALESCE(MAX(position),0)+1 as position FROM session_supervisor_inbox WHERE session_id = ? AND status = 'queued'").get(sessionId) as { position: number }).position;
       const id = randomUUID();
-      this.db.prepare(`INSERT INTO session_supervisor_inbox (id,session_id,request_id,content,status,decision,position,created_at,updated_at)
-        VALUES (?,?,?,?,'queued','pending',?,?,?)`).run(id, sessionId, requestId, content, position, timestamp, timestamp);
+      this.db.prepare(`INSERT INTO session_supervisor_inbox
+        (id,session_id,request_id,content,status,decision,position,created_at,updated_at,summary,intent,target_run_id,priority,urgency,relation,acceptance_json,scope,non_goals_json,confidence,decision_reason,router_version)
+        VALUES (?,?,?,?,'queued','pending',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, sessionId, requestId, content, position, timestamp, timestamp, analysis.summary, analysis.intent, analysis.targetRunId, analysis.priority, analysis.urgency, analysis.relation, JSON.stringify(analysis.acceptanceCriteria), analysis.scope, JSON.stringify(analysis.nonGoals), analysis.confidence, analysis.reason, analysis.routerVersion);
       return this.getSessionInboxItem(id)!;
     });
     return transaction();
   }
 
+  private hydrateSessionInbox(row: Record<string, unknown> | undefined): SessionInboxItem | undefined {
+    if (!row) return undefined;
+    const acceptanceCriteria = JSON.parse(String(row.acceptanceJson || "[]")) as string[];
+    const nonGoals = JSON.parse(String(row.nonGoalsJson || "[]")) as string[];
+    return { ...row, manualOrder: Boolean(row.manualOrder), analysis: { summary: String(row.summary || row.content || ""), intent: row.intent, targetRunId: row.targetRunId || null, priority: Number(row.priority || 0), urgency: row.urgency, relation: row.relation, acceptanceCriteria, scope: String(row.scope || row.summary || ""), nonGoals, confidence: Number(row.confidence || 0), reason: String(row.decisionReason || ""), routerVersion: String(row.routerVersion || "") } } as SessionInboxItem;
+  }
+
+  private sessionInboxSelect(where: string) {
+    return `SELECT id,session_id as sessionId,request_id as requestId,content,status,decision,run_id as runId,error,position,
+      created_at as createdAt,updated_at as updatedAt,claimed_at as claimedAt,started_at as startedAt,
+      summary,intent,target_run_id as targetRunId,priority,urgency,relation,acceptance_json as acceptanceJson,scope,
+      non_goals_json as nonGoalsJson,confidence,decision_reason as decisionReason,router_version as routerVersion,manual_order as manualOrder
+      FROM session_supervisor_inbox ${where}`;
+  }
+
   getSessionInboxItem(id: string): SessionInboxItem | undefined {
-    return this.db.prepare(`SELECT id,session_id as sessionId,request_id as requestId,content,status,decision,run_id as runId,error,position,
-      created_at as createdAt,updated_at as updatedAt,claimed_at as claimedAt,started_at as startedAt FROM session_supervisor_inbox WHERE id = ?`).get(id) as SessionInboxItem | undefined;
+    return this.hydrateSessionInbox(this.db.prepare(this.sessionInboxSelect("WHERE id = ?")).get(id) as Record<string, unknown> | undefined);
   }
 
   getSessionSubmission(sessionId: SessionId, requestId: string): SessionInboxItem | undefined {
-    return this.db.prepare(`SELECT id,session_id as sessionId,request_id as requestId,content,status,decision,run_id as runId,error,position,
-      created_at as createdAt,updated_at as updatedAt,claimed_at as claimedAt,started_at as startedAt
-      FROM session_supervisor_inbox WHERE session_id = ? AND request_id = ?`).get(sessionId, requestId) as SessionInboxItem | undefined;
+    return this.hydrateSessionInbox(this.db.prepare(this.sessionInboxSelect("WHERE session_id = ? AND request_id = ?")).get(sessionId, requestId) as Record<string, unknown> | undefined);
   }
 
   listSessionInbox(sessionId: SessionId, includeTerminal = false): SessionInboxItem[] {
-    return this.db.prepare(`SELECT id,session_id as sessionId,request_id as requestId,content,status,decision,run_id as runId,error,position,
-      created_at as createdAt,updated_at as updatedAt,claimed_at as claimedAt,started_at as startedAt FROM session_supervisor_inbox
-      WHERE session_id = ? ${includeTerminal ? "" : "AND status IN ('queued','claimed')"} ORDER BY position,created_at,id`).all(sessionId) as SessionInboxItem[];
+    const rows = this.db.prepare(`${this.sessionInboxSelect(`WHERE session_id = ? ${includeTerminal ? "" : "AND status IN ('queued','claimed')"}`)} ORDER BY
+      manual_order DESC, CASE urgency WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'normal' THEN 2 ELSE 1 END DESC,
+      priority DESC, position, created_at, id`).all(sessionId) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.hydrateSessionInbox(row)!);
+  }
+
+  routeSessionInboxItem(id: string, sessionId: SessionId, decision: "steer" | "follow_up" | "spawn_proposal" | "discussion", runId: RunId | null, error = "") {
+    const timestamp = now();
+    const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET status='routed',decision=?,run_id=?,error=?,claimed_at=COALESCE(claimed_at,?),started_at=COALESCE(started_at,?),updated_at=?
+      WHERE id=? AND session_id=? AND status='queued'`).run(decision, runId, error, timestamp, timestamp, timestamp, id, sessionId);
+    return changed.changes === 1 ? this.getSessionInboxItem(id) : undefined;
+  }
+
+  findMergeCandidate(sessionId: SessionId, analysis: SessionInputAnalysis) {
+    const normalized = analysis.summary.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+    if (!normalized) return undefined;
+    return this.listSessionInbox(sessionId).find((item) => item.status === "queued" && item.decision === "pending" && item.analysis.intent === analysis.intent && item.analysis.summary.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "") === normalized);
   }
 
   updateSessionInboxItem(id: string, sessionId: SessionId, content: string) {
     const trimmed = content.trim();
     if (!trimmed) return undefined;
-    const changed = this.db.prepare("UPDATE session_supervisor_inbox SET content=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'")
-      .run(trimmed, now(), id, sessionId).changes;
+    const changed = this.db.prepare("UPDATE session_supervisor_inbox SET content=?,summary=?,scope=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'")
+      .run(trimmed, trimmed.slice(0, 120), trimmed.slice(0, 120), now(), id, sessionId).changes;
     return changed === 1 ? this.getSessionInboxItem(id) : undefined;
   }
 
@@ -479,6 +536,7 @@ export class Store {
       const timestamp = now();
       const update = this.db.prepare("UPDATE session_supervisor_inbox SET position=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'");
       itemIds.forEach((id, index) => update.run(index + 1, timestamp, id, sessionId));
+      this.db.prepare("UPDATE session_supervisor_inbox SET manual_order=1 WHERE session_id=? AND status='queued'").run(sessionId);
       return this.listSessionInbox(sessionId);
     });
     return transaction();
@@ -522,7 +580,7 @@ ${source.content}`;
           )
         ) LIMIT 1`).get(sessionId, sessionId);
       if (active) return undefined;
-      const item = this.db.prepare("SELECT id FROM session_supervisor_inbox WHERE session_id = ? AND status = 'queued' AND decision = 'pending' ORDER BY position,created_at,id LIMIT 1").get(sessionId) as { id: string } | undefined;
+      const item = this.db.prepare("SELECT id FROM session_supervisor_inbox WHERE session_id = ? AND status = 'queued' AND decision = 'pending' ORDER BY manual_order DESC, CASE urgency WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'normal' THEN 2 ELSE 1 END DESC, priority DESC, position, created_at, id LIMIT 1").get(sessionId) as { id: string } | undefined;
       if (!item) return undefined;
       return this.claimSessionInboxItem(item.id, sessionId);
     });
@@ -550,7 +608,8 @@ ${source.content}`;
     const claimed = this.db.prepare("UPDATE session_supervisor_inbox SET status='claimed',decision='start_taskrun',claimed_at=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'").run(timestamp,timestamp,itemId,sessionId);
     if (claimed.changes !== 1) return undefined;
     const inbox = this.getSessionInboxItem(itemId)!;
-    const run = this.createRun(sessionId, inbox.content, `inbox:${inbox.id}`);
+    const contract: TaskRunContract = { sourceInput: inbox.content, summary: inbox.analysis.summary, acceptanceCriteria: inbox.analysis.acceptanceCriteria, scope: inbox.analysis.scope, nonGoals: inbox.analysis.nonGoals, sourceInboxIds: [inbox.id], parentRunId: inbox.analysis.targetRunId, relation: inbox.analysis.relation, intent: inbox.analysis.intent, decisionReason: inbox.analysis.reason, routerVersion: inbox.analysis.routerVersion };
+    const run = this.createRun(sessionId, inbox.analysis.summary || inbox.content, `inbox:${inbox.id}`, contract);
     this.db.prepare("UPDATE session_supervisor_inbox SET status='started',run_id=?,started_at=?,updated_at=? WHERE id=? AND status='claimed'").run(run.id,timestamp,timestamp,inbox.id);
     return { item: this.getSessionInboxItem(inbox.id)!, run };
   }
@@ -599,13 +658,13 @@ ${source.content}`;
     return (this.db.prepare("SELECT DISTINCT session_id as sessionId FROM session_supervisor_inbox WHERE status='queued'").all() as Array<{sessionId:string}>).map((row)=>row.sessionId);
   }
 
-  createRun(sessionId: SessionId, goal: string, requestId: string = randomUUID()): TaskRun {
+  createRun(sessionId: SessionId, goal: string, requestId: string = randomUUID(), contract: TaskRunContract | null = null): TaskRun {
     const id = randomUUID();
     const timestamp = now();
     this.db.prepare(`
-      INSERT INTO runs (id, session_id, request_id, status, phase, goal, created_at, updated_at)
-      VALUES (?, ?, ?, 'running', 'discover', ?, ?, ?)
-    `).run(id, sessionId, requestId, goal, timestamp, timestamp);
+      INSERT INTO runs (id, session_id, request_id, status, phase, goal, created_at, updated_at, contract_json)
+      VALUES (?, ?, ?, 'running', 'discover', ?, ?, ?, ?)
+    `).run(id, sessionId, requestId, goal, timestamp, timestamp, contract ? JSON.stringify(contract) : "");
     return this.getRun(id)!;
   }
 
@@ -621,7 +680,7 @@ ${source.content}`;
       transcriptCount: number;
     };
     const row = this.db.prepare(`
-      SELECT id, session_id as sessionId, request_id as requestId, status, phase, goal,
+      SELECT id, session_id as sessionId, request_id as requestId, status, phase, goal, contract_json as contractJson,
              gate_required as gateRequired, blocked_reason as blockedReason,
              last_event_seq as lastEventSeq, created_at as createdAt,
              updated_at as updatedAt, completed_at as completedAt,
@@ -639,9 +698,10 @@ ${source.content}`;
     const checks = checkRows.map((item) => ({ ...item, required: Boolean(item.required), stale: Boolean(item.stale) }));
     const artifacts = this.db.prepare(`SELECT id, run_id as runId, kind, title, content, uri, created_at as createdAt FROM artifacts WHERE run_id = ? ORDER BY created_at`).all(id) as Artifact[];
     const continuations = this.listContinuations(id);
-    const { usageInput, usageOutput, usageCacheRead, usageCacheWrite, usageTotalTokens, usageCost, transcriptCount, ...runRow } = row;
+    const { usageInput, usageOutput, usageCacheRead, usageCacheWrite, usageTotalTokens, usageCost, transcriptCount, contractJson, ...runRow } = row as RunRow & { contractJson: string };
     const task: TaskRun = {
       ...runRow,
+      contract: contractJson ? JSON.parse(contractJson) as TaskRunContract : null,
       gateRequired: Boolean(row.gateRequired),
       usage: { input: usageInput, output: usageOutput, cacheRead: usageCacheRead, cacheWrite: usageCacheWrite, totalTokens: usageTotalTokens, cost: usageCost },
       transcriptCount,

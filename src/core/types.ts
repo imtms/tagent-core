@@ -63,13 +63,42 @@ export interface SupervisorDecision { id: string; runId: RunId; attempt: number;
 export interface SpawnProposal { id: string; runId: RunId; goal: string; acceptanceCriteria: string[]; relation: "depends_on" | "follow_up" | "parallel" | "derived"; status: "proposed" | "approved" | "spawned" | "rejected"; spawnedRunId: string; createdAt: number; updatedAt: number }
 export interface TaskRunEdge { fromRunId: RunId; toRunId: RunId; relation: SpawnProposal["relation"] | "blocks" | "supersedes"; reason: string; createdAt: number }
 
+export type SessionInputIntent = "steer_active" | "follow_up_active" | "update_active_context" | "new_task" | "parallel_task" | "merge_candidate" | "discussion" | "clarification" | "defer";
+export interface SessionInputAnalysis {
+  summary: string;
+  intent: SessionInputIntent;
+  targetRunId: RunId | null;
+  priority: number;
+  urgency: "low" | "normal" | "high" | "critical";
+  relation: "same_goal" | "correction" | "constraint" | "follow_up" | "parallel" | "independent";
+  acceptanceCriteria: string[];
+  scope: string;
+  nonGoals: string[];
+  confidence: number;
+  reason: string;
+  routerVersion: string;
+}
+export interface TaskRunContract {
+  sourceInput: string;
+  summary: string;
+  acceptanceCriteria: string[];
+  scope: string;
+  nonGoals: string[];
+  sourceInboxIds: string[];
+  parentRunId: RunId | null;
+  relation: SessionInputAnalysis["relation"];
+  intent: SessionInputIntent;
+  decisionReason: string;
+  routerVersion: string;
+}
+
 export interface SessionInboxItem {
   id: string;
   sessionId: SessionId;
   requestId: string;
   content: string;
-  status: "queued" | "claimed" | "started" | "deleted" | "failed";
-  decision: "pending" | "start_taskrun" | "defer" | "merge" | "delete";
+  status: "queued" | "claimed" | "started" | "routed" | "deleted" | "failed";
+  decision: "pending" | "start_taskrun" | "steer" | "follow_up" | "spawn_proposal" | "discussion" | "defer" | "merge" | "delete";
   runId: RunId | null;
   error: string;
   position: number;
@@ -77,6 +106,8 @@ export interface SessionInboxItem {
   updatedAt: number;
   claimedAt: number | null;
   startedAt: number | null;
+  analysis: SessionInputAnalysis;
+  manualOrder: boolean;
 }
 
 export interface Message {
@@ -137,6 +168,7 @@ export interface TaskRun {
   status: RunStatus;
   phase: RunPhase;
   goal: string;
+  contract: TaskRunContract | null;
   gateRequired: boolean;
   blockedReason: string;
   lastEventSeq: number;
