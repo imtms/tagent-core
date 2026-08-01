@@ -6,6 +6,7 @@ import type { AgentRuntime, RuntimeFactory } from "../runtime/types.js";
 import type { ContextManifestItem, RunCheckpoint, RunEvent, SessionId, SessionInboxItem, RunId, TaskRun } from "../core/types.js";
 import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 import { TaskRunSupervisor } from "./supervisor.js";
+import { OpenAiSupervisorReviewer, TestSupervisorReviewer, type SupervisorReviewer } from "./supervisor-reviewer.js";
 import { SessionInputRouter } from "./session-input-router.js";
 import type { MemoryFacade } from "../memory/memory-service.js";
 import type { AccessContext, MemoryProvenance } from "../memory/types.js";
@@ -29,11 +30,13 @@ export class AgentService {
     private readonly store: Store,
     private readonly workspace: string,
     private readonly runtimeFactory: RuntimeFactory = createInProcessRuntime,
-    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { maxContinuations?: number; contextWindow?: number; maxContextTurns?: number; controlInboxCapacity?: number } = {},
+    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { maxContinuations?: number; contextWindow?: number; maxContextTurns?: number; controlInboxCapacity?: number; supervisorReviewer?: SupervisorReviewer } = {},
     private readonly memory?: MemoryFacade,
     private readonly memoryScopeId = "default",
   ) {
-    this.supervisor = new TaskRunSupervisor(store);
+    const reviewer = runtimeDefaults.supervisorReviewer ?? (runtimeDefaults.model && runtimeDefaults.apiKey ? new OpenAiSupervisorReviewer({ model: runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions">, apiKey: runtimeDefaults.apiKey, timeoutMs: runtimeDefaults.providerTimeoutMs }) : process.env.VITEST ? new TestSupervisorReviewer() : undefined);
+    if (!reviewer) throw new Error("LLM Supervisor reviewer requires a configured model and API key");
+    this.supervisor = new TaskRunSupervisor(store, reviewer);
     this.store.markInterrupted();
   }
 
@@ -533,7 +536,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
         .filter(Boolean);
       const response = checkpointResponse || assistantResponses.at(-1) || "";
       const checkpointSeq = this.store.getCheckpoint(runId)?.lastEventSeq ?? current.lastEventSeq;
-      const review = this.supervisor.reviewSettled(current, checkpointSeq, response);
+      const review = await this.supervisor.reviewSettled(current, checkpointSeq, response);
       const decision = review.decision;
       if (this.store.getRun(runId)?.attempt !== decision.attempt) {
         this.supervisor.markExecuted(decision.id, "superseded");
@@ -569,7 +572,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       if (!current || current.status !== "running") return false;
       const message = error instanceof Error ? error.message : String(error);
       const checkpointSeq = this.store.getCheckpoint(runId)?.lastEventSeq ?? current.lastEventSeq;
-      const decision = this.supervisor.reviewAttemptFailure(current, checkpointSeq, message);
+      const decision = await this.supervisor.reviewAttemptFailure(current, checkpointSeq, message);
       const recoverable = decision.action === "start_continuation";
       const event = this.store.transitionRun(runId, ["running"], "blocked", "run.blocked", {
         error: message, reason: decision.reasonCode, action: decision.action, supervisionDecisionId: decision.id,

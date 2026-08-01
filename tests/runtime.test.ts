@@ -3,12 +3,21 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { AgentService } from "../src/core/agent-service.js";
 import { Store } from "../src/store/store.js";
 import { TaskRunSupervisor } from "../src/core/supervisor.js";
+import { TestSupervisorReviewer, passingTestAudit, type SupervisorAudit } from "../src/core/supervisor-reviewer.js";
 import type { AgentRuntime, RuntimeFactory } from "../src/runtime/types.js";
 import type { MemoryFacade } from "../src/memory/memory-service.js";
 
 function assistantMessage(text: string): AgentMessage {
   return { role: "assistant", content: [{ type: "text", text }], api: "openai-completions", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: Date.now() };
 }
+
+function continuationAudit(reason = "More work is required."): SupervisorAudit {
+  const failure = { kind: "contract", key: "completion", reason, disposition: "auto_fixable" as const };
+  const failed = { passed: false, failures: [failure], summary: reason };
+  const passed = { passed: true, failures: [], summary: "Passed." };
+  return { action: "start_continuation", reasonCode: "auto_fixable_gate_failures", rationale: reason, confidence: 1, gates: { progress: passed, evidence: passed, contract: failed, completion: failed, continuation: passed } };
+}
+function reviewer(...audits: SupervisorAudit[]) { return new TestSupervisorReviewer(audits); }
 
 class CheckpointRuntime implements AgentRuntime {
   private resolvePrompt?: () => void;
@@ -213,7 +222,7 @@ describe("AgentService runtime boundary", () => {
       const runtime = new ControlledRuntime([assistantMessage("not complete")]);
       runtimes.push(runtime);
       return runtime;
-    });
+    }, { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit()) });
     service.enqueueSessionInput(session.id, "blocked task", "blocked-1");
     service.enqueueSessionInput(session.id, "later task", "blocked-2");
     runtimes[0].resolve();
@@ -381,7 +390,7 @@ describe("AgentService runtime boundary", () => {
     const session = store.createSession();
     const runtime = new FakeRuntime([assistantMessage("done")]);
     const factory: RuntimeFactory = vi.fn(() => runtime);
-    const service = new AgentService(store, "/tmp", factory, { maxContinuations: 0 });
+    const service = new AgentService(store, "/tmp", factory, { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit()) });
     const run = await service.start(session.id, "test factory");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(factory).toHaveBeenCalledOnce();
@@ -424,7 +433,7 @@ describe("AgentService runtime boundary", () => {
     const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
     service.recoverContinuations();
     const run = store.createRun(session.id, "active supervisor decision");
-    const decision = new TaskRunSupervisor(store, { repeatedFailureThreshold: 1, maxSteersPerAttempt: 1, minEventsBetweenInterventions: 1 }).reviewCheckpoint(run.id, { runId: run.id, seq: 1, type: "tool.completed", data: { toolName: "bash", isError: true }, createdAt: Date.now() });
+    const decision = new TaskRunSupervisor(store, reviewer(passingTestAudit()), { repeatedFailureThreshold: 1, maxSteersPerAttempt: 1, minEventsBetweenInterventions: 1 }).reviewCheckpoint(run.id, { runId: run.id, seq: 1, type: "tool.completed", data: { toolName: "bash", isError: true }, createdAt: Date.now() });
     expect(decision?.status).toBe("proposed");
     service.recoverContinuations();
     expect(store.listSupervisorDecisions(run.id)[0].status).toBe("proposed");
@@ -589,7 +598,7 @@ describe("AgentService runtime boundary", () => {
       options.push(runtimeOptions);
       return options.length === 1 ? first : second;
     });
-    const service = new AgentService(store, "/tmp", factory, { maxContinuations: 0 });
+    const service = new AgentService(store, "/tmp", factory, { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit(), continuationAudit()) });
     const started = await service.start(session.id, "resume goal", "stable-request");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(store.getRun(started.id)?.status).toBe("blocked");
@@ -631,13 +640,13 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
-  it("reconciles a persisted Supervisor continuation decision after a crash gap", () => {
+  it("reconciles a persisted Supervisor continuation decision after a crash gap", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "supervisor crash gap");
     store.upsertPlanItem(run.id, { key: "work", title: "Work", status: "pending", required: true, position: 1 });
-    const supervisor = new TaskRunSupervisor(store);
-    const review = supervisor.reviewSettled(store.getRun(run.id)!, 3, "not done");
+    const supervisor = new TaskRunSupervisor(store, reviewer(continuationAudit()));
+    const review = await supervisor.reviewSettled(store.getRun(run.id)!, 3, "not done");
     expect(review.decision.action).toBe("start_continuation");
     store.transitionRun(run.id, ["running"], "blocked", "run.blocked", {}, "work pending", 1);
     supervisor.markExecuted(review.decision.id, "executed");
@@ -704,7 +713,7 @@ describe("AgentService runtime boundary", () => {
       });
       runtimes.push(runtime);
       return runtime;
-    }, { maxContinuations: 2 });
+    }, { maxContinuations: 2, supervisorReviewer: reviewer(continuationAudit(), passingTestAudit()) });
     const run = await service.start(session.id, "auto continue");
     runId = run.id;
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -726,7 +735,7 @@ describe("AgentService runtime boundary", () => {
       return new CallbackRuntime(assistantMessage(calls > 40 ? "done" : "continue"), () => {
         if (calls > 40) store.upsertPlanItem(runId, { key: "finish", title: "Finish", status: "done", required: true, position: 1 });
       });
-    }, { maxContinuations: 64, runTimeoutMs: 60_000 });
+    }, { maxContinuations: 64, runTimeoutMs: 60_000, supervisorReviewer: reviewer(...Array.from({ length: 40 }, () => continuationAudit()), passingTestAudit()) });
     const run = await service.start(session.id, "long durable run");
     runId = run.id;
     for (let index = 0; index < 200 && store.getRun(run.id)?.status !== "completed"; index += 1) {
@@ -743,7 +752,7 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let calls = 0;
-    const service = new AgentService(store, "/tmp", () => { calls += 1; return new CallbackRuntime(assistantMessage("blocked")); }, { maxContinuations: 1 });
+    const service = new AgentService(store, "/tmp", () => { calls += 1; return new CallbackRuntime(assistantMessage("blocked")); }, { maxContinuations: 1, supervisorReviewer: reviewer(continuationAudit(), continuationAudit()) });
     const run = await service.start(session.id, "stay blocked");
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(calls).toBe(2);
@@ -849,7 +858,8 @@ describe("AgentService runtime boundary", () => {
     }
     const service = new AgentService(store, "/tmp", () => new ApprovalRuntime());
     // Exercise the same durable state produced by settled supervision without relying on provider timing.
-    const decision = new TaskRunSupervisor(store).reviewSettled(store.getRun(run.id)!, 1, "waiting").decision;
+    const approvalAudit = { ...continuationAudit("Production approval is required."), action: "pause_for_approval" as const, reasonCode: "approval_required" };
+    const decision = (await new TaskRunSupervisor(store, reviewer(approvalAudit)).reviewSettled(store.getRun(run.id)!, 1, "waiting")).decision;
     store.blockRun(run.id, decision.rationale);
     const approval = store.ensureApprovalRequest(run.id, decision.id, decision.rationale);
     expect(() => service.resume(run.id)).toThrow(/approval decision/);

@@ -536,3 +536,5 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(22, 116, 
 .criterion-row small { color: var(--muted); font-size: 8px; line-height: 1.4; }
 .audit-footnote { display: block; margin-top: 7px; color: var(--muted); font-size: 8px; line-height: 1.4; }
 @media (max-width: 680px) { .gate-standard-grid { grid-template-columns: minmax(0,1fr); } }
+
+.gate-evaluator { margin: 0; padding: 6px 7px; border-radius: 6px; background: #eef5f1; color: #486056; font-size: 8px; line-height: 1.45; }

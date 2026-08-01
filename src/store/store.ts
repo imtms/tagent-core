@@ -31,7 +31,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 
 export class Store {
   readonly db: Database.Database;
@@ -222,13 +222,15 @@ export class Store {
         checkpoint_seq INTEGER NOT NULL, trigger TEXT NOT NULL, action TEXT NOT NULL, reason_code TEXT NOT NULL,
         rationale TEXT NOT NULL, confidence REAL NOT NULL, instruction TEXT NOT NULL DEFAULT '',
         candidate_response_hash TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL, executed_at INTEGER
+        created_at INTEGER NOT NULL, executed_at INTEGER, evaluator TEXT NOT NULL DEFAULT 'system',
+        evaluator_model TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS idx_supervisor_decisions_run ON supervisor_decisions(run_id, attempt, created_at);
       CREATE TABLE IF NOT EXISTS gate_evaluations (
         id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), attempt INTEGER NOT NULL,
-        checkpoint_seq INTEGER NOT NULL, gate_type TEXT NOT NULL, passed INTEGER NOT NULL,
-        failures_json TEXT NOT NULL, input_manifest_hash TEXT NOT NULL, created_at INTEGER NOT NULL
+        checkpoint_seq INTEGER NOT NULL, gate_type TEXT NOT NULL, evaluator TEXT NOT NULL DEFAULT 'system',
+        evaluator_model TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '', passed INTEGER NOT NULL,
+        failures_json TEXT NOT NULL, criterion_coverage_json TEXT NOT NULL DEFAULT '[]', input_manifest_hash TEXT NOT NULL, created_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_gate_evaluations_run ON gate_evaluations(run_id, attempt, created_at);
       CREATE TABLE IF NOT EXISTS progress_snapshots (
@@ -384,6 +386,12 @@ export class Store {
     this.ensureColumn("session_supervisor_inbox", "decision_reason", "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn("session_supervisor_inbox", "router_version", "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn("session_supervisor_inbox", "manual_order", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("gate_evaluations", "evaluator", "TEXT NOT NULL DEFAULT 'system'");
+    this.ensureColumn("gate_evaluations", "evaluator_model", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("gate_evaluations", "summary", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("gate_evaluations", "criterion_coverage_json", "TEXT NOT NULL DEFAULT '[]'");
+    this.ensureColumn("supervisor_decisions", "evaluator", "TEXT NOT NULL DEFAULT 'system'");
+    this.ensureColumn("supervisor_decisions", "evaluator_model", "TEXT NOT NULL DEFAULT ''");
     this.db.prepare(`UPDATE run_continuations SET status = 'cancelled',
       error = 'Superseded while enforcing one active continuation per Run', completed_at = ?,
       lease_owner = '', lease_until = NULL, heartbeat_at = NULL
@@ -1257,14 +1265,14 @@ ${source.content}`;
 
   recordSupervisorDecision(decision: SupervisorDecision) {
     this.db.prepare(`INSERT INTO supervisor_decisions
-      (id,run_id,attempt,checkpoint_seq,trigger,action,reason_code,rationale,confidence,instruction,candidate_response_hash,status,error,created_at,executed_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(decision.id, decision.runId, decision.attempt, decision.checkpointSeq, decision.trigger, decision.action, decision.reasonCode, decision.rationale, decision.confidence, decision.instruction, decision.candidateResponseHash, decision.status, decision.error, decision.createdAt, decision.executedAt);
+      (id,run_id,attempt,checkpoint_seq,trigger,action,reason_code,rationale,confidence,instruction,candidate_response_hash,status,error,created_at,executed_at,evaluator,evaluator_model)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(decision.id, decision.runId, decision.attempt, decision.checkpointSeq, decision.trigger, decision.action, decision.reasonCode, decision.rationale, decision.confidence, decision.instruction, decision.candidateResponseHash, decision.status, decision.error, decision.createdAt, decision.executedAt, decision.evaluator, decision.evaluatorModel);
     return decision;
   }
 
   listSupervisorDecisions(runId: RunId, attempt?: number): SupervisorDecision[] {
     const rows = this.db.prepare(`SELECT id,run_id as runId,attempt,checkpoint_seq as checkpointSeq,trigger,action,reason_code as reasonCode,
-      rationale,confidence,instruction,candidate_response_hash as candidateResponseHash,status,error,created_at as createdAt,executed_at as executedAt
+      rationale,confidence,instruction,candidate_response_hash as candidateResponseHash,status,error,created_at as createdAt,executed_at as executedAt,evaluator,evaluator_model as evaluatorModel
       FROM supervisor_decisions WHERE run_id = ? ${attempt === undefined ? "" : "AND attempt = ?"} ORDER BY created_at,id`).all(runId, ...(attempt === undefined ? [] : [attempt])) as SupervisorDecision[];
     return rows;
   }
@@ -1276,16 +1284,16 @@ ${source.content}`;
   }
 
   recordGateEvaluation(gate: GateEvaluation) {
-    this.db.prepare(`INSERT INTO gate_evaluations (id,run_id,attempt,checkpoint_seq,gate_type,passed,failures_json,input_manifest_hash,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?)`).run(gate.id, gate.runId, gate.attempt, gate.checkpointSeq, gate.gateType, Number(gate.passed), JSON.stringify(gate.failures), gate.inputManifestHash, gate.createdAt);
+    this.db.prepare(`INSERT INTO gate_evaluations (id,run_id,attempt,checkpoint_seq,gate_type,evaluator,evaluator_model,summary,passed,failures_json,criterion_coverage_json,input_manifest_hash,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(gate.id, gate.runId, gate.attempt, gate.checkpointSeq, gate.gateType, gate.evaluator, gate.evaluatorModel, gate.summary, Number(gate.passed), JSON.stringify(gate.failures), JSON.stringify(gate.criterionCoverage ?? []), gate.inputManifestHash, gate.createdAt);
     return gate;
   }
 
   listLatestGateEvaluations(runId: RunId): GateEvaluation[] {
-    const rows = this.db.prepare(`SELECT id,run_id as runId,attempt,checkpoint_seq as checkpointSeq,gate_type as gateType,passed,
-      failures_json as failuresJson,input_manifest_hash as inputManifestHash,created_at as createdAt FROM gate_evaluations
-      WHERE run_id = ? AND (attempt,checkpoint_seq) = (SELECT attempt,checkpoint_seq FROM gate_evaluations WHERE run_id = ? ORDER BY attempt DESC,checkpoint_seq DESC,created_at DESC LIMIT 1) ORDER BY gate_type`).all(runId, runId) as Array<Omit<GateEvaluation,"passed"|"failures"> & {passed:number;failuresJson:string}>;
-    return rows.map(({ failuresJson, ...row }) => ({ ...row, passed: Boolean(row.passed), failures: JSON.parse(failuresJson) as GateEvaluation["failures"] }));
+    const rows = this.db.prepare(`SELECT id,run_id as runId,attempt,checkpoint_seq as checkpointSeq,gate_type as gateType,evaluator,evaluator_model as evaluatorModel,summary,passed,
+      failures_json as failuresJson,criterion_coverage_json as criterionCoverageJson,input_manifest_hash as inputManifestHash,created_at as createdAt FROM gate_evaluations
+      WHERE run_id = ? AND (attempt,checkpoint_seq) = (SELECT attempt,checkpoint_seq FROM gate_evaluations WHERE run_id = ? ORDER BY attempt DESC,checkpoint_seq DESC,created_at DESC LIMIT 1) ORDER BY gate_type`).all(runId, runId) as Array<Omit<GateEvaluation,"passed"|"failures"|"criterionCoverage"> & {passed:number;failuresJson:string;criterionCoverageJson:string}>;
+    return rows.map(({ failuresJson, criterionCoverageJson, ...row }) => ({ ...row, passed: Boolean(row.passed), failures: JSON.parse(failuresJson) as GateEvaluation["failures"], criterionCoverage: JSON.parse(criterionCoverageJson) as GateEvaluation["criterionCoverage"] }));
   }
 
   getProgressSnapshot(runId: RunId): ProgressSnapshot | undefined {

@@ -12,6 +12,7 @@
 
 ### Changed
 
+- Replaced keyword and lexical completion auditing with a structured LLM Supervisor reviewer for progress, evidence freshness, acceptance-criterion coverage, completion claims, blockers, continuation viability, runtime-failure classification, and final delivery quality. Persisted evaluations now record the evaluator, model, semantic summary, failures, and criterion evidence receipts; deterministic local logic remains only for runtime safety invariants such as repeated operations and pending control delivery.
 - Reserved the main conversation for user and assistant messages by moving historical and live/recent Tool activity into the TaskRun audit workspace, collapsed by default.
 - Expanded the right-side TaskRun panel into a Supervisor audit workspace with explicit progress, evidence, contract, claim, approval, and delivery standards; persisted gate failures; criterion coverage receipts; Supervisor rationale/confidence; and tool evidence drill-down.
 

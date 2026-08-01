@@ -21,8 +21,8 @@ export interface TaskRun {
   completionGate: { passed: boolean; failures: Array<{ kind: string; key: string; reason: string }> };
   launchRetryable: boolean;
   supervision: {
-    latestDecision: { id: string; action: string; reasonCode: string; rationale: string; confidence: number; status: string; attempt: number; checkpointSeq: number } | null;
-    latestGates: Array<{ id: string; gateType: string; passed: boolean; failures: Array<{ kind: string; key: string; reason: string; disposition: string }>; criterionCoverage?: Array<{ criterion: string; status: "covered" | "unsupported" | "contradicted" | "blocked"; evidenceRefs: string[]; reason: string }> }>;
+    latestDecision: { id: string; evaluator: "llm" | "system"; evaluatorModel: string; action: string; reasonCode: string; rationale: string; confidence: number; status: string; attempt: number; checkpointSeq: number } | null;
+    latestGates: Array<{ id: string; evaluator: "llm" | "system"; evaluatorModel: string; summary: string; gateType: string; passed: boolean; failures: Array<{ kind: string; key: string; reason: string; disposition: string }>; criterionCoverage?: Array<{ criterion: string; status: "covered" | "unsupported" | "contradicted" | "blocked"; evidenceRefs: string[]; reason: string }> }>;
     progress: { meaningfulChanges: number; consecutiveFailures: number; repeatedOperations: number; checkpointSeq: number; lastProgressAt: number } | null;
     spawnProposals: Array<{ id: string; goal: string; relation: string; status: "proposed" | "approved" | "spawned" | "rejected"; acceptanceCriteria?: string[] }>;
     approvalRequests: Array<{ id: string; decisionId: string; reason: string; status: "pending" | "approved" | "rejected" | "superseded"; requestedAt: number; resolvedAt: number | null; resolvedBy: string; resolution: string }>;

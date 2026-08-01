@@ -5,6 +5,7 @@ import path from "node:path";
 import { Store } from "../src/store/store.js";
 import { AgentService } from "../src/core/agent-service.js";
 import { TaskRunSupervisor } from "../src/core/supervisor.js";
+import { TestSupervisorReviewer } from "../src/core/supervisor-reviewer.js";
 import { createApp } from "../src/app.js";
 
 const apps: Array<ReturnType<typeof createApp>> = [];
@@ -359,7 +360,7 @@ describe("Supervisor approval API", () => {
     const session = store.createSession();
     const run = store.createRun(session.id, "approved operation");
     store.blockRun(run.id, "approval required");
-    const decision = new TaskRunSupervisor(store).reviewAttemptFailure(store.getRun(run.id)!, 1, "Permission approval required");
+    const decision = await new TaskRunSupervisor(store, new TestSupervisorReviewer(undefined, { action: "pause_for_approval", reasonCode: "approval_required", rationale: "Explicit approval is required.", confidence: 1 })).reviewAttemptFailure(store.getRun(run.id)!, 1, "Permission approval required");
     const approval = store.ensureApprovalRequest(run.id, decision.id, decision.rationale);
     const app = createApp({ store, service: new AgentService(store, "/tmp", () => ({
       async prompt() {}, async steer() { return "accepted" as const; }, async followUp() { return "accepted" as const; },
