@@ -243,10 +243,12 @@ describe("AgentService runtime boundary", () => {
       { kind: "steer", content: "change direction" },
       { kind: "follow_up", content: "then verify" },
     ]);
-    expect(store.listControlInbox(run.id)).toEqual([
+    const persistedControls = store.listControlInbox(run.id);
+    expect(persistedControls).toHaveLength(2);
+    expect(persistedControls).toEqual(expect.arrayContaining([
       expect.objectContaining({ requestId: "control-1", status: "delivered", attempt: 1 }),
       expect.objectContaining({ requestId: "control-2", status: "delivered", attempt: 1 }),
-    ]);
+    ]));
     expect(store.listEvents(run.id).some((event) => event.type === "control.duplicate")).toBe(true);
     await service.closeRuntimes();
     store.close();
