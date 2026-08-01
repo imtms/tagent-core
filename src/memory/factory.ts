@@ -58,7 +58,7 @@ export async function createMemoryRuntime(config:MemoryRuntimeConfig,store:Store
   const historicalMessages=store.db.prepare("SELECT id,content FROM messages WHERE role='user' ORDER BY id ASC").all() as Array<{id:number;content:string}>;
   for(const message of historicalMessages)if(isExplicitProfileCue(message.content))await service.enqueueCapture({access,sourceRefs:[{sourceType:"message",sourceId:String(message.id),revision:"user"}],content:`user: ${message.content}`,idempotencyKey:`user-message:${message.id}`,captureSource:{kind:"user_message",role:"user",explicitIntent:true}});
   if(embeddings)await service.reindex(access).catch((error)=>console.warn("Memory reindex failed; lexical recall remains available",error));
-  const worker=new LocalMemoryWorker(capture,lifecycle,consolidator,reconciler,access,config.workerIntervalMs,config.maintenanceIntervalMs);
+  const worker=new LocalMemoryWorker(capture,lifecycle,consolidator,reconciler,access,config.workerIntervalMs,config.maintenanceIntervalMs,()=>service.noteWorkerHeartbeat(),()=>service.noteConsolidation());
   return{service,adapter,worker,lifecycle,consolidator,reconciler,start(){worker.start();},async close(){await worker.stop();if (postgresAdapter) await postgresAdapter.close();}};
 }
 
