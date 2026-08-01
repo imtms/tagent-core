@@ -3,7 +3,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { AgentService } from "../src/core/agent-service.js";
 import { Store } from "../src/store/store.js";
 import { TaskRunSupervisor } from "../src/core/supervisor.js";
-import { TestSupervisorReviewer, passingTestAudit, type SupervisorAudit } from "../src/core/supervisor-reviewer.js";
+import { SupervisorReviewError, TestSupervisorReviewer, passingTestAudit, type SupervisorAudit, type SupervisorReviewer } from "../src/core/supervisor-reviewer.js";
 import type { AgentRuntime, RuntimeFactory } from "../src/runtime/types.js";
 import type { MemoryFacade } from "../src/memory/memory-service.js";
 
@@ -865,6 +865,28 @@ describe("AgentService runtime boundary", () => {
     expect(() => service.resume(run.id)).toThrow(/approval decision/);
     store.resolveApprovalRequest(approval.id, "rejected", "user", "not now");
     expect(store.getRun(run.id)?.supervision.approvalRequests).toEqual([expect.objectContaining({ status: "rejected" })]);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("does not create an Agent continuation when the Supervisor audit itself fails validation", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let runtimeCalls = 0;
+    const failedReviewer: SupervisorReviewer = {
+      evaluator: "llm",
+      model: "broken-supervisor",
+      async reviewSettled() { throw new SupervisorReviewError("invalid structured audit"); },
+      async reviewAttemptFailure() { throw new Error("Supervisor review failures must not be reclassified as Agent runtime failures"); },
+    };
+    const service = new AgentService(store, "/tmp", () => { runtimeCalls += 1; return new FakeRuntime([assistantMessage("candidate result")]); }, { maxContinuations: 8, supervisorReviewer: failedReviewer });
+    const run = await service.start(session.id, "audit failure isolation");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(runtimeCalls).toBe(1);
+    expect(store.getRun(run.id)).toMatchObject({ status: "blocked", attempt: 1 });
+    expect(store.getRun(run.id)?.continuations).toHaveLength(0);
+    expect(store.listSupervisorDecisions(run.id)).toEqual([expect.objectContaining({ reasonCode: "supervisor_review_failed", action: "block_taskrun", evaluator: "llm" })]);
+    expect(store.listMessages(session.id).at(-1)?.content).toMatch(/no automatic continuation/i);
     await service.closeRuntimes();
     store.close();
   });

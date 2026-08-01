@@ -10,6 +10,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Make the Contract gate the single owner of acceptance-criterion coverage receipts, eliminating duplicated Contract/Completion receipt drift from structured LLM audits. Invalid Supervisor audit output is retried internally up to three times and, if still invalid, blocks once without rerunning an already-finished Agent attempt.
+
 ### Changed
 
 - Replaced keyword and lexical completion auditing with a structured LLM Supervisor reviewer for progress, evidence freshness, acceptance-criterion coverage, completion claims, blockers, continuation viability, runtime-failure classification, and final delivery quality. Persisted evaluations now record the evaluator, model, semantic summary, failures, and criterion evidence receipts; deterministic local logic remains only for runtime safety invariants such as repeated operations and pending control delivery.

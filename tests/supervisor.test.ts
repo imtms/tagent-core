@@ -75,6 +75,42 @@ describe("TaskRunSupervisor LLM audit", () => {
     } finally { globalThis.fetch = original; store.close(); }
   });
 
+  it("uses one authoritative contract coverage receipt set and does not require completion duplication", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "single coverage owner");
+    const criterion = "Explain the result";
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, objectives: [], acceptanceCriteria: [criterion], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "discussion", decisionReason: "test", routerVersion: "test" }), run.id);
+    const payload = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: Object.fromEntries(["progress", "evidence", "completion", "continuation"].map((type) => [type, { passed: true, summary: "Passed.", failures: [] }])) as Record<string, unknown> };
+    payload.gates.contract = { passed: true, summary: "Covered.", failures: [], criterionCoverage: [{ criterion, status: "covered", evidenceRefs: [], reason: "The response directly explains the result." }] };
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(payload) } }] }), { status: 200 });
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "explanation", operations: [], progress: undefined });
+      expect(audit.action).toBe("complete_taskrun");
+      expect(audit.gates.contract.criterionCoverage).toHaveLength(1);
+      expect(audit.gates.completion.criterionCoverage).toBeUndefined();
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("retries malformed Supervisor audit output internally without creating another Agent attempt", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "retry audit only");
+    let requests = 0;
+    const valid = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } } };
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => {
+      requests += 1;
+      const content = requests === 1 ? JSON.stringify({ action: "complete_taskrun" }) : JSON.stringify(valid);
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+    };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
+      expect(audit.action).toBe("complete_taskrun");
+      expect(requests).toBe(2);
+      expect(store.getRun(run.id)?.attempt).toBe(1);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
   it("waits for durable control delivery before invoking the LLM reviewer", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "wait");
     store.enqueueControl(run.id, "control", "steer", "correct it", 32);

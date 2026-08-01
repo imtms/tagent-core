@@ -66,6 +66,10 @@ export class TaskRunSupervisor {
     return this.createDecision(run, checkpointSeq, "attempt_terminal", audit.action, audit.reasonCode, audit.rationale, audit.confidence);
   }
 
+  recordReviewFailure(run: TaskRun, checkpointSeq: number, error: string) {
+    return this.createDecision(run, checkpointSeq, "settled", "block_taskrun", "supervisor_review_failed", `Supervisor quality review could not produce a valid structured audit. The Agent result is preserved for audit and no automatic continuation was started. ${error}`, 1);
+  }
+
   reviewSpawn(run: TaskRun, checkpointSeq: number) {
     const proposals = this.store.listSpawnProposals(run.id, "proposed");
     return proposals.map((proposal) => this.createDecision(run, checkpointSeq, "taskrun_terminal", "spawn_taskrun", "pending_explicit_proposal", `Spawn proposal ${proposal.id}: ${proposal.goal}`, 1));

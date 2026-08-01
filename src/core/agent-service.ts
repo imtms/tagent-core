@@ -6,7 +6,7 @@ import type { AgentRuntime, RuntimeFactory } from "../runtime/types.js";
 import type { ContextManifestItem, RunCheckpoint, RunEvent, SessionId, SessionInboxItem, RunId, TaskRun } from "../core/types.js";
 import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 import { TaskRunSupervisor } from "./supervisor.js";
-import { OpenAiSupervisorReviewer, TestSupervisorReviewer, type SupervisorReviewer } from "./supervisor-reviewer.js";
+import { OpenAiSupervisorReviewer, SupervisorReviewError, TestSupervisorReviewer, type SupervisorReviewer } from "./supervisor-reviewer.js";
 import { SessionInputRouter } from "./session-input-router.js";
 import type { MemoryFacade } from "../memory/memory-service.js";
 import type { AccessContext, MemoryProvenance } from "../memory/types.js";
@@ -572,6 +572,17 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       if (!current || current.status !== "running") return false;
       const message = error instanceof Error ? error.message : String(error);
       const checkpointSeq = this.store.getCheckpoint(runId)?.lastEventSeq ?? current.lastEventSeq;
+      if (error instanceof SupervisorReviewError) {
+        const decision = this.supervisor.recordReviewFailure(current, checkpointSeq, message);
+        const event = this.store.transitionRun(runId, ["running"], "blocked", "run.blocked", {
+          error: message, reason: decision.reasonCode, action: decision.action, supervisionDecisionId: decision.id,
+        }, "Supervisor review failed after bounded internal retries. The candidate result was preserved and the Agent was not rerun.", attempt);
+        if (!event) { this.supervisor.markExecuted(decision.id, "superseded"); return false; }
+        this.supervisor.markExecuted(decision.id, "executed");
+        this.store.appendMessage(current.sessionId, "assistant", "Run blocked: Supervisor quality review failed after bounded internal retries. The Agent result was preserved for audit; no automatic continuation was started.");
+        this.publish(event);
+        return false;
+      }
       const decision = await this.supervisor.reviewAttemptFailure(current, checkpointSeq, message);
       const recoverable = decision.action === "start_continuation";
       const event = this.store.transitionRun(runId, ["running"], "blocked", "run.blocked", {
