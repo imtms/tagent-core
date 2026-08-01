@@ -134,7 +134,6 @@ export function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
-  const [provisionalDrafts, setProvisionalDrafts] = useState<string[]>([]);
   const [pendingUserMessage, setPendingUserMessage] = useState<{ sessionId: string; content: string; createdAt: number } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [activeRun, setActiveRun] = useState<TaskRun | null>(null);
@@ -166,6 +165,7 @@ export function App() {
   const renameSubmittingRef = useRef(false);
   const activeRunIdRef = useRef("");
   const sessionIdRef = useRef("");
+  const replaceStreamingOnNextDeltaRef = useRef(false);
 
   useEffect(() => { activeRunIdRef.current = activeRun?.id ?? ""; }, [activeRun?.id]);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
@@ -196,13 +196,20 @@ export function App() {
         setSessions(sessionItems);
         const active = runHistory.find((item) => item.status === "running") ?? null;
         if (active?.id && active.id !== activeRunIdRef.current) {
-          const [hydrated, view] = await Promise.all([api.run(active.id), api.transcriptView(active.id)]);
+          const [hydrated, view, history] = await Promise.all([api.run(active.id), api.transcriptView(active.id), api.messages(targetSessionId)]);
           if (closed || sessionIdRef.current !== targetSessionId) return;
+          replaceStreamingOnNextDeltaRef.current = false;
+          setMessages(history); setHasOlderMessages(history.length === 80);
           setActiveRun(hydrated); setSelectedRun(hydrated); setExpandedRunId(hydrated.id);
           setTranscript(view); setStreaming(hydrated.checkpoint?.active ? hydrated.checkpoint.assistantPartial : "");
           setEvents(hydrated.checkpoint?.active && hydrated.checkpoint.currentTool ? [{ runId: hydrated.id, seq: hydrated.checkpoint.lastEventSeq, type: "tool.started", data: hydrated.checkpoint.currentTool, createdAt: hydrated.checkpoint.updatedAt }] : []);
           setError("");
         } else if (!active && activeRunIdRef.current) {
+          const endedRunId = activeRunIdRef.current;
+          const [history, ended, view] = await Promise.all([api.messages(targetSessionId), api.run(endedRunId), api.transcriptView(endedRunId)]);
+          if (closed || sessionIdRef.current !== targetSessionId || activeRunIdRef.current !== endedRunId) return;
+          replaceStreamingOnNextDeltaRef.current = false;
+          setMessages(history); setHasOlderMessages(history.length === 80); setSelectedRun(ended); setTranscript(view);
           setActiveRun(null); setStreaming(""); setEvents([]);
         } else if (active) {
           setActiveRun((current) => current?.id === active.id ? { ...current, ...active } : active);
@@ -218,7 +225,8 @@ export function App() {
     if (!sessionId) return;
     const targetSessionId = sessionId;
     let closed = false;
-    setStreaming(""); setProvisionalDrafts([]); setEvents([]); setError(""); setEditingInboxId(""); setInboxDraft(""); setDraggingInboxId(""); setPendingUserMessage(null);
+    replaceStreamingOnNextDeltaRef.current = false;
+    setStreaming(""); setEvents([]); setError(""); setEditingInboxId(""); setInboxDraft(""); setDraggingInboxId(""); setPendingUserMessage(null);
     void Promise.all([api.messages(targetSessionId), api.runs(targetSessionId), api.inbox(targetSessionId)]).then(async ([history, runHistory, queued]) => {
       if (closed || sessionIdRef.current !== targetSessionId) return;
       const latest = runHistory[0] ?? null;
@@ -248,11 +256,19 @@ export function App() {
       const after = Math.max(checkpointAfter, cursor.ackedSeq);
       unsubscribe = subscribe(runId, consumerId, cursor.generation, after, async (event) => {
       setEvents((current) => [...current.slice(-39), event]);
-      if (event.type === "message.started") setStreaming((current) => {
-        if (current.trim()) setProvisionalDrafts((drafts) => [...drafts.slice(-2), current]);
-        return "";
+      if (event.type === "message.started") replaceStreamingOnNextDeltaRef.current = true;
+      if (event.type === "message.delta") setStreaming((current) => {
+        const delta = String(event.data.delta ?? "");
+        if (replaceStreamingOnNextDeltaRef.current) {
+          replaceStreamingOnNextDeltaRef.current = false;
+          return delta;
+        }
+        return current + delta;
       });
-      if (event.type === "message.delta") setStreaming((current) => current + String(event.data.delta ?? ""));
+      if (event.type === "message.completed") {
+        const content = String(event.data.content ?? "");
+        if (content.trim()) { replaceStreamingOnNextDeltaRef.current = false; setStreaming(content); }
+      }
       if (["run.completed", "run.blocked", "run.failed", "run.cancelled"].includes(event.type)) {
         const [updated, runHistory, history, queued, view, sessionItems] = await Promise.all([
           api.run(runId), api.runs(sessionId), api.messages(sessionId), api.inbox(sessionId), api.transcriptView(runId), api.sessions(),
@@ -264,7 +280,7 @@ export function App() {
           const persisted = !current.trim() || history.some((message) => message.role === "assistant" && (message.content === current || (response && message.content === response)));
           return persisted ? "" : current;
         });
-        setProvisionalDrafts([]); setActiveRun(nextActive);
+        replaceStreamingOnNextDeltaRef.current = false; setActiveRun(nextActive);
         setSelectedRun((current) => current?.id === updated.id ? updated : current);
         setRuns(runHistory); setMessages((current) => {
           const older = current.filter((message) => !history.some((latest) => latest.id === message.id) && message.id < (history[0]?.id ?? Number.MAX_SAFE_INTEGER));
@@ -462,7 +478,6 @@ export function App() {
         {pendingUserMessage?.sessionId === sessionId && !messages.some((message) => message.role === "user" && message.content === pendingUserMessage.content && message.createdAt >= pendingUserMessage.createdAt - 5_000) && <article className="message user pending" aria-label="Sending message"><div className="message-meta"><span>You</span><time>Sending…</time></div><div className="message-body"><Markdown>{pendingUserMessage.content}</Markdown></div></article>}
         {selectedRun && transcriptTools.length > 0 && <ToolHistory items={transcriptTools} />}
         {activeRun && <div className="active-run-strip"><Activity size={14} /><span>Attempt {activeRun.attempt}</span><strong>{activeRun.phase}</strong><small>{activeRun.usage.totalTokens.toLocaleString()} tokens</small></div>}
-        {provisionalDrafts.length > 0 && <details className="provisional-drafts"><summary>{provisionalDrafts.length} earlier draft{provisionalDrafts.length === 1 ? "" : "s"} retained</summary>{provisionalDrafts.map((item, index) => <pre key={`${index}-${item.length}`}>{item}</pre>)}</details>}
         {streaming && <article className="message assistant live"><div className="message-meta"><span>TAgent</span><span className="live-label"><span className="pulse" />Working</span></div><div className="message-body"><LiveText>{streaming}</LiveText></div></article>}
         {activeTools.length > 0 && <LiveToolActivity events={activeTools} />}
         <div ref={endRef} />

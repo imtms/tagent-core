@@ -315,6 +315,31 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
+  it("uses the durable completed message as the final candidate when runtime history ends with an empty assistant shell", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const complete = "Root cause found and fixed. The durable completed response is preserved and the regression test passed.";
+    const runtimeFactory: RuntimeFactory = (options) => ({
+      async prompt() {
+        const started = options.store.appendEvent(options.runId, "message.started", { ordinal: 1 }); options.onEvent?.(started);
+        const delta = options.store.appendEvent(options.runId, "message.delta", { ordinal: 1, delta: complete }); options.onEvent?.(delta);
+        const completed = options.store.appendEvent(options.runId, "message.completed", { ordinal: 1, content: complete }); options.onEvent?.(completed);
+      },
+      async steer() { return "accepted" as const; },
+      abort() {},
+      getMessages() { return [assistantMessage(complete), assistantMessage("")]; },
+      getError() { return undefined; },
+    });
+    const service = new AgentService(store, "/tmp", runtimeFactory);
+    const run = await service.start(session.id, "find and fix the missing final response");
+    store.upsertPlanItem(run.id, { key: "done", title: "Done", status: "done", required: true, position: 1 });
+    store.upsertCheck(run.id, { key: "verify", title: "Verify", status: "passed", required: true, command: "npm test", evidence: "regression test passed", stale: false });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(store.getRun(run.id)?.status).toBe("completed");
+    expect(store.listMessages(session.id).at(-1)).toMatchObject({ role: "assistant", content: complete });
+    await service.closeRuntimes(); store.close();
+  });
+
   it("resets the durable partial when a new assistant message starts", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();

@@ -8,6 +8,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep the currently visible assistant response on screen until replacement content actually arrives, rather than moving it into a repeated `earlier draft retained` placeholder at every assistant message boundary.
+- Reconcile missed SSE terminal events through Session polling by refreshing persisted messages, the terminal Run, and its transcript before clearing live state.
+- Prefer the durable completed assistant partial when selecting the Supervisor candidate response, preventing an empty trailing assistant shell from yielding a completed TaskRun with no persisted chat answer.
+
 ### Changed
 
 - Removed all TAgent Core token-budget control paths: no soft checkpoints, hard cumulative token ceiling, token-driven steer, token-driven continuation suppression, Memory recall token budget, or context reserve budget remains. Provider usage is observational only.

@@ -73,11 +73,14 @@ describe("Web workbench state model", () => {
     expect(styles).toContain("content-visibility: auto");
   });
 
-  it("retains a streamed draft when a replacement assistant message starts", async () => {
+  it("keeps the visible response until replacement content arrives and reconciles missed terminal events", async () => {
     const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
-    expect(source).toContain("setProvisionalDrafts((drafts) => [...drafts.slice(-2), current])");
-    expect(source).toContain('className="provisional-drafts"');
-    expect(source).toContain('history.some((message) => message.role === "assistant"');
+    expect(source).toContain('if (event.type === "message.started") replaceStreamingOnNextDeltaRef.current = true');
+    expect(source).toContain("if (replaceStreamingOnNextDeltaRef.current)");
+    expect(source).toContain('if (event.type === "message.completed")');
+    expect(source).toContain("const [history, ended, view] = await Promise.all");
+    expect(source).not.toContain("earlier draft");
+    expect(source).not.toContain("setProvisionalDrafts");
   });
 
   it("shows submitted messages optimistically and continuously reconciles persisted chat state", async () => {

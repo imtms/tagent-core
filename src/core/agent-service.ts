@@ -525,10 +525,13 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       const current = this.store.getRun(runId);
       if (!current || current.status !== "running") return false;
       const messages = runtime.getMessages();
-      const final = [...messages].reverse().find((message) => message.role === "assistant");
-      const response = final && "content" in final
-        ? (typeof final.content === "string" ? final.content : final.content.filter((part) => part.type === "text").map((part) => part.text).join(""))
-        : "";
+      const checkpointResponse = this.store.getCheckpoint(runId)?.assistantPartial.trim() ?? "";
+      const assistantResponses = messages
+        .filter((message) => message.role === "assistant" && "content" in message)
+        .map((message) => typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join(""))
+        .map((value) => value.trim())
+        .filter(Boolean);
+      const response = checkpointResponse || assistantResponses.at(-1) || "";
       const checkpointSeq = this.store.getCheckpoint(runId)?.lastEventSeq ?? current.lastEventSeq;
       const review = this.supervisor.reviewSettled(current, checkpointSeq, response);
       const decision = review.decision;
