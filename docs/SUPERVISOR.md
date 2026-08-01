@@ -63,10 +63,12 @@ A proposed child cannot be launched directly. It must transition through explici
 
 ## Attempt and settled supervision
 
-The TaskRun Supervisor now distinguishes additional designed actions:
+The TaskRun Supervisor distinguishes the designed terminal and runtime actions:
 
 - evidence-only completion failures -> `request_evidence` and an automatic continuation dedicated to verification;
-- blocked approval/permission items -> `pause_for_approval` without automatic continuation;
+- blocked approval/permission items -> `pause_for_approval`, a durable approval request, and no automatic continuation;
+- pending durable steer/follow-up delivery at settle time -> `wait_for_runtime`;
+- repeated identical successful tool operations -> bounded `steer`, not only repeated failures;
 - transient provider/network attempt failures -> `start_continuation`;
 - missing user parameters or non-transient runtime failures -> durable block.
 
@@ -74,4 +76,18 @@ These decisions are persisted with the `attempt_terminal` or `settled` trigger i
 
 ## Current boundary
 
-The deterministic router covers the high-confidence safety and orchestration paths required for stable operation. Future versions may add a schema-validated LLM classifier for ambiguous multi-intent input, semantic clustering beyond canonical summary equality, dedicated lightweight discussion turns, dependency-aware parallel execution, and approval UI for spawn proposals.
+The deterministic router covers the high-confidence safety and orchestration paths required for stable operation. Durable Run approval requests and their Approve/Reject Web flow are implemented. Future versions may add a schema-validated classifier for ambiguous multi-intent input, semantic clustering beyond canonical summary equality, dedicated lightweight discussion turns, dependency-aware parallel execution, and cross-Session Topic routing.
+
+
+## Design alignment audit
+
+The current implementation covers the durable Session Inbox, high-confidence input routing, TaskRun contracts, checkpoint/settled/attempt-terminal reviews, completion/evidence/continuation gates, explicit approval receipts, and approved spawn proposals. Compared with the original Session/Topic/TaskRun design, the following remain intentionally incomplete:
+
+- Topic is not yet a first-class cross-Session graph with message/Run links, confidence, merge, split, and correction receipts.
+- Context assembly does not yet persist a per-turn Context Manifest explaining every selected Session, TaskRun, Topic, and Memory item.
+- Ambiguous multi-intent routing is deterministic only; there is no schema-validated semantic classifier or human confirmation path for low-confidence analysis.
+- Discussion and clarification still use a lightweight TaskRun contract rather than a dedicated conversation-only runtime.
+- Parallel proposals require explicit approval and manual start; there is no dependency-aware concurrent scheduler.
+- Safety approvals currently govern Supervisor pauses and spawn proposals, not every high-risk operation through one capability-policy system.
+
+These are architectural roadmap items rather than claims of completed functionality.

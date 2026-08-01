@@ -568,7 +568,11 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       if (!event) { this.supervisor.markExecuted(decision.id, "superseded"); return false; }
       this.supervisor.markExecuted(decision.id, "executed");
       this.publish(event);
-      return decision.action === "start_continuation" || decision.action === "request_evidence";
+      if (decision.action === "pause_for_approval") {
+        const approval = this.store.ensureApprovalRequest(runId, decision.id, reason);
+        this.publish(this.store.appendEvent(runId, "supervisor.approval.requested", { approvalId: approval.id, decisionId: decision.id, reason }));
+      }
+      return decision.action === "start_continuation" || decision.action === "request_evidence" || decision.action === "wait_for_runtime";
     } catch (error) {
       if (this.closing) return false;
       if (continuationId && !this.store.ownsContinuationLease(continuationId, this.continuationOwner)) {
@@ -586,6 +590,10 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       }, message, attempt);
       if (!event) { this.supervisor.markExecuted(decision.id, "superseded"); return false; }
       this.supervisor.markExecuted(decision.id, "executed");
+      if (decision.action === "pause_for_approval") {
+        const approval = this.store.ensureApprovalRequest(runId, decision.id, message);
+        this.publish(this.store.appendEvent(runId, "supervisor.approval.requested", { approvalId: approval.id, decisionId: decision.id, reason: message }));
+      }
       this.store.appendMessage(current.sessionId, "assistant", decision.action === "pause_for_approval" ? `Run paused for approval: ${message}` : `Run blocked: ${message}`);
       this.publish(event);
       return recoverable;
@@ -745,9 +753,24 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     if (!this.runtimes.has(run.id)) throw new Error("Spawned runtime did not start");
   }
 
+  approveRunApproval(approvalId: string, resolution = "Approved by user") {
+    const approval = this.store.resolveApprovalRequest(approvalId, "approved", "user", resolution);
+    if (!approval) throw new Error("Approval request is not pending");
+    this.publish(this.store.appendEvent(approval.runId, "supervisor.approval.approved", { approvalId, resolution }));
+    return this.resume(approval.runId);
+  }
+
+  rejectRunApproval(approvalId: string, resolution = "Rejected by user") {
+    const approval = this.store.resolveApprovalRequest(approvalId, "rejected", "user", resolution);
+    if (!approval) throw new Error("Approval request is not pending");
+    this.publish(this.store.appendEvent(approval.runId, "supervisor.approval.rejected", { approvalId, resolution }));
+    return this.store.getRun(approval.runId)!;
+  }
+
   resume(runId: RunId) {
     if (this.closing) throw new Error("Service is shutting down");
     if (this.runtimes.has(runId)) throw new Error("Run is already active");
+    if (this.store.hasPendingApproval(runId)) throw new Error("Run requires an approval decision before resume");
     this.store.cancelQueuedContinuations(runId, "Superseded by manual resume");
     this.repairTranscript(runId, "resume");
     const run = this.store.resumeRun(runId);

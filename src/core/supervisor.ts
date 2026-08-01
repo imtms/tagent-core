@@ -21,17 +21,28 @@ export class TaskRunSupervisor {
     if (!run || run.status !== "running") return undefined;
     const snapshot = this.store.updateProgressSnapshot(run, event);
     if (!event.type.startsWith("tool.") && event.type !== "tool.guard.blocked") return undefined;
-    if (snapshot.consecutiveFailures < this.policy.repeatedFailureThreshold) return undefined;
+    const repeatedFailure = snapshot.consecutiveFailures >= this.policy.repeatedFailureThreshold;
+    const repeatedOperation = snapshot.repeatedOperations >= this.policy.repeatedFailureThreshold;
+    if (!repeatedFailure && !repeatedOperation) return undefined;
     const recent = this.store.listSupervisorDecisions(runId, run.attempt);
     const steers = recent.filter((item) => item.action === "steer" && (item.status === "proposed" || item.status === "executed"));
     if (steers.length >= this.policy.maxSteersPerAttempt) return undefined;
     const last = steers.at(-1);
     if (last && event.seq - last.checkpointSeq < this.policy.minEventsBetweenInterventions) return undefined;
-    return this.createDecision(run, event.seq, "checkpoint", "steer", "repeated_tool_failures",
-      `Stop repeating the failing operation. Inspect the root cause and use a materially different approach. ${snapshot.consecutiveFailures} consecutive tool failures were observed.`, 1);
+    const reasonCode = repeatedFailure ? "repeated_tool_failures" : "repeated_tool_operation";
+    const rationale = repeatedFailure
+      ? `Stop repeating the failing operation. Inspect the root cause and use a materially different approach. ${snapshot.consecutiveFailures} consecutive tool failures were observed.`
+      : `Stop repeating the same successful operation. ${snapshot.repeatedOperations} identical calls were observed without new TaskRun evidence; use the existing result or change approach.`;
+    return this.createDecision(run, event.seq, "checkpoint", "steer", reasonCode, rationale, 1);
   }
 
   reviewSettled(run: TaskRun, checkpointSeq: number, response: string): SettledReview {
+    const pendingControl = this.store.listControlInbox(run.id).filter((item) => item.attempt === run.attempt && ["queued", "delivering"].includes(item.status));
+    if (pendingControl.length) {
+      const gates = this.evaluateGates(run, checkpointSeq, response);
+      for (const gate of gates) this.store.recordGateEvaluation(gate);
+      return { gates, decision: this.createDecision(run, checkpointSeq, "settled", "wait_for_runtime", "pending_control_delivery", `${pendingControl.length} durable control message(s) are still pending delivery.`, 1, response) };
+    }
     const gates = this.evaluateGates(run, checkpointSeq, response);
     for (const gate of gates) this.store.recordGateEvaluation(gate);
     const completion = gates.find((item) => item.gateType === "completion")!;

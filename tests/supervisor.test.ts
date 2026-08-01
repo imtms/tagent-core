@@ -175,3 +175,47 @@ describe("TaskRunSupervisor", () => {
     store.close();
   });
 });
+
+describe("Supervisor approval and runtime waiting", () => {
+  it("waits when durable control messages are still pending at settle", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "wait for steer delivery");
+    store.upsertPlanItem(run.id, { key: "done", title: "Done", status: "done", required: true, position: 1 });
+    store.enqueueControl(run.id, "control-1", "steer", "use the corrected path", 32);
+    const review = new TaskRunSupervisor(store).reviewSettled(store.getRun(run.id)!, 3, "done");
+    expect(review.decision).toMatchObject({ action: "wait_for_runtime", reasonCode: "pending_control_delivery" });
+    store.close();
+  });
+
+  it("persists and resolves a single durable approval request", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "production approval");
+    const decision = new TaskRunSupervisor(store).reviewAttemptFailure(run, 2, "Production deployment permission required");
+    const first = store.ensureApprovalRequest(run.id, decision.id, decision.rationale);
+    const duplicate = store.ensureApprovalRequest(run.id, decision.id, decision.rationale);
+    expect(duplicate.id).toBe(first.id);
+    expect(store.hasPendingApproval(run.id)).toBe(true);
+    expect(store.resolveApprovalRequest(first.id, "approved", "user", "ship it")).toMatchObject({ status: "approved", resolution: "ship it" });
+    expect(store.hasPendingApproval(run.id)).toBe(false);
+    store.close();
+  });
+
+  it("steers repeated identical successful operations", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "avoid redundant reads");
+    const supervisor = new TaskRunSupervisor(store, { repeatedFailureThreshold: 3, maxSteersPerAttempt: 1, minEventsBetweenInterventions: 1 });
+    let decision;
+    for (let seq = 1; seq <= 3; seq += 1) {
+      const toolCallId = `call-${seq}`;
+      store.recordToolAttempt(run.id, run.attempt, toolCallId, "read", { path: "same-file" });
+      store.completeToolAttempt(run.id, run.attempt, toolCallId, true);
+      decision = supervisor.reviewCheckpoint(run.id, { runId: run.id, seq, type: "tool.completed", data: { toolCallId, toolName: "read", isError: false }, createdAt: Date.now() });
+    }
+    expect(decision).toMatchObject({ action: "steer", reasonCode: "repeated_tool_operation" });
+    expect(store.getProgressSnapshot(run.id)?.repeatedOperations).toBe(3);
+    store.close();
+  });
+});

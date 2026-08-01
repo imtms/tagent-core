@@ -258,6 +258,18 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     if (!run) return reply.code(404).send({ error: "run not found" });
     return { ...run.supervision, decisions: store.listSupervisorDecisions(id), edges: store.listTaskRunEdges(id) };
   });
+  app.post("/api/approval-requests/:id/approve", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { resolution?: string };
+    try { return service.approveRunApproval(id, body.resolution?.trim() || undefined); }
+    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+  app.post("/api/approval-requests/:id/reject", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { resolution?: string };
+    try { return service.rejectRunApproval(id, body.resolution?.trim() || undefined); }
+    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
   app.post("/api/runs/:id/spawn-proposals", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as { goal?: string; acceptanceCriteria?: string[]; relation?: "depends_on" | "follow_up" | "parallel" | "derived" };

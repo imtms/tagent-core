@@ -6,7 +6,7 @@ Updated: 2026-08-01 (Asia/Singapore)
 
 ### Core control plane
 
-- SQLite-backed sessions, ordered conversation messages, Schema v5 durable event-consumer cursors, Schema v6 durable control inbox records, Schema v7 TaskRun supervision records, and Schema v10 semantic Session Supervisor Inbox and TaskRun contract records.
+- SQLite-backed sessions, ordered conversation messages, Schema v5 durable event-consumer cursors, Schema v6 durable control inbox records, Schema v7 TaskRun supervision records, and Schema v11 semantic Session Supervisor Inbox, TaskRun contract, and durable approval-request records.
 - Session Input Router is the normal admission path: input is summarized, classified, prioritized, and either routed to the active Run, converted to a gated spawn proposal, or atomically bound to a durable TaskRun contract.
 - Automatic Session dispatch is blocked by any running Run and by the latest blocked/interrupted Run, while older historical blocked/interrupted Runs remain auditable without permanently freezing the queue.
 - A user can explicitly start a selected queued Inbox item through a transactional `Run now` path; running Runs and active continuations retain concurrency priority and fencing.
@@ -151,4 +151,4 @@ Updated: 2026-08-01 (Asia/Singapore)
 - Provider failures are typed and auditable, but retry scheduling still uses the provider SDK/pi boundary rather than a TAgent-owned retry loop.
 - Scoped Bearer credentials are available for supported automation routes, but the Web/administrative surface has no built-in login or complete multi-tenant isolation and must remain on localhost or a trusted private network.
 
-- Supervisor v2 adds edit reclassification, structured merge, explicit defer, attempt-terminal classification, request-evidence/approval actions, and approved derived TaskRun spawning.
+- Supervisor v3 adds edit reclassification, structured merge, explicit defer, attempt-terminal classification, request-evidence, wait-for-runtime, durable approval decisions, repeated-operation intervention, and approved derived TaskRun spawning.

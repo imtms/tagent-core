@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Store } from "../src/store/store.js";
 import { AgentService } from "../src/core/agent-service.js";
+import { TaskRunSupervisor } from "../src/core/supervisor.js";
 import { createApp } from "../src/app.js";
 
 const apps: Array<ReturnType<typeof createApp>> = [];
@@ -331,4 +332,25 @@ describe("HTTP API", () => {
     expect((await app.inject({ method: "POST", url: `/api/runs/${run.id}/consumers/web/ack`, payload: { generation: second.generation, seq: 1 } })).json()).toEqual({ ok: true, status: "accepted" });
   });
 
+});
+
+describe("Supervisor approval API", () => {
+  it("requires an explicit approval decision before resuming", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "approved operation");
+    store.blockRun(run.id, "approval required");
+    const decision = new TaskRunSupervisor(store).reviewAttemptFailure(store.getRun(run.id)!, 1, "Permission approval required");
+    const approval = store.ensureApprovalRequest(run.id, decision.id, decision.rationale);
+    const app = createApp({ store, service: new AgentService(store, "/tmp", () => ({
+      async prompt() {}, async steer() { return "accepted" as const; }, async followUp() { return "accepted" as const; },
+      abort() {}, getMessages() { return []; }, getError() { return undefined; },
+    })), logger: false, webRoot: "/tmp" });
+    apps.push(app);
+    const blocked = await app.inject({ method: "POST", url: `/api/runs/${run.id}/resume` });
+    expect(blocked.statusCode).toBe(409);
+    const rejected = await app.inject({ method: "POST", url: `/api/approval-requests/${approval.id}/reject`, payload: { resolution: "not allowed" } });
+    expect(rejected.statusCode).toBe(200);
+    expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "rejected", resolution: "not allowed" });
+  });
 });

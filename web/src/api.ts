@@ -24,6 +24,7 @@ export interface TaskRun {
     latestGates: Array<{ id: string; gateType: string; passed: boolean; failures: Array<{ kind: string; key: string; reason: string; disposition: string }> }>;
     progress: { meaningfulChanges: number; consecutiveFailures: number; checkpointSeq: number; lastProgressAt: number } | null;
     spawnProposals: Array<{ id: string; goal: string; relation: string; status: "proposed" | "approved" | "spawned" | "rejected"; acceptanceCriteria?: string[] }>;
+    approvalRequests: Array<{ id: string; decisionId: string; reason: string; status: "pending" | "approved" | "rejected" | "superseded"; requestedAt: number; resolvedAt: number | null; resolvedBy: string; resolution: string }>;
   };
 }
 export interface EventConsumerCursor { runId: string; consumerId: string; generation: number; ackedSeq: number; terminalAckedSeq: number | null; claimedAt: number; updatedAt: number }
@@ -87,6 +88,8 @@ export const api = {
   cancel: (runId: string) => request(`/api/runs/${runId}/cancel`, { method: "POST" }),
   steer: (runId: string, content: string) => request(`/api/runs/${runId}/steer`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId() }) }),
   resume: (runId: string) => request<TaskRun>(`/api/runs/${runId}/resume`, { method: "POST" }),
+  approveRunApproval: (approvalId: string) => request<TaskRun>(`/api/approval-requests/${approvalId}/approve`, { method: "POST" }),
+  rejectRunApproval: (approvalId: string) => request<TaskRun>(`/api/approval-requests/${approvalId}/reject`, { method: "POST" }),
   approveSpawn: (proposalId: string) => request<{ ok: true }>(`/api/spawn-proposals/${proposalId}/approve`, { method: "POST" }),
   rejectSpawn: (proposalId: string) => request<{ ok: true }>(`/api/spawn-proposals/${proposalId}/reject`, { method: "POST" }),
   spawnProposal: (proposalId: string) => request<TaskRun>(`/api/spawn-proposals/${proposalId}/spawn`, { method: "POST" }),

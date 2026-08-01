@@ -1,10 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Durable Supervisor approval requests with explicit Approve & Resume / Reject actions in the API and Web task panel.
+
+### Changed
+
+- Settled review now waits for durable control-message delivery instead of prematurely completing a Run.
+- Progress supervision now detects repeated identical successful operations in addition to consecutive failures.
+
 All notable changes to TAgent Core are documented here.
-
-## Unreleased
-
-No unreleased changes.
 
 ## [0.1.5] - 2026-08-01
 

@@ -860,4 +860,24 @@ describe("AgentService runtime boundary", () => {
     expect(store.listEvents(run.id).some((event) => event.type === "transcript.repaired")).toBe(true);
     store.close();
   });
+  it("persists approval and requires a decision before resume", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "production deployment");
+    store.upsertPlanItem(run.id, { key: "approval", title: "Production deployment approval", status: "blocked", required: true, position: 1 });
+    class ApprovalRuntime extends DeferredRuntime {
+      override async prompt() { this.messages = [assistantMessage("waiting")]; }
+    }
+    const service = new AgentService(store, "/tmp", () => new ApprovalRuntime());
+    // Exercise the same durable state produced by settled supervision without relying on provider timing.
+    const decision = new TaskRunSupervisor(store).reviewSettled(store.getRun(run.id)!, 1, "waiting").decision;
+    store.blockRun(run.id, decision.rationale);
+    const approval = store.ensureApprovalRequest(run.id, decision.id, decision.rationale);
+    expect(() => service.resume(run.id)).toThrow(/approval decision/);
+    store.resolveApprovalRequest(approval.id, "rejected", "user", "not now");
+    expect(store.getRun(run.id)?.supervision.approvalRequests).toEqual([expect.objectContaining({ status: "rejected" })]);
+    await service.closeRuntimes();
+    store.close();
+  });
+
 });

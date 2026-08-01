@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type {
+  ApprovalRequest,
   Artifact,
   CompletionGate,
   ControlInboxItem,
@@ -29,7 +30,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 export class Store {
   readonly db: Database.Database;
@@ -244,6 +245,13 @@ export class Store {
         relation TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL,
         PRIMARY KEY(from_run_id, to_run_id, relation)
       );
+      CREATE TABLE IF NOT EXISTS approval_requests (
+        id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), decision_id TEXT NOT NULL REFERENCES supervisor_decisions(id),
+        reason TEXT NOT NULL, status TEXT NOT NULL, requested_at INTEGER NOT NULL, resolved_at INTEGER,
+        resolved_by TEXT NOT NULL DEFAULT '', resolution TEXT NOT NULL DEFAULT ''
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_requests_pending ON approval_requests(run_id) WHERE status = 'pending';
+      CREATE INDEX IF NOT EXISTS idx_approval_requests_run ON approval_requests(run_id, requested_at);
       CREATE TABLE IF NOT EXISTS control_inbox (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL REFERENCES runs(id),
@@ -733,7 +741,7 @@ ${source.content}`;
       checks,
       artifacts,
       completionGate: { passed: true, failures: [] },
-      supervision: { latestDecision: this.listSupervisorDecisions(id).at(-1) ?? null, latestGates: this.listLatestGateEvaluations(id), progress: this.getProgressSnapshot(id) ?? null, spawnProposals: this.listSpawnProposals(id) },
+      supervision: { latestDecision: this.listSupervisorDecisions(id).at(-1) ?? null, latestGates: this.listLatestGateEvaluations(id), progress: this.getProgressSnapshot(id) ?? null, spawnProposals: this.listSpawnProposals(id), approvalRequests: this.listApprovalRequests(id) },
       launchRetryable: this.isInboxLaunchRetryable(id),
     };
     task.completionGate = this.evaluateGate(task);
@@ -1260,15 +1268,55 @@ ${source.content}`;
       last_decision_id as lastDecisionId,updated_at as updatedAt FROM progress_snapshots WHERE run_id = ?`).get(runId) as ProgressSnapshot | undefined;
   }
 
+  ensureApprovalRequest(runId: RunId, decisionId: string, reason: string) {
+    const existing = this.db.prepare("SELECT id FROM approval_requests WHERE run_id = ? AND status = 'pending'").get(runId) as { id: string } | undefined;
+    if (existing) return this.getApprovalRequest(existing.id)!;
+    const request: ApprovalRequest = { id: randomUUID(), runId, decisionId, reason, status: "pending", requestedAt: now(), resolvedAt: null, resolvedBy: "", resolution: "" };
+    this.db.prepare(`INSERT INTO approval_requests (id,run_id,decision_id,reason,status,requested_at) VALUES (?,?,?,?, 'pending', ?)`)
+      .run(request.id, runId, decisionId, reason, request.requestedAt);
+    return request;
+  }
+
+  getApprovalRequest(id: string) {
+    return this.db.prepare(`SELECT id,run_id as runId,decision_id as decisionId,reason,status,requested_at as requestedAt,
+      resolved_at as resolvedAt,resolved_by as resolvedBy,resolution FROM approval_requests WHERE id = ?`).get(id) as ApprovalRequest | undefined;
+  }
+
+  listApprovalRequests(runId: RunId) {
+    return this.db.prepare(`SELECT id,run_id as runId,decision_id as decisionId,reason,status,requested_at as requestedAt,
+      resolved_at as resolvedAt,resolved_by as resolvedBy,resolution FROM approval_requests WHERE run_id = ? ORDER BY requested_at,id`).all(runId) as ApprovalRequest[];
+  }
+
+  resolveApprovalRequest(id: string, status: "approved" | "rejected", resolvedBy = "user", resolution = "") {
+    const timestamp = now();
+    const changed = this.db.prepare(`UPDATE approval_requests SET status=?,resolved_at=?,resolved_by=?,resolution=? WHERE id=? AND status='pending'`)
+      .run(status, timestamp, resolvedBy, resolution, id);
+    return changed.changes === 1 ? this.getApprovalRequest(id) : undefined;
+  }
+
+  hasPendingApproval(runId: RunId) {
+    return Boolean(this.db.prepare("SELECT 1 FROM approval_requests WHERE run_id=? AND status='pending'").get(runId));
+  }
+
   updateProgressSnapshot(run: TaskRun, event: RunEvent): ProgressSnapshot {
     const previous = this.getProgressSnapshot(run.id);
     const toolName = String(event.data.toolName ?? "");
     const progressEvent = event.type === "run.updated" || event.type === "tool.completed" && !event.data.isError && ["write", "edit", "task_run"].includes(toolName);
     const failureEvent = event.type === "tool.completed" && Boolean(event.data.isError) || event.type === "tool.guard.blocked";
+    let repeatedOperations = previous?.attempt === run.attempt ? previous.repeatedOperations : 0;
+    const toolCallId = String(event.data.toolCallId ?? "");
+    if (event.type === "tool.completed" && toolCallId) {
+      const current = this.db.prepare("SELECT tool_name as toolName,args_hash as argsHash FROM tool_attempts WHERE run_id=? AND attempt=? AND tool_call_id=?").get(run.id, run.attempt, toolCallId) as { toolName: string; argsHash: string } | undefined;
+      if (current) {
+        const recent = this.db.prepare(`SELECT tool_name as toolName,args_hash as argsHash FROM tool_attempts WHERE run_id=? AND attempt=? AND id <= (SELECT id FROM tool_attempts WHERE run_id=? AND attempt=? AND tool_call_id=?) ORDER BY id DESC LIMIT 8`).all(run.id,run.attempt,run.id,run.attempt,toolCallId) as Array<{toolName:string;argsHash:string}>;
+        repeatedOperations = 0;
+        for (const item of recent) { if (item.toolName === current.toolName && item.argsHash === current.argsHash) repeatedOperations += 1; else break; }
+      }
+    }
     const snapshot: ProgressSnapshot = { runId: run.id, attempt: run.attempt, checkpointSeq: event.seq,
       meaningfulChanges: (previous?.attempt === run.attempt ? previous.meaningfulChanges : 0) + (progressEvent ? 1 : 0),
       consecutiveFailures: failureEvent ? (previous?.attempt === run.attempt ? previous.consecutiveFailures : 0) + 1 : progressEvent ? 0 : previous?.consecutiveFailures ?? 0,
-      repeatedOperations: previous?.attempt === run.attempt ? previous.repeatedOperations : 0,
+      repeatedOperations,
       lastProgressAt: progressEvent ? event.createdAt : previous?.lastProgressAt ?? event.createdAt,
       lastDecisionId: previous?.lastDecisionId ?? "", updatedAt: event.createdAt };
     this.db.prepare(`INSERT INTO progress_snapshots (run_id,attempt,checkpoint_seq,meaningful_changes,consecutive_failures,repeated_operations,last_progress_at,last_decision_id,updated_at)

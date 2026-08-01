@@ -62,6 +62,7 @@ export interface ProgressSnapshot { runId: RunId; attempt: number; checkpointSeq
 export interface SupervisorDecision { id: string; runId: RunId; attempt: number; checkpointSeq: number; trigger: "checkpoint" | "settled" | "attempt_terminal" | "taskrun_terminal" | "manual"; action: SupervisorAction; reasonCode: string; rationale: string; confidence: number; instruction: string; candidateResponseHash: string; status: "proposed" | "executed" | "superseded" | "failed"; error: string; createdAt: number; executedAt: number | null }
 export interface SpawnProposal { id: string; runId: RunId; goal: string; acceptanceCriteria: string[]; relation: "depends_on" | "follow_up" | "parallel" | "derived"; status: "proposed" | "approved" | "spawned" | "rejected"; spawnedRunId: string; createdAt: number; updatedAt: number }
 export interface TaskRunEdge { fromRunId: RunId; toRunId: RunId; relation: SpawnProposal["relation"] | "blocks" | "supersedes"; reason: string; createdAt: number }
+export interface ApprovalRequest { id: string; runId: RunId; decisionId: string; reason: string; status: "pending" | "approved" | "rejected" | "superseded"; requestedAt: number; resolvedAt: number | null; resolvedBy: string; resolution: string }
 
 export type SessionInputIntent = "steer_active" | "follow_up_active" | "update_active_context" | "new_task" | "parallel_task" | "merge_candidate" | "discussion" | "clarification" | "defer";
 export interface SessionInputAnalysis {
@@ -192,7 +193,7 @@ export interface TaskRun {
   checks: RunCheck[];
   artifacts: Artifact[];
   completionGate: CompletionGate;
-  supervision: { latestDecision: SupervisorDecision | null; latestGates: GateEvaluation[]; progress: ProgressSnapshot | null; spawnProposals: SpawnProposal[] };
+  supervision: { latestDecision: SupervisorDecision | null; latestGates: GateEvaluation[]; progress: ProgressSnapshot | null; spawnProposals: SpawnProposal[]; approvalRequests: ApprovalRequest[] };
   launchRetryable: boolean;
 }
 
