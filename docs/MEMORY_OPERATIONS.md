@@ -112,10 +112,10 @@ TAGENT_MEMORY_RECALL_TOKEN_BUDGET=8000
 
 The default long-term semantic store rejects control-plane and one-off runtime material, including `Goal:`, `Outcome:`, TaskRun terminal wrappers, `Verified check [...]`, `Published artifact [...]`, file paths/sizes, PASS/FAIL metadata, and ordinary questions or operational requests. TaskRun Checks and Artifacts remain authoritative in the control-plane database; they are not parsed into semantic memory automatically.
 
-Hybrid extraction also validates malformed Chinese negation. Proposals such as `不仍存在`, `不与……存在冲突风险`, or a malformed subject such as `用户不` are rejected instead of receiving high confidence. Direct company reporting relations are grouped under one canonical Topic:
+Hybrid extraction also validates malformed Chinese negation. Proposals such as `不仍存在`, `不与……存在冲突风险`, or a malformed subject such as `用户不` are rejected instead of receiving high confidence. Direct organization reporting relations are grouped under one canonical Topic:
 
 ```text
-workspace.<scope>.knowledge.company-org-structure
+<scope-type>.<scope-id>.knowledge.organization
 ```
 
 Recall first routes the query domain, applies minimum lexical/vector/topic thresholds, removes duplicates and contradictory lower-confidence cards, and permits an empty result. User identity is injected only for identity/name queries.
@@ -131,7 +131,7 @@ Always inspect the dry-run first and take a database backup. The apply script wr
 
 ## 7. Extractor and embedding health
 
-At startup, enabled OpenAI-compatible embedding configuration is validated and an asynchronous reindex is attempted. If embedding fails, a warning is logged and lexical recall remains available.
+At startup, enabled OpenAI-compatible embedding configuration is validated and a durable reindex job is queued or resumed. Workers checkpoint embedding batches with leases and fencing; if the provider fails, readiness reports degradation and lexical recall remains available.
 
 Hybrid extraction requires a valid base URL, key, and model. It may reference another environment variable using an exact `${NAME}` value, which the application resolves explicitly for systemd `EnvironmentFile` compatibility.
 
@@ -199,7 +199,7 @@ Before upgrade:
 
 The migration is additive/idempotent in the current release. An older binary may not understand newer columns or statuses; restore the matching backup for a full rollback.
 
-Changing embedding model or dimensions changes the generation. Startup reindex writes the configured generation; validate retrieval before retiring old generations.
+Changing embedding model or dimensions changes the generation. Durable reindex stages the configured generation and activates it only after successful completion; validate retrieval and readiness before old-generation cleanup.
 
 ## 11. Security
 

@@ -1,43 +1,10 @@
-## [Unreleased]
-
-### Changed
-- Added continuous Memory lifecycle metadata for first/last confirmation, confirmation counts, recall usage, staleness, tombstones, grace periods, and purge scheduling.
-- Added kind-specific retention for facts, preferences, episodes, and procedures; repeated evidence now reactivates stale canonical records.
-- Cold Topic consolidation now separates active current state from stale, superseded, and disputed history.
-- Memory forget is now reversible during a configurable grace period through `POST /api/memory/restore`; physical purge is asynchronous.
-### Memory correctness and scale
-
-- separated raw capture source from extracted record evidence;
-- removed fixture-specific entities from production quality routing and added configurable domain ontology plus canonical SPO normalization;
-- added Ranking v2, MMR diversity, validity/current-state/trust scoring and Recall Trace v2;
-- added `memory_record_get`, record provenance API and Memory readiness;
-- added content-hash incremental embedding reindex and generation garbage collection.
-
-
-### Supervisor
-
-- Reclassify edited Inbox items and structurally merge summaries, scopes, acceptance criteria, urgency, and priority.
-- Persist explicit postponement as deferred work and distinguish lightweight discussion from clarification.
-- Classify attempt-terminal failures into transient continuation, user-input block, approval pause, or non-transient block.
-- Emit `request_evidence` for evidence-only completion failures and `pause_for_approval` for blocked approval requirements.
-- Allow Agents to propose derived TaskRuns through the durable `task_run` tool.
-- Require an explicit proposed -> approved -> spawned transition, with Web approval, rejection, and start controls.
-
 # Changelog
 
 All notable changes to TAgent Core are documented here.
 
 ## Unreleased
 
-### Supervisor orchestration
-
-- Add a conservative Session Input Router that summarizes and classifies input as active-run steer/context, follow-up, parallel spawn proposal, discussion, or independent work.
-- Persist priority, urgency, target Run, relation, confidence, routing rationale, acceptance criteria, and router version with every Inbox item.
-- Generate durable TaskRun contracts instead of copying the entire original prompt into `runs.goal`.
-- Prioritize eligible work by manual override, urgency, priority, and age; deduplicate equivalent pending summaries.
-- Route high-confidence corrections and parameters into the active Pi control queue and convert explicit parallel work into a gated Spawn Proposal.
-- Show Supervisor summaries, classifications, target Runs, confidence, reasons, and TaskRun acceptance criteria in the Web UI.
-
+No unreleased changes.
 
 ## [0.1.5] - 2026-08-01
 
@@ -45,12 +12,29 @@ All notable changes to TAgent Core are documented here.
 
 - Added durable embedding reindex jobs with checkpoints, leases, fencing tokens, crash recovery, progress APIs, generation staging/ready/active states, and Memory Center progress controls.
 - Added real embedding/extractor probes, persistent worker heartbeats, backlog age, latency/error metrics, reindex completeness, and degraded-event readiness reporting.
+- Added continuous lifecycle metadata, kind-specific retention, repeated-confirmation reactivation, current-versus-history Cold consolidation, and asynchronous physical purge.
 - Unified Topic and Record forgetting with tombstones, grace-period restore, delayed Cold object purge, and immutable revision preservation.
 - Added recall feedback receipts that influence Ranking v2 and governance receipts for Candidate approve/reject/correct and Disputed resolution.
 - Added a revisioned, human-editable Core Memory Markdown projection generated across high-value active records and deterministically injected each turn.
-- Expanded deterministic memory evaluation across preferences, temporal state, organization, project decisions, residence relations, cross-language paraphrase, scope isolation, stale/current selection, and false positives.
+
+### Memory correctness, retrieval, and scale
+
+- Separated raw capture source from extracted record evidence.
+- Removed fixture-specific entities from production quality routing and added configurable domain ontology plus canonical SPO normalization.
+- Added Ranking v2, MMR diversity, validity/current-state/trust scoring, Recall Trace v2, `memory_record_get`, provenance APIs, and deep readiness.
+- Added content-hash incremental embedding indexing and then promoted reindexing to a durable, fenced job workflow.
+- Expanded deterministic retrieval evaluation across identity, preference, temporal state, contradiction, organization, project decisions, residence, cross-language paraphrase, scope isolation, stale/current selection, and false positives.
+
+### Supervisor orchestration
+
+- Added a conservative Session Input Router that summarizes, classifies, prioritizes, and routes input as active-run steer/context, follow-up, parallel spawn proposal, discussion, clarification, defer, or independent work.
+- Persisted structured TaskRun contracts, routing rationale, acceptance criteria, urgency, priority, target Run, relation, and confidence instead of copying raw Inbox text into a Run goal.
+- Added semantic queue admission, manual-order override, duplicate receipts, edit reclassification, structured merge, explicit defer, and active-run context delivery.
+- Added attempt-terminal failure classification, `request_evidence`, `pause_for_approval`, Agent-created Spawn Proposals, explicit proposed-to-approved-to-spawned transitions, and Web approval controls.
 
 ## [0.1.4] - 2026-08-01
+
+> Version `0.1.4` was prepared on `main` but not tagged separately; these changes ship in the tagged `v0.1.5` release.
 
 ### Run budget elasticity
 
@@ -67,7 +51,7 @@ All notable changes to TAgent Core are documented here.
 
 - Reject TaskRun wrappers, verification logs, artifact publication metadata, file paths/sizes, one-off questions, and malformed Chinese-negation proposals before durable persistence or embedding.
 - Stop automatic TaskRun Check/Artifact outcome capture; verified operational evidence remains in TaskRun records instead of default long-term semantic memory.
-- Route direct company reporting relationships into one canonical `knowledge.company-org-structure` Topic and apply semantic fingerprints when merging repeated facts.
+- Route direct company reporting relationships into one canonical organization Topic and apply semantic fingerprints when merging repeated facts.
 - Add intent/domain routing, lexical/vector/topic relevance thresholds, empty-result recall, identity isolation, semantic deduplication, contradiction suppression, and organization-path pruning.
 - Add reversible quarantine SQL with a dry-run report and audit snapshots for existing dirty records.
 
@@ -176,4 +160,5 @@ First public source preview of the persistent TAgent control plane.
 
 [0.1.3]: https://github.com/imtms/tagent-core/releases/tag/v0.1.3
 
-[0.1.4]: https://github.com/imtms/tagent-core/releases/tag/v0.1.4
+
+[0.1.5]: https://github.com/imtms/tagent-core/releases/tag/v0.1.5

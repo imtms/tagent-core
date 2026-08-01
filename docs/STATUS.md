@@ -80,12 +80,12 @@ Updated: 2026-08-01 (Asia/Singapore)
 
 - Opt-in Hot/Warm/Cold memory platform; disabled mode loads no memory adapter/worker and preserves the original SQLite-only runtime.
 - PostgreSQL 17/pgvector/pg_trgm durable profile with separate Fact and Preference storage, Topic Descriptors, bounded entity graph, capture jobs, policy receipts, and immutable Local Cold revisions.
-- OpenAI-compatible semantic embedding with generation-aware reindex and lexical-only fallback; deterministic hash embedding remains test/development-only.
+- OpenAI-compatible semantic embedding with durable checkpointed/fenced reindex jobs, staged/active generations, progress reporting, and lexical-only fallback; deterministic hash embedding remains test/development-only.
 - Deterministic safety extraction plus optional structured LLM extraction for multi-sentence context, negation, conditions, temporal changes, and Chinese coreference.
 - User-message, role-aware user-only context-prune summary, and manual capture triggers with queued/completed/empty/failed observability and proposal/persisted counts. Assistant final prose and TaskRun Check/Artifact wrappers are not automatic semantic-memory sources.
-- Hot-to-Warm promotion, duplicate/conflict handling, inferred preference promotion, LLM-assisted or deterministic Warm-to-Cold consolidation, and Local Cold reconciliation.
-- Dynamic recall across lexical, trigram, vector, Topic, and bounded graph routes, with domain routing, relevance thresholds, empty-result behavior, identity isolation, semantic deduplication, and contradiction suppression; complete checksum-verified Cold pages are injected as low-authority data and never vector-chunked.
-- Agent `memory_search`, `memory_topic_get`, and guarded `memory_forget` tools plus a conditional Web Memory Center.
+- Continuous lifecycle governance with Hot-to-Warm promotion, canonical confirmation/supersession, kind-specific retention, stale/history handling, reversible Record/Topic tombstones, delayed purge, and Local Cold reconciliation.
+- Ranking v2 recall across lexical, trigram, vector, Topic, and bounded graph routes, with domain routing, relevance thresholds, validity/trust/current-state scoring, MMR, empty-result behavior, identity isolation, semantic deduplication, contradiction suppression, feedback receipts, and Recall Trace v2; complete checksum-verified Cold pages are injected as low-authority data and never vector-chunked.
+- Agent `memory_search`, `memory_topic_get`, `memory_record_get`, and guarded `memory_forget` tools plus a Memory Center for readiness, reindex progress, feedback, Candidate/Disputed governance, tombstone restore, and human-editable Core Memory revisions.
 - Release documentation is indexed at [MEMORY.md](MEMORY.md); deployment limits remain trusted single-service/private-network use without complete multi-tenant authentication.
 
 ### Quality baseline
@@ -94,7 +94,7 @@ Updated: 2026-08-01 (Asia/Singapore)
 - Store, completion gate, workspace tool, and HTTP API tests.
 - Desktop and mobile Chromium rendering checks.
 - Production dependency audit with no known vulnerabilities at the current lockfile.
-- Full production and development dependency audit with no known vulnerabilities at the `0.1.0` lockfile.
+- Full production and development dependency audit with no known high-severity vulnerabilities at the current release lockfile.
 - ESLint flat configuration, release checklist, security policy, changelog, license, required PostgreSQL memory CI, and tag-triggered stable GitHub Release workflows.
 - Git repository linked to `git@github.com:imtms/tagent-core.git` with incremental commits on `main`.
 - The 2026-07-31 external PR audit merged queue scheduling, manual Inbox start, and workspace status improvements after combined and post-merge validation; deployment artifact and current-operation PRs remain open for rollback/integrity and sensitive-data fixes. See [PR_AUDIT_2026-07-31.md](PR_AUDIT_2026-07-31.md).
@@ -123,9 +123,9 @@ Updated: 2026-08-01 (Asia/Singapore)
 
 ### P3: Context modules
 
-- Extend the implemented memory interfaces with formal authenticated user/scope membership and richer recall scoring traces.
-- Add recall feedback, offline quality evaluation, MMR/diversity ranking, and explicit contradiction penalties.
-- Add source provenance and retrieval evidence to TaskRun artifacts and a unified ContextAssembler token budget.
+- Extend Memory governance with formal authenticated user/scope membership, multi-user approver roles, page-key reindex cursors, distributed provider scheduling, and real-provider quality dashboards.
+- Expand the deterministic evaluation set into required real-provider/nightly Recall@K, MRR, precision, contradiction, zero-result, cross-language, drift, and token-efficiency benchmarks.
+- Add learned feedback calibration, semantic conflict adjudication, Daily Memory/LLM distillation, and role-aware LLM context-prune summaries with same-turn reinjection.
 
 ### P4: Operations
 

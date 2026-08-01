@@ -24,3 +24,7 @@
 ## Stable deployment boundary
 
 Single trusted process and workspace, SQLite control plane, private network/localhost, optional PostgreSQL 17 + pgvector + pg_trgm memory metadata, and Local Cold storage.
+
+## Documentation drift review
+
+Before tagging, README, Changelog, STATUS, Memory architecture/operations/API, and the Memory release checklist were reconciled against `main`. Stale claims about the latest tag, destructive Topic forget, missing Recall Trace, startup-only reindexing, and incomplete lifecycle/governance were removed. Version links and the `0.1.5` release section are aligned with the tag workflow.

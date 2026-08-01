@@ -222,8 +222,8 @@ When memory is disabled, the entry is hidden and memory HTTP endpoints return `5
 - Hash embedding is for deterministic tests/development, not production semantic quality.
 - Rule-only extraction intentionally misses complex implicit memories; hybrid extraction is the recommended quality profile.
 - Local Cold is the tested single-service release profile. S3 has an adapter but is not the primary release gate here.
-- Forget removes selected records/topics and objects; a complete tombstone/retention/approval workflow is future hardening.
-- Recall ranking does not yet expose a full per-channel scoring trace, MMR feedback loop, or offline quality dashboard.
+- Record and Topic forget use reversible tombstones, grace-period restore, and delayed purge. Governance is workspace-admin oriented; multi-user approval roles remain future work.
+- Ranking v2 exposes per-channel Recall Trace and accepts bounded feedback receipts. A learned feedback model and full offline quality dashboard remain future work.
 
 The original broader design plan is preserved in [MEMORY_DESIGN_PLAN.md](MEMORY_DESIGN_PLAN.md).
 

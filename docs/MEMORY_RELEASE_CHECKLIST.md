@@ -28,13 +28,15 @@ Start PostgreSQL/pgvector from `deploy/postgres/compose.yml`, enable the Postgre
 
 - [ ] migration creates `vector`, `pg_trgm`, and all `memory.*` tables/indexes;
 - [ ] capture jobs claim, lease, complete, retry, and expose zero-proposal/dead-letter state;
+- [ ] durable reindex jobs checkpoint, renew leases, fence stale owners, resume after restart, stage/activate generations, expose progress/completeness, and skip unchanged content;
 - [ ] facts and preferences persist in separate tables;
 - [ ] Hot records promote to Warm;
 - [ ] Topic Descriptor and graph routing operate;
 - [ ] eligible Warm records publish an immutable Cold revision;
 - [ ] the current revision checksum is verified and the complete page is returned;
 - [ ] no `cold_body` vector can be inserted;
-- [ ] restart preserves PostgreSQL records/jobs/topics and Local Cold pages;
+- [ ] restart preserves PostgreSQL records/jobs/topics, reindex progress/generation state, governance/feedback receipts, Core Memory revisions, and Local Cold pages;
+- [ ] Record and Topic tombstones retain revisions/objects through the grace period, restore successfully, and purge asynchronously only after expiry;
 - [ ] backup/restore smoke test preserves readable current revisions.
 
 ## 4. Semantic quality gate
@@ -76,10 +78,10 @@ Sway家在前滩
 
 ## 6. API, tools, and Web gate
 
-- [ ] status, capture, jobs, recall, topic-get, records, export, and forget endpoints return expected JSON;
-- [ ] Memory Center opens without HTTP 500 and renders real records/jobs/topics; recall trace and empty-result states render without implying success;
+- [ ] status, readiness, capture, jobs, recall, record-get, topic-get, records, export, forget/restore, reindex, feedback, govern, and Core Snapshot endpoints return expected JSON;
+- [ ] Memory Center opens without HTTP 500 and renders real records/jobs/topics, deep readiness, reindex progress, Trace v2, governance/feedback actions, tombstone restore, and Core Memory revisions; empty-result states do not imply success;
 - [ ] disabled mode hides Memory Center;
-- [ ] `memory_search`, `memory_topic_get`, and guarded `memory_forget` work from the Agent;
+- [ ] `memory_search`, `memory_topic_get`, `memory_record_get`, and guarded `memory_forget` work from the Agent;
 - [ ] UI labels distinguish queued, completed, completed-empty, and failed capture;
 - [ ] a natural-language “记住了” is not used as the acceptance signal; persisted count/job state is inspectable.
 
@@ -111,14 +113,16 @@ Record exact test counts, PostgreSQL/pgvector versions, provider/model identifie
 ## 8. Deployment smoke test
 
 - [ ] start the built server, not `tsx` development mode;
-- [ ] confirm `/api/health` and `/api/config/status`;
+- [ ] confirm `/api/health`, `/api/config/status`, and `/api/memory/readiness`; provider probes, persistent worker heartbeat, backlog/dead-letter/error metrics, active generation, and reindex completeness must be credible;
 - [ ] submit one explicit profile memory and observe `persistedCount > 0`;
 - [ ] recall it in a new turn/session scope as designed;
-- [ ] inspect it in Memory Center;
+- [ ] inspect it in Memory Center, submit one bounded feedback receipt, and exercise Candidate/Disputed governance in an isolated scope;
 - [ ] publish/read one Cold Topic;
-- [ ] restart and repeat recall;
+- [ ] run reindex twice and confirm the second job skips unchanged content; restart and repeat recall;
+- [ ] generate/read a Core Memory revision, verify only high-value durable user state is included, and confirm a human-edited revision is preserved;
+- [ ] tombstone and restore one Record and one Topic in an isolated scope, then verify grace-period purge behavior;
 - [ ] verify logs contain no credentials or raw rejected secrets.
 
 ## 9. Release decision
 
-The feature is ready to merge/tag only when required checks above pass or every exception is documented as a release limitation with an owner and follow-up issue. Do not describe S3, multi-service workers, authenticated multi-tenancy, or complete retention/tombstone governance as release-complete unless separately tested and gated.
+The feature is ready to merge/tag only when required checks above pass or every exception is documented as a release limitation with an owner and follow-up issue. Do not describe S3, multi-service workers, authenticated multi-tenancy, or multi-user approval roles as release-complete unless separately tested and gated.

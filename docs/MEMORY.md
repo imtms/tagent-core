@@ -62,4 +62,4 @@ See [MEMORY_OPERATIONS.md](MEMORY_OPERATIONS.md) before using this profile with 
 
 ## Release boundary
 
-The current implementation is suitable for a trusted, single-service Local Cold deployment. It is not a claim of production-ready multi-tenant isolation. Built-in API authentication, formal server-side user membership, approval/quarantine workflows, independent worker services, and comprehensive retention/tombstone processing remain outside this release boundary.
+The current implementation is suitable for a trusted, single-service Local Cold deployment. It is not a claim of production-ready multi-tenant isolation. Built-in API authentication, formal server-side user membership, independent worker services, distributed provider scheduling, and multi-user approval roles remain outside this release boundary. Workspace-admin governance, reversible record/Topic tombstones, retention, durable reindex, feedback, and Core Memory projection are included in 0.1.5.

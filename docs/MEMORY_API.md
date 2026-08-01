@@ -44,7 +44,7 @@ Recall returns:
 - `cards`: ranked Hot/Warm memory cards;
 - `coldTopics`: checksum-verified complete Topic pages selected within budget;
 - `promptSection`: the same low-authority section suitable for Agent injection;
-- `trace`: candidate count, selected Topic IDs, and denied count.
+- `trace`: Recall Trace v2 with retrieval channels, raw/final score components, thresholds, filter/policy outcomes, budget drops, embedding degradation/generation, and Cold Topic selection reasons.
 
 Cold Topic bodies are not vector chunks. Topic routing happens through Warm descriptors/records, graph links, aliases, and optional semantic vectors. Recall first routes recognizable domains, applies minimum lexical/vector/Topic thresholds, removes semantic duplicates and lower-ranked contradictions, isolates identity memory to identity/name questions, and may return an empty result rather than filling Top-K with unrelated cards.
 
@@ -86,9 +86,11 @@ The Memory entry is rendered only when `/api/config/status` reports `memoryEnabl
 - kind filters;
 - record content, confidence/importance/strength, Topic route, and provenance;
 - complete Cold Markdown pages;
-- recall results and trace counts;
-- capture job status;
-- manual memory creation and guarded deletion.
+- recall results and Trace v2 diagnostics;
+- capture job status, deep readiness, and durable reindex progress;
+- Candidate/Disputed governance and recall feedback actions;
+- Core Memory Markdown revisions and human edits;
+- manual memory creation, reversible tombstone/restore, and guarded deletion.
 
 The UI is an administrative view, not an authentication boundary.
 
@@ -131,7 +133,7 @@ POST /api/memory/restore
 }
 ```
 
-A successful restore reinstates the pre-delete status. Once maintenance physically purges the tombstone, restore returns zero restored records. Record-ID forget is reversible; Topic-ID forget remains an administrative destructive operation for the current Cold revision and should require explicit confirmation.
+A successful restore reinstates the pre-delete status. Once maintenance physically purges the tombstone, restore returns zero restored records or Topics. Record and Topic forget are reversible during the grace period; Topic deletion still requires explicit administrative confirmation because it governs complete Cold revisions.
 
 ## 0.1.5 operations and governance
 
