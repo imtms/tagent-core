@@ -14,7 +14,7 @@ export interface TaskRun {
   continuations: Array<{ id: string; ordinal: number; status: string; reason: string; error: string; createdAt: number; startedAt: number | null; completedAt: number | null; leaseOwner: string; leaseUntil: number | null; heartbeatAt: number | null }>;
   plan: PlanItem[]; checks: RunCheck[];
   artifacts: Array<{ id: string; title: string; kind: string; uri: string }>;
-  budget?: { tier: string; maxContinuations: number; maxTokens: number; runTimeoutMs: number };
+  budget?: { tier: string; softTokens?: number; maxContinuations: number; maxTokens: number; runTimeoutMs: number };
   completionGate: { passed: boolean; failures: Array<{ kind: string; key: string; reason: string }> };
   launchRetryable: boolean;
   supervision: {

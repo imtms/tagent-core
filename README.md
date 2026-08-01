@@ -92,7 +92,7 @@ Credentials are supplied at runtime and are not written to Pi auth files, SQLite
 | `TAGENT_RUN_TIMEOUT_MS` | `7200000` | Run inactivity ceiling |
 | `TAGENT_RUN_HARD_TIMEOUT_MS` | `86400000` | Absolute Run wall-clock ceiling |
 | `TAGENT_MAX_CONTINUATIONS` | `128` | Automatic continuation ceiling |
-| `TAGENT_MAX_RUN_TOKENS` | `2000000` | Cumulative Run token ceiling |
+| `TAGENT_MAX_RUN_TOKENS` | `8000000` | Cumulative Run hard token ceiling |
 | `TAGENT_MAX_CONTEXT_TURNS` | `20` | Complete turns loaded into a new runtime |
 | `TAGENT_CONTROL_INBOX_CAPACITY` | `32` | Active-Run control inbox capacity |
 | `TAGENT_DYNAMIC_BUDGET` | `true` | Enable complexity-based soft budgets |
@@ -106,14 +106,14 @@ See [.env.example](.env.example) for every supported setting.
 
 ### Dynamic budgets
 
-| Tier | Continuations | Cumulative tokens | Idle timeout |
-| --- | ---: | ---: | ---: |
-| simple | 4 | 80,000 | 5 minutes |
-| standard | 12 | 240,000 | 15 minutes |
-| complex | 32 | 640,000 | 45 minutes |
-| extended | 96 | 1,600,000 | 120 minutes |
+| Tier | Guidance checkpoint | Idle timeout |
+| --- | ---: | ---: |
+| simple | 80,000 tokens | 5 minutes |
+| standard | 240,000 tokens | 15 minutes |
+| complex | 640,000 tokens | 45 minutes |
+| extended | 1,600,000 tokens | 120 minutes |
 
-Environment limits remain hard ceilings. Set `TAGENT_DYNAMIC_BUDGET=false` to use them directly.
+Dynamic tiers are soft guidance, not termination limits. Crossing a tier token checkpoint emits `run.token_budget.warning` and steers the active agent to compact context, avoid repeated investigation, and prioritize unresolved required work. A Run is stopped only at the configured hard ceilings `TAGENT_MAX_RUN_TOKENS`, `TAGENT_MAX_CONTINUATIONS`, or `TAGENT_RUN_HARD_TIMEOUT_MS`. This preserves a firm safety bound while allowing a normally progressing task to use the full configured allowance. Set `TAGENT_DYNAMIC_BUDGET=false` to disable tier guidance and use only the fixed limits.
 
 ## Optional Long-Term Memory
 

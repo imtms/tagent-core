@@ -4,6 +4,11 @@ All notable changes to TAgent Core are documented here.
 
 ## Unreleased
 
+### Run budget elasticity
+
+- Treat complexity-tier token allowances as soft guidance checkpoints instead of premature termination ceilings.
+- Keep `TAGENT_MAX_RUN_TOKENS` as the single cumulative hard token ceiling, raise its default from 2,000,000 to 8,000,000 tokens, and steer active agents to compact and finish when crossing a soft checkpoint.
+
 ### Run admission and budget safety
 
 - Reject opaque `release-*`, `ui-sync-*`, and `final-ui-sync-*` synchronization markers as non-actionable prompts instead of starting autonomous TaskRuns.

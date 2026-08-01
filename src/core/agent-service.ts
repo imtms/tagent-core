@@ -378,7 +378,21 @@ export class AgentService {
       memory: this.memory,
       memoryScopeId: this.memoryScopeId,
       memorySubjectId: `session:${run.sessionId}`,
+      softRunTokens: run.usage.totalTokens < budget.softTokens ? budget.softTokens : undefined,
       maxRunTokens: budget.maxTokens,
+      onTokenBudgetWarning: ({ totalTokens, softLimit, hardLimit }) => {
+        const current = this.store.getRun(run.id);
+        if (!current || current.status !== "running") return;
+        this.publish(this.store.appendEvent(run.id, "run.token_budget.warning", { tier: budget.tier, totalTokens, softLimit, hardLimit }));
+        const instruction = `Token budget checkpoint: ${totalTokens.toLocaleString()} tokens have been used. The hard ceiling is ${(hardLimit ?? budget.maxTokens).toLocaleString()}. Continue working, but compact context where useful, avoid repeating completed investigation, prioritize unresolved required plan/check items, and finish with verification before the hard ceiling.`;
+        void runtime.steer(instruction).then((status) => {
+          const active = this.store.getRun(run.id);
+          if (active?.status === "running") this.publish(this.store.appendEvent(run.id, "run.token_budget.warning.steered", { status, tier: budget.tier, totalTokens, softLimit, hardLimit }));
+        }).catch((error: unknown) => {
+          const active = this.store.getRun(run.id);
+          if (active?.status === "running") this.publish(this.store.appendEvent(run.id, "run.token_budget.warning.delivery_failed", { error: error instanceof Error ? error.message : String(error) }));
+        });
+      },
       onTokenBudgetExceeded: ({ totalTokens, limit }) => {
         const current = this.store.getRun(run.id);
         if (!current || current.status !== "running") return;
@@ -532,8 +546,8 @@ export class AgentService {
 
   private executionBudget(run: TaskRun) {
     const hardContinuations = this.runtimeDefaults.maxContinuations ?? 128;
-    const hardTokens = this.runtimeDefaults.maxRunTokens ?? 2_000_000;
-    if (this.runtimeDefaults.dynamicBudget === false) return { tier: "fixed", maxContinuations: hardContinuations, maxTokens: hardTokens, runTimeoutMs: this.runtimeDefaults.runTimeoutMs ?? 900_000 };
+    const hardTokens = this.runtimeDefaults.maxRunTokens ?? 8_000_000;
+    if (this.runtimeDefaults.dynamicBudget === false) return { tier: "fixed", softTokens: hardTokens, maxContinuations: hardContinuations, maxTokens: hardTokens, runTimeoutMs: this.runtimeDefaults.runTimeoutMs ?? 900_000 };
 
     let score = Math.min(6, Math.ceil(run.goal.length / 240));
     if (/(implement|develop|refactor|migrate|audit|debug|test|build|deploy|实现|开发|重构|迁移|审计|调试|测试|构建|部署)/i.test(run.goal)) score += 3;
@@ -543,15 +557,16 @@ export class AgentService {
     // them here allowed a Run to enlarge its own token ceiling while executing.
     const tier = score >= 10 ? "extended" : score >= 7 ? "complex" : score >= 4 ? "standard" : "simple";
     const presets = {
-      simple: { maxContinuations: 4, maxTokens: 80_000, runTimeoutMs: 300_000 },
-      standard: { maxContinuations: 12, maxTokens: 240_000, runTimeoutMs: 900_000 },
-      complex: { maxContinuations: 32, maxTokens: 640_000, runTimeoutMs: 2_700_000 },
-      extended: { maxContinuations: 96, maxTokens: 1_600_000, runTimeoutMs: 7_200_000 },
+      simple: { softTokens: 80_000, runTimeoutMs: 300_000 },
+      standard: { softTokens: 240_000, runTimeoutMs: 900_000 },
+      complex: { softTokens: 640_000, runTimeoutMs: 2_700_000 },
+      extended: { softTokens: 1_600_000, runTimeoutMs: 7_200_000 },
     } as const;
     return {
       tier,
-      maxContinuations: Math.min(hardContinuations, presets[tier].maxContinuations),
-      maxTokens: Math.min(hardTokens, presets[tier].maxTokens),
+      softTokens: Math.min(hardTokens, presets[tier].softTokens),
+      maxContinuations: hardContinuations,
+      maxTokens: hardTokens,
       runTimeoutMs: Math.min(this.runtimeDefaults.runTimeoutMs ?? 7_200_000, presets[tier].runTimeoutMs),
     };
   }

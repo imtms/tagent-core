@@ -594,12 +594,12 @@ describe("AgentService runtime boundary", () => {
     const session = store.createSession();
     const service = new AgentService(store, "/tmp", () => new FakeRuntime([]), { maxContinuations: 40, maxRunTokens: 700_000, runTimeoutMs: 3_000_000 });
     const simple = store.createRun(session.id, "Say hello");
-    expect(service.getBudget(simple.id)).toEqual({ tier: "simple", maxContinuations: 4, maxTokens: 80_000, runTimeoutMs: 300_000 });
+    expect(service.getBudget(simple.id)).toEqual({ tier: "simple", softTokens: 80_000, maxContinuations: 40, maxTokens: 700_000, runTimeoutMs: 300_000 });
     const complex = store.createRun(session.id, "Implement and test a multi module frontend backend database migration architecture");
     const admittedBudget = service.getBudget(complex.id);
     for (let index = 0; index < 8; index += 1) store.upsertPlanItem(complex.id, { key: `p${index}`, title: `Step ${index}`, status: "pending", required: true, position: index });
     for (let index = 0; index < 3; index += 1) store.upsertCheck(complex.id, { key: `c${index}`, title: `Check ${index}`, status: "pending", required: true, command: "", evidence: "", stale: false });
-    expect(admittedBudget).toEqual({ tier: "complex", maxContinuations: 32, maxTokens: 640_000, runTimeoutMs: 2_700_000 });
+    expect(admittedBudget).toEqual({ tier: "complex", softTokens: 640_000, maxContinuations: 40, maxTokens: 700_000, runTimeoutMs: 2_700_000 });
     expect(service.getBudget(complex.id)).toEqual(admittedBudget);
     store.close();
   });
@@ -666,6 +666,37 @@ describe("AgentService runtime boundary", () => {
     expect(store.getRun(run.id)?.status).toBe("blocked");
     expect(store.listContinuations(run.id)).toHaveLength(1);
     expect(store.listEvents(run.id).some((event) => event.type === "continuation.exhausted" && event.data.reason === "max_continuations")).toBe(true);
+    store.close();
+  });
+
+  it("treats the dynamic token tier as guidance while preserving the configured hard ceiling", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let captured: Parameters<RuntimeFactory>[0] | undefined;
+    let aborted = false;
+    let steered = "";
+    const service = new AgentService(store, "/tmp", (options) => {
+      captured = options;
+      return {
+        async prompt() {
+          options.onTokenBudgetWarning?.({ totalTokens: 80_000, softLimit: options.softRunTokens!, hardLimit: options.maxRunTokens });
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        },
+        async steer(instruction) { steered = instruction; return "accepted" as const; },
+        abort() { aborted = true; },
+        getMessages() { return []; },
+        getError() { return undefined; },
+      };
+    }, { maxContinuations: 40, maxRunTokens: 700_000, runTimeoutMs: 3_000_000 });
+    const run = await service.start(session.id, "Say hello");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(captured?.softRunTokens).toBe(80_000);
+    expect(captured?.maxRunTokens).toBe(700_000);
+    expect(aborted).toBe(false);
+    expect(store.getRun(run.id)?.status).not.toBe("blocked");
+    expect(steered).toContain("hard ceiling is 700,000");
+    expect(store.listEvents(run.id).some((event) => event.type === "run.token_budget.warning")).toBe(true);
+    await service.closeRuntimes();
     store.close();
   });
 
