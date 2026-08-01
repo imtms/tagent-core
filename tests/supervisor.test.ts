@@ -134,6 +134,20 @@ describe("TaskRunSupervisor", () => {
     store.close();
   });
 
+  it("accepts a concrete deployment result when the semantic criterion is covered despite harmless wording differences", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "3210拉最新版本部署");
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, acceptanceCriteria: ["交付目标结果：3210拉最新版本部署"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
+    store.upsertPlanItem(run.id, { key: "deploy", title: "Deploy", status: "done", required: true, position: 1 });
+    store.upsertCheck(run.id, { key: "health", title: "Health", status: "passed", required: true, command: "curl http://127.0.0.1:3210/api/health", evidence: "HTTP 200 and service active after restart", stale: false });
+    const response = "已完成 3210 端口最新版本部署。代码已拉取到远程 main 最新提交，生产构建成功，tagent-core-3210.service 已重启并保持 active；健康接口返回 HTTP 200，历史会话数量和数据库完整性复检均正常。";
+    const review = new TaskRunSupervisor(store).reviewSettled(store.getRun(run.id)!, 711, response);
+    expect(review.gates.find((gate) => gate.gateType === "contract")?.passed).toBe(true);
+    expect(review.decision.action).toBe("complete_taskrun");
+    store.close();
+  });
+
   it("pauses for approval when a required approval item is blocked", () => {
     const store = new Store(":memory:");
     const session = store.createSession();

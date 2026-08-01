@@ -2,6 +2,8 @@
 
 ### Fixed
 
+- Prevent completed TaskRuns from entering redundant continuations when criterion-level coverage already passes but a second brittle whole-contract phrase matcher rejects harmless wording differences.
+- Require explicit parallel language instead of treating discourse markers such as “另外” / “another” alone as proof of independent parallel work, and classify deploy/restart/pull operations as concrete change objectives.
 - Preserve earlier streamed assistant drafts when a later assistant message starts, and only clear live text after the approved response is confirmed in persisted chat history.
 - Page long chat history by stable message ID, stop refetching and reparsing messages on every status poll, memoize persisted Markdown, and use lightweight plain-text rendering while streaming.
 

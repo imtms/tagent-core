@@ -5,7 +5,7 @@ const normalize = (value: string) => value.replace(/\s+/g, " ").trim();
 const politePrefix = /^(?:请|麻烦|帮我|请你|please|could you|would you)\s*/i;
 const STEER = /(停止|暂停|先别|不要|别再|不允许|禁止|错了|有误|改成|换成|应该用|不要用|撤销|取消|回滚|stop|pause|do not|don't|wrong|instead|switch to|cancel|rollback)/i;
 const FOLLOW_UP = /(完成后|做完后|之后再|然后再|最后再|接着|下一步|after (?:that|this|it)|when (?:done|finished)|then|follow[- ]?up)/i;
-const PARALLEL = /(同时|并行|另外|另一个|与此同时|in parallel|separately|meanwhile|another)/i;
+const PARALLEL = /(同时|并行|与此同时|in parallel|separately|meanwhile)/i;
 const CONTEXT = /(补充|参数|地址|路径|端口|api\s*key|base\s*url|环境变量|仓库在|代码在|测试地址|额外信息|for context|additional context|the (?:path|port|url|key) is)/i;
 const DISCUSSION = /^(?:为什么|为何|怎么理解|解释一下|你觉得|是否应该|什么是|介绍一下|聊聊|what\b|why\b|how\b|explain\b|compare\b)|[?？]$/i;
 const CLARIFICATION = /^(?:这个|那个|它|他|她|这里|那里|刚才|上面|前面|which\b|where\b|when\b|who\b).*[?？]$|(?:具体|准确).*(?:哪个|哪里|什么|如何)[?？]$/i;
@@ -20,7 +20,7 @@ function objectiveKind(text: string): TaskObjective["kind"] {
   if (/(文档|说明|readme|document)/i.test(text)) return "document";
   if (/(发布|发版|release|deploy)/i.test(text)) return "release";
   if (/(审计|调查|分析|定位|排查|audit|investigate|analy[sz]e|debug)/i.test(text)) return "investigate";
-  if (/(修复|实现|完善|改造|更新|删除|迁移|fix|implement|improve|update|remove|migrate|refactor)/i.test(text)) return "change";
+  if (/(修复|实现|完善|改造|更新|删除|迁移|部署|重启|启动|停止|拉取|fix|implement|improve|update|remove|migrate|refactor|deploy|restart|start|stop|pull)/i.test(text)) return "change";
   if (DISCUSSION.test(text)) return "answer";
   return "other";
 }

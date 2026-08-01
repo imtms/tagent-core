@@ -128,7 +128,10 @@ export class TaskRunSupervisor {
     if (!response.trim()) completionFailures.push({ kind: "delivery", key: "response", reason: "Candidate response is empty", disposition: "auto_fixable" });
     const criterionCoverage = this.evaluateContractCoverage(run, response);
     const contractFailures: GateEvaluation["failures"] = criterionCoverage.filter((item) => item.status === "unsupported" || item.status === "contradicted").map((item, index) => ({ kind: "contract", key: `criterion_${index + 1}`, reason: `${item.criterion}: ${item.reason}`, disposition: "auto_fixable" }));
-    if (run.gateRequired && run.contract && (!this.responseAddressesContract(run, response) || contractFailures.length)) completionFailures.push(...(contractFailures.length ? contractFailures : [{ kind: "delivery", key: "contract_coverage", reason: "Candidate response does not substantively address the TaskRun contract or report a concrete blocker", disposition: "auto_fixable" } as const]));
+    if (run.gateRequired && run.contract && contractFailures.length) completionFailures.push(...contractFailures);
+    if (run.gateRequired && run.contract && !contractFailures.length && !this.isSubstantiveDelivery(response)) {
+      completionFailures.push({ kind: "delivery", key: "contract_coverage", reason: "Candidate response is too short or generic to serve as the final TaskRun delivery", disposition: "auto_fixable" });
+    }
     const claimFailures = this.validateCompletionClaims(run, response, operations);
     completionFailures.push(...claimFailures);
     return [gate("progress", progressFailures), gate("evidence", evidenceFailures), gate("contract", contractFailures, criterionCoverage), gate("completion", completionFailures, criterionCoverage), gate("continuation", completionFailures.filter((item) => item.disposition === "non_recoverable" || item.disposition === "needs_user_input" || item.disposition === "needs_approval" || item.disposition === "external_dependency"))];
@@ -176,13 +179,11 @@ export class TaskRunSupervisor {
     return [...new Set([...words, ...fragments])].filter((term) => !/^(相关|提供|实际|结果|进行|当前|完成|目标)$/.test(term));
   }
 
-  private responseAddressesContract(run: TaskRun, response: string) {
-    const normalized = response.replace(/[()`*_>#{}:：,，.。!！?？/\\|+-]/g, " ").replaceAll("[", " ").replaceAll("]", " ").replace(/\s+/g, " ").trim().toLowerCase();
-    if (normalized.length < 80) return false;
+  private isSubstantiveDelivery(response: string) {
+    const normalized = this.normalizeSemanticText(response);
     if (/(blocked|cannot|unable|waiting|requires|缺少|无法|不能|阻塞|等待|需要用户|需要审批)/i.test(response)) return true;
-    const contractText = [run.contract?.summary ?? run.goal, ...(run.contract?.acceptanceCriteria ?? [])].join(" ");
-    const terms = [...new Set(contractText.match(/[\p{Script=Han}]{2,8}|[a-zA-Z][a-zA-Z0-9._/-]{2,}/gu) ?? [])].map((term) => term.toLowerCase()).filter((term) => !/^(完成目标|提供可验证|明确说明|结果|进行|当前|taskrun|goal|scope|original|user|input)$/.test(term));
-    return terms.some((term) => normalized.includes(term));
+    if (normalized.length < 80) return false;
+    return !/^(?:收到|好的|明白|已处理|已经处理|任务完成|已完成|done|completed)[ 。.!！]*$/i.test(normalized);
   }
 
   private createDecision(run: TaskRun, checkpointSeq: number, trigger: SupervisorDecision["trigger"], action: SupervisorAction, reasonCode: string, rationale: string, confidence: number, candidateResponse = "") {

@@ -18,6 +18,12 @@ describe("SessionInputRouter", () => {
   it("creates a parallel proposal only for explicit independent parallel work", () => {
     expect(router.analyze("同时并行设计另一个独立的移动端客户端", active)).toMatchObject({ intent: "parallel_task", targetRunId: "run-1", relation: "parallel" });
   });
+  it("does not mistake a discourse marker for independent parallel work", () => {
+    const result = router.analyze("看看为什么需要三次 attempt。另外你可以重启 3220，不会影响自己。", undefined);
+    expect(result.objectives).toHaveLength(2);
+    expect(result.objectives.every((item) => item.timing === "current")).toBe(true);
+    expect(result.intent).toBe("new_task");
+  });
   it("classifies lightweight discussion and clarification turns", () => {
     expect(router.analyze("为什么需要 completion gate？")).toMatchObject({ intent: "discussion", priority: 350 });
     expect(router.analyze("刚才具体哪个路径错了？")).toMatchObject({ intent: "clarification", priority: 350 });
