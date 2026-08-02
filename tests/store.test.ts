@@ -31,7 +31,7 @@ describe("Store", () => {
     const store = createStore();
     const session = store.createSession();
     const timedOut = store.createRun(session.id, "timed out");
-    store.transitionRun(timedOut.id, ["running"], "failed", "run.failed", { reason: "idle_timeout", limitMs: 15_000 }, "Run idle for 15000ms without progress", 1);
+    store.transitionRun(timedOut.id, ["running"], "failed", "run.failed", { reason: "idle_timeout", limitMs: 120_000 }, "Run idle for 120000ms without progress", 1);
     expect(store.getRun(timedOut.id)).toMatchObject({ status: "failed", resumable: true });
     expect(store.resumeRun(timedOut.id)).toMatchObject({ status: "running", attempt: 2, resumable: false });
 

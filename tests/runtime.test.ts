@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { AgentService } from "../src/core/agent-service.js";
+import { loadConfig } from "../src/config.js";
 import { Store } from "../src/store/store.js";
 import { TaskRunSupervisor } from "../src/core/supervisor.js";
 import { SupervisorReviewError, TestSupervisorReviewer, passingTestAudit, type SupervisorAudit, type SupervisorReviewer } from "../src/core/supervisor-reviewer.js";
@@ -775,6 +776,28 @@ describe("AgentService runtime boundary", () => {
     await service.start(session.id, "observe token usage"); await new Promise((resolve) => setTimeout(resolve, 20));
     expect(captured).not.toHaveProperty("maxRunTokens"); expect(captured).not.toHaveProperty("softRunTokens");
     expect(store.listEvents(store.getLatestRun(session.id)!.id).some((event) => event.type.includes("token_budget"))).toBe(false); store.close();
+  });
+
+  it("reports the configured 120-second default when the Run idle watchdog expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new Store(":memory:");
+      const session = store.createSession();
+      const runtime = new DeferredRuntime();
+      const service = new AgentService(store, "/tmp", () => runtime, { runTimeoutMs: loadConfig({}).runTimeoutMs, runHardTimeoutMs: 86_400_000 });
+      const run = await service.start(session.id, "default timeout");
+
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(store.getRun(run.id)?.status).toBe("running");
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(runtime.aborted).toBe(true);
+      expect(store.getRun(run.id)).toMatchObject({ status: "failed", blockedReason: "Run idle for 120000ms without progress" });
+      expect(store.listEvents(run.id).at(-1)?.data).toMatchObject({ reason: "idle_timeout", limitMs: 120_000 });
+      store.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fails a run only after its idle watchdog sees no progress", async () => {

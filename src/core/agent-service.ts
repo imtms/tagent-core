@@ -434,7 +434,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     this.checkpointDrafts.set(run.id, { runId: run.id, attempt: run.attempt, active: true, assistantPartial: "", currentTool: null, lastEventSeq: checkpointBase.lastEventSeq });
     this.lastCheckpointTranscriptSeq.set(run.id, checkpointBase.checkpoint?.lastTranscriptSeq ?? this.store.getLastTranscriptSeq(run.id));
     this.flushCheckpoint(run.id);
-    const idleTimeoutMs = this.runtimeDefaults.runTimeoutMs ?? 7_200_000;
+    const idleTimeoutMs = this.runtimeDefaults.runTimeoutMs ?? 120_000;
     const hardTimeoutMs = this.runtimeDefaults.runHardTimeoutMs ?? 86_400_000;
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     let hardTimer: ReturnType<typeof setTimeout> | undefined;
