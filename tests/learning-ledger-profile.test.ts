@@ -1,0 +1,100 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { Store } from "../src/store/store.js";
+import { LearningService } from "../src/learning/learning-service.js";
+import type { RecallFeedbackSignal } from "../src/memory/types.js";
+
+const stores: Store[] = [];
+afterEach(() => stores.splice(0).forEach((store) => store.close()));
+
+function completedRun(store: Store, sessionId: string) {
+  const run = store.createRun(sessionId, "implement durable learning ledger");
+  store.upsertPlanItem(run.id, { key: "implement", title: "Implement", status: "done", required: true, position: 1 });
+  store.upsertCheck(run.id, { key: "tests", title: "Tests", status: "passed", required: true, command: "npm test", evidence: "passed", stale: false });
+  store.transitionRun(run.id, ["running"], "completed", "run.completed", {}, "", 1);
+  return store.getRun(run.id)!;
+}
+
+describe("Communication Profile", () => {
+  it("activates explicit preferences immediately and inferred preferences only after repeated evidence", () => {
+    const store = new Store(":memory:"); stores.push(store); const learning = new LearningService(store);
+    learning.recordCommunicationPreference({ subjectId: "user:1", scopeType: "global", scopeId: "*", dimension: "language", value: "中文", sourceType: "explicit_user", sourceRef: "message:1" });
+    learning.recordCommunicationPreference({ subjectId: "user:1", scopeType: "session", scopeId: "s1", dimension: "verbosity", value: "简洁", sourceType: "inferred", sourceRef: "run:r1" });
+    let resolved = learning.resolveCommunicationProfile("user:1", [{ type: "session", id: "s1" }]);
+    expect(resolved.values.language).toMatchObject({ value: "中文", status: "active" });
+    expect(resolved.values.verbosity).toBeUndefined();
+    learning.recordCommunicationPreference({ subjectId: "user:1", scopeType: "session", scopeId: "s1", dimension: "verbosity", value: "简洁", sourceType: "inferred", sourceRef: "run:r2" });
+    resolved = learning.resolveCommunicationProfile("user:1", [{ type: "session", id: "s1" }]);
+    expect(resolved.values.verbosity).toMatchObject({ value: "简洁", status: "active", confirmations: 2 });
+    expect(resolved.promptSection).toContain("language: 中文");
+  });
+
+  it("extracts explicit user communication instructions and supports profile locking", () => {
+    const store = new Store(":memory:"); stores.push(store); const learning = new LearningService(store);
+    learning.captureExplicitCommunicationPreferences("session:s1", "s1", 12, "以后用中文回答，请简洁");
+    const profiles = learning.listCommunicationProfiles("session:s1");
+    expect(profiles[0].revision.values.language.value).toBe("中文");
+    learning.lockCommunicationProfile(profiles[0].id, true);
+    learning.recordCommunicationPreference({ subjectId: "session:s1", scopeType: "session", scopeId: "s1", dimension: "language", value: "英文", sourceType: "inferred", sourceRef: "run:x" });
+    expect(learning.resolveCommunicationProfile("session:s1", [{ type: "session", id: "s1" }]).values.language?.value).toBe("中文");
+  });
+});
+
+describe("Learning Event, Outcome Label, and Correction ledgers", () => {
+  it("projects immutable learning events and outcome labels idempotently", () => {
+    const store = new Store(":memory:"); stores.push(store); const session = store.createSession(); const learning = new LearningService(store); const run = completedRun(store, session.id);
+    learning.projectRun(run); learning.projectRun(run);
+    expect((store.db.prepare("SELECT COUNT(*) count FROM learning_events WHERE run_id=?").get(run.id) as { count: number }).count).toBe(1);
+    expect((store.db.prepare("SELECT COUNT(*) count FROM outcome_labels WHERE run_id=?").get(run.id) as { count: number }).count).toBe(5);
+    const event = learning.listLearningEvents(session.id)[0];
+    expect(event.outcome).toMatchObject({ status: "completed", success: true, requiredChecks: 1 });
+    expect(event.executionTrace).toHaveProperty("continuations");
+  });
+
+  it("replays every projection-outbox lifecycle into the generic ledger idempotently", () => {
+    const store = new Store(":memory:"); stores.push(store); const session = store.createSession(); const learning = new LearningService(store); const run = store.createRun(session.id, "wait for user input");
+    store.requestUserInput(run.id, "Need value", [{ key: "v", label: "Value", description: "", inputType: "text", required: true, placeholder: "" }]);
+    learning.drainLearningProjectionLedger(); learning.drainLearningProjectionLedger();
+    const events = learning.listLearningEvents(session.id);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ lifecycle: "run.waiting_input", outcome: { status: "waiting_input", success: false } });
+  });
+
+  it("records user corrections idempotently and labels correction on the run", () => {
+    const store = new Store(":memory:"); stores.push(store); const session = store.createSession(); const learning = new LearningService(store); const run = completedRun(store, session.id);
+    const message = store.appendMessage(session.id, "user", "不对，应该改为保守归因");
+    learning.recordCorrection({ sessionId: session.id, runId: run.id, attempt: run.attempt, messageId: message.id, content: message.content });
+    learning.recordCorrection({ sessionId: session.id, runId: run.id, attempt: run.attempt, messageId: message.id, content: message.content });
+    learning.projectRun(store.getRun(run.id)!);
+    expect(learning.listCorrections(session.id)).toHaveLength(1);
+    expect(store.db.prepare("SELECT value FROM outcome_labels WHERE run_id=? AND label='correction_observed'").get(run.id)).toEqual({ value: "true" });
+  });
+});
+
+describe("conservative automatic Feedback Attribution", () => {
+  it("only attributes cited records and does not treat every recalled record as task_success", async () => {
+    const store = new Store(":memory:"); stores.push(store); const session = store.createSession(); const calls: Array<{ recordId: string; signal: RecallFeedbackSignal }> = [];
+    const memory = { feedback: async (_access: unknown, _scope: unknown, recordId: string, signal: RecallFeedbackSignal) => { calls.push({ recordId, signal }); return { id: `${recordId}:${signal}` }; } } as never;
+    const learning = new LearningService(store, memory, "workspace-1"); const run = completedRun(store, session.id);
+    store.recordContextManifest({ id: "manifest-1", runId: run.id, attempt: 1, source: "session", manifestHash: "h", createdAt: Date.now(), stats: {}, items: [
+      { kind: "memory_card", sourceId: "memory-a", selected: true, reason: "recall", estimatedTokens: 2 },
+      { kind: "memory_card", sourceId: "memory-b", selected: true, reason: "recall", estimatedTokens: 2 },
+    ] });
+    store.appendMessage(session.id, "assistant", "Result based on [memory:memory-a].");
+    learning.projectRun(store.getRun(run.id)!);
+    const receipts = learning.listFeedbackAttribution(session.id) as Array<{ recordId: string; signal: string; status: string }>;
+    expect(receipts.map((item) => `${item.recordId}:${item.signal}`).sort()).toEqual(["memory-a:cited", "memory-a:task_success"]);
+    await learning.drainFeedbackAttribution(); await learning.drainFeedbackAttribution();
+    expect(calls.map((item) => `${item.recordId}:${item.signal}`).sort()).toEqual(["memory-a:cited", "memory-a:task_success"]);
+    expect(learning.listFeedbackAttribution(session.id).every((item: any) => item.status === "applied")).toBe(true);
+  });
+
+  it("withholds positive attribution when required checks are absent", () => {
+    const store = new Store(":memory:"); stores.push(store); const session = store.createSession(); const learning = new LearningService(store); const run = store.createRun(session.id, "unchecked");
+    store.transitionRun(run.id, ["running"], "completed", "run.completed", {}, "", 1);
+    store.recordContextManifest({ id: "manifest-2", runId: run.id, attempt: 1, source: "session", manifestHash: "h2", createdAt: Date.now(), stats: {}, items: [{ kind: "memory_card", sourceId: "memory-a", selected: true, reason: "recall", estimatedTokens: 2 }] });
+    store.appendMessage(session.id, "assistant", "[memory:memory-a]");
+    learning.projectRun(store.getRun(run.id)!);
+    expect((learning.listFeedbackAttribution(session.id) as Array<{ signal: string }>).map((item) => item.signal)).toEqual(["cited"]);
+    expect(learning.listLearningEvents(session.id)[0].outcome.success).toBe(false);
+  });
+});

@@ -1,0 +1,68 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { Store } from "../src/store/store.js";
+import { WorkflowService, type WorkflowSpec } from "../src/learning/workflow-service.js";
+
+const stores: Store[] = [];
+const make = () => { const store = new Store(":memory:"); stores.push(store); return { store, service: new WorkflowService(store) }; };
+afterEach(() => stores.splice(0).forEach((store) => store.close()));
+
+function observe(store: Store, service: WorkflowService, scopeId: string, signature: string, summary: string, success = true, failedChecks: string[] = []) {
+  const run = store.createRun(scopeId, signature);
+  return service.recordExperience({
+    scopeId, runId: run.id, attempt: 1, sourceType: success ? "task_experience" : "task_failure",
+    taskSignature: signature, procedureSummary: summary, checksPassed: success ? ["tests"] : [], checksFailed: failedChecks,
+  });
+}
+
+const existingSpec: WorkflowSpec = {
+  name: "Existing verification", intent: "verify software change", cueTerms: ["verify", "software", "change"],
+  applicability: ["verify software change"], nonApplicability: [], preconditions: [], inputContract: [], outputContract: [],
+  steps: [{ stepId: "deploy", instruction: "Deploy before running tests", required: true }],
+  verification: [{ check: "tests", required: true, successCondition: "pass" }], requiredCapabilities: [], riskClass: "low",
+};
+
+describe("persistent asynchronous experience distiller", () => {
+  it("persists fenced checkpoints and rejects stale worker writes", () => {
+    const { store, service } = make(); const session = store.createSession();
+    observe(store, service, session.id, "verify software change", "1. Run tests\n2. Build artifact");
+    observe(store, service, session.id, "verify code change", "1. Run the tests\n2. Build artifact");
+    service.enqueueDistillation(session.id, "verify software change");
+    const stale = service.claimDistillationJob("worker-a", 10) as any;
+    service.checkpointDistillationJob(stale.id, "worker-a", stale.lease_token, stale.fence, { phase: "scan", cursor: 1 }, 10);
+    expect(JSON.parse((store.db.prepare("SELECT checkpoint_json value FROM workflow_distillation_jobs WHERE id=?").get(stale.id) as any).value)).toMatchObject({ phase: "scan", cursor: 1 });
+    store.db.prepare("UPDATE workflow_distillation_jobs SET lease_until=0 WHERE id=?").run(stale.id);
+    const current = service.claimDistillationJob("worker-b") as any;
+    expect(current.fence).toBe(stale.fence + 1);
+    expect(() => service.checkpointDistillationJob(stale.id, "worker-a", stale.lease_token, stale.fence, { phase: "stale" })).toThrow("lease lost");
+    service.checkpointDistillationJob(current.id, "worker-b", current.lease_token, current.fence, { phase: "resumed", cursor: 1 });
+  });
+
+  it("aggregates semantically similar runs, keeps consistent order, and derives counterexample handling", () => {
+    const { store, service } = make(); const session = store.createSession();
+    observe(store, service, session.id, "verify software release change", "1. Run tests\n2. Build release artifact\n3. Publish report");
+    observe(store, service, session.id, "validate software release update", "1. Run the tests\n2. Build release artifact\n3. Notify team");
+    observe(store, service, session.id, "verification of software release failed", "1. Build first\n2. Run tests", false, ["tests"]);
+    service.enqueueDistillation(session.id, "verify software release change");
+    const result = service.runNextDistillationJob("distiller")!;
+    expect(result.revision!.steps).toHaveLength(2);
+    expect(result.revision!.steps[0].instruction).toMatch(/Run (?:the )?tests/);
+    expect(result.revision!.steps[1].instruction).toBe("Build release artifact");
+    expect(result.revision!.counterexampleIds).toHaveLength(1);
+    expect(result.revision!.nonApplicability[0]).toContain("failed run");
+    expect(result.revision!.steps[0].failureHandling).toContain("tests");
+    expect(JSON.parse((store.db.prepare("SELECT checkpoint_json value FROM workflow_distillation_jobs").get() as any).value)).toMatchObject({ phase: "completed", workflowId: result.id });
+  });
+
+  it("records a durable conflict instead of silently duplicating a divergent workflow", () => {
+    const { store, service } = make(); const session = store.createSession();
+    service.createWorkflow(session.id, existingSpec, "explicit_user", ["message:1"], "candidate");
+    observe(store, service, session.id, "verify software change", "1. Run tests\n2. Build artifact");
+    observe(store, service, session.id, "validate software change", "1. Run the tests\n2. Build artifact");
+    service.enqueueDistillation(session.id, "verify software change");
+    expect(service.runNextDistillationJob("distiller")).toBeUndefined();
+    const conflict = store.db.prepare("SELECT kind,status,reasons_json as reasonsJson FROM workflow_distillation_conflicts").get() as any;
+    expect(conflict).toMatchObject({ kind: "conflict", status: "open" });
+    expect(JSON.parse(conflict.reasonsJson)).toContain("same applicability with divergent procedure");
+    expect(store.db.prepare("SELECT COUNT(*) count FROM workflow_definitions").get()).toEqual({ count: 1 });
+  });
+});

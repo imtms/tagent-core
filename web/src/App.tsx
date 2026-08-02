@@ -1,10 +1,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Command, Download, Eye, FileText, GripVertical, HelpCircle, Menu, MessageSquarePlus, PanelRight, Pencil, Play, Plus, Send, ShieldCheck, Square, Terminal, X } from "lucide-react";
-import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TranscriptItem, type UserInputRequest } from "./api";
+import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TranscriptItem, type UserInputRequest } from "./api";
 import { LiveText, Markdown } from "./Markdown";
 import { createRequestId } from "./id";
 import { deriveCurrentOperation } from "./current-operation";
 import { MemoryPanel } from "./MemoryPanel";
+import { LearningCenter } from "./LearningCenter";
 
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
 
@@ -246,6 +247,8 @@ function QueuePrompt({ item, index, editing, draft, busy, starting, dragging, ca
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
+  const [learningSettings, setLearningSettings] = useState<LearningFeatureState | null>(null);
+  const [learningToggleBusy, setLearningToggleBusy] = useState(false);
   const [retryingRunId, setRetryingRunId] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [renamingSessionId, setRenamingSessionId] = useState("");
@@ -278,6 +281,7 @@ export function App() {
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [learningOpen, setLearningOpen] = useState(false);
   const [memoryJobs, setMemoryJobs] = useState<CaptureJob[]>([]);
   const [memoryJobsLoaded, setMemoryJobsLoaded] = useState(false);
   const messageScrollRef = useRef<HTMLElement>(null);
@@ -300,7 +304,14 @@ export function App() {
     setSessionId((current) => current || items[0].id);
   }, []);
 
-  useEffect(() => { void loadSessions(); void api.status().then(setRuntimeStatus); }, [loadSessions]);
+  useEffect(() => { void loadSessions(); void api.status().then(setRuntimeStatus); void api.learningSettings().then(setLearningSettings); }, [loadSessions]);
+  const toggleLearningAutoExecution = async () => {
+    if (!learningSettings || learningToggleBusy) return;
+    setLearningToggleBusy(true); setError(""); setNotice("");
+    try { const updated = await api.updateLearningSettings({ autoExecutionEnabled: !learningSettings.autoExecutionEnabled }); setLearningSettings(updated); setNotice(updated.autoExecutionEnabled ? "Learning execution participation enabled. Every active action still requires human approval." : "Learning is now passive-only: observe, learn, distill and evolve candidates without active application."); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setLearningToggleBusy(false); }
+  };
   useEffect(() => {
     if (!runtimeStatus?.memoryEnabled || !sessionId) { setMemoryJobs([]); setMemoryJobsLoaded(false); return; }
     setMemoryJobsLoaded(false);
@@ -651,7 +662,7 @@ export function App() {
       <header className="topbar">
         <button className="icon-button mobile-only" onClick={() => setLeftOpen(true)} aria-label="Open sessions"><Menu size={19} /></button>
         <div><h1>{sessions.find((session) => session.id === sessionId)?.title ?? "TAgent Core"}</h1><p>{activeRun ? `${activeRun.phase} · ${activeRun.status}` : runtimeStatus ? `${runtimeStatus.modelId} · ${runtimeStatus.runtime}` : "Ready for a new task"}</p></div>
-        <div className="top-actions">{runtimeStatus?.memoryEnabled && <button className="memory-launch" onClick={() => setMemoryOpen(true)}><BrainCircuit size={16} /><span>Memory</span><i /></button>}{selectedRun?.resumable && !activeRun && !selectedRun.supervision.approvalRequests.some((item) => item.status === "pending") && <button className="resume-button" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}{selectedRun?.status === "failed" && selectedRun.launchRetryable && !activeRun && <button className="resume-button" onClick={() => void retryLaunch(selectedRun)} disabled={Boolean(retryingRunId)}><Play size={15} />{retryingRunId === selectedRun.id ? "Retrying…" : "Retry launch"}</button>}{activeRun?.status === "running" && <button className="icon-button danger" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={17} /></button>}<button className="icon-button mobile-only" onClick={() => setRightOpen(true)} aria-label="Open task panel"><PanelRight size={19} /></button></div>
+        <div className="top-actions">{learningSettings && <div className={`learning-execution-control ${!learningSettings.memoryEnabled ? "dependency-disabled" : learningSettings.autoExecutionEnabled ? "enabled" : "passive"}`} title={!learningSettings.memoryEnabled ? "Learning requires Memory" : learningSettings.autoExecutionEnabled ? "Learning may participate in execution, but every active action still requires human approval" : "Passive-only: observation, learning, distillation and candidate evolution"}><div><strong>Learning execution</strong><small>{!learningSettings.memoryEnabled ? "Memory required" : learningSettings.autoExecutionEnabled ? "On · approval always required" : "Off · passive learning only"}</small></div><button type="button" role="switch" aria-checked={learningSettings.autoExecutionEnabled} disabled={!learningSettings.learningEnabled || learningToggleBusy} onClick={() => void toggleLearningAutoExecution()}><span /></button></div>}{sessionId && <button className="memory-launch" onClick={() => setLearningOpen(true)} disabled={!learningSettings?.learningEnabled}><ShieldCheck size={16} /><span>Learning</span></button>}{runtimeStatus?.memoryEnabled && <button className="memory-launch" onClick={() => setMemoryOpen(true)}><BrainCircuit size={16} /><span>Memory</span><i /></button>}{selectedRun?.resumable && !activeRun && !selectedRun.supervision.approvalRequests.some((item) => item.status === "pending") && <button className="resume-button" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}{selectedRun?.status === "failed" && selectedRun.launchRetryable && !activeRun && <button className="resume-button" onClick={() => void retryLaunch(selectedRun)} disabled={Boolean(retryingRunId)}><Play size={15} />{retryingRunId === selectedRun.id ? "Retrying…" : "Retry launch"}</button>}{activeRun?.status === "running" && <button className="icon-button danger" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={17} /></button>}<button className="icon-button mobile-only" onClick={() => setRightOpen(true)} aria-label="Open task panel"><PanelRight size={19} /></button></div>
       </header>
 
       <section className="message-scroll" ref={messageScrollRef} onScroll={handleMessageScroll}>
@@ -695,6 +706,7 @@ export function App() {
       })}</div>}
     </aside>
     {runtimeStatus?.memoryEnabled && memoryOpen && <MemoryPanel runtime={runtimeStatus} onClose={() => setMemoryOpen(false)} />}
+    {learningOpen && sessionId && learningSettings?.learningEnabled && <LearningCenter sessionId={sessionId} onClose={() => setLearningOpen(false)} />}
     {(leftOpen || rightOpen) && <button className="backdrop mobile-only" onClick={() => { setLeftOpen(false); setRightOpen(false); }} aria-label="Close panel" />}
   </div>;
 }

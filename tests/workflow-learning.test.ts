@@ -4,6 +4,7 @@ import { WorkflowService, type WorkflowSpec } from "../src/learning/workflow-ser
 
 const stores: Store[] = [];
 const create = () => { const store = new Store(":memory:"); stores.push(store); return { store, workflows: new WorkflowService(store) }; };
+const activate = (workflows: WorkflowService, workflowId: string, revisionId?: string) => { const approval=workflows.requestActivation(workflowId,revisionId,"test");workflows.decideApproval(approval.id,"approved","test");return workflows.executeApproval(approval.id,"test"); };
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
 
 const spec = (name = "Safe release workflow"): WorkflowSpec => ({
@@ -31,7 +32,7 @@ describe("controlled workflow learning", () => {
     expect(candidate).toMatchObject({ status: "candidate", revision: { revision: 1, sourceType: "explicit_user", sourceEvidenceIds: ["message:1"], counterexampleIds: [], inputContract: [{ name: "releaseVersion", required: true }], outputContract: [{ name: "releaseArtifact", required: true }] } });
     expect(store.db.prepare("SELECT source_type as sourceType, source_evidence_json as evidenceJson FROM workflow_revisions WHERE id = ?").get(candidate.revision!.id)).toEqual({ sourceType: "explicit_user", evidenceJson: JSON.stringify(["message:1"]) });
     expect(workflows.recall(session.id, "prepare release", run.id, 1).workflows).toHaveLength(0);
-    workflows.activate(candidate.id);
+    activate(workflows,candidate.id);
     const recalled = workflows.recall(session.id, "prepare release and verify it", run.id, 1);
     expect(recalled.workflows[0]).toMatchObject({ definition: { id: candidate.id }, revision: { revision: 1 } });
     expect(recalled.promptSection).toContain("Inputs:");
@@ -44,7 +45,7 @@ describe("controlled workflow learning", () => {
     expect(binding.relevanceScore).toBeGreaterThan(0);
     expect(JSON.parse(binding.selectedReasonJson)).toEqual(expect.arrayContaining([expect.stringContaining("confidence")]));
     expect(recalled.contextItems[0].reason).toContain("confidence");
-    workflows.setBindingMode(recalled.workflows[0].bindingId, "adopted");
+    workflows.recordApplication({ bindingId: recalled.workflows[0].bindingId, status: "adopted", executedStepIds: ["test", "build"], verificationMapping: [{ verificationCheck: "release tests", runCheckKey: "release" }] });
     store.upsertCheck(run.id, { key: "release", title: "Release checks", status: "passed", required: true, command: "npm test", evidence: "ok", stale: false });
     store.finalizeRun(run.id, "completed"); workflows.recordRunApplications(store.getRun(run.id)!);
     expect(store.db.prepare("SELECT attribution_level as level FROM workflow_application_receipts").get()).toEqual({ level: "verified_contribution" });
@@ -64,6 +65,7 @@ describe("controlled workflow learning", () => {
     store.upsertPlanItem(second.id, { key: "test", title: "Run tests", status: "done", required: true, position: 1 });
     store.upsertCheck(second.id, { key: "tests", title: "Tests pass", status: "passed", required: true, command: "npm test", evidence: "ok", stale: false });
     store.finalizeRun(second.id, "completed"); workflows.projectRun(store.getRun(second.id)!, "completed");
+    workflows.runNextDistillationJob("test-worker");
     const distilled = workflows.listWorkflows(session.id);
     expect(distilled).toHaveLength(1);
     expect(distilled[0]).toMatchObject({ status: "candidate", revision: { sourceType: "task_experience", sourceEvidenceIds: expect.any(Array) } });
@@ -71,6 +73,33 @@ describe("controlled workflow learning", () => {
     workflows.projectRun(store.getRun(second.id)!, "completed");
     expect(workflows.listWorkflows(session.id)).toHaveLength(1);
     expect(store.db.prepare("SELECT COUNT(*) as count FROM experience_observations").get()).toEqual({ count: 2 });
+  });
+
+  it("requires non-empty fresh required checks or explicit confirmation for successful experience", () => {
+    const { store, workflows } = create(); const session = store.createSession();
+    const run = store.createRun(session.id, "unchecked success");
+    store.upsertPlanItem(run.id, { key: "done", title: "Do work", status: "done", required: true, position: 1 });
+    store.finalizeRun(run.id, "completed"); workflows.projectRun(store.getRun(run.id)!, "completed");
+    expect(store.db.prepare("SELECT source_type as sourceType FROM experience_observations WHERE run_id=?").get(run.id)).toEqual({ sourceType: "task_failure" });
+    const confirmed = store.createRun(session.id, "confirmed success");
+    store.upsertPlanItem(confirmed.id, { key: "done", title: "Do work", status: "done", required: true, position: 1 });
+    store.finalizeRun(confirmed.id, "completed"); workflows.projectRun(store.getRun(confirmed.id)!, "completed", { lifecycle: "run.completed", payload: { explicitUserConfirmation: true } });
+    expect(store.db.prepare("SELECT source_type as sourceType FROM experience_observations WHERE run_id=?").get(confirmed.id)).toEqual({ sourceType: "task_experience" });
+  });
+
+  it("does not count multiple attempts of one run as independent distillation evidence", () => {
+    const { store, workflows } = create(); const session = store.createSession(); const run = store.createRun(session.id, "same run evidence");
+    workflows.recordExperience({ scopeId: session.id, runId: run.id, attempt: 1, sourceType: "task_experience", taskSignature: "same run evidence", procedureSummary: "1. Check", checksPassed: ["check"] });
+    workflows.recordExperience({ scopeId: session.id, runId: run.id, attempt: 2, sourceType: "task_experience", taskSignature: "same run evidence", procedureSummary: "1. Check again", checksPassed: ["check"] });
+    expect(workflows.distillRepeatedExperience(session.id, "same run evidence")).toBeUndefined();
+    expect(workflows.listWorkflows(session.id)).toHaveLength(0);
+  });
+
+  it("hard-filters high-risk workflows even when they declare no capability", () => {
+    const { store, workflows } = create(); const session = store.createSession(); const run = store.createRun(session.id, "deploy production");
+    const workflow = workflows.createWorkflow(session.id, { ...spec("High risk release"), riskClass: "high", requiredCapabilities: [] }, "explicit_user", ["message:high"], "active");
+    expect(workflows.recall(session.id, "prepare release", run.id, 1, ["production_write"]).workflows).toHaveLength(0);
+    expect(store.db.prepare("SELECT decision, reasons_json as reasons FROM workflow_selector_receipts WHERE workflow_id=?").get(workflow.id)).toMatchObject({ decision: "excluded", reasons: expect.stringContaining("hard-filtered") });
   });
 
   it("distinguishes failed task experience from successful task experience", () => {
@@ -104,7 +133,8 @@ describe("controlled workflow learning", () => {
 
   it("filters non-applicable and capability-gated workflows", () => {
     const { store, workflows } = create(); const session = store.createSession(); const run = store.createRun(session.id, "release production");
-    const gated = workflows.teach(session.id, { ...spec("Production release"), requiredCapabilities: ["production_write"] }, "message:2", true);
+    const gated = workflows.teach(session.id, { ...spec("Production release"), requiredCapabilities: ["production_write"] }, "message:2");
+    activate(workflows,gated.id);
     expect(workflows.recall(session.id, "prepare release", run.id, 1).workflows).toHaveLength(0);
     expect(workflows.recall(session.id, "draft announcement only for release", run.id, 1, ["production_write"]).workflows).toHaveLength(0);
     expect(workflows.recall(session.id, "prepare release", run.id, 1, ["production_write"]).workflows[0].definition.id).toBe(gated.id);
@@ -112,18 +142,23 @@ describe("controlled workflow learning", () => {
 
   it("deduplicates feedback, suspends harmful workflows, and rolls back revisions", () => {
     const { store, workflows } = create(); const session = store.createSession(); const run = store.createRun(session.id, "prepare release");
-    const workflow = workflows.teach(session.id, spec(), "message:3", true);
+    const workflow = workflows.teach(session.id, spec(), "message:3");
+    activate(workflows,workflow.id);
     const revision2 = workflows.revise(workflow.id, { steps: [...spec().steps, { stepId: "sign", instruction: "Sign artifact", required: true }] }, "user_correction", ["message:4"], "Add signing");
     expect(store.db.prepare("SELECT source_type as sourceType, source_evidence_json as evidenceJson FROM workflow_revisions WHERE id = ?").get(revision2.id)).toEqual({ sourceType: "user_correction", evidenceJson: JSON.stringify(["message:4"]) });
-    workflows.activate(workflow.id, revision2.id);
+    activate(workflows,workflow.id, revision2.id);
     workflows.feedback({ workflowId: workflow.id, revisionId: revision2.id, runId: run.id, attempt: 1, signal: "harmful", idempotencyKey: "feedback:1", note: "Signing is wrong here" });
     workflows.feedback({ workflowId: workflow.id, revisionId: revision2.id, runId: run.id, attempt: 1, signal: "harmful", idempotencyKey: "feedback:1", note: "duplicate" });
     expect(workflows.getWorkflow(workflow.id)?.status).toBe("suspended");
     expect(store.db.prepare("SELECT COUNT(*) as count FROM workflow_feedback").get()).toEqual({ count: 1 });
     expect(store.db.prepare("SELECT COUNT(*) as count FROM workflow_revision_proposals").get()).toEqual({ count: 1 });
-    const rolledBack = workflows.rollback(workflow.id, workflow.revision!.id);
+    const rollbackApproval=workflows.requestActivation(workflow.id,workflow.revision!.id,"test","rollback");workflows.decideApproval(rollbackApproval.id,"approved","test");
+    const rolledBack = workflows.rollback(workflow.id, workflow.revision!.id, rollbackApproval.id);
     expect(rolledBack).toMatchObject({ status: "active", activeRevisionId: workflow.revision!.id, revision: { revision: 1 } });
-    expect(workflows.forget(workflow.id)).toBe(true);
+    expect(workflows.forget(workflow.id, "user requested", 60_000)).toBe(true);
     expect(workflows.getWorkflow(workflow.id)).toBeUndefined();
+    expect(store.db.prepare("SELECT COUNT(*) as count FROM workflow_revisions WHERE workflow_id=?").get(workflow.id)).toEqual({ count: 2 });
+    expect(store.db.prepare("SELECT COUNT(*) as count FROM workflow_governance_receipts WHERE workflow_id=? AND action='forget'").get(workflow.id)).toEqual({ count: 1 });
+    expect(workflows.restore(workflow.id)).toMatchObject({ id: workflow.id, status: "active" });
   });
 });

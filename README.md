@@ -4,7 +4,7 @@
 
 TAgent Core is a durable, self-hosted control plane for an in-process coding agent. It combines Pi's model and tool loop with TAgent-owned persistence, TaskRun supervision, verification gates, operation receipts, a responsive Web workbench, scoped automation credentials, and an optional Hot/Warm/Cold long-term memory platform.
 
-Version `0.1.7` is the current stable release. It adds progress-sensitive idle timeouts for streamed LLM calls, safer bounded Supervisor review of long final deliveries, live execution and user-input pause/resume UX, in-browser text/Markdown Artifact previews, and controlled workflow learning with versioned governance and evidence receipts. `0.1.0` was the first stable source release for the documented **trusted single-service deployment profile**. Stable means the supported profile has passed the repository's release gates; it does not mean that the service is a public multi-tenant sandbox.
+Version `0.1.8` is the current stable release. It adds progress-sensitive idle timeouts for streamed LLM calls, safer bounded Supervisor review of long final deliveries, live execution and user-input pause/resume UX, in-browser text/Markdown Artifact previews, and controlled workflow learning with versioned governance and evidence receipts. `0.1.0` was the first stable source release for the documented **trusted single-service deployment profile**. Stable means the supported profile has passed the repository's release gates; it does not mean that the service is a public multi-tenant sandbox.
 
 ## Highlights
 
@@ -18,6 +18,7 @@ Version `0.1.7` is the current stable release. It adds progress-sensitive idle t
 - Optional scoped Bearer credentials for external automation clients
 - Optional PostgreSQL/pgvector memory with Local Cold Markdown pages and a Web Memory Center
 - Durable memory reindex/readiness, lifecycle governance and feedback, plus a revisioned human-editable Core Memory Markdown snapshot
+- Memory-dependent controlled Learning with passive observation/distillation, versioned Workflow evolution, and human-approved active execution
 
 ## Supported 0.1 Profile
 
@@ -100,6 +101,8 @@ Credentials are supplied at runtime and are not written to Pi auth files, SQLite
 | `PORT` | `3100` | HTTP, SSE, and Web port |
 | `TAGENT_SERVICE_CREDENTIALS` | none | Optional scoped Bearer credentials for automation |
 | `TAGENT_MEMORY_ENABLED` | `false` | Opt in to long-term memory |
+| `TAGENT_LEARNING_ENABLED` | `false` | Enable Learning; forced off unless Memory is enabled |
+| `TAGENT_LEARNING_AUTO_EXECUTION_ENABLED` | `false` | Allow Workflow execution participation; active actions still require human approval |
 
 See [.env.example](.env.example) for every supported setting.
 
@@ -145,7 +148,7 @@ Hot/Warm records + lexical/vector/graph routing
                       -> complete immutable Cold Markdown page
 ```
 
-Cold page bodies are not chunk-vectorized. Capture, persistence, embedding, publication, recall, and prompt injection pass through policy gates. The Web displays Memory Center only when memory is enabled. Start with [docs/MEMORY.md](docs/MEMORY.md).
+Cold page bodies are not chunk-vectorized. Capture, persistence, embedding, publication, recall, and prompt injection pass through policy gates. The Web displays Memory Center only when memory is enabled. Start with [docs/MEMORY.md](docs/MEMORY.md). For the Memory dependency, passive/active Learning boundary, automatic-execution switch and approval flow, see [docs/LEARNING.md](docs/LEARNING.md).
 
 ## Execution Model
 
@@ -210,6 +213,7 @@ See [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md) and [docs/REL
 - [Pi runtime boundary](docs/PI_RUNTIME_BOUNDARY.md)
 - [Automation API contract](docs/core-api-contract.md)
 - [Long-term memory](docs/MEMORY.md)
+- [Memory-dependent Learning and controlled evolution](docs/LEARNING.md)
 - [Memory architecture](docs/MEMORY_ARCHITECTURE.md)
 - [Memory operations](docs/MEMORY_OPERATIONS.md)
 - [Memory API and UI](docs/MEMORY_API.md)
@@ -219,6 +223,7 @@ See [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md) and [docs/REL
 - [0.1.5 release audit](docs/RELEASE_AUDIT_0.1.5.md)
 - [0.1.6 release audit](docs/RELEASE_AUDIT_0.1.6.md)
 - [0.1.7 release audit](docs/RELEASE_AUDIT_0.1.7.md)
+- [0.1.8 release audit](docs/RELEASE_AUDIT_0.1.8.md)
 - [Changelog](CHANGELOG.md)
 
 ## Authorship and License

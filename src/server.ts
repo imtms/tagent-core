@@ -5,11 +5,15 @@ import { createApp } from "./app.js";
 import { createModel, loadConfig, publicRuntimeConfig } from "./config.js";
 import { resolveRuntimeFactory } from "./runtime/factory.js";
 import type { MemoryRuntime } from "./memory/factory.js";
+import { WorkflowService } from "./learning/workflow-service.js";
+import { DistillationWorker } from "./learning/distillation-worker.js";
+import { LearningFeatureControl } from "./learning/feature-control.js";
 
 const config = loadConfig();
 await mkdir(config.workspace, { recursive: true });
 await mkdir("./data", { recursive: true });
 const store = new Store(config.database);
+const learningControl = new LearningFeatureControl(store, config.memory.enabled, { learningEnabled: config.learning.enabledByDefault, autoExecutionEnabled: config.learning.autoExecutionEnabledByDefault });
 let memoryRuntime: MemoryRuntime | null = null;
 if (config.memory.enabled) {
   const { createMemoryRuntime } = await import("./memory/factory.js");
@@ -23,8 +27,12 @@ const service = new AgentService(
   { model: createModel(config.model), routerModel: createModel(config.routerModel), supervisorModel: createModel(config.supervisorModel), apiKey: config.apiKey, providerTimeoutMs: config.providerTimeoutMs, routerTimeoutMs: config.routerTimeoutMs, supervisorTimeoutMs: config.supervisorTimeoutMs, providerMaxRetries: config.providerMaxRetries, runTimeoutMs: config.runTimeoutMs, runHardTimeoutMs: config.runHardTimeoutMs, maxContinuations: config.maxContinuations, contextWindow: config.model.contextWindow, maxContextTurns: config.maxContextTurns, controlInboxCapacity: config.controlInboxCapacity },
   memoryRuntime?.service,
   config.memory.enabled ? config.memory.workspaceScopeId : "default",
+  learningControl,
 );
-const app = createApp({ store, service, workspaceRoot: config.workspace, runtimeConfig: publicRuntimeConfig(config, store.getSchemaVersion()), serviceCredentials: config.serviceCredentials, memory: memoryRuntime?.service, closeResources: () => memoryRuntime?.close() ?? Promise.resolve() });
+const distillationWorker = new DistillationWorker(new WorkflowService(store, undefined, learningControl), config.learning.distillationWorkerIntervalMs);
+if (learningControl.snapshot().learningEnabled) distillationWorker.start();
+learningControl.onChange(async (state) => { if (state.learningEnabled) distillationWorker.start(); else await distillationWorker.stop(); });
+const app = createApp({ store, service, workspaceRoot: config.workspace, runtimeConfig: { ...publicRuntimeConfig(config, store.getSchemaVersion()), ...learningControl.snapshot() }, serviceCredentials: config.serviceCredentials, memory: memoryRuntime?.service, distillationWorker, learningControl, closeResources: async () => { await distillationWorker.close(); await (memoryRuntime?.close() ?? Promise.resolve()); } });
 service.recoverContinuations();
 service.recoverSessionInbox();
 await app.listen({ host: "0.0.0.0", port: config.port });

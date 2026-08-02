@@ -33,7 +33,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 16;
+const SCHEMA_VERSION = 22;
 
 export class Store {
   readonly db: Database.Database;
@@ -388,6 +388,9 @@ export class Store {
         scope_id TEXT NOT NULL,
         run_id TEXT REFERENCES runs(id),
         attempt INTEGER,
+        lifecycle TEXT NOT NULL DEFAULT 'manual',
+        outcome TEXT NOT NULL DEFAULT '',
+        event_seq INTEGER NOT NULL DEFAULT 0,
         source_type TEXT NOT NULL CHECK (source_type IN ('explicit_user','task_experience','task_failure','user_correction')),
         task_signature TEXT NOT NULL,
         procedure_summary TEXT NOT NULL,
@@ -404,6 +407,11 @@ export class Store {
         scope_id TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('candidate','active','suspended','deprecated')),
         active_revision_id TEXT,
+        deleted_at INTEGER,
+        purge_after INTEGER,
+        delete_reason TEXT NOT NULL DEFAULT '',
+        previous_status TEXT,
+        previous_active_revision_id TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -439,6 +447,13 @@ export class Store {
         run_id TEXT NOT NULL REFERENCES runs(id),
         attempt INTEGER NOT NULL,
         task_outcome TEXT NOT NULL,
+        application_status TEXT NOT NULL DEFAULT 'exposed' CHECK (application_status IN ('exposed','adopted','partial','rejected')),
+        executed_step_ids_json TEXT NOT NULL DEFAULT '[]',
+        skipped_steps_json TEXT NOT NULL DEFAULT '[]',
+        correction_observed INTEGER NOT NULL DEFAULT 0,
+        repeated_tool_calls INTEGER NOT NULL DEFAULT 0,
+        continuation_count INTEGER NOT NULL DEFAULT 0,
+        verification_mapping_json TEXT NOT NULL DEFAULT '[]',
         required_checks_passed INTEGER NOT NULL,
         required_checks_failed INTEGER NOT NULL,
         attribution_level TEXT NOT NULL CHECK (attribution_level IN ('exposed','adopted','verified_contribution')),
@@ -466,7 +481,12 @@ export class Store {
         base_revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
         reason TEXT NOT NULL,
         evidence_json TEXT NOT NULL DEFAULT '[]',
-        status TEXT NOT NULL CHECK (status IN ('candidate','approved','rejected')),
+        patch_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL CHECK (status IN ('candidate','approved','rejected','applied')),
+        decided_by TEXT NOT NULL DEFAULT '',
+        decision_reason TEXT NOT NULL DEFAULT '',
+        decided_at INTEGER,
+        applied_revision_id TEXT REFERENCES workflow_revisions(id),
         created_at INTEGER NOT NULL,
         UNIQUE(workflow_id, base_revision_id, reason)
       );
@@ -483,6 +503,279 @@ export class Store {
         workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS learning_projection_outbox (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        attempt INTEGER NOT NULL,
+        lifecycle TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        event_seq INTEGER NOT NULL DEFAULT 0,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','completed','failed')),
+        error TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(run_id, attempt, lifecycle, event_seq)
+      );
+      CREATE INDEX IF NOT EXISTS idx_learning_projection_pending ON learning_projection_outbox(status, created_at);
+      CREATE TABLE IF NOT EXISTS workflow_selector_receipts (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        attempt INTEGER NOT NULL,
+        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
+        revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
+        decision TEXT NOT NULL CHECK (decision IN ('selected','excluded')),
+        reasons_json TEXT NOT NULL DEFAULT '[]',
+        score REAL,
+        created_at INTEGER NOT NULL,
+        UNIQUE(run_id, attempt, workflow_id, revision_id)
+      );
+      CREATE TABLE IF NOT EXISTS workflow_governance_receipts (
+        id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
+        action TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        reason TEXT NOT NULL DEFAULT '',
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS learning_feature_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        memory_enabled INTEGER NOT NULL DEFAULT 0,
+        learning_enabled INTEGER NOT NULL DEFAULT 0,
+        auto_execution_enabled INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL,
+        reason TEXT NOT NULL DEFAULT ''
+      );
+      CREATE TABLE IF NOT EXISTS autonomy_approval_requests (
+        id TEXT PRIMARY KEY,
+        scope_id TEXT NOT NULL,
+        action_type TEXT NOT NULL CHECK (action_type IN ('activate_workflow','apply_revision','start_canary','execute_workflow')),
+        target_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        workflow_id TEXT REFERENCES workflow_definitions(id),
+        revision_id TEXT REFERENCES workflow_revisions(id),
+        proposal_id TEXT REFERENCES workflow_revision_proposals(id),
+        binding_id TEXT REFERENCES workflow_bindings(id),
+        status TEXT NOT NULL CHECK (status IN ('pending','approved','rejected','revoked','expired','executed')),
+        risk_class TEXT NOT NULL CHECK (risk_class IN ('low','medium','high')),
+        impact_scope_json TEXT NOT NULL DEFAULT '{}',
+        evidence_json TEXT NOT NULL DEFAULT '[]',
+        diff_json TEXT NOT NULL DEFAULT '{}',
+        rollback_json TEXT NOT NULL DEFAULT '{}',
+        requested_by TEXT NOT NULL,
+        request_reason TEXT NOT NULL DEFAULT '',
+        expires_at INTEGER NOT NULL,
+        decided_by TEXT NOT NULL DEFAULT '',
+        decision_reason TEXT NOT NULL DEFAULT '',
+        decided_at INTEGER,
+        executed_at INTEGER,
+        execution_receipt_json TEXT NOT NULL DEFAULT '{}',
+        request_hash TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_autonomy_approvals_scope_status ON autonomy_approval_requests(scope_id,status,created_at);
+      CREATE INDEX IF NOT EXISTS idx_autonomy_approvals_target ON autonomy_approval_requests(action_type,target_id,status);
+      CREATE TABLE IF NOT EXISTS autonomy_audit_events (
+        id TEXT PRIMARY KEY,
+        scope_id TEXT NOT NULL,
+        category TEXT NOT NULL CHECK (category IN ('observe','learn','distill','evolve','approval','execute')),
+        action TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        source_run_id TEXT REFERENCES runs(id),
+        workflow_id TEXT REFERENCES workflow_definitions(id),
+        revision_id TEXT REFERENCES workflow_revisions(id),
+        approval_id TEXT REFERENCES autonomy_approval_requests(id),
+        evidence_json TEXT NOT NULL DEFAULT '[]',
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        receipt_hash TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_autonomy_audit_scope ON autonomy_audit_events(scope_id,created_at);
+      CREATE TABLE IF NOT EXISTS workflow_distillation_jobs (
+        id TEXT PRIMARY KEY,
+        scope_id TEXT NOT NULL,
+        task_signature TEXT NOT NULL,
+        signature_terms_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL CHECK (status IN ('queued','running','completed','failed','dead_letter')),
+        checkpoint_json TEXT NOT NULL DEFAULT '{}',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        lease_owner TEXT NOT NULL DEFAULT '',
+        lease_token TEXT NOT NULL DEFAULT '',
+        lease_until INTEGER,
+        fence INTEGER NOT NULL DEFAULT 0,
+        workflow_id TEXT REFERENCES workflow_definitions(id),
+        error TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(scope_id, task_signature)
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflow_distillation_jobs_claim ON workflow_distillation_jobs(status, lease_until, created_at);
+      CREATE TABLE IF NOT EXISTS workflow_distillation_conflicts (
+        id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL REFERENCES workflow_distillation_jobs(id),
+        scope_id TEXT NOT NULL,
+        candidate_signature TEXT NOT NULL,
+        existing_workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
+        existing_revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
+        kind TEXT NOT NULL CHECK (kind IN ('duplicate','conflict')),
+        similarity REAL NOT NULL,
+        reasons_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved','ignored')),
+        created_at INTEGER NOT NULL,
+        UNIQUE(job_id, existing_workflow_id, existing_revision_id, kind)
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflow_distillation_conflicts_scope ON workflow_distillation_conflicts(scope_id, status, created_at);
+      CREATE TABLE IF NOT EXISTS workflow_evaluations (
+        id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
+        revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
+        kind TEXT NOT NULL CHECK (kind IN ('shadow','offline_replay','canary')),
+        status TEXT NOT NULL CHECK (status IN ('pending','passed','failed','rolled_back')),
+        sample_size INTEGER NOT NULL DEFAULT 0,
+        success_rate REAL NOT NULL DEFAULT 0,
+        baseline_rate REAL NOT NULL DEFAULT 0,
+        risk_class TEXT NOT NULL,
+        evidence_json TEXT NOT NULL DEFAULT '{}',
+        evaluator_id TEXT NOT NULL DEFAULT '',
+        evaluator_version TEXT NOT NULL DEFAULT '',
+        dataset_id TEXT NOT NULL DEFAULT '',
+        dataset_hash TEXT NOT NULL DEFAULT '',
+        baseline_revision_id TEXT REFERENCES workflow_revisions(id),
+        candidate_revision_id TEXT REFERENCES workflow_revisions(id),
+        evaluation_run_ids_json TEXT NOT NULL DEFAULT '[]',
+        check_results_json TEXT NOT NULL DEFAULT '[]',
+        receipt_hash TEXT NOT NULL DEFAULT '',
+        signature TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS workflow_promotions (
+        id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
+        revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
+        previous_revision_id TEXT REFERENCES workflow_revisions(id),
+        status TEXT NOT NULL CHECK (status IN ('candidate','canary','promoted','rolled_back','rejected')),
+        canary_percent INTEGER NOT NULL DEFAULT 0,
+        max_failure_delta REAL NOT NULL DEFAULT 0,
+        reason TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS workflow_canary_bindings (
+        id TEXT PRIMARY KEY,
+        promotion_id TEXT NOT NULL REFERENCES workflow_promotions(id),
+        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        attempt INTEGER NOT NULL,
+        scope_id TEXT NOT NULL,
+        assignment_key TEXT NOT NULL,
+        assignment_hash TEXT NOT NULL,
+        bucket INTEGER NOT NULL CHECK (bucket >= 0 AND bucket < 10000),
+        variant TEXT NOT NULL CHECK (variant IN ('baseline','candidate')),
+        revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
+        receipt_hash TEXT NOT NULL UNIQUE,
+        outcome_status TEXT,
+        success INTEGER,
+        required_checks INTEGER NOT NULL DEFAULT 0,
+        passed_checks INTEGER NOT NULL DEFAULT 0,
+        outcome_recorded_at INTEGER,
+        created_at INTEGER NOT NULL,
+        UNIQUE(promotion_id, run_id, attempt)
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflow_canary_outcomes ON workflow_canary_bindings(promotion_id, variant, outcome_recorded_at);
+      CREATE TABLE IF NOT EXISTS communication_profiles (
+        id TEXT PRIMARY KEY,
+        subject_id TEXT NOT NULL,
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('global','workspace','project','session','task')),
+        scope_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('active','superseded','deleted')),
+        active_revision_id TEXT,
+        locked INTEGER NOT NULL DEFAULT 0,
+        deleted_at INTEGER,
+        previous_status TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(subject_id, scope_type, scope_id)
+      );
+      CREATE TABLE IF NOT EXISTS communication_profile_revisions (
+        id TEXT PRIMARY KEY,
+        profile_id TEXT NOT NULL REFERENCES communication_profiles(id),
+        revision INTEGER NOT NULL,
+        values_json TEXT NOT NULL DEFAULT '{}',
+        evidence_json TEXT NOT NULL DEFAULT '{}',
+        source_type TEXT NOT NULL CHECK (source_type IN ('explicit_user','inferred','governance')),
+        change_summary TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        UNIQUE(profile_id, revision)
+      );
+      CREATE INDEX IF NOT EXISTS idx_communication_profiles_resolve ON communication_profiles(subject_id, scope_type, scope_id, status);
+      CREATE TABLE IF NOT EXISTS learning_events (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        attempt INTEGER NOT NULL,
+        lifecycle TEXT NOT NULL,
+        event_seq INTEGER NOT NULL DEFAULT 0,
+        task_classification_json TEXT NOT NULL DEFAULT '{}',
+        strategy_selected_json TEXT NOT NULL DEFAULT '[]',
+        context_used_json TEXT NOT NULL DEFAULT '{}',
+        execution_trace_json TEXT NOT NULL DEFAULT '{}',
+        outcome_json TEXT NOT NULL DEFAULT '{}',
+        attribution_json TEXT NOT NULL DEFAULT '{}',
+        policy_json TEXT NOT NULL DEFAULT '{}',
+        event_hash TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL,
+        UNIQUE(run_id, attempt, lifecycle, event_seq)
+      );
+      CREATE INDEX IF NOT EXISTS idx_learning_events_run ON learning_events(run_id, attempt, created_at);
+      CREATE TABLE IF NOT EXISTS outcome_labels (
+        id TEXT PRIMARY KEY,
+        learning_event_id TEXT NOT NULL REFERENCES learning_events(id),
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        attempt INTEGER NOT NULL,
+        taxonomy_version TEXT NOT NULL,
+        label TEXT NOT NULL,
+        value TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        evidence_json TEXT NOT NULL DEFAULT '[]',
+        idempotency_key TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_outcome_labels_run ON outcome_labels(run_id, attempt, label);
+      CREATE TABLE IF NOT EXISTS user_corrections (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        run_id TEXT REFERENCES runs(id),
+        attempt INTEGER,
+        message_id INTEGER REFERENCES messages(id),
+        correction_type TEXT NOT NULL,
+        target_type TEXT NOT NULL DEFAULT 'run',
+        target_id TEXT NOT NULL DEFAULT '',
+        content TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('explicit_user','router','governance')),
+        applied INTEGER NOT NULL DEFAULT 0,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_corrections_run ON user_corrections(run_id, attempt, created_at);
+      CREATE TABLE IF NOT EXISTS feedback_attribution_receipts (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        attempt INTEGER NOT NULL,
+        actor_id TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        signal TEXT NOT NULL,
+        weight REAL NOT NULL,
+        basis TEXT NOT NULL,
+        context_manifest_id TEXT NOT NULL DEFAULT '',
+        evidence_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL CHECK (status IN ('pending','applied','skipped','failed')),
+        error TEXT NOT NULL DEFAULT '',
+        idempotency_key TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL,
+        applied_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_feedback_attribution_run ON feedback_attribution_receipts(run_id, attempt, status);
     `);
     const current = this.db.prepare("SELECT version FROM schema_meta WHERE id = 1").get() as { version: number } | undefined;
     if (current && current.version > SCHEMA_VERSION) throw new Error(`Database schema version ${current.version} is newer than supported version ${SCHEMA_VERSION}`);
@@ -498,6 +791,43 @@ export class Store {
     this.ensureColumn("run_continuations", "lease_until", "INTEGER");
     this.ensureColumn("run_continuations", "heartbeat_at", "INTEGER");
     this.ensureColumn("runs", "contract_json", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("experience_observations", "lifecycle", "TEXT NOT NULL DEFAULT 'manual'");
+    this.ensureColumn("experience_observations", "outcome", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("experience_observations", "event_seq", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("workflow_definitions", "deleted_at", "INTEGER");
+    this.ensureColumn("workflow_definitions", "purge_after", "INTEGER");
+    this.ensureColumn("workflow_definitions", "delete_reason", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("workflow_definitions", "previous_status", "TEXT");
+    this.ensureColumn("workflow_definitions", "previous_active_revision_id", "TEXT");
+    this.ensureColumn("workflow_application_receipts", "application_status", "TEXT NOT NULL DEFAULT 'exposed'");
+    this.ensureColumn("workflow_application_receipts", "executed_step_ids_json", "TEXT NOT NULL DEFAULT '[]'");
+    this.ensureColumn("workflow_application_receipts", "skipped_steps_json", "TEXT NOT NULL DEFAULT '[]'");
+    this.ensureColumn("workflow_application_receipts", "correction_observed", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("workflow_application_receipts", "repeated_tool_calls", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("workflow_application_receipts", "continuation_count", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("workflow_application_receipts", "verification_mapping_json", "TEXT NOT NULL DEFAULT '[]'");
+    this.ensureColumn("workflow_revision_proposals", "patch_json", "TEXT NOT NULL DEFAULT '{}'");
+    this.ensureColumn("workflow_revision_proposals", "decided_by", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("workflow_revision_proposals", "decision_reason", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("workflow_revision_proposals", "decided_at", "INTEGER");
+    this.ensureColumn("workflow_revision_proposals", "applied_revision_id", "TEXT");
+    this.ensureColumn("workflow_revision_proposals", "base_spec_hash", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("workflow_revision_proposals", "proposed_spec_hash", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("workflow_revision_proposals", "changed_paths_json", "TEXT NOT NULL DEFAULT '[]'");
+    this.ensureColumn("workflow_revisions", "spec_hash", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("workflow_evaluations", "evaluator_id", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("workflow_evaluations", "evaluator_version", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("workflow_evaluations", "dataset_id", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("workflow_evaluations", "dataset_hash", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("workflow_evaluations", "baseline_revision_id", "TEXT");
+    this.ensureColumn("workflow_evaluations", "candidate_revision_id", "TEXT");
+    this.ensureColumn("workflow_evaluations", "evaluation_run_ids_json", "TEXT NOT NULL DEFAULT '[]'");
+    this.ensureColumn("workflow_evaluations", "check_results_json", "TEXT NOT NULL DEFAULT '[]'");
+    this.ensureColumn("workflow_evaluations", "receipt_hash", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("workflow_evaluations", "signature", "TEXT NOT NULL DEFAULT ''");
+    this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_evaluations_receipt_hash ON workflow_evaluations(receipt_hash) WHERE receipt_hash <> ''");
+    this.db.prepare(`UPDATE workflow_revisions SET spec_hash=lower(hex(randomblob(32))) WHERE spec_hash=''`).run();
+    this.db.prepare(`UPDATE workflow_revision_proposals SET status='rejected',decision_reason='Legacy empty proposal invalidated by schema v20',decided_at=? WHERE trim(patch_json) IN ('','{}') AND status IN ('candidate','approved')`).run(now());
     this.ensureColumn("session_supervisor_inbox", "summary", "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn("session_supervisor_inbox", "objectives_json", "TEXT NOT NULL DEFAULT '[]'");
     this.ensureColumn("session_supervisor_inbox", "intent", "TEXT NOT NULL DEFAULT 'new_task'");
@@ -934,6 +1264,7 @@ ${source.content}`;
         VALUES (?, ?, ?, ?, ?, 'pending', ?)`).run(request.id, runId, run.attempt, prompt, JSON.stringify(fields), request.requestedAt);
       this.db.prepare(`UPDATE runs SET status = 'waiting_input', phase = 'waiting_input', blocked_reason = ?, completed_at = NULL, updated_at = ?
         WHERE id = ? AND status = 'running'`).run(prompt, request.requestedAt, runId);
+      this.enqueueLearningProjection(runId, run.attempt, "run.waiting_input", "waiting_input", 0, { requestId: request.id, prompt }, request.requestedAt);
       this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id = ?").run(request.requestedAt, runId);
       return request;
     });
@@ -1573,6 +1904,8 @@ ${source.content}`;
         const data = { error, reason: "spawn_launch_failed", proposalId };
         this.db.prepare("INSERT INTO run_events (run_id,seq,type,data,created_at) VALUES (?,?,'run.failed',?,?)").run(runId, seq, JSON.stringify(data), timestamp);
         this.db.prepare("UPDATE runs SET status = 'failed', phase = 'blocked', blocked_reason = ?, last_event_seq = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status = 'running'").run(`Spawn launch failed: ${error}`, seq, timestamp, timestamp, runId);
+        const attempt = (this.db.prepare("SELECT attempt FROM runs WHERE id=?").get(runId) as { attempt: number }).attempt;
+        this.enqueueLearningProjection(runId, attempt, "spawn.launch_failed", "failed", seq, data, timestamp);
       }
       this.db.prepare("UPDATE spawn_proposals SET status = 'rejected', updated_at = ? WHERE id = ? AND spawned_run_id = ?").run(timestamp, proposalId, runId);
       this.db.prepare("UPDATE taskrun_edges SET reason = reason || ? WHERE to_run_id = ?").run(`; launch failed: ${error}`, runId);
@@ -1601,6 +1934,7 @@ ${source.content}`;
         last_event_seq = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status IN (${placeholders})${attemptClause}`)
         .run(nextStatus, phase, reason, seq, completedAt, createdAt, runId, ...expected, ...(expectedAttempt === undefined ? [] : [expectedAttempt]));
       if (result.changes !== 1) throw new Error("Run transition lost its compare-and-set race");
+      this.enqueueLearningProjection(runId, row.attempt, type, nextStatus, seq, { ...data, reason }, createdAt);
       if (nextStatus !== "running") this.db.prepare(`UPDATE run_checkpoints SET active = 0, current_tool_json = '',
         last_event_seq = MAX(last_event_seq, ?), updated_at = ? WHERE run_id = ? AND attempt = ?`)
         .run(seq, createdAt, runId, row.attempt);
@@ -1609,12 +1943,30 @@ ${source.content}`;
     return transaction();
   }
 
+  private enqueueLearningProjection(runId: RunId, attempt: number, lifecycle: string, outcome: string, eventSeq: number, payload: Record<string, unknown>, timestamp = now()) {
+    this.db.prepare(`INSERT OR IGNORE INTO learning_projection_outbox
+      (id, run_id, attempt, lifecycle, outcome, event_seq, payload_json, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`)
+      .run(randomUUID(), runId, attempt, lifecycle, outcome, eventSeq, JSON.stringify(payload), timestamp, timestamp);
+  }
+
+  listPendingLearningProjections(limit = 100) {
+    return this.db.prepare(`SELECT id, run_id as runId, attempt, lifecycle, outcome, event_seq as eventSeq,
+      payload_json as payloadJson, status, error, created_at as createdAt, updated_at as updatedAt
+      FROM learning_projection_outbox WHERE status IN ('pending','failed') ORDER BY created_at LIMIT ?`).all(limit) as Array<{ id: string; runId: string; attempt: number; lifecycle: string; outcome: string; eventSeq: number; payloadJson: string; status: string; error: string; createdAt: number; updatedAt: number }>;
+  }
+
+  completeLearningProjection(id: string) { this.db.prepare("UPDATE learning_projection_outbox SET status='completed', error='', updated_at=? WHERE id=?").run(now(), id); }
+  failLearningProjection(id: string, error: string) { this.db.prepare("UPDATE learning_projection_outbox SET status='failed', error=?, updated_at=? WHERE id=?").run(error.slice(0, 4000), now(), id); }
+
   finalizeRun(runId: RunId, status: Exclude<RunStatus, "running" | "interrupted" | "blocked">, reason = "") {
     const timestamp = now();
     const completedAt = status === "completed" || status === "cancelled" || status === "failed" ? timestamp : null;
     const transaction = this.db.transaction(() => {
+      const run = this.db.prepare("SELECT attempt FROM runs WHERE id=?").get(runId) as { attempt: number } | undefined;
       this.db.prepare("UPDATE runs SET status = ?, blocked_reason = ?, completed_at = ?, updated_at = ? WHERE id = ?")
         .run(status, reason, completedAt, timestamp, runId);
+      if (run) this.enqueueLearningProjection(runId, run.attempt, `run.${status}`, status, 0, { reason }, timestamp);
       this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id = ?")
         .run(timestamp, runId);
     });
@@ -1624,8 +1976,10 @@ ${source.content}`;
   blockRun(runId: RunId, reason: string) {
     const timestamp = now();
     const transaction = this.db.transaction(() => {
+      const run = this.db.prepare("SELECT attempt FROM runs WHERE id=?").get(runId) as { attempt: number } | undefined;
       this.db.prepare("UPDATE runs SET status = 'blocked', phase = 'blocked', blocked_reason = ?, updated_at = ? WHERE id = ?")
         .run(reason, timestamp, runId);
+      if (run) this.enqueueLearningProjection(runId, run.attempt, "run.blocked", "blocked", 0, { reason }, timestamp);
       this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id = ?")
         .run(timestamp, runId);
     });
@@ -1635,10 +1989,14 @@ ${source.content}`;
   markInterrupted() {
     const timestamp = now();
     const transaction = this.db.transaction(() => {
+      const interrupted = this.db.prepare("SELECT id, attempt FROM runs WHERE status='running'").all() as Array<{ id: string; attempt: number }>;
       this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id IN (SELECT id FROM runs WHERE status = 'running')")
         .run(timestamp);
+      for (const run of interrupted) this.enqueueLearningProjection(run.id, run.attempt, "restart.interruption", "interrupted", 0, { reason: "service_restart" }, timestamp);
       this.db.prepare("UPDATE runs SET status = 'interrupted', blocked_reason = 'Service restarted before the run reached a terminal state', updated_at = ? WHERE status = 'running'")
         .run(timestamp);
+      const waiting = this.db.prepare("SELECT id, attempt FROM runs WHERE status='waiting_input'").all() as Array<{ id: string; attempt: number }>;
+      for (const run of waiting) this.enqueueLearningProjection(run.id, run.attempt, "run.waiting_input", "waiting_input", 0, { reason: "pending_user_input" }, timestamp);
       this.db.prepare(`UPDATE runs SET blocked_reason = COALESCE((SELECT prompt FROM user_input_requests input WHERE input.run_id = runs.id AND input.status = 'pending'), blocked_reason),
         phase = 'waiting_input', updated_at = ? WHERE status = 'waiting_input'`).run(timestamp);
     });

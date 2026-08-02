@@ -31,6 +31,11 @@ export interface AppConfig {
   routerModel: ModelConfig;
   supervisorModel: ModelConfig;
   memory: MemoryConfig;
+  learning: {
+    enabledByDefault: boolean;
+    autoExecutionEnabledByDefault: boolean;
+    distillationWorkerIntervalMs: number;
+  };
 }
 
 export type MemoryConfig =
@@ -172,7 +177,7 @@ function loadMemoryConfig(env: NodeJS.ProcessEnv): MemoryConfig {
 
 function parseServiceCredentials(value?: string): ServiceCredential[] {
   if (!value?.trim()) return [];
-  const allowed = new Set<ServiceScope>(["sessions:read", "sessions:write", "runs:read", "runs:control", "events:consume"]);
+  const allowed = new Set<ServiceScope>(["sessions:read", "sessions:write", "runs:read", "runs:control", "events:consume", "workflows:teach", "workflows:govern", "workflows:approve"]);
   const parsed = JSON.parse(value) as unknown;
   if (!Array.isArray(parsed)) throw new Error("TAGENT_SERVICE_CREDENTIALS must be a JSON array");
   return parsed.map((item, index) => {
@@ -211,6 +216,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     controlInboxCapacity: positiveInteger(env.TAGENT_CONTROL_INBOX_CAPACITY, 32, "TAGENT_CONTROL_INBOX_CAPACITY"),
     serviceCredentials: parseServiceCredentials(env.TAGENT_SERVICE_CREDENTIALS),
     memory: loadMemoryConfig(env),
+    learning: {
+      enabledByDefault: enabled(env.TAGENT_LEARNING_ENABLED, "TAGENT_LEARNING_ENABLED"),
+      autoExecutionEnabledByDefault: enabled(env.TAGENT_LEARNING_AUTO_EXECUTION_ENABLED, "TAGENT_LEARNING_AUTO_EXECUTION_ENABLED"),
+      distillationWorkerIntervalMs: positiveInteger(env.TAGENT_DISTILLATION_WORKER_INTERVAL_MS, 1_000, "TAGENT_DISTILLATION_WORKER_INTERVAL_MS"),
+    },
     model: {
       provider: env.TAGENT_PROVIDER ?? "openai-compatible",
       modelId: env.TAGENT_MODEL ?? "gpt-5.6-sol",
@@ -265,6 +275,10 @@ export interface PublicRuntimeConfig {
   memoryWorkspaceScopeId?: string;
   memoryBackend?: "memory" | "postgres";
   memoryColdBackend?: "local" | "s3";
+  learningEnabled: boolean;
+  learningAutoExecutionEnabled: boolean;
+  learningRequiresMemory: true;
+  learningActiveExecutionRequiresApproval: true;
 }
 
 export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): PublicRuntimeConfig {
@@ -292,6 +306,10 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     memoryWorkspaceScopeId: config.memory.enabled ? config.memory.workspaceScopeId : undefined,
     memoryBackend: config.memory.enabled ? config.memory.backend : undefined,
     memoryColdBackend: config.memory.enabled ? config.memory.coldBackend : undefined,
+    learningEnabled: config.memory.enabled && config.learning.enabledByDefault,
+    learningAutoExecutionEnabled: config.memory.enabled && config.learning.enabledByDefault && config.learning.autoExecutionEnabledByDefault,
+    learningRequiresMemory: true,
+    learningActiveExecutionRequiresApproval: true,
   };
 }
 

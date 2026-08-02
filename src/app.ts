@@ -8,6 +8,7 @@ import type { Store } from "./store/store.js";
 import type { AgentService } from "./core/agent-service.js";
 import type { MemoryFacade } from "./memory/memory-service.js";
 import type { AccessContext, MemoryScope } from "./memory/types.js";
+import type { LearningFeatureControl } from "./learning/feature-control.js";
 
 export interface AppDependencies {
   store: Store;
@@ -19,9 +20,11 @@ export interface AppDependencies {
   serviceCredentials?: ServiceCredential[];
   memory?: MemoryFacade;
   closeResources?: () => Promise<void>;
+  distillationWorker?: { snapshot: () => Record<string, unknown> };
+  learningControl?: LearningFeatureControl;
 }
 
-export function createApp({ store, service, webRoot = path.resolve("dist/web"), workspaceRoot = process.cwd(), logger = true, runtimeConfig, serviceCredentials = [], memory, closeResources }: AppDependencies) {
+export function createApp({ store, service, webRoot = path.resolve("dist/web"), workspaceRoot = process.cwd(), logger = true, runtimeConfig, serviceCredentials = [], memory, closeResources, distillationWorker, learningControl }: AppDependencies) {
   const app = Fastify({ logger });
 
   if (serviceCredentials.length) app.addHook("onRequest", async (request, reply) => {
@@ -35,6 +38,14 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
       if (credential) return reply.code(403).send({ error: "insufficient service credential scope", requiredScope });
     }
     return reply.code(401).send({ error: "authentication required" });
+  });
+
+  app.addHook("preHandler", async (request, reply) => {
+    const pathname = request.url.split("?")[0];
+    if (pathname === "/api/learning/settings" || !isLearningRoute(pathname)) return;
+    if (!learningControl) return;
+    try { learningControl.requireLearning(); }
+    catch (error) { return reply.code(503).send({ error: error instanceof Error ? error.message : String(error), code: "learning_disabled" }); }
   });
 
   app.post("/api/memory/capture", async (request, reply) => {
@@ -107,7 +118,7 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const body = request.body as { spec?: import("./learning/workflow-service.js").WorkflowSpec; sourceId?: string; activate?: boolean };
     if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
     if (!body.spec) return reply.code(400).send({ error: "spec is required" });
-    try { return service.teachWorkflow(id, body.spec, body.sourceId, Boolean(body.activate)); }
+    try { return service.teachWorkflow(id, body.spec, body.sourceId); }
     catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); }
   });
   app.get("/api/sessions/:id/workflows", async (request, reply) => {
@@ -115,22 +126,60 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
     return service.listWorkflows(id);
   });
-  app.post("/api/workflows/:id/activate", async (request, reply) => { const { id } = request.params as { id: string }; const body = (request.body ?? {}) as { revisionId?: string }; try { return service.activateWorkflow(id, body.revisionId); } catch (error) { return reply.code(404).send({ error: error instanceof Error ? error.message : String(error) }); } });
+  app.post("/api/workflows/:id/activate", async (request, reply) => { const { id } = request.params as { id: string }; const body = (request.body ?? {}) as { revisionId?: string; approvalId?: string }; if(!body.approvalId)return reply.code(409).send({error:"Human approval is required; create and approve an activation request first"});try { return service.activateWorkflow(id, body.revisionId, body.approvalId); } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); } });
+  app.post("/api/workflows/:id/activation-request", async (request, reply) => { const { id } = request.params as { id: string }; const body=(request.body??{}) as {revisionId?:string;actor?:string;reason?:string};try{return service.requestWorkflowActivation(id,body.revisionId,body.actor??"learning_center",body.reason);}catch(error){return reply.code(409).send({error:error instanceof Error?error.message:String(error)});} });
   app.post("/api/workflows/:id/suspend", async (request, reply) => { const { id } = request.params as { id: string }; const body = (request.body ?? {}) as { reason?: string }; try { return service.suspendWorkflow(id, body.reason); } catch (error) { return reply.code(404).send({ error: error instanceof Error ? error.message : String(error) }); } });
   app.post("/api/workflows/:id/rollback", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { revisionId?: string }; if (!body.revisionId) return reply.code(400).send({ error: "revisionId is required" }); try { return service.rollbackWorkflow(id, body.revisionId); } catch (error) { return reply.code(404).send({ error: error instanceof Error ? error.message : String(error) }); } });
-  app.delete("/api/workflows/:id", async (request, reply) => { const { id } = request.params as { id: string }; return service.forgetWorkflow(id) ? { ok: true } : reply.code(404).send({ error: "workflow not found" }); });
+  app.delete("/api/workflows/:id", async (request, reply) => { const { id } = request.params as { id: string }; const body = (request.body ?? {}) as { reason?: string; gracePeriodMs?: number }; return service.forgetWorkflow(id, body.reason, body.gracePeriodMs) ? { ok: true } : reply.code(404).send({ error: "workflow not found" }); });
+  app.post("/api/workflows/:id/restore", async (request, reply) => { const { id } = request.params as { id: string }; try { return service.restoreWorkflow(id); } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); } });
+  app.get("/api/sessions/:id/learning-center", async (request, reply) => { const { id } = request.params as { id: string }; if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" }); return service.getLearningCenter(id); });
   app.post("/api/workflow-bindings/:id/mode", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { mode?: "suggested" | "adopted" | "partially_adopted" | "rejected" }; if (!body.mode) return reply.code(400).send({ error: "mode is required" }); try { return service.setWorkflowBindingMode(id, body.mode); } catch (error) { return reply.code(404).send({ error: error instanceof Error ? error.message : String(error) }); } });
+  app.post("/api/workflow-bindings/:id/application", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as Omit<Parameters<AgentService["recordWorkflowApplication"]>[0], "bindingId">; if (!body.status) return reply.code(400).send({ error: "status is required" }); try { return service.recordWorkflowApplication({ bindingId: id, ...body }); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); } });
+  app.post("/api/workflow-proposals/:id/approve", async (request, reply) => { const { id } = request.params as { id: string }; const body=(request.body??{}) as {actor?:string;reason?:string}; try{return service.decideWorkflowProposal(id,"approved",body.actor??"governor",body.reason);}catch(error){return reply.code(409).send({error:error instanceof Error?error.message:String(error)});} });
+  app.post("/api/workflow-proposals/:id/reject", async (request, reply) => { const { id } = request.params as { id: string }; const body=(request.body??{}) as {actor?:string;reason?:string}; try{return service.decideWorkflowProposal(id,"rejected",body.actor??"governor",body.reason);}catch(error){return reply.code(409).send({error:error instanceof Error?error.message:String(error)});} });
+  app.post("/api/workflow-proposals/:id/application-request", async (request,reply)=>{const{id}=request.params as{id:string};const body=(request.body??{}) as{actor?:string;reason?:string};try{return service.requestWorkflowProposalApplication(id,body.actor??"learning_center",body.reason);}catch(error){return reply.code(409).send({error:error instanceof Error?error.message:String(error)});}});
+  app.post("/api/workflow-proposals/:id/apply", async (request, reply) => { const { id } = request.params as { id: string }; const body=(request.body??{}) as {actor?:string;approvalId?:string};if(!body.approvalId)return reply.code(409).send({error:"Human approval is required before applying a revision proposal"});try{return service.applyWorkflowProposal(id,body.actor??"governor",body.approvalId);}catch(error){return reply.code(409).send({error:error instanceof Error?error.message:String(error)});} });
+  app.post("/api/workflow-distillation/run", async (request) => { const body=(request.body??{}) as {owner?:string}; return service.runWorkflowDistiller(body.owner); });
+  app.get("/api/workflow-distillation/dead-letter", async (request) => service.listDeadLetterDistillations(Number((request.query as {limit?:string}).limit??100)));
+  app.post("/api/workflow-distillation/:id/retry", async (request,reply)=>{const{id}=request.params as{id:string};const body=(request.body??{}) as{taskSignature?:string};try{return service.retryWorkflowDistillation(id,body);}catch(error){return reply.code(409).send({error:error instanceof Error?error.message:String(error)});}});
+  app.post("/api/workflows/:id/evaluations", async (_request,reply)=>reply.code(410).send({error:"Evaluation statistics cannot be submitted by governance callers; use the trusted evaluator endpoint"}));
+  app.post("/api/internal/workflows/:id/evaluate",async(request,reply)=>{const{id}=request.params as{id:string};const body=request.body as{candidateRevisionId?:string;baselineRevisionId?:string;kind?:"shadow"|"offline_replay";datasetId?:string;baselineRunIds?:string[];candidateRunIds?:string[]};if(!body.candidateRevisionId||!body.baselineRevisionId||!body.kind||!body.datasetId)return reply.code(400).send({error:"candidateRevisionId, baselineRevisionId, kind and datasetId are required"});try{return service.executeWorkflowEvaluation({workflowId:id,candidateRevisionId:body.candidateRevisionId,baselineRevisionId:body.baselineRevisionId,kind:body.kind,datasetId:body.datasetId,baselineRunIds:body.baselineRunIds??[],candidateRunIds:body.candidateRunIds??[]});}catch(error){return reply.code(409).send({error:error instanceof Error?error.message:String(error)});}});
+  app.get("/api/workflow-evaluations/:id/verify",async(request)=>service.verifyWorkflowEvaluation((request.params as{id:string}).id));
+  app.post("/api/workflows/:id/promotion-request",async(request,reply)=>{const{id}=request.params as{id:string};const body=request.body as{revisionId?:string;canaryPercent?:number;maxFailureDelta?:number;actor?:string};if(!body.revisionId)return reply.code(400).send({error:"revisionId is required"});try{return service.requestWorkflowPromotion(id,body.revisionId,body.canaryPercent,body.maxFailureDelta,body.actor??"learning_center");}catch(error){return reply.code(409).send({error:error instanceof Error?error.message:String(error)});}});
+  app.post("/api/workflows/:id/promote",async(request,reply)=>{const{id}=request.params as{id:string};const body=request.body as{revisionId?:string;canaryPercent?:number;maxFailureDelta?:number;approvalId?:string};if(!body.revisionId)return reply.code(400).send({error:"revisionId is required"});if(!body.approvalId)return reply.code(409).send({error:"Human approval is required before starting canary"});try{return service.promoteWorkflow(id,body.revisionId,body.canaryPercent,body.maxFailureDelta,body.approvalId);}catch(error){return reply.code(409).send({error:error instanceof Error?error.message:String(error)});}});
+  app.get("/api/sessions/:id/autonomy-approvals",async(request,reply)=>{const{id}=request.params as{id:string};if(!store.getSession(id))return reply.code(404).send({error:"session not found"});return service.listAutonomyApprovals(id,Number((request.query as{limit?:string}).limit??200));});
+  app.post("/api/autonomy-approvals/:id/approve",async(request,reply)=>{const{id}=request.params as{id:string};const body=(request.body??{}) as{actor?:string;reason?:string};try{return service.decideAutonomyApproval(id,"approved",body.actor??"human_governor",body.reason);}catch(error){return reply.code(409).send({error:error instanceof Error?error.message:String(error)});}});
+  app.post("/api/autonomy-approvals/:id/reject",async(request,reply)=>{const{id}=request.params as{id:string};const body=(request.body??{}) as{actor?:string;reason?:string};try{return service.decideAutonomyApproval(id,"rejected",body.actor??"human_governor",body.reason);}catch(error){return reply.code(409).send({error:error instanceof Error?error.message:String(error)});}});
+  app.post("/api/autonomy-approvals/:id/revoke",async(request,reply)=>{const{id}=request.params as{id:string};const body=(request.body??{}) as{actor?:string;reason?:string};try{return service.revokeAutonomyApproval(id,body.actor??"human_governor",body.reason);}catch(error){return reply.code(409).send({error:error instanceof Error?error.message:String(error)});}});
+  app.post("/api/autonomy-approvals/:id/execute",async(request,reply)=>{const{id}=request.params as{id:string};const body=(request.body??{}) as{actor?:string};try{return service.executeAutonomyApproval(id,body.actor??"human_governor");}catch(error){return reply.code(409).send({error:error instanceof Error?error.message:String(error)});}});
   app.post("/api/workflows/:id/revise", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { patch?: Partial<import("./learning/workflow-service.js").WorkflowSpec>; sourceId?: string; changeSummary?: string }; if (!body.patch || !body.sourceId) return reply.code(400).send({ error: "patch and sourceId are required" }); try { return service.reviseWorkflow(id, body.patch, body.sourceId, body.changeSummary ?? "User correction"); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); } });
   app.post("/api/workflows/:id/feedback", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { revisionId?: string; runId?: string; attempt?: number; signal?: import("./learning/workflow-service.js").WorkflowFeedbackSignal; idempotencyKey?: string; note?: string; adopted?: boolean; verified?: boolean }; if (!body.revisionId || !body.runId || !body.attempt || !body.signal || !body.idempotencyKey) return reply.code(400).send({ error: "revisionId, runId, attempt, signal and idempotencyKey are required" }); try { return service.recordWorkflowFeedback({ workflowId: id, revisionId: body.revisionId, runId: body.runId, attempt: body.attempt, signal: body.signal, idempotencyKey: body.idempotencyKey, note: body.note, adopted: body.adopted, verified: body.verified }); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); } });
   app.post("/api/runs/:id/learning-policy", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { policy?: "allow" | "metadata_only" | "deny"; reason?: string }; if (!store.getRun(id)) return reply.code(404).send({ error: "run not found" }); if (!body.policy) return reply.code(400).send({ error: "policy is required" }); return service.setRunLearningPolicy(id, body.policy, body.reason); });
+  app.get("/api/sessions/:id/communication-profiles", async (request, reply) => { const { id } = request.params as { id: string }; if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" }); return service.listCommunicationProfiles(`session:${id}`); });
+  app.post("/api/sessions/:id/communication-preferences", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { dimension?: import("./learning/learning-service.js").CommunicationDimension; value?: string | string[]; scopeType?: import("./learning/learning-service.js").CommunicationApplicability; scopeId?: string; sourceType?: "explicit_user" | "inferred" | "governance"; sourceRef?: string; confidence?: number; expiresAt?: number }; if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" }); if (!body.dimension || body.value == null) return reply.code(400).send({ error: "dimension and value are required" }); return service.setCommunicationPreference({ subjectId: `session:${id}`, scopeType: body.scopeType ?? "session", scopeId: body.scopeId ?? id, dimension: body.dimension, value: body.value, sourceType: body.sourceType ?? "explicit_user", sourceRef: body.sourceRef ?? `api:${Date.now()}`, confidence: body.confidence, expiresAt: body.expiresAt }); });
+  app.post("/api/communication-profiles/:id/lock", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { locked?: boolean }; if (typeof body.locked !== "boolean") return reply.code(400).send({ error: "locked is required" }); return service.lockCommunicationProfile(id, body.locked) ?? reply.code(404).send({ error: "profile not found" }); });
+  app.get("/api/sessions/:id/learning-events", async (request, reply) => { const { id } = request.params as { id: string }; if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" }); return service.listLearningEvents(id, Number((request.query as { limit?: string }).limit ?? 100)); });
+  app.get("/api/sessions/:id/corrections", async (request, reply) => { const { id } = request.params as { id: string }; if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" }); return service.listCorrections(id, Number((request.query as { limit?: string }).limit ?? 100)); });
+  app.post("/api/sessions/:id/corrections", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { runId?: string; attempt?: number; messageId?: number; correctionType?: string; targetType?: string; targetId?: string; content?: string }; if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" }); if (!body.content?.trim()) return reply.code(400).send({ error: "content is required" }); return service.recordCorrection({ sessionId: id, runId: body.runId, attempt: body.attempt, messageId: body.messageId, correctionType: body.correctionType, targetType: body.targetType, targetId: body.targetId, content: body.content }); });
+  app.get("/api/sessions/:id/feedback-attribution", async (request, reply) => { const { id } = request.params as { id: string }; if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" }); return service.listFeedbackAttribution(id, Number((request.query as { limit?: string }).limit ?? 100)); });
+  app.post("/api/feedback-attribution/drain", async (request) => service.drainFeedbackAttribution(Number(((request.body ?? {}) as { limit?: number }).limit ?? 100)));
 
   app.get("/api/health", async (_request, reply) => {
-    if(!memory)return {ok:true,service:"tagent-core"};
-    const scopeId=runtimeConfig?.memoryWorkspaceScopeId; if(!scopeId)return {ok:true,service:"tagent-core",memory:{enabled:true,ready:false,degraded:true,reasons:["memory_scope_unavailable"]}};
+    const featureState=learningControl?.snapshot();
+    const distillation=distillationWorker?.snapshot()??{running:false,ready:false};
+    if(!memory){if(!learningControl&&!distillationWorker)return {ok:true,service:"tagent-core"};return {ok:true,service:"tagent-core",learning:featureState??{memoryEnabled:false,learningEnabled:false,autoExecutionEnabled:false},distillation};}
+    const scopeId=runtimeConfig?.memoryWorkspaceScopeId; if(!scopeId)return {ok:false,service:"tagent-core",memory:{enabled:true,ready:false,degraded:true,reasons:["memory_scope_unavailable"]},distillation};
     const readiness=await memory.readiness({subjectId:"health",scopes:[{type:"workspace",id:scopeId}],purpose:"memory_admin"});
-    if(!readiness.ready)reply.code(503); return {ok:readiness.ready,service:"tagent-core",memory:{enabled:true,...readiness}};
+    const workerRequired=Boolean(featureState?.learningEnabled);const ok=readiness.ready&&(!workerRequired||Boolean(distillation.ready));if(!ok)reply.code(503); return {ok,service:"tagent-core",memory:{enabled:true,...readiness},learning:featureState,distillation};
   });
-  app.get("/api/config/status", async () => runtimeConfig ?? null);
+  app.get("/api/config/status", async () => runtimeConfig ? { ...runtimeConfig, ...(learningControl?.snapshot() ?? {}) } : null);
+  app.get("/api/learning/settings", async () => learningControl?.snapshot() ?? { memoryAvailable: Boolean(memory), memoryEnabled: Boolean(memory), learningEnabled: false, autoExecutionEnabled: false, passiveLearningEnabled: false, activeExecutionRequiresApproval: true, updatedAt: 0, reason: "learning_control_unavailable" });
+  app.patch("/api/learning/settings", async (request, reply) => {
+    if (!learningControl) return reply.code(503).send({ error: "learning feature control unavailable" });
+    const body = (request.body ?? {}) as { memoryEnabled?: boolean; learningEnabled?: boolean; autoExecutionEnabled?: boolean; reason?: string };
+    try { return await learningControl.update({ memoryEnabled: body.memoryEnabled, learningEnabled: body.learningEnabled, autoExecutionEnabled: body.autoExecutionEnabled, reason: body.reason ?? "web_ui" }); }
+    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
   app.get("/api/sessions", async () => store.listSessions());
   app.post("/api/sessions", async (request, reply) => {
     const body = (request.body ?? {}) as { title?: string; requestId?: string };
@@ -454,6 +503,10 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
 
   app.addHook("onClose", async () => { await service.closeRuntimes(); await closeResources?.(); store.close(); });
   return app;
+}
+
+function isLearningRoute(pathname: string) {
+  return pathname.startsWith("/api/workflows/") || pathname.startsWith("/api/workflow-") || pathname.startsWith("/api/autonomy-approvals/") || pathname.startsWith("/api/internal/workflows/") || pathname.startsWith("/api/communication-profiles/") || pathname.startsWith("/api/feedback-attribution/") || /^\/api\/sessions\/[^/]+\/(?:workflows|learning-center|learning-events|corrections|communication-profiles|communication-preferences)/.test(pathname) || /^\/api\/runs\/[^/]+\/learning-policy$/.test(pathname);
 }
 
 function artifactReadError(reply: FastifyReply, error: unknown) {

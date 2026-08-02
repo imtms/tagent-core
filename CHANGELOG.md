@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-08-02
+
+### Memory-dependent Learning release integration
+
+- Added a persisted Schema v22 feature-control state enforcing `Memory off => Learning off => automatic execution off` across APIs, runtime Workflow recall, Learning projection and the Distillation Worker.
+- Added a top-bar Learning execution switch. Off keeps passive observation, evidence capture, distillation and candidate evolution running while blocking Workflow injection and every active path; on allows execution participation but never bypasses human approval.
+- Added Learning mode/status APIs, health visibility, restart persistence, automatic Worker stop/start, dependency diagnostics and detailed operations, migration and rollback documentation.
+- Integrated Communication Profiles, Learning Events, corrections, conservative feedback attribution, durable Experience Distillation, governed Workflow evolution, trusted evaluation and guarded Canary support into the release build.
+
 ## [0.1.7] - 2026-08-02
 
 ### Runtime and supervision reliability

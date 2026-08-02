@@ -12,6 +12,8 @@ import { SessionInputRouter } from "./session-input-router.js";
 import type { MemoryFacade } from "../memory/memory-service.js";
 import type { AccessContext, MemoryProvenance } from "../memory/types.js";
 import { WorkflowService, type WorkflowSpec, type WorkflowFeedbackSignal } from "../learning/workflow-service.js";
+import { LearningService, type CommunicationApplicability, type CommunicationDimension } from "../learning/learning-service.js";
+import type { LearningFeatureControl } from "../learning/feature-control.js";
 
 export class AgentService {
   private readonly runtimes = new Map<RunId, AgentRuntime>();
@@ -23,6 +25,7 @@ export class AgentService {
   private readonly listeners = new Map<RunId, Set<(event: RunEvent) => void>>();
   private readonly recalledMemory = new Map<RunId, string>();
   private readonly workflowService: WorkflowService;
+  private readonly learningService: LearningService;
   private readonly continuationOwner = randomUUID();
   private continuationRecoveryTimer?: ReturnType<typeof setTimeout>;
   private supervisorRestartReconciled = false;
@@ -37,13 +40,20 @@ export class AgentService {
     private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { routerModel?: import("@earendil-works/pi-ai/compat").Model<"openai-completions">; routerTimeoutMs?: number; supervisorModel?: import("@earendil-works/pi-ai/compat").Model<"openai-completions">; supervisorTimeoutMs?: number; maxContinuations?: number; contextWindow?: number; maxContextTurns?: number; controlInboxCapacity?: number; supervisorReviewer?: SupervisorReviewer } = {},
     private readonly memory?: MemoryFacade,
     private readonly memoryScopeId = "default",
+    private readonly learningControl?: LearningFeatureControl,
   ) {
     const reviewer = runtimeDefaults.supervisorReviewer ?? (runtimeDefaults.model && runtimeDefaults.apiKey ? new OpenAiSupervisorReviewer({ model: runtimeDefaults.supervisorModel ?? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions">, fallbackModel: runtimeDefaults.supervisorModel ? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions"> : undefined, apiKey: runtimeDefaults.apiKey, timeoutMs: runtimeDefaults.supervisorTimeoutMs ?? runtimeDefaults.providerTimeoutMs }) : process.env.VITEST ? new TestSupervisorReviewer() : undefined);
     if (!reviewer) throw new Error("LLM Supervisor reviewer requires a configured model and API key");
     this.supervisor = new TaskRunSupervisor(store, reviewer);
     this.sessionRouter = new SessionInputRouter({ model: runtimeDefaults.routerModel ?? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions"> | undefined, apiKey: runtimeDefaults.apiKey, timeoutMs: runtimeDefaults.routerTimeoutMs ?? 15_000 });
-    this.workflowService = new WorkflowService(store);
+    this.workflowService = new WorkflowService(store, undefined, learningControl);
+    this.learningService = new LearningService(store, memory, memoryScopeId);
     this.store.markInterrupted();
+    if (learningControl?.snapshot().learningEnabled ?? true) {
+      this.workflowService.drainProjectionOutbox();
+      this.learningService.drainLearningProjectionLedger();
+      void this.learningService.drainFeedbackAttribution();
+    }
   }
 
   private updateCheckpoint(event: RunEvent) {
@@ -395,7 +405,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     const retryable = !message.startsWith("Model is not allowed:");
     this.store.recordSessionInboxLaunchFailure(item.id, run.id, message);
     const event = this.store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: message, reason: "runtime_initialization_failed", stage: "launch_setup", retryable, inboxItemId: item.id }, message, run.attempt);
-    if (event) this.publish(event);
+    if (event) { this.publish(event); this.projectWorkflowExperience(run.id); }
     setImmediate(() => { if (!this.closing) this.dispatchSessionInbox(run.sessionId); });
     return undefined;
   }
@@ -441,6 +451,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       if (!event) return;
       this.store.appendMessage(run.sessionId, "assistant", `Run failed: ${message}`);
       this.publish(event);
+      this.projectWorkflowExperience(run.id);
     };
     const checkIdle = () => {
       idleTimer = undefined;
@@ -517,7 +528,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
           if (!this.closing && this.store.getRun(run.id)?.status === "running") {
             if (launchOptions.inboxItemId) this.store.recordSessionInboxLaunchFailure(launchOptions.inboxItemId, run.id, message);
             const event = this.store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: message, reason: "runtime_initialization_failed", stage: "runtime_initialize", retryable: true, inboxItemId: launchOptions.inboxItemId }, message, run.attempt);
-            if (event) this.publish(event);
+            if (event) { this.publish(event); this.projectWorkflowExperience(run.id); }
           }
           return false;
         }
@@ -544,6 +555,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       this.checkpointTimers.delete(run.id);
       this.checkpointDrafts.delete(run.id);
       this.lastCheckpointTranscriptSeq.delete(run.id);
+      this.workflowService.drainProjectionOutbox();
       if (this.executionTasks.get(run.id) === execution) this.executionTasks.delete(run.id);
       setImmediate(() => {
         try {
@@ -557,10 +569,17 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
   }
 
   private projectWorkflowExperience(runId: RunId) {
+    if (this.learningControl && !this.learningControl.snapshot().learningEnabled) return;
     const run = this.store.getRun(runId);
     if (!run) return;
-    try { this.workflowService.recordRunApplications(run); this.workflowService.projectRun(run, run.status); }
-    catch (error) { this.publish(this.store.appendEvent(runId, "workflow.learning.failed", { error: error instanceof Error ? error.message : String(error) })); }
+    try {
+      this.workflowService.recordRunApplications(run);
+      this.workflowService.recordCanaryOutcome(run);
+      this.workflowService.drainProjectionOutbox();
+      this.learningService.drainLearningProjectionLedger();
+      this.learningService.projectRun(run);
+      void this.learningService.drainFeedbackAttribution().catch((error: unknown) => this.publish(this.store.appendEvent(runId, "memory.feedback.attribution.failed", { error: error instanceof Error ? error.message : String(error) })));
+    } catch (error) { this.publish(this.store.appendEvent(runId, "workflow.learning.failed", { error: error instanceof Error ? error.message : String(error) })); }
   }
 
   private async execute(runId: RunId, attempt: number, runtime: AgentRuntime, prompt: string, continuationId?: string, onRuntimeSettled: () => void = () => {}) {
@@ -639,6 +658,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
         this.supervisor.markExecuted(decision.id, "executed");
         this.store.appendMessage(current.sessionId, "assistant", "Run blocked: Supervisor quality review failed after bounded internal retries. The Agent result was preserved for audit; no automatic continuation was started.");
         this.publish(event);
+        this.projectWorkflowExperience(runId);
         return false;
       }
       const decision = await this.supervisor.reviewAttemptFailure(current, checkpointSeq, message);
@@ -654,11 +674,14 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       }
       this.store.appendMessage(current.sessionId, "assistant", decision.action === "pause_for_approval" ? `Run paused for approval: ${message}` : `Run blocked: ${message}`);
       this.publish(event);
+      this.projectWorkflowExperience(runId);
       return recoverable;
     }
   }
 
   private captureUserMessage(run: TaskRun, messageId: number, content: string) {
+    if (this.learningControl?.snapshot().learningEnabled ?? true) this.learningService.captureExplicitCommunicationPreferences(`session:${run.sessionId}`, run.sessionId, messageId, content);
+    if ((this.learningControl?.snapshot().learningEnabled ?? true) && (/\b(?:correction|incorrect|wrong)\b|(?:不对|错了|改为|纠正|不是.{0,20}而是|不要再)/i.test(content))) this.learningService.recordCorrection({ sessionId: run.sessionId, runId: run.id, attempt: run.attempt, messageId, content, source: "explicit_user" });
     if (!this.memory) return;
     const context = this.store.listRecentMessages(run.sessionId, 8).filter((message) => message.id < messageId).slice(-4).map((message) => `${message.role}: ${message.content}`).join("\n");
     void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "message", sourceId: String(messageId), revision: "user" }], content: `<context>\n${context}\n</context>\n<focus_user>\n${content}\n</focus_user>`, idempotencyKey: `user-message:${messageId}`, captureSource: { kind: "user_message", role: "user" } }).then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "message", sourceId: String(messageId) }))).catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "message", sourceId: String(messageId), error: error instanceof Error ? error.message : String(error) })));
@@ -721,17 +744,43 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     return this.enqueueControl(runId, "steer", instruction, requestId);
   }
 
-  teachWorkflow(sessionId: SessionId, spec: WorkflowSpec, sourceId = `manual:${randomUUID()}`, activate = false) { return this.workflowService.teach(sessionId, spec, sourceId, activate); }
+  teachWorkflow(sessionId: SessionId, spec: WorkflowSpec, sourceId = `manual:${randomUUID()}`) { return this.workflowService.teach(sessionId, spec, sourceId); }
   listWorkflows(sessionId: SessionId) { return this.workflowService.listWorkflows(sessionId); }
   getWorkflow(workflowId: string) { return this.workflowService.getWorkflow(workflowId); }
-  activateWorkflow(workflowId: string, revisionId?: string) { return this.workflowService.activate(workflowId, revisionId); }
+  requestWorkflowActivation(workflowId: string, revisionId?: string, actor?: string, reason?: string) { return this.workflowService.requestActivation(workflowId, revisionId, actor, reason); }
+  activateWorkflow(workflowId: string, revisionId?: string, approvalId?: string) { return this.workflowService.activate(workflowId, revisionId, approvalId); }
   suspendWorkflow(workflowId: string, reason?: string) { return this.workflowService.suspend(workflowId, reason); }
   rollbackWorkflow(workflowId: string, revisionId: string) { return this.workflowService.rollback(workflowId, revisionId); }
-  forgetWorkflow(workflowId: string) { return this.workflowService.forget(workflowId); }
+  forgetWorkflow(workflowId: string, reason?: string, gracePeriodMs?: number) { return this.workflowService.forget(workflowId, reason, gracePeriodMs); }
+  restoreWorkflow(workflowId: string) { return this.workflowService.restore(workflowId); }
   setWorkflowBindingMode(bindingId: string, mode: "suggested" | "adopted" | "partially_adopted" | "rejected") { return this.workflowService.setBindingMode(bindingId, mode); }
+  recordWorkflowApplication(input: Parameters<WorkflowService["recordApplication"]>[0]) { return this.workflowService.recordApplication(input); }
+  getLearningCenter(sessionId: SessionId) { return this.workflowService.getLearningCenter(sessionId); }
+  decideWorkflowProposal(id: string, decision: "approved" | "rejected", actor: string, reason?: string) { return this.workflowService.decideProposal(id, decision, actor, reason); }
+  requestWorkflowProposalApplication(id: string, actor: string, reason?: string) { return this.workflowService.requestProposalApplication(id, actor, reason); }
+  applyWorkflowProposal(id: string, actor: string, approvalId?: string) { return this.workflowService.applyProposal(id, actor, approvalId); }
+  runWorkflowDistiller(owner?: string) { return this.workflowService.runNextDistillationJob(owner); }
+  retryWorkflowDistillation(id:string,repair?:{taskSignature?:string}) { return this.workflowService.retryDistillationJob(id,repair); }
+  listDeadLetterDistillations(limit?:number) { return this.workflowService.listDeadLetterJobs(limit); }
+  executeWorkflowEvaluation(input: Parameters<WorkflowService["executeEvaluation"]>[0]) { return this.workflowService.executeEvaluation(input); }
+  verifyWorkflowEvaluation(id:string) { return this.workflowService.verifyEvaluationReceipt(id); }
+  requestWorkflowPromotion(workflowId: string, revisionId: string, canaryPercent?: number, maxFailureDelta?: number, actor?: string) { return this.workflowService.requestPromotion(workflowId, revisionId, canaryPercent, maxFailureDelta, actor); }
+  promoteWorkflow(workflowId: string, revisionId: string, canaryPercent?: number, maxFailureDelta?: number, approvalId?: string) { return this.workflowService.promote(workflowId, revisionId, canaryPercent, maxFailureDelta, approvalId); }
+  listAutonomyApprovals(scopeId: string, limit?: number) { return this.workflowService.listApprovals(scopeId, limit); }
+  decideAutonomyApproval(id: string, decision: "approved" | "rejected", actor: string, reason?: string) { return this.workflowService.decideApproval(id, decision, actor, reason); }
+  revokeAutonomyApproval(id: string, actor: string, reason?: string) { return this.workflowService.revokeApproval(id, actor, reason); }
+  executeAutonomyApproval(id: string, actor: string) { return this.workflowService.executeApproval(id, actor); }
   reviseWorkflow(workflowId: string, patch: Partial<WorkflowSpec>, sourceId: string, changeSummary: string) { return this.workflowService.revise(workflowId, patch, "user_correction", [sourceId], changeSummary); }
   setRunLearningPolicy(runId: RunId, policy: "allow" | "metadata_only" | "deny", reason?: string) { return this.workflowService.setRunLearningPolicy(runId, policy, reason); }
   recordWorkflowFeedback(input: { workflowId: string; revisionId: string; runId: string; attempt: number; signal: WorkflowFeedbackSignal; idempotencyKey: string; note?: string; adopted?: boolean; verified?: boolean }) { return this.workflowService.feedback(input); }
+  setCommunicationPreference(input: { subjectId: string; scopeType: CommunicationApplicability; scopeId: string; dimension: CommunicationDimension; value: string | string[]; sourceType: "explicit_user" | "inferred" | "governance"; sourceRef: string; confidence?: number; expiresAt?: number }) { return this.learningService.recordCommunicationPreference(input); }
+  listCommunicationProfiles(subjectId: string) { return this.learningService.listCommunicationProfiles(subjectId); }
+  lockCommunicationProfile(profileId: string, locked: boolean) { return this.learningService.lockCommunicationProfile(profileId, locked); }
+  listLearningEvents(sessionId: string, limit?: number) { return this.learningService.listLearningEvents(sessionId, limit); }
+  listCorrections(sessionId: string, limit?: number) { return this.learningService.listCorrections(sessionId, limit); }
+  recordCorrection(input: Parameters<LearningService["recordCorrection"]>[0]) { return this.learningService.recordCorrection(input); }
+  listFeedbackAttribution(sessionId: string, limit?: number) { return this.learningService.listFeedbackAttribution(sessionId, limit); }
+  drainFeedbackAttribution(limit?: number) { return this.learningService.drainFeedbackAttribution(limit); }
 
   subscribe(runId: RunId, listener: (event: RunEvent) => void) {
     let listeners = this.listeners.get(runId);
@@ -770,9 +819,9 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     if (!run) throw new Error("Proposal is not spawnable");
     if (!this.memory) {
       try { const history = this.prepareSessionHistoryWithoutRecall(run, run.goal); this.completeSpawnProposal(run, history); return this.store.getRun(run.id)!; }
-      catch (error) { this.store.failSpawnedRun(proposalId, run.id, error instanceof Error ? error.message : String(error)); throw error; }
+      catch (error) { this.store.failSpawnedRun(proposalId, run.id, error instanceof Error ? error.message : String(error)); this.workflowService.drainProjectionOutbox(); throw error; }
     }
-    return this.prepareSessionHistory(run, run.goal).then((history) => { this.completeSpawnProposal(run, history); return this.store.getRun(run.id)!; }).catch((error) => { this.store.failSpawnedRun(proposalId, run.id, error instanceof Error ? error.message : String(error)); throw error; });
+    return this.prepareSessionHistory(run, run.goal).then((history) => { this.completeSpawnProposal(run, history); return this.store.getRun(run.id)!; }).catch((error) => { this.store.failSpawnedRun(proposalId, run.id, error instanceof Error ? error.message : String(error)); this.workflowService.drainProjectionOutbox(); throw error; });
   }
 
   private completeSpawnProposal(run: TaskRun, history: ContextAssembly & { recalledMemory?: string; memoryContextItems?: ContextManifestItem[] }) {
@@ -863,17 +912,20 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
   private prepareSessionHistoryWithoutRecall(run: TaskRun, query: string, excludeCurrentUserAfter?: number) {
     const history = this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter);
     const workflows = this.workflowService.recall(run.sessionId, query, run.id, run.attempt);
-    return { ...this.contextAssembler().assemble("session", history.messages, this.buildSystemPrompt(run, workflows.promptSection), query, history.sourceIds), recalledMemory: workflows.promptSection, memoryContextItems: workflows.contextItems };
+    const profile = (this.learningControl?.snapshot().learningEnabled ?? true) ? this.learningService.resolveCommunicationProfile(`session:${run.sessionId}`, [{ type: "workspace", id: this.memoryScopeId }, { type: "session", id: run.sessionId }, { type: "task", id: run.id }]) : { promptSection: "", contextItems: [], profileIds: [], revisionIds: [], values: {} };
+    const injected = [profile.promptSection, workflows.promptSection].filter(Boolean).join("\n\n");
+    return { ...this.contextAssembler().assemble("session", history.messages, this.buildSystemPrompt(run, injected), query, history.sourceIds), recalledMemory: injected, memoryContextItems: [...profile.contextItems, ...workflows.contextItems] };
   }
 
   private async prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter?: number) {
     const access = this.memoryAccess(run);
     const [recall,coreSnapshot] = this.memory ? await Promise.all([this.memory.recall({ access, cue: query }),this.memory.getCoreSnapshot?.(access)]) : [undefined,undefined];
     const workflows = this.workflowService.recall(run.sessionId, query, run.id, run.attempt);
+    const profile = (this.learningControl?.snapshot().learningEnabled ?? true) ? this.learningService.resolveCommunicationProfile(`session:${run.sessionId}`, [{ type: "workspace", id: this.memoryScopeId }, { type: "session", id: run.sessionId }, { type: "task", id: run.id }]) : { promptSection: "", contextItems: [], profileIds: [], revisionIds: [], values: {} };
     const coreSection=coreSnapshot?.markdown?`<core_memory revision="${coreSnapshot.revision}">
 ${coreSnapshot.markdown}
 </core_memory>`:"";
-    const memorySection=[coreSection,recall?.promptSection,workflows.promptSection].filter(Boolean).join("\n\n");
+    const memorySection=[coreSection,profile.promptSection,recall?.promptSection,workflows.promptSection].filter(Boolean).join("\n\n");
     const history = this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter);
     const assembly = this.contextAssembler().assemble("session", history.messages, this.buildSystemPrompt(run, memorySection), query, history.sourceIds);
     this.capturePrunedUserContext(run, assembly.droppedMessages);
@@ -882,6 +934,7 @@ ${coreSnapshot.markdown}
       ...(recall?.cards.map((card) => ({ kind: "memory_card" as const, sourceId: card.id, selected: true, reason: `selected by Recall Trace v${recall.trace.version}`, estimatedTokens: estimateContextTokens(`${card.title}: ${card.content}`), metadata: { score: card.score, channels: card.retrievalChannels, topicIds: card.topicIds } })) ?? []),
       ...(recall?.coldTopics.map((topic) => ({ kind: "cold_topic" as const, sourceId: topic.descriptor.topicId, selected: true, reason: "selected by topic routing", estimatedTokens: topic.revision.tokenCount, metadata: { revision: topic.revision.revision } })) ?? []),
       ...(recall?.trace?.candidates?.filter((candidate) => candidate.outcome !== "selected").map((candidate) => ({ kind: "memory_card" as const, sourceId: candidate.id, selected: false, reason: candidate.reason ?? candidate.outcome, estimatedTokens: 0, metadata: { outcome: candidate.outcome, channels: candidate.channels, finalScore: candidate.finalScore } })) ?? []),
+      ...profile.contextItems,
       ...workflows.contextItems,
     ];
     return { ...assembly, recalledMemory: memorySection, memoryContextItems };
