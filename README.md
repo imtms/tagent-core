@@ -214,6 +214,7 @@ See [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md) and [docs/REL
 - [Automation API contract](docs/core-api-contract.md)
 - [Long-term memory](docs/MEMORY.md)
 - [Memory-dependent Learning and controlled evolution](docs/LEARNING.md)
+- [Learning release acceptance coverage](docs/LEARNING_RELEASE_COVERAGE.md)
 - [Memory architecture](docs/MEMORY_ARCHITECTURE.md)
 - [Memory operations](docs/MEMORY_OPERATIONS.md)
 - [Memory API and UI](docs/MEMORY_API.md)

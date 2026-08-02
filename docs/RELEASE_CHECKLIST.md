@@ -6,7 +6,7 @@ This checklist applies to source releases. TAgent Core is not published to npm i
 
 ## Before tagging
 
-If long-term memory is included in the release, complete [MEMORY_RELEASE_CHECKLIST.md](MEMORY_RELEASE_CHECKLIST.md) in addition to the general checks below. Memory-off compatibility is a required release gate because long-term memory is opt-in. If Learning is included, also verify [LEARNING.md](LEARNING.md): Memory-off must force Learning and its Worker off; passive mode must continue observation/distillation without Workflow injection; execution mode must still require human approval; the persisted switch must survive restart.
+If long-term memory is included in the release, complete [MEMORY_RELEASE_CHECKLIST.md](MEMORY_RELEASE_CHECKLIST.md) in addition to the general checks below. Memory-off compatibility is a required release gate because long-term memory is opt-in. If Learning is included, also verify [LEARNING.md](LEARNING.md) and the reviewable [LEARNING_RELEASE_COVERAGE.md](LEARNING_RELEASE_COVERAGE.md) matrix: Memory-off must force Learning and its Worker off; passive mode must continue observation/distillation without Workflow injection; execution mode must still require human approval; the persisted switch must survive restart.
 
 1. Confirm `package.json` and `package-lock.json` use the target version.
 2. Update `CHANGELOG.md`, `README.md`, `docs/STATUS.md`, and known limitations.
