@@ -170,19 +170,78 @@ describe("TaskRunSupervisor LLM audit", () => {
     const review = await new TaskRunSupervisor(store, new TestSupervisorReviewer()).reviewSettled(run, 3, "candidate");
     expect(review).toMatchObject({ gates: [], decision: { action: "wait_for_runtime", evaluator: "system" } }); store.close();
   });
-  it("does not repeat a failed Supervisor transport request three times", async () => {
+  it("turns a retryable Supervisor transport failure into a conservative continuation without three review requests", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "transport failure");
     let requests = 0;
     const original = globalThis.fetch;
     globalThis.fetch = async () => { requests += 1; return new Response("upstream unavailable", { status: 503 }); };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("API 503");
+      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
+      expect(audit).toMatchObject({ action: "start_continuation", reasonCode: "supervisor_transport_unavailable", evaluator: "system", evaluatorModel: "deterministic-transport-recovery-v1", gates: { completion: { passed: false }, continuation: { passed: true } } });
       expect(requests).toBe(1);
     } finally { globalThis.fetch = original; store.close(); }
   });
 
-  it("falls back once from the lightweight Supervisor model to the main model on transport failure", async () => {
+  it("does not guess criterion coverage from generic evidence when semantic transport is unavailable", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "verified delivery");
+    store.upsertPlanItem(run.id, { key: "implement", title: "Implement", status: "done", required: true, position: 1 });
+    store.upsertCheck(run.id, { key: "verify", title: "Verify", status: "passed", required: true, command: "npm test", evidence: "286 tests passed", stale: false });
+    let requests = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => { requests += 1; return new Response("unavailable", { status: 503 }); };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const current = store.getRun(run.id)!;
+      expect(current.completionGate.passed).toBe(true);
+      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: current, response: "A complete standalone delivery with root cause, implementation details, deployment evidence, and verification results.".repeat(3), operations: [], progress: undefined });
+      expect(audit).toMatchObject({ action: "start_continuation", reasonCode: "supervisor_transport_unavailable", gates: { completion: { passed: false }, contract: { passed: false } } });
+      expect(audit.gates.contract.criterionCoverage?.every((item) => item.status === "blocked")).toBe(true);
+      expect(requests).toBe(1);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("blocks after a repeated semantic judge transport failure instead of looping continuations", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "repeat judge failure");
+    const previous = { id: "previous", runId: run.id, evaluator: "llm", evaluatorModel: "audit-model", attempt: run.attempt, checkpointSeq: 1, trigger: "settled", action: "start_continuation", reasonCode: "supervisor_transport_unavailable", rationale: "retry", confidence: 1, instruction: "", candidateResponseHash: "", status: "executed", error: "", createdAt: Date.now(), executedAt: Date.now() } as const;
+    store.recordSupervisorDecision(previous);
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => new Response("unavailable", { status: 503 });
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "candidate", operations: [], progress: undefined });
+      expect(audit).toMatchObject({ action: "block_taskrun", reasonCode: "supervisor_transport_unavailable", evaluator: "system", evaluatorModel: "deterministic-transport-recovery-v1", gates: { completion: { passed: false }, continuation: { passed: false } } });
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("persists deterministic evaluator provenance for transport recovery", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "transport provenance");
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => new Response("unavailable", { status: 503 });
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const supervisor = new TaskRunSupervisor(store, new OpenAiSupervisorReviewer({ model, apiKey: "secret" }));
+      const review = await supervisor.reviewSettled(store.getRun(run.id)!, 2, "candidate");
+      expect(review.decision).toMatchObject({ evaluator: "system", evaluatorModel: "deterministic-transport-recovery-v1", reasonCode: "supervisor_transport_unavailable" });
+      expect(review.gates.every((gate) => gate.evaluator === "system" && gate.evaluatorModel === "deterministic-transport-recovery-v1")).toBe(true);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("does not pay a second timeout when the lightweight and main Supervisor models share one upstream", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "same upstream outage");
+    const models: string[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => { models.push(String(JSON.parse(String(init?.body)).model)); return new Response("unavailable", { status: 503 }); };
+    try {
+      const light = { id: "gpt-5.6-luna", baseUrl: "https://audit.test/v1" } as never;
+      const main = { id: "gpt-5.6-sol", baseUrl: "https://audit.test/v1" } as never;
+      const audit = await new OpenAiSupervisorReviewer({ model: light, fallbackModel: main, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
+      expect(audit.action).toBe("start_continuation");
+      expect(models).toEqual(["gpt-5.6-luna"]);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("falls back once from the lightweight Supervisor model to a main model on a different upstream", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "fallback audit");
     const models: string[] = [];
     const valid = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } } };
@@ -193,8 +252,8 @@ describe("TaskRunSupervisor LLM audit", () => {
       return modelId === "gpt-5.6-luna" ? new Response("unavailable", { status: 503 }) : new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(valid) } }] }), { status: 200 });
     };
     try {
-      const light = { id: "gpt-5.6-luna", baseUrl: "https://audit.test/v1" } as never;
-      const main = { id: "gpt-5.6-sol", baseUrl: "https://audit.test/v1" } as never;
+      const light = { id: "gpt-5.6-luna", baseUrl: "https://light-audit.test/v1" } as never;
+      const main = { id: "gpt-5.6-sol", baseUrl: "https://main-audit.test/v1" } as never;
       const audit = await new OpenAiSupervisorReviewer({ model: light, fallbackModel: main, apiKey: "secret", timeoutMs: 1_000 }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
       expect(audit.action).toBe("complete_taskrun");
       expect(models).toEqual(["gpt-5.6-luna", "gpt-5.6-sol"]);
@@ -212,10 +271,12 @@ describe("TaskRunSupervisor LLM audit", () => {
     const original = globalThis.fetch;
     globalThis.fetch = async (_url, init) => { requestBody = String(init?.body); return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(valid) } }] }), { status: 200 }); };
     try {
-      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1", maxTokens: 2_048 } as never;
       await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "R".repeat(40_000), operations: [], progress: undefined });
       expect(new TextEncoder().encode(requestBody).byteLength).toBeLessThan(30_000);
-      const prompt = String((JSON.parse(requestBody) as { messages: Array<{ content: string }> }).messages[0].content);
+      const parsedRequest = JSON.parse(requestBody) as { max_completion_tokens?: number; messages: Array<{ content: string }> };
+      expect(parsedRequest.max_completion_tokens).toBe(2_048);
+      const prompt = String(parsedRequest.messages[0].content);
       expect(prompt).not.toContain("sourceInput");
       expect(prompt).not.toContain("decisionReason");
       expect(prompt).toContain('"key":"verify"');

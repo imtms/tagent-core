@@ -203,7 +203,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     providerTimeoutMs: positiveInteger(env.TAGENT_PROVIDER_TIMEOUT_MS, 120_000, "TAGENT_PROVIDER_TIMEOUT_MS"),
     providerMaxRetries: nonNegativeInteger(env.TAGENT_PROVIDER_MAX_RETRIES, 1, "TAGENT_PROVIDER_MAX_RETRIES"),
     routerTimeoutMs: positiveInteger(env.TAGENT_ROUTER_TIMEOUT_MS, 15_000, "TAGENT_ROUTER_TIMEOUT_MS"),
-    supervisorTimeoutMs: positiveInteger(env.TAGENT_SUPERVISOR_TIMEOUT_MS, 30_000, "TAGENT_SUPERVISOR_TIMEOUT_MS"),
+    supervisorTimeoutMs: positiveInteger(env.TAGENT_SUPERVISOR_TIMEOUT_MS, 12_000, "TAGENT_SUPERVISOR_TIMEOUT_MS"),
     runTimeoutMs: positiveInteger(env.TAGENT_RUN_TIMEOUT_MS, 7_200_000, "TAGENT_RUN_TIMEOUT_MS"),
     runHardTimeoutMs: positiveInteger(env.TAGENT_RUN_HARD_TIMEOUT_MS, 86_400_000, "TAGENT_RUN_HARD_TIMEOUT_MS"),
     maxContinuations: nonNegativeInteger(env.TAGENT_MAX_CONTINUATIONS, 128, "TAGENT_MAX_CONTINUATIONS"),
@@ -235,7 +235,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       api: "openai-completions",
       baseUrl: normalizeBaseUrl(env.TAGENT_SUPERVISOR_API_BASE?.trim() || env.TAGENT_API_BASE || "https://one.tms.im/v1"),
       contextWindow: positiveInteger(env.TAGENT_SUPERVISOR_CONTEXT_WINDOW, 64_000, "TAGENT_SUPERVISOR_CONTEXT_WINDOW"),
-      maxTokens: positiveInteger(env.TAGENT_SUPERVISOR_MAX_TOKENS, 4_096, "TAGENT_SUPERVISOR_MAX_TOKENS"),
+      maxTokens: positiveInteger(env.TAGENT_SUPERVISOR_MAX_TOKENS, 1_024, "TAGENT_SUPERVISOR_MAX_TOKENS"),
       reasoning: env.TAGENT_SUPERVISOR_REASONING === "true",
     },
   };

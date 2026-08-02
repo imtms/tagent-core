@@ -46,7 +46,7 @@ export interface PreferenceRecord { id: string; kind: "preference"; tier: Memory
 export type WarmMemory = MemoryRecord | PreferenceRecord;
 export interface TopicDescriptor { topicId: string; kind: MemoryKind; scope: MemoryScope; title: string; description: string; aliases: string[]; entityIds: string[]; relatedTopicIds: string[]; coldRevisionId?: string; status: MemoryStatus; updatedAt: number }
 export interface ColdTopic { descriptor: TopicDescriptor; revision: { id: string; revision: number; checksum: string; tokenCount: number; createdAt: number; publishedAt?: number }; body: string }
-export interface CaptureJob { id:string; status:"queued"|"running"|"completed"|"completed_empty"|"retryable_failed"|"dead_letter"; attempts:number; errorCode?:string; proposalCount?:number; persistedCount?:number; createdAt:number; updatedAt:number; request:{sourceRefs:MemorySourceRef[]} }
+export interface CaptureJob { id:string; status:"queued"|"running"|"completed"|"completed_empty"|"retryable_failed"|"dead_letter"; attempts:number; errorCode?:string; proposalCount?:number; persistedCount?:number; createdAt:number; updatedAt:number; request:{sourceRefs:MemorySourceRef[]; captureSource?:{kind:string;role:string}} }
 export interface MemoryStatusResult { records: { hot: number; warm: number; candidate: number; active: number; disputed: number }; topics: number; coldTopics: number; readiness?: any }
 export interface ReindexJob {id:string;generation:string;status:string;checkpoint:{processed:number;indexed:number;skipped:number;failed:number;total?:number;phase:string};createdAt:number;updatedAt:number}
 export interface CoreMemorySnapshot {revision:number;markdown:string;sourceRecordIds:string[];tokenCount:number;generatedAt:number;editedAt?:number}

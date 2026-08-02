@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Command, Eye, FileText, GripVertical, Menu, MessageSquarePlus, PanelRight, Pencil, Play, Plus, Send, ShieldCheck, Square, Terminal, X } from "lucide-react";
-import { api, subscribe, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TranscriptItem } from "./api";
+import { api, subscribe, type CaptureJob, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TranscriptItem } from "./api";
 import { LiveText, Markdown } from "./Markdown";
 import { createRequestId } from "./id";
 import { deriveCurrentOperation } from "./current-operation";
@@ -8,8 +8,23 @@ import { MemoryPanel } from "./MemoryPanel";
 
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
 
-const ChatMessage = memo(function ChatMessage({ message }: { message: Message }) {
-  return <article className={`message ${message.role}`}><div className="message-meta"><span>{message.role === "user" ? "You" : "TAgent"}</span><time>{formatTime(message.createdAt)}</time></div><div className="message-body"><Markdown>{message.content}</Markdown></div></article>;
+function MemoryExtraction({ job }: { job: CaptureJob | null | undefined }) {
+  if (job === undefined) return <div className="turn-memory loading"><BrainCircuit size={13} /><span><strong>Memory extraction</strong><small>Checking this turn…</small></span></div>;
+  if (!job) return <div className="turn-memory empty"><BrainCircuit size={13} /><span><strong>Memory extraction</strong><small>No extraction record for this turn</small></span></div>;
+  const completed = job.status === "completed";
+  const empty = job.status === "completed_empty";
+  const failed = job.status === "dead_letter" || job.status === "retryable_failed";
+  const count = job.persistedCount ?? job.proposalCount ?? 0;
+  const detail = completed
+    ? `${count} ${count === 1 ? "memory" : "memories"} extracted`
+    : empty ? "No durable memory extracted"
+    : failed ? `Extraction failed${job.errorCode ? ` · ${job.errorCode}` : ""}`
+    : job.status === "running" ? "Extracting durable memory…" : "Queued for extraction";
+  return <div className={`turn-memory ${completed ? "completed" : empty ? "empty" : failed ? "failed" : job.status}`} title={`Capture job ${job.id}`}><BrainCircuit size={13} /><span><strong>Memory extraction</strong><small>{detail}</small></span>{completed && <b>{count}</b>}</div>;
+}
+
+const ChatMessage = memo(function ChatMessage({ message, memoryEnabled, memoryJob }: { message: Message; memoryEnabled: boolean; memoryJob?: CaptureJob | null }) {
+  return <article className={`message ${message.role}`}><div className="message-meta"><span>{message.role === "user" ? "You" : "TAgent"}</span><time>{formatTime(message.createdAt)}</time></div><div className="message-body"><Markdown>{message.content}</Markdown></div>{memoryEnabled && message.role === "user" && <MemoryExtraction job={memoryJob} />}</article>;
 });
 
 function WorkspaceRunStatus({ session }: { session: Session }) {
@@ -175,6 +190,8 @@ export function App() {
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [memoryJobs, setMemoryJobs] = useState<CaptureJob[]>([]);
+  const [memoryJobsLoaded, setMemoryJobsLoaded] = useState(false);
   const messageScrollRef = useRef<HTMLElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
@@ -196,6 +213,23 @@ export function App() {
   }, []);
 
   useEffect(() => { void loadSessions(); void api.status().then(setRuntimeStatus); }, [loadSessions]);
+  useEffect(() => {
+    if (!runtimeStatus?.memoryEnabled || !sessionId) { setMemoryJobs([]); setMemoryJobsLoaded(false); return; }
+    setMemoryJobsLoaded(false);
+    let closed = false;
+    let polling = false;
+    const scope = { type: "workspace" as const, id: runtimeStatus.memoryWorkspaceScopeId ?? "default" };
+    const refresh = async () => {
+      if (closed || polling) return;
+      polling = true;
+      try { const jobs = await api.memoryJobs(scope); if (!closed) { setMemoryJobs(jobs); setMemoryJobsLoaded(true); } }
+      catch { if (!closed) setMemoryJobsLoaded(true); }
+      finally { polling = false; }
+    };
+    void refresh();
+    const timer = setInterval(() => void refresh(), 3_000);
+    return () => { closed = true; clearInterval(timer); };
+  }, [runtimeStatus?.memoryEnabled, runtimeStatus?.memoryWorkspaceScopeId, sessionId]);
   useEffect(() => {
     if (!sessionId) return;
     const targetSessionId = sessionId;
@@ -347,6 +381,18 @@ export function App() {
 
   const activeTools = useMemo(() => events.filter((event) => event.type.startsWith("tool.")).slice(-20), [events]);
   const transcriptTools = useMemo(() => transcript.filter((item): item is Extract<TranscriptItem, { kind: "tool" }> => item.kind === "tool"), [transcript]);
+  const memoryJobByMessageId = useMemo(() => {
+    const jobs = new Map<number, CaptureJob>();
+    for (const job of memoryJobs) {
+      if (job.request.captureSource?.kind && job.request.captureSource.kind !== "user_message") continue;
+      for (const source of job.request.sourceRefs) {
+        if (source.sourceType !== "message") continue;
+        const messageId = Number(source.sourceId);
+        if (Number.isFinite(messageId) && (!jobs.has(messageId) || job.updatedAt > (jobs.get(messageId)?.updatedAt ?? 0))) jobs.set(messageId, job);
+      }
+    }
+    return jobs;
+  }, [memoryJobs]);
 
   async function loadOlderMessages() {
     if (!sessionId || loadingOlderMessages || !messages.length) return;
@@ -507,8 +553,8 @@ export function App() {
         <div className="message-feed">
         {!messages.length && !streaming && pendingUserMessage?.sessionId !== sessionId && <div className="empty-state"><div className="empty-icon"><MessageSquarePlus size={25} /></div><h2>Start with an outcome</h2><p>TAgent will turn substantial work into a durable plan, execute tools, and hold completion behind checks.</p></div>}
         {hasOlderMessages && <button className="load-older" onClick={() => void loadOlderMessages()} disabled={loadingOlderMessages}>{loadingOlderMessages ? "Loading…" : "Load earlier messages"}</button>}
-        {messages.map((message) => <ChatMessage key={message.id} message={message} />)}
-        {pendingUserMessage?.sessionId === sessionId && !messages.some((message) => message.role === "user" && message.content === pendingUserMessage.content && message.createdAt >= pendingUserMessage.createdAt - 5_000) && <article className="message user pending" aria-label="Sending message"><div className="message-meta"><span>You</span><time>Sending…</time></div><div className="message-body"><Markdown>{pendingUserMessage.content}</Markdown></div></article>}
+        {messages.map((message) => <ChatMessage key={message.id} message={message} memoryEnabled={Boolean(runtimeStatus?.memoryEnabled)} memoryJob={message.role === "user" ? (memoryJobsLoaded ? memoryJobByMessageId.get(message.id) ?? null : undefined) : undefined} />)}
+        {pendingUserMessage?.sessionId === sessionId && !messages.some((message) => message.role === "user" && message.content === pendingUserMessage.content && message.createdAt >= pendingUserMessage.createdAt - 5_000) && <article className="message user pending" aria-label="Sending message"><div className="message-meta"><span>You</span><time>Sending…</time></div><div className="message-body"><Markdown>{pendingUserMessage.content}</Markdown></div>{runtimeStatus?.memoryEnabled && <MemoryExtraction job={undefined} />}</article>}
         {activeRun && <div className="active-run-strip"><Activity size={14} /><span>Attempt {activeRun.attempt}</span><strong>{activeRun.phase}</strong><small>{activeRun.usage.totalTokens.toLocaleString()} tokens</small></div>}
         {streaming && <article className="message assistant live"><div className="message-meta"><span>TAgent</span><span className="live-label"><span className="pulse" />Working</span></div><div className="message-body"><LiveText>{streaming}</LiveText></div></article>}
         <div ref={endRef} />

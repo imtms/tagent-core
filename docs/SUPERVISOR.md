@@ -84,6 +84,19 @@ In addition to Plan, Check, evidence, progress, and non-empty delivery checks, s
 
 This is a deterministic, independently evidenced safety floor rather than a second free-form agent. Criterion receipts expose covered, unsupported, contradicted, and blocked outcomes; unsupported completion claims trigger continuation instead of durable delivery.
 
+## Eval-engineering policy
+
+The completion gate follows an evidence-first policy:
+
+- objectively checkable facts remain owned by deterministic Plan, Check, Operation, and Artifact receipts;
+- the semantic judge evaluates criterion-level meaning and delivery quality, but may not turn generic evidence or confidence into approval;
+- trajectory signals such as repeated operations, consecutive failures, and meaningful changes are part of review rather than grading only the final prose;
+- the configured judge model ID is persisted with every Gate Evaluation and Supervisor Decision; production operators should pin this model and prefer a model family independent from the generating Agent when providers permit it;
+- a retryable judge transport failure permits one bounded continuation, but never fabricates acceptance-criterion coverage; a repeated transport failure blocks for explicit recovery instead of creating an unbounded continuation loop;
+- high-impact production changes still require explicit approval boundaries. A future capability policy will make blast-radius lanes first-class rather than inferring them only from declared Plan and approval items.
+
+The compact Supervisor request is bounded by configured timeout and output tokens. When the lightweight and fallback models share one upstream base URL, the same outage is not retried against a second model ID.
+
 ## Context Manifest
 
 Every new Run, resume, and continuation now persists an immutable per-attempt Context Manifest. It records the required system instruction, TaskRun contract, selected and omitted Session/transcript messages, Core Memory, dynamic Memory Cards, Cold Topics, current prompt, selection reasons, token estimates, and a SHA-256 manifest hash.

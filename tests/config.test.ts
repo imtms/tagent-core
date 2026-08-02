@@ -15,8 +15,8 @@ describe("configuration", () => {
       provider: "openai-compatible",
     });
     expect(config.routerModel).toMatchObject({ modelId: "gpt-5.6-luna", reasoning: false });
-    expect(config.supervisorModel).toMatchObject({ modelId: "gpt-5.6-luna", reasoning: false });
-    expect(config).toMatchObject({ routerTimeoutMs: 15_000, supervisorTimeoutMs: 30_000 });
+    expect(config.supervisorModel).toMatchObject({ modelId: "gpt-5.6-luna", reasoning: false, maxTokens: 1_024 });
+    expect(config).toMatchObject({ routerTimeoutMs: 15_000, supervisorTimeoutMs: 12_000 });
   });
 
   it("allows independent lightweight Router and Supervisor models", () => {

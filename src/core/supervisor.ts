@@ -53,8 +53,8 @@ export class TaskRunSupervisor {
     // Semantic review still runs whenever deterministic prerequisites pass.
     const deterministicAudit = this.reviewDeterministicPrerequisites(run);
     const audit = deterministicAudit ?? await this.reviewer.reviewSettled({ run, response, operations, progress });
-    const evaluator = deterministicAudit ? "system" as const : this.reviewer.evaluator;
-    const evaluatorModel = deterministicAudit ? "deterministic-prerequisite-gate" : this.reviewer.model;
+    const evaluator = deterministicAudit ? "system" as const : audit.evaluator ?? this.reviewer.evaluator;
+    const evaluatorModel = deterministicAudit ? "deterministic-prerequisite-gate" : audit.evaluatorModel ?? this.reviewer.model;
     const createdAt = Date.now();
     const manifest = { attempt: run.attempt, checkpointSeq, contract: run.contract, plan: run.plan, checks: run.checks, artifacts: run.artifacts.map(({ id, kind, uri }) => ({ id, kind, uri })), operations: operations.map(({ id, operationType, status, stage }) => ({ id, operationType, status, stage })), response, progress };
     const inputManifestHash = createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
