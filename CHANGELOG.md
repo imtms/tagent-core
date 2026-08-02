@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-08-03
+
+### Release reliability
+
+- Preserve terminal approval receipts while allowing a new approval request for the same action in the same millisecond; pending/approved requests remain idempotently reused. This fixes the GitHub release-gate race exposed by the v0.1.11 workflow.
+
 ## [0.1.11] - 2026-08-03
 
 ### LLM-semantic Memory and Learning

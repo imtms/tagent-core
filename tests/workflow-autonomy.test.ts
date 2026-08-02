@@ -32,8 +32,8 @@ describe("tiered autonomy governance",()=>{
   it("never executes rejected, revoked, or expired approvals",async()=>{
     const{store,session,service}=fixture();const workflow=service.teach(session.id,spec,"message:1");
     const rejected=service.requestActivation(workflow.id);service.decideApproval(rejected.id,"rejected","human","no");expect(()=>service.executeApproval(rejected.id,"human")).toThrow("Approved request");
-    const revoked=service.requestActivation(workflow.id,undefined,"system","retry");service.decideApproval(revoked.id,"approved","human","yes");service.revokeApproval(revoked.id,"human","withdrawn");expect(()=>service.executeApproval(revoked.id,"human")).toThrow("Approved request");
-    const expiring=service.requestActivation(workflow.id,undefined,"system","expires",60_000);store.db.prepare("UPDATE autonomy_approval_requests SET expires_at=? WHERE id=?").run(Date.now()-1,expiring.id);expect(()=>service.executeApproval(expiring.id,"human")).toThrow("Approved request");expect(service.getApproval(expiring.id)?.status).toBe("expired");
+    const revoked=service.requestActivation(workflow.id,undefined,"system","retry");expect(revoked.id).not.toBe(rejected.id);service.decideApproval(revoked.id,"approved","human","yes");service.revokeApproval(revoked.id,"human","withdrawn");expect(()=>service.executeApproval(revoked.id,"human")).toThrow("Approved request");
+    const expiring=service.requestActivation(workflow.id,undefined,"system","expires",60_000);expect(expiring.id).not.toBe(revoked.id);store.db.prepare("UPDATE autonomy_approval_requests SET expires_at=? WHERE id=?").run(Date.now()-1,expiring.id);expect(()=>service.executeApproval(expiring.id,"human")).toThrow("Approved request");expect(service.getApproval(expiring.id)?.status).toBe("expired");
   });
 
   it("requires a second approval to apply an approved revision proposal",async()=>{

@@ -1,8 +1,8 @@
-# TAgent Core 0.1.11 Release Audit
+# TAgent Core 0.1.12 Release Audit
 
 ## Scope
 
-0.1.11 releases the LLM-semantic Memory/Learning quality upgrade. It does not change the existing Memory dependency, passive-learning switch, human approval, capability, risk, Supervisor or rollback boundaries.
+0.1.12 releases the LLM-semantic Memory/Learning quality upgrade. It does not change the existing Memory dependency, passive-learning switch, human approval, capability, risk, Supervisor or rollback boundaries.
 
 ## Semantic judgment boundary
 
@@ -55,7 +55,7 @@ Summary:
 
 ## Compatibility
 
-- Package version: `0.1.11`.
+- Package version: `0.1.12`.
 - SQLite schema: `23`.
 - Existing Schema 22 databases migrate transactionally.
 - Back up SQLite including WAL/SHM and Memory PostgreSQL/Cold stores before deployment.

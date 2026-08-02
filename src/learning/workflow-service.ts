@@ -354,10 +354,11 @@ export class WorkflowService {
       workflowId: input.workflowId ?? null, revisionId: input.revisionId ?? null, proposalId: input.proposalId ?? null,
       bindingId: input.bindingId ?? null, riskClass: input.riskClass, impactScope: input.impactScope ?? {},
       evidence: sanitizeIds(input.evidence ?? []), diff: input.diff ?? {}, rollback: input.rollback ?? {}, expiresAt };
-    const requestHash = hash(payload);
-    const existing = this.store.db.prepare(`SELECT id FROM autonomy_approval_requests WHERE request_hash=? AND status IN ('pending','approved')`).get(requestHash) as { id: string } | undefined;
-    if (existing) return this.getApproval(existing.id)!;
+    const intentHash = hash(payload);
+    const existing = this.store.db.prepare(`SELECT id,status FROM autonomy_approval_requests WHERE request_hash=?`).get(intentHash) as { id: string; status: string } | undefined;
+    if (existing && (existing.status === "pending" || existing.status === "approved")) return this.getApproval(existing.id)!;
     const id = randomUUID();
+    const requestHash = existing ? hash({ ...payload, requestId: id }) : intentHash;
     this.store.db.prepare(`INSERT INTO autonomy_approval_requests
       (id,scope_id,action_type,target_type,target_id,workflow_id,revision_id,proposal_id,binding_id,status,risk_class,
        impact_scope_json,evidence_json,diff_json,rollback_json,requested_by,request_reason,expires_at,request_hash,created_at,updated_at)
