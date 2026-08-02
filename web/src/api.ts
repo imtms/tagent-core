@@ -9,6 +9,8 @@ export interface ContextManifestItem { kind: string; sourceId: string; role?: st
 export interface ContextManifest { id: string; source: "session" | "transcript"; attempt: number; manifestHash: string; createdAt: number; items: ContextManifestItem[]; stats: Record<string, number | string> }
 export interface PlanItem { key: string; title: string; status: string; required: boolean; position: number }
 export interface RunCheck { key: string; title: string; status: string; required: boolean; command: string; evidence: string; stale: boolean }
+export interface UserInputField { key: string; label: string; description: string; inputType: "text" | "textarea"; required: boolean; placeholder: string }
+export interface UserInputRequest { id: string; runId: string; attempt: number; prompt: string; fields: UserInputField[]; status: "pending" | "submitted" | "cancelled" | "superseded"; response: Record<string, string>; requestedAt: number; submittedAt: number | null }
 export interface TaskRun {
   id: string; sessionId: string; requestId: string; status: string; phase: string; goal: string; contract: TaskRunContract | null;
   blockedReason: string; lastEventSeq: number; attempt: number; resumedAt: number | null; createdAt: number; updatedAt: number; completedAt: number | null;
@@ -17,6 +19,7 @@ export interface TaskRun {
   checkpoint: { runId: string; attempt: number; active: boolean; assistantPartial: string; currentTool: { toolCallId: string; toolName: string; startedAt?: number; lastActivityAt?: number } | null; lastEventSeq: number; lastTranscriptSeq: number; updatedAt: number } | null;
   continuations: Array<{ id: string; ordinal: number; status: string; reason: string; error: string; createdAt: number; startedAt: number | null; completedAt: number | null; leaseOwner: string; leaseUntil: number | null; heartbeatAt: number | null }>;
   plan: PlanItem[]; checks: RunCheck[];
+  userInputRequests: UserInputRequest[]; pendingUserInput: UserInputRequest | null;
   artifacts: Array<{ id: string; title: string; kind: string; uri: string }>;
   completionGate: { passed: boolean; failures: Array<{ kind: string; key: string; reason: string }> };
   launchRetryable: boolean;
@@ -33,6 +36,7 @@ export interface EventConsumerCursor { runId: string; consumerId: string; genera
 export interface RunEvent { runId: string; seq: number; type: string; data: Record<string, unknown>; createdAt: number }
 export type TranscriptItem =
   | { seq: number; index?: number; attempt: number; kind: "user" | "assistant"; text: string; createdAt: number }
+  | { seq: number; index: number; attempt: number; kind: "thinking"; text: string; redacted: boolean; createdAt: number }
   | { seq: number; index: number; attempt: number; kind: "tool"; toolCallId: string; toolName: string; arguments: unknown; result: string; isError: boolean; status: string; createdAt: number };
 export interface RuntimeStatus { runtime: string; provider: string; api: string; baseUrl: string; modelId: string; credentialConfigured: boolean; providerTimeoutMs: number; providerMaxRetries: number; runTimeoutMs: number; maxContinuations: number; schemaVersion?: number; memoryEnabled: boolean; memoryWorkspaceScopeId?: string; memoryBackend?: "memory" | "postgres"; memoryColdBackend?: "local" | "s3" }
 
@@ -91,6 +95,7 @@ export const api = {
   cancel: (runId: string) => request(`/api/runs/${runId}/cancel`, { method: "POST" }),
   steer: (runId: string, content: string) => request(`/api/runs/${runId}/steer`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId() }) }),
   resume: (runId: string) => request<TaskRun>(`/api/runs/${runId}/resume`, { method: "POST" }),
+  submitUserInput: (requestId: string, response: Record<string, string>) => request<TaskRun>(`/api/user-input-requests/${requestId}/submit`, { method: "POST", body: JSON.stringify({ response }) }),
   approveRunApproval: (approvalId: string) => request<TaskRun>(`/api/approval-requests/${approvalId}/approve`, { method: "POST" }),
   rejectRunApproval: (approvalId: string) => request<TaskRun>(`/api/approval-requests/${approvalId}/reject`, { method: "POST" }),
   approveSpawn: (proposalId: string) => request<{ ok: true }>(`/api/spawn-proposals/${proposalId}/approve`, { method: "POST" }),

@@ -1,8 +1,8 @@
 export type SessionId = string;
 export type RunId = string;
 
-export type RunStatus = "running" | "completed" | "blocked" | "interrupted" | "cancelled" | "failed";
-export type RunPhase = "discover" | "plan" | "implement" | "verify" | "review" | "done" | "blocked";
+export type RunStatus = "running" | "waiting_input" | "completed" | "blocked" | "interrupted" | "cancelled" | "failed";
+export type RunPhase = "discover" | "plan" | "implement" | "verify" | "review" | "waiting_input" | "done" | "blocked";
 export type PlanStatus = "pending" | "in_progress" | "done" | "blocked" | "skipped";
 export type CheckStatus = "pending" | "running" | "passed" | "failed" | "blocked" | "skipped";
 
@@ -64,6 +64,8 @@ export interface SupervisorDecision { id: string; runId: RunId; evaluator: "llm"
 export interface SpawnProposal { id: string; runId: RunId; goal: string; acceptanceCriteria: string[]; relation: "depends_on" | "follow_up" | "parallel" | "derived"; status: "proposed" | "approved" | "spawned" | "rejected"; spawnedRunId: string; createdAt: number; updatedAt: number }
 export interface TaskRunEdge { fromRunId: RunId; toRunId: RunId; relation: SpawnProposal["relation"] | "blocks" | "supersedes"; reason: string; createdAt: number }
 export interface ApprovalRequest { id: string; runId: RunId; decisionId: string; reason: string; status: "pending" | "approved" | "rejected" | "superseded"; requestedAt: number; resolvedAt: number | null; resolvedBy: string; resolution: string }
+export interface UserInputField { key: string; label: string; description: string; inputType: "text" | "textarea"; required: boolean; placeholder: string }
+export interface UserInputRequest { id: string; runId: RunId; attempt: number; prompt: string; fields: UserInputField[]; status: "pending" | "submitted" | "cancelled" | "superseded"; response: Record<string, string>; requestedAt: number; submittedAt: number | null }
 
 export type ContextManifestSource = "session" | "transcript";
 export type ContextManifestItemKind = "system_prompt" | "taskrun_contract" | "session_message" | "transcript_message" | "core_memory" | "memory_card" | "cold_topic" | "user_prompt";
@@ -215,6 +217,8 @@ export interface TaskRun {
   artifacts: Artifact[];
   completionGate: CompletionGate;
   supervision: { latestDecision: SupervisorDecision | null; latestGates: GateEvaluation[]; progress: ProgressSnapshot | null; spawnProposals: SpawnProposal[]; approvalRequests: ApprovalRequest[]; latestContextManifest: ContextManifest | null };
+  userInputRequests: UserInputRequest[];
+  pendingUserInput: UserInputRequest | null;
   launchRetryable: boolean;
 }
 

@@ -28,10 +28,12 @@ import type {
   TaskRunContract,
   SessionId,
   TaskRun,
+  UserInputField,
+  UserInputRequest,
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 15;
 
 export class Store {
   readonly db: Database.Database;
@@ -267,6 +269,13 @@ export class Store {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_requests_pending ON approval_requests(run_id) WHERE status = 'pending';
       CREATE INDEX IF NOT EXISTS idx_approval_requests_run ON approval_requests(run_id, requested_at);
+      CREATE TABLE IF NOT EXISTS user_input_requests (
+        id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), attempt INTEGER NOT NULL,
+        prompt TEXT NOT NULL, fields_json TEXT NOT NULL, status TEXT NOT NULL,
+        response_json TEXT NOT NULL DEFAULT '{}', requested_at INTEGER NOT NULL, submitted_at INTEGER
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_user_input_requests_pending ON user_input_requests(run_id) WHERE status = 'pending';
+      CREATE INDEX IF NOT EXISTS idx_user_input_requests_run ON user_input_requests(run_id, requested_at);
       CREATE TABLE IF NOT EXISTS context_manifests (
         id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), attempt INTEGER NOT NULL,
         source TEXT NOT NULL, items_json TEXT NOT NULL, stats_json TEXT NOT NULL,
@@ -634,7 +643,7 @@ ${source.content}`;
     const transaction = this.db.transaction(() => {
       const active = this.db.prepare(`SELECT 1 FROM runs
         WHERE session_id = ? AND (
-          status = 'running' OR (
+          status IN ('running','waiting_input') OR (
             status IN ('blocked','interrupted') AND id = (
               SELECT latest.id FROM runs latest WHERE latest.session_id = ? ORDER BY latest.rowid DESC LIMIT 1
             )
@@ -730,7 +739,7 @@ ${source.content}`;
   }
 
   getRun(id: RunId): TaskRun | undefined {
-    type RunRow = Omit<TaskRun, "plan" | "checks" | "artifacts" | "continuations" | "completionGate" | "gateRequired" | "usage" | "transcriptCount" | "checkpoint" | "supervision"> & {
+    type RunRow = Omit<TaskRun, "plan" | "checks" | "artifacts" | "continuations" | "completionGate" | "gateRequired" | "usage" | "transcriptCount" | "checkpoint" | "supervision" | "userInputRequests" | "pendingUserInput"> & {
       gateRequired: number;
       usageInput: number;
       usageOutput: number;
@@ -773,6 +782,8 @@ ${source.content}`;
       artifacts,
       completionGate: { passed: true, failures: [] },
       supervision: { latestDecision: this.listSupervisorDecisions(id).at(-1) ?? null, latestGates: this.listLatestGateEvaluations(id), progress: this.getProgressSnapshot(id) ?? null, spawnProposals: this.listSpawnProposals(id), approvalRequests: this.listApprovalRequests(id), latestContextManifest: this.getLatestContextManifest(id) ?? null },
+      userInputRequests: this.listUserInputRequests(id),
+      pendingUserInput: this.getPendingUserInputRequest(id) ?? null,
       launchRetryable: this.isInboxLaunchRetryable(id),
     };
     task.completionGate = this.evaluateGate(task);
@@ -792,6 +803,50 @@ ${source.content}`;
   getActiveRun(sessionId: SessionId): TaskRun | undefined {
     const row = this.db.prepare("SELECT id FROM runs WHERE session_id = ? AND status = 'running' ORDER BY updated_at DESC LIMIT 1").get(sessionId) as { id: string } | undefined;
     return row ? this.getRun(row.id) : undefined;
+  }
+
+  listUserInputRequests(runId: RunId): UserInputRequest[] {
+    const rows = this.db.prepare(`SELECT id, run_id as runId, attempt, prompt, fields_json as fieldsJson,
+      status, response_json as responseJson, requested_at as requestedAt, submitted_at as submittedAt
+      FROM user_input_requests WHERE run_id = ? ORDER BY requested_at`).all(runId) as Array<Omit<UserInputRequest, "fields" | "response"> & { fieldsJson: string; responseJson: string }>;
+    return rows.map(({ fieldsJson, responseJson, ...row }) => ({ ...row, fields: JSON.parse(fieldsJson) as UserInputField[], response: JSON.parse(responseJson) as Record<string, string> }));
+  }
+
+  getPendingUserInputRequest(runId: RunId) {
+    return this.listUserInputRequests(runId).find((item) => item.status === "pending");
+  }
+
+  requestUserInput(runId: RunId, prompt: string, fields: UserInputField[]) {
+    const transaction = this.db.transaction(() => {
+      const run = this.getRun(runId);
+      if (!run || run.status !== "running") throw new Error("Run is not active");
+      const existing = this.getPendingUserInputRequest(runId);
+      if (existing) return existing;
+      const request: UserInputRequest = { id: randomUUID(), runId, attempt: run.attempt, prompt, fields, status: "pending", response: {}, requestedAt: now(), submittedAt: null };
+      this.db.prepare(`INSERT INTO user_input_requests (id, run_id, attempt, prompt, fields_json, status, requested_at)
+        VALUES (?, ?, ?, ?, ?, 'pending', ?)`).run(request.id, runId, run.attempt, prompt, JSON.stringify(fields), request.requestedAt);
+      this.db.prepare(`UPDATE runs SET status = 'waiting_input', phase = 'waiting_input', blocked_reason = ?, completed_at = NULL, updated_at = ?
+        WHERE id = ? AND status = 'running'`).run(prompt, request.requestedAt, runId);
+      this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id = ?").run(request.requestedAt, runId);
+      return request;
+    });
+    return transaction();
+  }
+
+  submitUserInput(requestId: string, response: Record<string, string>) {
+    const transaction = this.db.transaction(() => {
+      const row = this.db.prepare(`SELECT id, run_id as runId, fields_json as fieldsJson FROM user_input_requests
+        WHERE id = ? AND status = 'pending'`).get(requestId) as { id: string; runId: RunId; fieldsJson: string } | undefined;
+      if (!row) throw new Error("User input request is not pending");
+      const fields = JSON.parse(row.fieldsJson) as UserInputField[];
+      for (const field of fields) if (field.required && !String(response[field.key] ?? "").trim()) throw new Error(`${field.label} is required`);
+      const submittedAt = now();
+      const normalized = Object.fromEntries(fields.map((field) => [field.key, String(response[field.key] ?? "").trim()]));
+      this.db.prepare("UPDATE user_input_requests SET status = 'submitted', response_json = ?, submitted_at = ? WHERE id = ? AND status = 'pending'")
+        .run(JSON.stringify(normalized), submittedAt, requestId);
+      return { request: this.listUserInputRequests(row.runId).find((item) => item.id === requestId)!, run: this.getRun(row.runId)! };
+    });
+    return transaction();
   }
 
   listSupervisorContinuationsNeedingReconcile() {
@@ -1000,6 +1055,7 @@ ${source.content}`;
   listTranscriptView(runId: RunId) {
     type TranscriptViewItem =
       | { seq: number; index?: number; attempt: number; kind: "user" | "assistant"; text: string; createdAt: number }
+      | { seq: number; index: number; attempt: number; kind: "thinking"; text: string; redacted: boolean; createdAt: number }
       | { seq: number; index: number; attempt: number; kind: "tool"; toolCallId: string; toolName: string; arguments: unknown; result: string; isError: boolean; status: "pending" | "completed" | "failed"; createdAt: number };
     const toolResults = new Map<string, { content: string; isError: boolean; toolName: string }>();
     const entries = this.listTranscriptEntries(runId);
@@ -1020,6 +1076,10 @@ ${source.content}`;
       for (const [index, part] of message.content.entries()) {
         if (part.type === "text" && part.text) {
           view.push({ seq: entry.seq, index, attempt: entry.attempt, kind: "assistant", text: part.text, createdAt: entry.createdAt });
+          continue;
+        }
+        if (part.type === "thinking" && (part.thinking || part.redacted)) {
+          view.push({ seq: entry.seq, index, attempt: entry.attempt, kind: "thinking", text: part.redacted ? "Reasoning was redacted by the model provider." : part.thinking, redacted: Boolean(part.redacted), createdAt: entry.createdAt });
           continue;
         }
         if (part.type !== "toolCall") continue;
@@ -1122,12 +1182,12 @@ ${source.content}`;
   }
 
   setRunPhase(runId: RunId, phase: RunPhase) {
-    if (phase === "done" || phase === "blocked") return false;
+    if (phase === "done" || phase === "blocked" || phase === "waiting_input") return false;
     return this.advanceRunPhase(runId, phase);
   }
 
-  advanceRunPhase(runId: RunId, phase: Exclude<RunPhase, "done" | "blocked">) {
-    const rank: Record<Exclude<RunPhase, "done" | "blocked">, number> = { discover: 0, plan: 1, implement: 2, verify: 3, review: 4 };
+  advanceRunPhase(runId: RunId, phase: Exclude<RunPhase, "done" | "blocked" | "waiting_input">) {
+    const rank: Record<Exclude<RunPhase, "done" | "blocked" | "waiting_input">, number> = { discover: 0, plan: 1, implement: 2, verify: 3, review: 4 };
     return this.db.prepare(`UPDATE runs SET phase = ?, updated_at = ?
       WHERE id = ? AND status = 'running' AND CASE phase
         WHEN 'discover' THEN 0 WHEN 'plan' THEN 1 WHEN 'implement' THEN 2
@@ -1467,15 +1527,18 @@ ${source.content}`;
         .run(timestamp);
       this.db.prepare("UPDATE runs SET status = 'interrupted', blocked_reason = 'Service restarted before the run reached a terminal state', updated_at = ? WHERE status = 'running'")
         .run(timestamp);
+      this.db.prepare(`UPDATE runs SET blocked_reason = COALESCE((SELECT prompt FROM user_input_requests input WHERE input.run_id = runs.id AND input.status = 'pending'), blocked_reason),
+        phase = 'waiting_input', updated_at = ? WHERE status = 'waiting_input'`).run(timestamp);
     });
     transaction();
   }
 
   resumeRun(runId: RunId) {
     const run = this.getRun(runId);
-    if (!run || !["interrupted", "blocked"].includes(run.status)) throw new Error("Run is not resumable");
+    if (!run || !["interrupted", "blocked", "waiting_input"].includes(run.status)) throw new Error("Run is not resumable");
+    if (run.status === "waiting_input" && run.pendingUserInput) throw new Error("Run is waiting for the requested user input");
     const resumedAt = now();
-    this.db.prepare("UPDATE runs SET status = 'running', phase = CASE WHEN phase = 'blocked' THEN 'implement' ELSE phase END, blocked_reason = '', completed_at = NULL, attempt = attempt + 1, resumed_at = ?, updated_at = ? WHERE id = ?")
+    this.db.prepare("UPDATE runs SET status = 'running', phase = CASE WHEN phase IN ('blocked','waiting_input') THEN 'implement' ELSE phase END, blocked_reason = '', completed_at = NULL, attempt = attempt + 1, resumed_at = ?, updated_at = ? WHERE id = ?")
       .run(resumedAt, resumedAt, runId);
     return this.getRun(runId)!;
   }

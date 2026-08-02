@@ -354,6 +354,28 @@ describe("HTTP API", () => {
 
 });
 
+describe("User input request API", () => {
+  it("submits requested fields and resumes the original TaskRun", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "configure target");
+    const request = store.requestUserInput(run.id, "Which target?", [{ key: "target", label: "Target", description: "", inputType: "text", required: true, placeholder: "staging" }]);
+    const prompts: string[] = [];
+    const app = createApp({ store, service: new AgentService(store, "/tmp", () => ({
+      async prompt(prompt) { prompts.push(prompt); }, async steer() { return "accepted" as const; }, async followUp() { return "accepted" as const; },
+      abort() {}, getMessages() { return []; }, getError() { return undefined; },
+    })), logger: false, webRoot: "/tmp" });
+    apps.push(app);
+    const missing = await app.inject({ method: "POST", url: `/api/user-input-requests/${request.id}/submit`, payload: { response: {} } });
+    expect(missing.statusCode).toBe(409);
+    const submitted = await app.inject({ method: "POST", url: `/api/user-input-requests/${request.id}/submit`, payload: { response: { target: "staging" } } });
+    expect(submitted.statusCode).toBe(200);
+    expect(submitted.json()).toMatchObject({ id: run.id, status: "running", attempt: 2, pendingUserInput: null });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(prompts.join("\n")).toContain("Target (target): staging");
+  });
+});
+
 describe("Supervisor approval API", () => {
   it("requires an explicit approval decision before resuming", async () => {
     const store = new Store(":memory:");

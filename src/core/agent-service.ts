@@ -545,7 +545,8 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
         return false;
       }
       const current = this.store.getRun(runId);
-      if (!current || current.status !== "running") return false;
+      if (!current || current.status === "waiting_input") return false;
+      if (current.status !== "running") return false;
       const messages = runtime.getMessages();
       const checkpointResponse = this.store.getCheckpoint(runId)?.assistantPartial.trim() ?? "";
       const assistantResponses = messages
@@ -747,16 +748,34 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     return this.store.getRun(approval.runId)!;
   }
 
-  resume(runId: RunId) {
+  async submitUserInput(requestId: string, response: Record<string, string>) {
+    if (this.closing) throw new Error("Service is shutting down");
+    const pending = this.store.db.prepare("SELECT run_id as runId FROM user_input_requests WHERE id = ? AND status = 'pending'").get(requestId) as { runId: RunId } | undefined;
+    if (!pending) throw new Error("User input request is not pending");
+    const runtime = this.runtimes.get(pending.runId);
+    if (runtime) {
+      await this.abortRuntime(runtime, pending.runId);
+      await this.executionTasks.get(pending.runId);
+    }
+    const submitted = this.store.submitUserInput(requestId, response);
+    const run = submitted.run;
+    const summary = submitted.request.fields.map((field) => `${field.label}: ${submitted.request.response[field.key] ?? ""}`).join("\n");
+    const message = this.store.appendMessage(run.sessionId, "user", summary);
+    this.captureUserMessage(run, message.id, summary);
+    this.publish(this.store.appendEvent(run.id, "run.input.submitted", { requestId, fieldKeys: submitted.request.fields.map((field) => field.key), submittedAt: submitted.request.submittedAt }));
+    return this.resume(run.id, { inputRequest: submitted.request });
+  }
+
+  resume(runId: RunId, options?: { inputRequest?: import("./types.js").UserInputRequest }) {
     if (this.closing) throw new Error("Service is shutting down");
     if (this.runtimes.has(runId)) throw new Error("Run is already active");
     if (this.store.hasPendingApproval(runId)) throw new Error("Run requires an approval decision before resume");
     this.store.cancelQueuedContinuations(runId, "Superseded by manual resume");
     this.repairTranscript(runId, "resume");
     const run = this.store.resumeRun(runId);
-    const provisionalPrompt = this.buildResumePrompt(run, this.store.getTranscriptCount(run.id));
+    const provisionalPrompt = options?.inputRequest ? this.buildUserInputResumePrompt(run, options.inputRequest) : this.buildResumePrompt(run, this.store.getTranscriptCount(run.id));
     const transcript = this.prepareTranscript(run, provisionalPrompt);
-    const prompt = this.buildResumePrompt(run, transcript.messages.length);
+    const prompt = options?.inputRequest ? this.buildUserInputResumePrompt(run, options.inputRequest) : this.buildResumePrompt(run, transcript.messages.length);
     this.publishContextEvents(run.id, transcript);
     const event = this.store.appendEvent(run.id, "run.resumed", { attempt: run.attempt, resumedAt: run.resumedAt, mode: transcript.messages.length ? "transcript-continuation" : "durable-snapshot-replay", transcriptCount: transcript.messages.length });
     this.publish(event);
@@ -850,6 +869,18 @@ ${coreSnapshot.markdown}
     }
   }
 
+  private buildUserInputResumePrompt(run: TaskRun, request: import("./types.js").UserInputRequest) {
+    return [
+      "The user supplied the information requested by this TaskRun. Resume the same task from the persisted transcript and durable state.",
+      `Original request for information: ${request.prompt}`,
+      "Submitted fields:",
+      ...request.fields.map((field) => `- ${field.label} (${field.key}): ${request.response[field.key] ?? ""}`),
+      "Use these values as user-provided task context. Do not ask for them again unless the submission is genuinely insufficient. Continue execution, update the existing plan/checks, verify, and provide a complete standalone final response.",
+      `Original goal: ${run.goal}`,
+      `Durable snapshot: ${JSON.stringify(runtimeRunContext(run))}`,
+    ].join("\n\n");
+  }
+
   private buildResumePrompt(run: TaskRun, transcriptCount: number) {
     return [
       transcriptCount
@@ -875,6 +906,7 @@ ${coreSnapshot.markdown}
       "You are TAgent Core, a practical persistent software agent.",
       `Current workspace: ${this.workspace}`,
       "Use the task_run tool for substantial work. Maintain a plan and checks before claiming completion.",
+      "If execution cannot continue without specific user-provided information, call task_run with action=request_user_input, a concise prompt, and only the necessary typed fields. Do not guess, continue, or fail the task after requesting input; the TaskRun will pause and resume when the user submits the form. Do not request input for information available from the workspace, tools, transcript, or durable state.",
       "Assistant text streamed while a TaskRun is active is provisional. Only a Supervisor-approved final candidate is persisted to chat, so make the final candidate complete and standalone.",
       "Use read before modifying unfamiliar files. Keep changes focused and report verification evidence.",
       `Active TaskRun: ${JSON.stringify(runtimeRunContext(run))}`,

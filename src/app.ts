@@ -257,6 +257,13 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     try { return service.resume(id); }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
   });
+  app.post("/api/user-input-requests/:id/submit", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { response?: Record<string, unknown> };
+    if (!body.response || typeof body.response !== "object" || Array.isArray(body.response)) return reply.code(400).send({ error: "response is required" });
+    try { return await service.submitUserInput(id, Object.fromEntries(Object.entries(body.response).map(([key, value]) => [key, typeof value === "string" ? value : String(value ?? "")]))); }
+    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
   app.get("/api/runs/:id/supervision", async (request, reply) => {
     const { id } = request.params as { id: string };
     const run = service.getRun(id);

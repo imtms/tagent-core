@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createServer } from "node:http";
-import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxProvider, fauxThinking } from "@earendil-works/pi-ai/providers/faux";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { PiRuntime } from "../src/runtime/pi-runtime.js";
 import { Store } from "../src/store/store.js";
@@ -25,6 +25,19 @@ describe("Pi 0.83 AgentSession integration", () => {
     expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "session ready" }] });
     expect(store.listTranscript(run.id).some((message) => message.role === "assistant")).toBe(true);
     expect(store.listEvents(run.id).some((event) => event.type === "message.completed")).toBe(true);
+    runtime.dispose();
+    store.close();
+  });
+
+  it("streams and persists model thinking separately from visible answer text", async () => {
+    const { store, run, runtime } = await setup([fauxAssistantMessage([fauxThinking("inspect, compare, verify"), { type: "text", text: "done" }])]);
+    await runtime.prompt("reason");
+    const events = store.listEvents(run.id);
+    expect(events.filter((event) => event.type === "message.thinking.delta").map((event) => String(event.data.delta ?? "")).join("")).toBe("inspect, compare, verify");
+    expect(store.listTranscriptView(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "thinking", text: "inspect, compare, verify" }),
+      expect.objectContaining({ kind: "assistant", text: "done" }),
+    ]));
     runtime.dispose();
     store.close();
   });

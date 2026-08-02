@@ -29,7 +29,9 @@ export class PiRuntime implements AgentRuntime {
   private abortPromise?: Promise<void>;
   private assistantMessageOrdinal = 0;
   private pendingDelta = "";
+  private pendingThinkingDelta = "";
   private deltaTimer?: ReturnType<typeof setTimeout>;
+  private thinkingDeltaTimer?: ReturnType<typeof setTimeout>;
   private lastToolProgressAt = new Map<string, number>();
 
   constructor(private readonly options: RuntimeOptions) {}
@@ -140,6 +142,7 @@ export class PiRuntime implements AgentRuntime {
       const effectiveError = piResult?.isError ?? isError;
       const run = this.options.store.getRun(this.options.runId);
       if (run) this.options.store.completeToolAttempt(this.options.runId, run.attempt, toolCall.id, !effectiveError, effectiveError ? "Tool execution failed" : "");
+      if (run?.status === "waiting_input") setImmediate(() => void session.abort());
       return piResult;
     };
     this.unsubscribe = session.subscribe((event) => this.handleEvent(event));
@@ -155,8 +158,12 @@ export class PiRuntime implements AgentRuntime {
     }
     if (event.type === "message_end") {
       this.flushDelta();
+      this.flushThinkingDelta();
       const run = this.options.store.getRun(this.options.runId);
-      if (run) this.options.store.appendTranscript(this.options.runId, run.attempt, event.message);
+      if (run) {
+        const transcriptSeq = this.options.store.appendTranscript(this.options.runId, run.attempt, event.message);
+        this.emit("transcript.updated", { transcriptSeq, role: event.message.role, ordinal: event.message.role === "assistant" ? this.assistantMessageOrdinal : undefined });
+      }
       if (run?.status === "running" && event.message.role === "assistant") {
         const kind = classifyProviderFailure(event.message, this.options.model?.contextWindow);
         const summary = (event.message.errorMessage ?? "").replace(/\s+/g, " ").slice(0, 500);
@@ -177,6 +184,7 @@ export class PiRuntime implements AgentRuntime {
       this.emit("tool.completed", { toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError });
     }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") this.queueDelta(event.assistantMessageEvent.delta);
+    if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") this.queueThinkingDelta(event.assistantMessageEvent.delta);
     if (event.type === "agent_end") {
       if (this.options.store.getRun(this.options.runId)?.status === "running") {
         const final = [...event.messages].reverse().find((message) => message.role === "assistant");
@@ -199,6 +207,7 @@ export class PiRuntime implements AgentRuntime {
     if (this.disposed) throw new Error("Runtime disposed");
     if (this.abortRequested) throw new Error("Runtime aborted");
     await session.prompt(query);
+    if (this.options.store.getRun(this.options.runId)?.status === "waiting_input" && session.isStreaming) await session.abort();
   }
 
   async steer(instruction: string) {
@@ -225,6 +234,7 @@ export class PiRuntime implements AgentRuntime {
 
   dispose() {
     this.flushDelta();
+    this.flushThinkingDelta();
     this.disposed = true;
     const session = this.session;
     if (!session) return;
@@ -266,6 +276,23 @@ export class PiRuntime implements AgentRuntime {
     const delta = this.pendingDelta;
     this.pendingDelta = "";
     this.emit("message.delta", { delta, ordinal: this.assistantMessageOrdinal });
+  }
+
+  private queueThinkingDelta(delta: string) {
+    this.pendingThinkingDelta += delta;
+    if (this.pendingThinkingDelta.length >= 256) return this.flushThinkingDelta();
+    if (this.thinkingDeltaTimer) return;
+    this.thinkingDeltaTimer = setTimeout(() => this.flushThinkingDelta(), 50);
+    this.thinkingDeltaTimer.unref?.();
+  }
+
+  private flushThinkingDelta() {
+    if (this.thinkingDeltaTimer) clearTimeout(this.thinkingDeltaTimer);
+    this.thinkingDeltaTimer = undefined;
+    if (!this.pendingThinkingDelta) return;
+    const delta = this.pendingThinkingDelta;
+    this.pendingThinkingDelta = "";
+    this.emit("message.thinking.delta", { delta, ordinal: this.assistantMessageOrdinal });
   }
 
   private emit(type: string, data: Record<string, unknown>) {

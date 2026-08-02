@@ -14,6 +14,19 @@ const createStore = () => {
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
 
 describe("Store", () => {
+  it("persists a user input pause and accepts a validated submission", () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "needs deployment target");
+    const request = store.requestUserInput(run.id, "Choose the deployment target", [{ key: "target", label: "Target", description: "Environment name", inputType: "text", required: true, placeholder: "staging" }]);
+    expect(store.getRun(run.id)).toMatchObject({ status: "waiting_input", phase: "waiting_input", pendingUserInput: { id: request.id, prompt: "Choose the deployment target" } });
+    expect(() => store.resumeRun(run.id)).toThrow("waiting for the requested user input");
+    expect(() => store.submitUserInput(request.id, {})).toThrow("Target is required");
+    store.submitUserInput(request.id, { target: "staging" });
+    expect(store.getRun(run.id)?.pendingUserInput).toBeNull();
+    expect(store.resumeRun(run.id)).toMatchObject({ status: "running", phase: "implement", attempt: 2 });
+    store.close();
+  });
   it("creates a Session only once for an external requestId", () => {
     const store = createStore();
     const first = store.createSession("First", "external-session-1");
@@ -477,11 +490,12 @@ describe("Store", () => {
     const session = store.createSession();
     const run = store.createRun(session.id, "transcript view");
     store.appendTranscript(run.id, 1, {
-      role: "assistant", content: [{ type: "text", text: "Before" }, { type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.txt" } }], api: "openai-completions", provider: "test", model: "test",
+      role: "assistant", content: [{ type: "thinking", thinking: "Inspect the file before deciding." }, { type: "text", text: "Before" }, { type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.txt" } }], api: "openai-completions", provider: "test", model: "test",
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: 1,
     });
     store.appendTranscript(run.id, 1, { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text: "file contents" }], details: {}, isError: false, timestamp: 2 });
     expect(store.listTranscriptView(run.id)).toEqual([
+      expect.objectContaining({ kind: "thinking", text: "Inspect the file before deciding.", redacted: false }),
       expect.objectContaining({ kind: "assistant", text: "Before" }),
       expect.objectContaining({ kind: "tool", toolName: "read", arguments: { path: "a.txt" }, result: "file contents", status: "completed" }),
     ]);
@@ -562,16 +576,16 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(14);
+    expect(store.getSchemaVersion()).toBe(15);
   });
 
-  it("migrates an older database to schema version 14", () => {
+  it("migrates an older database to schema version 15", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(14);
+    expect(migrated.getSchemaVersion()).toBe(15);
     expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('approval_requests','context_manifests','control_inbox','event_consumers','gate_evaluations','operations','progress_snapshots','run_checkpoints','session_supervisor_inbox','spawn_proposals','supervisor_decisions','taskrun_edges','tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["approval_requests", "context_manifests", "control_inbox", "event_consumers", "gate_evaluations", "operations", "progress_snapshots", "run_checkpoints", "session_supervisor_inbox", "spawn_proposals", "supervisor_decisions", "taskrun_edges", "tool_attempts"]);
     migrated.close();
   });

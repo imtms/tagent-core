@@ -2,6 +2,16 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 describe("Web workbench state model", () => {
+  it("renders the persisted user-input form and submits it to resume", async () => {
+    const app = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    const api = await readFile(new URL("../web/src/api.ts", import.meta.url), "utf8");
+    expect(app).toContain("Information needed to continue");
+    expect(app).toContain("selectedRun?.pendingUserInput");
+    expect(app).toContain("api.submitUserInput");
+    expect(app).toContain("Submit and resume");
+    expect(api).toContain("/api/user-input-requests/${requestId}/submit");
+  });
+
   it("keeps active execution separate from selected Run history", async () => {
     const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
     expect(source).toContain("const [activeRun, setActiveRun]");
@@ -67,7 +77,10 @@ describe("Web workbench state model", () => {
     const styles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
     expect(app).toContain("loadOlderMessages");
     expect(app).toContain("<ChatMessage key={message.id}");
-    expect(app).toContain("<LiveText>{streaming}</LiveText>");
+    expect(app).toContain("<LiveText>{liveOutput}</LiveText>");
+    expect(app).toContain("<LiveText>{liveThinking}</LiveText>");
+    expect(app).toContain("<ExecutionTimeline runId=");
+    expect(app).toContain("items={transcript}");
     expect(app).not.toContain("api.sessions(), api.messages(targetSessionId)");
     expect(markdown).toContain("export const Markdown = memo");
     expect(styles).toContain("content-visibility: auto");
@@ -75,12 +88,27 @@ describe("Web workbench state model", () => {
 
   it("keeps the visible response until replacement content arrives and reconciles missed terminal events", async () => {
     const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
-    expect(source).toContain('if (event.type === "message.started") replaceStreamingOnNextDeltaRef.current = true');
+    expect(source).toContain('if (event.type === "message.started") { replaceStreamingOnNextDeltaRef.current = true; setLiveThinking(""); }');
+    expect(source).toContain('if (event.type === "message.thinking.delta")');
+    expect(source).toContain('if (event.type === "transcript.updated")');
     expect(source).toContain("if (replaceStreamingOnNextDeltaRef.current)");
     expect(source).toContain('if (event.type === "message.completed")');
     expect(source).toContain("const [history, ended, view] = await Promise.all");
     expect(source).not.toContain("earlier draft");
     expect(source).not.toContain("setProvisionalDrafts");
+  });
+
+  it("keeps the execution trace live while running and collapses it when the final result settles", async () => {
+    const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    const styles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
+    expect(source).toContain("const [expanded, setExpanded] = useState(isRunning)");
+    expect(source).toContain("useEffect(() => { setExpanded(isRunning); }, [runId, isRunning])");
+    expect(source).toContain("if (!isRunning || !expanded) return;");
+    expect(source).toContain("body.scrollTop = body.scrollHeight");
+    expect(source).toContain('aria-expanded={expanded}');
+    expect(source).toContain('isRunning={activeRun?.status === "running"}');
+    expect(styles).toContain(".execution-timeline-body { max-height:");
+    expect(styles).toContain("overflow-y: auto");
   });
 
   it("keeps tool telemetry out of the conversation and exposes auditable Supervisor gates", async () => {

@@ -28,6 +28,7 @@ const TaskRunSchema = Type.Union([
   Type.Object({ action: Type.Literal("mark_checks_stale") }),
   Type.Object({ action: Type.Literal("operations") }),
   Type.Object({ action: Type.Literal("artifact"), id: Type.String(), title: Type.String(), kind: Type.Optional(Type.String()), content: Type.Optional(Type.String()), uri: Type.Optional(Type.String()) }),
+  Type.Object({ action: Type.Literal("request_user_input"), prompt: Type.String(), fields: Type.Array(Type.Object({ key: Type.String(), label: Type.String(), description: Type.Optional(Type.String()), inputType: Type.Optional(Type.Union([Type.Literal("text"), Type.Literal("textarea")])), required: Type.Optional(Type.Boolean()), placeholder: Type.Optional(Type.String()) }), { minItems: 1, maxItems: 12 }) }),
   Type.Object({ action: Type.Literal("spawn_proposal"), goal: Type.String(), acceptanceCriteria: Type.Array(Type.String()), relation: Type.Optional(Type.Union([Type.Literal("depends_on"), Type.Literal("follow_up"), Type.Literal("parallel"), Type.Literal("derived")])) }),
 ]);
 
@@ -204,6 +205,18 @@ export function createTools(store: Store, runId: RunId, workspace: string, onEve
       if (params.action === "mark_checks_stale") store.markChecksStale(runId);
       if (params.action === "operations") return textResult(JSON.stringify(store.listOperations(runId), null, 2));
       if (params.action === "artifact") store.addArtifact(runId, { id: params.id, title: params.title, kind: params.kind ?? "artifact", content: params.content ?? "", uri: params.uri ?? "" });
+      if (params.action === "request_user_input") {
+        const keys = new Set<string>();
+        const fields = params.fields.map((field) => {
+          const key = field.key.trim();
+          if (!key || keys.has(key)) throw new Error("User input field keys must be non-empty and unique");
+          keys.add(key);
+          return { key, label: field.label.trim() || key, description: field.description?.trim() ?? "", inputType: field.inputType ?? "text" as const, required: field.required ?? true, placeholder: field.placeholder?.trim() ?? "" };
+        });
+        const request = store.requestUserInput(runId, params.prompt.trim(), fields);
+        onEvent?.(store.appendEvent(runId, "run.waiting_for_input", { requestId: request.id, prompt: request.prompt, fields: request.fields.map(({ key, label, description, inputType, required, placeholder }) => ({ key, label, description, inputType, required, placeholder })) }));
+        return textResult(JSON.stringify({ ok: true, action: params.action, runId, status: "waiting_input", requestId: request.id, requiredFields: request.fields.map((field) => field.key) }), { compact: true });
+      }
       if (params.action === "spawn_proposal") store.createSpawnProposal(runId, params.goal.trim(), params.acceptanceCriteria, params.relation ?? "derived");
       const changed = params.action !== "get";
       const run = store.getRun(runId);

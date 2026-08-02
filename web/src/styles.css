@@ -547,3 +547,56 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(22, 116, 
 @media (max-width: 680px) { .gate-standard-grid { grid-template-columns: minmax(0,1fr); } }
 
 .gate-evaluator { margin: 0; padding: 6px 7px; border-radius: 6px; background: #eef5f1; color: #486056; font-size: 8px; line-height: 1.45; }
+
+.execution-timeline { max-width: 980px; margin: 0 auto 22px; overflow: hidden; border: 1px solid #d9e2dc; border-radius: 10px; background: #f7faf8; }
+.execution-timeline-heading { width: 100%; min-height: 42px; padding: 0 12px; border: 0; display: flex; align-items: center; justify-content: space-between; color: #45534b; background: transparent; font-size: 10px; text-align: left; cursor: pointer; }
+.execution-timeline-heading:hover { background: #f0f5f2; }
+.execution-timeline-heading > span { display: inline-flex; align-items: center; gap: 7px; font-weight: 750; text-transform: uppercase; letter-spacing: .035em; }
+.execution-timeline-heading > span i { margin-left: 3px; display: inline-flex; align-items: center; gap: 5px; color: var(--accent); font-size: 9px; font-style: normal; letter-spacing: 0; text-transform: none; }
+.execution-timeline-heading small { color: var(--muted); font-weight: 500; }
+.execution-timeline.collapsed .execution-timeline-heading { background: #f8faf8; }
+.execution-timeline-body { max-height: min(52vh, 520px); padding: 0 12px 12px; display: grid; gap: 8px; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: smooth; border-top: 1px solid #e4e9e5; scrollbar-gutter: stable; }
+.run-step { overflow: hidden; border: 1px solid #dde4df; border-radius: 8px; background: white; }
+.run-step-meta, .run-step > summary { min-height: 36px; padding: 0 10px; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto 14px; align-items: center; gap: 6px; color: #46534b; font-size: 10px; }
+.run-step-meta { grid-template-columns: 18px minmax(0, 1fr) auto; border-bottom: 1px solid #edf0ed; }
+.run-step > summary { cursor: pointer; list-style: none; }
+.run-step > summary::-webkit-details-marker { display: none; }
+.run-step > summary small, .run-step-meta small { color: var(--muted); font-weight: 500; }
+.run-step[open] > summary { border-bottom: 1px solid #e8ece9; }
+.run-step[open] > summary .tool-chevron { transform: rotate(90deg); }
+.run-step-content { padding: 11px 12px; color: #303b34; font-size: 12px; line-height: 1.62; overflow-wrap: anywhere; }
+.run-step-content .markdown { font-size: inherit; }
+.assistant-step { border-color: #d5e2da; }
+.assistant-step .run-step-meta { color: var(--accent); background: #f4f9f6; }
+.assistant-step.live { border-color: #a9cdb9; box-shadow: 0 0 0 2px rgba(22,116,84,.05); }
+.thinking-step { border-color: #e2dccb; background: #fffdf8; }
+.thinking-step > summary { color: #755f2f; background: #fbf7ec; }
+.thinking-step.redacted .run-step-content { color: var(--muted); font-style: italic; }
+.thinking-step.live { border-color: #d9c99e; }
+.tool-step > summary { background: #f7f8f7; }
+.tool-step.failed > summary, .live-tool-step.failed { color: var(--danger); background: #fff5f5; }
+.run-step-tool { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; padding: 10px; }
+.run-step-tool strong { display: block; margin-bottom: 5px; color: var(--muted); font-size: 9px; text-transform: uppercase; }
+.run-step-tool pre { max-height: 260px; margin: 0; padding: 9px; overflow: auto; border: 1px solid #e0e5e1; border-radius: 6px; background: #f6f8f6; white-space: pre-wrap; overflow-wrap: anywhere; font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.live-tool-step { min-height: 38px; padding: 0 10px; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 6px; color: #4a5a51; background: #f8faf8; font-size: 10px; }
+.live-tool-step small { color: var(--accent); text-transform: capitalize; }
+.user-input-card { margin: 12px 0 18px; padding: 16px; border: 1px solid #d8c999; border-radius: 12px; background: linear-gradient(145deg,#fffdf6,#fffaf0); box-shadow: 0 10px 28px rgba(95,77,29,.08); }
+.user-input-heading { display: grid; grid-template-columns: 24px minmax(0,1fr) auto; gap: 10px; align-items: start; color: #725b20; }
+.user-input-heading strong { display:block; font-size: 13px; color:#4d421f; }
+.user-input-heading p { margin:4px 0 0; color:#6b634e; font-size:12px; line-height:1.55; }
+.user-input-heading > span { padding:3px 7px; border-radius:999px; background:#f0dfaa; color:#6a5317; font-size:9px; font-weight:700; text-transform:uppercase; }
+.user-input-needed { margin:12px 0; padding:10px 12px 10px 28px; border-radius:8px; background:rgba(255,255,255,.7); color:#575142; font-size:11px; }
+.user-input-needed li + li { margin-top:6px; }
+.user-input-needed strong { margin-right:6px; color:#403c31; }
+.user-input-needed span { color:#77705f; }
+.user-input-card form { display:grid; gap:11px; }
+.user-input-card label { display:grid; gap:5px; color:#474337; font-size:11px; font-weight:650; }
+.user-input-card label small { color:#817966; font-size:10px; font-weight:400; }
+.user-input-card input,.user-input-card textarea { width:100%; box-sizing:border-box; padding:9px 10px; border:1px solid #d9d2bd; border-radius:7px; outline:none; background:#fff; color:#29312c; font:12px/1.5 inherit; resize:vertical; }
+.user-input-card input:focus,.user-input-card textarea:focus { border-color:#9c8a4c; box-shadow:0 0 0 3px rgba(156,138,76,.12); }
+.user-input-card button { justify-self:start; min-height:34px; padding:0 13px; display:flex; align-items:center; gap:7px; border:0; border-radius:7px; background:var(--accent); color:#fff; font-size:11px; font-weight:700; cursor:pointer; }
+.user-input-card button:disabled { opacity:.5; cursor:not-allowed; }
+.workspace-run-status.waiting_input { color:#8a691e; }
+.workspace-run-status.waiting_input .workspace-status-dot,.history-status.waiting_input { background:#d1a32c; }
+.phase-badge.waiting_input { background:#fff1c7; color:#755814; }
+@media (max-width: 700px) { .run-step-tool { grid-template-columns: 1fr; } .run-step-meta, .run-step > summary { grid-template-columns: 18px minmax(0,1fr) auto 14px; } .user-input-heading { grid-template-columns:22px minmax(0,1fr); } .user-input-heading > span { grid-column:2; justify-self:start; } }

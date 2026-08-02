@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Command, Eye, FileText, GripVertical, Menu, MessageSquarePlus, PanelRight, Pencil, Play, Plus, Send, ShieldCheck, Square, Terminal, X } from "lucide-react";
-import { api, subscribe, type CaptureJob, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TranscriptItem } from "./api";
+import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Command, Eye, FileText, GripVertical, HelpCircle, Menu, MessageSquarePlus, PanelRight, Pencil, Play, Plus, Send, ShieldCheck, Square, Terminal, X } from "lucide-react";
+import { api, subscribe, type CaptureJob, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TranscriptItem, type UserInputRequest } from "./api";
 import { LiveText, Markdown } from "./Markdown";
 import { createRequestId } from "./id";
 import { deriveCurrentOperation } from "./current-operation";
@@ -41,6 +41,62 @@ function ToolCall({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> })
     <summary><Terminal size={14} /><span>{item.toolName}</span><small>{item.isError ? "failed" : item.status}</small><ChevronRight className="tool-chevron" size={14} /></summary>
     <div className="tool-call-body"><div><strong>Arguments</strong><pre>{JSON.stringify(item.arguments, null, 2)}</pre></div><div><strong>Result</strong><pre>{item.result || "No result recorded"}</pre></div></div>
   </details>;
+}
+
+function RunStep({ item }: { item: TranscriptItem }) {
+  if (item.kind === "assistant") return <article className="run-step assistant-step"><div className="run-step-meta"><Bot size={13} /><strong>Model output</strong><small>attempt {item.attempt} · {formatTime(item.createdAt)}</small></div><div className="run-step-content"><Markdown>{item.text}</Markdown></div></article>;
+  if (item.kind === "thinking") return <details className={`run-step thinking-step ${item.redacted ? "redacted" : ""}`} open={!item.redacted}><summary><BrainCircuit size={13} /><strong>{item.redacted ? "Model reasoning unavailable" : "Model reasoning"}</strong><small>attempt {item.attempt} · {formatTime(item.createdAt)}</small><ChevronRight className="tool-chevron" size={13} /></summary><div className="run-step-content"><Markdown>{item.text}</Markdown></div></details>;
+  if (item.kind === "tool") return <details className={`run-step tool-step ${item.isError ? "failed" : ""}`}><summary><Terminal size={13} /><strong>{item.toolName}</strong><small>{item.status} · attempt {item.attempt}</small><ChevronRight className="tool-chevron" size={13} /></summary><div className="run-step-tool"><div><strong>Arguments</strong><pre>{JSON.stringify(item.arguments, null, 2)}</pre></div><div><strong>Result</strong><pre>{item.result || "Waiting for result…"}</pre></div></div></details>;
+  return null;
+}
+
+function UserInputCard({ request, submitting, onSubmit }: { request: UserInputRequest; submitting: boolean; onSubmit: (values: Record<string, string>) => Promise<void> }) {
+  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(request.fields.map((field) => [field.key, ""])));
+  const missing = request.fields.some((field) => field.required && !values[field.key]?.trim());
+  return <section className="user-input-card" aria-label="TaskRun needs more information">
+    <div className="user-input-heading"><HelpCircle size={18} /><div><strong>Information needed to continue</strong><p>{request.prompt}</p></div><span>Paused</span></div>
+    <ul className="user-input-needed">{request.fields.map((field) => <li key={field.key}><strong>{field.label}{field.required ? " *" : ""}</strong>{field.description && <span>{field.description}</span>}</li>)}</ul>
+    <form onSubmit={(event) => { event.preventDefault(); if (!missing && !submitting) void onSubmit(values); }}>
+      {request.fields.map((field) => <label key={field.key}><span>{field.label}{field.required ? " *" : ""}</span>{field.inputType === "textarea" ? <textarea rows={3} value={values[field.key] ?? ""} placeholder={field.placeholder} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} /> : <input value={values[field.key] ?? ""} placeholder={field.placeholder} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} />}{field.description && <small>{field.description}</small>}</label>)}
+      <button type="submit" disabled={missing || submitting}>{submitting ? <Activity className="spin" size={15} /> : <Send size={15} />}{submitting ? "Resuming…" : "Submit and resume"}</button>
+    </form>
+  </section>;
+}
+
+function ExecutionTimeline({ runId, isRunning, items, events, liveThinking, liveOutput }: { runId: string; isRunning: boolean; items: TranscriptItem[]; events: RunEvent[]; liveThinking: string; liveOutput: string }) {
+  const [expanded, setExpanded] = useState(isRunning);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const visible = items.filter((item) => item.kind !== "user");
+  const completedToolIds = new Set(items.filter((item): item is Extract<TranscriptItem, { kind: "tool" }> => item.kind === "tool").map((item) => item.toolCallId));
+  const liveTools = events.filter((event) => event.type.startsWith("tool.") && !completedToolIds.has(String(event.data.toolCallId ?? ""))).reduce<RunEvent[]>((latest, event) => {
+    const id = String(event.data.toolCallId ?? event.seq);
+    const existing = latest.findIndex((item) => String(item.data.toolCallId ?? item.seq) === id);
+    if (existing >= 0) latest[existing] = event; else latest.push(event);
+    return latest;
+  }, []);
+  useEffect(() => { setExpanded(isRunning); }, [runId, isRunning]);
+  useEffect(() => {
+    if (!isRunning || !expanded) return;
+    const frame = requestAnimationFrame(() => {
+      const body = bodyRef.current;
+      if (body) body.scrollTop = body.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [expanded, isRunning, visible.length, liveTools.length, liveThinking, liveOutput, events]);
+  if (!visible.length && !liveThinking && !liveOutput && !liveTools.length) return null;
+  const stepCount = visible.length + liveTools.length;
+  return <section className={`execution-timeline ${expanded ? "expanded" : "collapsed"}`} aria-label="Agent execution timeline">
+    <button className="execution-timeline-heading" type="button" aria-expanded={expanded} aria-controls={`execution-trace-${runId}`} onClick={() => setExpanded((current) => !current)}>
+      <span>{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<Activity size={14} />Execution trace{isRunning && <i><span className="pulse" />Live</i>}</span>
+      <small>{stepCount} step{stepCount === 1 ? "" : "s"}{!isRunning && !expanded ? " · expand to inspect" : ""}</small>
+    </button>
+    {expanded && <div className="execution-timeline-body" id={`execution-trace-${runId}`} ref={bodyRef}>
+      {visible.map((item) => <RunStep key={`${item.seq}-${item.index ?? 0}-${item.kind}`} item={item} />)}
+      {liveThinking && <details className="run-step thinking-step live" open><summary><BrainCircuit size={13} /><strong>Model reasoning</strong><span className="live-label"><span className="pulse" />Live</span><ChevronRight className="tool-chevron" size={13} /></summary><div className="run-step-content"><LiveText>{liveThinking}</LiveText></div></details>}
+      {liveTools.map((event) => <div className={`run-step live-tool-step ${event.data.isError ? "failed" : ""}`} key={`${event.seq}-${event.type}`}><Terminal size={13} /><strong>{String(event.data.toolName ?? "tool")}</strong><small>{event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "completed"}</small></div>)}
+      {liveOutput && <article className="run-step assistant-step live"><div className="run-step-meta"><Bot size={13} /><strong>Model output</strong><span className="live-label"><span className="pulse" />Live</span></div><div className="run-step-content"><LiveText>{liveOutput}</LiveText></div></article>}
+    </div>}
+  </section>;
 }
 
 function ToolActivityPanel({ transcriptItems, events }: { transcriptItems: Extract<TranscriptItem, { kind: "tool" }>[]; events: RunEvent[] }) {
@@ -169,6 +225,7 @@ export function App() {
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const [pendingUserMessage, setPendingUserMessage] = useState<{ sessionId: string; content: string; createdAt: number } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [submittingUserInputId, setSubmittingUserInputId] = useState("");
   const [activeRun, setActiveRun] = useState<TaskRun | null>(null);
   const [selectedRun, setSelectedRun] = useState<TaskRun | null>(null);
   const [runs, setRuns] = useState<TaskRun[]>([]);
@@ -185,6 +242,7 @@ export function App() {
   const [reorderingInbox, setReorderingInbox] = useState(false);
   const [mutatingInboxId, setMutatingInboxId] = useState("");
   const [streaming, setStreaming] = useState("");
+  const [liveThinking, setLiveThinking] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [leftOpen, setLeftOpen] = useState(false);
@@ -253,7 +311,7 @@ export function App() {
           replaceStreamingOnNextDeltaRef.current = false;
           setMessages(history); setHasOlderMessages(history.length === 80);
           setActiveRun(hydrated); setSelectedRun(hydrated); setExpandedRunId(hydrated.id);
-          setTranscript(view); setStreaming(hydrated.checkpoint?.active ? hydrated.checkpoint.assistantPartial : "");
+          setTranscript(view); setStreaming(hydrated.checkpoint?.active ? hydrated.checkpoint.assistantPartial : ""); setLiveThinking("");
           setEvents(hydrated.checkpoint?.active && hydrated.checkpoint.currentTool ? [{ runId: hydrated.id, seq: hydrated.checkpoint.lastEventSeq, type: "tool.started", data: hydrated.checkpoint.currentTool, createdAt: hydrated.checkpoint.updatedAt }] : []);
           setError("");
         } else if (!active && activeRunIdRef.current) {
@@ -262,7 +320,7 @@ export function App() {
           if (closed || sessionIdRef.current !== targetSessionId || activeRunIdRef.current !== endedRunId) return;
           replaceStreamingOnNextDeltaRef.current = false;
           setMessages(history); setHasOlderMessages(history.length === 80); setSelectedRun(ended); setTranscript(view);
-          setActiveRun(null); setStreaming(""); setEvents([]);
+          setActiveRun(null); setStreaming(""); setLiveThinking(""); setEvents([]);
         } else if (active) {
           setActiveRun((current) => current?.id === active.id ? { ...current, ...active } : active);
         }
@@ -278,13 +336,13 @@ export function App() {
     const targetSessionId = sessionId;
     let closed = false;
     replaceStreamingOnNextDeltaRef.current = false;
-    setStreaming(""); setEvents([]); setError(""); setEditingInboxId(""); setInboxDraft(""); setDraggingInboxId(""); setPendingUserMessage(null);
+    setStreaming(""); setLiveThinking(""); setEvents([]); setError(""); setEditingInboxId(""); setInboxDraft(""); setDraggingInboxId(""); setPendingUserMessage(null);
     void Promise.all([api.messages(targetSessionId), api.runs(targetSessionId), api.inbox(targetSessionId)]).then(async ([history, runHistory, queued]) => {
       if (closed || sessionIdRef.current !== targetSessionId) return;
       const latest = runHistory[0] ?? null;
       const active = runHistory.find((item) => item.status === "running") ?? null;
       setMessages(history); setHasOlderMessages(history.length === 80); setRuns(runHistory); setInbox(queued); setActiveRun(active); setSelectedRun(latest); setExpandedRunId(latest?.id ?? "");
-      setStreaming(active?.checkpoint?.active ? active.checkpoint.assistantPartial : "");
+      setStreaming(active?.checkpoint?.active ? active.checkpoint.assistantPartial : ""); setLiveThinking("");
       setEvents(active?.checkpoint?.active && active.checkpoint.currentTool ? [{ runId: active.id, seq: active.checkpoint.lastEventSeq, type: "tool.started", data: active.checkpoint.currentTool, createdAt: active.checkpoint.updatedAt }] : []);
       if (!latest) { setTranscript([]); return; }
       const view = await api.transcriptView(latest.id);
@@ -323,7 +381,8 @@ export function App() {
       const after = Math.max(checkpointAfter, cursor.ackedSeq);
       unsubscribe = subscribe(runId, consumerId, cursor.generation, after, async (event) => {
       setEvents((current) => [...current.slice(-39), event]);
-      if (event.type === "message.started") replaceStreamingOnNextDeltaRef.current = true;
+      if (event.type === "message.started") { replaceStreamingOnNextDeltaRef.current = true; setLiveThinking(""); }
+      if (event.type === "message.thinking.delta") setLiveThinking((current) => current + String(event.data.delta ?? ""));
       if (event.type === "message.delta") setStreaming((current) => {
         const delta = String(event.data.delta ?? "");
         if (replaceStreamingOnNextDeltaRef.current) {
@@ -336,7 +395,12 @@ export function App() {
         const content = String(event.data.content ?? "");
         if (content.trim()) { replaceStreamingOnNextDeltaRef.current = false; setStreaming(content); }
       }
-      if (["run.completed", "run.blocked", "run.failed", "run.cancelled"].includes(event.type)) {
+      if (event.type === "transcript.updated") {
+        const view = await api.transcriptView(runId);
+        if (closed || sessionIdRef.current !== sessionId) return;
+        setTranscript(view); setStreaming(""); setLiveThinking("");
+      }
+      if (["run.completed", "run.blocked", "run.failed", "run.cancelled", "run.waiting_for_input"].includes(event.type)) {
         const [updated, runHistory, history, queued, view, sessionItems] = await Promise.all([
           api.run(runId), api.runs(sessionId), api.messages(sessionId), api.inbox(sessionId), api.transcriptView(runId), api.sessions(),
         ]);
@@ -348,7 +412,7 @@ export function App() {
           return persisted ? "" : current;
         });
         replaceStreamingOnNextDeltaRef.current = false; setActiveRun(nextActive);
-        setSelectedRun((current) => current?.id === updated.id ? updated : current);
+        setSelectedRun(updated);
         setRuns(runHistory); setMessages((current) => {
           const older = current.filter((message) => !history.some((latest) => latest.id === message.id) && message.id < (history[0]?.id ?? Number.MAX_SAFE_INTEGER));
           return [...older, ...history];
@@ -371,7 +435,7 @@ export function App() {
     if (!viewport || (!autoScrollRef.current && !forceScrollRef.current)) return;
     viewport.scrollTop = viewport.scrollHeight;
     forceScrollRef.current = false;
-  }, [messages, pendingUserMessage, streaming]);
+  }, [messages, pendingUserMessage, transcript, streaming, liveThinking, events]);
 
   const handleMessageScroll = useCallback(() => {
     const viewport = messageScrollRef.current;
@@ -450,7 +514,7 @@ export function App() {
       setInbox(queued); setMessages(history); setHasOlderMessages(history.length === 80); setPendingUserMessage(persisted ? null : admission.run ? optimistic : null);
       if (admission.run) {
         const nextRun = admission.run;
-        setActiveRun(nextRun); setSelectedRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setStreaming("");
+        setActiveRun(nextRun); setSelectedRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setTranscript([]); setStreaming(""); setLiveThinking("");
       }
     } catch (cause) {
       if (sessionIdRef.current === targetSessionId) { setPendingUserMessage(null); setDraft(content); setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -504,10 +568,21 @@ export function App() {
       const result = await api.startInbox(sessionId, item.id);
       const nextRun = result.run;
       setInbox(await api.inbox(sessionId)); const history = await api.messages(sessionId); setMessages(history); setHasOlderMessages(history.length === 80); setActiveRun(nextRun); setSelectedRun(nextRun);
-      setRuns((current) => [nextRun, ...current.filter((run) => run.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setStreaming("");
+      setRuns((current) => [nextRun, ...current.filter((run) => run.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setTranscript([]); setStreaming(""); setLiveThinking("");
       setNotice("Queued prompt started.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setStartingInboxId(""); }
+  }
+
+  async function submitRequestedInput(request: UserInputRequest, values: Record<string, string>) {
+    if (submittingUserInputId) return;
+    setSubmittingUserInputId(request.id); setError(""); setNotice("");
+    try {
+      const resumed = await api.submitUserInput(request.id, values);
+      setActiveRun(resumed); setSelectedRun(resumed); setRuns((current) => current.map((item) => item.id === resumed.id ? resumed : item));
+      setEvents([]); setStreaming(""); setLiveThinking(""); setNotice("Information submitted. TaskRun resumed."); forceScrollRef.current = true;
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setSubmittingUserInputId(""); }
   }
 
   async function retryLaunch(run: TaskRun) {
@@ -516,7 +591,7 @@ export function App() {
     try {
       const result = await api.retryLaunch(run.id);
       const nextRun = result.run;
-      setActiveRun(nextRun); setSelectedRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setStreaming("");
+      setActiveRun(nextRun); setSelectedRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setTranscript([]); setStreaming(""); setLiveThinking("");
       setNotice("TaskRun launch retry started.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setRetryingRunId(""); }
@@ -556,7 +631,8 @@ export function App() {
         {messages.map((message) => <ChatMessage key={message.id} message={message} memoryEnabled={Boolean(runtimeStatus?.memoryEnabled)} memoryJob={message.role === "user" ? (memoryJobsLoaded ? memoryJobByMessageId.get(message.id) ?? null : undefined) : undefined} />)}
         {pendingUserMessage?.sessionId === sessionId && !messages.some((message) => message.role === "user" && message.content === pendingUserMessage.content && message.createdAt >= pendingUserMessage.createdAt - 5_000) && <article className="message user pending" aria-label="Sending message"><div className="message-meta"><span>You</span><time>Sending…</time></div><div className="message-body"><Markdown>{pendingUserMessage.content}</Markdown></div>{runtimeStatus?.memoryEnabled && <MemoryExtraction job={undefined} />}</article>}
         {activeRun && <div className="active-run-strip"><Activity size={14} /><span>Attempt {activeRun.attempt}</span><strong>{activeRun.phase}</strong><small>{activeRun.usage.totalTokens.toLocaleString()} tokens</small></div>}
-        {streaming && <article className="message assistant live"><div className="message-meta"><span>TAgent</span><span className="live-label"><span className="pulse" />Working</span></div><div className="message-body"><LiveText>{streaming}</LiveText></div></article>}
+        {selectedRun?.pendingUserInput && <UserInputCard request={selectedRun.pendingUserInput} submitting={submittingUserInputId === selectedRun.pendingUserInput.id} onSubmit={(values) => submitRequestedInput(selectedRun.pendingUserInput!, values)} />}
+        {(activeRun || selectedRun) && transcript.length + events.length + Number(Boolean(liveThinking || streaming)) > 0 && <ExecutionTimeline runId={(activeRun ?? selectedRun)!.id} isRunning={activeRun?.status === "running"} items={transcript} events={activeRun ? events : []} liveThinking={activeRun ? liveThinking : ""} liveOutput={activeRun ? streaming : ""} />}
         <div ref={endRef} />
         </div>
       </section>
