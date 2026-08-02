@@ -278,7 +278,7 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
   });
   app.post("/api/runs/:id/resume", async (request, reply) => {
     const { id } = request.params as { id: string };
-    try { return service.resume(id); }
+    try { return await service.resume(id); }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
   });
   app.post("/api/user-input-requests/:id/submit", async (request, reply) => {
@@ -303,7 +303,7 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
   app.post("/api/approval-requests/:id/approve", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = (request.body ?? {}) as { resolution?: string };
-    try { return service.approveRunApproval(id, body.resolution?.trim() || undefined); }
+    try { return await service.approveRunApproval(id, body.resolution?.trim() || undefined); }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
   });
   app.post("/api/approval-requests/:id/reject", async (request, reply) => {

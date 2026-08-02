@@ -220,6 +220,7 @@ export interface TaskRun {
   userInputRequests: UserInputRequest[];
   pendingUserInput: UserInputRequest | null;
   launchRetryable: boolean;
+  resumable: boolean;
 }
 
 export interface CompletionGate {

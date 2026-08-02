@@ -117,7 +117,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "strict evidence refs");
     store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, objectives: [], acceptanceCriteria: ["Provide verified output"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
     const payload = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: Object.fromEntries(["progress", "evidence", "continuation"].map((type) => [type, { passed: true, summary: "Passed.", failures: [] }])) as Record<string, unknown> };
-    const receipt = [{ criterion: "Provide verified output", status: "covered", evidenceRefs: ["check:invented"], reason: "Claimed support." }];
+    const receipt = [{ criterionId: "ac-1", status: "covered", evidenceRefs: ["check:invented"], reason: "Claimed support." }];
     payload.gates.contract = { passed: true, summary: "Passed.", failures: [], criterionCoverage: receipt };
     payload.gates.completion = { passed: true, summary: "Passed.", failures: [], criterionCoverage: receipt };
     const original = globalThis.fetch;
@@ -133,7 +133,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     const criterion = "Explain the result";
     store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, objectives: [], acceptanceCriteria: [criterion], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "discussion", decisionReason: "test", routerVersion: "test" }), run.id);
     const payload = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: Object.fromEntries(["progress", "evidence", "completion", "continuation"].map((type) => [type, { passed: true, summary: "Passed.", failures: [] }])) as Record<string, unknown> };
-    payload.gates.contract = { passed: true, summary: "Covered.", failures: [], criterionCoverage: [{ criterion, status: "covered", evidenceRefs: [], reason: "The response directly explains the result." }] };
+    payload.gates.contract = { passed: true, summary: "Covered.", failures: [], criterionCoverage: [{ criterionId: "ac-1", status: "covered", evidenceRefs: [], reason: "The response directly explains the result." }] };
     const original = globalThis.fetch;
     globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(payload) } }] }), { status: 200 });
     try {
@@ -366,6 +366,77 @@ describe("TaskRunSupervisor LLM audit", () => {
       const main = { id: "gpt-5.6-sol", baseUrl: "https://audit.test/v1" } as never;
       await expect(new OpenAiSupervisorReviewer({ model: light, fallbackModel: main, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("API 413");
       expect(models).toEqual(["gpt-5.6-luna"]);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("maps one coverage receipt per criterion by stable id even when the LLM returns them out of order", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "stable coverage mapping");
+    const criteria = ["First exact criterion", "Second exact criterion"];
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, objectives: [], acceptanceCriteria: criteria, scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
+    const valid = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [{ criterionId: "ac-2", status: "covered", evidenceRefs: [], reason: "Second is covered." }, { criterionId: "ac-1", status: "covered", evidenceRefs: [], reason: "First is covered." }] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } } };
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(valid) } }] }), { status: 200 });
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "done", operations: [], progress: undefined });
+      expect(audit.gates.contract.criterionCoverage?.map((item) => item.criterion)).toEqual(criteria);
+      expect(audit.gates.contract.criterionCoverage?.map((item) => item.reason)).toEqual(["First is covered.", "Second is covered."]);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("corrects missing coverage receipts within the bounded Supervisor review attempts", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "correct missing coverage");
+    const criteria = ["Criterion one", "Criterion two"];
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, objectives: [], acceptanceCriteria: criteria, scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
+    const gates = { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } };
+    const audit = (criterionCoverage: unknown[]) => ({ action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: { ...gates, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage } } });
+    let requests = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => {
+      requests += 1;
+      const content = requests === 1
+        ? audit([{ criterionId: "ac-1", status: "covered", evidenceRefs: [], reason: "One." }])
+        : audit([{ criterionId: "ac-1", status: "covered", evidenceRefs: [], reason: "One." }, { criterionId: "ac-2", status: "covered", evidenceRefs: [], reason: "Two." }]);
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }), { status: 200 });
+    };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const result = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "done", operations: [], progress: undefined });
+      expect(result.gates.contract.criterionCoverage?.map((item) => item.criterion)).toEqual(criteria);
+      expect(requests).toBe(2);
+      expect(store.getRun(run.id)?.attempt).toBe(1);
+      expect(store.getRun(run.id)?.continuations).toHaveLength(0);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("repairs a bounded missing-comma JSON syntax error without rerunning the Agent", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "repair malformed audit JSON");
+    const valid = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } } };
+    const malformed = JSON.stringify(valid).replace('"reasonCode"', '"reasonCode"').replace(',"confidence"', '"confidence"');
+    let requests = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => { requests += 1; return new Response(JSON.stringify({ choices: [{ message: { content: malformed } }] }), { status: 200 }); };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
+      expect(audit.action).toBe("complete_taskrun");
+      expect(requests).toBe(1);
+      expect(store.getRun(run.id)?.attempt).toBe(1);
+      expect(store.getRun(run.id)?.continuations).toHaveLength(0);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("keeps malformed JSON correction bounded and never creates an Agent continuation", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "bounded malformed audit");
+    let requests = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => { requests += 1; return new Response(JSON.stringify({ choices: [{ message: { content: '{"action":"complete_taskrun","rationale":"unterminated}' } }] }), { status: 200 }); };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("after 2 review attempts");
+      expect(requests).toBe(2);
+      expect(store.getRun(run.id)?.attempt).toBe(1);
+      expect(store.getRun(run.id)?.continuations).toHaveLength(0);
     } finally { globalThis.fetch = original; store.close(); }
   });
 

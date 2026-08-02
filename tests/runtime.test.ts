@@ -386,7 +386,7 @@ describe("AgentService runtime boundary", () => {
     const secondStore = new Store(filename);
     const service = new AgentService(secondStore, "/tmp", () => new DeferredRuntime());
     expect(secondStore.getRun(run.id)).toMatchObject({ status: "interrupted", checkpoint: { active: false, assistantPartial: "partial answer", currentTool: null, attempt: 1 } });
-    const resumed = service.resume(run.id);
+    const resumed = await service.resume(run.id);
     expect(resumed).toMatchObject({ status: "running", attempt: 2, checkpoint: { active: true, assistantPartial: "", currentTool: null, attempt: 2 } });
     await service.closeRuntimes();
     secondStore.close();
@@ -610,7 +610,7 @@ describe("AgentService runtime boundary", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(store.getRun(started.id)?.status).toBe("blocked");
 
-    const resumed = service.resume(started.id);
+    const resumed = await service.resume(started.id);
     expect(resumed.id).toBe(started.id);
     expect(resumed.requestId).toBe("stable-request");
     expect(resumed.attempt).toBe(2);
@@ -639,7 +639,7 @@ describe("AgentService runtime boundary", () => {
     let options: Parameters<RuntimeFactory>[0] | undefined;
     const runtime = new FakeRuntime([assistantMessage("done")]);
     const service = new AgentService(store, "/tmp", (value) => { options = value; return runtime; });
-    service.resume(run.id);
+    await service.resume(run.id);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(options?.initialMessages).toEqual([user, assistant]);
     expect(runtime.prompts[0]).toContain("persisted pi transcript messages");
@@ -697,7 +697,7 @@ describe("AgentService runtime boundary", () => {
     store.blockRun(run.id, "gate");
     let options: Parameters<RuntimeFactory>[0] | undefined;
     const service = new AgentService(store, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 1_000, maxContextTurns: 1, model: { contextWindow: 1_000, maxTokens: 100 } as never });
-    service.resume(run.id);
+    await service.resume(run.id);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(options?.initialMessages).toEqual([newUser, newAssistant]);
     expect(store.listEvents(run.id).some((event) => event.type === "context.pruned" && event.data.source === "transcript" && event.data.originalMessages === 4 && event.data.keptMessages === 2)).toBe(true);
@@ -790,6 +790,47 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
+  it("allows an idle-timeout failure to resume after stale runtime cleanup settles", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const first = new SlowAbortRuntime();
+    const second = new DeferredRuntime();
+    let calls = 0;
+    const service = new AgentService(store, "/tmp", () => ++calls === 1 ? first : second, { runTimeoutMs: 10, runHardTimeoutMs: 1_000 });
+    const run = await service.start(session.id, "timeout then resume");
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    expect(store.getRun(run.id)).toMatchObject({ status: "failed", resumable: true });
+
+    const resumed = await service.resume(run.id);
+
+    expect(first.settled).toBe(true);
+    expect(resumed).toMatchObject({ id: run.id, status: "running", attempt: 2, resumable: false });
+    expect(store.listEvents(run.id).some((event) => event.type === "run.resumed" && event.data.attempt === 2)).toBe(true);
+    service.cancel(run.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    store.close();
+  });
+
+  it("does not apply the Run idle watchdog while bounded Supervisor review is in progress", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const slowReviewer: SupervisorReviewer = {
+      evaluator: "llm",
+      model: "slow-reviewer",
+      async reviewSettled() {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return passingTestAudit();
+      },
+      async reviewAttemptFailure() { return { action: "block_taskrun", reasonCode: "failed", rationale: "failed", confidence: 1 }; },
+    };
+    const service = new AgentService(store, "/tmp", () => new CallbackRuntime(assistantMessage("complete candidate")), { runTimeoutMs: 10, runHardTimeoutMs: 1_000, supervisorReviewer: slowReviewer });
+    const run = await service.start(session.id, "slow bounded review");
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    expect(store.getRun(run.id)).toMatchObject({ status: "completed", blockedReason: "" });
+    expect(store.listEvents(run.id).some((event) => event.type === "run.failed" && event.data.reason === "idle_timeout")).toBe(false);
+    store.close();
+  });
+
   it("refreshes the idle watchdog while the runtime keeps making progress", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
@@ -869,7 +910,7 @@ describe("AgentService runtime boundary", () => {
     const decision = (await new TaskRunSupervisor(store, reviewer(approvalAudit)).reviewSettled(store.getRun(run.id)!, 1, "waiting")).decision;
     store.blockRun(run.id, decision.rationale);
     const approval = store.ensureApprovalRequest(run.id, decision.id, decision.rationale);
-    expect(() => service.resume(run.id)).toThrow(/approval decision/);
+    await expect(service.resume(run.id)).rejects.toThrow(/approval decision/);
     store.resolveApprovalRequest(approval.id, "rejected", "user", "not now");
     expect(store.getRun(run.id)?.supervision.approvalRequests).toEqual([expect.objectContaining({ status: "rejected" })]);
     await service.closeRuntimes();

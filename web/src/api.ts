@@ -25,6 +25,7 @@ export interface TaskRun {
   artifacts: Artifact[];
   completionGate: { passed: boolean; failures: Array<{ kind: string; key: string; reason: string }> };
   launchRetryable: boolean;
+  resumable: boolean;
   supervision: {
     latestDecision: { id: string; evaluator: "llm" | "system"; evaluatorModel: string; action: string; reasonCode: string; rationale: string; confidence: number; status: string; attempt: number; checkpointSeq: number } | null;
     latestGates: Array<{ id: string; evaluator: "llm" | "system"; evaluatorModel: string; summary: string; gateType: string; passed: boolean; failures: Array<{ kind: string; key: string; reason: string; disposition: string }>; criterionCoverage?: Array<{ criterion: string; status: "covered" | "unsupported" | "contradicted" | "blocked"; evidenceRefs: string[]; reason: string }> }>;

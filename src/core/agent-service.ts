@@ -428,6 +428,8 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     let hardTimer: ReturnType<typeof setTimeout> | undefined;
     let leaseTimer: ReturnType<typeof setInterval> | undefined;
     let runtime: AgentRuntime;
+    let lastActivityAt = Date.now();
+    let runtimeSettled = false;
 
     const failTimeout = (reason: "idle_timeout" | "hard_timeout", limitMs: number) => {
       if (this.store.getRun(run.id)?.status !== "running") return;
@@ -440,10 +442,26 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       this.store.appendMessage(run.sessionId, "assistant", `Run failed: ${message}`);
       this.publish(event);
     };
+    const checkIdle = () => {
+      idleTimer = undefined;
+      if (runtimeSettled || this.store.getRun(run.id)?.status !== "running") return;
+      const remaining = idleTimeoutMs - (Date.now() - lastActivityAt);
+      if (remaining > 0) {
+        idleTimer = setTimeout(checkIdle, remaining);
+        return;
+      }
+      failTimeout("idle_timeout", idleTimeoutMs);
+    };
     const touchActivity = () => {
-      if (!idleTimeoutMs) return;
+      if (!idleTimeoutMs || runtimeSettled) return;
+      lastActivityAt = Date.now();
       if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => failTimeout("idle_timeout", idleTimeoutMs), idleTimeoutMs);
+      idleTimer = setTimeout(checkIdle, idleTimeoutMs);
+    };
+    const stopIdleWatchdog = () => {
+      runtimeSettled = true;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = undefined;
     };
 
     runtime = this.runtimeFactory({
@@ -504,7 +522,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
           return false;
         }
       }
-      return this.execute(run.id, run.attempt, runtime, prompt, continuationId);
+      return this.execute(run.id, run.attempt, runtime, prompt, continuationId, stopIdleWatchdog);
     })().then((blocked) => {
       if (this.closing) return;
       if (continuationId) {
@@ -545,9 +563,15 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     catch (error) { this.publish(this.store.appendEvent(runId, "workflow.learning.failed", { error: error instanceof Error ? error.message : String(error) })); }
   }
 
-  private async execute(runId: RunId, attempt: number, runtime: AgentRuntime, prompt: string, continuationId?: string) {
+  private async execute(runId: RunId, attempt: number, runtime: AgentRuntime, prompt: string, continuationId?: string, onRuntimeSettled: () => void = () => {}) {
     try {
-      await runtime.prompt(prompt);
+      try {
+        await runtime.prompt(prompt);
+      } finally {
+        // The Run idle watchdog covers active Agent/runtime work only. Supervisor
+        // review has its own bounded SSE idle timeout and must not be raced by it.
+        onRuntimeSettled();
+      }
       const runtimeError = runtime.getError();
       if (runtimeError) throw new Error(runtimeError);
       if (continuationId && !this.store.ownsContinuationLease(continuationId, this.continuationOwner)) {
@@ -793,8 +817,14 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     return this.resume(run.id, { inputRequest: submitted.request });
   }
 
-  resume(runId: RunId, options?: { inputRequest?: import("./types.js").UserInputRequest }) {
+  async resume(runId: RunId, options?: { inputRequest?: import("./types.js").UserInputRequest }) {
     if (this.closing) throw new Error("Service is shutting down");
+    if (this.runtimes.has(runId)) {
+      if (this.store.getRun(runId)?.status === "running") throw new Error("Run is already active");
+      // Timeout state is persisted before abort/cleanup necessarily settles. Wait for
+      // that stale runtime so an immediate Resume cannot race its finally handlers.
+      await this.executionTasks.get(runId);
+    }
     if (this.runtimes.has(runId)) throw new Error("Run is already active");
     if (this.store.hasPendingApproval(runId)) throw new Error("Run requires an approval decision before resume");
     this.store.cancelQueuedContinuations(runId, "Superseded by manual resume");

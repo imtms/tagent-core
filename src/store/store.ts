@@ -891,6 +891,7 @@ ${source.content}`;
       userInputRequests: this.listUserInputRequests(id),
       pendingUserInput: this.getPendingUserInputRequest(id) ?? null,
       launchRetryable: this.isInboxLaunchRetryable(id),
+      resumable: this.isRunResumable(id),
     };
     task.completionGate = this.evaluateGate(task);
     return task;
@@ -1644,9 +1645,18 @@ ${source.content}`;
     transaction();
   }
 
+  isRunResumable(runId: RunId) {
+    const row = this.db.prepare(`SELECT status FROM runs WHERE id = ?`).get(runId) as { status: RunStatus } | undefined;
+    if (!row) return false;
+    if (["interrupted", "blocked"].includes(row.status)) return true;
+    if (row.status !== "failed") return false;
+    return Boolean(this.db.prepare(`SELECT 1 FROM run_events WHERE run_id = ? AND type = 'run.failed'
+      AND json_extract(data, '$.reason') IN ('idle_timeout', 'hard_timeout') ORDER BY seq DESC LIMIT 1`).get(runId));
+  }
+
   resumeRun(runId: RunId) {
     const run = this.getRun(runId);
-    if (!run || !["interrupted", "blocked", "waiting_input"].includes(run.status)) throw new Error("Run is not resumable");
+    if (!run || !this.isRunResumable(runId) && run.status !== "waiting_input") throw new Error("Run is not resumable");
     if (run.status === "waiting_input" && run.pendingUserInput) throw new Error("Run is waiting for the requested user input");
     const resumedAt = now();
     this.db.prepare("UPDATE runs SET status = 'running', phase = CASE WHEN phase IN ('blocked','waiting_input') THEN 'implement' ELSE phase END, blocked_reason = '', completed_at = NULL, attempt = attempt + 1, resumed_at = ?, updated_at = ? WHERE id = ?")
