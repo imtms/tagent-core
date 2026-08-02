@@ -34,9 +34,9 @@ export class DistillationWorker {
     if (this.polling || !this.status.running) return;
     this.polling = true; this.status.lastPollAt = Date.now();
     try {
-      const result = this.workflows.runNextDistillationJob(this.status.owner);
+      const result = await this.workflows.runNextDistillationJob(this.status.owner);
       if (result !== undefined) { this.status.processed += 1; this.status.lastSuccessAt = Date.now(); }
-      this.status.lastError = ""; this.status.ready = true;
+      this.status.lastError = ""; this.status.ready = this.status.running;
     } catch (error) {
       this.status.failures += 1; this.status.lastErrorAt = Date.now(); this.status.lastError = error instanceof Error ? error.message : String(error);
     } finally { this.polling = false; }

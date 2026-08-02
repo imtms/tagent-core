@@ -2,6 +2,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto
 import type { Store } from "../store/store.js";
 import type { ContextManifestItem, RunStatus, TaskRun } from "../core/types.js";
 import type { LearningFeatureControl } from "./feature-control.js";
+import type { SemanticJudge } from "./semantic-judge.js";
 
 export type WorkflowStatus = "candidate" | "active" | "suspended" | "deprecated";
 export type WorkflowApplicationStatus = "exposed" | "adopted" | "partial" | "rejected";
@@ -81,7 +82,7 @@ const redact = (value: string) => value
   .replace(/\b(?:password|passwd|token|secret|api[_-]?key)\s*[:=]\s*\S+/gi, "$1=[REDACTED]");
 
 export class WorkflowService {
-  constructor(private readonly store: Store, private readonly evaluationSecret = process.env.TAGENT_EVALUATION_RECEIPT_SECRET ?? "", private readonly featureControl?: LearningFeatureControl) {}
+  constructor(private readonly store: Store, private readonly evaluationSecret = process.env.TAGENT_EVALUATION_RECEIPT_SECRET ?? "", private readonly featureControl?: LearningFeatureControl, private readonly semanticJudge?: SemanticJudge) {}
 
   private requireLearning() { this.featureControl?.requireLearning(); }
   private requireAutoExecution() { this.featureControl?.requireAutoExecution(); }
@@ -149,8 +150,9 @@ export class WorkflowService {
     });
     this.autonomyAudit(run.sessionId, "observe", "run_outcome_projected", "learning_projector", { sourceRunId: run.id, evidence: observation ? [observation.id] : [], metadata: { attempt: run.attempt, lifecycle, outcome, policy: policy.policy, completedWithEvidence } });
     if (completedWithEvidence) {
-      this.enqueueDistillation(run.sessionId, normalize(run.contract?.summary ?? run.goal));
-      this.autonomyAudit(run.sessionId, "learn", "distillation_enqueued", "learning_projector", { sourceRunId: run.id, evidence: observation ? [observation.id] : [], metadata: { taskSignature: normalize(run.contract?.summary ?? run.goal) } });
+      const taskSignature = normalize(run.contract?.summary ?? run.goal);
+      const decide=(semanticEligibility:Awaited<ReturnType<SemanticJudge["learningSample"]>>)=>{const eligibility=semanticEligibility?{eligible:semanticEligibility.eligible&&semanticEligibility.reusable,reason:semanticEligibility.reason}:distillationEligibility(taskSignature,plan.length);if(eligibility.eligible){this.enqueueDistillation(run.sessionId,taskSignature);this.autonomyAudit(run.sessionId,"learn","distillation_enqueued","learning_projector",{sourceRunId:run.id,evidence:observation?[observation.id]:[],metadata:{taskSignature,semantic:semanticEligibility??null}});}else this.autonomyAudit(run.sessionId,"learn","distillation_withheld","learning_projector",{sourceRunId:run.id,evidence:observation?[observation.id]:[],metadata:{taskSignature,reason:eligibility.reason,semantic:semanticEligibility??null}});};
+      if(this.semanticJudge)void this.semanticJudge.learningSample({taskSignature,procedureSummary:summary,stepCount:plan.length,outcome,requiredChecks:requiredChecks.map((check)=>({key:check.key,status:check.status,stale:check.stale}))}).then(decide);else decide(undefined);
     }
     return observation;
   }
@@ -214,20 +216,21 @@ export class WorkflowService {
     if (changed !== 1) throw new Error("Distillation lease lost");
   }
 
-  runNextDistillationJob(owner = `distiller:${randomUUID()}`) {
+  async runNextDistillationJob(owner = `distiller:${randomUUID()}`) {
     if (!this.learningAvailable()) return undefined;
     const job = this.claimDistillationJob(owner) as { id: string; scope_id: string; task_signature: string; lease_token: string; fence: number; attempts: number; checkpoint_json: string } | undefined;
     if (!job) return undefined;
     try {
       this.checkpointDistillationJob(job.id, owner, job.lease_token, job.fence, { phase: "claimed", previous: JSON.parse(job.checkpoint_json || "{}") });
-      const result = this.distillRepeatedExperience(job.scope_id, job.task_signature, {
+      const result = await this.distillRepeatedExperience(job.scope_id, job.task_signature, {
         semantic: true,
         checkpoint: (checkpoint) => this.checkpointDistillationJob(job.id, owner, job.lease_token, job.fence, checkpoint),
         jobId: job.id,
       });
+      const priorCheckpoint = JSON.parse(String((this.store.db.prepare("SELECT checkpoint_json value FROM workflow_distillation_jobs WHERE id=?").get(job.id) as {value?:string}|undefined)?.value||"{}")) as Record<string,unknown>;
       const changed = this.store.db.prepare(`UPDATE workflow_distillation_jobs SET status='completed', workflow_id=?, checkpoint_json=?,
         lease_owner='',lease_token='',lease_until=NULL,error='',updated_at=? WHERE id=? AND status='running' AND lease_owner=? AND lease_token=? AND fence=?`)
-        .run(result?.id ?? null, JSON.stringify({ phase: "completed", workflowId: result?.id ?? null }), now(), job.id, owner, job.lease_token, job.fence).changes;
+        .run(result?.id ?? null, JSON.stringify({ phase: "completed", result: result?.id ? "candidate" : "withheld", workflowId: result?.id ?? null, detail: priorCheckpoint }), now(), job.id, owner, job.lease_token, job.fence).changes;
       if (changed !== 1) throw new Error("Distillation lease lost before completion");
       return result;
     } catch (error) {
@@ -238,7 +241,7 @@ export class WorkflowService {
     }
   }
 
-  distillRepeatedExperience(scopeId: string, taskSignature: string, options: { jobId?: string; semantic?: boolean; checkpoint?: (checkpoint: Record<string, unknown>) => void } = {}) {
+  async distillRepeatedExperience(scopeId: string, taskSignature: string, options: { jobId?: string; semantic?: boolean; checkpoint?: (checkpoint: Record<string, unknown>) => void } = {}) {
     const checkpoint = (value: Record<string, unknown>) => {
       if (options.checkpoint) options.checkpoint(value);
       else if (options.jobId) this.store.db.prepare("UPDATE workflow_distillation_jobs SET checkpoint_json=?,updated_at=? WHERE id=?").run(JSON.stringify(value), now(), options.jobId);
@@ -248,10 +251,10 @@ export class WorkflowService {
       procedure_summary as procedureSummary, checks_passed_json as checksPassedJson, checks_failed_json as checksFailedJson, created_at as createdAt
       FROM experience_observations WHERE scope_id = ? AND learn_policy = 'allow' AND run_id IS NOT NULL
       AND source_type IN ('task_experience','task_failure') ORDER BY created_at DESC`).all(scopeId) as Array<{ id: string; runId: string; sourceType: WorkflowSourceType; taskSignature: string; procedureSummary: string; checksPassedJson: string; checksFailedJson: string; createdAt: number }>;
-    const similar = candidates.map((row) => ({ ...row, similarity: options.semantic === false ? Number(normalize(row.taskSignature) === normalize(taskSignature)) : textSimilarity(taskSignature, row.taskSignature) }))
-      .filter((row) => row.similarity >= (options.semantic === false ? 1 : 0.42));
-    const successes = [...new Map(similar.filter((row) => row.sourceType === "task_experience").map((row) => [row.runId, row])).values()];
-    const failures = [...new Map(similar.filter((row) => row.sourceType === "task_failure").map((row) => [row.runId, row])).values()];
+    const similar:Array<(typeof candidates)[number]&{similarity:number}>=[];
+    for(const row of candidates){const lexical=options.semantic===false?Number(normalize(row.taskSignature)===normalize(taskSignature)):textSimilarity(taskSignature,row.taskSignature);if(lexical>=.72){similar.push({...row,similarity:lexical});continue;}if(this.semanticJudge&&options.semantic!==false){const decision=await this.semanticJudge.cluster(taskSignature,row.taskSignature);if(decision?.similar)similar.push({...row,similarity:decision.confidence});}else if(lexical>=.48)similar.push({...row,similarity:lexical});}
+    const successes=[] as typeof similar;const failures=[] as typeof similar;
+    for(const row of similar){if(row.sourceType==="task_experience"){const semantic=this.semanticJudge?await this.semanticJudge.learningSample({taskSignature:row.taskSignature,procedureSummary:row.procedureSummary,stepCount:parseProcedureSteps(row.procedureSummary).length,checksPassed:JSON.parse(row.checksPassedJson)}):undefined;if((semantic?semantic.eligible&&semantic.reusable:distillationEligibility(row.taskSignature,parseProcedureSteps(row.procedureSummary).length).eligible)&&!successes.some((item)=>item.runId===row.runId))successes.push(row);}else{const semantic=this.semanticJudge?await this.semanticJudge.learningSample({taskSignature:row.taskSignature,procedureSummary:row.procedureSummary,checksFailed:JSON.parse(row.checksFailedJson),outcome:"failed"}):undefined;if((semantic?semantic.failureIsCounterexample:failureIsCounterexample(row))&&!failures.some((item)=>item.runId===row.runId))failures.push(row);}}
     checkpoint({ phase: "clustered", scanned: candidates.length, matched: similar.length, successes: successes.length, failures: failures.length, runIds: successes.map((row) => row.runId) });
     if (successes.length < 2) return undefined;
 
@@ -262,28 +265,22 @@ export class WorkflowService {
 
     const procedures = successes.map((row) => parseProcedureSteps(row.procedureSummary));
     const minimumSupport = Math.max(2, Math.ceil(procedures.length * 0.67));
-    const stepCandidates = procedures.flatMap((steps, procedureIndex) => steps.map((instruction, position) => ({ instruction, procedureIndex, position })));
-    const groups: Array<{ instruction: string; occurrences: Array<{ procedureIndex: number; position: number }> }> = [];
-    for (const candidate of stepCandidates) {
-      const group = groups.find((item) => textSimilarity(item.instruction, candidate.instruction) >= 0.78);
-      if (group) {
-        if (!group.occurrences.some((item) => item.procedureIndex === candidate.procedureIndex)) group.occurrences.push({ procedureIndex: candidate.procedureIndex, position: candidate.position });
-      } else groups.push({ instruction: candidate.instruction, occurrences: [{ procedureIndex: candidate.procedureIndex, position: candidate.position }] });
-    }
-    const consistentGroups = groups.filter((group) => group.occurrences.length >= minimumSupport)
-      .sort((left, right) => average(left.occurrences.map((item) => item.position)) - average(right.occurrences.map((item) => item.position)));
-    const stepLines = (consistentGroups.length ? consistentGroups.map((group) => group.instruction) : procedures[0]).slice(0, 30);
-    const orderConflicts = countOrderConflicts(consistentGroups);
-    checkpoint({ phase: "steps", procedureCount: procedures.length, minimumSupport, consistentSteps: consistentGroups.length, orderConflicts });
+    const semanticProcedure=this.semanticJudge?await this.semanticJudge.procedure({successes:successes.map((row)=>({runId:row.runId,taskSignature:row.taskSignature,steps:parseProcedureSteps(row.procedureSummary),checksPassed:JSON.parse(row.checksPassedJson)})),failures:failures.map((row)=>({runId:row.runId,taskSignature:row.taskSignature,steps:parseProcedureSteps(row.procedureSummary),checksFailed:JSON.parse(row.checksFailedJson)})),minimumSupport}):undefined;
+    let consistentGroups:Array<{instruction:string;occurrences:Array<{procedureIndex:number;position:number}>}>;let stepLines:string[];let orderConflicts:number;
+    if(semanticProcedure){const runIndex=new Map(successes.map((row,index)=>[row.runId,index]));consistentGroups=semanticProcedure.commonSteps.filter((step)=>new Set(step.supportRunIds).size>=minimumSupport).map((step)=>({instruction:step.instruction,occurrences:step.supportRunIds.map((runId)=>({procedureIndex:runIndex.get(runId)??0,position:procedures[runIndex.get(runId)??0]?.findIndex((item)=>textSimilarity(item,step.instruction)>=.45)??0}))}));stepLines=consistentGroups.map((group)=>group.instruction).slice(0,30);orderConflicts=countOrderConflicts(consistentGroups);}else{const stepCandidates=procedures.flatMap((steps,procedureIndex)=>steps.map((instruction,position)=>({instruction,procedureIndex,position})));const groups:Array<{instruction:string;occurrences:Array<{procedureIndex:number;position:number}>}>=[];for(const candidate of stepCandidates){const group=groups.find((item)=>textSimilarity(item.instruction,candidate.instruction)>=.78);if(group){if(!group.occurrences.some((item)=>item.procedureIndex===candidate.procedureIndex))group.occurrences.push({procedureIndex:candidate.procedureIndex,position:candidate.position});}else groups.push({instruction:candidate.instruction,occurrences:[{procedureIndex:candidate.procedureIndex,position:candidate.position}]});}consistentGroups=groups.filter((group)=>group.occurrences.length>=minimumSupport).sort((left,right)=>average(left.occurrences.map((item)=>item.position))-average(right.occurrences.map((item)=>item.position)));stepLines=consistentGroups.map((group)=>group.instruction).slice(0,30);orderConflicts=countOrderConflicts(consistentGroups);}
+    checkpoint({ phase: "steps", procedureCount: procedures.length, minimumSupport, consistentSteps: consistentGroups.length, orderConflicts, semantic:Boolean(semanticProcedure) });
+    if (!stepLines.length) { checkpoint({ phase: "withheld", reason: "no_consistent_steps", procedureCount: procedures.length, minimumSupport }); return undefined; }
 
-    const checks = [...new Set(successes.flatMap((row) => JSON.parse(row.checksPassedJson) as string[]))].slice(0, 12);
+    const deterministicChecks = successes.map((row) => JSON.parse(row.checksPassedJson) as string[]).reduce<string[]>((common,current,index)=>index===0?current:common.filter((check)=>current.includes(check)),[]).slice(0,12);
+    const checks=(semanticProcedure?.verificationChecks.filter((check)=>deterministicChecks.includes(check))??deterministicChecks).slice(0,12);
+    if (!checks.length) { checkpoint({ phase: "withheld", reason: "no_common_verification", procedureCount: procedures.length }); return undefined; }
     const failedChecks = [...new Set(failures.flatMap((row) => JSON.parse(row.checksFailedJson) as string[]))].slice(0, 12);
     const counterexampleIds = failures.map((row) => row.id);
-    const failureHandling = failedChecks.length
+    const failureHandling = semanticProcedure?.failureHandling || (failedChecks.length
       ? `Stop when ${failedChecks.join(", ")} fails; preserve evidence, diagnose the failed check, and require a corrected retry before continuing.`
       : failures.length
         ? "Stop on a repeated failure pattern; preserve evidence, record the failing step, and request correction before retrying."
-        : "Stop on verification failure, preserve evidence, and diagnose before retrying.";
+        : "Stop on verification failure, preserve evidence, and diagnose before retrying.");
     const nonApplicability = failures.slice(0, 8).map((row) => `Exclude contexts matching failed run: ${row.taskSignature}`);
     const cueTerms = terms(successes.map((row) => row.taskSignature).join(" ")).slice(0, 16);
 
@@ -743,7 +740,7 @@ export class WorkflowService {
     c.bucket,c.variant,c.revision_id as revisionId,c.receipt_hash as receiptHash,c.outcome_status as outcomeStatus,c.success,c.required_checks as requiredChecks,
     c.passed_checks as passedChecks,c.outcome_recorded_at as outcomeRecordedAt,c.created_at as createdAt FROM workflow_canary_bindings c
     JOIN workflow_definitions w ON w.id=c.workflow_id WHERE w.scope_id=? ORDER BY c.created_at DESC LIMIT ?`).all(scopeId,limit); }
-  getDistillationMetrics() { const rows=this.store.db.prepare("SELECT status,COUNT(*) count,MIN(created_at) oldest FROM workflow_distillation_jobs GROUP BY status").all() as Array<{status:string;count:number;oldest:number}>; const byStatus=Object.fromEntries(rows.map(row=>[row.status,row.count])); return {queued:byStatus.queued??0,running:byStatus.running??0,completed:byStatus.completed??0,deadLetter:byStatus.dead_letter??0,failed:byStatus.failed??0,oldestQueuedAgeMs:rows.find(row=>row.status==='queued')?now()-(rows.find(row=>row.status==='queued')!.oldest):0}; }
+  getDistillationMetrics() { const rows=this.store.db.prepare("SELECT status,COUNT(*) count,MIN(created_at) oldest FROM workflow_distillation_jobs GROUP BY status").all() as Array<{status:string;count:number;oldest:number}>; const byStatus=Object.fromEntries(rows.map(row=>[row.status,row.count]));const completed=this.store.db.prepare("SELECT checkpoint_json FROM workflow_distillation_jobs WHERE status='completed'").all() as Array<{checkpoint_json:string}>;const outcomes=completed.map(row=>JSON.parse(row.checkpoint_json||"{}") as {result?:string;detail?:{reason?:string}}),withheldReasons:Record<string,number>={};for(const outcome of outcomes)if(outcome.result==="withheld"){const reason=outcome.detail?.reason??"insufficient_evidence";withheldReasons[reason]=(withheldReasons[reason]??0)+1;}return {queued:byStatus.queued??0,running:byStatus.running??0,completed:byStatus.completed??0,deadLetter:byStatus.dead_letter??0,failed:byStatus.failed??0,candidates:outcomes.filter(item=>item.result==="candidate").length,withheld:outcomes.filter(item=>item.result==="withheld").length,withheldReasons,oldestQueuedAgeMs:rows.find(row=>row.status==='queued')?now()-(rows.find(row=>row.status==='queued')!.oldest):0}; }
   listAutonomyAudit(scopeId: string, limit = 300) { return this.store.db.prepare(`SELECT id,scope_id as scopeId,category,action,actor,source_run_id as sourceRunId,
     workflow_id as workflowId,revision_id as revisionId,approval_id as approvalId,evidence_json as evidenceJson,metadata_json as metadataJson,
     receipt_hash as receiptHash,created_at as createdAt FROM autonomy_audit_events WHERE scope_id=? ORDER BY created_at DESC LIMIT ?`).all(scopeId,limit); }
@@ -800,6 +797,8 @@ function sanitizeSpec(spec: WorkflowSpec): WorkflowSpec {
 function sanitizeContract(items: WorkflowValueContract[]) { return items.slice(0, 20).map((item) => ({ name: redact(item.name ?? "").slice(0, 160), description: redact(item.description ?? "").slice(0, 1000), required: item.required !== false, schema: item.schema ? redact(item.schema).slice(0, 2000) : undefined })).filter((item) => item.name && item.description); }
 function sanitizeIds(items: string[]) { return items.map((item) => redact(String(item)).slice(0, 500)).filter(Boolean).slice(0, 100); }
 function average(values: number[]) { return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0; }
+function distillationEligibility(signature:string,stepCount:number){const normalized=normalize(signature);if(stepCount<2)return{eligible:false,reason:"insufficient_procedure_steps"};if(normalized.length<12||/^(?:回复一下|继续|再试一次|为什么|怎么回事|检查一下|看看|确认一下|reply|continue|retry|why)$/i.test(normalized))return{eligible:false,reason:"underspecified_task_signature"};return{eligible:true,reason:"eligible"};}
+function failureIsCounterexample(row:{taskSignature:string;procedureSummary:string;checksFailedJson:string}){const failedChecks=JSON.parse(row.checksFailedJson||"[]") as string[];if(failedChecks.length)return true;return /(?:failed|failure|错误|失败|回滚|纠正|不正确|harmful)/i.test(`${row.taskSignature} ${row.procedureSummary}`);}
 function countOrderConflicts(groups: Array<{ occurrences: Array<{ procedureIndex: number; position: number }> }>) {
   let conflicts = 0;
   for (let left = 0; left < groups.length; left += 1) for (let right = left + 1; right < groups.length; right += 1) {

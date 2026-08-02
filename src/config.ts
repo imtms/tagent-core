@@ -35,6 +35,14 @@ export interface AppConfig {
     enabledByDefault: boolean;
     autoExecutionEnabledByDefault: boolean;
     distillationWorkerIntervalMs: number;
+    semanticJudgeEnabled: boolean;
+    semanticJudgeBaseUrl?: string;
+    semanticJudgeApiKey?: string;
+    semanticJudgeModel?: string;
+    semanticJudgeTimeoutMs: number;
+    semanticJudgeMinimumConfidence: number;
+    semanticJudgeCacheTtlMs: number;
+    semanticJudgeMaxCallsPerMinute: number;
   };
 }
 
@@ -89,6 +97,12 @@ function positiveInteger(value: string | undefined, fallback: number, name: stri
 function nonNegativeInteger(value: string | undefined, fallback: number, name: string) {
   const parsed = value === undefined ? fallback : Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`${name} must be a non-negative integer`);
+  return parsed;
+}
+
+function probability(value: string | undefined, fallback: number, name: string) {
+  const parsed = value === undefined ? fallback : Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) throw new Error(`${name} must be between 0 and 1`);
   return parsed;
 }
 
@@ -220,6 +234,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       enabledByDefault: enabled(env.TAGENT_LEARNING_ENABLED, "TAGENT_LEARNING_ENABLED"),
       autoExecutionEnabledByDefault: enabled(env.TAGENT_LEARNING_AUTO_EXECUTION_ENABLED, "TAGENT_LEARNING_AUTO_EXECUTION_ENABLED"),
       distillationWorkerIntervalMs: positiveInteger(env.TAGENT_DISTILLATION_WORKER_INTERVAL_MS, 1_000, "TAGENT_DISTILLATION_WORKER_INTERVAL_MS"),
+      semanticJudgeEnabled: enabled(env.TAGENT_LEARNING_SEMANTIC_JUDGE_ENABLED, "TAGENT_LEARNING_SEMANTIC_JUDGE_ENABLED"),
+      semanticJudgeBaseUrl: referencedEnvValue(env, "TAGENT_LEARNING_SEMANTIC_JUDGE_BASE_URL") || env.TAGENT_ROUTER_API_BASE?.trim() || env.TAGENT_API_BASE?.trim() || undefined,
+      semanticJudgeApiKey: referencedEnvValue(env, "TAGENT_LEARNING_SEMANTIC_JUDGE_API_KEY") || env.OPENAI_API_KEY?.trim() || undefined,
+      semanticJudgeModel: referencedEnvValue(env, "TAGENT_LEARNING_SEMANTIC_JUDGE_MODEL") || env.TAGENT_ROUTER_MODEL?.trim() || env.TAGENT_MODEL?.trim() || undefined,
+      semanticJudgeTimeoutMs: positiveInteger(env.TAGENT_LEARNING_SEMANTIC_JUDGE_TIMEOUT_MS, 8_000, "TAGENT_LEARNING_SEMANTIC_JUDGE_TIMEOUT_MS"),
+      semanticJudgeMinimumConfidence: probability(env.TAGENT_LEARNING_SEMANTIC_JUDGE_MIN_CONFIDENCE, .72, "TAGENT_LEARNING_SEMANTIC_JUDGE_MIN_CONFIDENCE"),
+      semanticJudgeCacheTtlMs: positiveInteger(env.TAGENT_LEARNING_SEMANTIC_JUDGE_CACHE_TTL_MS, 86_400_000, "TAGENT_LEARNING_SEMANTIC_JUDGE_CACHE_TTL_MS"),
+      semanticJudgeMaxCallsPerMinute: positiveInteger(env.TAGENT_LEARNING_SEMANTIC_JUDGE_MAX_CALLS_PER_MINUTE, 120, "TAGENT_LEARNING_SEMANTIC_JUDGE_MAX_CALLS_PER_MINUTE"),
     },
     model: {
       provider: env.TAGENT_PROVIDER ?? "openai-compatible",

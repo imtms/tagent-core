@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-08-03
+
+### LLM-semantic Memory and Learning
+
+- Added a shared, schema-validated LLM Semantic Judge for durable Memory capture intent and quality, natural-language corrections and communication preferences, reusable Learning sample selection, counterexample judgment, cross-language experience clustering, supported Workflow step/verification distillation, and conservative Memory feedback attribution.
+- Kept deterministic safety, provenance, Required Check freshness, independent-Run support, risk/capability policy, Learning feature controls and human approval authoritative; invalid, timed-out or low-confidence semantic judgments are withheld or use the conservative deterministic fallback.
+- Added a durable Schema v23 semantic-judgment cache with TTL, call-rate budget, confidence threshold, timeout, token/cost and latency metrics, plus Capture diagnostics separating extractor-zero from quality-filtered results.
+- Hardened Workflow distillation so candidates require shared steps and common verification across independent successful Runs, while waiting-input/interruption outcomes without concrete failed checks are not treated as counterexamples.
+- Added reproducible semantic evaluation tooling and release documentation with labeled Memory, correction and cross-language clustering results.
+
 ## [0.1.10] - 2026-08-02
 
 ### Release audit evidence

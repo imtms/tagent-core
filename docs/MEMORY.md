@@ -22,6 +22,7 @@ The recommended first deployment is one trusted TAgent Core process with:
 - Local Cold storage for immutable, complete Markdown Topic revisions;
 - an OpenAI-compatible embedding provider for production semantic retrieval;
 - hybrid extraction: deterministic safety rules plus a structured LLM extractor;
+- an optional shared schema-validated LLM Semantic Judge for durable capture intent and extracted-record quality, with confidence, timeout, rate and persistent-cache controls;
 - in-process capture and maintenance loops;
 - the Web Memory Center and guarded Agent memory tools.
 
@@ -56,6 +57,10 @@ TAGENT_MEMORY_EMBEDDING_MODEL=...
 
 TAGENT_MEMORY_EXTRACTOR_PROVIDER=hybrid
 # If omitted, extractor endpoint/key/model fall back to the main model settings.
+
+# Optional shared semantic judgment for durable intent/quality and Learning.
+TAGENT_LEARNING_SEMANTIC_JUDGE_ENABLED=true
+# URL/key/model may be omitted to reuse router/main provider settings.
 ```
 
 See [MEMORY_OPERATIONS.md](MEMORY_OPERATIONS.md) before using this profile with existing data or exposing it outside a trusted private network.

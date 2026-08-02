@@ -31,6 +31,13 @@ export class RuleBasedExtractor implements ExtractorPort {
         continue;
       }
 
+      const explicitMemory = evidence.role !== "assistant" ? extractExplicitMemoryStatement(evidence.text, scope, sourceRefs, now) : undefined;
+      if (explicitMemory) {
+        records.push(explicitMemory.record);
+        topics.set(explicitMemory.topic.topicId, explicitMemory.topic);
+        continue;
+      }
+
       const food = evidence.role !== "assistant" ? extractFoodPreferences(evidence.text, scope, sourceRefs, now) : undefined;
       if (food?.records.length) {
         for (const record of food.records) records.push(record);
@@ -98,6 +105,17 @@ function extractIdentity(text: string): string | undefined {
     if (value && !/^(?:什么|谁|不知道|unknown|what|who)$/i.test(value)) return value;
   }
   return undefined;
+}
+function extractExplicitMemoryStatement(text:string,scope:MemoryScope,sourceRefs:SourceReference[],now:number) {
+  const match=/^(?:请)?记住(?:一下)?[：:，,]?\s*(.{4,240})$/i.exec(text.trim());
+  const statement=match?.[1]?.trim();
+  if(!statement||/[?？]$/.test(statement)||looksLikeOperationalRequest(statement)||isControlPlaneText(statement))return undefined;
+  const kind:MemoryKind=/(?:以后|每次|始终|必须|务必|流程|步骤|from now on|always|must)/i.test(statement)?"procedure":"fact";
+  const topicId=`${scope.type}.${scope.id}.${kind}.explicit.${stableId(statement).slice(0,12)}`;
+  const record=kind==="procedure"
+    ? {id:randomUUID(),createdAt:now,updatedAt:now,kind,tier:"hot" as const,scope,title:titleFor(statement,kind),content:statement,summary:statement.slice(0,240),topicIds:[topicId],entityIds:[],status:"active" as const,confidence:.99,importance:.95,sourceRefs}
+    : {id:randomUUID(),createdAt:now,updatedAt:now,kind,tier:"hot" as const,scope,title:titleFor(statement,kind),content:statement,summary:statement.slice(0,240),topicIds:[topicId],entityIds:[],status:"active" as const,confidence:.99,importance:.95,sourceRefs};
+  return{record,topic:{topicId,kind,scope,title:titleFor(statement,kind),description:statement,aliases:keywords(statement),entityIds:[],relatedTopicIds:[],embeddingText:statement,status:"active" as const,updatedAt:now}};
 }
 function looksLikeOperationalRequest(text: string) {
   const value = text.trim();

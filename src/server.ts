@@ -8,16 +8,18 @@ import type { MemoryRuntime } from "./memory/factory.js";
 import { WorkflowService } from "./learning/workflow-service.js";
 import { DistillationWorker } from "./learning/distillation-worker.js";
 import { LearningFeatureControl } from "./learning/feature-control.js";
+import { SemanticJudge } from "./learning/semantic-judge.js";
 
 const config = loadConfig();
 await mkdir(config.workspace, { recursive: true });
 await mkdir("./data", { recursive: true });
 const store = new Store(config.database);
 const learningControl = new LearningFeatureControl(store, config.memory.enabled, { learningEnabled: config.learning.enabledByDefault, autoExecutionEnabled: config.learning.autoExecutionEnabledByDefault });
+const semanticJudge=config.learning.semanticJudgeEnabled&&config.learning.semanticJudgeBaseUrl&&config.learning.semanticJudgeApiKey&&config.learning.semanticJudgeModel?new SemanticJudge({baseUrl:config.learning.semanticJudgeBaseUrl,apiKey:config.learning.semanticJudgeApiKey,model:config.learning.semanticJudgeModel,timeoutMs:config.learning.semanticJudgeTimeoutMs,minimumConfidence:config.learning.semanticJudgeMinimumConfidence,cacheTtlMs:config.learning.semanticJudgeCacheTtlMs,maxCallsPerMinute:config.learning.semanticJudgeMaxCallsPerMinute},store):undefined;
 let memoryRuntime: MemoryRuntime | null = null;
 if (config.memory.enabled) {
   const { createMemoryRuntime } = await import("./memory/factory.js");
-  memoryRuntime = await createMemoryRuntime(config.memory, store);
+  memoryRuntime = await createMemoryRuntime(config.memory, store, semanticJudge);
   memoryRuntime.start();
 }
 const service = new AgentService(
@@ -28,8 +30,9 @@ const service = new AgentService(
   memoryRuntime?.service,
   config.memory.enabled ? config.memory.workspaceScopeId : "default",
   learningControl,
+  semanticJudge,
 );
-const distillationWorker = new DistillationWorker(new WorkflowService(store, undefined, learningControl), config.learning.distillationWorkerIntervalMs);
+const distillationWorker = new DistillationWorker(new WorkflowService(store, undefined, learningControl, semanticJudge), config.learning.distillationWorkerIntervalMs);
 if (learningControl.snapshot().learningEnabled) distillationWorker.start();
 learningControl.onChange(async (state) => { if (state.learningEnabled) distillationWorker.start(); else await distillationWorker.stop(); });
 const app = createApp({ store, service, workspaceRoot: config.workspace, runtimeConfig: { ...publicRuntimeConfig(config, store.getSchemaVersion()), ...learningControl.snapshot() }, serviceCredentials: config.serviceCredentials, memory: memoryRuntime?.service, distillationWorker, learningControl, closeResources: async () => { await distillationWorker.close(); await (memoryRuntime?.close() ?? Promise.resolve()); } });

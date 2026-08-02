@@ -22,7 +22,7 @@ const existingSpec: WorkflowSpec = {
 };
 
 describe("persistent asynchronous experience distiller", () => {
-  it("persists fenced checkpoints and rejects stale worker writes", () => {
+  it("persists fenced checkpoints and rejects stale worker writes", async () => {
     const { store, service } = make(); const session = store.createSession();
     observe(store, service, session.id, "verify software change", "1. Run tests\n2. Build artifact");
     observe(store, service, session.id, "verify code change", "1. Run the tests\n2. Build artifact");
@@ -37,13 +37,13 @@ describe("persistent asynchronous experience distiller", () => {
     service.checkpointDistillationJob(current.id, "worker-b", current.lease_token, current.fence, { phase: "resumed", cursor: 1 });
   });
 
-  it("aggregates semantically similar runs, keeps consistent order, and derives counterexample handling", () => {
+  it("aggregates semantically similar runs, keeps consistent order, and derives counterexample handling", async () => {
     const { store, service } = make(); const session = store.createSession();
     observe(store, service, session.id, "verify software release change", "1. Run tests\n2. Build release artifact\n3. Publish report");
     observe(store, service, session.id, "validate software release update", "1. Run the tests\n2. Build release artifact\n3. Notify team");
     observe(store, service, session.id, "verification of software release failed", "1. Build first\n2. Run tests", false, ["tests"]);
     service.enqueueDistillation(session.id, "verify software release change");
-    const result = service.runNextDistillationJob("distiller")!;
+    const result = await service.runNextDistillationJob("distiller")!;
     expect(result.revision!.steps).toHaveLength(2);
     expect(result.revision!.steps[0].instruction).toMatch(/Run (?:the )?tests/);
     expect(result.revision!.steps[1].instruction).toBe("Build release artifact");
@@ -53,13 +53,33 @@ describe("persistent asynchronous experience distiller", () => {
     expect(JSON.parse((store.db.prepare("SELECT checkpoint_json value FROM workflow_distillation_jobs").get() as any).value)).toMatchObject({ phase: "completed", workflowId: result.id });
   });
 
-  it("records a durable conflict instead of silently duplicating a divergent workflow", () => {
+  it("withholds a candidate when repeated runs have no consistent steps or common verification", async () => {
+    const { store, service } = make(); const session = store.createSession();
+    observe(store, service, session.id, "reply to pull request review", "1. Draft a reply", true);
+    observe(store, service, session.id, "respond to pull request review", "1. Post a comment", true);
+    service.enqueueDistillation(session.id, "reply to pull request review");
+    expect(await service.runNextDistillationJob("distiller")).toBeUndefined();
+    expect(store.db.prepare("SELECT COUNT(*) count FROM workflow_definitions").get()).toEqual({ count: 0 });
+  });
+
+  it("does not treat waiting-input or interruption events without failed checks as counterexamples", async () => {
+    const { store, service } = make(); const session = store.createSession();
+    observe(store, service, session.id, "verify software release change", "1. Run tests\n2. Build release artifact");
+    observe(store, service, session.id, "validate software release update", "1. Run the tests\n2. Build release artifact");
+    observe(store, service, session.id, "verify software release change", "Please provide the release identifier", false, []);
+    service.enqueueDistillation(session.id, "verify software release change");
+    const result = await service.runNextDistillationJob("distiller")!;
+    expect(result.revision!.counterexampleIds).toEqual([]);
+    expect(result.revision!.nonApplicability).toEqual([]);
+  });
+
+  it("records a durable conflict instead of silently duplicating a divergent workflow", async () => {
     const { store, service } = make(); const session = store.createSession();
     service.createWorkflow(session.id, existingSpec, "explicit_user", ["message:1"], "candidate");
     observe(store, service, session.id, "verify software change", "1. Run tests\n2. Build artifact");
     observe(store, service, session.id, "validate software change", "1. Run the tests\n2. Build artifact");
     service.enqueueDistillation(session.id, "verify software change");
-    expect(service.runNextDistillationJob("distiller")).toBeUndefined();
+    expect(await service.runNextDistillationJob("distiller")).toBeUndefined();
     const conflict = store.db.prepare("SELECT kind,status,reasons_json as reasonsJson FROM workflow_distillation_conflicts").get() as any;
     expect(conflict).toMatchObject({ kind: "conflict", status: "open" });
     expect(JSON.parse(conflict.reasonsJson)).toContain("same applicability with divergent procedure");

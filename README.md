@@ -4,7 +4,7 @@
 
 TAgent Core is a durable, self-hosted control plane for an in-process coding agent. It combines Pi's model and tool loop with TAgent-owned persistence, TaskRun supervision, verification gates, operation receipts, a responsive Web workbench, scoped automation credentials, and an optional Hot/Warm/Cold long-term memory platform.
 
-Version `0.1.10` is the current stable release. It adds progress-sensitive idle timeouts for streamed LLM calls, safer bounded Supervisor review of long final deliveries, live execution and user-input pause/resume UX, in-browser text/Markdown Artifact previews, and controlled workflow learning with versioned governance and evidence receipts. `0.1.0` was the first stable source release for the documented **trusted single-service deployment profile**. Stable means the supported profile has passed the repository's release gates; it does not mean that the service is a public multi-tenant sandbox.
+Version `0.1.11` is the current stable release. It adds a shared, schema-validated LLM Semantic Judge for Memory capture quality, natural-language corrections, reusable Learning evidence, cross-language experience clustering, supported Workflow distillation, and conservative feedback attribution. Deterministic safety, provenance, verification, risk/capability policy and human approval remain authoritative. `0.1.0` was the first stable source release for the documented **trusted single-service deployment profile**. Stable means the supported profile has passed the repository's release gates; it does not mean that the service is a public multi-tenant sandbox.
 
 ## Highlights
 
@@ -103,6 +103,8 @@ Credentials are supplied at runtime and are not written to Pi auth files, SQLite
 | `TAGENT_MEMORY_ENABLED` | `false` | Opt in to long-term memory |
 | `TAGENT_LEARNING_ENABLED` | `false` | Enable Learning; forced off unless Memory is enabled |
 | `TAGENT_LEARNING_AUTO_EXECUTION_ENABLED` | `false` | Allow Workflow execution participation; active actions still require human approval |
+| `TAGENT_LEARNING_SEMANTIC_JUDGE_ENABLED` | `false` | Enable the shared structured LLM judge for Memory/Learning semantics |
+| `TAGENT_LEARNING_SEMANTIC_JUDGE_MODEL` | main/router fallback | Semantic judge model; base URL and API key have matching optional settings |
 
 See [.env.example](.env.example) for every supported setting.
 

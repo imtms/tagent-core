@@ -1,8 +1,8 @@
 # Development Status
 
-Updated: 2026-08-02 (Asia/Singapore)
+Updated: 2026-08-03 (Asia/Singapore)
 
-Current stable release: `0.1.10`. Current SQLite schema: `22`.
+Current stable release: `0.1.11`. Current SQLite schema: `23`.
 
 ## Completed
 
@@ -88,7 +88,8 @@ Current stable release: `0.1.10`. Current SQLite schema: `22`.
 - PostgreSQL 17/pgvector/pg_trgm durable profile with separate Fact and Preference storage, Topic Descriptors, bounded entity graph, capture jobs, policy receipts, and immutable Local Cold revisions.
 - OpenAI-compatible semantic embedding with durable checkpointed/fenced reindex jobs, staged/active generations, progress reporting, and lexical-only fallback; deterministic hash embedding remains test/development-only.
 - Deterministic safety extraction plus optional structured LLM extraction for multi-sentence context, negation, conditions, temporal changes, and Chinese coreference.
-- User-message, role-aware user-only context-prune summary, and manual capture triggers with queued/completed/empty/failed observability and proposal/persisted counts. Assistant final prose and TaskRun Check/Artifact wrappers are not automatic semantic-memory sources.
+- A shared schema-validated LLM Semantic Judge can classify durable capture intent and extracted-record quality, detect natural-language corrections and communication preferences, select reusable Learning evidence, cluster paraphrased/cross-language tasks, distill only independently supported steps and verification, and conservatively attribute actual Memory use. Confidence, timeout, rate, cache, token/cost and safe-fallback controls are enforced without weakening deterministic policy or human approval.
+- User-message, role-aware user-only context-prune summary, and manual capture triggers with queued/completed/empty/failed observability, extracted/proposal/persisted counts and quality-filter reasons. Assistant final prose and TaskRun Check/Artifact wrappers are not automatic semantic-memory sources.
 - Continuous lifecycle governance with Hot-to-Warm promotion, canonical confirmation/supersession, kind-specific retention, stale/history handling, reversible Record/Topic tombstones, delayed purge, and Local Cold reconciliation.
 - Ranking v2 recall across lexical, trigram, vector, Topic, and bounded graph routes, with domain routing, relevance thresholds, validity/trust/current-state scoring, MMR, empty-result behavior, identity isolation, semantic deduplication, contradiction suppression, feedback receipts, and Recall Trace v2; complete checksum-verified Cold pages are injected as low-authority data and never vector-chunked.
 - Agent `memory_search`, `memory_topic_get`, `memory_record_get`, and guarded `memory_forget` tools plus a Memory Center for readiness, reindex progress, feedback, Candidate/Disputed governance, tombstone restore, and human-editable Core Memory revisions.

@@ -3,12 +3,13 @@ import type { PolicyGatePort } from "./policy/policy-engine.js";
 import type { MemoryService } from "./memory-service.js";
 import type { MemoryLifecycle } from "./lifecycle.js";
 import type { CaptureRequest, MemoryProvenance, SourceReference, WarmMemory } from "./types.js";
-import { isDurableMemory } from "./quality.js";
+import { hardMemoryQualityRejectionReason, memoryQualityRejectionReason } from "./quality.js";
+import type { SemanticJudge } from "../learning/semantic-judge.js";
 
 const leaseMs = 30_000;
 
 export class MemoryCaptureWorker {
-  constructor(private readonly jobs:JobQueuePort,private readonly source:SourceLoaderPort,private readonly extractor:ExtractorPort,private readonly policy:PolicyGatePort,private readonly service:MemoryService,private readonly lifecycle?:MemoryLifecycle,private readonly owner=`memory-worker:${process.pid}`,private readonly onEvent?:(event:{type:string;sourceRefs:SourceReference[];data:Record<string,unknown>})=>void){}
+  constructor(private readonly jobs:JobQueuePort,private readonly source:SourceLoaderPort,private readonly extractor:ExtractorPort,private readonly policy:PolicyGatePort,private readonly service:MemoryService,private readonly lifecycle?:MemoryLifecycle,private readonly owner=`memory-worker:${process.pid}`,private readonly onEvent?:(event:{type:string;sourceRefs:SourceReference[];data:Record<string,unknown>})=>void,private readonly semanticJudge?:SemanticJudge){}
   async runOnce(){
     const job=await this.jobs.claim(this.owner,leaseMs);if(!job)return false;
     const leaseToken=job.leaseToken,fencingToken=job.fencingToken;
@@ -20,8 +21,12 @@ export class MemoryCaptureWorker {
       const scope=job.request.access.scopes[0];let content=job.request.content??"";if(!content)content=await this.source.load(job.request.access,job.request.sourceRefs);
       const decision=await this.policy.evaluate("source_egress",job.request.access,{text:content,scope});
       if(decision.action!=="allow"&&decision.action!=="transform"){await finish(()=>this.jobs.fail(job.id,this.owner,leaseToken,fencingToken,"source_policy_rejected",false));return true;}
-      const proposal=applyProvenance(await this.extractor.extract(decision.payload.text,job.request.sourceRefs,scope),job.request);
-      proposal.records=proposal.records.filter(isDurableMemory);
+      const captureDecision=this.semanticJudge?await this.semanticJudge.memoryCapture(decision.payload.text):undefined;
+      if(captureDecision&&!captureDecision.shouldCapture){const completed=await finish(()=>this.jobs.complete(job.id,this.owner,leaseToken,fencingToken,{extractedCount:0,proposalCount:0,persistedCount:0,filterReasons:{semantic_not_durable:1}}));if(completed)this.onEvent?.({type:"memory.capture.empty",sourceRefs:job.request.sourceRefs,data:{jobId:job.id,attempts:job.attempts,extractedCount:0,proposalCount:0,persistedCount:0,filterReasons:{semantic_not_durable:1},semanticDecision:captureDecision,latencyMs:Date.now()-job.createdAt,errorCode:"semantic_not_durable"}});return true;}
+      const proposal:{records:WarmMemory[];topics:any[];nodes:any[];edges:any[]}=applyProvenance(await this.extractor.extract(decision.payload.text,job.request.sourceRefs,scope),job.request);
+      const extractedCount=proposal.records.length,filterReasons:Record<string,number>={};
+      const accepted:WarmMemory[]=[];
+      for(const record of proposal.records){const hard=hardMemoryQualityRejectionReason(record);if(hard){filterReasons[hard]=(filterReasons[hard]??0)+1;continue;}if(this.semanticJudge){const semantic=await this.semanticJudge.memoryQuality({source:decision.payload.text,record});if(!semantic||!semantic.accept){const reason=semantic?.rejectionCode&&semantic.rejectionCode!=="none"?semantic.rejectionCode:"semantic_low_confidence";filterReasons[reason]=(filterReasons[reason]??0)+1;continue;}}else{const reason=memoryQualityRejectionReason(record);if(reason){filterReasons[reason]=(filterReasons[reason]??0)+1;continue;}}accepted.push(record);}proposal.records=accepted;
       const referencedTopics=new Set(proposal.records.flatMap((record)=>record.topicIds));
       proposal.topics=proposal.topics.filter((topic)=>referencedTopics.has(topic.topicId));
       const referencedEntities=new Set(proposal.records.flatMap((record)=>record.entityIds));
@@ -31,8 +36,8 @@ export class MemoryCaptureWorker {
       const integrated=this.lifecycle?await this.lifecycle.integrate(job.request.access,proposal):proposal;
       if(leaseLost)return true;
       const persisted=await this.service.persistExtracted(job.request.access,integrated.records,integrated.topics,proposal.nodes,proposal.edges);
-      const completed=await finish(()=>this.jobs.complete(job.id,this.owner,leaseToken,fencingToken,{proposalCount:proposal.records.length,persistedCount:persisted.length}));
-      if(completed)this.onEvent?.({type:proposal.records.length?"memory.capture.completed":"memory.capture.empty",sourceRefs:job.request.sourceRefs,data:{jobId:job.id,attempts:job.attempts,proposalCount:proposal.records.length,persistedCount:persisted.length,latencyMs:Date.now()-job.createdAt,errorCode:proposal.records.length?undefined:"zero_proposals"}});
+      const completed=await finish(()=>this.jobs.complete(job.id,this.owner,leaseToken,fencingToken,{extractedCount,proposalCount:proposal.records.length,persistedCount:persisted.length,filterReasons}));
+      if(completed)this.onEvent?.({type:proposal.records.length?"memory.capture.completed":"memory.capture.empty",sourceRefs:job.request.sourceRefs,data:{jobId:job.id,attempts:job.attempts,extractedCount,proposalCount:proposal.records.length,persistedCount:persisted.length,filterReasons,latencyMs:Date.now()-job.createdAt,errorCode:proposal.records.length?(persisted.length<proposal.records.length?"partially_persisted":undefined):(extractedCount?"all_filtered":"extractor_zero")}});
       return true;
     }catch(error){const errorCode=error instanceof Error?error.name:"capture_error";const failed=await finish(()=>this.jobs.fail(job.id,this.owner,leaseToken,fencingToken,errorCode,true));if(failed)this.onEvent?.({type:"memory.capture.failed",sourceRefs:job.request.sourceRefs,data:{jobId:job.id,attempts:job.attempts,errorCode,latencyMs:Date.now()-job.createdAt}});return true;}finally{clearInterval(heartbeat);}
   }

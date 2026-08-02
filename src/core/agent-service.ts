@@ -14,6 +14,7 @@ import type { AccessContext, MemoryProvenance } from "../memory/types.js";
 import { WorkflowService, type WorkflowSpec, type WorkflowFeedbackSignal } from "../learning/workflow-service.js";
 import { LearningService, type CommunicationApplicability, type CommunicationDimension } from "../learning/learning-service.js";
 import type { LearningFeatureControl } from "../learning/feature-control.js";
+import type { SemanticJudge } from "../learning/semantic-judge.js";
 
 export class AgentService {
   private readonly runtimes = new Map<RunId, AgentRuntime>();
@@ -41,16 +42,17 @@ export class AgentService {
     private readonly memory?: MemoryFacade,
     private readonly memoryScopeId = "default",
     private readonly learningControl?: LearningFeatureControl,
+    private readonly semanticJudge?: SemanticJudge,
   ) {
     const reviewer = runtimeDefaults.supervisorReviewer ?? (runtimeDefaults.model && runtimeDefaults.apiKey ? new OpenAiSupervisorReviewer({ model: runtimeDefaults.supervisorModel ?? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions">, fallbackModel: runtimeDefaults.supervisorModel ? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions"> : undefined, apiKey: runtimeDefaults.apiKey, timeoutMs: runtimeDefaults.supervisorTimeoutMs ?? runtimeDefaults.providerTimeoutMs }) : process.env.VITEST ? new TestSupervisorReviewer() : undefined);
     if (!reviewer) throw new Error("LLM Supervisor reviewer requires a configured model and API key");
     this.supervisor = new TaskRunSupervisor(store, reviewer);
     this.sessionRouter = new SessionInputRouter({ model: runtimeDefaults.routerModel ?? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions"> | undefined, apiKey: runtimeDefaults.apiKey, timeoutMs: runtimeDefaults.routerTimeoutMs ?? 15_000 });
-    this.workflowService = new WorkflowService(store, undefined, learningControl);
-    this.learningService = new LearningService(store, memory, memoryScopeId);
+    this.workflowService = new WorkflowService(store, undefined, learningControl, semanticJudge);
+    this.learningService = new LearningService(store, memory, memoryScopeId, semanticJudge);
     this.store.markInterrupted();
     if (learningControl?.snapshot().learningEnabled ?? true) {
-      this.workflowService.drainProjectionOutbox();
+      void this.workflowService.drainProjectionOutbox();
       this.learningService.drainLearningProjectionLedger();
       void this.learningService.drainFeedbackAttribution();
     }
@@ -555,7 +557,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       this.checkpointTimers.delete(run.id);
       this.checkpointDrafts.delete(run.id);
       this.lastCheckpointTranscriptSeq.delete(run.id);
-      this.workflowService.drainProjectionOutbox();
+      void this.workflowService.drainProjectionOutbox();
       if (this.executionTasks.get(run.id) === execution) this.executionTasks.delete(run.id);
       setImmediate(() => {
         try {
@@ -575,7 +577,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     try {
       this.workflowService.recordRunApplications(run);
       this.workflowService.recordCanaryOutcome(run);
-      this.workflowService.drainProjectionOutbox();
+      void this.workflowService.drainProjectionOutbox();
       this.learningService.drainLearningProjectionLedger();
       this.learningService.projectRun(run);
       void this.learningService.drainFeedbackAttribution().catch((error: unknown) => this.publish(this.store.appendEvent(runId, "memory.feedback.attribution.failed", { error: error instanceof Error ? error.message : String(error) })));
@@ -680,10 +682,9 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
   }
 
   private captureUserMessage(run: TaskRun, messageId: number, content: string) {
-    if (this.learningControl?.snapshot().learningEnabled ?? true) this.learningService.captureExplicitCommunicationPreferences(`session:${run.sessionId}`, run.sessionId, messageId, content);
-    if ((this.learningControl?.snapshot().learningEnabled ?? true) && (/\b(?:correction|incorrect|wrong)\b|(?:不对|错了|改为|纠正|不是.{0,20}而是|不要再)/i.test(content))) this.learningService.recordCorrection({ sessionId: run.sessionId, runId: run.id, attempt: run.attempt, messageId, content, source: "explicit_user" });
-    if (!this.memory) return;
     const context = this.store.listRecentMessages(run.sessionId, 8).filter((message) => message.id < messageId).slice(-4).map((message) => `${message.role}: ${message.content}`).join("\n");
+    if (this.learningControl?.snapshot().learningEnabled ?? true) void this.learningService.analyzeUserMessage({subjectId:`session:${run.sessionId}`,scopeId:run.sessionId,messageId,content,context,runId:run.id,attempt:run.attempt});
+    if (!this.memory) return;
     void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "message", sourceId: String(messageId), revision: "user" }], content: `<context>\n${context}\n</context>\n<focus_user>\n${content}\n</focus_user>`, idempotencyKey: `user-message:${messageId}`, captureSource: { kind: "user_message", role: "user" } }).then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "message", sourceId: String(messageId) }))).catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "message", sourceId: String(messageId), error: error instanceof Error ? error.message : String(error) })));
   }
 
@@ -819,9 +820,9 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     if (!run) throw new Error("Proposal is not spawnable");
     if (!this.memory) {
       try { const history = this.prepareSessionHistoryWithoutRecall(run, run.goal); this.completeSpawnProposal(run, history); return this.store.getRun(run.id)!; }
-      catch (error) { this.store.failSpawnedRun(proposalId, run.id, error instanceof Error ? error.message : String(error)); this.workflowService.drainProjectionOutbox(); throw error; }
+      catch (error) { this.store.failSpawnedRun(proposalId, run.id, error instanceof Error ? error.message : String(error)); void this.workflowService.drainProjectionOutbox(); throw error; }
     }
-    return this.prepareSessionHistory(run, run.goal).then((history) => { this.completeSpawnProposal(run, history); return this.store.getRun(run.id)!; }).catch((error) => { this.store.failSpawnedRun(proposalId, run.id, error instanceof Error ? error.message : String(error)); this.workflowService.drainProjectionOutbox(); throw error; });
+    return this.prepareSessionHistory(run, run.goal).then((history) => { this.completeSpawnProposal(run, history); return this.store.getRun(run.id)!; }).catch((error) => { this.store.failSpawnedRun(proposalId, run.id, error instanceof Error ? error.message : String(error)); void this.workflowService.drainProjectionOutbox(); throw error; });
   }
 
   private completeSpawnProposal(run: TaskRun, history: ContextAssembly & { recalledMemory?: string; memoryContextItems?: ContextManifestItem[] }) {

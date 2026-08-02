@@ -43,7 +43,7 @@ describe("v0.1.8 Learning release acceptance coverage", () => {
     expect(control.snapshot()).toMatchObject({ memoryEnabled: false, learningEnabled: false, autoExecutionEnabled: false, passiveLearningEnabled: false });
     expect(worker.snapshot()).toMatchObject({ running: false, ready: false });
     expect(workflows.projectRun(store.getRun(run.id)!, "failed")).toBeUndefined();
-    expect(workflows.runNextDistillationJob("disabled-worker")).toBeUndefined();
+    expect(await workflows.runNextDistillationJob("disabled-worker")).toBeUndefined();
     expect(workflows.recall(session.id, "release gate", run.id, 1)).toEqual({ promptSection: "", workflows: [], contextItems: [] });
     expect(() => workflows.teach(session.id, spec, "evidence:2")).toThrow("Memory is disabled");
     expect(() => workflows.requestActivation(workflow.id)).toThrow("Memory is disabled");
@@ -73,17 +73,18 @@ describe("v0.1.8 Learning release acceptance coverage", () => {
     expect(store.db.prepare("SELECT COUNT(*) count FROM autonomy_approval_requests").get()).toEqual({ count: 0 });
   });
 
-  it("passive mode allows observation, evidence, distillation and candidate evolution but blocks all active operation families", () => {
+  it("passive mode allows observation, evidence, distillation and candidate evolution but blocks all active operation families", async () => {
     const { store, workflows } = fixture();
     const session = store.createSession();
     for (let index = 0; index < 2; index += 1) {
       const run = store.createRun(session.id, "release gate");
-      store.upsertPlanItem(run.id, { key: "observe", title: "Observe", status: "done", required: true, position: 1 });
+      store.upsertPlanItem(run.id, { key: "prepare", title: "Prepare release evidence", status: "done", required: true, position: 1 });
+      store.upsertPlanItem(run.id, { key: "observe", title: "Observe release gate", status: "done", required: true, position: 2 });
       store.upsertCheck(run.id, { key: "gate", title: "Gate", status: "passed", required: true, command: "test", evidence: "fresh", stale: false });
       store.finalizeRun(run.id, "completed");
       expect(workflows.projectRun(store.getRun(run.id)!, "completed")).toBeTruthy();
     }
-    const candidate = workflows.runNextDistillationJob("passive-distiller");
+    const candidate = await workflows.runNextDistillationJob("passive-distiller");
     expect(candidate).toMatchObject({ status: "candidate", activeRevisionId: null });
     expect(store.db.prepare("SELECT COUNT(*) count FROM experience_observations WHERE source_type='task_experience'").get()).toEqual({ count: 2 });
     expect(workflows.listAutonomyAudit(session.id).map((item) => item.category)).toEqual(expect.arrayContaining(["observe", "learn", "distill"]));
@@ -95,7 +96,7 @@ describe("v0.1.8 Learning release acceptance coverage", () => {
     expect(store.db.prepare("SELECT COUNT(*) count FROM autonomy_approval_requests").get()).toEqual({ count: 0 });
   });
 
-  it("top-bar UI source exposes state, Memory dependency and permanent approval warning", () => {
+  it("top-bar UI source exposes state, Memory dependency and permanent approval warning", async () => {
     const source = readFileSync(new URL("../web/src/App.tsx", import.meta.url), "utf8");
     for (const text of ["Learning execution", "Memory required", "Off · passive learning only", "On · approval always required", "Every active action still requires human approval."]) {
       expect(source).toContain(text);
@@ -105,7 +106,7 @@ describe("v0.1.8 Learning release acceptance coverage", () => {
     expect(source).toContain("aria-checked={learningSettings.autoExecutionEnabled}");
   });
 
-  it("release documentation covers every required operational topic with concrete state and approval contracts", () => {
+  it("release documentation covers every required operational topic with concrete state and approval contracts", async () => {
     const document = readFileSync(new URL("../docs/LEARNING.md", import.meta.url), "utf8");
     for (const heading of ["Release boundary", "Hard dependency", "Modes", "Configuration", "API", "Web UI", "State transitions", "Upgrade and migration", "Operations", "Troubleshooting", "Rollback and emergency disable"]) {
       expect(document).toContain(`## ${heading}`);

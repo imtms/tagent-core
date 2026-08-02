@@ -4,7 +4,7 @@
 
 Learning is an optional extension of long-term Memory. It covers passive observation, structured learning evidence, communication profiles, experience distillation, versioned Workflow candidates, evaluation receipts, guarded promotion and reversible governance.
 
-Learning never modifies TAgent Core source code. It evolves data objects and runtime guidance under revision, evidence, approval and rollback controls.
+Learning never modifies TAgent Core source code. It evolves data objects and runtime guidance under revision, evidence, approval and rollback controls. For the LLM semantic quality benchmark, latency/cache receipt and labeled predictions, see [SEMANTIC_MEMORY_LEARNING_EVALUATION.md](SEMANTIC_MEMORY_LEARNING_EVALUATION.md).
 
 ## Hard dependency
 
@@ -52,9 +52,35 @@ TAGENT_MEMORY_ENABLED=true
 TAGENT_LEARNING_ENABLED=true
 TAGENT_LEARNING_AUTO_EXECUTION_ENABLED=false
 TAGENT_DISTILLATION_WORKER_INTERVAL_MS=1000
+
+# Optional shared LLM semantic judge. It reuses the main/router provider when
+# URL, key or model are omitted, and never bypasses deterministic policy.
+TAGENT_LEARNING_SEMANTIC_JUDGE_ENABLED=true
+TAGENT_LEARNING_SEMANTIC_JUDGE_BASE_URL=${TAGENT_ROUTER_API_BASE}
+TAGENT_LEARNING_SEMANTIC_JUDGE_API_KEY=${OPENAI_API_KEY}
+TAGENT_LEARNING_SEMANTIC_JUDGE_MODEL=${TAGENT_ROUTER_MODEL}
+TAGENT_LEARNING_SEMANTIC_JUDGE_TIMEOUT_MS=8000
+TAGENT_LEARNING_SEMANTIC_JUDGE_MIN_CONFIDENCE=0.72
+TAGENT_LEARNING_SEMANTIC_JUDGE_CACHE_TTL_MS=86400000
+TAGENT_LEARNING_SEMANTIC_JUDGE_MAX_CALLS_PER_MINUTE=120
 ```
 
 The environment values seed a new database. Runtime state is persisted in `learning_feature_settings`; after first initialization, Web/API changes survive restart.
+
+## LLM semantic judgment
+
+When enabled, the shared Semantic Judge replaces brittle keyword-only decisions in the following bounded paths:
+
+- durable Memory capture intent and extracted-record quality;
+- indirect user corrections and explicit communication preferences;
+- reusable procedural Learning samples and genuine failure counterexamples;
+- paraphrased/cross-language experience clustering;
+- common Workflow steps, verification and failure handling supported by independent Runs;
+- conservative Memory-use and correction attribution.
+
+Every task uses strict JSON validation and a confidence threshold. Exact judgments are cached in SQLite (`semantic_judgment_cache`) by task, model and input hash. Timeouts, malformed output, low confidence or the call-rate budget cannot grant capability or make a Workflow active: deterministic source policy, prompt-injection/secret checks, fresh non-empty Required Checks, independent Run support, risk/capability filtering and human approval remain authoritative. Without a configured Semantic Judge, the conservative deterministic path remains available.
+
+Schema v23 adds the semantic cache. It may be cleared without deleting Memory, Learning Events or Workflow revisions; the next eligible input is judged again.
 
 ## API
 
@@ -106,9 +132,9 @@ Learning Center repeats the effective mode and explains its behavior boundary.
 
 ## Upgrade and migration
 
-Schema v22 creates the singleton `learning_feature_settings` row. Existing databases initialize from runtime Memory/Learning configuration. Before upgrade, back up SQLite including WAL/SHM and the Memory PostgreSQL/Cold stores together.
+Schema v22 creates the singleton `learning_feature_settings` row. Schema v23 adds the durable `semantic_judgment_cache`. Existing databases migrate transactionally. Before upgrade, back up SQLite including WAL/SHM and the Memory PostgreSQL/Cold stores together.
 
-No downgrade is supported against schema v22. Rollback requires restoring the matching pre-upgrade database backup and release artifact.
+No downgrade is supported against schema v23. Rollback requires restoring the matching pre-upgrade database backup and release artifact.
 
 ## Operations
 

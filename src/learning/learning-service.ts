@@ -3,6 +3,7 @@ import type { Store } from "../store/store.js";
 import type { ContextManifestItem, TaskRun } from "../core/types.js";
 import type { MemoryFacade } from "../memory/memory-service.js";
 import type { MemoryScope, RecallFeedbackSignal } from "../memory/types.js";
+import type { SemanticJudge } from "./semantic-judge.js";
 
 export type CommunicationDimension = "language" | "verbosity" | "technicalDepth" | "answerStructure" | "progressUpdatePolicy" | "clarificationTolerance" | "uncertaintyStyle" | "challengeLevel" | "forbiddenPatterns";
 export type CommunicationApplicability = "global" | "workspace" | "project" | "session" | "task";
@@ -23,9 +24,11 @@ const now = () => Date.now();
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const redact = (value: string) => value.replace(/(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}/g, "[REDACTED_SECRET]").replace(/\b(?:password|passwd|token|secret|api[_-]?key)\s*[:=]\s*\S+/gi, "$1=[REDACTED]");
 const safeJson = <T>(value: string, fallback: T): T => { try { return JSON.parse(value) as T; } catch { return fallback; } };
+const communicationDimensions=new Set<CommunicationDimension>(["language","verbosity","technicalDepth","answerStructure","progressUpdatePolicy","clarificationTolerance","uncertaintyStyle","challengeLevel","forbiddenPatterns"]);
+const isCommunicationDimension=(value:string):value is CommunicationDimension=>communicationDimensions.has(value as CommunicationDimension);
 
 export class LearningService {
-  constructor(private readonly store: Store, private readonly memory?: MemoryFacade, private readonly memoryScopeId = "default") {}
+  constructor(private readonly store: Store, private readonly memory?: MemoryFacade, private readonly memoryScopeId = "default", private readonly semanticJudge?: SemanticJudge) {}
 
   recordCommunicationPreference(input: { subjectId: string; scopeType: CommunicationApplicability; scopeId: string; dimension: CommunicationDimension; value: string | string[]; sourceType: "explicit_user" | "inferred" | "governance"; sourceRef: string; confidence?: number; expiresAt?: number }) {
     const timestamp = now();
@@ -64,6 +67,14 @@ export class LearningService {
       return this.getCommunicationProfile(profile.id)!;
     });
     return transaction();
+  }
+
+  async analyzeUserMessage(input:{subjectId:string;scopeId:string;messageId:number;content:string;context?:string;runId?:string;attempt?:number}) {
+    const semantic=this.semanticJudge?await this.semanticJudge.userMessage(input.content,input.context??""):undefined;
+    if(semantic){for(const preference of semantic.communicationPreferences){if(isCommunicationDimension(preference.dimension))this.recordCommunicationPreference({subjectId:input.subjectId,scopeType:"session",scopeId:input.scopeId,dimension:preference.dimension,value:preference.value,sourceType:"explicit_user",sourceRef:`message:${input.messageId}`,confidence:semantic.confidence});}if(semantic.correction)this.recordCorrection({sessionId:input.scopeId,runId:input.runId,attempt:input.attempt,messageId:input.messageId,correctionType:semantic.correctionType,targetType:"run",targetId:input.runId,content:input.content,source:"explicit_user"});return semantic;}
+    this.captureExplicitCommunicationPreferences(input.subjectId,input.scopeId,input.messageId,input.content);
+    if(/\b(?:correction|incorrect|wrong|inaccurate|learned wrong)\b|(?:不太对|不准确|不正确|不对|错了|学错|改为|纠正|不是.{0,20}而是|不要再)/i.test(input.content))this.recordCorrection({sessionId:input.scopeId,runId:input.runId,attempt:input.attempt,messageId:input.messageId,content:input.content,source:"explicit_user"});
+    return undefined;
   }
 
   captureExplicitCommunicationPreferences(subjectId: string, scopeId: string, messageId: number, content: string) {
@@ -160,6 +171,7 @@ export class LearningService {
       (id,learning_event_id,run_id,attempt,taxonomy_version,label,value,confidence,evidence_json,idempotency_key,created_at) VALUES (?,?,?,?, 'outcome-v1',?,?,?,?,?,?)`)
       .run(randomUUID(), event.id, run.id, run.attempt, label, value, confidence, JSON.stringify(evidence), `outcome:${event.id}:${label}`, now());
     this.createConservativeFeedbackReceipts(run, manifest?.id ?? "", manifest?.items ?? [], success, correctionCount > 0);
+    if(this.semanticJudge)void this.createSemanticFeedbackReceipts(run,manifest?.id??"",manifest?.items??[],success,correctionCount>0);
     return this.getLearningEvent(event.id);
   }
 
@@ -180,6 +192,16 @@ export class LearningService {
           VALUES (?,?,?,?,?,?,?,?,?,?,'pending',?,?)`).run(randomUUID(), run.id, run.attempt, `session:${run.sessionId}`, item.sourceId, entry.signal, entry.weight, entry.basis, manifestId, JSON.stringify([`manifest:${manifestId}`, `run:${run.id}`]), key, now());
       }
     }
+  }
+
+  private async createSemanticFeedbackReceipts(run:TaskRun,manifestId:string,items:ContextManifestItem[],success:boolean,corrected:boolean){
+    const selected=items.filter((item)=>item.kind==="memory_card"&&item.selected);if(!selected.length)return;
+    const assistant=this.store.listMessages(run.sessionId,30).filter((item)=>item.role==="assistant").at(-1)?.content??"";
+    const corrections=this.store.db.prepare("SELECT content FROM user_corrections WHERE run_id=? AND (attempt=? OR attempt IS NULL)").all(run.id,run.attempt) as Array<{content:string}>;
+    const decision=await this.semanticJudge!.feedbackAttribution({assistantAnswer:assistant,corrections:corrections.map((item)=>item.content),records:selected.map((item)=>({id:item.sourceId,reason:item.reason,metadata:item.metadata}))});if(!decision)return;
+    const selectedIds=new Set(selected.map((item)=>item.sourceId));
+    for(const recordId of decision.usedRecordIds.filter((id)=>selectedIds.has(id))){for(const entry of [{signal:"cited" as const,weight:.1,basis:"semantic_answer_attribution"},...(success&&!corrected?[{signal:"task_success" as const,weight:.15,basis:"semantic_use_and_verified_task_success"}]:[])]){const key=`memory-attribution:${run.id}:${run.attempt}:${recordId}:${entry.signal}`;this.store.db.prepare(`INSERT OR IGNORE INTO feedback_attribution_receipts (id,run_id,attempt,actor_id,record_id,signal,weight,basis,context_manifest_id,evidence_json,status,idempotency_key,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,'pending',?,?)`).run(randomUUID(),run.id,run.attempt,`session:${run.sessionId}`,recordId,entry.signal,entry.weight,entry.basis,manifestId,JSON.stringify([`manifest:${manifestId}`,`semantic-confidence:${decision.confidence}`]),key,now());}}
+    if(corrected)for(const recordId of decision.harmfulRecordIds.filter((id)=>selectedIds.has(id))){const key=`memory-attribution:${run.id}:${run.attempt}:${recordId}:corrected`;this.store.db.prepare(`INSERT OR IGNORE INTO feedback_attribution_receipts (id,run_id,attempt,actor_id,record_id,signal,weight,basis,context_manifest_id,evidence_json,status,idempotency_key,created_at) VALUES (?,?,?,?,?,'corrected',-.75,'semantic_correction_attribution',?,?,'pending',?,?)`).run(randomUUID(),run.id,run.attempt,`session:${run.sessionId}`,recordId,manifestId,JSON.stringify([`manifest:${manifestId}`,`semantic-confidence:${decision.confidence}`]),key,now());}
   }
 
   async drainFeedbackAttribution(limit = 100) {

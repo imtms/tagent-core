@@ -33,7 +33,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 22;
+const SCHEMA_VERSION = 23;
 
 export class Store {
   readonly db: Database.Database;
@@ -776,6 +776,16 @@ export class Store {
         applied_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_feedback_attribution_run ON feedback_attribution_receipts(run_id, attempt, status);
+      CREATE TABLE IF NOT EXISTS semantic_judgment_cache (
+        cache_key TEXT PRIMARY KEY,
+        task TEXT NOT NULL,
+        input_hash TEXT NOT NULL,
+        model TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_semantic_judgment_cache_expiry ON semantic_judgment_cache(expires_at);
     `);
     const current = this.db.prepare("SELECT version FROM schema_meta WHERE id = 1").get() as { version: number } | undefined;
     if (current && current.version > SCHEMA_VERSION) throw new Error(`Database schema version ${current.version} is newer than supported version ${SCHEMA_VERSION}`);

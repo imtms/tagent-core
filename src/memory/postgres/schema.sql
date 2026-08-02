@@ -40,8 +40,10 @@ ALTER TABLE memory.topics ADD CONSTRAINT memory_topics_current_revision_fk FOREI
 CREATE TABLE IF NOT EXISTS memory.embeddings (ref_type text NOT NULL CHECK(ref_type IN ('hot_record','warm_record','topic_descriptor')),ref_id text NOT NULL,scope_type text NOT NULL,scope_id text NOT NULL,kind text NOT NULL,generation text NOT NULL,embedding vector NOT NULL,content_hash text,updated_at bigint NOT NULL,PRIMARY KEY(ref_type,ref_id,generation));
 CREATE INDEX IF NOT EXISTS memory_embeddings_scope ON memory.embeddings(scope_type,scope_id,kind,generation);
 CREATE TABLE IF NOT EXISTS memory.capture_jobs (id uuid PRIMARY KEY,idempotency_key text NOT NULL UNIQUE,request jsonb NOT NULL,status text NOT NULL,attempts integer NOT NULL DEFAULT 0,lease_owner text,lease_until bigint,lease_token uuid,fencing_token bigint NOT NULL DEFAULT 0,error_code text,proposal_count integer,persisted_count integer,created_at bigint NOT NULL,updated_at bigint NOT NULL);
+ALTER TABLE memory.capture_jobs ADD COLUMN IF NOT EXISTS extracted_count integer;
 ALTER TABLE memory.capture_jobs ADD COLUMN IF NOT EXISTS proposal_count integer;
 ALTER TABLE memory.capture_jobs ADD COLUMN IF NOT EXISTS persisted_count integer;
+ALTER TABLE memory.capture_jobs ADD COLUMN IF NOT EXISTS filter_reasons jsonb NOT NULL DEFAULT '{}';
 ALTER TABLE memory.capture_jobs ADD COLUMN IF NOT EXISTS lease_token uuid;
 ALTER TABLE memory.capture_jobs ADD COLUMN IF NOT EXISTS fencing_token bigint NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS memory_jobs_claim ON memory.capture_jobs(status,lease_until,created_at);

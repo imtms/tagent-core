@@ -19,6 +19,7 @@ import { CoreMemorySnapshotService } from "./core-snapshot.js";
 import { LocalBlobStore } from "./storage/local-blob-store.js";
 import type { AccessContext, SourceReference } from "./types.js";
 import type { SourceLoaderPort } from "./ports.js";
+import type { SemanticJudge } from "../learning/semantic-judge.js";
 export type MemoryRuntimeConfig = Extract<MemoryConfig, { enabled: true }>;
 class StoreSourceLoader implements SourceLoaderPort { constructor(private readonly store:Store){} async load(_access:AccessContext,refs:SourceReference[]){const parts:string[]=[];for(const ref of refs){if(ref.sourceType==="message"){const row=this.store.db.prepare("SELECT role,content FROM messages WHERE id=?").get(Number(ref.sourceId)) as {role:string;content:string}|undefined;if(row)parts.push(`${row.role}: ${row.content}`);}else if(ref.sourceType==="run"){const run=this.store.getRun(ref.sourceId);if(run){parts.push(`goal: ${run.goal}`);parts.push(...this.store.listTranscriptView(ref.sourceId).map((entry)=>JSON.stringify(entry)));}}}return parts.join("\n\n");}}
 async function loadPostgresAdapter() {
@@ -37,7 +38,7 @@ async function loadS3BlobStore() {
   }
 }
 
-export async function createMemoryRuntime(config:MemoryRuntimeConfig,store:Store){
+export async function createMemoryRuntime(config:MemoryRuntimeConfig,store:Store,semanticJudge?:SemanticJudge){
   const postgresModule = config.backend === "postgres" ? await loadPostgresAdapter() : undefined;
   const postgresAdapter = postgresModule ? new postgresModule.PostgresMemoryAdapter(config.postgresUrl!) : undefined;
   if (postgresAdapter) await postgresAdapter.migrate();
@@ -55,7 +56,7 @@ export async function createMemoryRuntime(config:MemoryRuntimeConfig,store:Store
   const lifecycle=new MemoryLifecycle(adapter,adapter,adapter,adapter,{warmAfterMs:config.warmAfterMs,hotTtlMs:config.hotTtlMs,coldMinimumRecords:config.coldMinimumRecords,candidateTtlMs:config.candidateTtlMs,deletedGracePeriodMs:config.deletedGracePeriodMs,retention:{fact:{staleAfterMs:config.retentionFactStaleMs,deleteAfterMs:config.retentionFactDeleteMs},preference:{staleAfterMs:config.retentionPreferenceStaleMs,deleteAfterMs:config.retentionPreferenceDeleteMs},episode:{staleAfterMs:config.retentionEpisodeStaleMs,deleteAfterMs:config.retentionEpisodeDeleteMs},procedure:{staleAfterMs:config.retentionProcedureStaleMs,deleteAfterMs:config.retentionProcedureDeleteMs}}});
   const ruleExtractor=new RuleBasedExtractor();
   const llmExtractor=config.extractorProvider === "hybrid"?new LlmExtractor({baseUrl:config.extractorBaseUrl!,apiKey:config.extractorApiKey!,model:config.extractorModel!,maxRetries:1}):undefined; const extractor=config.extractorProvider === "hybrid" ? new HybridExtractor(ruleExtractor,llmExtractor) : ruleExtractor; extractorProbe=llmExtractor?{probe:async()=>{const started=Date.now();try{await llmExtractor.extract("user: readiness probe, do not persist",[],access.scopes[0]);return{ok:true,latencyMs:Date.now()-started};}catch(error){return{ok:false,latencyMs:Date.now()-started,error:String(error)}}}}:undefined; (service as any).deps.extractorProbe=extractorProbe;
-  const capture=new MemoryCaptureWorker(adapter,new StoreSourceLoader(store),extractor,policy,service,lifecycle,undefined,(event)=>{for(const ref of event.sourceRefs.filter((x)=>x.sourceType==="run"))if(store.getRun(ref.sourceId))store.appendEvent(ref.sourceId,event.type,event.data);});
+  const capture=new MemoryCaptureWorker(adapter,new StoreSourceLoader(store),extractor,policy,service,lifecycle,undefined,(event)=>{for(const ref of event.sourceRefs.filter((x)=>x.sourceType==="run"))if(store.getRun(ref.sourceId))store.appendEvent(ref.sourceId,event.type,event.data);},semanticJudge);
   const semanticConsolidator=config.extractorProvider==="hybrid"?new LlmSemanticConsolidator({baseUrl:config.extractorBaseUrl!,apiKey:config.extractorApiKey!,model:config.extractorModel!}):undefined;
   const consolidator=new MemoryConsolidator(adapter,adapter,service,{minimumRecords:config.coldMinimumRecords},semanticConsolidator); const reconciler=new ColdStorageReconciler(adapter,blobs);
   // Backfill durable user messages with the same idempotency key used by live capture.

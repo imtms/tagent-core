@@ -26,7 +26,7 @@ const spec = (name = "Safe release workflow"): WorkflowSpec => ({
 });
 
 describe("controlled workflow learning", () => {
-  it("keeps explicit teaching versioned and requires activation before recall", () => {
+  it("keeps explicit teaching versioned and requires activation before recall", async () => {
     const { store, workflows } = create(); const session = store.createSession(); const run = store.createRun(session.id, "prepare release");
     const candidate = workflows.teach(session.id, spec(), "message:1");
     expect(candidate).toMatchObject({ status: "candidate", revision: { revision: 1, sourceType: "explicit_user", sourceEvidenceIds: ["message:1"], counterexampleIds: [], inputContract: [{ name: "releaseVersion", required: true }], outputContract: [{ name: "releaseArtifact", required: true }] } });
@@ -52,20 +52,22 @@ describe("controlled workflow learning", () => {
     expect(store.db.prepare("SELECT signal FROM workflow_feedback").get()).toEqual({ signal: "successful" });
   });
 
-  it("does not distill one success, distills repeated evidence as a candidate, and is idempotent", () => {
+  it("does not distill one success, distills repeated evidence as a candidate, and is idempotent", async () => {
     const { store, workflows } = create(); const session = store.createSession();
     const first = store.createRun(session.id, "repeatable release");
-    store.upsertPlanItem(first.id, { key: "test", title: "Run tests", status: "done", required: true, position: 1 });
+    store.upsertPlanItem(first.id, { key: "prepare", title: "Prepare release inputs", status: "done", required: true, position: 1 });
+    store.upsertPlanItem(first.id, { key: "test", title: "Run tests", status: "done", required: true, position: 2 });
     store.upsertCheck(first.id, { key: "tests", title: "Tests pass", status: "passed", required: true, command: "npm test", evidence: "ok", stale: false });
     store.finalizeRun(first.id, "completed"); workflows.projectRun(store.getRun(first.id)!, "completed");
     expect(store.db.prepare("SELECT source_type as sourceType, run_id as runId, attempt FROM experience_observations WHERE run_id = ?").get(first.id)).toEqual({ sourceType: "task_experience", runId: first.id, attempt: 1 });
     expect(workflows.listWorkflows(session.id)).toHaveLength(0);
 
     const second = store.createRun(session.id, "repeatable release");
-    store.upsertPlanItem(second.id, { key: "test", title: "Run tests", status: "done", required: true, position: 1 });
+    store.upsertPlanItem(second.id, { key: "prepare", title: "Prepare release inputs", status: "done", required: true, position: 1 });
+    store.upsertPlanItem(second.id, { key: "test", title: "Run tests", status: "done", required: true, position: 2 });
     store.upsertCheck(second.id, { key: "tests", title: "Tests pass", status: "passed", required: true, command: "npm test", evidence: "ok", stale: false });
     store.finalizeRun(second.id, "completed"); workflows.projectRun(store.getRun(second.id)!, "completed");
-    workflows.runNextDistillationJob("test-worker");
+    await workflows.runNextDistillationJob("test-worker");
     const distilled = workflows.listWorkflows(session.id);
     expect(distilled).toHaveLength(1);
     expect(distilled[0]).toMatchObject({ status: "candidate", revision: { sourceType: "task_experience", sourceEvidenceIds: expect.any(Array) } });
@@ -75,7 +77,7 @@ describe("controlled workflow learning", () => {
     expect(store.db.prepare("SELECT COUNT(*) as count FROM experience_observations").get()).toEqual({ count: 2 });
   });
 
-  it("requires non-empty fresh required checks or explicit confirmation for successful experience", () => {
+  it("requires non-empty fresh required checks or explicit confirmation for successful experience", async () => {
     const { store, workflows } = create(); const session = store.createSession();
     const run = store.createRun(session.id, "unchecked success");
     store.upsertPlanItem(run.id, { key: "done", title: "Do work", status: "done", required: true, position: 1 });
@@ -87,22 +89,22 @@ describe("controlled workflow learning", () => {
     expect(store.db.prepare("SELECT source_type as sourceType FROM experience_observations WHERE run_id=?").get(confirmed.id)).toEqual({ sourceType: "task_experience" });
   });
 
-  it("does not count multiple attempts of one run as independent distillation evidence", () => {
+  it("does not count multiple attempts of one run as independent distillation evidence", async () => {
     const { store, workflows } = create(); const session = store.createSession(); const run = store.createRun(session.id, "same run evidence");
     workflows.recordExperience({ scopeId: session.id, runId: run.id, attempt: 1, sourceType: "task_experience", taskSignature: "same run evidence", procedureSummary: "1. Check", checksPassed: ["check"] });
     workflows.recordExperience({ scopeId: session.id, runId: run.id, attempt: 2, sourceType: "task_experience", taskSignature: "same run evidence", procedureSummary: "1. Check again", checksPassed: ["check"] });
-    expect(workflows.distillRepeatedExperience(session.id, "same run evidence")).toBeUndefined();
+    expect(await workflows.distillRepeatedExperience(session.id, "same run evidence")).toBeUndefined();
     expect(workflows.listWorkflows(session.id)).toHaveLength(0);
   });
 
-  it("hard-filters high-risk workflows even when they declare no capability", () => {
+  it("hard-filters high-risk workflows even when they declare no capability", async () => {
     const { store, workflows } = create(); const session = store.createSession(); const run = store.createRun(session.id, "deploy production");
     const workflow = workflows.createWorkflow(session.id, { ...spec("High risk release"), riskClass: "high", requiredCapabilities: [] }, "explicit_user", ["message:high"], "active");
     expect(workflows.recall(session.id, "prepare release", run.id, 1, ["production_write"]).workflows).toHaveLength(0);
     expect(store.db.prepare("SELECT decision, reasons_json as reasons FROM workflow_selector_receipts WHERE workflow_id=?").get(workflow.id)).toMatchObject({ decision: "excluded", reasons: expect.stringContaining("hard-filtered") });
   });
 
-  it("distinguishes failed task experience from successful task experience", () => {
+  it("distinguishes failed task experience from successful task experience", async () => {
     const { store, workflows } = create(); const session = store.createSession(); const run = store.createRun(session.id, "failed release");
     store.upsertPlanItem(run.id, { key: "test", title: "Run tests", status: "done", required: true, position: 1 });
     store.upsertCheck(run.id, { key: "tests", title: "Tests pass", status: "failed", required: true, command: "npm test", evidence: "failed", stale: false });
@@ -111,7 +113,7 @@ describe("controlled workflow learning", () => {
     expect(workflows.listWorkflows(session.id)).toHaveLength(0);
   });
 
-  it("honors deny-learning and redacts common secret forms", () => {
+  it("honors deny-learning and redacts common secret forms", async () => {
     const { store, workflows } = create(); const session = store.createSession(); const denied = store.createRun(session.id, "private task");
     workflows.setRunLearningPolicy(denied.id, "deny");
     store.upsertPlanItem(denied.id, { key: "one", title: "Use token=super-secret-value", status: "done", required: true, position: 1 });
@@ -131,7 +133,7 @@ describe("controlled workflow learning", () => {
     expect(JSON.stringify(sanitized)).not.toContain("source-value");
   });
 
-  it("filters non-applicable and capability-gated workflows", () => {
+  it("filters non-applicable and capability-gated workflows", async () => {
     const { store, workflows } = create(); const session = store.createSession(); const run = store.createRun(session.id, "release production");
     const gated = workflows.teach(session.id, { ...spec("Production release"), requiredCapabilities: ["production_write"] }, "message:2");
     activate(workflows,gated.id);
@@ -140,7 +142,7 @@ describe("controlled workflow learning", () => {
     expect(workflows.recall(session.id, "prepare release", run.id, 1, ["production_write"]).workflows[0].definition.id).toBe(gated.id);
   });
 
-  it("deduplicates feedback, suspends harmful workflows, and rolls back revisions", () => {
+  it("deduplicates feedback, suspends harmful workflows, and rolls back revisions", async () => {
     const { store, workflows } = create(); const session = store.createSession(); const run = store.createRun(session.id, "prepare release");
     const workflow = workflows.teach(session.id, spec(), "message:3");
     activate(workflows,workflow.id);
