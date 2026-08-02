@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-08-02
+
+### Learning release boundary certification
+
+- Added a reviewable acceptance-coverage matrix and focused tests for Memory-off API families, worker/scheduler/distiller shutdown, passive observation/distillation/evolution, active-operation denial, top-bar UI messaging and release documentation topics.
+- Made the automatic-execution gate run before object lookup and governance validation for Workflow application records, Revision application and Canary promotion, giving every active operation family one consistent passive-mode denial.
+
 ## [0.1.8] - 2026-08-02
 
 ### Memory-dependent Learning release integration

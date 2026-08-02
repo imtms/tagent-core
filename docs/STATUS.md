@@ -2,7 +2,7 @@
 
 Updated: 2026-08-02 (Asia/Singapore)
 
-Current stable release: `0.1.8`. Current SQLite schema: `22`.
+Current stable release: `0.1.9`. Current SQLite schema: `22`.
 
 ## Completed
 

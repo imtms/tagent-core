@@ -1,6 +1,6 @@
 {
   "name": "tagent-core",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": true,
   "description": "A persistent TAgent control plane built around the pi coding-agent SDK.",
   "type": "module",
