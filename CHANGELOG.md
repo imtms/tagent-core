@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-08-02
+
+### Release audit evidence
+
+- Added a compact, line-addressable Memory/Learning implementation, documentation, test, release and 3220 restart evidence index for operator and release review.
+
 ## [0.1.9] - 2026-08-02
 
 ### Learning release boundary certification
