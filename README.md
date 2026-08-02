@@ -88,9 +88,9 @@ Credentials are supplied at runtime and are not written to Pi auth files, SQLite
 | `TAGENT_MODEL` | `gpt-5.6-sol` | Upstream model identifier |
 | `TAGENT_CONTEXT_WINDOW` | `200000` | Advertised model context window |
 | `TAGENT_MAX_TOKENS` | `32768` | Maximum output tokens per provider response |
-| `TAGENT_PROVIDER_TIMEOUT_MS` | `120000` | Provider request timeout |
+| `TAGENT_PROVIDER_TIMEOUT_MS` | `15000` | Provider transport idle window (main model uses the activity watchdog below) |
 | `TAGENT_PROVIDER_MAX_RETRIES` | `1` | Pi retry count per attempt |
-| `TAGENT_RUN_TIMEOUT_MS` | `7200000` | Run inactivity ceiling |
+| `TAGENT_RUN_TIMEOUT_MS` | `15000` | Run/SSE inactivity timeout; refreshed by model chunks and tool progress |
 | `TAGENT_RUN_HARD_TIMEOUT_MS` | `86400000` | Absolute Run wall-clock ceiling |
 | `TAGENT_MAX_CONTINUATIONS` | `128` | Automatic continuation ceiling |
 | `TAGENT_MAX_CONTEXT_TURNS` | `20` | Complete turns loaded into a new runtime |

@@ -2,6 +2,7 @@ import type { Model } from "@earendil-works/pi-ai/compat";
 import type { CriterionCoverage, GateFailure, SupervisorAction, TaskRun } from "./types.js";
 import type { Store } from "../store/store.js";
 import { truncateUtf8 } from "./llm-payload.js";
+import { OpenAiSseIdleTimeoutError, readOpenAiChatContent } from "./openai-sse.js";
 
 export type AuditedGateType = "progress" | "evidence" | "contract" | "completion" | "continuation";
 export interface AuditedGate { passed: boolean; failures: GateFailure[]; criterionCoverage?: CriterionCoverage[]; summary: string }
@@ -228,21 +229,24 @@ Your previous audit response failed schema validation: ${lastError instanceof Er
 
   private async requestModel(prompt: string, model: Model<"openai-completions">): Promise<unknown> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 30_000);
+    const idleTimeoutMs = this.options.timeoutMs ?? 15_000;
+    const headerTimer = setTimeout(() => controller.abort(new OpenAiSseIdleTimeoutError(idleTimeoutMs)), idleTimeoutMs);
     try {
-      const response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${this.options.apiKey}` }, body: JSON.stringify({ model: model.id, messages: [{ role: "system", content: prompt }], temperature: 0, max_completion_tokens: model.maxTokens, response_format: { type: "json_object" } }), signal: controller.signal });
-      const body = await response.text();
-      if (!response.ok) throw new SupervisorRequestError(`Supervisor LLM API ${response.status} (${model.id}): ${body.slice(0, 500)}`, response.status === 408 || response.status === 429 || response.status >= 500);
-      const envelope = JSON.parse(body) as { choices?: Array<{ message?: { content?: string } }> };
-      const content = envelope.choices?.[0]?.message?.content;
+      const response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${this.options.apiKey}` }, body: JSON.stringify({ model: model.id, messages: [{ role: "system", content: prompt }], temperature: 0, max_completion_tokens: model.maxTokens, response_format: { type: "json_object" }, stream: true }), signal: controller.signal });
+      clearTimeout(headerTimer);
+      if (!response.ok) {
+        const body = await response.text();
+        throw new SupervisorRequestError(`Supervisor LLM API ${response.status} (${model.id}): ${body.slice(0, 500)}`, response.status === 408 || response.status === 429 || response.status >= 500);
+      }
+      const content = await readOpenAiChatContent(response, { idleTimeoutMs, controller });
       if (!content) throw new Error("Supervisor LLM returned no JSON content");
       return JSON.parse(content);
     } catch (error) {
       if (error instanceof SupervisorRequestError) throw error;
-      if (controller.signal.aborted) throw new SupervisorRequestError(`Supervisor LLM request timed out after ${this.options.timeoutMs ?? 30_000}ms (${model.id})`);
+      if (error instanceof OpenAiSseIdleTimeoutError || controller.signal.reason instanceof OpenAiSseIdleTimeoutError) throw new SupervisorRequestError(`Supervisor LLM SSE stream was idle for ${idleTimeoutMs}ms (${model.id})`);
       if (error instanceof SyntaxError) throw error;
       throw new SupervisorRequestError(`Supervisor LLM request failed (${model.id}): ${error instanceof Error ? error.message : String(error)}`);
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(headerTimer); }
   }
 
 }

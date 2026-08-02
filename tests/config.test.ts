@@ -6,7 +6,7 @@ describe("configuration", () => {
     const config = loadConfig({});
     expect(config.runtime).toBe("in-process");
     expect(config.apiKey).toBeUndefined();
-    expect(config).toMatchObject({ providerTimeoutMs: 120_000, providerMaxRetries: 1, runTimeoutMs: 7_200_000, runHardTimeoutMs: 86_400_000, maxContinuations: 128, maxContextTurns: 20 });
+    expect(config).toMatchObject({ providerTimeoutMs: 15_000, providerMaxRetries: 1, runTimeoutMs: 15_000, runHardTimeoutMs: 86_400_000, maxContinuations: 128, maxContextTurns: 20 });
     expect(config.memory).toEqual({ enabled: false });
     expect(config.model).toMatchObject({
       api: "openai-completions",
@@ -16,7 +16,7 @@ describe("configuration", () => {
     });
     expect(config.routerModel).toMatchObject({ modelId: "gpt-5.6-luna", reasoning: false });
     expect(config.supervisorModel).toMatchObject({ modelId: "gpt-5.6-luna", reasoning: false, maxTokens: 1_024 });
-    expect(config).toMatchObject({ routerTimeoutMs: 15_000, supervisorTimeoutMs: 12_000 });
+    expect(config).toMatchObject({ routerTimeoutMs: 15_000, supervisorTimeoutMs: 15_000 });
   });
 
   it("allows independent lightweight Router and Supervisor models", () => {

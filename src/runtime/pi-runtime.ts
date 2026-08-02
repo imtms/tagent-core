@@ -66,11 +66,14 @@ export class PiRuntime implements AgentRuntime {
       enableInstallTelemetry: false,
       defaultProjectTrust: "never",
       compaction: { enabled: true },
+      httpIdleTimeoutMs: this.options.providerTimeoutMs,
       retry: {
         enabled: retries > 0,
         maxRetries: retries,
         baseDelayMs: 1_000,
-        provider: { timeoutMs: this.options.providerTimeoutMs, maxRetries: 0, maxRetryDelayMs: 15_000 },
+        // The OpenAI SDK timeout is an absolute request deadline. Keep it effectively
+        // disabled and let undici's header/body idle timeout enforce inactivity instead.
+        provider: { timeoutMs: 2_147_483_647, maxRetries: 0, maxRetryDelayMs: 15_000 },
       },
     }, { projectTrusted: false });
     const modelRuntime = this.options.modelRuntime ?? await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });

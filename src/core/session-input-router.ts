@@ -1,5 +1,6 @@
 import type { Model } from "@earendil-works/pi-ai/compat";
 import type { Message, SessionInputAnalysis, SessionInputIntent, TaskObjective, TaskRun } from "./types.js";
+import { OpenAiSseIdleTimeoutError, readOpenAiChatContent } from "./openai-sse.js";
 
 const RULE_ROUTER_VERSION = "semantic-rules-v3";
 const LLM_ROUTER_VERSION = "llm-semantic-v1";
@@ -125,8 +126,15 @@ Preserve genuine corrections, constraints, sequencing, and explicit parallel tas
   }
 
   private async request(prompt: string, model: Model<"openai-completions">, apiKey: string, timeoutMs?: number): Promise<unknown> {
-    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), Math.min(timeoutMs ?? 20_000, 20_000));
-    try { const response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model: model.id, messages: [{ role: "system", content: prompt }], temperature: 0, response_format: { type: "json_object" } }), signal: controller.signal }); const body = await response.text(); if (!response.ok) throw new Error(`LLM router API ${response.status}: ${body.slice(0, 300)}`); const envelope = JSON.parse(body) as { choices?: Array<{ message?: { content?: string } }> }; const output = envelope.choices?.[0]?.message?.content; if (!output) throw new Error("LLM router returned no JSON content"); return JSON.parse(output); }
-    finally { clearTimeout(timer); }
+    const controller = new AbortController();
+    const idleTimeoutMs = timeoutMs ?? 15_000;
+    const headerTimer = setTimeout(() => controller.abort(new OpenAiSseIdleTimeoutError(idleTimeoutMs)), idleTimeoutMs);
+    let response: Response;
+    try { response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model: model.id, messages: [{ role: "system", content: prompt }], temperature: 0, response_format: { type: "json_object" }, stream: true }), signal: controller.signal }); }
+    finally { clearTimeout(headerTimer); }
+    if (!response.ok) { const body = await response.text(); throw new Error(`LLM router API ${response.status}: ${body.slice(0, 300)}`); }
+    const output = await readOpenAiChatContent(response, { idleTimeoutMs, controller });
+    if (!output) throw new Error("LLM router returned no JSON content");
+    return JSON.parse(output);
   }
 }

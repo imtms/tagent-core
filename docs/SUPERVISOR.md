@@ -95,7 +95,7 @@ The completion gate follows an evidence-first policy:
 - a retryable judge transport failure permits one bounded continuation, but never fabricates acceptance-criterion coverage; a repeated transport failure blocks for explicit recovery instead of creating an unbounded continuation loop;
 - high-impact production changes still require explicit approval boundaries. A future capability policy will make blast-radius lanes first-class rather than inferring them only from declared Plan and approval items.
 
-The compact Supervisor request is bounded by configured timeout and output tokens. When the lightweight and fallback models share one upstream base URL, the same outage is not retried against a second model ID.
+The compact Supervisor request uses SSE and is bounded by a configured inactivity timeout plus output tokens. Each received SSE chunk refreshes the timer, so actively generating reviews are not cut off by an absolute deadline. When the lightweight and fallback models share one upstream base URL, the same outage is not retried against a second model ID.
 
 ## Context Manifest
 
