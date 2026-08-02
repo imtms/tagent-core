@@ -2,6 +2,8 @@
 
 Updated: 2026-08-02 (Asia/Singapore)
 
+Current stable release: `0.1.7`. Current SQLite schema: `16`.
+
 ## Completed
 
 ### Core control plane

@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-08-02
+
+### Runtime and supervision reliability
+
+- Replaced fixed wall-clock Router, Supervisor, and Agent stream deadlines with progress-sensitive idle timeouts: active SSE output refreshes the watchdog, while genuinely stalled streams fail after the configured idle interval and remain bounded by an absolute hard timeout.
+- Switched long Supervisor candidate review from a front-only 6,000-byte truncation to a bounded 8,000-byte head-tail projection that preserves the final delivery and distinguishes review projection from a real `stopReason=length` model truncation.
+- Added bounded correction when a Judge mistakes an internal projection for truncated model output, preventing repeated completion-gate continuations caused by the same fixed review boundary.
+
+### Web workbench and interaction
+
+- Added a live, scrollable Execution trace with model output, provider reasoning when available, tool lifecycle details, durable transcript recovery, and automatic collapse after the final answer is available.
+- Added durable `waiting_input` TaskRun pauses with typed in-chat forms; required user information is persisted and resumes the same TaskRun attempt chain after submission.
+- Added direct in-browser preview for inline and local text/Markdown Artifacts, safe Markdown rendering, independent scrolling, source/size metadata, and retained download support.
+- Added per-turn memory extraction status and persisted-memory counts while memory is enabled.
+
+### Controlled workflow learning
+
+- Added versioned workflow definitions, revisions, bindings, application receipts, feedback, learning policies, rollback, suspension, deletion, and explicit teaching/governance APIs.
+- Active workflows can be recalled into Context Manifests with applicability, capability, confidence, and provenance controls; recalled workflows grant no additional capability or approval.
+- Successful and failed task experience is projected separately, repeated evidence can distill only a candidate workflow, harmful feedback suspends active workflows, and deny-learning plus secret redaction protect sensitive tasks.
+
+### Compatibility
+
+- Advances the SQLite schema from version 15 to 16 for workflow-learning records. Back up the SQLite database, WAL, and SHM together before deployment; code rollback requires restoring a matching pre-upgrade database backup.
+
 ## [0.1.6] - 2026-08-02
 
 ### Performance and control-plane efficiency
@@ -236,3 +261,5 @@ First public source preview of the persistent TAgent control plane.
 [0.1.5]: https://github.com/imtms/tagent-core/releases/tag/v0.1.5
 
 [0.1.6]: https://github.com/imtms/tagent-core/releases/tag/v0.1.6
+
+[0.1.7]: https://github.com/imtms/tagent-core/releases/tag/v0.1.7

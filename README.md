@@ -4,7 +4,7 @@
 
 TAgent Core is a durable, self-hosted control plane for an in-process coding agent. It combines Pi's model and tool loop with TAgent-owned persistence, TaskRun supervision, verification gates, operation receipts, a responsive Web workbench, scoped automation credentials, and an optional Hot/Warm/Cold long-term memory platform.
 
-Version `0.1.6` is the current stable release. It focuses on lower-latency execution and explainable supervision: contextual LLM routing, lightweight Router/Supervisor models, compact control-plane traffic, reduced event/checkpoint persistence, structured Supervisor judgments, and deterministic Gate prerequisite fast paths. `0.1.0` was the first stable source release for the documented **trusted single-service deployment profile**. Stable means the supported profile has passed the repository's release gates; it does not mean that the service is a public multi-tenant sandbox.
+Version `0.1.7` is the current stable release. It adds progress-sensitive idle timeouts for streamed LLM calls, safer bounded Supervisor review of long final deliveries, live execution and user-input pause/resume UX, in-browser text/Markdown Artifact previews, and controlled workflow learning with versioned governance and evidence receipts. `0.1.0` was the first stable source release for the documented **trusted single-service deployment profile**. Stable means the supported profile has passed the repository's release gates; it does not mean that the service is a public multi-tenant sandbox.
 
 ## Highlights
 
@@ -218,6 +218,7 @@ See [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md) and [docs/REL
 - [0.1.4 release audit](docs/RELEASE_AUDIT_0.1.4.md)
 - [0.1.5 release audit](docs/RELEASE_AUDIT_0.1.5.md)
 - [0.1.6 release audit](docs/RELEASE_AUDIT_0.1.6.md)
+- [0.1.7 release audit](docs/RELEASE_AUDIT_0.1.7.md)
 - [Changelog](CHANGELOG.md)
 
 ## Authorship and License

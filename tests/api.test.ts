@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Store } from "../src/store/store.js";
@@ -57,6 +57,31 @@ describe("HTTP API", () => {
     const manifests = await app.inject({ method: "GET", url: `/api/runs/${secondRun.id}/context-manifests` });
     expect(manifests.json()).toEqual([expect.objectContaining({ id: "api-manifest", manifestHash: "hash" })]);
     expect((await app.inject({ method: "GET", url: "/api/runs/missing/context-manifests" })).statusCode).toBe(404);
+  });
+
+  it("previews text and Markdown artifacts in-browser while preserving downloads", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-artifact-"));
+    await writeFile(path.join(workspace, "report.md"), "# Durable report\n\nMarkdown body.", "utf8");
+    const store = new Store(":memory:");
+    const app = createApp({ store, service: new AgentService(store, workspace), logger: false, webRoot: workspace, workspaceRoot: workspace }); apps.push(app);
+    const session = store.createSession();
+    const run = store.createRun(session.id, "artifact preview");
+    store.addArtifact(run.id, { id: "inline-note", title: "Notes.txt", kind: "text", content: "inline notes", uri: "" });
+    store.addArtifact(run.id, { id: "markdown-report", title: "Report", kind: "report", content: "", uri: "report.md" });
+    store.addArtifact(run.id, { id: "remote", title: "Remote", kind: "link", content: "", uri: "https://example.com/file.bin" });
+
+    const inline = await app.inject({ method: "GET", url: `/api/runs/${run.id}/artifacts/inline-note/content` });
+    expect(inline.statusCode).toBe(200);
+    expect(inline.json()).toMatchObject({ content: "inline notes", format: "text", source: "inline" });
+    const markdown = await app.inject({ method: "GET", url: `/api/runs/${run.id}/artifacts/markdown-report/content` });
+    expect(markdown.statusCode).toBe(200);
+    expect(markdown.json()).toMatchObject({ content: "# Durable report\n\nMarkdown body.", format: "markdown", source: "file" });
+    const download = await app.inject({ method: "GET", url: `/api/runs/${run.id}/artifacts/markdown-report/download` });
+    expect(download.statusCode).toBe(200);
+    expect(download.headers["content-disposition"]).toContain("attachment;");
+    expect(download.body).toBe("# Durable report\n\nMarkdown body.");
+    expect((await app.inject({ method: "GET", url: `/api/runs/${run.id}/artifacts/remote/content` })).statusCode).toBe(422);
+    expect((await app.inject({ method: "GET", url: `/api/runs/${run.id}/artifacts/missing/content` })).statusCode).toBe(404);
   });
 
   it("creates Sessions idempotently with an optional requestId", async () => {

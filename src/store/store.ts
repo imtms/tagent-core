@@ -33,7 +33,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 15;
+const SCHEMA_VERSION = 16;
 
 export class Store {
   readonly db: Database.Database;
@@ -375,6 +375,112 @@ export class Store {
         title TEXT NOT NULL,
         content TEXT NOT NULL DEFAULT '',
         uri TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS run_learning_policies (
+        run_id TEXT PRIMARY KEY REFERENCES runs(id),
+        policy TEXT NOT NULL CHECK (policy IN ('allow','metadata_only','deny')),
+        reason TEXT NOT NULL DEFAULT '',
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS experience_observations (
+        id TEXT PRIMARY KEY,
+        scope_id TEXT NOT NULL,
+        run_id TEXT REFERENCES runs(id),
+        attempt INTEGER,
+        source_type TEXT NOT NULL CHECK (source_type IN ('explicit_user','task_experience','task_failure','user_correction')),
+        task_signature TEXT NOT NULL,
+        procedure_summary TEXT NOT NULL,
+        checks_passed_json TEXT NOT NULL DEFAULT '[]',
+        checks_failed_json TEXT NOT NULL DEFAULT '[]',
+        source_refs_json TEXT NOT NULL DEFAULT '[]',
+        learn_policy TEXT NOT NULL CHECK (learn_policy IN ('allow','metadata_only','deny')),
+        observation_hash TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_experience_scope_signature ON experience_observations(scope_id, task_signature, source_type, created_at);
+      CREATE TABLE IF NOT EXISTS workflow_definitions (
+        id TEXT PRIMARY KEY,
+        scope_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('candidate','active','suspended','deprecated')),
+        active_revision_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflow_definitions_scope ON workflow_definitions(scope_id, status, updated_at);
+      CREATE TABLE IF NOT EXISTS workflow_revisions (
+        id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
+        revision INTEGER NOT NULL,
+        spec_json TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK (source_type IN ('explicit_user','task_experience','task_failure','user_correction')),
+        source_evidence_json TEXT NOT NULL DEFAULT '[]',
+        confidence REAL NOT NULL,
+        change_summary TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        UNIQUE(workflow_id, revision)
+      );
+      CREATE TABLE IF NOT EXISTS workflow_bindings (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        attempt INTEGER NOT NULL,
+        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
+        revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
+        selector_version TEXT NOT NULL,
+        relevance_score REAL NOT NULL,
+        selected_reason_json TEXT NOT NULL DEFAULT '[]',
+        application_mode TEXT NOT NULL DEFAULT 'suggested',
+        created_at INTEGER NOT NULL,
+        UNIQUE(run_id, attempt, workflow_id, revision_id)
+      );
+      CREATE TABLE IF NOT EXISTS workflow_application_receipts (
+        id TEXT PRIMARY KEY,
+        binding_id TEXT NOT NULL REFERENCES workflow_bindings(id),
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        attempt INTEGER NOT NULL,
+        task_outcome TEXT NOT NULL,
+        required_checks_passed INTEGER NOT NULL,
+        required_checks_failed INTEGER NOT NULL,
+        attribution_level TEXT NOT NULL CHECK (attribution_level IN ('exposed','adopted','verified_contribution')),
+        receipt_version INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        UNIQUE(binding_id, receipt_version)
+      );
+      CREATE TABLE IF NOT EXISTS workflow_feedback (
+        id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
+        revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        attempt INTEGER NOT NULL,
+        signal TEXT NOT NULL,
+        weight REAL NOT NULL,
+        adopted INTEGER NOT NULL DEFAULT 1,
+        verified INTEGER NOT NULL DEFAULT 0,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        note TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS workflow_revision_proposals (
+        id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
+        base_revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
+        reason TEXT NOT NULL,
+        evidence_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL CHECK (status IN ('candidate','approved','rejected')),
+        created_at INTEGER NOT NULL,
+        UNIQUE(workflow_id, base_revision_id, reason)
+      );
+      CREATE TABLE IF NOT EXISTS workflow_status_history (
+        id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
+        previous_status TEXT NOT NULL,
+        next_status TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS workflow_distillations (
+        evidence_set_hash TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
         created_at INTEGER NOT NULL
       );
     `);
@@ -1215,6 +1321,11 @@ ${source.content}`;
       ON CONFLICT(run_id, check_key) DO UPDATE SET title=excluded.title, status=excluded.status, required=excluded.required, command=excluded.command, evidence=excluded.evidence, stale=excluded.stale
     `).run(runId, check.key, check.title, check.status, Number(check.required), check.command, check.evidence, Number(check.stale));
     this.advanceRunPhase(runId, check.status === "pending" ? "implement" : "verify");
+  }
+
+  getArtifact(runId: RunId, artifactId: string): Artifact | undefined {
+    return this.db.prepare(`SELECT id, run_id as runId, kind, title, content, uri, created_at as createdAt
+      FROM artifacts WHERE run_id = ? AND id = ?`).get(runId, artifactId) as Artifact | undefined;
   }
 
   addArtifact(runId: RunId, artifact: Omit<Artifact, "runId" | "createdAt">): Artifact {

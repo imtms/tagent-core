@@ -14,6 +14,7 @@ export function requiredServiceScope(method: string, url: string): ServiceScope 
   if (pathname === "/api/settings" || pathname === "/api/config/status") return "admin";
   if (/^\/api\/runs\/[^/]+\/consumers\/[^/]+\/(claim|ack)$/.test(pathname) || /^\/api\/runs\/[^/]+\/events$/.test(pathname)) return "events:consume";
   if (/^\/api\/runs\/[^/]+\/(cancel|steer|follow-up|resume|retry-launch)$/.test(pathname)) return "runs:control";
+  if (/^\/api\/runs\/[^/]+\/artifacts\/[^/]+\/(content|download)$/.test(pathname) && method === "GET") return "runs:read";
   if (/^\/api\/runs\/[^/]+(\/(supervision|control-inbox|operations|transcript|transcript-view))?$/.test(pathname) && method === "GET") return "runs:read";
   if (pathname.startsWith("/api/sessions")) return method === "GET" ? "sessions:read" : "sessions:write";
   return "admin";

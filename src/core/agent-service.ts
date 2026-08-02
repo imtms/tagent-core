@@ -11,6 +11,7 @@ import { OpenAiSupervisorReviewer, SupervisorReviewError, TestSupervisorReviewer
 import { SessionInputRouter } from "./session-input-router.js";
 import type { MemoryFacade } from "../memory/memory-service.js";
 import type { AccessContext, MemoryProvenance } from "../memory/types.js";
+import { WorkflowService, type WorkflowSpec, type WorkflowFeedbackSignal } from "../learning/workflow-service.js";
 
 export class AgentService {
   private readonly runtimes = new Map<RunId, AgentRuntime>();
@@ -21,6 +22,7 @@ export class AgentService {
   private readonly lastCheckpointTranscriptSeq = new Map<RunId, number>();
   private readonly listeners = new Map<RunId, Set<(event: RunEvent) => void>>();
   private readonly recalledMemory = new Map<RunId, string>();
+  private readonly workflowService: WorkflowService;
   private readonly continuationOwner = randomUUID();
   private continuationRecoveryTimer?: ReturnType<typeof setTimeout>;
   private supervisorRestartReconciled = false;
@@ -40,6 +42,7 @@ export class AgentService {
     if (!reviewer) throw new Error("LLM Supervisor reviewer requires a configured model and API key");
     this.supervisor = new TaskRunSupervisor(store, reviewer);
     this.sessionRouter = new SessionInputRouter({ model: runtimeDefaults.routerModel ?? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions"> | undefined, apiKey: runtimeDefaults.apiKey, timeoutMs: runtimeDefaults.routerTimeoutMs ?? 15_000 });
+    this.workflowService = new WorkflowService(store);
     this.store.markInterrupted();
   }
 
@@ -535,6 +538,13 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     this.executionTasks.set(run.id, execution);
   }
 
+  private projectWorkflowExperience(runId: RunId) {
+    const run = this.store.getRun(runId);
+    if (!run) return;
+    try { this.workflowService.recordRunApplications(run); this.workflowService.projectRun(run, run.status); }
+    catch (error) { this.publish(this.store.appendEvent(runId, "workflow.learning.failed", { error: error instanceof Error ? error.message : String(error) })); }
+  }
+
   private async execute(runId: RunId, attempt: number, runtime: AgentRuntime, prompt: string, continuationId?: string) {
     try {
       await runtime.prompt(prompt);
@@ -549,14 +559,16 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       if (current.status !== "running") return false;
       const messages = runtime.getMessages();
       const checkpointResponse = this.store.getCheckpoint(runId)?.assistantPartial.trim() ?? "";
-      const assistantResponses = messages
-        .filter((message) => message.role === "assistant" && "content" in message)
+      const assistantMessages = messages.filter((message) => message.role === "assistant" && "content" in message);
+      const assistantResponses = assistantMessages
         .map((message) => typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join(""))
         .map((value) => value.trim())
         .filter(Boolean);
       const response = checkpointResponse || assistantResponses.at(-1) || "";
+      const finalAssistant = assistantMessages.at(-1);
+      const modelOutputTruncated = finalAssistant && "stopReason" in finalAssistant && finalAssistant.stopReason === "length";
       const checkpointSeq = this.store.getCheckpoint(runId)?.lastEventSeq ?? current.lastEventSeq;
-      const review = await this.supervisor.reviewSettled(current, checkpointSeq, response);
+      const review = await this.supervisor.reviewSettled(current, checkpointSeq, response, { modelOutputTruncated });
       const decision = review.decision;
       if (this.store.getRun(runId)?.attempt !== decision.attempt) {
         this.supervisor.markExecuted(decision.id, "superseded");
@@ -568,6 +580,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
         if (response) this.store.appendMessage(current.sessionId, "assistant", response);
         this.supervisor.markExecuted(decision.id, "executed");
         this.publish(event);
+        this.projectWorkflowExperience(runId);
         for (const spawn of this.supervisor.reviewSpawn(this.store.getRun(runId)!, event.seq)) this.publish(this.store.appendEvent(runId, "supervisor.spawn.proposed", { decisionId: spawn.id, reasonCode: spawn.reasonCode }));
         return false;
       }
@@ -577,6 +590,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       if (!event) { this.supervisor.markExecuted(decision.id, "superseded"); return false; }
       this.supervisor.markExecuted(decision.id, "executed");
       this.publish(event);
+      this.projectWorkflowExperience(runId);
       if (decision.action === "pause_for_approval") {
         const approval = this.store.ensureApprovalRequest(runId, decision.id, reason);
         this.publish(this.store.appendEvent(runId, "supervisor.approval.requested", { approvalId: approval.id, decisionId: decision.id, reason }));
@@ -675,12 +689,25 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
     const event = this.store.transitionRun(runId, ["running"], "cancelled", "run.cancelled", {}, "Cancelled by user", attempt);
     if (!event) return false;
     this.publish(event);
+    this.projectWorkflowExperience(runId);
     return true;
   }
 
   async steer(runId: RunId, instruction: string, requestId: string = randomUUID()) {
     return this.enqueueControl(runId, "steer", instruction, requestId);
   }
+
+  teachWorkflow(sessionId: SessionId, spec: WorkflowSpec, sourceId = `manual:${randomUUID()}`, activate = false) { return this.workflowService.teach(sessionId, spec, sourceId, activate); }
+  listWorkflows(sessionId: SessionId) { return this.workflowService.listWorkflows(sessionId); }
+  getWorkflow(workflowId: string) { return this.workflowService.getWorkflow(workflowId); }
+  activateWorkflow(workflowId: string, revisionId?: string) { return this.workflowService.activate(workflowId, revisionId); }
+  suspendWorkflow(workflowId: string, reason?: string) { return this.workflowService.suspend(workflowId, reason); }
+  rollbackWorkflow(workflowId: string, revisionId: string) { return this.workflowService.rollback(workflowId, revisionId); }
+  forgetWorkflow(workflowId: string) { return this.workflowService.forget(workflowId); }
+  setWorkflowBindingMode(bindingId: string, mode: "suggested" | "adopted" | "partially_adopted" | "rejected") { return this.workflowService.setBindingMode(bindingId, mode); }
+  reviseWorkflow(workflowId: string, patch: Partial<WorkflowSpec>, sourceId: string, changeSummary: string) { return this.workflowService.revise(workflowId, patch, "user_correction", [sourceId], changeSummary); }
+  setRunLearningPolicy(runId: RunId, policy: "allow" | "metadata_only" | "deny", reason?: string) { return this.workflowService.setRunLearningPolicy(runId, policy, reason); }
+  recordWorkflowFeedback(input: { workflowId: string; revisionId: string; runId: string; attempt: number; signal: WorkflowFeedbackSignal; idempotencyKey: string; note?: string; adopted?: boolean; verified?: boolean }) { return this.workflowService.feedback(input); }
 
   subscribe(runId: RunId, listener: (event: RunEvent) => void) {
     let listeners = this.listeners.get(runId);
@@ -805,16 +832,18 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
 
   private prepareSessionHistoryWithoutRecall(run: TaskRun, query: string, excludeCurrentUserAfter?: number) {
     const history = this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter);
-    return { ...this.contextAssembler().assemble("session", history.messages, this.buildSystemPrompt(run), query, history.sourceIds), recalledMemory: "", memoryContextItems: [] as ContextManifestItem[] };
+    const workflows = this.workflowService.recall(run.sessionId, query, run.id, run.attempt);
+    return { ...this.contextAssembler().assemble("session", history.messages, this.buildSystemPrompt(run, workflows.promptSection), query, history.sourceIds), recalledMemory: workflows.promptSection, memoryContextItems: workflows.contextItems };
   }
 
   private async prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter?: number) {
     const access = this.memoryAccess(run);
     const [recall,coreSnapshot] = this.memory ? await Promise.all([this.memory.recall({ access, cue: query }),this.memory.getCoreSnapshot?.(access)]) : [undefined,undefined];
+    const workflows = this.workflowService.recall(run.sessionId, query, run.id, run.attempt);
     const coreSection=coreSnapshot?.markdown?`<core_memory revision="${coreSnapshot.revision}">
 ${coreSnapshot.markdown}
 </core_memory>`:"";
-    const memorySection=[coreSection,recall?.promptSection].filter(Boolean).join("\n\n");
+    const memorySection=[coreSection,recall?.promptSection,workflows.promptSection].filter(Boolean).join("\n\n");
     const history = this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter);
     const assembly = this.contextAssembler().assemble("session", history.messages, this.buildSystemPrompt(run, memorySection), query, history.sourceIds);
     this.capturePrunedUserContext(run, assembly.droppedMessages);
@@ -823,6 +852,7 @@ ${coreSnapshot.markdown}
       ...(recall?.cards.map((card) => ({ kind: "memory_card" as const, sourceId: card.id, selected: true, reason: `selected by Recall Trace v${recall.trace.version}`, estimatedTokens: estimateContextTokens(`${card.title}: ${card.content}`), metadata: { score: card.score, channels: card.retrievalChannels, topicIds: card.topicIds } })) ?? []),
       ...(recall?.coldTopics.map((topic) => ({ kind: "cold_topic" as const, sourceId: topic.descriptor.topicId, selected: true, reason: "selected by topic routing", estimatedTokens: topic.revision.tokenCount, metadata: { revision: topic.revision.revision } })) ?? []),
       ...(recall?.trace?.candidates?.filter((candidate) => candidate.outcome !== "selected").map((candidate) => ({ kind: "memory_card" as const, sourceId: candidate.id, selected: false, reason: candidate.reason ?? candidate.outcome, estimatedTokens: 0, metadata: { outcome: candidate.outcome, channels: candidate.channels, finalScore: candidate.finalScore } })) ?? []),
+      ...workflows.contextItems,
     ];
     return { ...assembly, recalledMemory: memorySection, memoryContextItems };
   }

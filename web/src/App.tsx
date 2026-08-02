@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Command, Eye, FileText, GripVertical, HelpCircle, Menu, MessageSquarePlus, PanelRight, Pencil, Play, Plus, Send, ShieldCheck, Square, Terminal, X } from "lucide-react";
-import { api, subscribe, type CaptureJob, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TranscriptItem, type UserInputRequest } from "./api";
+import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Command, Download, Eye, FileText, GripVertical, HelpCircle, Menu, MessageSquarePlus, PanelRight, Pencil, Play, Plus, Send, ShieldCheck, Square, Terminal, X } from "lucide-react";
+import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TranscriptItem, type UserInputRequest } from "./api";
 import { LiveText, Markdown } from "./Markdown";
 import { createRequestId } from "./id";
 import { deriveCurrentOperation } from "./current-operation";
@@ -178,6 +178,36 @@ function ContextManifestPanel({ run }: { run: TaskRun }) {
   return <section className="panel-section"><div className="section-title"><span>Context manifests</span><small>{manifests.length} retained</small></div><div className="checkpoint-card context-manifest-card">{manifests.length > 1 && <select value={current.id} onChange={(event) => setSelectedId(event.target.value)}>{manifests.map((item) => <option value={item.id} key={item.id}>attempt {item.attempt} · {item.source} · {new Date(item.createdAt).toLocaleTimeString()}</option>)}</select>}<strong>{selected.length} selected · {omitted.length} omitted</strong><span>{selected.reduce((sum, item) => sum + item.estimatedTokens, 0).toLocaleString()} estimated tokens · hash {current.manifestHash.slice(0, 12)}</span>{previous && <span>diff +{added.length} / -{removed.length} selected sources</span>}<details><summary>Selected sources</summary><div className="manifest-items">{selected.map((item) => <code key={`${item.kind}:${item.sourceId}`}>{item.kind} · {item.sourceId}</code>)}</div></details><details><summary>Omitted sources</summary><div className="manifest-items">{omitted.length ? omitted.map((item) => <code key={`${item.kind}:${item.sourceId}`}>{item.kind} · {item.sourceId} · {item.reason}</code>) : <small>None</small>}</div></details>{previous && <details><summary>Changes from previous manifest</summary><div className="manifest-items">{added.map((item) => <code key={`add:${item.kind}:${item.sourceId}`}>+ {item.kind} · {item.sourceId}</code>)}{removed.map((item) => <code key={`remove:${item.kind}:${item.sourceId}`}>- {item.kind} · {item.sourceId}</code>)}{!added.length && !removed.length && <small>No selected-source changes.</small>}</div></details>}{error && <small>{error}</small>}</div></section>;
 }
 
+function ArtifactsPanel({ run }: { run: TaskRun }) {
+  const [selectedId, setSelectedId] = useState("");
+  const [preview, setPreview] = useState<ArtifactContent | null>(null);
+  const [loadingId, setLoadingId] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => { setSelectedId(""); setPreview(null); setError(""); setLoadingId(""); }, [run.id]);
+  const openArtifact = async (artifact: Artifact) => {
+    if (selectedId === artifact.id && preview) { setSelectedId(""); setPreview(null); setError(""); return; }
+    setSelectedId(artifact.id); setPreview(null); setError(""); setLoadingId(artifact.id);
+    try { setPreview(await api.artifactContent(run.id, artifact.id)); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setLoadingId(""); }
+  };
+  return <section className="panel-section artifacts-section">
+    <div className="section-title"><span>Artifacts</span><small>{run.artifacts.length}</small></div>
+    <div className="artifact-list">{run.artifacts.length ? run.artifacts.map((artifact) => {
+      const selected = selectedId === artifact.id;
+      return <div className={`artifact-entry ${selected ? "selected" : ""}`} key={artifact.id}>
+        <div className="artifact-row"><FileText size={15} /><button type="button" onClick={() => void openArtifact(artifact)} aria-expanded={selected} aria-controls={`artifact-preview-${artifact.id}`}><strong>{artifact.title}</strong><small>{artifact.kind || "artifact"}</small></button><a href={api.artifactDownloadUrl(run.id, artifact.id)} download title={`Download ${artifact.title}`} aria-label={`Download ${artifact.title}`}><Download size={14} /></a></div>
+        {selected && <div className="artifact-preview" id={`artifact-preview-${artifact.id}`}>
+          {loadingId === artifact.id ? <div className="artifact-preview-state"><Activity className="spin" size={15} />Loading preview…</div>
+            : error ? <div className="artifact-preview-state failed">{error}<small>Unsupported or unavailable artifacts can still be downloaded.</small></div>
+            : preview ? <><div className="artifact-preview-meta"><span>{preview.format} · {preview.bytes.toLocaleString()} bytes</span><small>{preview.source === "file" ? "loaded from file" : "stored content"}</small></div>{preview.format === "markdown" ? <Markdown>{preview.content}</Markdown> : <pre>{preview.content}</pre>}</>
+            : null}
+        </div>}
+      </div>;
+    }) : <p className="muted">No artifacts.</p>}</div>
+  </section>;
+}
+
 function RunDetails({ run, toolEvents, transcriptTools, onRefresh }: { run: TaskRun; toolEvents: RunEvent[]; transcriptTools: Extract<TranscriptItem, { kind: "tool" }>[]; onRefresh?: () => Promise<void> }) {
   return <div className="run-details">
     <CurrentOperationPanel run={run} />
@@ -192,7 +222,7 @@ function RunDetails({ run, toolEvents, transcriptTools, onRefresh }: { run: Task
     <section className="panel-section"><div className="section-title"><span>Checks</span><small>{run.checks.filter((item) => item.status === "passed" && !item.stale).length}/{run.checks.length}</small></div><div className="task-list">{run.checks.length ? run.checks.map((check) => <div className="task-row" key={check.key}>{check.status === "passed" && !check.stale ? <Check size={15} /> : <Circle size={14} />}<span>{check.title}</span><small>{check.stale ? "stale" : check.status}</small></div>) : <p className="muted">No required checks.</p>}</div></section>
     <section className="panel-section"><div className="section-title"><span>Continuations</span><small>{run.continuations.length}</small></div><div className="task-list">{run.continuations.length ? run.continuations.map((item) => <div className="continuation-row" key={item.id}><div><strong>#{item.ordinal}</strong><span>{item.reason}</span></div><small className={`continuation-status ${item.status}`}>{item.status}{item.leaseUntil && item.status === "running" ? " · leased" : ""}</small></div>) : <p className="muted">No automatic continuation.</p>}</div></section>
     <section className="panel-section"><div className="section-title"><span>Spawn proposals</span><small>{run.supervision.spawnProposals.length}</small></div><div className="task-list">{run.supervision.spawnProposals.length ? run.supervision.spawnProposals.map((proposal) => <div className="spawn-proposal" key={proposal.id}><div><strong>{proposal.goal}</strong><small>{proposal.relation} · {proposal.status}</small></div><span className="proposal-actions">{proposal.status === "proposed" && <><button onClick={async () => { await api.approveSpawn(proposal.id); await onRefresh?.(); }}>Approve</button><button onClick={async () => { await api.rejectSpawn(proposal.id); await onRefresh?.(); }}>Reject</button></>}{proposal.status === "approved" && <button onClick={async () => { await api.spawnProposal(proposal.id); await onRefresh?.(); }}>Start TaskRun</button>}</span></div>) : <p className="muted">No derived TaskRun proposals.</p>}</div></section>
-    <section className="panel-section"><div className="section-title"><span>Artifacts</span><small>{run.artifacts.length}</small></div>{run.artifacts.map((artifact) => <div className="artifact-row" key={artifact.id}><FileText size={15} /><span>{artifact.title}</span></div>)}</section>
+    <ArtifactsPanel run={run} />
   </div>;
 }
 

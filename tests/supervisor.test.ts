@@ -284,6 +284,78 @@ describe("TaskRunSupervisor LLM audit", () => {
     } finally { globalThis.fetch = original; store.close(); }
   });
 
+  it("reviews long candidates with a bounded head-tail projection that preserves the final delivery", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "long delivery");
+    const ending = "FINAL DELIVERY: implementation complete; all regression checks passed; no deployment was requested.";
+    const response = `Opening context.\n${"middle detail 中文证据。".repeat(2_000)}\n${ending}`;
+    const valid = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } } };
+    let requestBody = "";
+    const original = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => { requestBody = String(init?.body); return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(valid) } }] }), { status: 200 }); };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1", maxTokens: 1_024 } as never;
+      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response, operations: [], progress: undefined });
+      expect(audit.action).toBe("complete_taskrun");
+      expect(new TextEncoder().encode(requestBody).byteLength).toBeLessThan(25_000);
+      const prompt = (JSON.parse(requestBody) as { messages: Array<{ content: string }> }).messages[0].content;
+      expect(prompt).toContain("Opening context.");
+      expect(prompt).toContain(ending);
+      expect(prompt).toContain('"strategy":"head_tail"');
+      expect(prompt).toContain('"completeSourcePreserved":true');
+      expect(prompt).toContain('"modelOutputTruncated":false');
+      expect(prompt).not.toContain("candidateResponseTruncated");
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("corrects a projection-only truncation verdict without creating an Agent continuation", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "long candidate correction");
+    const failure = { kind: "delivery", key: "final_delivery_truncated", reason: "Candidate response was truncated by the review projection.", disposition: "auto_fixable" as const };
+    const invalid = failedAudit("start_continuation", "final_delivery_truncated", failure);
+    const valid = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "The preserved tail contains the complete delivery.", confidence: 1, gates: { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } } };
+    let requests = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => { requests += 1; const content = requests === 1 ? invalid : valid; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }), { status: 200 }); };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const response = `${"long middle\n".repeat(1_000)}\nFINAL: complete and verified.`;
+      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response, operations: [], progress: undefined });
+      expect(audit.action).toBe("complete_taskrun");
+      expect(requests).toBe(2);
+      expect(store.getRun(run.id)?.attempt).toBe(1);
+      expect(store.getRun(run.id)?.continuations).toHaveLength(0);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("fails closed after bounded review retries when a judge repeatedly confuses projection with output truncation", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "projection loop fuse");
+    const failure = { kind: "delivery", key: "candidate_truncated", reason: "The answer is truncated because the middle was omitted.", disposition: "auto_fixable" as const };
+    const invalid = failedAudit("start_continuation", "candidate_truncated", failure);
+    let requests = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => { requests += 1; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(invalid) } }] }), { status: 200 }); };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: `${"detail".repeat(2_000)}\nFINAL complete.`, operations: [], progress: undefined })).rejects.toThrow("bounded review projection");
+      expect(requests).toBe(2);
+      expect(store.getRun(run.id)?.continuations).toHaveLength(0);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("still allows a genuine model length stop to be classified as truncated", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "real output truncation");
+    const failure = { kind: "delivery", key: "final_delivery_truncated", reason: "The model output ended at its length limit.", disposition: "auto_fixable" as const };
+    const auditPayload = failedAudit("start_continuation", "final_delivery_truncated", failure);
+    let requests = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => { requests += 1; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(auditPayload) } }] }), { status: 200 }); };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "unfinished ".repeat(1_000), modelOutputTruncated: true, operations: [], progress: undefined });
+      expect(audit.action).toBe("start_continuation");
+      expect(requests).toBe(1);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
   it("does not resend an HTTP 413 payload to the fallback model", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "too large");
     const models: string[] = [];

@@ -255,7 +255,29 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid rgba(22, 116, 
 .checkpoint-card > span { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
 .checkpoint-card > strong { font-size: 12px; }
 .checkpoint-card > p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
-.artifact-row { grid-template-columns: 20px minmax(0, 1fr); }
+.artifact-list { margin-top: 10px; }
+.artifact-entry { border-bottom: 1px solid #e8ece9; }
+.artifact-entry:last-child { border-bottom: 0; }
+.artifact-entry.selected { margin-inline: -7px; padding-inline: 7px; border-radius: 7px; background: #f4f7f5; }
+.artifact-row { grid-template-columns: 20px minmax(0, 1fr) 28px; gap: 5px; }
+.artifact-row > svg { color: var(--accent); }
+.artifact-row > button { min-width: 0; padding: 7px 4px; display: grid; gap: 2px; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.artifact-row > button strong, .artifact-row > button small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-row > button strong { font-size: 11px; font-weight: 650; }
+.artifact-row > button small { color: var(--muted); font-size: 9px; text-transform: lowercase; }
+.artifact-row > button:hover strong { color: var(--accent); }
+.artifact-row > a { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 5px; color: var(--muted); text-decoration: none; }
+.artifact-row > a:hover { color: var(--accent); background: var(--accent-soft); }
+.artifact-preview { max-height: min(58vh, 560px); margin: 2px 0 10px; padding: 12px; overflow: auto; border: 1px solid #dce3de; border-radius: 8px; background: white; }
+.artifact-preview .markdown { font-size: 11px; line-height: 1.6; }
+.artifact-preview .markdown h1 { font-size: 17px; }
+.artifact-preview .markdown h2 { font-size: 15px; }
+.artifact-preview .markdown h3, .artifact-preview .markdown h4, .artifact-preview .markdown h5, .artifact-preview .markdown h6 { font-size: 13px; }
+.artifact-preview > pre { margin: 0; color: #39433d; white-space: pre-wrap; overflow-wrap: anywhere; font: 10.5px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.artifact-preview-meta { margin: -2px 0 10px; padding-bottom: 8px; display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid #edf0ed; color: var(--muted); font-size: 9px; }
+.artifact-preview-state { min-height: 70px; display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--muted); font-size: 10px; }
+.artifact-preview-state.failed { align-items: flex-start; flex-direction: column; color: var(--danger); }
+.artifact-preview-state.failed small { color: var(--muted); }
 .muted { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .mobile-only { display: none; }
 .backdrop { position: fixed; inset: 0; background: rgba(17, 23, 19, .34); z-index: 20; border: 0; }

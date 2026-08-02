@@ -12,6 +12,20 @@ describe("Web workbench state model", () => {
     expect(api).toContain("/api/user-input-requests/${requestId}/submit");
   });
 
+  it("opens text and Markdown artifacts in the Web UI without removing downloads", async () => {
+    const app = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    const api = await readFile(new URL("../web/src/api.ts", import.meta.url), "utf8");
+    const styles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
+    expect(app).toContain("function ArtifactsPanel");
+    expect(app).toContain("api.artifactContent(run.id, artifact.id)");
+    expect(app).toContain('preview.format === "markdown" ? <Markdown>{preview.content}</Markdown> : <pre>{preview.content}</pre>');
+    expect(app).toContain("api.artifactDownloadUrl(run.id, artifact.id)");
+    expect(app).toContain("<Download size={14} />");
+    expect(api).toContain("/artifacts/${encodeURIComponent(artifactId)}/content");
+    expect(api).toContain("/artifacts/${encodeURIComponent(artifactId)}/download");
+    expect(styles).toContain(".artifact-preview");
+  });
+
   it("keeps active execution separate from selected Run history", async () => {
     const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
     expect(source).toContain("const [activeRun, setActiveRun]");

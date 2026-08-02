@@ -2,6 +2,7 @@ import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { requiredServiceScope, secureEqual, type ServiceCredential } from "./auth.js";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { artifactFilename, isMarkdownArtifact, isTextArtifact, loadArtifactDownload, loadArtifactSource } from "./artifact-content.js";
 import type { PublicRuntimeConfig } from "./config.js";
 import type { Store } from "./store/store.js";
 import type { AgentService } from "./core/agent-service.js";
@@ -12,6 +13,7 @@ export interface AppDependencies {
   store: Store;
   service: AgentService;
   webRoot?: string;
+  workspaceRoot?: string;
   logger?: boolean;
   runtimeConfig?: PublicRuntimeConfig;
   serviceCredentials?: ServiceCredential[];
@@ -19,7 +21,7 @@ export interface AppDependencies {
   closeResources?: () => Promise<void>;
 }
 
-export function createApp({ store, service, webRoot = path.resolve("dist/web"), logger = true, runtimeConfig, serviceCredentials = [], memory, closeResources }: AppDependencies) {
+export function createApp({ store, service, webRoot = path.resolve("dist/web"), workspaceRoot = process.cwd(), logger = true, runtimeConfig, serviceCredentials = [], memory, closeResources }: AppDependencies) {
   const app = Fastify({ logger });
 
   if (serviceCredentials.length) app.addHook("onRequest", async (request, reply) => {
@@ -100,6 +102,28 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
   app.post("/api/memory/govern", async (request, reply) => { if(!memory?.govern)return reply.code(503).send({error:"memory governance unavailable"});const body=request.body as {scope?:MemoryScope;id?:string;action?:import("./memory/types.js").MemoryGovernanceAction;content?:string;title?:string;reason?:string;resolution?:"accept"|"reject"};if(!body.scope||!body.id||!body.action)return reply.code(400).send({error:"scope, id and action are required"});return memory.govern({access:memoryAccess(request,[body.scope],"memory_admin"),scope:body.scope,id:body.id,action:body.action,content:body.content,title:body.title,reason:body.reason,resolution:body.resolution}); });
   app.post("/api/memory/feedback", async (request, reply) => { if(!memory?.feedback)return reply.code(503).send({error:"memory feedback unavailable"});const body=request.body as {scope?:MemoryScope;recordId?:string;signal?:import("./memory/types.js").RecallFeedbackSignal;runId?:string;note?:string};if(!body.scope||!body.recordId||!body.signal)return reply.code(400).send({error:"scope, recordId and signal are required"});return memory.feedback(memoryAccess(request,[body.scope],"memory_admin"),body.scope,body.recordId,body.signal,{runId:body.runId,note:body.note}); });
   app.post("/api/memory/core-snapshot", async (request, reply) => { if(!memory?.getCoreSnapshot)return reply.code(503).send({error:"core snapshot unavailable"});const body=request.body as {scope?:MemoryScope;generate?:boolean;markdown?:string};if(!body.scope)return reply.code(400).send({error:"scope is required"});const access=memoryAccess(request,[body.scope],"memory_admin");if(typeof body.markdown==="string")return memory.updateCoreSnapshot!(access,body.markdown);if(body.generate)return memory.generateCoreSnapshot!(access);return memory.getCoreSnapshot(access); });
+  app.post("/api/sessions/:id/workflows/teach", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as { spec?: import("./learning/workflow-service.js").WorkflowSpec; sourceId?: string; activate?: boolean };
+    if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    if (!body.spec) return reply.code(400).send({ error: "spec is required" });
+    try { return service.teachWorkflow(id, body.spec, body.sourceId, Boolean(body.activate)); }
+    catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+  app.get("/api/sessions/:id/workflows", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    return service.listWorkflows(id);
+  });
+  app.post("/api/workflows/:id/activate", async (request, reply) => { const { id } = request.params as { id: string }; const body = (request.body ?? {}) as { revisionId?: string }; try { return service.activateWorkflow(id, body.revisionId); } catch (error) { return reply.code(404).send({ error: error instanceof Error ? error.message : String(error) }); } });
+  app.post("/api/workflows/:id/suspend", async (request, reply) => { const { id } = request.params as { id: string }; const body = (request.body ?? {}) as { reason?: string }; try { return service.suspendWorkflow(id, body.reason); } catch (error) { return reply.code(404).send({ error: error instanceof Error ? error.message : String(error) }); } });
+  app.post("/api/workflows/:id/rollback", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { revisionId?: string }; if (!body.revisionId) return reply.code(400).send({ error: "revisionId is required" }); try { return service.rollbackWorkflow(id, body.revisionId); } catch (error) { return reply.code(404).send({ error: error instanceof Error ? error.message : String(error) }); } });
+  app.delete("/api/workflows/:id", async (request, reply) => { const { id } = request.params as { id: string }; return service.forgetWorkflow(id) ? { ok: true } : reply.code(404).send({ error: "workflow not found" }); });
+  app.post("/api/workflow-bindings/:id/mode", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { mode?: "suggested" | "adopted" | "partially_adopted" | "rejected" }; if (!body.mode) return reply.code(400).send({ error: "mode is required" }); try { return service.setWorkflowBindingMode(id, body.mode); } catch (error) { return reply.code(404).send({ error: error instanceof Error ? error.message : String(error) }); } });
+  app.post("/api/workflows/:id/revise", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { patch?: Partial<import("./learning/workflow-service.js").WorkflowSpec>; sourceId?: string; changeSummary?: string }; if (!body.patch || !body.sourceId) return reply.code(400).send({ error: "patch and sourceId are required" }); try { return service.reviseWorkflow(id, body.patch, body.sourceId, body.changeSummary ?? "User correction"); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); } });
+  app.post("/api/workflows/:id/feedback", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { revisionId?: string; runId?: string; attempt?: number; signal?: import("./learning/workflow-service.js").WorkflowFeedbackSignal; idempotencyKey?: string; note?: string; adopted?: boolean; verified?: boolean }; if (!body.revisionId || !body.runId || !body.attempt || !body.signal || !body.idempotencyKey) return reply.code(400).send({ error: "revisionId, runId, attempt, signal and idempotencyKey are required" }); try { return service.recordWorkflowFeedback({ workflowId: id, revisionId: body.revisionId, runId: body.runId, attempt: body.attempt, signal: body.signal, idempotencyKey: body.idempotencyKey, note: body.note, adopted: body.adopted, verified: body.verified }); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); } });
+  app.post("/api/runs/:id/learning-policy", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { policy?: "allow" | "metadata_only" | "deny"; reason?: string }; if (!store.getRun(id)) return reply.code(404).send({ error: "run not found" }); if (!body.policy) return reply.code(400).send({ error: "policy is required" }); return service.setRunLearningPolicy(id, body.policy, body.reason); });
+
   app.get("/api/health", async (_request, reply) => {
     if(!memory)return {ok:true,service:"tagent-core"};
     const scopeId=runtimeConfig?.memoryWorkspaceScopeId; if(!scopeId)return {ok:true,service:"tagent-core",memory:{enabled:true,ready:false,degraded:true,reasons:["memory_scope_unavailable"]}};
@@ -330,6 +354,34 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     if (!service.getRun(id)) return reply.code(404).send({ error: "run not found" });
     return store.listTranscriptView(id);
   });
+  app.get("/api/runs/:id/artifacts/:artifactId/content", async (request, reply) => {
+    const { id, artifactId } = request.params as { id: string; artifactId: string };
+    if (!service.getRun(id)) return reply.code(404).send({ error: "run not found" });
+    const artifact = store.getArtifact(id, artifactId);
+    if (!artifact) return reply.code(404).send({ error: "artifact not found" });
+    try {
+      const source = await loadArtifactSource(artifact.content, artifact.uri, workspaceRoot);
+      if (!isTextArtifact(artifact.kind, artifact.title, artifact.uri, source.content)) return reply.code(415).send({ error: "artifact is not a supported text file" });
+      return { id: artifact.id, title: artifact.title, kind: artifact.kind, uri: artifact.uri, content: source.content, format: isMarkdownArtifact(artifact.kind, artifact.title, artifact.uri) ? "markdown" : "text", bytes: Buffer.byteLength(source.content), source: source.source };
+    } catch (error) {
+      return artifactReadError(reply, error);
+    }
+  });
+  app.get("/api/runs/:id/artifacts/:artifactId/download", async (request, reply) => {
+    const { id, artifactId } = request.params as { id: string; artifactId: string };
+    if (!service.getRun(id)) return reply.code(404).send({ error: "run not found" });
+    const artifact = store.getArtifact(id, artifactId);
+    if (!artifact) return reply.code(404).send({ error: "artifact not found" });
+    try {
+      const source = await loadArtifactDownload(artifact.content, artifact.uri, workspaceRoot);
+      const filename = artifactFilename(artifact.title, artifact.uri);
+      reply.header("Content-Type", "application/octet-stream");
+      reply.header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+      return reply.send(Buffer.from(source.content));
+    } catch (error) {
+      return artifactReadError(reply, error);
+    }
+  });
   app.get("/api/runs/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const run = service.getRun(id);
@@ -402,6 +454,15 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
 
   app.addHook("onClose", async () => { await service.closeRuntimes(); await closeResources?.(); store.close(); });
   return app;
+}
+
+function artifactReadError(reply: FastifyReply, error: unknown) {
+  const cause = error as NodeJS.ErrnoException & { code?: string };
+  if (cause.code === "ENOENT") return reply.code(404).send({ error: "artifact file not found" });
+  if (cause.code === "ARTIFACT_TOO_LARGE") return reply.code(413).send({ error: cause.message });
+  if (cause.code === "ARTIFACT_SOURCE_UNAVAILABLE" || cause.code === "EISDIR") return reply.code(422).send({ error: cause.message });
+  if (cause.code === "ERR_INVALID_FILE_URL_HOST" || cause.code === "ERR_INVALID_FILE_URL_PATH") return reply.code(400).send({ error: "invalid artifact file URI" });
+  return reply.code(500).send({ error: "artifact could not be read" });
 }
 
 function memoryAccess(request: FastifyRequest, scopes: MemoryScope[], purpose: AccessContext["purpose"]): AccessContext {

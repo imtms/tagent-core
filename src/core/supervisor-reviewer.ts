@@ -1,7 +1,7 @@
 import type { Model } from "@earendil-works/pi-ai/compat";
 import type { CriterionCoverage, GateFailure, SupervisorAction, TaskRun } from "./types.js";
 import type { Store } from "../store/store.js";
-import { truncateUtf8 } from "./llm-payload.js";
+import { projectUtf8HeadTail, truncateUtf8 } from "./llm-payload.js";
 import { OpenAiSseIdleTimeoutError, readOpenAiChatContent } from "./openai-sse.js";
 
 export type AuditedGateType = "progress" | "evidence" | "contract" | "completion" | "continuation";
@@ -26,7 +26,7 @@ class SupervisorRequestError extends Error {
 export interface SupervisorReviewer {
   readonly evaluator: "llm";
   readonly model: string;
-  reviewSettled(input: { run: TaskRun; response: string; operations: ReturnType<Store["listOperations"]>; progress: ReturnType<Store["getProgressSnapshot"]> }): Promise<SupervisorAudit>;
+  reviewSettled(input: { run: TaskRun; response: string; modelOutputTruncated?: boolean; operations: ReturnType<Store["listOperations"]>; progress: ReturnType<Store["getProgressSnapshot"]> }): Promise<SupervisorAudit>;
   reviewAttemptFailure(input: { run: TaskRun; error: string }): Promise<AttemptFailureAudit>;
 }
 
@@ -83,9 +83,10 @@ export class OpenAiSupervisorReviewer implements SupervisorReviewer {
   readonly model: string;
   constructor(private readonly options: { model: Model<"openai-completions">; fallbackModel?: Model<"openai-completions">; apiKey: string; timeoutMs?: number }) { this.model = options.model.id; }
 
-  async reviewSettled(input: { run: TaskRun; response: string; operations: ReturnType<Store["listOperations"]>; progress: ReturnType<Store["getProgressSnapshot"]> }): Promise<SupervisorAudit> {
+  async reviewSettled(input: { run: TaskRun; response: string; modelOutputTruncated?: boolean; operations: ReturnType<Store["listOperations"]>; progress: ReturnType<Store["getProgressSnapshot"]> }): Promise<SupervisorAudit> {
     const criteria = input.run.contract?.acceptanceCriteria ?? [];
     const recentOperations = input.operations.slice(-20);
+    const candidateProjection = projectUtf8HeadTail(input.response, 8_000, 3_000);
     const payload = {
       goal: truncateUtf8(input.run.goal, 2_000),
       contract: input.run.contract ? {
@@ -102,8 +103,15 @@ export class OpenAiSupervisorReviewer implements SupervisorReviewer {
       operations: recentOperations.map(({ id, operationType, status, stage, error }) => ({ id, operationType, status, stage, error: truncateUtf8(error, 500) })),
       operationsOmitted: input.operations.length - recentOperations.length,
       progress: input.progress ? { meaningfulChanges: input.progress.meaningfulChanges, consecutiveFailures: input.progress.consecutiveFailures, repeatedOperations: input.progress.repeatedOperations } : null,
-      candidateResponse: truncateUtf8(input.response, 6_000),
-      candidateResponseTruncated: new TextEncoder().encode(input.response).byteLength > 6_000,
+      candidateResponse: candidateProjection.text,
+      candidateResponseProjection: {
+        strategy: candidateProjection.strategy,
+        originalBytes: candidateProjection.originalBytes,
+        projectedBytes: candidateProjection.projectedBytes,
+        omittedBytes: candidateProjection.omittedBytes,
+        completeSourcePreserved: true,
+        modelOutputTruncated: input.modelOutputTruncated === true,
+      },
     };
     const validEvidenceRefs = new Set([
       ...input.run.checks.map((item) => `check:${item.key}`),
@@ -123,6 +131,9 @@ Authoritative audit rules:
 - A candidate may report a real blocker; classify whether it needs user input, approval, external dependency, transient retry, automatic repair, or is non-recoverable.
 - Approval boundaries must not be bypassed, and confidence alone must never open a gate.
 - Final delivery must be accurate, substantive, standalone, and directly answer the contract.
+- candidateResponseProjection describes an internal bounded review projection, not damage to the durable candidate. A head_tail projection preserves the opening and final delivery while omitting only the middle.
+- Never report final_delivery_truncated, candidate_truncated, or request a continuation merely because projection.strategy is head_tail or omittedBytes is positive. Treat output as truly truncated only when modelOutputTruncated is true or the visible ending itself provides semantic evidence of an incomplete sentence/delivery.
+- Judge conclusions and final delivery from the preserved tail; use checks/artifacts/operations for details omitted from the middle.
 - The contract gate is the single authoritative owner of acceptance-criterion coverage receipts. Do not repeat criterionCoverage in any other gate.
 - completion passes only if progress, evidence, contract, claims, and delivery quality all pass.
 - continuation failures contain only blockers that make automatic continuation inappropriate.
@@ -137,8 +148,10 @@ Action must agree with the completion failures. TASKRUN_DATA=${JSON.stringify(pa
       try {
         const correction = auditAttempt === 1 ? "" : `
 
-Your previous audit response failed schema validation: ${lastError instanceof Error ? lastError.message : String(lastError)}. Regenerate the entire JSON object. Do not repeat criterionCoverage outside the contract gate.`;
-        return this.parseSettledAudit(await this.request(basePrompt + correction), criteria, validEvidenceRefs);
+Your previous audit response failed validation: ${lastError instanceof Error ? lastError.message : String(lastError)}. Regenerate the entire JSON object. A bounded head_tail projection is not a truncated model output; the final delivery is present in its tail. Do not create a truncation failure unless modelOutputTruncated=true.`;
+        const audit = this.parseSettledAudit(await this.request(basePrompt + correction), criteria, validEvidenceRefs);
+        this.rejectProjectionOnlyTruncation(audit, input.modelOutputTruncated === true, candidateProjection.strategy);
+        return audit;
       } catch (error) {
         if (error instanceof SupervisorRequestError) {
           if (error.retryable) return this.conservativeSettledAudit(input, error.message);
@@ -148,6 +161,14 @@ Your previous audit response failed schema validation: ${lastError instanceof Er
       }
     }
     throw new SupervisorReviewError(`Supervisor LLM audit failed validation after ${maxSchemaAttempts} review attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+  }
+
+  private rejectProjectionOnlyTruncation(audit: SupervisorAudit, modelOutputTruncated: boolean, projectionStrategy: "full" | "head_tail") {
+    if (modelOutputTruncated || projectionStrategy === "full" || audit.gates.completion.passed) return;
+    const projectionTerms = /(?:candidate|response|delivery|answer).{0,40}(?:truncat|cut off|incomplete because.{0,20}omitt)|(?:截断|裁剪|省略).{0,30}(?:候选|答复|交付)|(?:候选|答复|交付).{0,30}(?:截断|裁剪|省略)/i;
+    const failures = Object.values(audit.gates).flatMap((gate) => gate.failures);
+    const projectionOnly = failures.length > 0 && failures.every((failure) => projectionTerms.test(`${failure.key} ${failure.reason}`));
+    if (projectionOnly) throw new Error("Supervisor treated a bounded review projection as model-output truncation");
   }
 
   private parseSettledAudit(raw: unknown, criteria: string[], validEvidenceRefs: Set<string>): SupervisorAudit {

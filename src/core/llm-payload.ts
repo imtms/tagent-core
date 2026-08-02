@@ -17,6 +17,44 @@ export function truncateUtf8(value: string, maxBytes: number, marker = "\n[trunc
   return value.slice(0, low) + marker;
 }
 
+function utf8Prefix(value: string, maxBytes: number) {
+  if (utf8Bytes(value) <= maxBytes) return value;
+  let low = 0; let high = value.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (utf8Bytes(value.slice(0, middle)) <= maxBytes) low = middle;
+    else high = middle - 1;
+  }
+  if (low > 0 && /[\uD800-\uDBFF]/.test(value[low - 1])) low -= 1;
+  return value.slice(0, low);
+}
+
+function utf8Suffix(value: string, maxBytes: number) {
+  if (utf8Bytes(value) <= maxBytes) return value;
+  let low = 0; let high = value.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (utf8Bytes(value.slice(value.length - middle)) <= maxBytes) low = middle;
+    else high = middle - 1;
+  }
+  let start = value.length - low;
+  if (start < value.length && /[\uDC00-\uDFFF]/.test(value[start])) start += 1;
+  return value.slice(start);
+}
+
+/** Bounded review projection that keeps both the opening context and final delivery. */
+export function projectUtf8HeadTail(value: string, maxBytes: number, headBytes = Math.floor(maxBytes * .4)) {
+  const originalBytes = utf8Bytes(value);
+  if (originalBytes <= maxBytes) return { text: value, originalBytes, projectedBytes: originalBytes, omittedBytes: 0, strategy: "full" as const };
+  const marker = "\n\n[... middle omitted from Supervisor projection; durable candidate remains complete ...]\n\n";
+  const markerBytes = utf8Bytes(marker);
+  const contentBudget = Math.max(0, maxBytes - markerBytes);
+  const boundedHeadBytes = Math.max(0, Math.min(headBytes, contentBudget));
+  const text = utf8Prefix(value, boundedHeadBytes) + marker + utf8Suffix(value, contentBudget - boundedHeadBytes);
+  const projectedBytes = utf8Bytes(text);
+  return { text, originalBytes, projectedBytes, omittedBytes: originalBytes - projectedBytes + markerBytes, strategy: "head_tail" as const };
+}
+
 /** Minimal, bounded TaskRun projection used at the LLM boundary. Durable state remains in Store. */
 export function runtimeRunContext(run: TaskRun) {
   return {

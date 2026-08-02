@@ -42,7 +42,7 @@ export class TaskRunSupervisor {
     return this.createDecision(run, event.seq, "checkpoint", "steer", reasonCode, rationale, 1);
   }
 
-  async reviewSettled(run: TaskRun, checkpointSeq: number, response: string): Promise<SettledReview> {
+  async reviewSettled(run: TaskRun, checkpointSeq: number, response: string, options: { modelOutputTruncated?: boolean } = {}): Promise<SettledReview> {
     const pendingControl = this.store.listControlInbox(run.id).filter((item) => item.attempt === run.attempt && ["queued", "delivering"].includes(item.status));
     if (pendingControl.length) {
       return { gates: [], decision: this.createDecision(run, checkpointSeq, "settled", "wait_for_runtime", "pending_control_delivery", `${pendingControl.length} durable control message(s) are still pending delivery.`, 1, response) };
@@ -52,7 +52,7 @@ export class TaskRunSupervisor {
     // Do not spend a model round-trip proving facts already authoritatively known by the local gate.
     // Semantic review still runs whenever deterministic prerequisites pass.
     const deterministicAudit = this.reviewDeterministicPrerequisites(run);
-    const audit = deterministicAudit ?? await this.reviewer.reviewSettled({ run, response, operations, progress });
+    const audit = deterministicAudit ?? await this.reviewer.reviewSettled({ run, response, modelOutputTruncated: options.modelOutputTruncated, operations, progress });
     const evaluator = deterministicAudit ? "system" as const : audit.evaluator ?? this.reviewer.evaluator;
     const evaluatorModel = deterministicAudit ? "deterministic-prerequisite-gate" : audit.evaluatorModel ?? this.reviewer.model;
     const createdAt = Date.now();

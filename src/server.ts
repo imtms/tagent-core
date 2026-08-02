@@ -24,7 +24,7 @@ const service = new AgentService(
   memoryRuntime?.service,
   config.memory.enabled ? config.memory.workspaceScopeId : "default",
 );
-const app = createApp({ store, service, runtimeConfig: publicRuntimeConfig(config, store.getSchemaVersion()), serviceCredentials: config.serviceCredentials, memory: memoryRuntime?.service, closeResources: () => memoryRuntime?.close() ?? Promise.resolve() });
+const app = createApp({ store, service, workspaceRoot: config.workspace, runtimeConfig: publicRuntimeConfig(config, store.getSchemaVersion()), serviceCredentials: config.serviceCredentials, memory: memoryRuntime?.service, closeResources: () => memoryRuntime?.close() ?? Promise.resolve() });
 service.recoverContinuations();
 service.recoverSessionInbox();
 await app.listen({ host: "0.0.0.0", port: config.port });

@@ -9,6 +9,8 @@ export interface ContextManifestItem { kind: string; sourceId: string; role?: st
 export interface ContextManifest { id: string; source: "session" | "transcript"; attempt: number; manifestHash: string; createdAt: number; items: ContextManifestItem[]; stats: Record<string, number | string> }
 export interface PlanItem { key: string; title: string; status: string; required: boolean; position: number }
 export interface RunCheck { key: string; title: string; status: string; required: boolean; command: string; evidence: string; stale: boolean }
+export interface Artifact { id: string; title: string; kind: string; uri: string }
+export interface ArtifactContent extends Artifact { content: string; format: "markdown" | "text"; bytes: number; source: "inline" | "file" }
 export interface UserInputField { key: string; label: string; description: string; inputType: "text" | "textarea"; required: boolean; placeholder: string }
 export interface UserInputRequest { id: string; runId: string; attempt: number; prompt: string; fields: UserInputField[]; status: "pending" | "submitted" | "cancelled" | "superseded"; response: Record<string, string>; requestedAt: number; submittedAt: number | null }
 export interface TaskRun {
@@ -20,7 +22,7 @@ export interface TaskRun {
   continuations: Array<{ id: string; ordinal: number; status: string; reason: string; error: string; createdAt: number; startedAt: number | null; completedAt: number | null; leaseOwner: string; leaseUntil: number | null; heartbeatAt: number | null }>;
   plan: PlanItem[]; checks: RunCheck[];
   userInputRequests: UserInputRequest[]; pendingUserInput: UserInputRequest | null;
-  artifacts: Array<{ id: string; title: string; kind: string; uri: string }>;
+  artifacts: Artifact[];
   completionGate: { passed: boolean; failures: Array<{ kind: string; key: string; reason: string }> };
   launchRetryable: boolean;
   supervision: {
@@ -84,6 +86,8 @@ export const api = {
   run: (runId: string) => request<TaskRun>(`/api/runs/${runId}`),
   contextManifests: (runId: string, limit = 20) => request<ContextManifest[]>(`/api/runs/${runId}/context-manifests?limit=${limit}`),
   transcriptView: (runId: string) => request<TranscriptItem[]>(`/api/runs/${runId}/transcript-view`),
+  artifactContent: (runId: string, artifactId: string) => request<ArtifactContent>(`/api/runs/${runId}/artifacts/${encodeURIComponent(artifactId)}/content`),
+  artifactDownloadUrl: (runId: string, artifactId: string) => `/api/runs/${runId}/artifacts/${encodeURIComponent(artifactId)}/download`,
   send: (sessionId: string, content: string) => request<{ item: SessionInboxItem; run: TaskRun | null }>(`/api/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId() }) }),
   inbox: (sessionId: string) => request<SessionInboxItem[]>(`/api/sessions/${sessionId}/inbox`),
   updateInbox: (sessionId: string, itemId: string, content: string) => request<SessionInboxItem>(`/api/sessions/${sessionId}/inbox/${itemId}`, { method: "PATCH", body: JSON.stringify({ content }) }),
