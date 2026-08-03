@@ -5,9 +5,19 @@ export class OpenAiSseIdleTimeoutError extends Error {
   }
 }
 
+export interface OpenAiUsage { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number }
 interface ChatCompletionChunk {
   choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; prompt_tokens_details?: { cached_tokens?: number }; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
   error?: { message?: string };
+}
+function normalizedUsage(usage: ChatCompletionChunk["usage"]): OpenAiUsage | undefined {
+  if (!usage) return undefined;
+  const cacheRead = usage.prompt_tokens_details?.cached_tokens ?? usage.cache_read_input_tokens ?? 0;
+  const cacheWrite = usage.cache_creation_input_tokens ?? 0;
+  const input = usage.prompt_tokens ?? 0;
+  const output = usage.completion_tokens ?? 0;
+  return { input, output, cacheRead, cacheWrite, totalTokens: usage.total_tokens ?? input + output };
 }
 
 /**
@@ -15,7 +25,7 @@ interface ChatCompletionChunk {
  * The timer is refreshed whenever bytes arrive, so a long generation is allowed
  * to continue indefinitely while the upstream keeps making progress.
  */
-export async function readOpenAiChatSse(response: Response, options: { idleTimeoutMs: number; controller: AbortController }): Promise<string> {
+export async function readOpenAiChatSse(response: Response, options: { idleTimeoutMs: number; controller: AbortController; onUsage?: (usage: OpenAiUsage) => void }): Promise<string> {
   if (!response.body) throw new Error("OpenAI-compatible SSE response has no body");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -41,6 +51,8 @@ export async function readOpenAiChatSse(response: Response, options: { idleTimeo
       .trim();
     if (!data || data === "[DONE]") return;
     const chunk = JSON.parse(data) as ChatCompletionChunk;
+    const usage = normalizedUsage(chunk.usage);
+    if (usage) options.onUsage?.(usage);
     if (chunk.error?.message) throw new Error(`OpenAI-compatible SSE error: ${chunk.error.message}`);
     for (const choice of chunk.choices ?? []) content += choice.delta?.content ?? choice.message?.content ?? "";
   };
@@ -69,10 +81,12 @@ export async function readOpenAiChatSse(response: Response, options: { idleTimeo
   }
 }
 
-export async function readOpenAiChatContent(response: Response, options: { idleTimeoutMs: number; controller: AbortController }): Promise<string> {
+export async function readOpenAiChatContent(response: Response, options: { idleTimeoutMs: number; controller: AbortController; onUsage?: (usage: OpenAiUsage) => void }): Promise<string> {
   if (response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) {
     return readOpenAiChatSse(response, options);
   }
   const envelope = await response.json() as ChatCompletionChunk;
+  const usage = normalizedUsage(envelope.usage);
+  if (usage) options.onUsage?.(usage);
   return envelope.choices?.[0]?.message?.content ?? "";
 }

@@ -33,7 +33,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 23;
+const SCHEMA_VERSION = 24;
 
 export class Store {
   readonly db: Database.Database;
@@ -165,6 +165,20 @@ export class Store {
         contract_json TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id, updated_at);
+      CREATE TABLE IF NOT EXISTS run_model_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        component TEXT NOT NULL,
+        model TEXT NOT NULL DEFAULT '',
+        usage_input INTEGER NOT NULL DEFAULT 0,
+        usage_output INTEGER NOT NULL DEFAULT 0,
+        usage_cache_read INTEGER NOT NULL DEFAULT 0,
+        usage_cache_write INTEGER NOT NULL DEFAULT 0,
+        usage_total_tokens INTEGER NOT NULL DEFAULT 0,
+        usage_cost REAL NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_model_usage_run ON run_model_usage(run_id, component);
       CREATE TABLE IF NOT EXISTS run_events (
         run_id TEXT NOT NULL REFERENCES runs(id),
         seq INTEGER NOT NULL,
@@ -1444,6 +1458,19 @@ ${source.content}`;
       .run(reason, timestamp, runId);
   }
 
+
+  recordModelUsage(runId: RunId, component: string, model: string, usage: { input: number; output: number; cacheRead?: number; cacheWrite?: number; totalTokens: number; cost?: number }) {
+    const timestamp = now();
+    const cacheRead = usage.cacheRead ?? 0;
+    const cacheWrite = usage.cacheWrite ?? 0;
+    const cost = usage.cost ?? 0;
+    const transaction = this.db.transaction(() => {
+      this.db.prepare("INSERT INTO run_model_usage (run_id,component,model,usage_input,usage_output,usage_cache_read,usage_cache_write,usage_total_tokens,usage_cost,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)").run(runId, component, model, usage.input, usage.output, cacheRead, cacheWrite, usage.totalTokens, cost, timestamp);
+      this.db.prepare("UPDATE runs SET usage_input=usage_input+?,usage_output=usage_output+?,usage_cache_read=usage_cache_read+?,usage_cache_write=usage_cache_write+?,usage_total_tokens=usage_total_tokens+?,usage_cost=usage_cost+?,updated_at=? WHERE id=?").run(usage.input, usage.output, cacheRead, cacheWrite, usage.totalTokens, cost, timestamp, runId);
+    });
+    transaction();
+  }
+
   appendTranscript(runId: RunId, attempt: number, message: AgentMessage) {
     const transaction = this.db.transaction(() => {
       const row = this.db.prepare("SELECT COALESCE(MAX(seq), 0) + 1 as seq FROM run_transcript WHERE run_id = ?").get(runId) as { seq: number };
@@ -1890,6 +1917,9 @@ ${source.content}`;
   }
 
   createSpawnProposal(runId: RunId, goal: string, acceptanceCriteria: string[], relation: SpawnProposal["relation"]): SpawnProposal {
+    const normalizedGoal = goal.replace(/\s+/g, " ").trim();
+    const duplicate = this.listSpawnProposals(runId).find((item) => item.relation === relation && item.goal.replace(/\s+/g, " ").trim() === normalizedGoal && item.status !== "rejected");
+    if (duplicate) return duplicate;
     const timestamp = now(); const proposal: SpawnProposal = { id: randomUUID(), runId, goal, acceptanceCriteria, relation, status: "proposed", spawnedRunId: "", createdAt: timestamp, updatedAt: timestamp };
     this.db.prepare("INSERT INTO spawn_proposals (id,run_id,goal,acceptance_json,relation,status,created_at,updated_at) VALUES (?,?,?,?,?,'proposed',?,?)").run(proposal.id,runId,goal,JSON.stringify(acceptanceCriteria),relation,timestamp,timestamp); return proposal;
   }

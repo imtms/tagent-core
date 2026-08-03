@@ -55,7 +55,7 @@ describe("SessionInputRouter LLM parsing", () => {
 
   it("falls back deterministically when the LLM request fails", async () => {
     const router = new SessionInputRouter({ request: async () => { throw new Error("provider unavailable"); } });
-    const result = await router.analyze("修复 Router");
+    const result = await router.analyze("结合上面的运行记录，分析并修复 Router 在当前 active Run 路由中的歧义问题，同时验证长文本和多目标输入仍可可靠解析");
     expect(result.routerVersion).toBe("semantic-rules-v3");
     expect(result.reason).toContain("deterministic fallback used");
   });

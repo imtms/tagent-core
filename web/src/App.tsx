@@ -291,10 +291,11 @@ export function App() {
   const cancelRenameRef = useRef(false);
   const renameSubmittingRef = useRef(false);
   const activeRunIdRef = useRef("");
+  const activeRunRef = useRef<TaskRun | null>(null);
   const sessionIdRef = useRef("");
   const replaceStreamingOnNextDeltaRef = useRef(false);
 
-  useEffect(() => { activeRunIdRef.current = activeRun?.id ?? ""; }, [activeRun?.id]);
+  useEffect(() => { activeRunIdRef.current = activeRun?.id ?? ""; activeRunRef.current = activeRun; }, [activeRun]);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
   const loadSessions = useCallback(async () => {
@@ -345,7 +346,7 @@ export function App() {
         setInbox(queued);
         setRuns(runHistory);
         setSessions(sessionItems);
-        const active = runHistory.find((item) => item.status === "running") ?? null;
+        const active = runHistory.find((item) => ["running", "waiting_input", "blocked", "interrupted"].includes(item.status)) ?? null;
         if (active?.id && active.id !== activeRunIdRef.current) {
           const [hydrated, view, history] = await Promise.all([api.run(active.id), api.transcriptView(active.id), api.messages(targetSessionId)]);
           if (closed || sessionIdRef.current !== targetSessionId) return;
@@ -363,7 +364,15 @@ export function App() {
           setMessages(history); setHasOlderMessages(history.length === 80); setSelectedRun(ended); setTranscript(view);
           setActiveRun(null); setStreaming(""); setLiveThinking(""); setEvents([]);
         } else if (active) {
-          setActiveRun((current) => current?.id === active.id ? { ...current, ...active } : active);
+          const currentRun = activeRunIdRef.current === active.id ? await api.run(active.id) : active;
+          const shouldRefreshContent = currentRun.lastEventSeq !== activeRunRef.current?.lastEventSeq;
+          if (shouldRefreshContent) {
+            const [view, history] = await Promise.all([api.transcriptView(active.id), api.messages(targetSessionId)]);
+            if (closed || sessionIdRef.current !== targetSessionId) return;
+            setTranscript(view); setMessages(history); setHasOlderMessages(history.length === 80);
+          }
+          setActiveRun(currentRun);
+          setSelectedRun((current) => current?.id === currentRun.id ? currentRun : current);
         }
       } catch {
         // SSE remains authoritative while polling provides eventual UI recovery.
@@ -381,7 +390,7 @@ export function App() {
     void Promise.all([api.messages(targetSessionId), api.runs(targetSessionId), api.inbox(targetSessionId)]).then(async ([history, runHistory, queued]) => {
       if (closed || sessionIdRef.current !== targetSessionId) return;
       const latest = runHistory[0] ?? null;
-      const active = runHistory.find((item) => item.status === "running") ?? null;
+      const active = runHistory.find((item) => ["running", "waiting_input", "blocked", "interrupted"].includes(item.status)) ?? null;
       setMessages(history); setHasOlderMessages(history.length === 80); setRuns(runHistory); setInbox(queued); setActiveRun(active); setSelectedRun(latest); setExpandedRunId(latest?.id ?? "");
       setStreaming(active?.checkpoint?.active ? active.checkpoint.assistantPartial : ""); setLiveThinking("");
       setEvents(active?.checkpoint?.active && active.checkpoint.currentTool ? [{ runId: active.id, seq: active.checkpoint.lastEventSeq, type: "tool.started", data: active.checkpoint.currentTool, createdAt: active.checkpoint.updatedAt }] : []);
@@ -392,8 +401,15 @@ export function App() {
     return () => { closed = true; };
   }, [sessionId]);
 
+  const [streamGeneration, setStreamGeneration] = useState(0);
   useEffect(() => {
-    if (!activeRun?.id || activeRun.status !== "running") return;
+    const reconnect = () => { if (document.visibilityState === "visible" && navigator.onLine) setStreamGeneration((value) => value + 1); };
+    document.addEventListener("visibilitychange", reconnect);
+    window.addEventListener("online", reconnect);
+    return () => { document.removeEventListener("visibilitychange", reconnect); window.removeEventListener("online", reconnect); };
+  }, []);
+  useEffect(() => {
+    if (!activeRun?.id || !["running", "waiting_input", "blocked", "interrupted"].includes(activeRun.status)) return;
     let closed = false;
     let unsubscribe: () => void = () => {};
     const consumerKey = "tagent.eventConsumerId";
@@ -446,7 +462,7 @@ export function App() {
           api.run(runId), api.runs(sessionId), api.messages(sessionId), api.inbox(sessionId), api.transcriptView(runId), api.sessions(),
         ]);
         if (closed || sessionIdRef.current !== sessionId) return;
-        const nextActive = runHistory.find((item) => item.status === "running") ?? null;
+        const nextActive = runHistory.find((item) => ["running", "waiting_input", "blocked", "interrupted"].includes(item.status)) ?? null;
         setStreaming((current) => {
           const response = String(event.data.response ?? "").trim();
           const persisted = !current.trim() || history.some((message) => message.role === "assistant" && (message.content === current || (response && message.content === response)));
@@ -466,10 +482,14 @@ export function App() {
         setRuns((current) => current.map((item) => item.id === updated.id ? updated : item));
       }
       if (!closed) scheduleAck(event.seq);
-      }, () => undefined);
+      }, () => {
+        if (closed) return;
+        unsubscribe();
+        window.setTimeout(() => { if (!closed && document.visibilityState === "visible" && navigator.onLine) setStreamGeneration((value) => value + 1); }, 1_000);
+      });
     }).catch((cause) => { if (!closed) setError(cause instanceof Error ? cause.message : String(cause)); });
     return () => { flushAck(); closed = true; if (ackTimer) clearTimeout(ackTimer); unsubscribe(); };
-  }, [activeRun?.id, activeRun?.status, sessionId, loadSessions]);
+  }, [activeRun?.id, activeRun?.status, sessionId, loadSessions, streamGeneration]);
 
   useEffect(() => {
     const viewport = messageScrollRef.current;

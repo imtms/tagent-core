@@ -29,6 +29,7 @@ export interface AppConfig {
   controlInboxCapacity: number;
   serviceCredentials: ServiceCredential[];
   model: ModelConfig;
+  fallbackModels: ModelConfig[];
   routerModel: ModelConfig;
   supervisorModel: ModelConfig;
   memory: MemoryConfig;
@@ -219,6 +220,12 @@ function modelApi(value: string | undefined, name: string): ModelConfig["api"] {
   return api;
 }
 
+function modelIds(value: string | undefined, fallback: string) {
+  const ids = (value ?? fallback).split(",").map((item) => item.trim()).filter(Boolean);
+  if (!ids.length) throw new Error("TAGENT_MODEL must contain at least one model id");
+  return [...new Set(ids)];
+}
+
 function normalizeBaseUrl(value: string) {
   const url = new URL(value);
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("TAGENT_API_BASE must use http or https");
@@ -259,15 +266,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       semanticJudgeCacheTtlMs: positiveInteger(env.TAGENT_LEARNING_SEMANTIC_JUDGE_CACHE_TTL_MS, 86_400_000, "TAGENT_LEARNING_SEMANTIC_JUDGE_CACHE_TTL_MS"),
       semanticJudgeMaxCallsPerMinute: positiveInteger(env.TAGENT_LEARNING_SEMANTIC_JUDGE_MAX_CALLS_PER_MINUTE, 120, "TAGENT_LEARNING_SEMANTIC_JUDGE_MAX_CALLS_PER_MINUTE"),
     },
-    model: {
-      provider: env.TAGENT_PROVIDER ?? "openai-compatible",
-      modelId: env.TAGENT_MODEL ?? "gpt-5.6-sol",
-      api: modelApi(env.TAGENT_API, "TAGENT_API"),
-      baseUrl: normalizeBaseUrl(env.TAGENT_API_BASE ?? "https://one.tms.im/v1"),
-      contextWindow: positiveInteger(env.TAGENT_CONTEXT_WINDOW, 200_000, "TAGENT_CONTEXT_WINDOW"),
-      maxTokens: positiveInteger(env.TAGENT_MAX_TOKENS, 32_768, "TAGENT_MAX_TOKENS"),
-      reasoning: env.TAGENT_REASONING !== "false",
-    },
+    ...(() => {
+      const ids = modelIds(env.TAGENT_MODEL, "gpt-5.6-sol");
+      const base = {
+        provider: env.TAGENT_PROVIDER ?? "openai-compatible",
+        api: modelApi(env.TAGENT_API, "TAGENT_API"),
+        baseUrl: normalizeBaseUrl(env.TAGENT_API_BASE ?? "https://one.tms.im/v1"),
+        contextWindow: positiveInteger(env.TAGENT_CONTEXT_WINDOW, 200_000, "TAGENT_CONTEXT_WINDOW"),
+        maxTokens: positiveInteger(env.TAGENT_MAX_TOKENS, 32_768, "TAGENT_MAX_TOKENS"),
+        reasoning: env.TAGENT_REASONING !== "false",
+      };
+      return { model: { ...base, modelId: ids[0] }, fallbackModels: ids.slice(1).map((modelId) => ({ ...base, modelId })) };
+    })(),
     routerModel: {
       provider: env.TAGENT_ROUTER_PROVIDER?.trim() || env.TAGENT_PROVIDER || "openai-compatible",
       modelId: env.TAGENT_ROUTER_MODEL ?? "gpt-5.6-luna",
@@ -295,6 +305,7 @@ export interface PublicRuntimeConfig {
   api: ModelConfig["api"];
   baseUrl: string;
   modelId: string;
+  fallbackModelIds: string[];
   credentialConfigured: boolean;
   serviceAuthenticationConfigured: boolean;
   providerTimeoutMs: number;
@@ -327,6 +338,7 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     api: config.model.api,
     baseUrl: config.model.baseUrl,
     modelId: config.model.modelId,
+    fallbackModelIds: config.fallbackModels.map((model) => model.modelId),
     credentialConfigured: Boolean(config.apiKey),
     serviceAuthenticationConfigured: config.serviceCredentials.length > 0,
     providerTimeoutMs: config.providerTimeoutMs,

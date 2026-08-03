@@ -86,7 +86,7 @@ Credentials are supplied at runtime and are not written to Pi auth files, SQLite
 | `TAGENT_RUNTIME` | `in-process` | Runtime implementation; only `in-process` is supported |
 | `TAGENT_PROVIDER` | `openai-compatible` | Pi provider identifier |
 | `TAGENT_API_BASE` | `https://one.tms.im/v1` | OpenAI-compatible API base URL |
-| `TAGENT_MODEL` | `gpt-5.6-sol` | Upstream model identifier |
+| `TAGENT_MODEL` | `gpt-5.6-sol` | Upstream execution model identifier, or an ordered comma-separated fallback chain; rate-limit failures switch to the next model without restarting |
 | `TAGENT_CONTEXT_WINDOW` | `200000` | Advertised model context window |
 | `TAGENT_MAX_TOKENS` | `32768` | Maximum output tokens per provider response |
 | `TAGENT_PROVIDER_TIMEOUT_MS` | `15000` | Provider transport idle window (main model uses the activity watchdog below) |

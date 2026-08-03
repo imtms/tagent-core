@@ -733,26 +733,17 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
-  it("sustains dozens of continuations in one durable run", async () => {
+  it("stops repeated continuations when the same gate diagnosis makes no progress", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    let runId = "";
     let calls = 0;
-    const service = new AgentService(store, "/tmp", () => {
-      calls += 1;
-      return new CallbackRuntime(assistantMessage(calls > 40 ? "done" : "continue"), () => {
-        if (calls > 40) store.upsertPlanItem(runId, { key: "finish", title: "Finish", status: "done", required: true, position: 1 });
-      });
-    }, { maxContinuations: 64, runTimeoutMs: 60_000, supervisorReviewer: reviewer(...Array.from({ length: 40 }, () => continuationAudit()), passingTestAudit()) });
-    const run = await service.start(session.id, "long durable run");
-    runId = run.id;
-    for (let index = 0; index < 200 && store.getRun(run.id)?.status !== "completed"; index += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    expect(calls).toBe(41);
-    expect(store.getRun(run.id)).toMatchObject({ status: "completed", attempt: 41 });
-    expect(store.listContinuations(run.id)).toHaveLength(40);
-    expect(store.listContinuations(run.id).every((item) => item.status === "completed" || item.status === "blocked")).toBe(true);
+    const service = new AgentService(store, "/tmp", () => { calls += 1; return new CallbackRuntime(assistantMessage("continue")); }, { maxContinuations: 64, runTimeoutMs: 60_000, supervisorReviewer: reviewer(continuationAudit(), continuationAudit(), continuationAudit()) });
+    const run = await service.start(session.id, "stalled durable run");
+    for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "continuation.stalled"); index += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls).toBe(3);
+    expect(store.getRun(run.id)?.status).toBe("blocked");
+    expect(store.listContinuations(run.id)).toHaveLength(2);
+    expect(store.listEvents(run.id).some((event) => event.type === "continuation.stalled" && event.data.reason === "repeated_gate_failure")).toBe(true);
     store.close();
   });
 

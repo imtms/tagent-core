@@ -19,6 +19,13 @@ describe("configuration", () => {
     expect(config).toMatchObject({ routerTimeoutMs: 15_000, supervisorTimeoutMs: 15_000 });
   });
 
+  it("supports an ordered main-model fallback chain", () => {
+    const config = loadConfig({ TAGENT_MODEL: "primary, fallback-a, fallback-b" });
+    expect(config.model.modelId).toBe("primary");
+    expect(config.fallbackModels.map((model) => model.modelId)).toEqual(["fallback-a", "fallback-b"]);
+    expect(publicRuntimeConfig(config).fallbackModelIds).toEqual(["fallback-a", "fallback-b"]);
+  });
+
   it("allows independent lightweight Router and Supervisor models", () => {
     const config = loadConfig({
       TAGENT_MODEL: "main-model",

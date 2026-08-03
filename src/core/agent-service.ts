@@ -38,7 +38,7 @@ export class AgentService {
     private readonly store: Store,
     private readonly workspace: string,
     private readonly runtimeFactory: RuntimeFactory = createInProcessRuntime,
-    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { routerModel?: import("@earendil-works/pi-ai/compat").Model<"openai-completions">; routerTimeoutMs?: number; supervisorModel?: import("@earendil-works/pi-ai/compat").Model<"openai-completions">; supervisorTimeoutMs?: number; maxContinuations?: number; contextWindow?: number; maxContextTurns?: number; controlInboxCapacity?: number; supervisorReviewer?: SupervisorReviewer } = {},
+    private readonly runtimeDefaults: Pick<Parameters<RuntimeFactory>[0], "model" | "fallbackModels" | "apiKey" | "providerTimeoutMs" | "providerMaxRetries" | "runTimeoutMs" | "runHardTimeoutMs"> & { routerModel?: import("@earendil-works/pi-ai/compat").Model<"openai-completions">; routerTimeoutMs?: number; supervisorModel?: import("@earendil-works/pi-ai/compat").Model<"openai-completions">; supervisorTimeoutMs?: number; maxContinuations?: number; contextWindow?: number; maxContextTurns?: number; controlInboxCapacity?: number; supervisorReviewer?: SupervisorReviewer } = {},
     private readonly memory?: MemoryFacade,
     private readonly memoryScopeId = "default",
     private readonly learningControl?: LearningFeatureControl,
@@ -46,7 +46,7 @@ export class AgentService {
   ) {
     if (runtimeDefaults.routerModel && runtimeDefaults.routerModel.api !== "openai-completions") throw new Error("Router supports only openai-completions; configure TAGENT_ROUTER_API=openai-completions and an explicit TAGENT_ROUTER_API_BASE");
     if (runtimeDefaults.supervisorModel && runtimeDefaults.supervisorModel.api !== "openai-completions") throw new Error("Supervisor supports only openai-completions; configure TAGENT_SUPERVISOR_API=openai-completions and an explicit TAGENT_SUPERVISOR_API_BASE");
-    const reviewer = runtimeDefaults.supervisorReviewer ?? (runtimeDefaults.model && runtimeDefaults.apiKey ? new OpenAiSupervisorReviewer({ model: runtimeDefaults.supervisorModel ?? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions">, fallbackModel: runtimeDefaults.supervisorModel ? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions"> : undefined, apiKey: runtimeDefaults.apiKey, timeoutMs: runtimeDefaults.supervisorTimeoutMs ?? runtimeDefaults.providerTimeoutMs }) : process.env.VITEST ? new TestSupervisorReviewer() : undefined);
+    const reviewer = runtimeDefaults.supervisorReviewer ?? (runtimeDefaults.model && runtimeDefaults.apiKey ? new OpenAiSupervisorReviewer({ model: runtimeDefaults.supervisorModel ?? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions">, fallbackModel: runtimeDefaults.supervisorModel ? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions"> : undefined, apiKey: runtimeDefaults.apiKey, timeoutMs: runtimeDefaults.supervisorTimeoutMs ?? runtimeDefaults.providerTimeoutMs, onUsage: (runId, model, usage) => this.store.recordModelUsage(runId, "supervisor", model, usage) }) : process.env.VITEST ? new TestSupervisorReviewer() : undefined);
     if (!reviewer) throw new Error("LLM Supervisor reviewer requires a configured model and API key");
     this.supervisor = new TaskRunSupervisor(store, reviewer);
     this.sessionRouter = new SessionInputRouter({ model: runtimeDefaults.routerModel ?? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions"> | undefined, apiKey: runtimeDefaults.apiKey, timeoutMs: runtimeDefaults.routerTimeoutMs ?? 15_000 });
@@ -256,6 +256,8 @@ export class AgentService {
     if (existing) return { item: existing, run: existing.runId ? this.store.getRun(existing.runId) ?? null : null };
     const activeRun = this.store.getActiveRun(sessionId);
     const analysis = await this.sessionRouter.analyze(content, activeRun, this.sessionRouterContext(sessionId));
+    const routerUsage = this.sessionRouter.takeUsage(analysis);
+    if (activeRun) for (const observed of routerUsage) this.store.recordModelUsage(activeRun.id, "router", observed.model, observed.usage);
     const duplicate = !activeRun ? this.store.findMergeCandidate(sessionId, analysis) : undefined;
     const item = this.store.enqueueSessionInbox(sessionId, content, analysis, requestId);
     if (analysis.intent === "defer") {
@@ -299,6 +301,7 @@ export class AgentService {
     }
 
     const run = this.dispatchSessionInbox(sessionId);
+    if (run) for (const observed of routerUsage) this.store.recordModelUsage(run.id, "router", observed.model, observed.usage);
     return { item: this.store.getSessionInboxItem(item.id)!, run: run ?? null };
   }
 
@@ -397,11 +400,11 @@ export class AgentService {
 
   private buildContractPrompt(run: TaskRun, sourceInput: string) {
     if (!run.contract) return sourceInput;
-    return [`TaskRun goal: ${run.contract.summary}`, `Semantic objectives:
-${run.contract.objectives.map((item) => `- [${item.timing}/${item.kind}] ${item.summary}`).join("\n")}`, `Scope: ${run.contract.scope}`, run.contract.nonGoals.length ? `Non-goals:
-${run.contract.nonGoals.map((item) => `- ${item}`).join("\n")}` : "", `Acceptance criteria:
-${run.contract.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`, `Original user input:
-${sourceInput}`].filter(Boolean).join("\n\n");
+    return [
+      "Execute the active TaskRun contract from the system context.",
+      "Treat the following as the original user request; do not duplicate or reinterpret the already supplied contract:",
+      sourceInput,
+    ].join("\n\n");
   }
 
   private failClaimedSessionLaunch(item: SessionInboxItem, run: TaskRun, error: unknown) {
@@ -486,6 +489,7 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
       systemPrompt: this.buildSystemPrompt(run, this.recalledMemory.get(run.id) ?? ""),
       initialMessages,
       model: this.runtimeDefaults.model,
+      fallbackModels: this.runtimeDefaults.fallbackModels,
       apiKey: this.runtimeDefaults.apiKey,
       providerTimeoutMs: this.runtimeDefaults.providerTimeoutMs,
       providerMaxRetries: this.runtimeDefaults.providerMaxRetries,
@@ -695,6 +699,13 @@ ${sourceInput}`].filter(Boolean).join("\n\n");
   private queueContinuation(runId: RunId) {
     const run = this.store.getRun(runId);
     if (!run || run.status !== "blocked") return;
+    const latestReasons = run.continuations.slice(-2).map((item) => item.reason.replace(/\s+/g, " ").trim());
+    const currentReason = run.blockedReason.replace(/\s+/g, " ").trim();
+    if (latestReasons.length === 2 && latestReasons.every((reason) => reason === currentReason)) {
+      this.store.appendMessage(run.sessionId, "assistant", `Run remains blocked because two continuations produced the same unresolved gate failure without a changed diagnosis: ${run.blockedReason}`);
+      this.publish(this.store.appendEvent(runId, "continuation.stalled", { reason: "repeated_gate_failure", repeatedReason: currentReason }));
+      return;
+    }
     const maxContinuations = this.runtimeDefaults.maxContinuations ?? 128;
     if (run.continuations.length >= maxContinuations) {
       const message = `Run remains blocked after ${maxContinuations} automatic continuation${maxContinuations === 1 ? "" : "s"}: ${run.blockedReason}`;

@@ -33,6 +33,7 @@ export class PiRuntime implements AgentRuntime {
   private deltaTimer?: ReturnType<typeof setTimeout>;
   private thinkingDeltaTimer?: ReturnType<typeof setTimeout>;
   private lastToolProgressAt = new Map<string, number>();
+  private fallbackIndex = 0;
 
   constructor(private readonly options: RuntimeOptions) {}
 
@@ -78,28 +79,29 @@ export class PiRuntime implements AgentRuntime {
     }, { projectTrusted: false });
     const modelRuntime = this.options.modelRuntime ?? await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
     if (this.options.model && !modelRuntime.getProvider(this.options.model.provider)) {
+      const configuredModels = [this.options.model, ...(this.options.fallbackModels ?? [])].filter((model) => model.provider === this.options.model!.provider);
       modelRuntime.registerProvider(this.options.model.provider, {
         name: this.options.model.provider,
         api: this.options.model.api,
         baseUrl: this.options.model.baseUrl,
-        models: [{
-          id: this.options.model.id,
-          name: this.options.model.name,
-          api: this.options.model.api,
-          baseUrl: this.options.model.baseUrl,
-          reasoning: this.options.model.reasoning,
-          thinkingLevelMap: this.options.model.thinkingLevelMap,
-          input: [...this.options.model.input],
-          cost: this.options.model.cost,
-          contextWindow: this.options.model.contextWindow,
-          maxTokens: this.options.model.maxTokens,
-          headers: this.options.model.headers,
-          compat: this.options.model.compat,
-        }],
+        models: configuredModels.map((model) => ({
+          id: model.id,
+          name: model.name,
+          api: model.api,
+          baseUrl: model.baseUrl,
+          reasoning: model.reasoning,
+          thinkingLevelMap: model.thinkingLevelMap,
+          input: [...model.input],
+          cost: model.cost,
+          contextWindow: model.contextWindow,
+          maxTokens: model.maxTokens,
+          headers: model.headers,
+          compat: model.compat,
+        })),
       });
       await modelRuntime.refresh({ allowNetwork: false });
     }
-    if (this.options.model && this.options.apiKey) await modelRuntime.setRuntimeApiKey(this.options.model.provider, this.options.apiKey, { allowNetwork: false });
+    if (this.options.apiKey) for (const provider of new Set([this.options.model, ...(this.options.fallbackModels ?? [])].map((model) => model?.provider).filter((value): value is string => Boolean(value)))) await modelRuntime.setRuntimeApiKey(provider, this.options.apiKey, { allowNetwork: false });
     const resourceLoader = new DefaultResourceLoader({
       cwd: this.options.workspace,
       agentDir: this.options.workspace,
@@ -210,6 +212,16 @@ export class PiRuntime implements AgentRuntime {
     if (this.disposed) throw new Error("Runtime disposed");
     if (this.abortRequested) throw new Error("Runtime aborted");
     await session.prompt(query);
+    while (!this.abortRequested && this.options.store.getRun(this.options.runId)?.status === "running") {
+      const last = [...session.messages].reverse().find((message) => message.role === "assistant");
+      if (!last || classifyProviderFailure(last, session.model?.contextWindow) !== "rate_limit") break;
+      const fallback = this.options.fallbackModels?.[this.fallbackIndex++];
+      if (!fallback) break;
+      const previousModel = session.model?.id ?? this.options.model?.id ?? "unknown";
+      await session.setModel(fallback);
+      this.emit("provider.fallback", { kind: "rate_limit", previousModel, model: fallback.id, ordinal: this.fallbackIndex });
+      await session.prompt("Retry the same unresolved request using the persisted conversation and tool state. Do not repeat completed work.");
+    }
     if (this.options.store.getRun(this.options.runId)?.status === "waiting_input" && session.isStreaming) await session.abort();
   }
 

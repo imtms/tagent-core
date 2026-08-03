@@ -229,4 +229,20 @@ describe("Pi 0.83 AgentSession integration", () => {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
   });
+  it("switches to the next configured model after a rate-limit failure", async () => {
+    const faux = fauxProvider({ models: [{ id: "primary", contextWindow: 32_000, maxTokens: 2_000 }, { id: "fallback", contextWindow: 32_000, maxTokens: 2_000 }] });
+    faux.setResponses([
+      fauxAssistantMessage([], { stopReason: "error", errorMessage: "429 rate limit exceeded" }),
+      fauxAssistantMessage("fallback recovered"),
+    ]);
+    const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const store = new Store(":memory:"); const session = store.createSession(); const run = store.createRun(session.id, "fallback");
+    const runtime = new PiRuntime({ store, runId: run.id, workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel("primary"), fallbackModels: [faux.getModel("fallback")], modelRuntime, providerMaxRetries: 0 });
+    await runtime.prompt("hello");
+    expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", model: "fallback", content: [{ type: "text", text: "fallback recovered" }] });
+    expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([expect.objectContaining({ type: "provider.fallback", data: expect.objectContaining({ previousModel: "primary", model: "fallback" }) })]));
+    runtime.dispose(); store.close();
+  });
+
 });

@@ -49,14 +49,24 @@ export class ContextAssembler {
     const entries = messages.map((message, index) => ({ message, sourceId: sourceIds[index] || legacyMessageIdentity(message, index) }));
     const originalTurns = identifyTurns(entries);
     const turnLimited = originalTurns.slice(-Math.max(1, this.options.maxTurns));
-    const kept = turnLimited.map((turn, index) => this.prepareHistoricalTurn(turn, index === turnLimited.length - 1));
-    const estimatedMessageTokens = kept.reduce((sum, turn) => sum + estimateTurnTokens(turn), 0);
+    const prepared = turnLimited.map((turn, index) => this.prepareHistoricalTurn(turn, index === turnLimited.length - 1));
+    const messageBudget = Math.max(0, contextWindow - this.options.maxOutputTokens - systemTokens - promptTokens);
+    const kept: Turn[] = [];
+    let estimatedMessageTokens = 0;
+    for (let index = prepared.length - 1; index >= 0; index -= 1) {
+      const turn = prepared[index];
+      const tokens = estimateTurnTokens(turn);
+      if (kept.length && estimatedMessageTokens + tokens > messageBudget) continue;
+      kept.unshift(turn);
+      estimatedMessageTokens += tokens;
+    }
+    const keptSourceIds = new Set(kept.flatMap((turn) => turn.entries.map((entry) => entry.sourceId)));
     const keptEntries = kept.flatMap((turn) => turn.entries);
-    const droppedEntries = originalTurns.slice(0, Math.max(0, originalTurns.length - turnLimited.length)).flatMap((turn) => turn.entries);
+    const droppedEntries = originalTurns.flatMap((turn) => turn.entries).filter((entry) => !keptSourceIds.has(entry.sourceId));
     const selectedKind: ContextManifestItem["kind"] = source === "session" ? "session_message" : "transcript_message";
     const contextItems: ContextManifestItem[] = [
       ...keptEntries.map(({ message, sourceId }) => ({ kind: selectedKind, sourceId, role: message.role, selected: true, reason: "selected by recent-turn policy", estimatedTokens: estimateMessageTokens(message) })),
-      ...droppedEntries.map(({ message, sourceId }) => ({ kind: selectedKind, sourceId, role: message.role, selected: false, reason: "dropped by configured turn limit", estimatedTokens: estimateMessageTokens(message) })),
+      ...droppedEntries.map(({ message, sourceId }) => ({ kind: selectedKind, sourceId, role: message.role, selected: false, reason: "dropped by turn limit or context-window policy", estimatedTokens: estimateMessageTokens(message) })),
     ];
     return {
       messages: keptEntries.map((entry) => entry.message),

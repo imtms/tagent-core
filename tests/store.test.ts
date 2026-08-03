@@ -590,16 +590,16 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(23);
+    expect(store.getSchemaVersion()).toBe(24);
   });
 
-  it("migrates an older database to schema version 23", () => {
+  it("migrates an older database to schema version 24", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(23);
+    expect(migrated.getSchemaVersion()).toBe(24);
     expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('approval_requests','context_manifests','control_inbox','event_consumers','gate_evaluations','operations','progress_snapshots','run_checkpoints','session_supervisor_inbox','spawn_proposals','supervisor_decisions','taskrun_edges','tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["approval_requests", "context_manifests", "control_inbox", "event_consumers", "gate_evaluations", "operations", "progress_snapshots", "run_checkpoints", "session_supervisor_inbox", "spawn_proposals", "supervisor_decisions", "taskrun_edges", "tool_attempts"]);
     migrated.close();
   });
@@ -821,6 +821,13 @@ describe("Store", () => {
     expect(messages[0].content).toBe("message-6");
     expect(messages.at(-1)?.content).toBe("message-205");
     store.close();
+  });
+
+  it("attributes auxiliary model usage to the Run total", () => {
+    const store = createStore(); const session = store.createSession(); const run = store.createRun(session.id, "usage");
+    store.recordModelUsage(run.id, "supervisor", "judge", { input: 11, output: 2, totalTokens: 13 });
+    expect(store.getRun(run.id)?.usage).toMatchObject({ input: 11, output: 2, totalTokens: 13 });
+    expect(store.db.prepare("SELECT component,model,usage_total_tokens as total FROM run_model_usage WHERE run_id=?").get(run.id)).toEqual({ component: "supervisor", model: "judge", total: 13 });
   });
 
 });

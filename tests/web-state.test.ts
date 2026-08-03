@@ -154,4 +154,14 @@ describe("Web workbench state model", () => {
     expect(source).not.toContain('event.type.startsWith("tool.") || event.type.startsWith("continuation.")');
   });
 
+  it("keeps recoverable non-running Runs subscribed and refreshes same-Run content", async () => {
+    const source = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain('["running", "waiting_input", "blocked", "interrupted"].includes(activeRun.status)');
+    expect(source).toContain('document.addEventListener("visibilitychange", reconnect)');
+    expect(source).toContain('window.addEventListener("online", reconnect)');
+    expect(source).toContain('const shouldRefreshContent = currentRun.lastEventSeq !== activeRunRef.current?.lastEventSeq');
+    expect(source).toContain('Promise.all([api.transcriptView(active.id), api.messages(targetSessionId)])');
+    expect(source).toContain('setStreamGeneration((value) => value + 1)');
+  });
+
 });

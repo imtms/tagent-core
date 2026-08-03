@@ -87,4 +87,14 @@ describe("historical tool-result projection", () => {
     expect(oldResult.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("Historical tool result truncated") });
     expect((latestResult.content[0] as { type: "text"; text: string }).text).toHaveLength(20_000);
   });
+  it("drops older turns that exceed the effective context window", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "old ".repeat(500), timestamp: 1 }, assistant("old answer ".repeat(500)),
+      { role: "user", content: "latest", timestamp: 2 }, assistant("latest answer"),
+    ];
+    const result = new ContextAssembler({ contextWindow: 500, maxOutputTokens: 100, maxTurns: 10 }).assemble("transcript", messages, "system", "continue");
+    expect(result.messages[0]).toMatchObject({ role: "user", content: "latest" });
+    expect(result.stats.droppedTurns).toBe(1);
+  });
+
 });

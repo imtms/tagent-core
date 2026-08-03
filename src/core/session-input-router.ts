@@ -56,22 +56,49 @@ export interface SessionInputRouterContext {
   recentRuns?: TaskRun[];
 }
 
-export type SessionInputLlmRequest = (prompt: string) => Promise<unknown>;
+export type SessionInputLlmRequest = (prompt: string, runId?: string) => Promise<unknown>;
 export class SessionInputRouter {
   private readonly llmRequest?: SessionInputLlmRequest;
+  private readonly usageByAnalysis = new WeakMap<SessionInputAnalysis, Array<{ model: string; usage: import("./openai-sse.js").OpenAiUsage }>>();
+  private readonly modelId?: string;
+  private readonly pendingUsage: import("./openai-sse.js").OpenAiUsage[] = [];
   constructor(options: { model?: Model<"openai-completions">; apiKey?: string; timeoutMs?: number; request?: SessionInputLlmRequest } = {}) {
+    this.modelId = options.model?.id;
     this.llmRequest = options.request ?? (options.model && options.apiKey ? (prompt) => this.request(prompt, options.model!, options.apiKey!, options.timeoutMs) : undefined);
+  }
+
+  takeUsage(analysis: SessionInputAnalysis) {
+    const usage = this.usageByAnalysis.get(analysis) ?? [];
+    this.usageByAnalysis.delete(analysis);
+    return usage;
   }
 
   async analyze(content: string, activeRun?: TaskRun, context: SessionInputRouterContext = {}): Promise<SessionInputAnalysis> {
     const fallback = ruleAnalysis(content, activeRun);
-    if (!this.llmRequest) return fallback;
-    try { return this.parse(await this.llmRequest(this.prompt(content, activeRun, context)), activeRun); }
-    catch (error) { return { ...fallback, reason: `${fallback.reason} LLM parsing failed; deterministic fallback used: ${error instanceof Error ? error.message : String(error)}` }; }
+    if (!this.llmRequest || this.canUseDeterministicResult(content, activeRun, fallback)) return fallback;
+    try {
+      this.pendingUsage.length = 0;
+      const parsed = this.parse(await this.llmRequest(this.prompt(content, activeRun, context), activeRun?.id), activeRun);
+      const observed = this.pendingUsage.splice(0);
+      if (observed.length) this.usageByAnalysis.set(parsed, observed.map((item) => ({ model: this.modelId ?? "router", usage: item })));
+      return parsed;
+    }
+    catch (error) {
+      this.pendingUsage.length = 0;
+      return { ...fallback, reason: `${fallback.reason} LLM parsing failed; deterministic fallback used: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  }
+
+  private canUseDeterministicResult(content: string, activeRun: TaskRun | undefined, result: SessionInputAnalysis) {
+    const compact = normalize(content);
+    if (compact.length > 280 || result.objectives.length > 2) return false;
+    if (result.intent === "defer" || result.intent === "clarification") return true;
+    if (activeRun && ["steer_active", "follow_up_active", "update_active_context", "parallel_task"].includes(result.intent) && result.confidence >= 0.92) return true;
+    return !activeRun && result.objectives.length === 1 && result.confidence >= 0.9 && !/(以上|上述|前面|刚才|继续|this|that|above|previous)/i.test(compact);
   }
 
   private prompt(content: string, activeRun?: TaskRun, context: SessionInputRouterContext = {}) {
-    const recentMessages = (context.recentMessages ?? []).slice(-12).map((message) => ({
+    const recentMessages = (context.recentMessages ?? []).filter((message) => !(message.role === "user" && normalize(message.content) === normalize(content))).slice(-12).map((message) => ({
       id: message.id,
       role: message.role,
       content: message.content.slice(0, 2_000),
@@ -133,7 +160,7 @@ Preserve genuine corrections, constraints, sequencing, and explicit parallel tas
     try { response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model: model.id, messages: [{ role: "user", content: prompt }], temperature: 0, response_format: { type: "json_object" }, stream: true }), signal: controller.signal }); }
     finally { clearTimeout(headerTimer); }
     if (!response.ok) { const body = await response.text(); throw new Error(`LLM router API ${response.status}: ${body.slice(0, 300)}`); }
-    const output = await readOpenAiChatContent(response, { idleTimeoutMs, controller });
+    const output = await readOpenAiChatContent(response, { idleTimeoutMs, controller, onUsage: (usage) => this.pendingUsage.push(usage) });
     if (!output) throw new Error("LLM router returned no JSON content");
     return JSON.parse(output);
   }

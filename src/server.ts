@@ -26,7 +26,7 @@ const service = new AgentService(
   store,
   config.workspace,
   resolveRuntimeFactory(config.runtime),
-  { model: createModel(config.model), routerModel: createModel(config.routerModel), supervisorModel: createModel(config.supervisorModel), apiKey: config.apiKey, providerTimeoutMs: config.providerTimeoutMs, routerTimeoutMs: config.routerTimeoutMs, supervisorTimeoutMs: config.supervisorTimeoutMs, providerMaxRetries: config.providerMaxRetries, runTimeoutMs: config.runTimeoutMs, runHardTimeoutMs: config.runHardTimeoutMs, maxContinuations: config.maxContinuations, contextWindow: config.model.contextWindow, maxContextTurns: config.maxContextTurns, controlInboxCapacity: config.controlInboxCapacity },
+  { model: createModel(config.model), fallbackModels: config.fallbackModels.map(createModel), routerModel: createModel(config.routerModel), supervisorModel: createModel(config.supervisorModel), apiKey: config.apiKey, providerTimeoutMs: config.providerTimeoutMs, routerTimeoutMs: config.routerTimeoutMs, supervisorTimeoutMs: config.supervisorTimeoutMs, providerMaxRetries: config.providerMaxRetries, runTimeoutMs: config.runTimeoutMs, runHardTimeoutMs: config.runHardTimeoutMs, maxContinuations: config.maxContinuations, contextWindow: config.model.contextWindow, maxContextTurns: config.maxContextTurns, controlInboxCapacity: config.controlInboxCapacity },
   memoryRuntime?.service,
   config.memory.enabled ? config.memory.workspaceScopeId : "default",
   learningControl,

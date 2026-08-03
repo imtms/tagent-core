@@ -25,6 +25,7 @@ export interface RuntimeOptions {
   workspace: string;
   systemPrompt: string;
   model?: Model<any>;
+  fallbackModels?: Model<any>[];
   modelRuntime?: ModelRuntime;
   apiKey?: string;
   initialMessages?: AgentMessage[];

@@ -39,4 +39,12 @@ describe("OpenAI-compatible SSE idle timeout", () => {
     const response = new Response(JSON.stringify({ choices: [{ message: { content: "result" } }] }), { headers: { "content-type": "application/json" } });
     await expect(readOpenAiChatContent(response, { idleTimeoutMs: 15, controller })).resolves.toBe("result");
   });
+  it("reports streamed usage to callers", async () => {
+    const controller = new AbortController();
+    const observed: unknown[] = [];
+    const response = new Response(new ReadableStream({ start(stream) { stream.enqueue(new TextEncoder().encode('data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}\n\ndata: [DONE]\n\n')); stream.close(); } }), { headers: { "content-type": "text/event-stream" } });
+    await readOpenAiChatContent(response, { idleTimeoutMs: 30, controller, onUsage: (usage) => observed.push(usage) });
+    expect(observed).toEqual([{ input: 7, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 10 }]);
+  });
+
 });
