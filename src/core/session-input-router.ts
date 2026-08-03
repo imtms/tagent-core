@@ -57,11 +57,14 @@ export interface SessionInputRouterContext {
 }
 
 export type SessionInputLlmRequest = (prompt: string, runId?: string) => Promise<unknown>;
+interface RouterLlmResult { value: unknown; usage: import("./openai-sse.js").OpenAiUsage[] }
+function isRouterLlmResult(value: unknown): value is RouterLlmResult {
+  return Boolean(value && !Array.isArray(value) && typeof value === "object" && "value" in value && Array.isArray((value as RouterLlmResult).usage));
+}
 export class SessionInputRouter {
   private readonly llmRequest?: SessionInputLlmRequest;
   private readonly usageByAnalysis = new WeakMap<SessionInputAnalysis, Array<{ model: string; usage: import("./openai-sse.js").OpenAiUsage }>>();
   private readonly modelId?: string;
-  private readonly pendingUsage: import("./openai-sse.js").OpenAiUsage[] = [];
   constructor(options: { model?: Model<"openai-completions">; apiKey?: string; timeoutMs?: number; request?: SessionInputLlmRequest } = {}) {
     this.modelId = options.model?.id;
     this.llmRequest = options.request ?? (options.model && options.apiKey ? (prompt) => this.request(prompt, options.model!, options.apiKey!, options.timeoutMs) : undefined);
@@ -77,14 +80,12 @@ export class SessionInputRouter {
     const fallback = ruleAnalysis(content, activeRun);
     if (!this.llmRequest || this.canUseDeterministicResult(content, activeRun, fallback)) return fallback;
     try {
-      this.pendingUsage.length = 0;
-      const parsed = this.parse(await this.llmRequest(this.prompt(content, activeRun, context), activeRun?.id), activeRun);
-      const observed = this.pendingUsage.splice(0);
-      if (observed.length) this.usageByAnalysis.set(parsed, observed.map((item) => ({ model: this.modelId ?? "router", usage: item })));
+      const result = await this.llmRequest(this.prompt(content, activeRun, context), activeRun?.id);
+      const parsed = this.parse(isRouterLlmResult(result) ? result.value : result, activeRun);
+      if (isRouterLlmResult(result) && result.usage.length) this.usageByAnalysis.set(parsed, result.usage.map((usage) => ({ model: this.modelId ?? "router", usage })));
       return parsed;
     }
     catch (error) {
-      this.pendingUsage.length = 0;
       return { ...fallback, reason: `${fallback.reason} LLM parsing failed; deterministic fallback used: ${error instanceof Error ? error.message : String(error)}` };
     }
   }
@@ -152,16 +153,17 @@ Preserve genuine corrections, constraints, sequencing, and explicit parallel tas
     return { summary: text(value.summary, "summary", 240), objectives: parsedObjectives, intent, targetRunId: targetsActive && activeRun ? activeRun.id : null, priority: value.priority, urgency, relation, acceptanceCriteria, scope: text(value.scope, "scope", 1000), nonGoals: (value.nonGoals as string[]).map((item) => normalize(item).slice(0, 300)), confidence: value.confidence, reason: text(value.reason, "reason", 1000), routerVersion: LLM_ROUTER_VERSION };
   }
 
-  private async request(prompt: string, model: Model<"openai-completions">, apiKey: string, timeoutMs?: number): Promise<unknown> {
+  private async request(prompt: string, model: Model<"openai-completions">, apiKey: string, timeoutMs?: number): Promise<RouterLlmResult> {
     const controller = new AbortController();
+    const usage: import("./openai-sse.js").OpenAiUsage[] = [];
     const idleTimeoutMs = timeoutMs ?? 15_000;
     const headerTimer = setTimeout(() => controller.abort(new OpenAiSseIdleTimeoutError(idleTimeoutMs)), idleTimeoutMs);
     let response: Response;
     try { response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model: model.id, messages: [{ role: "user", content: prompt }], temperature: 0, response_format: { type: "json_object" }, stream: true }), signal: controller.signal }); }
     finally { clearTimeout(headerTimer); }
     if (!response.ok) { const body = await response.text(); throw new Error(`LLM router API ${response.status}: ${body.slice(0, 300)}`); }
-    const output = await readOpenAiChatContent(response, { idleTimeoutMs, controller, onUsage: (usage) => this.pendingUsage.push(usage) });
+    const output = await readOpenAiChatContent(response, { idleTimeoutMs, controller, onUsage: (observed) => usage.push(observed) });
     if (!output) throw new Error("LLM router returned no JSON content");
-    return JSON.parse(output);
+    return { value: JSON.parse(output), usage };
   }
 }
