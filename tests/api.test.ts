@@ -7,6 +7,7 @@ import { AgentService } from "../src/core/agent-service.js";
 import { TaskRunSupervisor } from "../src/core/supervisor.js";
 import { TestSupervisorReviewer } from "../src/core/supervisor-reviewer.js";
 import { createApp } from "../src/app.js";
+import { LearningFeatureControl } from "../src/learning/feature-control.js";
 
 const apps: Array<ReturnType<typeof createApp>> = [];
 const inboxAnalysis = (summary: string) => ({ summary, intent: "new_task" as const, targetRunId: null, priority: 500, urgency: "normal" as const, relation: "independent" as const, acceptanceCriteria: [summary], scope: summary, nonGoals: [], confidence: 1, reason: "test", routerVersion: "test" });
@@ -26,6 +27,27 @@ describe("HTTP API", () => {
     expect(memory.statusCode).toBe(503);
     expect(memory.json()).toEqual({ error: "memory is disabled" });
   });
+  it("reports the effective persisted Memory switch in runtime status", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-memory-status-"));
+    const store = new Store(":memory:");
+    const learningControl = new LearningFeatureControl(store, true, { learningEnabled: true, autoExecutionEnabled: false });
+    const runtimeConfig = {
+      runtime: "in-process" as const, provider: "test", api: "openai-completions" as const, baseUrl: "", modelId: "test",
+      credentialConfigured: false, serviceAuthenticationConfigured: false, providerTimeoutMs: 1, providerMaxRetries: 0,
+      routerModelId: "test", routerTimeoutMs: 1, supervisorModelId: "test", supervisorTimeoutMs: 1,
+      runTimeoutMs: 1, runHardTimeoutMs: 1, maxContinuations: 1, maxContextTurns: 1, controlInboxCapacity: 1,
+      schemaVersion: 1, memoryEnabled: true, memoryWorkspaceScopeId: "personal-memory-v1", memoryBackend: "postgres" as const,
+      memoryColdBackend: "local" as const, learningEnabled: true, learningAutoExecutionEnabled: false,
+      learningRequiresMemory: true as const, learningActiveExecutionRequiresApproval: true as const,
+    };
+    const app = createApp({ store, service: new AgentService(store, workspace), logger: false, webRoot: workspace, runtimeConfig, learningControl });
+    apps.push(app);
+
+    expect((await app.inject({ method: "GET", url: "/api/config/status" })).json()).toMatchObject({ memoryEnabled: true, memoryRuntimeEnabled: true });
+    await learningControl.update({ memoryEnabled: false, reason: "test" });
+    expect((await app.inject({ method: "GET", url: "/api/config/status" })).json()).toMatchObject({ memoryEnabled: false, memoryRuntimeEnabled: false });
+  });
+
   it("serves health and session CRUD", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
     const store = new Store(":memory:");

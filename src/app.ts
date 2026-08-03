@@ -172,7 +172,7 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     const readiness=await memory.readiness({subjectId:"health",scopes:[{type:"workspace",id:scopeId}],purpose:"memory_admin"});
     const workerRequired=Boolean(featureState?.learningEnabled);const ok=readiness.ready&&(!workerRequired||Boolean(distillation.ready));if(!ok)reply.code(503); return {ok,service:"tagent-core",memory:{enabled:true,...readiness},learning:featureState,distillation};
   });
-  app.get("/api/config/status", async () => { const learning = learningControl?.snapshot(); return runtimeConfig ? { ...runtimeConfig, ...(learning ? { ...learning, memoryEnabled: undefined, memoryRuntimeEnabled: learning.memoryEnabled } : {}) } : null; });
+  app.get("/api/config/status", async () => { const learning = learningControl?.snapshot(); return runtimeConfig ? { ...runtimeConfig, ...(learning ? { ...learning, memoryEnabled: learning.memoryEnabled, memoryRuntimeEnabled: learning.memoryEnabled } : {}) } : null; });
   app.get("/api/learning/settings", async () => learningControl?.snapshot() ?? { memoryAvailable: Boolean(memory), memoryEnabled: Boolean(memory), learningEnabled: false, autoExecutionEnabled: false, passiveLearningEnabled: false, activeExecutionRequiresApproval: true, updatedAt: 0, reason: "learning_control_unavailable" });
   app.patch("/api/learning/settings", async (request, reply) => {
     if (!learningControl) return reply.code(503).send({ error: "learning feature control unavailable" });
