@@ -23,7 +23,8 @@ export class LearningFeatureControl {
         .run(Number(memoryAvailable), Number(memoryAvailable && defaults.learningEnabled), Number(Boolean(memoryAvailable && defaults.learningEnabled && defaults.autoExecutionEnabled)), timestamp, memoryAvailable ? "initialized_from_runtime_configuration" : "memory_unavailable");
     }
     const persisted = (row ?? { memoryEnabled: Number(memoryAvailable), learningEnabled: Number(memoryAvailable && defaults.learningEnabled), autoExecutionEnabled: Number(Boolean(memoryAvailable && defaults.learningEnabled && defaults.autoExecutionEnabled)), updatedAt: timestamp, reason: memoryAvailable ? "initialized_from_runtime_configuration" : "memory_unavailable" }) as {memoryEnabled:number;learningEnabled:number;autoExecutionEnabled:number;updatedAt:number;reason:string};
-    this.state = this.normalize(Boolean(persisted.memoryEnabled), Boolean(persisted.learningEnabled), Boolean(persisted.autoExecutionEnabled), persisted.updatedAt, persisted.reason);
+    const enablingAfterUnavailable = Boolean(row && memoryAvailable && !persisted.memoryEnabled && persisted.reason === "memory_unavailable");
+    this.state = this.normalize(enablingAfterUnavailable || Boolean(persisted.memoryEnabled), enablingAfterUnavailable ? Boolean(defaults.learningEnabled) : Boolean(persisted.learningEnabled), enablingAfterUnavailable ? Boolean(defaults.learningEnabled && defaults.autoExecutionEnabled) : Boolean(persisted.autoExecutionEnabled), enablingAfterUnavailable ? timestamp : persisted.updatedAt, enablingAfterUnavailable ? "reconciled_memory_runtime_available" : persisted.reason);
     this.persist();
   }
 

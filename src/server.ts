@@ -38,8 +38,8 @@ learningControl.onChange(async (state) => { if (state.learningEnabled) distillat
 const app = createApp({ store, service, workspaceRoot: config.workspace, runtimeConfig: { ...publicRuntimeConfig(config, store.getSchemaVersion()), ...learningControl.snapshot() }, serviceCredentials: config.serviceCredentials, memory: memoryRuntime?.service, distillationWorker, learningControl, closeResources: async () => { await distillationWorker.close(); await (memoryRuntime?.close() ?? Promise.resolve()); } });
 service.recoverContinuations();
 service.recoverSessionInbox();
-await app.listen({ host: "0.0.0.0", port: config.port });
-console.log(`TAgent Core listening on http://localhost:${config.port}`);
+await app.listen({ host: config.host, port: config.port });
+console.log(`TAgent Core listening on http://${config.host}:${config.port}`);
 console.log(`Runtime=${config.runtime} Model=${config.model.modelId} Base=${config.model.baseUrl}`);
 
 let closing = false;

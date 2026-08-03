@@ -115,6 +115,17 @@ describe("workspace tools", () => {
     expect(events.at(-1)).toBe("run.updated:verify");
     store.close();
   });
+  it("exposes task_run as a top-level object schema and returns corrective action errors", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-"));
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "schema");
+    const taskRun = createTools(store, run.id, workspace).find((tool) => tool.name === "task_run")!;
+    expect((taskRun.parameters as { type?: string }).type).toBe("object");
+    expect(taskRun.parameters).not.toHaveProperty("anyOf");
+    await expect(taskRun.execute("missing", { action: "artifact", title: "Result" }, undefined)).rejects.toThrow('requires "id"');
+    store.close();
+  });
+
   it("lets the agent propose a derived TaskRun without launching it", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-"));
     const store = new Store(":memory:");

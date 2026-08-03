@@ -49,10 +49,11 @@ export class TaskRunSupervisor {
     }
     const operations = this.store.listOperations(run.id);
     const progress = this.store.getProgressSnapshot(run.id);
+    const contextManifest = this.store.getLatestContextManifest(run.id);
     // Do not spend a model round-trip proving facts already authoritatively known by the local gate.
     // Semantic review still runs whenever deterministic prerequisites pass.
     const deterministicAudit = this.reviewDeterministicPrerequisites(run);
-    const audit = deterministicAudit ?? await this.reviewer.reviewSettled({ run, response, modelOutputTruncated: options.modelOutputTruncated, operations, progress });
+    const audit = deterministicAudit ?? await this.reviewer.reviewSettled({ run, response, modelOutputTruncated: options.modelOutputTruncated, operations, progress, contextManifest });
     const evaluator = deterministicAudit ? "system" as const : audit.evaluator ?? this.reviewer.evaluator;
     const evaluatorModel = deterministicAudit ? "deterministic-prerequisite-gate" : audit.evaluatorModel ?? this.reviewer.model;
     const createdAt = Date.now();
@@ -69,9 +70,10 @@ export class TaskRunSupervisor {
   private reviewDeterministicPrerequisites(run: TaskRun): SupervisorAudit | undefined {
     if (run.completionGate.passed) return undefined;
     const localFailures = run.completionGate.failures;
-    // A run with no declared required plan may be a lightweight/discussion task; preserve semantic review.
-    // The fast path is only for concrete declared prerequisites whose state is authoritative.
-    if (localFailures.some((failure) => failure.kind === "plan" && failure.key === "plan")) return undefined;
+    // The deterministic completion gate is a floor for routed substantial work with an execution contract.
+    // Legacy/lightweight runs without a contract retain semantic review so discussion-only work is not forced
+    // into artificial plan/check continuations.
+    if (!run.contract && localFailures.some((failure) => failure.kind === "plan" && failure.key === "plan")) return undefined;
     const toFailure = (failure: (typeof localFailures)[number]): GateFailure => ({
       ...failure,
       disposition: "auto_fixable",

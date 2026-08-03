@@ -20,17 +20,16 @@ const MemorySearchSchema=Type.Object({query:Type.String(),kinds:Type.Optional(Ty
 const MemoryRecordSchema=Type.Object({id:Type.String()});
 const MemoryTopicSchema=Type.Object({topicId:Type.String()});
 const MemoryForgetSchema=Type.Object({ids:Type.Optional(Type.Array(Type.String())),topicIds:Type.Optional(Type.Array(Type.String())),reason:Type.Optional(Type.String()),gracePeriodMs:Type.Optional(Type.Number({minimum:1}))});
-const TaskRunSchema = Type.Union([
-  Type.Object({ action: Type.Literal("get") }),
-  Type.Object({ action: Type.Literal("phase"), phase: Type.Union([Type.Literal("discover"), Type.Literal("plan"), Type.Literal("implement"), Type.Literal("verify"), Type.Literal("review")]) }),
-  Type.Object({ action: Type.Literal("plan"), key: Type.String(), title: Type.String(), status: Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("done"), Type.Literal("blocked"), Type.Literal("skipped")]), required: Type.Optional(Type.Boolean()), position: Type.Optional(Type.Integer()) }),
-  Type.Object({ action: Type.Literal("check"), key: Type.String(), title: Type.String(), status: Type.Union([Type.Literal("pending"), Type.Literal("running"), Type.Literal("passed"), Type.Literal("failed"), Type.Literal("blocked"), Type.Literal("skipped")]), required: Type.Optional(Type.Boolean()), command: Type.Optional(Type.String()), evidence: Type.Optional(Type.String()), stale: Type.Optional(Type.Boolean()) }),
-  Type.Object({ action: Type.Literal("mark_checks_stale") }),
-  Type.Object({ action: Type.Literal("operations") }),
-  Type.Object({ action: Type.Literal("artifact"), id: Type.String(), title: Type.String(), kind: Type.Optional(Type.String()), content: Type.Optional(Type.String()), uri: Type.Optional(Type.String()) }),
-  Type.Object({ action: Type.Literal("request_user_input"), prompt: Type.String(), fields: Type.Array(Type.Object({ key: Type.String(), label: Type.String(), description: Type.Optional(Type.String()), inputType: Type.Optional(Type.Union([Type.Literal("text"), Type.Literal("textarea")])), required: Type.Optional(Type.Boolean()), placeholder: Type.Optional(Type.String()) }), { minItems: 1, maxItems: 12 }) }),
-  Type.Object({ action: Type.Literal("spawn_proposal"), goal: Type.String(), acceptanceCriteria: Type.Array(Type.String()), relation: Type.Optional(Type.Union([Type.Literal("depends_on"), Type.Literal("follow_up"), Type.Literal("parallel"), Type.Literal("derived")])) }),
-]);
+const TaskRunSchema = Type.Object({
+  action: Type.Union([Type.Literal("get"), Type.Literal("phase"), Type.Literal("plan"), Type.Literal("check"), Type.Literal("mark_checks_stale"), Type.Literal("operations"), Type.Literal("artifact"), Type.Literal("request_user_input"), Type.Literal("spawn_proposal")]),
+  phase: Type.Optional(Type.Union([Type.Literal("discover"), Type.Literal("plan"), Type.Literal("implement"), Type.Literal("verify"), Type.Literal("review")])),
+  key: Type.Optional(Type.String()), title: Type.Optional(Type.String()),
+  status: Type.Optional(Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("done"), Type.Literal("blocked"), Type.Literal("skipped"), Type.Literal("running"), Type.Literal("passed"), Type.Literal("failed")])),
+  required: Type.Optional(Type.Boolean()), position: Type.Optional(Type.Integer()), command: Type.Optional(Type.String()), evidence: Type.Optional(Type.String()), stale: Type.Optional(Type.Boolean()),
+  id: Type.Optional(Type.String()), kind: Type.Optional(Type.String()), content: Type.Optional(Type.String()), uri: Type.Optional(Type.String()),
+  prompt: Type.Optional(Type.String()), fields: Type.Optional(Type.Array(Type.Object({ key: Type.String(), label: Type.String(), description: Type.Optional(Type.String()), inputType: Type.Optional(Type.Union([Type.Literal("text"), Type.Literal("textarea")])), required: Type.Optional(Type.Boolean()), placeholder: Type.Optional(Type.String()) }), { minItems: 1, maxItems: 12 })),
+  goal: Type.Optional(Type.String()), acceptanceCriteria: Type.Optional(Type.Array(Type.String())), relation: Type.Optional(Type.Union([Type.Literal("depends_on"), Type.Literal("follow_up"), Type.Literal("parallel"), Type.Literal("derived")]))
+});
 
 function textResult(text: string, details: Record<string, unknown> = {}): AgentToolResult<Record<string, unknown>> {
   const clipped = text.length > MAX_OUTPUT ? `${text.slice(0, MAX_OUTPUT)}\n... output truncated` : text;
@@ -199,25 +198,27 @@ export function createTools(store: Store, runId: RunId, workspace: string, onEve
   const taskRunTool: AgentTool<typeof TaskRunSchema, Record<string, unknown>> = {
     name: "task_run", label: "Update task", description: "Inspect or update the current durable TaskRun. Mutations return a compact receipt; use action=get only when the full state is needed.", parameters: TaskRunSchema, executionMode: "sequential",
     async execute(_id, params: Static<typeof TaskRunSchema>) {
-      if (params.action === "phase") store.setRunPhase(runId, params.phase);
-      if (params.action === "plan") store.upsertPlanItem(runId, { key: params.key, title: params.title, status: params.status, required: params.required ?? true, position: params.position ?? 0 });
-      if (params.action === "check") store.upsertCheck(runId, { key: params.key, title: params.title, status: params.status, required: params.required ?? true, command: params.command ?? "", evidence: params.evidence ?? "", stale: params.stale ?? false });
+      const requireText = (name: "key" | "title" | "id" | "prompt" | "goal") => { const value = params[name]; if (typeof value !== "string" || !value.trim()) throw new Error(`task_run action="${params.action}" requires "${name}". Send one item per call.`); return value; };
+      if (params.action === "phase") { if (!params.phase) throw new Error('task_run action="phase" requires "phase".'); store.setRunPhase(runId, params.phase); }
+      if (params.action === "plan") { const status = params.status; if (!status || !["pending","in_progress","done","blocked","skipped"].includes(status)) throw new Error('task_run action="plan" requires a plan status.'); store.upsertPlanItem(runId, { key: requireText("key"), title: requireText("title"), status: status as "pending"|"in_progress"|"done"|"blocked"|"skipped", required: params.required ?? true, position: params.position ?? 0 }); }
+      if (params.action === "check") { const status = params.status; if (!status || !["pending","running","passed","failed","blocked","skipped"].includes(status)) throw new Error('task_run action="check" requires a check status.'); store.upsertCheck(runId, { key: requireText("key"), title: requireText("title"), status: status as "pending"|"running"|"passed"|"failed"|"blocked"|"skipped", required: params.required ?? true, command: params.command ?? "", evidence: params.evidence ?? "", stale: params.stale ?? false }); }
       if (params.action === "mark_checks_stale") store.markChecksStale(runId);
       if (params.action === "operations") return textResult(JSON.stringify(store.listOperations(runId), null, 2));
-      if (params.action === "artifact") store.addArtifact(runId, { id: params.id, title: params.title, kind: params.kind ?? "artifact", content: params.content ?? "", uri: params.uri ?? "" });
+      if (params.action === "artifact") store.addArtifact(runId, { id: requireText("id"), title: requireText("title"), kind: params.kind ?? "artifact", content: params.content ?? "", uri: params.uri ?? "" });
       if (params.action === "request_user_input") {
         const keys = new Set<string>();
+        if (!params.fields?.length) throw new Error('task_run action="request_user_input" requires "fields".');
         const fields = params.fields.map((field) => {
           const key = field.key.trim();
           if (!key || keys.has(key)) throw new Error("User input field keys must be non-empty and unique");
           keys.add(key);
           return { key, label: field.label.trim() || key, description: field.description?.trim() ?? "", inputType: field.inputType ?? "text" as const, required: field.required ?? true, placeholder: field.placeholder?.trim() ?? "" };
         });
-        const request = store.requestUserInput(runId, params.prompt.trim(), fields);
+        const request = store.requestUserInput(runId, requireText("prompt").trim(), fields);
         onEvent?.(store.appendEvent(runId, "run.waiting_for_input", { requestId: request.id, prompt: request.prompt, fields: request.fields.map(({ key, label, description, inputType, required, placeholder }) => ({ key, label, description, inputType, required, placeholder })) }));
         return textResult(JSON.stringify({ ok: true, action: params.action, runId, status: "waiting_input", requestId: request.id, requiredFields: request.fields.map((field) => field.key) }), { compact: true });
       }
-      if (params.action === "spawn_proposal") store.createSpawnProposal(runId, params.goal.trim(), params.acceptanceCriteria, params.relation ?? "derived");
+      if (params.action === "spawn_proposal") { if (!params.acceptanceCriteria) throw new Error('task_run action="spawn_proposal" requires "acceptanceCriteria".'); store.createSpawnProposal(runId, requireText("goal").trim(), params.acceptanceCriteria, params.relation ?? "derived"); }
       const changed = params.action !== "get";
       const run = store.getRun(runId);
       if (changed) onEvent?.(store.appendEvent(runId, "run.updated", { action: params.action, phase: run?.phase ?? "discover" }));

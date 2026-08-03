@@ -130,7 +130,7 @@ Preserve genuine corrections, constraints, sequencing, and explicit parallel tas
     const idleTimeoutMs = timeoutMs ?? 15_000;
     const headerTimer = setTimeout(() => controller.abort(new OpenAiSseIdleTimeoutError(idleTimeoutMs)), idleTimeoutMs);
     let response: Response;
-    try { response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model: model.id, messages: [{ role: "system", content: prompt }], temperature: 0, response_format: { type: "json_object" }, stream: true }), signal: controller.signal }); }
+    try { response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model: model.id, messages: [{ role: "user", content: prompt }], temperature: 0, response_format: { type: "json_object" }, stream: true }), signal: controller.signal }); }
     finally { clearTimeout(headerTimer); }
     if (!response.ok) { const body = await response.text(); throw new Error(`LLM router API ${response.status}: ${body.slice(0, 300)}`); }
     const output = await readOpenAiChatContent(response, { idleTimeoutMs, controller });

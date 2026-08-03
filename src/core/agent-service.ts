@@ -44,6 +44,8 @@ export class AgentService {
     private readonly learningControl?: LearningFeatureControl,
     private readonly semanticJudge?: SemanticJudge,
   ) {
+    if (runtimeDefaults.routerModel && runtimeDefaults.routerModel.api !== "openai-completions") throw new Error("Router supports only openai-completions; configure TAGENT_ROUTER_API=openai-completions and an explicit TAGENT_ROUTER_API_BASE");
+    if (runtimeDefaults.supervisorModel && runtimeDefaults.supervisorModel.api !== "openai-completions") throw new Error("Supervisor supports only openai-completions; configure TAGENT_SUPERVISOR_API=openai-completions and an explicit TAGENT_SUPERVISOR_API_BASE");
     const reviewer = runtimeDefaults.supervisorReviewer ?? (runtimeDefaults.model && runtimeDefaults.apiKey ? new OpenAiSupervisorReviewer({ model: runtimeDefaults.supervisorModel ?? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions">, fallbackModel: runtimeDefaults.supervisorModel ? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions"> : undefined, apiKey: runtimeDefaults.apiKey, timeoutMs: runtimeDefaults.supervisorTimeoutMs ?? runtimeDefaults.providerTimeoutMs }) : process.env.VITEST ? new TestSupervisorReviewer() : undefined);
     if (!reviewer) throw new Error("LLM Supervisor reviewer requires a configured model and API key");
     this.supervisor = new TaskRunSupervisor(store, reviewer);

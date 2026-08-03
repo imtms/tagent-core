@@ -4,7 +4,7 @@ import type { Model } from "@earendil-works/pi-ai/compat";
 export interface ModelConfig {
   provider: string;
   modelId: string;
-  api: "openai-completions";
+  api: "openai-completions" | "anthropic-messages";
   baseUrl: string;
   contextWindow: number;
   maxTokens: number;
@@ -12,6 +12,7 @@ export interface ModelConfig {
 }
 
 export interface AppConfig {
+  host: string;
   port: number;
   database: string;
   workspace: string;
@@ -86,6 +87,7 @@ export type MemoryConfig =
       extractorBaseUrl?: string;
       extractorApiKey?: string;
       extractorModel?: string;
+      recallThresholds: { lexicalMin: number; topicMin: number; vectorMin: number; vectorTopicMin: number; finalMin: number };
     };
 
 function positiveInteger(value: string | undefined, fallback: number, name: string) {
@@ -186,6 +188,13 @@ function loadMemoryConfig(env: NodeJS.ProcessEnv): MemoryConfig {
     extractorBaseUrl: referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_BASE_URL") || env.TAGENT_API_BASE?.trim() || undefined,
     extractorApiKey: referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_API_KEY") || env.OPENAI_API_KEY?.trim() || undefined,
     extractorModel: referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_MODEL") || env.TAGENT_MODEL?.trim() || undefined,
+    recallThresholds: {
+      lexicalMin: probability(env.TAGENT_MEMORY_LEXICAL_MIN, .04, "TAGENT_MEMORY_LEXICAL_MIN"),
+      topicMin: probability(env.TAGENT_MEMORY_TOPIC_MIN, .06, "TAGENT_MEMORY_TOPIC_MIN"),
+      vectorMin: probability(env.TAGENT_MEMORY_VECTOR_MIN, .62, "TAGENT_MEMORY_VECTOR_MIN"),
+      vectorTopicMin: probability(env.TAGENT_MEMORY_VECTOR_TOPIC_MIN, .68, "TAGENT_MEMORY_VECTOR_TOPIC_MIN"),
+      finalMin: probability(env.TAGENT_MEMORY_FINAL_MIN, .18, "TAGENT_MEMORY_FINAL_MIN"),
+    },
   };
 }
 
@@ -204,6 +213,12 @@ function parseServiceCredentials(value?: string): ServiceCredential[] {
   });
 }
 
+function modelApi(value: string | undefined, name: string): ModelConfig["api"] {
+  const api = value?.trim() || "openai-completions";
+  if (api !== "openai-completions" && api !== "anthropic-messages") throw new Error(`${name} must be openai-completions or anthropic-messages`);
+  return api;
+}
+
 function normalizeBaseUrl(value: string) {
   const url = new URL(value);
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("TAGENT_API_BASE must use http or https");
@@ -214,6 +229,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const runtime = env.TAGENT_RUNTIME ?? "in-process";
   if (runtime !== "in-process") throw new Error(`Unsupported TAGENT_RUNTIME: ${runtime}`);
   return {
+    host: env.HOST?.trim() || "127.0.0.1",
     port: positiveInteger(env.PORT, 3100, "PORT"),
     database: env.TAGENT_DB ?? "./data/tagent.db",
     workspace: env.TAGENT_WORKSPACE ?? process.cwd(),
@@ -246,7 +262,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     model: {
       provider: env.TAGENT_PROVIDER ?? "openai-compatible",
       modelId: env.TAGENT_MODEL ?? "gpt-5.6-sol",
-      api: "openai-completions",
+      api: modelApi(env.TAGENT_API, "TAGENT_API"),
       baseUrl: normalizeBaseUrl(env.TAGENT_API_BASE ?? "https://one.tms.im/v1"),
       contextWindow: positiveInteger(env.TAGENT_CONTEXT_WINDOW, 200_000, "TAGENT_CONTEXT_WINDOW"),
       maxTokens: positiveInteger(env.TAGENT_MAX_TOKENS, 32_768, "TAGENT_MAX_TOKENS"),
@@ -255,7 +271,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     routerModel: {
       provider: env.TAGENT_ROUTER_PROVIDER?.trim() || env.TAGENT_PROVIDER || "openai-compatible",
       modelId: env.TAGENT_ROUTER_MODEL ?? "gpt-5.6-luna",
-      api: "openai-completions",
+      api: modelApi(env.TAGENT_ROUTER_API, "TAGENT_ROUTER_API"),
       baseUrl: normalizeBaseUrl(env.TAGENT_ROUTER_API_BASE?.trim() || env.TAGENT_API_BASE || "https://one.tms.im/v1"),
       contextWindow: positiveInteger(env.TAGENT_ROUTER_CONTEXT_WINDOW, 64_000, "TAGENT_ROUTER_CONTEXT_WINDOW"),
       maxTokens: positiveInteger(env.TAGENT_ROUTER_MAX_TOKENS, 2_048, "TAGENT_ROUTER_MAX_TOKENS"),
@@ -264,7 +280,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     supervisorModel: {
       provider: env.TAGENT_SUPERVISOR_PROVIDER?.trim() || env.TAGENT_PROVIDER || "openai-compatible",
       modelId: env.TAGENT_SUPERVISOR_MODEL ?? "gpt-5.6-luna",
-      api: "openai-completions",
+      api: modelApi(env.TAGENT_SUPERVISOR_API, "TAGENT_SUPERVISOR_API"),
       baseUrl: normalizeBaseUrl(env.TAGENT_SUPERVISOR_API_BASE?.trim() || env.TAGENT_API_BASE || "https://one.tms.im/v1"),
       contextWindow: positiveInteger(env.TAGENT_SUPERVISOR_CONTEXT_WINDOW, 64_000, "TAGENT_SUPERVISOR_CONTEXT_WINDOW"),
       maxTokens: positiveInteger(env.TAGENT_SUPERVISOR_MAX_TOKENS, 1_024, "TAGENT_SUPERVISOR_MAX_TOKENS"),
@@ -294,6 +310,7 @@ export interface PublicRuntimeConfig {
   controlInboxCapacity: number;
   schemaVersion?: number;
   memoryEnabled: boolean;
+  memoryRuntimeEnabled?: boolean;
   memoryWorkspaceScopeId?: string;
   memoryBackend?: "memory" | "postgres";
   memoryColdBackend?: "local" | "s3";
@@ -335,8 +352,8 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
   };
 }
 
-export function createModel(config: ModelConfig): Model<"openai-completions"> {
-  return {
+export function createModel(config: ModelConfig): Model<any> {
+  const model: Model<any> = {
     id: config.modelId,
     name: config.modelId,
     api: config.api,
@@ -360,7 +377,9 @@ export function createModel(config: ModelConfig): Model<"openai-completions"> {
       thinkingFormat: "openai",
       supportsStrictMode: true,
       sendSessionAffinityHeaders: false,
-      supportsLongCacheRetention: false,
+      supportsLongCacheRetention: config.api === "anthropic-messages",
     },
   };
+  if (config.api === "anthropic-messages") delete model.compat;
+  return model;
 }

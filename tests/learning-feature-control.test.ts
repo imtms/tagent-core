@@ -29,6 +29,14 @@ describe("Memory/Learning feature gates", () => {
     expect(reloaded.snapshot().autoExecutionEnabled).toBe(true);
   });
 
+  it("reconciles a persisted unavailable default when Memory becomes configured later", () => {
+    const store = new Store(":memory:"); stores.push(store);
+    const unavailable = new LearningFeatureControl(store, false);
+    expect(unavailable.snapshot()).toMatchObject({ memoryEnabled: false, reason: "memory_unavailable" });
+    const available = new LearningFeatureControl(store, true);
+    expect(available.snapshot()).toMatchObject({ memoryEnabled: true, reason: "reconciled_memory_runtime_available" });
+  });
+
   it("stops the distillation worker when Memory is turned off", async () => {
     const store = new Store(":memory:"); stores.push(store);
     const control = new LearningFeatureControl(store, true, { learningEnabled: true });

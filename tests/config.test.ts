@@ -48,6 +48,14 @@ describe("configuration", () => {
     expect(model.compat?.maxTokensField).toBe("max_completion_tokens");
   });
 
+  it("supports native Anthropic transport for the main model and loopback host configuration", () => {
+    const config = loadConfig({ HOST: "::1", TAGENT_API: "anthropic-messages", TAGENT_API_BASE: "https://relay.example" });
+    expect(config.host).toBe("::1");
+    expect(createModel(config.model)).toMatchObject({ api: "anthropic-messages", baseUrl: "https://relay.example" });
+    expect(createModel(config.model).compat).toBeUndefined();
+    expect(() => loadConfig({ TAGENT_API: "unsupported" })).toThrow("TAGENT_API must be");
+  });
+
   it("exposes runtime status without exposing the credential", () => {
     const status = publicRuntimeConfig(loadConfig({ OPENAI_API_KEY: "secret" }));
     expect(status.credentialConfigured).toBe(true);

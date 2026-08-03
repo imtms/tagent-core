@@ -106,6 +106,10 @@ TAGENT_MEMORY_COLD_MINIMUM_RECORDS=2
 - `COLD_MINIMUM_RECORDS` controls when a Topic becomes eligible for publication;
 - Cold pages that do not fit the recall budget are skipped rather than truncated.
 
+### Embedding-model threshold calibration
+
+Cosine score distributions differ by embedding model. Tune `TAGENT_MEMORY_VECTOR_MIN` and `TAGENT_MEMORY_VECTOR_TOPIC_MIN` with a small deployment-specific set of relevant and irrelevant cues: embed both groups, inspect their score ranges, and choose thresholds in the separating band. The defaults (`0.62` and `0.68`) preserve existing behavior but are not universally portable. Lexical, topic, and final thresholds are also configurable through `TAGENT_MEMORY_LEXICAL_MIN`, `TAGENT_MEMORY_TOPIC_MIN`, and `TAGENT_MEMORY_FINAL_MIN`.
+
 
 ## 6.1 Write-quality boundary
 
