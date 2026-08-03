@@ -52,10 +52,12 @@ export class TaskRunSupervisor {
     const contextManifest = this.store.getLatestContextManifest(run.id);
     // Do not spend a model round-trip proving facts already authoritatively known by the local gate.
     // Semantic review still runs whenever deterministic prerequisites pass.
-    const deterministicAudit = this.reviewDeterministicPrerequisites(run);
+    const prerequisiteAudit = this.reviewDeterministicPrerequisites(run);
+    const lightweightAudit = prerequisiteAudit ? undefined : this.reviewLightweightCompletion(run, response, operations, options);
+    const deterministicAudit = prerequisiteAudit ?? lightweightAudit;
     const audit = deterministicAudit ?? await this.reviewer.reviewSettled({ run, response, modelOutputTruncated: options.modelOutputTruncated, operations, progress, contextManifest });
     const evaluator = deterministicAudit ? "system" as const : audit.evaluator ?? this.reviewer.evaluator;
-    const evaluatorModel = deterministicAudit ? "deterministic-prerequisite-gate" : audit.evaluatorModel ?? this.reviewer.model;
+    const evaluatorModel = prerequisiteAudit ? "deterministic-prerequisite-gate" : lightweightAudit ? "deterministic-lightweight-delivery-v1" : audit.evaluatorModel ?? this.reviewer.model;
     const createdAt = Date.now();
     const manifest = { attempt: run.attempt, checkpointSeq, contract: run.contract, plan: run.plan, checks: run.checks, artifacts: run.artifacts.map(({ id, kind, uri }) => ({ id, kind, uri })), operations: operations.map(({ id, operationType, status, stage }) => ({ id, operationType, status, stage })), response, progress };
     const inputManifestHash = createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
@@ -65,6 +67,43 @@ export class TaskRunSupervisor {
     });
     for (const gate of gates) this.store.recordGateEvaluation(gate);
     return { gates, decision: this.createDecision(run, checkpointSeq, "settled", audit.action, audit.reasonCode, audit.rationale, audit.confidence, response, evaluator, evaluatorModel) };
+  }
+
+  private reviewLightweightCompletion(run: TaskRun, response: string, operations: ReturnType<Store["listOperations"]>, options: { modelOutputTruncated?: boolean }): SupervisorAudit | undefined {
+    const contract = run.contract;
+    const objectives = contract?.objectives.filter((item) => item.timing === "current") ?? [];
+    const objective = objectives[0];
+    const risky = /(?:release|deploy|publish|production|credential|secret|permission|delete|remove|migration|security|发布|发版|部署|生产|凭据|密钥|权限|删除|迁移|安全)/i;
+    const candidate = response.trim();
+    // This path is intentionally narrow: a single discussion/answer objective, no side
+    // effects, no truncation, and all deterministic prerequisites already satisfied.
+    // Any ambiguity or execution work keeps the independent semantic reviewer.
+    if (!contract || contract.intent !== "discussion" || objectives.length !== 1 || objective?.kind !== "answer") return undefined;
+    if (contract.objectives.length !== 1 || contract.acceptanceCriteria.length > 1 || contract.nonGoals.length > 0) return undefined;
+    if (operations.length > 0 || run.checks.some((check) => check.required) || run.artifacts.length > 0) return undefined;
+    if (options.modelOutputTruncated || candidate.length < 20 || risky.test(`${contract.summary} ${contract.scope} ${candidate}`)) return undefined;
+    const coverage: CriterionCoverage[] = contract.acceptanceCriteria.map((criterion) => ({
+      criterion,
+      status: "covered",
+      evidenceRefs: [],
+      reason: "The single low-risk answer objective is addressed by the complete standalone candidate.",
+    }));
+    const gate = (summary: string, criterionCoverage?: CriterionCoverage[]) => ({ passed: true, failures: [], summary, criterionCoverage });
+    return {
+      action: "complete_taskrun",
+      reasonCode: "lightweight_delivery_validated",
+      rationale: "Skipped the general semantic Supervisor for a low-risk single-answer Run after deterministic delivery validation.",
+      confidence: 1,
+      evaluator: "system",
+      evaluatorModel: "deterministic-lightweight-delivery-v1",
+      gates: {
+        progress: gate("The required lightweight plan is complete."),
+        evidence: gate("This discussion-only Run requires no external operation or check evidence."),
+        contract: gate("The complete candidate directly addresses the single low-risk answer objective.", coverage),
+        completion: gate("Deterministic prerequisites and lightweight delivery validation passed."),
+        continuation: gate("No unresolved blocker requires continuation."),
+      },
+    };
   }
 
   private reviewDeterministicPrerequisites(run: TaskRun): SupervisorAudit | undefined {

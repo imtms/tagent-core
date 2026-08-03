@@ -82,8 +82,9 @@ export class AgentService {
     if ((event.type === "tool.completed" || event.type === "tool.failed") && draft.currentTool?.toolCallId === String(event.data.toolCallId ?? "")) draft.currentTool = null;
     const transcriptBoundary = event.type === "tool.completed" || event.type === "tool.failed" || event.type === "message.completed";
     if (transcriptBoundary) this.lastCheckpointTranscriptSeq.set(event.runId, this.store.getLastTranscriptSeq(event.runId));
-    const immediate = event.type === "tool.started" || transcriptBoundary
-      || event.type === "message.started" || event.type === "message.retrying";
+    // Streaming text remains recoverable through the debounced checkpoint. Persist
+    // immediately only at tool/transcript boundaries where durable replay semantics change.
+    const immediate = event.type === "tool.started" || transcriptBoundary;
     if (immediate) this.flushCheckpoint(event.runId);
     else this.scheduleCheckpoint(event.runId);
   }
@@ -725,7 +726,7 @@ export class AgentService {
     if (!claimed) return;
     const { continuation, run, event } = claimed;
     const prompt = this.buildContinuationPrompt(run, continuation.ordinal);
-    const transcript = this.prepareTranscript(run, prompt);
+    const transcript = this.prepareContinuationTranscript(run, prompt);
     this.publishContextEvents(runId, transcript);
     this.publish(event);
     this.launch(run, prompt, transcript.messages, continuation.id);
@@ -911,6 +912,20 @@ export class AgentService {
       this.buildSystemPrompt(run),
       prompt,
       entries.map((entry) => `transcript:${run.id}:${entry.seq}`),
+    );
+  }
+
+  private prepareContinuationTranscript(run: TaskRun, prompt: string) {
+    const entries = this.store.listTranscriptEntries(run.id);
+    const previousAttempt = Math.max(1, run.attempt - 1);
+    const delta = entries.filter((entry) => entry.attempt === previousAttempt);
+    const selected = delta.length ? delta : entries;
+    return this.contextAssembler().assemble(
+      "transcript",
+      selected.map((entry) => entry.message),
+      this.buildSystemPrompt(run),
+      prompt,
+      selected.map((entry) => `transcript:${run.id}:${entry.seq}`),
     );
   }
 

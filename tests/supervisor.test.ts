@@ -69,6 +69,41 @@ describe("TaskRunSupervisor LLM audit", () => {
     store.close();
   });
 
+  it("completes a low-risk single-answer discussion without a general Supervisor call", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "explain caching");
+    const contract = { sourceInput: run.goal, summary: run.goal, objectives: [{ id: "objective-1", summary: run.goal, timing: "current" as const, kind: "answer" as const }], acceptanceCriteria: ["Explain caching clearly"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "discussion" as const, decisionReason: "test", routerVersion: "test" };
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify(contract), run.id);
+    let calls = 0;
+    const reviewer = {
+      evaluator: "llm" as const, model: "must-not-run",
+      async reviewSettled() { calls += 1; return passingTestAudit(); },
+      async reviewAttemptFailure() { return { action: "block_taskrun" as const, reasonCode: "unused", rationale: "unused", confidence: 1 }; },
+    };
+    const current = store.getRun(run.id)!;
+    expect(current.completionGate.passed).toBe(true);
+    const review = await new TaskRunSupervisor(store, reviewer).reviewSettled(current, 2, "Caching stores reusable results so repeated work completes faster.");
+    expect(calls).toBe(0);
+    expect(review.decision).toMatchObject({ action: "complete_taskrun", evaluator: "system", evaluatorModel: "deterministic-lightweight-delivery-v1", reasonCode: "lightweight_delivery_validated" });
+    expect(review.gates.find((gate) => gate.gateType === "contract")?.criterionCoverage).toEqual([expect.objectContaining({ criterion: "Explain caching clearly", status: "covered" })]);
+    store.close();
+  });
+
+  it("escalates lightweight-looking discussions when delivery risk is present", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "explain production release");
+    const contract = { sourceInput: run.goal, summary: run.goal, objectives: [{ id: "objective-1", summary: run.goal, timing: "current" as const, kind: "answer" as const }], acceptanceCriteria: ["Explain release"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "discussion" as const, decisionReason: "test", routerVersion: "test" };
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify(contract), run.id);
+    let calls = 0;
+    const reviewer = {
+      evaluator: "llm" as const, model: "semantic-model",
+      async reviewSettled() { calls += 1; return passingTestAudit(); },
+      async reviewAttemptFailure() { return { action: "block_taskrun" as const, reasonCode: "unused", rationale: "unused", confidence: 1 }; },
+    };
+    const review = await new TaskRunSupervisor(store, reviewer).reviewSettled(store.getRun(run.id)!, 2, "A production release changes externally visible software and requires care.");
+    expect(calls).toBe(1);
+    expect(review.decision).toMatchObject({ evaluator: "llm", evaluatorModel: "semantic-model" });
+    store.close();
+  });
+
   it("still invokes semantic LLM review after deterministic prerequisites pass", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "semantic audit required");
     store.upsertPlanItem(run.id, { key: "implement", title: "Implement", status: "done", required: true, position: 1 });
@@ -407,6 +442,30 @@ describe("TaskRunSupervisor LLM audit", () => {
       expect(requests).toBe(2);
       expect(store.getRun(run.id)?.attempt).toBe(1);
       expect(store.getRun(run.id)?.continuations).toHaveLength(0);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("uses a compact delta prompt for Supervisor schema repair", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "compact repair");
+    const criterion = "Return a verified explanation";
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: "S".repeat(1800), objectives: [], acceptanceCriteria: [criterion], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
+    const gates = { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } };
+    const first = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: { ...gates, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [] } } };
+    const second = { ...first, gates: { ...gates, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [{ criterionId: "ac-1", status: "covered", evidenceRefs: [], reason: "Covered." }] } } };
+    const prompts: string[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      prompts.push(body.messages[0].content);
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(prompts.length === 1 ? first : second) } }] }), { status: 200 });
+    };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "A complete standalone explanation.", operations: [], progress: undefined });
+      expect(prompts).toHaveLength(2);
+      expect(prompts[1]).toContain("PREVIOUS_RESPONSE=");
+      expect(prompts[1]).not.toContain("TASKRUN_DATA=");
+      expect(prompts[1].length).toBeLessThan(prompts[0].length);
     } finally { globalThis.fetch = original; store.close(); }
   });
 

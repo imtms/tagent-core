@@ -733,6 +733,35 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
+  it("loads only the previous attempt delta for automatic continuation", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let calls = 0;
+    const captured: Array<Parameters<RuntimeFactory>[0]> = [];
+    const service = new AgentService(store, "/tmp", (options) => {
+      captured.push(options);
+      calls += 1;
+      return new CallbackRuntime(assistantMessage(calls === 1 ? "needs one repair" : "repaired and verified"), () => {
+        if (calls === 1) {
+          store.appendTranscript(options.runId, 1, { role: "user", content: "old attempt detail", timestamp: 1 });
+          store.appendTranscript(options.runId, 1, assistantMessage("latest failed candidate"));
+        } else {
+          store.upsertPlanItem(options.runId, { key: "work", title: "Work", status: "done", required: true, position: 1 });
+          store.upsertCheck(options.runId, { key: "verify", title: "Verify", status: "passed", required: true, command: "test", evidence: "passed", stale: false });
+        }
+      });
+    }, { maxContinuations: 1, supervisorReviewer: reviewer(continuationAudit(), passingTestAudit()) });
+    const run = await service.start(session.id, "continuation delta");
+    // Historical attempt zero data must not be replayed into attempt two.
+    store.appendTranscript(run.id, 0, { role: "user", content: "ancient unrelated transcript", timestamp: 0 });
+    for (let index = 0; index < 50 && captured.length < 2; index += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(captured).toHaveLength(2);
+    expect(JSON.stringify(captured[1].initialMessages)).toContain("old attempt detail");
+    expect(JSON.stringify(captured[1].initialMessages)).not.toContain("ancient unrelated transcript");
+    expect(store.listEvents(run.id).some((event) => event.type === "context.loaded" && event.data.source === "transcript" && event.data.originalMessages === 2)).toBe(true);
+    store.close();
+  });
+
   it("stops repeated continuations when the same gate diagnosis makes no progress", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();

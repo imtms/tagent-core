@@ -192,13 +192,13 @@ Return compact JSON only. Keep each summary, rationale, coverage reason, and fai
 Each failure is {"kind":"...","key":"...","reason":"...","disposition":"auto_fixable|needs_user_input|needs_approval|external_dependency|runtime_transient|non_recoverable"}.
 Action must agree with the completion failures. TASKRUN_DATA=${JSON.stringify(payload)}`;
     let lastError: unknown;
+    let previousResponse = "";
     const maxSchemaAttempts = 2;
     for (let auditAttempt = 1; auditAttempt <= maxSchemaAttempts; auditAttempt += 1) {
       try {
-        const correction = auditAttempt === 1 ? "" : `
-
-Your previous audit response failed validation: ${lastError instanceof Error ? lastError.message : String(lastError)}. Regenerate the entire JSON object from scratch as strict parseable JSON. Return exactly one contract criterionCoverage receipt for each supplied criterionId, with no duplicates or extras. A bounded head_tail projection is not a truncated model output; the final delivery is present in its tail. Do not create a truncation failure unless modelOutputTruncated=true.`;
-        const audit = this.parseSettledAudit(repairJsonSyntax(await this.request(basePrompt + correction, input.run.id)), criteria, validEvidenceRefs);
+        const prompt = auditAttempt === 1 ? basePrompt : this.schemaRepairPrompt(previousResponse, lastError, criteria, validEvidenceRefs, input.modelOutputTruncated === true);
+        previousResponse = await this.request(prompt, input.run.id);
+        const audit = this.parseSettledAudit(repairJsonSyntax(previousResponse), criteria, validEvidenceRefs);
         this.rejectProjectionOnlyTruncation(audit, input.modelOutputTruncated === true, candidateProjection.strategy);
         return audit;
       } catch (error) {
@@ -210,6 +210,16 @@ Your previous audit response failed validation: ${lastError instanceof Error ? l
       }
     }
     throw new SupervisorReviewError(`Supervisor LLM audit failed validation after ${maxSchemaAttempts} review attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+  }
+
+  private schemaRepairPrompt(previousResponse: string, error: unknown, criteria: string[], validEvidenceRefs: Set<string>, modelOutputTruncated: boolean) {
+    return `You repair a TAgent Supervisor JSON response. Preserve its semantic verdict; fix only syntax, shape, action/gate consistency, criterion receipt cardinality, and evidence references. Return compact JSON only, with no markdown.
+Validation error: ${error instanceof Error ? error.message : String(error)}
+Required criterionIds: ${JSON.stringify(criteria.map((_, index) => criterionId(index)))}
+Allowed evidenceRefs: ${JSON.stringify([...validEvidenceRefs])}
+modelOutputTruncated: ${modelOutputTruncated}
+Required shape: {"action":"complete_taskrun|request_evidence|pause_for_approval|start_continuation|block_taskrun","reasonCode":"...","rationale":"...","confidence":0.0,"gates":{"progress":{"passed":true,"summary":"...","failures":[]},"evidence":{"passed":true,"summary":"...","failures":[]},"contract":{"passed":true,"summary":"...","failures":[],"criterionCoverage":[{"criterionId":"ac-1","status":"covered|unsupported|contradicted|blocked","evidenceRefs":[],"reason":"..."}]},"completion":{"passed":true,"summary":"...","failures":[]},"continuation":{"passed":true,"summary":"...","failures":[]}}}
+Each failure requires kind,key,reason,disposition. PREVIOUS_RESPONSE=${truncateUtf8(previousResponse, 12_000)}`;
   }
 
   private rejectProjectionOnlyTruncation(audit: SupervisorAudit, modelOutputTruncated: boolean, projectionStrategy: "full" | "head_tail") {

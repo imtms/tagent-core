@@ -2066,7 +2066,13 @@ ${source.content}`;
     if (!run.gateRequired) return { passed: true, failures: [] };
     const failures: CompletionGate["failures"] = [];
     const requiredPlan = run.plan.filter((item) => item.required);
-    if (requiredPlan.length === 0) failures.push({ kind: "plan", key: "plan", reason: "No required plan items" });
+    const lightweightDiscussion = run.contract?.intent === "discussion"
+      && run.contract.objectives.length === 1
+      && run.contract.objectives[0]?.timing === "current"
+      && run.contract.objectives[0]?.kind === "answer"
+      && run.contract.acceptanceCriteria.length <= 1
+      && run.contract.nonGoals.length === 0;
+    if (requiredPlan.length === 0 && !lightweightDiscussion) failures.push({ kind: "plan", key: "plan", reason: "No required plan items" });
     for (const item of requiredPlan) if (item.status !== "done") failures.push({ kind: "plan_item", key: item.key, reason: `Required plan item is ${item.status}` });
     for (const check of run.checks.filter((item) => item.required)) {
       if (check.status !== "passed") failures.push({ kind: "check", key: check.key, reason: `Required check is ${check.status}` });

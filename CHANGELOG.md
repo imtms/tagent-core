@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-08-04
+
+### Orchestration efficiency
+
+- Added a narrow deterministic completion path for low-risk, single-answer discussion Runs, skipping the general semantic Supervisor only when there are no side effects, required checks, artifacts, truncation, or risky release/security semantics.
+- Reduced automatic continuation replay to the immediately preceding attempt while retaining the durable TaskRun snapshot and falling back to the available transcript when no attempt delta exists.
+- Changed Supervisor schema correction to a compact response-and-validation delta request instead of resending the full TaskRun audit payload.
+- Coalesced assistant message-start and retry checkpoint writes into the existing debounced stream checkpoint while preserving immediate tool and transcript-boundary persistence.
+
+### Quality safeguards
+
+- Retained deterministic prerequisite gates, fresh required checks, operation receipts, full semantic review for change/release/risky or ambiguous work, and durable transcript recovery.
+- Added regression coverage for lightweight completion escalation, compact Supervisor repair, continuation delta replay, and checkpoint recovery behavior.
+
 ## [0.1.12] - 2026-08-03
 
 ### Release reliability
