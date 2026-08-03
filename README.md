@@ -4,7 +4,7 @@
 
 TAgent Core is a durable, self-hosted control plane for an in-process coding agent. It combines Pi's model and tool loop with TAgent-owned persistence, TaskRun supervision, verification gates, operation receipts, a responsive Web workbench, scoped automation credentials, and an optional Hot/Warm/Cold long-term memory platform.
 
-Version `0.1.12` is the current stable release. It adds a shared, schema-validated LLM Semantic Judge for Memory capture quality, natural-language corrections, reusable Learning evidence, cross-language experience clustering, supported Workflow distillation, and conservative feedback attribution. Deterministic safety, provenance, verification, risk/capability policy and human approval remain authoritative. `0.1.0` was the first stable source release for the documented **trusted single-service deployment profile**. Stable means the supported profile has passed the repository's release gates; it does not mean that the service is a public multi-tenant sandbox.
+Version `0.1.13` is the current stable release. It adds execution-model rate-limit fallback, complete Router/Supervisor usage attribution, token-aware context selection, stalled-continuation detection, a narrow deterministic completion path for low-risk single-answer discussions, compact continuation and Supervisor repair inputs, and resilient mobile/Web event recovery. Deterministic safety, provenance, verification, risk/capability policy and human approval remain authoritative. `0.1.0` was the first stable source release for the documented **trusted single-service deployment profile**. Stable means the supported profile has passed the repository's release gates; it does not mean that the service is a public multi-tenant sandbox.
 
 ## Highlights
 
@@ -44,7 +44,7 @@ Read [SECURITY.md](SECURITY.md) before deployment.
 ## Requirements
 
 - Node.js `>=24.18.1`
-- npm `>=12`
+- npm `>=11`
 - an OpenAI Chat Completions-compatible provider and `OPENAI_API_KEY`
 - a trusted workspace directory
 - optional: PostgreSQL 17 with `vector` and `pg_trgm` when persistent memory is enabled
@@ -217,6 +217,7 @@ See [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md) and [docs/REL
 - [Long-term memory](docs/MEMORY.md)
 - [Memory-dependent Learning and controlled evolution](docs/LEARNING.md)
 - [Learning release acceptance coverage](docs/LEARNING_RELEASE_COVERAGE.md)
+- [v0.1.13 release audit](docs/RELEASE_AUDIT_0.1.13.md)
 - [v0.1.9 Memory/Learning release audit](docs/LEARNING_RELEASE_AUDIT.md)
 - [Memory architecture](docs/MEMORY_ARCHITECTURE.md)
 - [Memory operations](docs/MEMORY_OPERATIONS.md)

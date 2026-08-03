@@ -1,8 +1,8 @@
 # Development Status
 
-Updated: 2026-08-03 (Asia/Singapore)
+Updated: 2026-08-04 (Asia/Singapore)
 
-Current stable release: `0.1.12`. Current SQLite schema: `23`.
+Current stable release: `0.1.13`. Current SQLite schema: `24`.
 
 ## Completed
 
@@ -16,6 +16,7 @@ Current stable release: `0.1.12`. Current SQLite schema: `23`.
 - Durable TaskRun records with goal, phase, status, plan items, checks, artifacts, ordered events, and Schema v4 Run checkpoints.
 - Deterministic completion gate that prevents a model response from directly marking a run complete.
 - Structured LLM Supervisor audits semantic contract coverage and final delivery after authoritative local prerequisites pass; incomplete plans and missing/failed/stale checks take a deterministic sub-100ms path without an unnecessary model request.
+- A narrow deterministic delivery receipt completes only low-risk, single-answer discussion Runs with no side effects, required checks, artifacts, truncation, or release/security semantics; all change, release, risky, ambiguous, or insufficiently evidenced work retains full semantic review.
 - Request idempotency through stable `requestId` values.
 - Startup recovery that marks abandoned running tasks as interrupted.
 - Cancellation, SDK-backed in-flight steering, follow-up queueing, and manual compaction for active runs.
@@ -37,13 +38,14 @@ Current stable release: `0.1.12`. Current SQLite schema: `23`.
 - Sequential tool execution for predictable state mutations.
 - Append-only pi transcript persistence for user, assistant, tool-call, and tool-result messages.
 - Cancel settlement and resume/continuation startup repair any unpaired tool calls with auditable synthetic error tool results before provider reuse.
-- Per-run aggregate model usage for input, output, cache, total tokens, and provider-reported cost.
+- Per-run aggregate model usage for input, output, cache, total tokens, and provider-reported cost, including Run-associated Router and Supervisor calls in the Schema v24 `run_model_usage` ledger.
+- Ordered execution-model fallback chains switch to the next configured model after an explicit rate-limit failure without restarting the service.
 - Resume loads the persisted pi transcript into the new runtime before appending the recovery instruction.
 - Pi automatic retry and provider timeout controls, a progress-sensitive idle watchdog for each attempt, and a separate absolute hard timeout.
 - Provider responses and terminal failures are audited with typed auth, invalid-request, context-overflow, rate-limit, timeout, network, server, aborted, and unknown classifications plus retryability metadata.
 - The idle watchdog is refreshed by model deltas and tool start/progress/completion events, so active tasks are no longer killed at the simple-tier five-minute mark.
-- Persistent bounded continuations after completion-gate blocks, with queued/running/completed/blocked/failed/cancelled audit states.
-- Automatic continuation limits by count and cumulative run tokens; exhausted runs remain blocked for manual inspection.
+- Persistent bounded continuations after completion-gate blocks, with queued/running/completed/blocked/failed/cancelled audit states; repeated unchanged gate diagnoses stop automatic re-execution and emit `continuation.stalled` for inspection.
+- Automatic continuation remains bounded by its configured count and wall-clock safety controls; provider usage is observational and is not used as a cumulative continuation budget.
 - Persistent operation receipts make `write`, `edit`, and `bash` idempotent by Run attempt and tool-call ID; unfinished operations become `outcome_unknown` after restart.
 - Mutating tools automatically stale previously passing checks, so later workspace changes cannot reuse old verification evidence.
 - Run terminal status and its terminal event are committed in one compare-and-set transaction.
@@ -56,7 +58,7 @@ Current stable release: `0.1.12`. Current SQLite schema: `23`.
 - Graceful close stops scheduling, waits for Pi abort and AgentService execution settlement, releases only this owner's continuation leases, and marks other active Runs interrupted before SQLite closes.
 - SIGTERM and SIGINT enter the Fastify close path instead of bypassing runtime and lease cleanup.
 - Versioned SQLite schema metadata rejects newer unsupported databases and advances only after transactional migration success.
-- Resume/continuation context assembly prunes oldest complete turns to a 75% context-window budget while retaining the full transcript in SQLite.
+- Resume context assembly selects newest complete turns within the advertised model context after reserving the system prompt, current prompt, and maximum response; automatic continuation normally replays only the immediately preceding attempt while the durable TaskRun snapshot retains authoritative state, with transcript fallback when no attempt delta exists.
 - New Run context reads the newest persisted Session message window in chronological order, including Sessions beyond 10,000 messages.
 - Active Runs persist a throttled checkpoint containing the current attempt, assistant partial text, current tool identity, and covered event/transcript sequences; text writes are coalesced to at most once per 500ms and tool boundaries persist immediately.
 - Every Run start, resume, and continuation persists an immutable Context Manifest with selected/omitted messages, TaskRun contract, Memory inputs, selection reasons, token estimates, stable SQLite message/transcript source IDs, and a stable hash; API and Web expose the latest diagnostics.
@@ -77,6 +79,7 @@ Current stable release: `0.1.12`. Current SQLite schema: `23`.
 - The right panel lists up to 50 recent TaskRuns as collapsible history and expands the current/latest Run by default.
 - Web restores active assistant text and current tool from the durable checkpoint before opening SSE from the checkpoint's covered event sequence, and shows preserved checkpoints for interrupted or terminal Run diagnostics.
 - Web event delivery now claims a persistent per-Run consumer generation, resumes from the greater of checkpoint coverage and durable ACK, advances ACKs monotonically after event handling, and records terminal-event acknowledgement evidence. A newer connection fences stale SSE streams and stale ACK writers.
+- Running, waiting-input, blocked, and interrupted Runs retain live subscriptions; connection errors, browser visibility recovery, and network recovery reclaim the stream, while sequence-aware polling refreshes transcript/messages for the same Run when SSE delivery is missed.
 - Provider-reported token and cost usage is persisted and displayed for observation only. TAgent Core no longer warns, steers, blocks, truncates Memory recall, or suppresses continuations based on cumulative token use; execution remains bounded by wall-clock, continuation count, policy, approval, and evidence gates.
 - A deterministic stress test completes a single durable Run after 40 automatic continuations; hundreds of model-backed turns are not yet an acceptance claim.
 - Session navigation displays each workspace's latest TaskRun status and phase, refreshed with the Session summary rather than an application-layer per-Session query loop.

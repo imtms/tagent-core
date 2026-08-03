@@ -10,7 +10,7 @@ verified directory is transferred as an immutable archive.
 The `Production release artifact` GitHub Actions workflow runs
 `scripts/build-release.sh`. It:
 
-1. verifies Linux x64, Node `24.18.1`, ABI `137`, and npm 12 or newer;
+1. verifies Linux x64, Node `24.18.1`, ABI `137`, and npm 11 or newer;
 2. installs from `package-lock.json` with lifecycle scripts enabled in CI, where
    `better-sqlite3` can fall back to `node-gyp` safely;
 3. runs lint, type checks, tests, and the production build;
