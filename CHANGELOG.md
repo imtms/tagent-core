@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Remove npm-created `node_modules/.bin` symlinks from production archives so the immutable release builder and the deployer's no-links archive policy remain compatible.
+
 ## [0.1.13] - 2026-08-04
 
 ### Orchestration efficiency

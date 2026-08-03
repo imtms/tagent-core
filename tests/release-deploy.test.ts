@@ -6,6 +6,7 @@ import os from "node:os";
 import { createHash } from "node:crypto";
 
 const deployScript = path.resolve("scripts/deploy-release.sh");
+const buildScript = path.resolve("scripts/build-release.sh");
 const manifestScript = path.resolve("scripts/release-manifest.mjs");
 
 async function executable(file: string, content: string) {
@@ -69,6 +70,12 @@ function deploy(fixture: Awaited<ReturnType<typeof deploymentFixture>>, tarball:
 const commit = "1".repeat(40);
 
 describe("production release deployment", () => {
+  it("removes npm .bin symlinks before creating an archive that the deployer can accept", async () => {
+    const source = await readFile(buildScript, "utf8");
+    expect(source).toContain('rm -rf "$release/node_modules/.bin"');
+    expect(source.indexOf('rm -rf "$release/node_modules/.bin"')).toBeLessThan(source.indexOf('tar -C "$work" -czf'));
+  });
+
   it.each(["native", "manifest", "syntax"] as const)("does not switch or restart when %s preflight fails", async (kind) => {
     const fixture = await deploymentFixture();
     const result = deploy(fixture, await artifact(fixture.root, commit, kind));
