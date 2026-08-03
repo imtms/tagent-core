@@ -55,15 +55,15 @@ export interface ControlInboxItem {
   completedAt: number | null;
 }
 
-export type SupervisorAction = "observe" | "steer" | "follow_up" | "request_evidence" | "pause_for_approval" | "wait_for_runtime" | "start_continuation" | "complete_taskrun" | "block_taskrun" | "spawn_taskrun";
+export type SupervisorAction = "observe" | "steer" | "follow_up" | "request_evidence" | "pause_for_approval" | "wait_for_runtime" | "start_continuation" | "complete_taskrun" | "block_taskrun";
 export interface GateFailure { kind: string; key: string; reason: string; disposition: "auto_fixable" | "needs_user_input" | "needs_approval" | "external_dependency" | "runtime_transient" | "non_recoverable" }
 export interface CriterionCoverage { criterion: string; status: "covered" | "unsupported" | "contradicted" | "blocked"; evidenceRefs: string[]; reason: string }
 export interface GateEvaluation { id: string; runId: RunId; attempt: number; checkpointSeq: number; gateType: "progress" | "evidence" | "contract" | "completion" | "continuation" | "spawn"; evaluator: "llm" | "system"; evaluatorModel: string; summary: string; passed: boolean; failures: GateFailure[]; criterionCoverage?: CriterionCoverage[]; inputManifestHash: string; createdAt: number }
 export interface ProgressSnapshot { runId: RunId; attempt: number; checkpointSeq: number; meaningfulChanges: number; consecutiveFailures: number; repeatedOperations: number; lastProgressAt: number; lastDecisionId: string; updatedAt: number }
 export interface SupervisorDecision { id: string; runId: RunId; evaluator: "llm" | "system"; evaluatorModel: string; attempt: number; checkpointSeq: number; trigger: "checkpoint" | "settled" | "attempt_terminal" | "taskrun_terminal" | "manual"; action: SupervisorAction; reasonCode: string; rationale: string; confidence: number; instruction: string; candidateResponseHash: string; status: "proposed" | "executed" | "superseded" | "failed"; error: string; createdAt: number; executedAt: number | null }
-export interface SpawnProposal { id: string; runId: RunId; goal: string; acceptanceCriteria: string[]; relation: "depends_on" | "follow_up" | "parallel" | "derived"; status: "proposed" | "approved" | "spawned" | "rejected"; spawnedRunId: string; createdAt: number; updatedAt: number }
-export interface TaskRunEdge { fromRunId: RunId; toRunId: RunId; relation: SpawnProposal["relation"] | "blocks" | "supersedes"; reason: string; createdAt: number }
-export interface ApprovalRequest { id: string; runId: RunId; decisionId: string; reason: string; status: "pending" | "approved" | "rejected" | "superseded"; requestedAt: number; resolvedAt: number | null; resolvedBy: string; resolution: string }
+export type TaskRunRelation = "depends_on" | "follow_up" | "parallel" | "derived" | "blocks" | "supersedes";
+export interface TaskRunEdge { fromRunId: RunId; toRunId: RunId; relation: TaskRunRelation; reason: string; createdAt: number }
+export interface ApprovalRequest { id: string; runId: RunId; decisionId: string; actionType: "resume_taskrun" | "start_parallel_taskrun"; targetType: "taskrun" | "session_inbox_item"; targetId: string; reason: string; metadata: Record<string, unknown>; status: "pending" | "approved" | "rejected" | "superseded"; requestedAt: number; resolvedAt: number | null; resolvedBy: string; resolution: string }
 export interface UserInputField { key: string; label: string; description: string; inputType: "text" | "textarea"; required: boolean; placeholder: string }
 export interface UserInputRequest { id: string; runId: RunId; attempt: number; prompt: string; fields: UserInputField[]; status: "pending" | "submitted" | "cancelled" | "superseded"; response: Record<string, string>; requestedAt: number; submittedAt: number | null }
 
@@ -93,7 +93,7 @@ export interface SessionInputAnalysis {
   targetRunId: RunId | null;
   priority: number;
   urgency: "low" | "normal" | "high" | "critical";
-  relation: "same_goal" | "correction" | "constraint" | "follow_up" | "parallel" | "independent";
+  relation: "same_goal" | "correction" | "constraint" | "follow_up" | "parallel" | "derived" | "depends_on" | "independent";
   acceptanceCriteria: string[];
   scope: string;
   nonGoals: string[];
@@ -122,7 +122,7 @@ export interface SessionInboxItem {
   requestId: string;
   content: string;
   status: "queued" | "claimed" | "started" | "routed" | "deleted" | "failed";
-  decision: "pending" | "start_taskrun" | "steer" | "follow_up" | "spawn_proposal" | "discussion" | "defer" | "merge" | "delete";
+  decision: "pending" | "start_taskrun" | "steer" | "follow_up" | "discussion" | "defer" | "merge" | "delete";
   runId: RunId | null;
   error: string;
   position: number;
@@ -216,7 +216,7 @@ export interface TaskRun {
   checks: RunCheck[];
   artifacts: Artifact[];
   completionGate: CompletionGate;
-  supervision: { latestDecision: SupervisorDecision | null; latestGates: GateEvaluation[]; progress: ProgressSnapshot | null; spawnProposals: SpawnProposal[]; approvalRequests: ApprovalRequest[]; latestContextManifest: ContextManifest | null };
+  supervision: { latestDecision: SupervisorDecision | null; latestGates: GateEvaluation[]; progress: ProgressSnapshot | null; approvalRequests: ApprovalRequest[]; latestContextManifest: ContextManifest | null };
   userInputRequests: UserInputRequest[];
   pendingUserInput: UserInputRequest | null;
   launchRetryable: boolean;

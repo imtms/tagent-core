@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Store } from "../src/store/store.js";
@@ -81,15 +81,34 @@ describe("HTTP API", () => {
     expect((await app.inject({ method: "GET", url: "/api/runs/missing/context-manifests" })).statusCode).toBe(404);
   });
 
+  it("binds communication preferences to a user message in the same Session", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-profile-"));
+    const store = new Store(":memory:");
+    const app = createApp({ store, service: new AgentService(store, workspace), logger: false, webRoot: workspace }); apps.push(app);
+    const first = store.createSession(); const second = store.createSession();
+    const userMessage = store.appendMessage(first.id, "user", "以后使用中文");
+    const assistantMessage = store.appendMessage(first.id, "assistant", "好的");
+    expect((await app.inject({ method: "POST", url: `/api/sessions/${first.id}/communication-preferences`, payload: { dimension: "language", value: "中文" } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: `/api/sessions/${first.id}/communication-preferences`, payload: { dimension: "language", value: "中文", messageId: assistantMessage.id } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: `/api/sessions/${second.id}/communication-preferences`, payload: { dimension: "language", value: "中文", messageId: userMessage.id } })).statusCode).toBe(400);
+    const accepted = await app.inject({ method: "POST", url: `/api/sessions/${first.id}/communication-preferences`, payload: { dimension: "language", value: "中文", messageId: userMessage.id, sourceType: "governance", scopeType: "global" } });
+    expect(accepted.statusCode).toBe(200);
+    const profile = store.db.prepare("SELECT id,subject_id as subjectId,scope_type as scopeType,scope_id as scopeId FROM communication_profiles").get() as {id:string;subjectId:string;scopeType:string;scopeId:string};
+    expect(profile).toMatchObject({subjectId:`session:${first.id}`,scopeType:"session",scopeId:first.id});
+    expect(store.db.prepare("SELECT source_type as sourceType,evidence_json as evidenceJson FROM communication_profile_revisions WHERE profile_id=?").get(profile.id)).toEqual({sourceType:"explicit_user",evidenceJson:JSON.stringify({dimension:"language",sourceRef:`message:${userMessage.id}`,confirmations:1,status:"active"})});
+  });
+
   it("previews text and Markdown artifacts in-browser while preserving downloads", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-artifact-"));
     await writeFile(path.join(workspace, "report.md"), "# Durable report\n\nMarkdown body.", "utf8");
+    await writeFile(path.join(workspace, "data.bin"), Buffer.from([1, 0, 2]));
     const store = new Store(":memory:");
     const app = createApp({ store, service: new AgentService(store, workspace), logger: false, webRoot: workspace, workspaceRoot: workspace }); apps.push(app);
     const session = store.createSession();
     const run = store.createRun(session.id, "artifact preview");
     store.addArtifact(run.id, { id: "inline-note", title: "Notes.txt", kind: "text", content: "inline notes", uri: "" });
     store.addArtifact(run.id, { id: "markdown-report", title: "Report", kind: "report", content: "", uri: "report.md" });
+    store.addArtifact(run.id, { id: "binary", title: "Data.bin", kind: "binary", content: "", uri: "data.bin" });
     store.addArtifact(run.id, { id: "remote", title: "Remote", kind: "link", content: "", uri: "https://example.com/file.bin" });
 
     const inline = await app.inject({ method: "GET", url: `/api/runs/${run.id}/artifacts/inline-note/content` });
@@ -102,8 +121,35 @@ describe("HTTP API", () => {
     expect(download.statusCode).toBe(200);
     expect(download.headers["content-disposition"]).toContain("attachment;");
     expect(download.body).toBe("# Durable report\n\nMarkdown body.");
-    expect((await app.inject({ method: "GET", url: `/api/runs/${run.id}/artifacts/remote/content` })).statusCode).toBe(422);
+    expect((await app.inject({ method: "GET", url: `/api/runs/${run.id}/artifacts/binary/content` })).statusCode).toBe(415);
+    const binaryDownload = await app.inject({ method: "GET", url: `/api/runs/${run.id}/artifacts/binary/download` });
+    expect(binaryDownload.statusCode).toBe(200);
+    expect(Buffer.from(binaryDownload.rawPayload)).toEqual(Buffer.from([1, 0, 2]));
+    expect((await app.inject({ method: "GET", url: `/api/runs/${run.id}/artifacts/remote/content` })).statusCode).toBe(400);
     expect((await app.inject({ method: "GET", url: `/api/runs/${run.id}/artifacts/missing/content` })).statusCode).toBe(404);
+  });
+
+  it("rejects absolute, file URI, traversal, and symlink artifact sources for content and download", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-artifact-security-"));
+    const outside = await mkdtemp(path.join(tmpdir(), "tagent-api-artifact-outside-"));
+    await writeFile(path.join(outside, "secret.md"), "# outside", "utf8");
+    await symlink(path.join(outside, "secret.md"), path.join(workspace, "file-link.md"));
+    await symlink(outside, path.join(workspace, "dir-link"));
+    const store = new Store(":memory:");
+    const app = createApp({ store, service: new AgentService(store, workspace), logger: false, webRoot: workspace, workspaceRoot: workspace }); apps.push(app);
+    const run = store.createRun(store.createSession().id, "artifact security");
+    const attacks = [
+      ["absolute", "/etc/hostname"], ["proc", "/proc/self/environ"], ["file-uri", "file:///etc/hostname"],
+      ["traversal", "../secret.md"], ["encoded-traversal", "%2e%2e/secret.md"], ["double-encoded-traversal", "%252e%252e/secret.md"],
+      ["encoded-slash", "..%2fsecret.md"], ["encoded-backslash", "..%5csecret.md"], ["encoded-file-uri", "file%3A%2F%2F%2Fetc%2Fhostname"],
+      ["file-link", "file-link.md"], ["dir-link", "dir-link/secret.md"], ["broken-link", "broken-link.md"],
+    ];
+    await symlink(path.join(outside, "missing.md"), path.join(workspace, "broken-link.md"));
+    for (const [id, uri] of attacks) store.addArtifact(run.id, { id, title: `${id}.md`, kind: "report", content: "", uri });
+    for (const [id] of attacks) {
+      expect((await app.inject({ method: "GET", url: `/api/runs/${run.id}/artifacts/${id}/content` })).statusCode).toBeGreaterThanOrEqual(400);
+      expect((await app.inject({ method: "GET", url: `/api/runs/${run.id}/artifacts/${id}/download` })).statusCode).toBeGreaterThanOrEqual(400);
+    }
   });
 
   it("creates Sessions idempotently with an optional requestId", async () => {
@@ -363,24 +409,25 @@ describe("HTTP API", () => {
     expect(inbox[0]).toMatchObject({ requestId: "request-1", kind: "steer", status: "delivered" });
   });
 
-  it("exposes supervision state and explicitly launches an approved spawn proposal", async () => {
+  it("queues related parallel work and starts it only through unified human approval", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-api-"));
     const store = new Store(":memory:");
-    const service = new AgentService(store, workspace, () => ({
-      async prompt() {}, async steer() { return "accepted" as const; }, abort() {}, getMessages() { return []; }, getError() { return undefined; },
-    }));
+    class ActiveRuntime { private resolve?:()=>void; prompt() { return new Promise<void>((resolve)=>{this.resolve=resolve;}); } async steer() { return "accepted" as const; } abort() { this.resolve?.(); } getMessages() { return []; } getError() { return undefined; } }
+    const service = new AgentService(store, workspace, () => new ActiveRuntime());
     const app = createApp({ store, service, logger: false, webRoot: workspace }); apps.push(app);
     const session = store.createSession();
-    const parent = store.createRun(session.id, "parent"); store.finalizeRun(parent.id, "completed");
-    const proposal = (await app.inject({ method: "POST", url: `/api/runs/${parent.id}/spawn-proposals`, payload: { goal: "child", acceptanceCriteria: ["done"], relation: "follow_up" } })).json();
-    const rejectedBeforeApproval = await app.inject({ method: "POST", url: `/api/spawn-proposals/${proposal.id}/spawn` });
-    expect(rejectedBeforeApproval.statusCode).toBe(409);
-    expect((await app.inject({ method: "POST", url: `/api/spawn-proposals/${proposal.id}/approve` })).statusCode).toBe(200);
-    const childResponse = await app.inject({ method: "POST", url: `/api/spawn-proposals/${proposal.id}/spawn` });
-    expect(childResponse.statusCode).toBe(200);
-    expect(childResponse.json()).toMatchObject({ goal: "child", status: "running" });
-    const supervision = (await app.inject({ method: "GET", url: `/api/runs/${parent.id}/supervision` })).json();
-    expect(supervision.edges).toEqual([expect.objectContaining({ relation: "follow_up", toRunId: childResponse.json().id })]);
+    const parent = await service.enqueueSessionInput(session.id, "parent task", "api-parallel-parent");
+    const related = await service.enqueueSessionInput(session.id, "同时并行处理另一个独立任务", "api-parallel-child");
+    const direct = await app.inject({ method: "POST", url: `/api/sessions/${session.id}/inbox/${related.item.id}/start` });
+    expect(direct.statusCode).toBe(409); expect(direct.json()).toMatchObject({ reason: "approval_required" });
+    const request = await app.inject({ method: "POST", url: `/api/sessions/${session.id}/inbox/${related.item.id}/parallel-start-request`, payload: { actor: "governor" } });
+    expect(request.statusCode).toBe(200); const approval = request.json();
+    const execution = await app.inject({ method: "POST", url: `/api/approval-requests/${approval.id}/approve`, payload: { resolution: "approved for parallel start" } });
+    expect(execution.statusCode).toBe(200); const childId = execution.json().id;
+    expect(store.getRun(childId)?.contract).toMatchObject({ parentRunId: parent.run!.id, relation: "parallel", sourceInboxIds: [related.item.id] });
+    const supervision = (await app.inject({ method: "GET", url: `/api/runs/${parent.run!.id}/supervision` })).json();
+    expect(supervision).not.toHaveProperty("spawnProposals");
+    expect(supervision.edges).toEqual([expect.objectContaining({ relation: "parallel", toRunId: childId })]);
   });
 
   it("claims consumers and rejects stale or invalid ACKs", async () => {

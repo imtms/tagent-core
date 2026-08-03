@@ -89,9 +89,9 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
   });
   app.post("/api/memory/export", async (request, reply) => {
     if (!memory) return reply.code(503).send({ error: "memory is disabled" });
-    const body = request.body as { scope?: MemoryScope };
+    const body = request.body as { scope?: MemoryScope; limit?: number };
     if (!body.scope) return reply.code(400).send({ error: "scope is required" });
-    return memory.export(memoryAccess(request, [body.scope], "memory_admin"), body.scope);
+    return memory.export(memoryAccess(request, [body.scope], "memory_admin"), body.scope, body.limit);
   });
   app.post("/api/memory/forget", async (request, reply) => {
     if (!memory) return reply.code(503).send({ error: "memory is disabled" });
@@ -156,7 +156,7 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
   app.post("/api/workflows/:id/feedback", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { revisionId?: string; runId?: string; attempt?: number; signal?: import("./learning/workflow-service.js").WorkflowFeedbackSignal; idempotencyKey?: string; note?: string; adopted?: boolean; verified?: boolean }; if (!body.revisionId || !body.runId || !body.attempt || !body.signal || !body.idempotencyKey) return reply.code(400).send({ error: "revisionId, runId, attempt, signal and idempotencyKey are required" }); try { return service.recordWorkflowFeedback({ workflowId: id, revisionId: body.revisionId, runId: body.runId, attempt: body.attempt, signal: body.signal, idempotencyKey: body.idempotencyKey, note: body.note, adopted: body.adopted, verified: body.verified }); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); } });
   app.post("/api/runs/:id/learning-policy", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { policy?: "allow" | "metadata_only" | "deny"; reason?: string }; if (!store.getRun(id)) return reply.code(404).send({ error: "run not found" }); if (!body.policy) return reply.code(400).send({ error: "policy is required" }); return service.setRunLearningPolicy(id, body.policy, body.reason); });
   app.get("/api/sessions/:id/communication-profiles", async (request, reply) => { const { id } = request.params as { id: string }; if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" }); return service.listCommunicationProfiles(`session:${id}`); });
-  app.post("/api/sessions/:id/communication-preferences", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { dimension?: import("./learning/learning-service.js").CommunicationDimension; value?: string | string[]; scopeType?: import("./learning/learning-service.js").CommunicationApplicability; scopeId?: string; sourceType?: "explicit_user" | "inferred" | "governance"; sourceRef?: string; confidence?: number; expiresAt?: number }; if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" }); if (!body.dimension || body.value == null) return reply.code(400).send({ error: "dimension and value are required" }); return service.setCommunicationPreference({ subjectId: `session:${id}`, scopeType: body.scopeType ?? "session", scopeId: body.scopeId ?? id, dimension: body.dimension, value: body.value, sourceType: body.sourceType ?? "explicit_user", sourceRef: body.sourceRef ?? `api:${Date.now()}`, confidence: body.confidence, expiresAt: body.expiresAt }); });
+  app.post("/api/sessions/:id/communication-preferences", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { dimension?: import("./learning/learning-service.js").CommunicationDimension; value?: string | string[]; messageId?: number; expiresAt?: number }; if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" }); if (!body.dimension || body.value == null) return reply.code(400).send({ error: "dimension and value are required" }); if (!Number.isInteger(body.messageId)) return reply.code(400).send({ error: "messageId is required for explicit user preferences" }); const message = store.listMessages(id).find((item) => item.id === body.messageId && item.role === "user"); if (!message) return reply.code(400).send({ error: "messageId must identify a user message in this session" }); return service.setCommunicationPreference({ subjectId: `session:${id}`, scopeType: "session", scopeId: id, dimension: body.dimension, value: body.value, sourceType: "explicit_user", sourceRef: `message:${body.messageId}`, confidence: 1, expiresAt: body.expiresAt }); });
   app.post("/api/communication-profiles/:id/lock", async (request, reply) => { const { id } = request.params as { id: string }; const body = request.body as { locked?: boolean }; if (typeof body.locked !== "boolean") return reply.code(400).send({ error: "locked is required" }); return service.lockCommunicationProfile(id, body.locked) ?? reply.code(404).send({ error: "profile not found" }); });
   app.get("/api/sessions/:id/learning-events", async (request, reply) => { const { id } = request.params as { id: string }; if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" }); return service.listLearningEvents(id, Number((request.query as { limit?: string }).limit ?? 100)); });
   app.get("/api/sessions/:id/corrections", async (request, reply) => { const { id } = request.params as { id: string }; if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" }); return service.listCorrections(id, Number((request.query as { limit?: string }).limit ?? 100)); });
@@ -258,6 +258,7 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
     const result = service.startSessionInputNow(id, itemId);
     if (result.status === "started") return result;
+    if (result.status === "approval_required") return reply.code(409).send({ error: "parallel TaskRun start requires human approval", reason: "approval_required", runId: result.runId, inboxItemId: result.item.id });
     if (result.status === "running") return reply.code(409).send({ error: "session already has a running TaskRun", reason: "running_taskrun", runId: result.runId });
     if (result.status === "continuation") return reply.code(409).send({ error: "a blocked TaskRun has a queued or running continuation", reason: "active_continuation", continuationId: result.continuationId });
     if (result.status === "closing") return reply.code(409).send({ error: "service is shutting down", reason: "service_closing" });
@@ -361,26 +362,11 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
     try { return service.rejectRunApproval(id, body.resolution?.trim() || undefined); }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
   });
-  app.post("/api/runs/:id/spawn-proposals", async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const body = request.body as { goal?: string; acceptanceCriteria?: string[]; relation?: "depends_on" | "follow_up" | "parallel" | "derived" };
-    if (!service.getRun(id)) return reply.code(404).send({ error: "run not found" });
-    if (!body?.goal?.trim()) return reply.code(400).send({ error: "goal is required" });
-    return store.createSpawnProposal(id, body.goal.trim(), body.acceptanceCriteria ?? [], body.relation ?? "follow_up");
-  });
-  app.post("/api/spawn-proposals/:id/approve", async (request, reply) => {
-    const { id } = request.params as { id: string };
-    try { return service.approveSpawnProposal(id); }
-    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
-  });
-  app.post("/api/spawn-proposals/:id/reject", async (request, reply) => {
-    const { id } = request.params as { id: string };
-    try { return service.rejectSpawnProposal(id); }
-    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
-  });
-  app.post("/api/spawn-proposals/:id/spawn", async (request, reply) => {
-    const { id } = request.params as { id: string };
-    try { return service.spawnProposal(id); }
+  app.post("/api/sessions/:id/inbox/:itemId/parallel-start-request", async (request, reply) => {
+    const { id, itemId } = request.params as { id: string; itemId: string };
+    const body = (request.body ?? {}) as { actor?: string; reason?: string };
+    if (!store.getSession(id)) return reply.code(404).send({ error: "session not found" });
+    try { return service.requestParallelSessionInputApproval(id, itemId, body.actor ?? "session_governor", body.reason); }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) }); }
   });
   app.get("/api/runs/:id/control-inbox", async (request, reply) => {
@@ -426,7 +412,7 @@ export function createApp({ store, service, webRoot = path.resolve("dist/web"), 
       const filename = artifactFilename(artifact.title, artifact.uri);
       reply.header("Content-Type", "application/octet-stream");
       reply.header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
-      return reply.send(Buffer.from(source.content));
+      return reply.send(source.buffer);
     } catch (error) {
       return artifactReadError(reply, error);
     }
@@ -514,7 +500,7 @@ function artifactReadError(reply: FastifyReply, error: unknown) {
   if (cause.code === "ENOENT") return reply.code(404).send({ error: "artifact file not found" });
   if (cause.code === "ARTIFACT_TOO_LARGE") return reply.code(413).send({ error: cause.message });
   if (cause.code === "ARTIFACT_SOURCE_UNAVAILABLE" || cause.code === "EISDIR") return reply.code(422).send({ error: cause.message });
-  if (cause.code === "ERR_INVALID_FILE_URL_HOST" || cause.code === "ERR_INVALID_FILE_URL_PATH") return reply.code(400).send({ error: "invalid artifact file URI" });
+  if (cause.code === "ARTIFACT_PATH_REJECTED") return reply.code(400).send({ error: cause.message });
   return reply.code(500).send({ error: "artifact could not be read" });
 }
 

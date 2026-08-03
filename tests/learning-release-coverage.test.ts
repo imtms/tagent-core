@@ -53,7 +53,7 @@ describe("v0.1.8 Learning release acceptance coverage", () => {
       ["GET", `/api/sessions/${session.id}/learning-center`],
       ["GET", `/api/sessions/${session.id}/learning-events`],
       ["GET", `/api/sessions/${session.id}/communication-profiles`],
-      ["POST", `/api/sessions/${session.id}/communication-preferences`, { dimension: "language", value: "中文" }],
+      ["POST", `/api/sessions/${session.id}/communication-preferences`, { dimension: "language", value: "中文", messageId: store.appendMessage(session.id, "user", "以后用中文回答").id }],
       ["GET", `/api/sessions/${session.id}/corrections`],
       ["POST", `/api/sessions/${session.id}/corrections`, { content: "correction" }],
       ["POST", `/api/runs/${run.id}/learning-policy`, { policy: "deny" }],

@@ -1,6 +1,5 @@
-import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { readWorkspaceFile, WorkspacePathError } from "./security/workspace-path.js";
 
 const TEXT_EXTENSIONS = new Set([
   ".md", ".markdown", ".mdown", ".mkd", ".txt", ".log", ".csv", ".tsv",
@@ -19,8 +18,18 @@ const TEXT_KINDS = new Set([
 const MAX_PREVIEW_BYTES = 5 * 1024 * 1024;
 const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 
+function safeRelativeUri(uri: string) {
+  const value = uri.trim();
+  if (!value) return "";
+  if (path.isAbsolute(value) || /^[a-z][a-z0-9+.-]*:/i.test(value)) {
+    throw Object.assign(new Error("artifact URI must be a workspace-relative path"), { code: "ARTIFACT_PATH_REJECTED" });
+  }
+  return value;
+}
+
 function artifactExtension(title: string, uri: string) {
-  const uriPath = uri.startsWith("file://") ? fileURLToPath(uri) : uri;
+  let uriPath = "";
+  try { uriPath = safeRelativeUri(uri); } catch { /* untrusted URI is not needed for type display */ }
   return path.extname(uriPath || title).toLowerCase() || path.extname(title).toLowerCase();
 }
 
@@ -34,30 +43,35 @@ export function isTextArtifact(kind: string, title: string, uri: string, content
 }
 
 export function artifactFilename(title: string, uri: string) {
-  const uriPath = uri.startsWith("file://") ? fileURLToPath(uri) : uri;
-  return path.basename(uriPath || title) || title || "artifact.txt";
+  let uriPath = "";
+  try { uriPath = safeRelativeUri(uri); } catch { /* fall back to trusted display title */ }
+  return path.basename(uriPath || title) || "artifact.bin";
 }
 
-function localArtifactPath(uri: string, workspaceRoot: string) {
-  if (!uri || /^[a-z][a-z0-9+.-]*:\/\//i.test(uri) && !uri.startsWith("file://")) return null;
-  const filename = uri.startsWith("file://") ? fileURLToPath(uri) : uri;
-  return path.resolve(path.isAbsolute(filename) ? filename : path.join(workspaceRoot, filename));
+async function loadArtifactBytes(content: string, uri: string, workspaceRoot: string, maxBytes: number) {
+  if (content) {
+    const buffer = Buffer.from(content, "utf8");
+    if (buffer.length > maxBytes) throw Object.assign(new Error(`artifact exceeds the ${Math.floor(maxBytes / 1024 / 1024)} MiB limit`), { code: "ARTIFACT_TOO_LARGE" });
+    return { buffer, source: "inline" as const };
+  }
+  const relative = safeRelativeUri(uri);
+  if (!relative) throw Object.assign(new Error("artifact content is not available from this server"), { code: "ARTIFACT_SOURCE_UNAVAILABLE" });
+  try {
+    // Boundary validation and O_NOFOLLOW happen again for every content/download read.
+    const source = await readWorkspaceFile(workspaceRoot, relative);
+    if (source.metadata.size > maxBytes) throw Object.assign(new Error(`artifact exceeds the ${Math.floor(maxBytes / 1024 / 1024)} MiB limit`), { code: "ARTIFACT_TOO_LARGE" });
+    return { buffer: source.buffer, source: "file" as const };
+  } catch (error) {
+    if (error instanceof WorkspacePathError) throw Object.assign(new Error(error.message), { code: "ARTIFACT_PATH_REJECTED" });
+    throw error;
+  }
 }
 
 export async function loadArtifactSource(content: string, uri: string, workspaceRoot: string, maxBytes = MAX_PREVIEW_BYTES) {
-  if (content) {
-    const bytes = Buffer.byteLength(content);
-    if (bytes > maxBytes) throw Object.assign(new Error(`artifact exceeds the ${Math.floor(maxBytes / 1024 / 1024)} MiB limit`), { code: "ARTIFACT_TOO_LARGE" });
-    return { content, source: "inline" as const };
-  }
-  const filename = localArtifactPath(uri, workspaceRoot);
-  if (!filename) throw Object.assign(new Error("artifact content is not available from this server"), { code: "ARTIFACT_SOURCE_UNAVAILABLE" });
-  const metadata = await stat(filename);
-  if (!metadata.isFile()) throw Object.assign(new Error("artifact URI does not identify a file"), { code: "ARTIFACT_SOURCE_UNAVAILABLE" });
-  if (metadata.size > maxBytes) throw Object.assign(new Error(`artifact exceeds the ${Math.floor(maxBytes / 1024 / 1024)} MiB limit`), { code: "ARTIFACT_TOO_LARGE" });
-  return { content: await readFile(filename, "utf8"), source: "file" as const };
+  const source = await loadArtifactBytes(content, uri, workspaceRoot, maxBytes);
+  return { content: source.buffer.toString("utf8"), source: source.source };
 }
 
 export function loadArtifactDownload(content: string, uri: string, workspaceRoot: string) {
-  return loadArtifactSource(content, uri, workspaceRoot, MAX_DOWNLOAD_BYTES);
+  return loadArtifactBytes(content, uri, workspaceRoot, MAX_DOWNLOAD_BYTES);
 }

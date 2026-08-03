@@ -21,10 +21,13 @@ describe("web markdown rendering", () => {
     expect(html).toContain("hljs-keyword");
   });
 
-  it("keeps raw HTML inert and hardens external links and images", () => {
-    const html = renderMarkdown('<script>alert(1)</script>\n\n[site](https://example.com)\n\n![alt](https://example.com/a.png)');
+  it("keeps raw HTML inert and rejects dangerous links while hardening external resources", () => {
+    const html = renderMarkdown('<script>alert(1)</script>\n\n<img src=x onerror=alert(2)>\n\n[danger](javascript:alert(3))\n\n[site](https://example.com)\n\n![alt](https://example.com/a.png)');
     expect(html).not.toContain("<script>");
+    expect(html).not.toContain("<img src=x onerror=");
+    expect(html).not.toContain('href="javascript:');
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).toContain("&lt;img src=x onerror=alert(2)&gt;");
     expect(html).toContain('target="_blank"');
     expect(html).toContain('rel="noopener noreferrer"');
     expect(html).toContain('loading="lazy"');

@@ -162,9 +162,9 @@ export class TaskRunSupervisor {
     return this.createDecision(run, checkpointSeq, "settled", "block_taskrun", "supervisor_review_failed", `Supervisor quality review could not produce a valid structured audit. The Agent result is preserved for audit and no automatic continuation was started. ${error}`, 1);
   }
 
-  reviewSpawn(run: TaskRun, checkpointSeq: number) {
-    const proposals = this.store.listSpawnProposals(run.id, "proposed");
-    return proposals.map((proposal) => this.createDecision(run, checkpointSeq, "taskrun_terminal", "spawn_taskrun", "pending_explicit_proposal", `Spawn proposal ${proposal.id}: ${proposal.goal}`, 1));
+  proposeParallelTaskStart(parentRunId: string, inboxItemId: string, summary: string) {
+    const run = this.store.getRun(parentRunId); if (!run) throw new Error("Parent TaskRun not found");
+    return this.createDecision(run, run.lastEventSeq, "manual", "pause_for_approval", "parallel_task_start_requested", `Start related Session Inbox task ${inboxItemId}: ${summary}`, 1);
   }
 
   markExecuted(id: string, status: "executed" | "superseded" | "failed", error = "") {

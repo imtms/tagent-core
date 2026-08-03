@@ -37,6 +37,21 @@ describe("persistent asynchronous experience distiller", () => {
     service.checkpointDistillationJob(current.id, "worker-b", current.lease_token, current.fence, { phase: "resumed", cursor: 1 });
   });
 
+  it("keeps a long-running job leased with an independent heartbeat", async () => {
+    const { store, service } = make(); const session = store.createSession();
+    observe(store, service, session.id, "heartbeat release verification", "1. Run tests\n2. Build artifact");
+    observe(store, service, session.id, "heartbeat release validation", "1. Run the tests\n2. Build artifact");
+    service.enqueueDistillation(session.id, "heartbeat release verification");
+    const original = service.distillRepeatedExperience.bind(service);
+    service.distillRepeatedExperience = (async (...args: Parameters<typeof original>) => { await new Promise((resolve) => setTimeout(resolve, 8_500)); return original(...args); }) as typeof service.distillRepeatedExperience;
+    const running = service.runNextDistillationJob("heartbeat-worker");
+    await new Promise((resolve) => setTimeout(resolve, 8_200));
+    const job = store.db.prepare("SELECT lease_until as leaseUntil,fence FROM workflow_distillation_jobs").get() as any;
+    expect(job.leaseUntil).toBeGreaterThan(Date.now() + 20_000);
+    expect(service.claimDistillationJob("competing-worker")).toBeUndefined();
+    await running;
+  }, 20_000);
+
   it("aggregates semantically similar runs, keeps consistent order, and derives counterexample handling", async () => {
     const { store, service } = make(); const session = store.createSession();
     observe(store, service, session.id, "verify software release change", "1. Run tests\n2. Build release artifact\n3. Publish report");

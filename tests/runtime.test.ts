@@ -160,10 +160,10 @@ describe("AgentService runtime boundary", () => {
     service.enqueueControl = (async (runId: string, kind: "steer" | "follow_up", content: string, requestId?: string) => { controls.push({ kind, content }); return original(runId, kind, content, requestId); }) as typeof service.enqueueControl;
     const routed = await service.enqueueSessionInput(session.id, "先不要部署。完成后更新文档。同时并行检查另一个仓库", "compound-route");
     expect(routed.run?.id).toBe(active.id);
-    expect((routed as { proposals?: unknown[] }).proposals).toHaveLength(1);
+    expect((routed as { relatedItems?: unknown[] }).relatedItems).toHaveLength(1);
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(controls).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "steer", content: expect.stringContaining("先不要部署") }), expect.objectContaining({ kind: "follow_up", content: expect.stringContaining("完成后更新文档") })]));
-    expect(store.listSpawnProposals(active.id, "proposed")).toEqual([expect.objectContaining({ goal: expect.stringContaining("并行检查另一个仓库") })]);
+    expect(store.listSessionInbox(session.id)).toEqual([expect.objectContaining({ content: expect.stringContaining("并行检查另一个仓库"), status: "queued", analysis: expect.objectContaining({ relation: "parallel", targetRunId: active.id }) })]);
     await service.closeRuntimes(); store.close();
   });
 
@@ -178,15 +178,15 @@ describe("AgentService runtime boundary", () => {
     await service.closeRuntimes(); store.close();
   });
 
-  it("turns explicit parallel input into a spawn proposal", async () => {
+  it("keeps explicit parallel input as a related queued Session Inbox task", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
     const first = await service.enqueueSessionInput(session.id, "修复 Web UI", "parallel-base");
     const routed = await service.enqueueSessionInput(session.id, "同时并行设计另一个独立的移动端客户端", "parallel-child");
     expect(store.listRuns(session.id)).toHaveLength(1);
-    expect(routed.item).toMatchObject({ status: "routed", decision: "spawn_proposal", runId: first.run!.id });
-    expect(store.listSpawnProposals(first.run!.id)).toEqual([expect.objectContaining({ relation: "parallel", status: "proposed" })]);
+    expect(routed.item).toMatchObject({ status: "queued", decision: "pending", runId: null, analysis: { relation: "parallel", targetRunId: first.run!.id } });
+    expect(store.listSessionInbox(session.id)).toEqual([expect.objectContaining({ id: routed.item.id, status: "queued", analysis: expect.objectContaining({ relation: "parallel", targetRunId: first.run!.id }) })]);
     await service.closeRuntimes(); store.close();
   });
 
@@ -278,20 +278,18 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
-  it("compensates a spawned Run when runtime launch throws", () => {
+  it("requires unified approval before a related parallel Inbox task can start", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const parent = store.createRun(session.id, "parent");
-    store.finalizeRun(parent.id, "completed");
-    const proposal = store.createSpawnProposal(parent.id, "child", [], "follow_up");
-    store.updateSpawnProposalStatus(proposal.id, "approved");
-    const service = new AgentService(store, "/tmp", () => { throw new Error("factory failed"); });
-    expect(() => service.spawnProposal(proposal.id)).toThrow("factory failed");
-    const persisted = store.listSpawnProposals(parent.id)[0];
-    expect(persisted.status).toBe("rejected");
-    expect(store.getRun(persisted.spawnedRunId)).toMatchObject({ status: "failed", blockedReason: expect.stringContaining("factory failed") });
-    expect(store.listEvents(persisted.spawnedRunId).at(-1)).toMatchObject({ type: "run.failed", data: expect.objectContaining({ reason: "spawn_launch_failed" }) });
-    store.close();
+    const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
+    const parent = await service.enqueueSessionInput(session.id, "parent", "parallel-approval-parent");
+    const related = await service.enqueueSessionInput(session.id, "同时并行处理独立子任务", "parallel-approval-child");
+    expect(service.startSessionInputNow(session.id, related.item.id)).toMatchObject({ status: "approval_required", runId: parent.run!.id });
+    const approval = service.requestParallelSessionInputApproval(session.id, related.item.id);
+    const child = await service.approveRunApproval(approval.id);
+    expect(store.getRun(child.id)?.contract).toMatchObject({ parentRunId: parent.run!.id, relation: "parallel", sourceInboxIds: [related.item.id] });
+    expect(store.listTaskRunEdges(parent.run!.id)).toEqual([expect.objectContaining({ toRunId: child.id, relation: "parallel" })]);
+    await service.closeRuntimes(); store.close();
   });
 
   it("throttles partial checkpoints and persists tool boundaries immediately", async () => {

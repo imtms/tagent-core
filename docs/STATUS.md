@@ -9,7 +9,7 @@ Current stable release: `0.1.13`. Current SQLite schema: `24`.
 ### Core control plane
 
 - SQLite-backed sessions, ordered conversation messages, Schema v5 durable event-consumer cursors, Schema v6 durable control inbox records, Schema v7 TaskRun supervision records, and Schema v12 semantic Session Supervisor Inbox, TaskRun contracts, durable approval requests, and immutable Context Manifests.
-- Session Input Router is the normal admission path: input is summarized, classified, prioritized, and either routed to the active Run, converted to a gated spawn proposal, or atomically bound to a durable TaskRun contract.
+- Session Input Router is the normal admission path: input is summarized, classified, prioritized, and either routed to the active Run, persisted as a related queued Inbox item, or atomically bound to a durable TaskRun contract.
 - Router analysis receives bounded recent Session messages, recent TaskRun summaries, and the active contract; Router and Supervisor have independent low-latency model/time/token configuration and default to `gpt-5.6-luna`.
 - Automatic Session dispatch is blocked by any running Run and by the latest blocked/interrupted Run, while older historical blocked/interrupted Runs remain auditable without permanently freezing the queue.
 - A user can explicitly start a selected queued Inbox item through a transactional `Run now` path; running Runs and active continuations retain concurrency priority and fencing.
@@ -161,7 +161,7 @@ Current stable release: `0.1.13`. Current SQLite schema: `24`.
 - Provider failures are typed and auditable, but retry scheduling still uses the provider SDK/pi boundary rather than a TAgent-owned retry loop.
 - Scoped Bearer credentials are available for supported automation routes, but the Web/administrative surface has no built-in login or complete multi-tenant isolation and must remain on localhost or a trusted private network.
 
-- Supervisor v3 adds edit reclassification, structured merge, explicit defer, attempt-terminal classification, request-evidence, wait-for-runtime, durable approval decisions, repeated-operation intervention, and approved derived TaskRun spawning.
+- Supervisor v3 adds edit reclassification, structured merge, explicit defer, attempt-terminal classification, request-evidence, wait-for-runtime, durable approval decisions, repeated-operation intervention, and approved early start of related parallel Inbox tasks.
 
 
 ## Version trajectory

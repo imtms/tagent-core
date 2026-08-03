@@ -9,7 +9,6 @@ import type {
   ContextManifest,
   GateEvaluation,
   ProgressSnapshot,
-  SpawnProposal,
   SupervisorDecision,
   TaskRunEdge,
   Message,
@@ -33,7 +32,7 @@ import type {
 } from "../core/types.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 24;
+const SCHEMA_VERSION = 27;
 
 export class Store {
   readonly db: Database.Database;
@@ -266,11 +265,6 @@ export class Store {
         repeated_operations INTEGER NOT NULL DEFAULT 0, last_progress_at INTEGER NOT NULL,
         last_decision_id TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS spawn_proposals (
-        id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), goal TEXT NOT NULL,
-        acceptance_json TEXT NOT NULL, relation TEXT NOT NULL, status TEXT NOT NULL,
-        spawned_run_id TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-      );
       CREATE TABLE IF NOT EXISTS taskrun_edges (
         from_run_id TEXT NOT NULL REFERENCES runs(id), to_run_id TEXT NOT NULL REFERENCES runs(id),
         relation TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL,
@@ -278,7 +272,8 @@ export class Store {
       );
       CREATE TABLE IF NOT EXISTS approval_requests (
         id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), decision_id TEXT NOT NULL REFERENCES supervisor_decisions(id),
-        reason TEXT NOT NULL, status TEXT NOT NULL, requested_at INTEGER NOT NULL, resolved_at INTEGER,
+        action_type TEXT NOT NULL DEFAULT 'resume_taskrun', target_type TEXT NOT NULL DEFAULT 'taskrun', target_id TEXT NOT NULL DEFAULT '',
+        reason TEXT NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL, requested_at INTEGER NOT NULL, resolved_at INTEGER,
         resolved_by TEXT NOT NULL DEFAULT '', resolution TEXT NOT NULL DEFAULT ''
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_requests_pending ON approval_requests(run_id) WHERE status = 'pending';
@@ -525,6 +520,7 @@ export class Store {
         outcome TEXT NOT NULL,
         event_seq INTEGER NOT NULL DEFAULT 0,
         payload_json TEXT NOT NULL DEFAULT '{}',
+        snapshot_json TEXT NOT NULL DEFAULT '{}',
         status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','completed','failed')),
         error TEXT NOT NULL DEFAULT '',
         created_at INTEGER NOT NULL,
@@ -532,6 +528,22 @@ export class Store {
         UNIQUE(run_id, attempt, lifecycle, event_seq)
       );
       CREATE INDEX IF NOT EXISTS idx_learning_projection_pending ON learning_projection_outbox(status, created_at);
+      CREATE TABLE IF NOT EXISTS semantic_learning_jobs (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('user_message','workflow_eligibility','feedback_attribution')),
+        run_id TEXT REFERENCES runs(id),
+        attempt INTEGER,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','failed','completed','dead_letter')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_retry_at INTEGER NOT NULL DEFAULT 0,
+        error TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        completed_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_semantic_learning_jobs_pending ON semantic_learning_jobs(status, next_retry_at, created_at);
       CREATE TABLE IF NOT EXISTS workflow_selector_receipts (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL REFERENCES runs(id),
@@ -783,8 +795,10 @@ export class Store {
         basis TEXT NOT NULL,
         context_manifest_id TEXT NOT NULL DEFAULT '',
         evidence_json TEXT NOT NULL DEFAULT '[]',
-        status TEXT NOT NULL CHECK (status IN ('pending','applied','skipped','failed')),
+        status TEXT NOT NULL CHECK (status IN ('pending','applied','skipped','failed','dead_letter')),
         error TEXT NOT NULL DEFAULT '',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_retry_at INTEGER NOT NULL DEFAULT 0,
         idempotency_key TEXT NOT NULL UNIQUE,
         created_at INTEGER NOT NULL,
         applied_at INTEGER
@@ -818,6 +832,9 @@ export class Store {
     this.ensureColumn("experience_observations", "lifecycle", "TEXT NOT NULL DEFAULT 'manual'");
     this.ensureColumn("experience_observations", "outcome", "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn("experience_observations", "event_seq", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("learning_projection_outbox", "snapshot_json", "TEXT NOT NULL DEFAULT '{}'");
+    this.ensureColumn("feedback_attribution_receipts", "attempts", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("feedback_attribution_receipts", "next_retry_at", "INTEGER NOT NULL DEFAULT 0");
     this.ensureColumn("workflow_definitions", "deleted_at", "INTEGER");
     this.ensureColumn("workflow_definitions", "purge_after", "INTEGER");
     this.ensureColumn("workflow_definitions", "delete_reason", "TEXT NOT NULL DEFAULT ''");
@@ -870,8 +887,14 @@ export class Store {
     this.ensureColumn("gate_evaluations", "evaluator_model", "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn("gate_evaluations", "summary", "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn("gate_evaluations", "criterion_coverage_json", "TEXT NOT NULL DEFAULT '[]'");
+    this.ensureColumn("approval_requests", "action_type", "TEXT NOT NULL DEFAULT 'resume_taskrun'");
+    this.ensureColumn("approval_requests", "target_type", "TEXT NOT NULL DEFAULT 'taskrun'");
+    this.ensureColumn("approval_requests", "target_id", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("approval_requests", "metadata_json", "TEXT NOT NULL DEFAULT '{}'");
+    this.db.prepare("UPDATE approval_requests SET target_id=run_id WHERE target_id=''").run();
     this.ensureColumn("supervisor_decisions", "evaluator", "TEXT NOT NULL DEFAULT 'system'");
     this.ensureColumn("supervisor_decisions", "evaluator_model", "TEXT NOT NULL DEFAULT ''");
+    this.migrateSpawnProposalsToSessionInbox();
     this.db.prepare(`UPDATE run_continuations SET status = 'cancelled',
       error = 'Superseded while enforcing one active continuation per Run', completed_at = ?,
       lease_owner = '', lease_until = NULL, heartbeat_at = NULL
@@ -898,6 +921,27 @@ export class Store {
   private ensureColumn(table: string, column: string, definition: string) {
     const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (!columns.some((item) => item.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+
+  private migrateSpawnProposalsToSessionInbox() {
+    const exists = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='spawn_proposals'").get();
+    if (!exists) return;
+    const rows = this.db.prepare(`SELECT p.id,p.run_id as runId,p.goal,p.acceptance_json as acceptanceJson,p.relation,p.status,
+      p.spawned_run_id as spawnedRunId,p.created_at as createdAt,p.updated_at as updatedAt,r.session_id as sessionId
+      FROM spawn_proposals p JOIN runs r ON r.id=p.run_id ORDER BY p.created_at,p.id`).all() as Array<{id:string;runId:string;goal:string;acceptanceJson:string;relation:string;status:string;spawnedRunId:string;createdAt:number;updatedAt:number;sessionId:string}>;
+    const insert = this.db.prepare(`INSERT OR IGNORE INTO session_supervisor_inbox
+      (id,session_id,request_id,content,status,decision,run_id,error,position,created_at,updated_at,claimed_at,started_at,summary,objectives_json,intent,target_run_id,priority,urgency,relation,acceptance_json,scope,non_goals_json,confidence,decision_reason,router_version,manual_order)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`);
+    for (const row of rows) {
+      if (row.status === "spawned" && row.spawnedRunId) continue;
+      const status = row.status === "rejected" ? "deleted" : "queued";
+      const decision = row.status === "rejected" ? "delete" : "pending";
+      const relation = ["parallel","follow_up"].includes(row.relation) ? row.relation : "independent";
+      const timing = row.relation === "parallel" ? "parallel" : "follow_up";
+      const position = (this.db.prepare("SELECT COALESCE(MAX(position),0)+1 as position FROM session_supervisor_inbox WHERE session_id=?").get(row.sessionId) as {position:number}).position;
+      insert.run(`migrated:${row.id}`,row.sessionId,`spawn-migration:${row.id}`,row.goal,status,decision,null,`Migrated from legacy SpawnProposal ${row.id} (${row.status})`,position,row.createdAt,row.updatedAt,null,null,row.goal,JSON.stringify([{id:"objective-1",summary:row.goal,timing,kind:"other"}]),row.relation === "parallel" ? "parallel_task" : "new_task",row.runId,500,"normal",relation,row.acceptanceJson,row.goal,"[]",1,"Migrated from legacy SpawnProposal into Session Inbox","spawn-proposal-migration-v1");
+    }
+    this.db.exec("DROP TABLE spawn_proposals");
   }
 
   createSession(title = "New workspace", requestId?: string): Session {
@@ -1014,7 +1058,7 @@ export class Store {
     return rows.map((row) => this.hydrateSessionInbox(row)!);
   }
 
-  routeSessionInboxItem(id: string, sessionId: SessionId, decision: "steer" | "follow_up" | "spawn_proposal" | "discussion", runId: RunId | null, error = "") {
+  routeSessionInboxItem(id: string, sessionId: SessionId, decision: "steer" | "follow_up" | "discussion", runId: RunId | null, error = "") {
     const timestamp = now();
     const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET status='routed',decision=?,run_id=?,error=?,claimed_at=COALESCE(claimed_at,?),started_at=COALESCE(started_at,?),updated_at=?
       WHERE id=? AND session_id=? AND status='queued'`).run(decision, runId, error, timestamp, timestamp, timestamp, id, sessionId);
@@ -1117,12 +1161,12 @@ ${source.content}`;
     return transaction();
   }
 
-  claimSessionInboxNow(itemId: string, sessionId: SessionId) {
+  claimSessionInboxNow(itemId: string, sessionId: SessionId, allowApprovedParallel = false) {
     const transaction = this.db.transaction(() => {
-      const item = this.db.prepare("SELECT status FROM session_supervisor_inbox WHERE id = ? AND session_id = ?").get(itemId, sessionId) as { status: SessionInboxItem["status"] } | undefined;
-      if (!item || item.status !== "queued") return { status: "not_queued" as const };
-      const running = this.db.prepare("SELECT id FROM runs WHERE session_id = ? AND status = 'running' LIMIT 1").get(sessionId) as { id: string } | undefined;
-      if (running) return { status: "running" as const, runId: running.id };
+      const item = this.getSessionInboxItem(itemId);
+      if (!item || item.sessionId !== sessionId || item.status !== "queued") return { status: "not_queued" as const };
+      const running = this.db.prepare("SELECT id FROM runs WHERE session_id = ? AND status = 'running' ORDER BY updated_at DESC LIMIT 1").get(sessionId) as { id: string } | undefined;
+      if (running && !(allowApprovedParallel && item.analysis.relation === "parallel" && item.analysis.targetRunId === running.id)) return { status: "running" as const, runId: running.id };
       const continuation = this.db.prepare(`SELECT c.id FROM run_continuations c
         JOIN runs r ON r.id = c.run_id
         WHERE r.session_id = ? AND r.status IN ('blocked','interrupted') AND c.status IN ('queued','running') LIMIT 1`).get(sessionId) as { id: string } | undefined;
@@ -1140,6 +1184,11 @@ ${source.content}`;
     const inbox = this.getSessionInboxItem(itemId)!;
     const contract: TaskRunContract = { sourceInput: inbox.content, summary: inbox.analysis.summary, objectives: inbox.analysis.objectives, acceptanceCriteria: inbox.analysis.acceptanceCriteria, scope: inbox.analysis.scope, nonGoals: inbox.analysis.nonGoals, sourceInboxIds: [inbox.id], parentRunId: inbox.analysis.targetRunId, relation: inbox.analysis.relation, intent: inbox.analysis.intent, decisionReason: inbox.analysis.reason, routerVersion: inbox.analysis.routerVersion };
     const run = this.createRun(sessionId, inbox.analysis.summary || inbox.content, `inbox:${inbox.id}`, contract);
+    if (contract.parentRunId && contract.parentRunId !== run.id) {
+      const edgeRelation = contract.relation === "parallel" || contract.relation === "follow_up" || contract.relation === "derived" || contract.relation === "depends_on" ? contract.relation : "derived";
+      this.db.prepare("INSERT OR IGNORE INTO taskrun_edges (from_run_id,to_run_id,relation,reason,created_at) VALUES (?,?,?,?,?)")
+        .run(contract.parentRunId,run.id,edgeRelation,`Session Inbox ${inbox.id}: ${contract.decisionReason}`,timestamp);
+    }
     this.db.prepare("UPDATE session_supervisor_inbox SET status='started',run_id=?,started_at=?,updated_at=? WHERE id=? AND status='claimed'").run(run.id,timestamp,timestamp,inbox.id);
     return { item: this.getSessionInboxItem(inbox.id)!, run };
   }
@@ -1241,7 +1290,7 @@ ${source.content}`;
       checks,
       artifacts,
       completionGate: { passed: true, failures: [] },
-      supervision: { latestDecision: this.listSupervisorDecisions(id).at(-1) ?? null, latestGates: this.listLatestGateEvaluations(id), progress: this.getProgressSnapshot(id) ?? null, spawnProposals: this.listSpawnProposals(id), approvalRequests: this.listApprovalRequests(id), latestContextManifest: this.getLatestContextManifest(id) ?? null },
+      supervision: { latestDecision: this.listSupervisorDecisions(id).at(-1) ?? null, latestGates: this.listLatestGateEvaluations(id), progress: this.getProgressSnapshot(id) ?? null, approvalRequests: this.listApprovalRequests(id), latestContextManifest: this.getLatestContextManifest(id) ?? null },
       userInputRequests: this.listUserInputRequests(id),
       pendingUserInput: this.getPendingUserInputRequest(id) ?? null,
       launchRetryable: this.isInboxLaunchRetryable(id),
@@ -1814,6 +1863,14 @@ ${source.content}`;
 
   getLatestContextManifest(runId: RunId) { return this.listContextManifests(runId, 1)[0]; }
 
+  getContextManifestForAttempt(runId: RunId, attempt: number) {
+    const row = this.db.prepare(`SELECT id,run_id as runId,attempt,source,items_json as itemsJson,stats_json as statsJson,manifest_hash as manifestHash,created_at as createdAt
+      FROM context_manifests WHERE run_id=? AND attempt=? ORDER BY created_at DESC,id DESC LIMIT 1`).get(runId, attempt) as (Omit<ContextManifest,"items"|"stats"> & {itemsJson:string;statsJson:string}) | undefined;
+    if (!row) return undefined;
+    const { itemsJson, statsJson, ...manifest } = row;
+    return { ...manifest, items: JSON.parse(itemsJson) as ContextManifest["items"], stats: JSON.parse(statsJson) as ContextManifest["stats"] };
+  }
+
   recordSupervisorDecision(decision: SupervisorDecision) {
     this.db.prepare(`INSERT INTO supervisor_decisions
       (id,run_id,attempt,checkpoint_seq,trigger,action,reason_code,rationale,confidence,instruction,candidate_response_hash,status,error,created_at,executed_at,evaluator,evaluator_model)
@@ -1853,23 +1910,29 @@ ${source.content}`;
       last_decision_id as lastDecisionId,updated_at as updatedAt FROM progress_snapshots WHERE run_id = ?`).get(runId) as ProgressSnapshot | undefined;
   }
 
-  ensureApprovalRequest(runId: RunId, decisionId: string, reason: string) {
-    const existing = this.db.prepare("SELECT id FROM approval_requests WHERE run_id = ? AND status = 'pending'").get(runId) as { id: string } | undefined;
+  ensureApprovalRequest(runId: RunId, decisionId: string, reason: string, options: { actionType?: ApprovalRequest["actionType"]; targetType?: ApprovalRequest["targetType"]; targetId?: string; metadata?: Record<string, unknown> } = {}) {
+    const actionType = options.actionType ?? "resume_taskrun"; const targetType = options.targetType ?? "taskrun"; const targetId = options.targetId ?? runId;
+    const existing = this.db.prepare("SELECT id FROM approval_requests WHERE run_id = ? AND action_type=? AND target_id=? AND status = 'pending'").get(runId,actionType,targetId) as { id: string } | undefined;
     if (existing) return this.getApprovalRequest(existing.id)!;
-    const request: ApprovalRequest = { id: randomUUID(), runId, decisionId, reason, status: "pending", requestedAt: now(), resolvedAt: null, resolvedBy: "", resolution: "" };
-    this.db.prepare(`INSERT INTO approval_requests (id,run_id,decision_id,reason,status,requested_at) VALUES (?,?,?,?, 'pending', ?)`)
-      .run(request.id, runId, decisionId, reason, request.requestedAt);
+    const request: ApprovalRequest = { id: randomUUID(), runId, decisionId, actionType, targetType, targetId, reason, metadata: options.metadata ?? {}, status: "pending", requestedAt: now(), resolvedAt: null, resolvedBy: "", resolution: "" };
+    this.db.prepare(`INSERT INTO approval_requests (id,run_id,decision_id,action_type,target_type,target_id,reason,metadata_json,status,requested_at) VALUES (?,?,?,?,?,?,?,?,'pending',?)`)
+      .run(request.id, runId, decisionId, actionType, targetType, targetId, reason, JSON.stringify(request.metadata), request.requestedAt);
     return request;
   }
 
+  private hydrateApprovalRequest(row: (Omit<ApprovalRequest,"metadata"> & {metadataJson:string})|undefined) {
+    if (!row) return undefined; const {metadataJson,...request}=row; return {...request,metadata:JSON.parse(metadataJson||"{}")} as ApprovalRequest;
+  }
+
   getApprovalRequest(id: string) {
-    return this.db.prepare(`SELECT id,run_id as runId,decision_id as decisionId,reason,status,requested_at as requestedAt,
-      resolved_at as resolvedAt,resolved_by as resolvedBy,resolution FROM approval_requests WHERE id = ?`).get(id) as ApprovalRequest | undefined;
+    return this.hydrateApprovalRequest(this.db.prepare(`SELECT id,run_id as runId,decision_id as decisionId,action_type as actionType,target_type as targetType,target_id as targetId,reason,metadata_json as metadataJson,status,requested_at as requestedAt,
+      resolved_at as resolvedAt,resolved_by as resolvedBy,resolution FROM approval_requests WHERE id = ?`).get(id) as Omit<ApprovalRequest,"metadata"> & {metadataJson:string}|undefined);
   }
 
   listApprovalRequests(runId: RunId) {
-    return this.db.prepare(`SELECT id,run_id as runId,decision_id as decisionId,reason,status,requested_at as requestedAt,
-      resolved_at as resolvedAt,resolved_by as resolvedBy,resolution FROM approval_requests WHERE run_id = ? ORDER BY requested_at,id`).all(runId) as ApprovalRequest[];
+    const rows=this.db.prepare(`SELECT id,run_id as runId,decision_id as decisionId,action_type as actionType,target_type as targetType,target_id as targetId,reason,metadata_json as metadataJson,status,requested_at as requestedAt,
+      resolved_at as resolvedAt,resolved_by as resolvedBy,resolution FROM approval_requests WHERE run_id = ? ORDER BY requested_at,id`).all(runId) as Array<Omit<ApprovalRequest,"metadata"> & {metadataJson:string}>;
+    return rows.map((row)=>this.hydrateApprovalRequest(row)!);
   }
 
   resolveApprovalRequest(id: string, status: "approved" | "rejected", resolvedBy = "user", resolution = "") {
@@ -1911,47 +1974,7 @@ ${source.content}`;
     return snapshot;
   }
 
-  updateSpawnProposalStatus(id: string, status: "approved" | "rejected") {
-    const changed = this.db.prepare("UPDATE spawn_proposals SET status=?,updated_at=? WHERE id=? AND status='proposed'").run(status, now(), id);
-    return changed.changes === 1;
-  }
-
-  createSpawnProposal(runId: RunId, goal: string, acceptanceCriteria: string[], relation: SpawnProposal["relation"]): SpawnProposal {
-    const normalizedGoal = goal.replace(/\s+/g, " ").trim();
-    const duplicate = this.listSpawnProposals(runId).find((item) => item.relation === relation && item.goal.replace(/\s+/g, " ").trim() === normalizedGoal && item.status !== "rejected");
-    if (duplicate) return duplicate;
-    const timestamp = now(); const proposal: SpawnProposal = { id: randomUUID(), runId, goal, acceptanceCriteria, relation, status: "proposed", spawnedRunId: "", createdAt: timestamp, updatedAt: timestamp };
-    this.db.prepare("INSERT INTO spawn_proposals (id,run_id,goal,acceptance_json,relation,status,created_at,updated_at) VALUES (?,?,?,?,?,'proposed',?,?)").run(proposal.id,runId,goal,JSON.stringify(acceptanceCriteria),relation,timestamp,timestamp); return proposal;
-  }
-
-  listSpawnProposals(runId: RunId, status?: SpawnProposal["status"]): SpawnProposal[] {
-    const rows = this.db.prepare(`SELECT id,run_id as runId,goal,acceptance_json as acceptanceJson,relation,status,spawned_run_id as spawnedRunId,created_at as createdAt,updated_at as updatedAt FROM spawn_proposals WHERE run_id = ? ${status ? "AND status = ?" : ""} ORDER BY created_at`).all(runId,...(status?[status]:[])) as Array<Omit<SpawnProposal,"acceptanceCriteria"> & {acceptanceJson:string}>;
-    return rows.map(({acceptanceJson,...row})=>({...row,acceptanceCriteria:JSON.parse(acceptanceJson) as string[]}));
-  }
-
-  spawnFromProposal(proposalId: string) {
-    const transaction = this.db.transaction(() => { const proposal = this.db.prepare("SELECT * FROM spawn_proposals WHERE id = ? AND status = 'approved'").get(proposalId) as {id:string;run_id:string;goal:string;relation:SpawnProposal["relation"]}|undefined; if(!proposal) return undefined; const parent=this.getRun(proposal.run_id); if(!parent || (proposal.relation !== "parallel" && parent.status !== "completed")) return undefined; const child=this.createRun(parent.sessionId,proposal.goal,`spawn:${proposal.id}`); const timestamp=now(); this.db.prepare("UPDATE spawn_proposals SET status='spawned',spawned_run_id=?,updated_at=? WHERE id=?").run(child.id,timestamp,proposal.id); this.db.prepare("INSERT INTO taskrun_edges (from_run_id,to_run_id,relation,reason,created_at) VALUES (?,?,?,?,?)").run(parent.id,child.id,proposal.relation,`Spawn proposal ${proposal.id}`,timestamp); return child; }); return transaction();
-  }
-
   listTaskRunEdges(runId: RunId): TaskRunEdge[] { return this.db.prepare(`SELECT from_run_id as fromRunId,to_run_id as toRunId,relation,reason,created_at as createdAt FROM taskrun_edges WHERE from_run_id=? OR to_run_id=? ORDER BY created_at`).all(runId,runId) as TaskRunEdge[]; }
-
-  failSpawnedRun(proposalId: string, runId: RunId, error: string) {
-    const transaction = this.db.transaction(() => {
-      const timestamp = now();
-      const run = this.db.prepare("SELECT last_event_seq as seq FROM runs WHERE id = ? AND status = 'running'").get(runId) as { seq: number } | undefined;
-      if (run) {
-        const seq = run.seq + 1;
-        const data = { error, reason: "spawn_launch_failed", proposalId };
-        this.db.prepare("INSERT INTO run_events (run_id,seq,type,data,created_at) VALUES (?,?,'run.failed',?,?)").run(runId, seq, JSON.stringify(data), timestamp);
-        this.db.prepare("UPDATE runs SET status = 'failed', phase = 'blocked', blocked_reason = ?, last_event_seq = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status = 'running'").run(`Spawn launch failed: ${error}`, seq, timestamp, timestamp, runId);
-        const attempt = (this.db.prepare("SELECT attempt FROM runs WHERE id=?").get(runId) as { attempt: number }).attempt;
-        this.enqueueLearningProjection(runId, attempt, "spawn.launch_failed", "failed", seq, data, timestamp);
-      }
-      this.db.prepare("UPDATE spawn_proposals SET status = 'rejected', updated_at = ? WHERE id = ? AND spawned_run_id = ?").run(timestamp, proposalId, runId);
-      this.db.prepare("UPDATE taskrun_edges SET reason = reason || ? WHERE to_run_id = ?").run(`; launch failed: ${error}`, runId);
-    });
-    transaction();
-  }
 
   listEvents(runId: RunId, after = 0): RunEvent[] {
     const rows = this.db.prepare(`SELECT run_id as runId, seq, type, data, created_at as createdAt FROM run_events WHERE run_id = ? AND seq > ? ORDER BY seq`).all(runId, after) as Array<Omit<RunEvent, "data"> & { data: string }>;
@@ -1984,16 +2007,24 @@ ${source.content}`;
   }
 
   private enqueueLearningProjection(runId: RunId, attempt: number, lifecycle: string, outcome: string, eventSeq: number, payload: Record<string, unknown>, timestamp = now()) {
+    const current = this.getRun(runId);
+    const manifest = this.getContextManifestForAttempt(runId, attempt);
+    const snapshot = current ? {
+      ...current,
+      attempt,
+      status: outcome,
+      supervision: { ...current.supervision, latestContextManifest: manifest ?? null },
+    } : null;
     this.db.prepare(`INSERT OR IGNORE INTO learning_projection_outbox
-      (id, run_id, attempt, lifecycle, outcome, event_seq, payload_json, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`)
-      .run(randomUUID(), runId, attempt, lifecycle, outcome, eventSeq, JSON.stringify(payload), timestamp, timestamp);
+      (id, run_id, attempt, lifecycle, outcome, event_seq, payload_json, snapshot_json, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`)
+      .run(randomUUID(), runId, attempt, lifecycle, outcome, eventSeq, JSON.stringify(payload), JSON.stringify(snapshot), timestamp, timestamp);
   }
 
   listPendingLearningProjections(limit = 100) {
     return this.db.prepare(`SELECT id, run_id as runId, attempt, lifecycle, outcome, event_seq as eventSeq,
-      payload_json as payloadJson, status, error, created_at as createdAt, updated_at as updatedAt
-      FROM learning_projection_outbox WHERE status IN ('pending','failed') ORDER BY created_at LIMIT ?`).all(limit) as Array<{ id: string; runId: string; attempt: number; lifecycle: string; outcome: string; eventSeq: number; payloadJson: string; status: string; error: string; createdAt: number; updatedAt: number }>;
+      payload_json as payloadJson, snapshot_json as snapshotJson, status, error, created_at as createdAt, updated_at as updatedAt
+      FROM learning_projection_outbox WHERE status IN ('pending','failed') ORDER BY created_at LIMIT ?`).all(limit) as Array<{ id: string; runId: string; attempt: number; lifecycle: string; outcome: string; eventSeq: number; payloadJson: string; snapshotJson: string; status: string; error: string; createdAt: number; updatedAt: number }>;
   }
 
   completeLearningProjection(id: string) { this.db.prepare("UPDATE learning_projection_outbox SET status='completed', error='', updated_at=? WHERE id=?").run(now(), id); }
@@ -2060,6 +2091,28 @@ ${source.content}`;
     this.db.prepare("UPDATE runs SET status = 'running', phase = CASE WHEN phase IN ('blocked','waiting_input') THEN 'implement' ELSE phase END, blocked_reason = '', completed_at = NULL, attempt = attempt + 1, resumed_at = ?, updated_at = ? WHERE id = ?")
       .run(resumedAt, resumedAt, runId);
     return this.getRun(runId)!;
+  }
+
+  enqueueSemanticLearningJob(kind: "user_message" | "workflow_eligibility" | "feedback_attribution", payload: Record<string, unknown>, idempotencyKey: string, runId?: RunId, attempt?: number) {
+    const timestamp = now();
+    this.db.prepare(`INSERT OR IGNORE INTO semantic_learning_jobs
+      (id,kind,run_id,attempt,idempotency_key,payload_json,status,attempts,next_retry_at,error,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,'pending',0,0,'',?,?)`).run(randomUUID(), kind, runId ?? null, attempt ?? null, idempotencyKey, JSON.stringify(payload), timestamp, timestamp);
+    return this.db.prepare("SELECT * FROM semantic_learning_jobs WHERE idempotency_key=?").get(idempotencyKey);
+  }
+
+  listDueSemanticLearningJobs(limit = 100) {
+    return this.db.prepare(`SELECT id,kind,run_id as runId,attempt,idempotency_key as idempotencyKey,payload_json as payloadJson,status,attempts,next_retry_at as nextRetryAt,error,created_at as createdAt,updated_at as updatedAt
+      FROM semantic_learning_jobs WHERE status IN ('pending','failed') AND next_retry_at<=? ORDER BY created_at LIMIT ?`).all(now(), limit) as Array<{id:string;kind:"user_message"|"workflow_eligibility"|"feedback_attribution";runId?:string;attempt?:number;idempotencyKey:string;payloadJson:string;status:string;attempts:number;nextRetryAt:number;error:string;createdAt:number;updatedAt:number}>;
+  }
+
+  completeSemanticLearningJob(id: string) { this.db.prepare("UPDATE semantic_learning_jobs SET status='completed',error='',completed_at=?,updated_at=? WHERE id=? AND status IN ('pending','processing','failed')").run(now(), now(), id); }
+
+  failSemanticLearningJob(id: string, priorAttempts: number, error: string) {
+    const attempts = priorAttempts + 1; const status = attempts >= 5 ? "dead_letter" : "failed"; const timestamp = now();
+    const retryAt = status === "dead_letter" ? 0 : timestamp + Math.min(60 * 60_000, 2 ** attempts * 5_000);
+    this.db.prepare("UPDATE semantic_learning_jobs SET status=?,attempts=?,next_retry_at=?,error=?,updated_at=? WHERE id=? AND status IN ('pending','processing','failed')").run(status, attempts, retryAt, error.slice(0, 4000), timestamp, id);
+    return { attempts, status, nextRetryAt: retryAt };
   }
 
   evaluateGate(run: TaskRun): CompletionGate {

@@ -9,7 +9,7 @@ function run(overrides: Partial<TaskRun> = {}): TaskRun {
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 }, transcriptCount: 0,
     checkpoint: { runId: "run-1", attempt: 1, active: true, assistantPartial: "", currentTool: null, lastEventSeq: 2, lastTranscriptSeq: 0, updatedAt: 2_000 },
     continuations: [], plan: [], checks: [], artifacts: [], completionGate: { passed: false, failures: [] },
-    supervision: { latestDecision: null, latestGates: [], progress: null, spawnProposals: [] },
+    supervision: { latestDecision: null, latestGates: [], progress: null, approvalRequests: [], latestContextManifest: null },
     ...overrides,
   };
 }

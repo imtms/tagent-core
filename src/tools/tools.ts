@@ -1,12 +1,13 @@
-import { access, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { access, mkdir } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import path from "node:path";
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Store } from "../store/store.js";
 import type { RunEvent, RunId } from "../core/types.js";
 import type { MemoryFacade } from "../memory/memory-service.js";
 import type { MemoryKind } from "../memory/types.js";
+import { listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "../security/workspace-path.js";
 
 const MAX_OUTPUT = 24_000;
 const MAX_CAPTURE = 256_000;
@@ -21,14 +22,13 @@ const MemoryRecordSchema=Type.Object({id:Type.String()});
 const MemoryTopicSchema=Type.Object({topicId:Type.String()});
 const MemoryForgetSchema=Type.Object({ids:Type.Optional(Type.Array(Type.String())),topicIds:Type.Optional(Type.Array(Type.String())),reason:Type.Optional(Type.String()),gracePeriodMs:Type.Optional(Type.Number({minimum:1}))});
 const TaskRunSchema = Type.Object({
-  action: Type.Union([Type.Literal("get"), Type.Literal("phase"), Type.Literal("plan"), Type.Literal("check"), Type.Literal("mark_checks_stale"), Type.Literal("operations"), Type.Literal("artifact"), Type.Literal("request_user_input"), Type.Literal("spawn_proposal")]),
+  action: Type.Union([Type.Literal("get"), Type.Literal("phase"), Type.Literal("plan"), Type.Literal("check"), Type.Literal("mark_checks_stale"), Type.Literal("operations"), Type.Literal("artifact"), Type.Literal("request_user_input")]),
   phase: Type.Optional(Type.Union([Type.Literal("discover"), Type.Literal("plan"), Type.Literal("implement"), Type.Literal("verify"), Type.Literal("review")])),
   key: Type.Optional(Type.String()), title: Type.Optional(Type.String()),
   status: Type.Optional(Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("done"), Type.Literal("blocked"), Type.Literal("skipped"), Type.Literal("running"), Type.Literal("passed"), Type.Literal("failed")])),
   required: Type.Optional(Type.Boolean()), position: Type.Optional(Type.Integer()), command: Type.Optional(Type.String()), evidence: Type.Optional(Type.String()), stale: Type.Optional(Type.Boolean()),
   id: Type.Optional(Type.String()), kind: Type.Optional(Type.String()), content: Type.Optional(Type.String()), uri: Type.Optional(Type.String()),
   prompt: Type.Optional(Type.String()), fields: Type.Optional(Type.Array(Type.Object({ key: Type.String(), label: Type.String(), description: Type.Optional(Type.String()), inputType: Type.Optional(Type.Union([Type.Literal("text"), Type.Literal("textarea")])), required: Type.Optional(Type.Boolean()), placeholder: Type.Optional(Type.String()) }), { minItems: 1, maxItems: 12 })),
-  goal: Type.Optional(Type.String()), acceptanceCriteria: Type.Optional(Type.Array(Type.String())), relation: Type.Optional(Type.Union([Type.Literal("depends_on"), Type.Literal("follow_up"), Type.Literal("parallel"), Type.Literal("derived")]))
 });
 
 function textResult(text: string, details: Record<string, unknown> = {}): AgentToolResult<Record<string, unknown>> {
@@ -47,13 +47,6 @@ function firstChangedLine(before: string, after: string) {
   const length = Math.max(left.length, right.length);
   for (let index = 0; index < length; index += 1) if (left[index] !== right[index]) return index + 1;
   return null;
-}
-
-function resolveInside(root: string, target: string) {
-  const absolute = path.resolve(root, target);
-  const relative = path.relative(root, absolute);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Path escapes the workspace");
-  return absolute;
 }
 
 function operationId(runId: RunId, attempt: number, toolCallId: string) {
@@ -93,20 +86,17 @@ export function createTools(store: Store, runId: RunId, workspace: string, onEve
     name: "ls", label: "List directory", description: "List entries in a workspace directory.", parameters: ListSchema,
     async execute(_id, params: Static<typeof ListSchema>) {
       const target = params.path ?? ".";
-      const dirname = resolveInside(workspace, target);
-      const entries = await readdir(dirname, { withFileTypes: true });
+      const entries = await listWorkspaceDirectory(workspace, target);
       const limit = params.limit ?? 200;
-      const names = entries.sort((left, right) => left.name.localeCompare(right.name)).slice(0, limit).map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`);
-      return textResult(names.join("\n") || "Directory is empty", { path: dirname, totalEntries: entries.length, returnedEntries: names.length, truncated: entries.length > limit });
+      const names = entries.sort((left, right) => left.name.localeCompare(right.name)).slice(0, limit).map((entry) => `${entry.name}${entry.directory ? "/" : ""}`);
+      return textResult(names.join("\n") || "Directory is empty", { path: path.resolve(workspace, target), totalEntries: entries.length, returnedEntries: names.length, truncated: entries.length > limit });
     },
   };
 
   const readTool: AgentTool<typeof ReadSchema, Record<string, unknown>> = {
     name: "read", label: "Read file", description: "Read a UTF-8 text file inside the workspace.", parameters: ReadSchema,
     async execute(_id, params: Static<typeof ReadSchema>) {
-      const filename = resolveInside(workspace, params.path);
-      const file = await stat(filename);
-      const buffer = await readFile(filename);
+      const { path: filename, metadata: file, buffer } = await readWorkspaceFile(workspace, params.path);
       if (buffer.subarray(0, Math.min(buffer.length, 8192)).includes(0)) return textResult(`Binary file: ${params.path}`, { path: filename, type: "binary", bytes: file.size });
       const content = buffer.toString("utf8").replace(/^\uFEFF/, "");
       const lines = content.split("\n");
@@ -120,9 +110,7 @@ export function createTools(store: Store, runId: RunId, workspace: string, onEve
     name: "write", label: "Write file", description: "Create or overwrite a UTF-8 file inside the workspace.", parameters: WriteSchema, executionMode: "sequential",
     async execute(id, params: Static<typeof WriteSchema>) {
       return executeMutation(store, runId, id, "tool.write", params, async () => {
-        const filename = resolveInside(workspace, params.path);
-        await mkdir(path.dirname(filename), { recursive: true });
-        await writeFile(filename, params.content, "utf8");
+        const { path: filename } = await writeWorkspaceFile(workspace, params.path, params.content);
         return textResult(`Wrote ${Buffer.byteLength(params.content)} bytes to ${params.path}`, { path: filename, bytes: Buffer.byteLength(params.content) });
       });
     },
@@ -132,14 +120,14 @@ export function createTools(store: Store, runId: RunId, workspace: string, onEve
     name: "edit", label: "Edit file", description: "Replace exact text in a workspace file. The old text must occur exactly once.", parameters: EditSchema, executionMode: "sequential",
     async execute(id, params: Static<typeof EditSchema>) {
       return executeMutation(store, runId, id, "tool.edit", params, async () => {
-        const filename = resolveInside(workspace, params.path);
-        const content = await readFile(filename, "utf8");
+        const { path: filename, buffer } = await readWorkspaceFile(workspace, params.path);
+        const content = buffer.toString("utf8");
         const newContent = params.oldText === "" ? content + params.newText : (() => {
           const occurrences = content.split(params.oldText).length - 1;
           if (occurrences !== 1) throw new Error(`Expected oldText exactly once, found ${occurrences}`);
           return content.replace(params.oldText, params.newText);
         })();
-        await writeFile(filename, newContent, "utf8");
+        await writeWorkspaceFile(workspace, params.path, newContent);
         return textResult(`Updated ${params.path}`, { path: filename, mode: params.oldText === "" ? "append" : "replace", bytesBefore: Buffer.byteLength(content), bytesAfter: Buffer.byteLength(newContent), firstChangedLine: firstChangedLine(content, newContent) });
       });
     },
@@ -198,7 +186,7 @@ export function createTools(store: Store, runId: RunId, workspace: string, onEve
   const taskRunTool: AgentTool<typeof TaskRunSchema, Record<string, unknown>> = {
     name: "task_run", label: "Update task", description: "Inspect or update the current durable TaskRun. Mutations return a compact receipt; use action=get only when the full state is needed.", parameters: TaskRunSchema, executionMode: "sequential",
     async execute(_id, params: Static<typeof TaskRunSchema>) {
-      const requireText = (name: "key" | "title" | "id" | "prompt" | "goal") => { const value = params[name]; if (typeof value !== "string" || !value.trim()) throw new Error(`task_run action="${params.action}" requires "${name}". Send one item per call.`); return value; };
+      const requireText = (name: "key" | "title" | "id" | "prompt") => { const value = params[name]; if (typeof value !== "string" || !value.trim()) throw new Error(`task_run action="${params.action}" requires "${name}". Send one item per call.`); return value; };
       if (params.action === "phase") { if (!params.phase) throw new Error('task_run action="phase" requires "phase".'); store.setRunPhase(runId, params.phase); }
       if (params.action === "plan") { const status = params.status; if (!status || !["pending","in_progress","done","blocked","skipped"].includes(status)) throw new Error('task_run action="plan" requires a plan status.'); store.upsertPlanItem(runId, { key: requireText("key"), title: requireText("title"), status: status as "pending"|"in_progress"|"done"|"blocked"|"skipped", required: params.required ?? true, position: params.position ?? 0 }); }
       if (params.action === "check") { const status = params.status; if (!status || !["pending","running","passed","failed","blocked","skipped"].includes(status)) throw new Error('task_run action="check" requires a check status.'); store.upsertCheck(runId, { key: requireText("key"), title: requireText("title"), status: status as "pending"|"running"|"passed"|"failed"|"blocked"|"skipped", required: params.required ?? true, command: params.command ?? "", evidence: params.evidence ?? "", stale: params.stale ?? false }); }
@@ -218,7 +206,6 @@ export function createTools(store: Store, runId: RunId, workspace: string, onEve
         onEvent?.(store.appendEvent(runId, "run.waiting_for_input", { requestId: request.id, prompt: request.prompt, fields: request.fields.map(({ key, label, description, inputType, required, placeholder }) => ({ key, label, description, inputType, required, placeholder })) }));
         return textResult(JSON.stringify({ ok: true, action: params.action, runId, status: "waiting_input", requestId: request.id, requiredFields: request.fields.map((field) => field.key) }), { compact: true });
       }
-      if (params.action === "spawn_proposal") { if (!params.acceptanceCriteria) throw new Error('task_run action="spawn_proposal" requires "acceptanceCriteria".'); store.createSpawnProposal(runId, requireText("goal").trim(), params.acceptanceCriteria, params.relation ?? "derived"); }
       const changed = params.action !== "get";
       const run = store.getRun(runId);
       if (changed) onEvent?.(store.appendEvent(runId, "run.updated", { action: params.action, phase: run?.phase ?? "discover" }));

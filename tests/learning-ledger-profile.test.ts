@@ -88,6 +88,23 @@ describe("conservative automatic Feedback Attribution", () => {
     expect(learning.listFeedbackAttribution(session.id).every((item: any) => item.status === "applied")).toBe(true);
   });
 
+
+  it("retries transient feedback failures and dead-letters the fifth failure", async () => {
+    const store = new Store(":memory:"); stores.push(store); const session = store.createSession(); let calls = 0;
+    const memory = { feedback: async () => { calls++; throw new Error("temporary backend outage"); } } as never;
+    const learning = new LearningService(store, memory, "workspace-1"); const run = completedRun(store, session.id);
+    store.recordContextManifest({ id: "manifest-retry", runId: run.id, attempt: 1, source: "session", manifestHash: "retry", createdAt: Date.now(), stats: {}, items: [{ kind: "memory_card", sourceId: "memory-retry", selected: true, reason: "recall", estimatedTokens: 1 }] });
+    store.appendMessage(session.id, "assistant", "[memory:memory-retry]"); learning.projectRun(store.getRun(run.id)!);
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      store.db.prepare("UPDATE feedback_attribution_receipts SET next_retry_at=0 WHERE status IN ('pending','failed')").run();
+      await learning.drainFeedbackAttribution();
+      const rows = learning.listFeedbackAttribution(session.id) as Array<{ status: string; attempts: number }>;
+      expect(rows.every((row) => row.attempts === attempt)).toBe(true);
+      expect(rows.every((row) => row.status === (attempt === 5 ? "dead_letter" : "failed"))).toBe(true);
+    }
+    expect(calls).toBe(10);
+  });
+
   it("withholds positive attribution when required checks are absent", () => {
     const store = new Store(":memory:"); stores.push(store); const session = store.createSession(); const learning = new LearningService(store); const run = store.createRun(session.id, "unchecked");
     store.transitionRun(run.id, ["running"], "completed", "run.completed", {}, "", 1);

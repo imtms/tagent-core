@@ -1,9 +1,9 @@
 import { createRequestId } from "./id";
 
 export interface Session { id: string; title: string; createdAt: number; updatedAt: number; latestRunStatus: string | null; latestRunPhase: string | null }
-export interface SessionInputAnalysis { summary: string; intent: "steer_active" | "follow_up_active" | "update_active_context" | "new_task" | "parallel_task" | "merge_candidate" | "discussion" | "clarification" | "defer"; targetRunId: string | null; priority: number; urgency: "low" | "normal" | "high" | "critical"; relation: "same_goal" | "correction" | "constraint" | "follow_up" | "parallel" | "independent"; acceptanceCriteria: string[]; scope: string; nonGoals: string[]; confidence: number; reason: string; routerVersion: string }
+export interface SessionInputAnalysis { summary: string; intent: "steer_active" | "follow_up_active" | "update_active_context" | "new_task" | "parallel_task" | "merge_candidate" | "discussion" | "clarification" | "defer"; targetRunId: string | null; priority: number; urgency: "low" | "normal" | "high" | "critical"; relation: "same_goal" | "correction" | "constraint" | "follow_up" | "parallel" | "derived" | "depends_on" | "independent"; acceptanceCriteria: string[]; scope: string; nonGoals: string[]; confidence: number; reason: string; routerVersion: string }
 export interface TaskRunContract { sourceInput: string; summary: string; acceptanceCriteria: string[]; scope: string; nonGoals: string[]; sourceInboxIds: string[]; parentRunId: string | null; relation: SessionInputAnalysis["relation"]; intent: SessionInputAnalysis["intent"]; decisionReason: string; routerVersion: string }
-export interface SessionInboxItem { id: string; sessionId: string; requestId: string; content: string; status: "queued" | "claimed" | "started" | "routed" | "deleted" | "failed"; decision: "pending" | "start_taskrun" | "steer" | "follow_up" | "spawn_proposal" | "discussion" | "defer" | "merge" | "delete"; runId: string | null; error: string; position: number; createdAt: number; updatedAt: number; claimedAt: number | null; startedAt: number | null; analysis: SessionInputAnalysis; manualOrder: boolean }
+export interface SessionInboxItem { id: string; sessionId: string; requestId: string; content: string; status: "queued" | "claimed" | "started" | "routed" | "deleted" | "failed"; decision: "pending" | "start_taskrun" | "steer" | "follow_up" | "discussion" | "defer" | "merge" | "delete"; runId: string | null; error: string; position: number; createdAt: number; updatedAt: number; claimedAt: number | null; startedAt: number | null; analysis: SessionInputAnalysis; manualOrder: boolean }
 export interface Message { id: number; sessionId: string; role: "user" | "assistant" | "tool"; content: string; createdAt: number }
 export interface ContextManifestItem { kind: string; sourceId: string; role?: string; selected: boolean; reason: string; estimatedTokens: number; metadata?: Record<string, unknown> }
 export interface ContextManifest { id: string; source: "session" | "transcript"; attempt: number; manifestHash: string; createdAt: number; items: ContextManifestItem[]; stats: Record<string, number | string> }
@@ -30,8 +30,7 @@ export interface TaskRun {
     latestDecision: { id: string; evaluator: "llm" | "system"; evaluatorModel: string; action: string; reasonCode: string; rationale: string; confidence: number; status: string; attempt: number; checkpointSeq: number } | null;
     latestGates: Array<{ id: string; evaluator: "llm" | "system"; evaluatorModel: string; summary: string; gateType: string; passed: boolean; failures: Array<{ kind: string; key: string; reason: string; disposition: string }>; criterionCoverage?: Array<{ criterion: string; status: "covered" | "unsupported" | "contradicted" | "blocked"; evidenceRefs: string[]; reason: string }> }>;
     progress: { meaningfulChanges: number; consecutiveFailures: number; repeatedOperations: number; checkpointSeq: number; lastProgressAt: number } | null;
-    spawnProposals: Array<{ id: string; goal: string; relation: string; status: "proposed" | "approved" | "spawned" | "rejected"; acceptanceCriteria?: string[] }>;
-    approvalRequests: Array<{ id: string; decisionId: string; reason: string; status: "pending" | "approved" | "rejected" | "superseded"; requestedAt: number; resolvedAt: number | null; resolvedBy: string; resolution: string }>;
+    approvalRequests: Array<{ id: string; decisionId: string; actionType: "resume_taskrun" | "start_parallel_taskrun"; targetType: "taskrun" | "session_inbox_item"; targetId: string; reason: string; metadata: Record<string, unknown>; status: "pending" | "approved" | "rejected" | "superseded"; requestedAt: number; resolvedAt: number | null; resolvedBy: string; resolution: string }>;
     latestContextManifest: ContextManifest | null;
   };
 }
@@ -110,15 +109,13 @@ export const api = {
   submitUserInput: (requestId: string, response: Record<string, string>) => request<TaskRun>(`/api/user-input-requests/${requestId}/submit`, { method: "POST", body: JSON.stringify({ response }) }),
   approveRunApproval: (approvalId: string) => request<TaskRun>(`/api/approval-requests/${approvalId}/approve`, { method: "POST" }),
   rejectRunApproval: (approvalId: string) => request<TaskRun>(`/api/approval-requests/${approvalId}/reject`, { method: "POST" }),
-  approveSpawn: (proposalId: string) => request<{ ok: true }>(`/api/spawn-proposals/${proposalId}/approve`, { method: "POST" }),
-  rejectSpawn: (proposalId: string) => request<{ ok: true }>(`/api/spawn-proposals/${proposalId}/reject`, { method: "POST" }),
-  spawnProposal: (proposalId: string) => request<TaskRun>(`/api/spawn-proposals/${proposalId}/spawn`, { method: "POST" }),
+  requestParallelStart: (sessionId: string, itemId: string) => request<AutonomyApproval>(`/api/sessions/${sessionId}/inbox/${itemId}/parallel-start-request`, { method: "POST", body: JSON.stringify({ actor: "session_governor", reason: "Start this queued related task before the parent TaskRun completes" }) }),
   retryLaunch: (runId: string) => request<{ status: "started"; item: SessionInboxItem; run: TaskRun }>(`/api/runs/${runId}/retry-launch`, { method: "POST" }),
   claimConsumer: (runId: string, consumerId: string) => request<EventConsumerCursor>(`/api/runs/${runId}/consumers/${encodeURIComponent(consumerId)}/claim`, { method: "POST" }),
   ackConsumer: (runId: string, consumerId: string, generation: number, seq: number) => request(`/api/runs/${runId}/consumers/${encodeURIComponent(consumerId)}/ack`, { method: "POST", body: JSON.stringify({ generation, seq }) }),
   memoryJobs: (scope: MemoryScope) => request<CaptureJob[]>("/api/memory/jobs", { method: "POST", body: JSON.stringify({ scopes: [scope], limit: 100 }) }),
   memoryStatus: (scope: MemoryScope) => request<MemoryStatusResult>("/api/memory/status", { method: "POST", body: JSON.stringify({ scopes: [scope] }) }),
-  memoryExport: (scope: MemoryScope) => request<MemoryExport>("/api/memory/export", { method: "POST", body: JSON.stringify({ scope }) }),
+  memoryExport: (scope: MemoryScope, limit = 200) => request<MemoryExport>("/api/memory/export", { method: "POST", body: JSON.stringify({ scope, limit }) }),
   memoryRecall: (scope: MemoryScope, cue: string, kinds?: MemoryKind[]) => request<RecallResult>("/api/memory/recall", { method: "POST", body: JSON.stringify({ scopes: [scope], cue, kinds, maxCards: 12, maxColdTopics: 4 }) }),
   memoryCapture: (scope: MemoryScope, content: string) => request<{ jobId: string }>("/api/memory/capture", { method: "POST", body: JSON.stringify({ scope, content, idempotencyKey: createRequestId() }) }),
   memoryReindex: (scope:MemoryScope)=>request<ReindexJob>("/api/memory/reindex",{method:"POST",body:JSON.stringify({scope})}),

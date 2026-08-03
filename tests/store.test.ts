@@ -590,20 +590,32 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(24);
+    expect(store.getSchemaVersion()).toBe(27);
   });
 
-  it("migrates an older database to schema version 24", () => {
+  it("migrates an older database to schema version 27", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(24);
-    expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('approval_requests','context_manifests','control_inbox','event_consumers','gate_evaluations','operations','progress_snapshots','run_checkpoints','session_supervisor_inbox','spawn_proposals','supervisor_decisions','taskrun_edges','tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["approval_requests", "context_manifests", "control_inbox", "event_consumers", "gate_evaluations", "operations", "progress_snapshots", "run_checkpoints", "session_supervisor_inbox", "spawn_proposals", "supervisor_decisions", "taskrun_edges", "tool_attempts"]);
+    expect(migrated.getSchemaVersion()).toBe(27);
+    expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('approval_requests','context_manifests','control_inbox','event_consumers','gate_evaluations','operations','progress_snapshots','run_checkpoints','semantic_learning_jobs','session_supervisor_inbox','supervisor_decisions','taskrun_edges','tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["approval_requests", "context_manifests", "control_inbox", "event_consumers", "gate_evaluations", "operations", "progress_snapshots", "run_checkpoints", "semantic_learning_jobs", "session_supervisor_inbox",  "supervisor_decisions", "taskrun_edges", "tool_attempts"]);
+    expect(migrated.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='spawn_proposals'").get()).toBeUndefined();
     migrated.close();
   });
 
+  it("migrates legacy SpawnProposal rows into related Session Inbox items before dropping the table", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "spawn-migration.db");
+    const initial = new Store(filename); const session = initial.createSession(); const parent = initial.createRun(session.id, "parent");
+    initial.db.exec(`CREATE TABLE spawn_proposals (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, goal TEXT NOT NULL, acceptance_json TEXT NOT NULL, relation TEXT NOT NULL, status TEXT NOT NULL, spawned_run_id TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
+    initial.db.prepare("INSERT INTO spawn_proposals VALUES (?,?,?,?,?,'proposed','',?,?)").run("legacy-proposal",parent.id,"legacy child",JSON.stringify(["child verified"]),"parallel",1,1);
+    initial.db.prepare("UPDATE schema_meta SET version=26 WHERE id=1").run(); initial.close();
+    const migrated = new Store(filename);
+    expect(migrated.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='spawn_proposals'").get()).toBeUndefined();
+    expect(migrated.listSessionInbox(session.id)).toEqual([expect.objectContaining({ content: "legacy child", status: "queued", analysis: expect.objectContaining({ targetRunId: parent.id, relation: "parallel", acceptanceCriteria: ["child verified"] }) })]);
+    migrated.close();
+  });
 
   it("persists immutable per-attempt context manifests", () => {
     const store = createStore(); const session = store.createSession(); const run = store.createRun(session.id, "manifest");

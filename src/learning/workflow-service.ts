@@ -151,17 +151,41 @@ export class WorkflowService {
     this.autonomyAudit(run.sessionId, "observe", "run_outcome_projected", "learning_projector", { sourceRunId: run.id, evidence: observation ? [observation.id] : [], metadata: { attempt: run.attempt, lifecycle, outcome, policy: policy.policy, completedWithEvidence } });
     if (completedWithEvidence) {
       const taskSignature = normalize(run.contract?.summary ?? run.goal);
-      const decide=(semanticEligibility:Awaited<ReturnType<SemanticJudge["learningSample"]>>)=>{const eligibility=semanticEligibility?{eligible:semanticEligibility.eligible&&semanticEligibility.reusable,reason:semanticEligibility.reason}:distillationEligibility(taskSignature,plan.length);if(eligibility.eligible){this.enqueueDistillation(run.sessionId,taskSignature);this.autonomyAudit(run.sessionId,"learn","distillation_enqueued","learning_projector",{sourceRunId:run.id,evidence:observation?[observation.id]:[],metadata:{taskSignature,semantic:semanticEligibility??null}});}else this.autonomyAudit(run.sessionId,"learn","distillation_withheld","learning_projector",{sourceRunId:run.id,evidence:observation?[observation.id]:[],metadata:{taskSignature,reason:eligibility.reason,semantic:semanticEligibility??null}});};
-      if(this.semanticJudge)void this.semanticJudge.learningSample({taskSignature,procedureSummary:summary,stepCount:plan.length,outcome,requiredChecks:requiredChecks.map((check)=>({key:check.key,status:check.status,stale:check.stale}))}).then(decide);else decide(undefined);
+      const input={taskSignature,procedureSummary:summary,stepCount:plan.length,outcome,requiredChecks:requiredChecks.map((check)=>({key:check.key,status:check.status,stale:check.stale}))};
+      if (this.semanticJudge) this.store.enqueueSemanticLearningJob("workflow_eligibility", { runId: run.id, scopeId: run.sessionId, taskSignature, observationId: observation?.id ?? "", input }, `semantic-workflow-eligibility:${run.id}:${run.attempt}:${lifecycle}:${projection?.eventSeq ?? 0}`, run.id, run.attempt);
+      else this.applyWorkflowEligibility(run.sessionId,run.id,taskSignature,observation?.id,undefined,plan.length);
     }
     return observation;
+  }
+
+  private applyWorkflowEligibility(scopeId:string,runId:string,taskSignature:string,observationId:string|undefined,semanticEligibility:Awaited<ReturnType<SemanticJudge["learningSample"]>>,stepCount:number) {
+    const eligibility=semanticEligibility?{eligible:semanticEligibility.eligible&&semanticEligibility.reusable,reason:semanticEligibility.reason}:distillationEligibility(taskSignature,stepCount);
+    if(eligibility.eligible){this.enqueueDistillation(scopeId,taskSignature);this.autonomyAudit(scopeId,"learn","distillation_enqueued","learning_projector",{sourceRunId:runId,evidence:observationId?[observationId]:[],metadata:{taskSignature,semantic:semanticEligibility??null}});}
+    else this.autonomyAudit(scopeId,"learn","distillation_withheld","learning_projector",{sourceRunId:runId,evidence:observationId?[observationId]:[],metadata:{taskSignature,reason:eligibility.reason,semantic:semanticEligibility??null}});
+  }
+
+  async drainSemanticLearningJobs(limit = 100) {
+    if (!this.semanticJudge) return 0;
+    const rows = this.store.listDueSemanticLearningJobs(limit).filter((row)=>row.kind==="workflow_eligibility");
+    for (const row of rows) {
+      try {
+        const payload=JSON.parse(row.payloadJson) as {runId:string;scopeId:string;taskSignature:string;observationId?:string;input:{taskSignature:string;procedureSummary:string;stepCount?:number;outcome?:string;requiredChecks?:Array<{key:string;status:string;stale:boolean}>}};
+        const failuresBefore=this.semanticJudge.snapshot().failures;
+        const decision=await this.semanticJudge.learningSample(payload.input);
+        if(!decision&&this.semanticJudge.snapshot().failures>failuresBefore)throw new Error("Semantic workflow eligibility failed");
+        this.applyWorkflowEligibility(payload.scopeId,payload.runId,payload.taskSignature,payload.observationId,decision,payload.input.stepCount??0);
+        this.store.completeSemanticLearningJob(row.id);
+      } catch(error){this.store.failSemanticLearningJob(row.id,row.attempts,error instanceof Error?error.message:String(error));}
+    }
+    return rows.length;
   }
 
   drainProjectionOutbox(limit = 100) {
     const rows = this.store.listPendingLearningProjections(limit);
     for (const row of rows) {
       try {
-        const run = this.store.getRun(row.runId);
+        const snapshot = JSON.parse(row.snapshotJson || "null") as TaskRun | null;
+        const run = snapshot ?? this.store.getRun(row.runId);
         if (run) {
           const projectedRun: TaskRun = { ...run, attempt: row.attempt, status: row.outcome as RunStatus };
           this.projectRun(projectedRun, row.outcome as RunStatus, { lifecycle: row.lifecycle, eventSeq: row.eventSeq, payload: JSON.parse(row.payloadJson) as Record<string, unknown> });
@@ -220,13 +244,22 @@ export class WorkflowService {
     if (!this.learningAvailable()) return undefined;
     const job = this.claimDistillationJob(owner) as { id: string; scope_id: string; task_signature: string; lease_token: string; fence: number; attempts: number; checkpoint_json: string } | undefined;
     if (!job) return undefined;
+    let leaseLost = false;
+    const heartbeat = setInterval(() => {
+      if (!this.renewDistillationLease(job.id, owner, job.lease_token, job.fence)) leaseLost = true;
+    }, 8_000);
+    heartbeat.unref?.();
     try {
       this.checkpointDistillationJob(job.id, owner, job.lease_token, job.fence, { phase: "claimed", previous: JSON.parse(job.checkpoint_json || "{}") });
       const result = await this.distillRepeatedExperience(job.scope_id, job.task_signature, {
         semantic: true,
-        checkpoint: (checkpoint) => this.checkpointDistillationJob(job.id, owner, job.lease_token, job.fence, checkpoint),
+        checkpoint: (checkpoint) => {
+          if (leaseLost) throw new Error("Distillation lease lost");
+          this.checkpointDistillationJob(job.id, owner, job.lease_token, job.fence, checkpoint);
+        },
         jobId: job.id,
       });
+      if (leaseLost) throw new Error("Distillation lease lost");
       const priorCheckpoint = JSON.parse(String((this.store.db.prepare("SELECT checkpoint_json value FROM workflow_distillation_jobs WHERE id=?").get(job.id) as {value?:string}|undefined)?.value||"{}")) as Record<string,unknown>;
       const changed = this.store.db.prepare(`UPDATE workflow_distillation_jobs SET status='completed', workflow_id=?, checkpoint_json=?,
         lease_owner='',lease_token='',lease_until=NULL,error='',updated_at=? WHERE id=? AND status='running' AND lease_owner=? AND lease_token=? AND fence=?`)
@@ -238,6 +271,8 @@ export class WorkflowService {
       this.store.db.prepare(`UPDATE workflow_distillation_jobs SET status=?,checkpoint_json=?,error=?,lease_owner='',lease_token='',lease_until=NULL,updated_at=?
         WHERE id=? AND status='running' AND lease_owner=? AND lease_token=? AND fence=?`).run(status, JSON.stringify({ phase: "failed", error: redact(message) }), redact(message), now(), job.id, owner, job.lease_token, job.fence);
       throw error;
+    } finally {
+      clearInterval(heartbeat);
     }
   }
 
@@ -250,7 +285,7 @@ export class WorkflowService {
     const candidates = this.store.db.prepare(`SELECT id, run_id as runId, source_type as sourceType, task_signature as taskSignature,
       procedure_summary as procedureSummary, checks_passed_json as checksPassedJson, checks_failed_json as checksFailedJson, created_at as createdAt
       FROM experience_observations WHERE scope_id = ? AND learn_policy = 'allow' AND run_id IS NOT NULL
-      AND source_type IN ('task_experience','task_failure') ORDER BY created_at DESC`).all(scopeId) as Array<{ id: string; runId: string; sourceType: WorkflowSourceType; taskSignature: string; procedureSummary: string; checksPassedJson: string; checksFailedJson: string; createdAt: number }>;
+      AND source_type IN ('task_experience','task_failure') ORDER BY created_at DESC LIMIT 500`).all(scopeId) as Array<{ id: string; runId: string; sourceType: WorkflowSourceType; taskSignature: string; procedureSummary: string; checksPassedJson: string; checksFailedJson: string; createdAt: number }>;
     const similar:Array<(typeof candidates)[number]&{similarity:number}>=[];
     for(const row of candidates){const lexical=options.semantic===false?Number(normalize(row.taskSignature)===normalize(taskSignature)):textSimilarity(taskSignature,row.taskSignature);if(lexical>=.72){similar.push({...row,similarity:lexical});continue;}if(this.semanticJudge&&options.semantic!==false){const decision=await this.semanticJudge.cluster(taskSignature,row.taskSignature);if(decision?.similar)similar.push({...row,similarity:decision.confidence});}else if(lexical>=.48)similar.push({...row,similarity:lexical});}
     const successes=[] as typeof similar;const failures=[] as typeof similar;
@@ -418,20 +453,35 @@ export class WorkflowService {
     return this.getApproval(id)!;
   }
 
-  executeApproval(id: string, actor: string) {
+  private requireExecutableApproval(id: string) {
     this.requireAutoExecution();
     const approval = this.getApproval(id); if (!approval || approval.status !== "approved") throw new Error("Approved request is required before execution");
     if (approval.expiresAt <= now()) { this.expireApprovals(); throw new Error("Approval request has expired"); }
+    return approval;
+  }
+
+  private completeApprovalExecution(approval: AutonomyApprovalRequest, actor: string, result: unknown) {
+    const receipt = { actionType: approval.actionType, targetId: approval.targetId, result, executedBy: actor, executedAt: now() };
+    this.store.db.prepare(`UPDATE autonomy_approval_requests SET status='executed',executed_at=?,execution_receipt_json=?,updated_at=? WHERE id=? AND status='approved'`)
+      .run(receipt.executedAt, JSON.stringify(receipt), receipt.executedAt, approval.id);
+    this.autonomyAudit(approval.scopeId, "execute", approval.actionType, actor, { approvalId: approval.id, workflowId: approval.workflowId ?? undefined, revisionId: approval.revisionId ?? undefined, metadata: receipt });
+    return { approval: this.getApproval(approval.id)!, result };
+  }
+
+  executeExternalApproval(id: string, actor: string, executor: (approval: AutonomyApprovalRequest) => unknown) {
+    const approval = this.requireExecutableApproval(id);
+    const result = executor(approval);
+    return this.completeApprovalExecution(approval, actor, result);
+  }
+
+  executeApproval(id: string, actor: string) {
+    const approval = this.requireExecutableApproval(id);
     let result: unknown;
     if (approval.actionType === "activate_workflow") result = this.activateApproved(approval.workflowId!, approval.revisionId!, actor, id);
     else if (approval.actionType === "apply_revision") result = this.applyProposalApproved(approval.proposalId!, actor, id);
     else if (approval.actionType === "start_canary") result = this.promoteApproved(approval.workflowId!, approval.revisionId!, JSON.parse(approval.impactScopeJson) as { canaryPercent?: number; maxFailureDelta?: number }, id);
-    else throw new Error("Automatic workflow execution is not enabled; approval records authorization but an executor must provide a capability-scoped implementation");
-    const receipt = { actionType: approval.actionType, targetId: approval.targetId, result, executedBy: actor, executedAt: now() };
-    this.store.db.prepare(`UPDATE autonomy_approval_requests SET status='executed',executed_at=?,execution_receipt_json=?,updated_at=? WHERE id=? AND status='approved'`)
-      .run(receipt.executedAt, JSON.stringify(receipt), receipt.executedAt, id);
-    this.autonomyAudit(approval.scopeId, "execute", approval.actionType, actor, { approvalId: id, workflowId: approval.workflowId ?? undefined, revisionId: approval.revisionId ?? undefined, metadata: receipt });
-    return { approval: this.getApproval(id)!, result };
+    else throw new Error("This approved action requires its capability-scoped executor");
+    return this.completeApprovalExecution(approval, actor, result);
   }
 
   private expireApprovals() {

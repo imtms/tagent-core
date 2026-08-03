@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 
 const deployScript = path.resolve("scripts/deploy-release.sh");
 const buildScript = path.resolve("scripts/build-release.sh");
@@ -43,11 +44,13 @@ async function artifact(root: string, commit: string, corrupt: "native" | "manif
   await writeFile(path.join(directory, "dist", "server.js"), corrupt === "syntax" ? "const = ;\n" : "console.log('ok');\n");
   await writeFile(path.join(directory, "scripts", "deploy-release.sh"), "deploy\n");
   await writeFile(path.join(directory, "scripts", "release-manifest.mjs"), await readFile(manifestScript));
-  const bindingSource = path.resolve("node_modules/better-sqlite3/build/Release/better_sqlite3.node");
+  const require = createRequire(import.meta.url);
+  const packageRoot = path.resolve(path.dirname(require.resolve("better-sqlite3")), "..");
+  const bindingSource = path.join(packageRoot, "build", "Release", "better_sqlite3.node");
   await writeFile(path.join(directory, "node_modules", "better-sqlite3", "build", "Release", "better_sqlite3.node"), await readFile(bindingSource));
   await writeFile(path.join(directory, "node_modules", "better-sqlite3", "package.json"), JSON.stringify({ main: "lib/index.js" }));
   await mkdir(path.join(directory, "node_modules", "better-sqlite3", "lib"), { recursive: true });
-  await writeFile(path.join(directory, "node_modules", "better-sqlite3", "lib", "index.js"), "module.exports = require(" + JSON.stringify(path.resolve("node_modules/better-sqlite3")) + ");\n");
+  await writeFile(path.join(directory, "node_modules", "better-sqlite3", "lib", "index.js"), "module.exports = require(" + JSON.stringify(packageRoot) + ");\n");
   const files: Record<string, string> = {};
   async function add(relative: string) { files[relative] = createHash("sha256").update(await readFile(path.join(directory, relative))).digest("hex"); }
   for (const relative of ["package.json", "package-lock.json", "dist/server.js", "scripts/deploy-release.sh", "scripts/release-manifest.mjs", "node_modules/better-sqlite3/build/Release/better_sqlite3.node", "node_modules/better-sqlite3/package.json", "node_modules/better-sqlite3/lib/index.js"]) await add(relative);

@@ -17,6 +17,7 @@ export function requiredServiceScope(method: string, url: string): ServiceScope 
   if (/^\/api\/sessions\/[^/]+\/workflows\/teach$/.test(pathname)) return "workflows:teach";
   if (/^\/api\/internal\/workflows\/[^/]+\/evaluate$/.test(pathname)) return "admin";
   if (/^\/api\/autonomy-approvals\/[^/]+\/(approve|reject|revoke|execute)$/.test(pathname)) return "workflows:approve";
+  if (/^\/api\/sessions\/[^/]+\/inbox\/[^/]+\/parallel-start-request$/.test(pathname)) return "workflows:govern";
   if (/^\/api\/(workflows\/[^/]+\/(suspend|restore|evaluations|activation-request|promotion-request)|workflow-proposals\/[^/]+\/(approve|reject|application-request)|workflow-distillation\/(run|dead-letter|[^/]+\/retry)|workflow-evaluations\/[^/]+\/verify|communication-profiles\/[^/]+\/lock|feedback-attribution\/drain)$/.test(pathname)) return "workflows:govern";
   if (/^\/api\/(workflows\/[^/]+\/(activate|rollback|promote)|workflow-proposals\/[^/]+\/apply|workflow-bindings\/[^/]+\/(mode|application))$/.test(pathname)) return "workflows:approve";
   if (/^\/api\/runs\/[^/]+\/artifacts\/[^/]+\/(content|download)$/.test(pathname) && method === "GET") return "runs:read";

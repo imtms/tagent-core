@@ -70,7 +70,9 @@ export class LearningService {
   }
 
   async analyzeUserMessage(input:{subjectId:string;scopeId:string;messageId:number;content:string;context?:string;runId?:string;attempt?:number}) {
+    const failuresBefore=this.semanticJudge?.snapshot().failures??0;
     const semantic=this.semanticJudge?await this.semanticJudge.userMessage(input.content,input.context??""):undefined;
+    if(this.semanticJudge&&!semantic&&this.semanticJudge.snapshot().failures>failuresBefore)throw new Error("Semantic user-message analysis failed");
     if(semantic){for(const preference of semantic.communicationPreferences){if(isCommunicationDimension(preference.dimension))this.recordCommunicationPreference({subjectId:input.subjectId,scopeType:"session",scopeId:input.scopeId,dimension:preference.dimension,value:preference.value,sourceType:"explicit_user",sourceRef:`message:${input.messageId}`,confidence:semantic.confidence});}if(semantic.correction)this.recordCorrection({sessionId:input.scopeId,runId:input.runId,attempt:input.attempt,messageId:input.messageId,correctionType:semantic.correctionType,targetType:"run",targetId:input.runId,content:input.content,source:"explicit_user"});return semantic;}
     this.captureExplicitCommunicationPreferences(input.subjectId,input.scopeId,input.messageId,input.content);
     if(/\b(?:correction|incorrect|wrong|inaccurate|learned wrong)\b|(?:不太对|不准确|不正确|不对|错了|学错|改为|纠正|不是.{0,20}而是|不要再)/i.test(input.content))this.recordCorrection({sessionId:input.scopeId,runId:input.runId,attempt:input.attempt,messageId:input.messageId,content:input.content,source:"explicit_user"});
@@ -130,17 +132,19 @@ export class LearningService {
   }
 
   drainLearningProjectionLedger(limit = 200) {
-    const rows = this.store.db.prepare(`SELECT o.run_id as runId,o.attempt,o.lifecycle,o.outcome,o.event_seq as eventSeq
+    const rows = this.store.db.prepare(`SELECT o.run_id as runId,o.attempt,o.lifecycle,o.outcome,o.event_seq as eventSeq,o.snapshot_json as snapshotJson
       FROM learning_projection_outbox o LEFT JOIN learning_events e
         ON e.run_id=o.run_id AND e.attempt=o.attempt AND e.lifecycle=o.lifecycle AND e.event_seq=o.event_seq
-      WHERE e.id IS NULL ORDER BY o.created_at LIMIT ?`).all(limit) as Array<{ runId: string; attempt: number; lifecycle: string; outcome: TaskRun["status"]; eventSeq: number }>;
-    for (const row of rows) { const run = this.store.getRun(row.runId); if (run) this.projectRun({ ...run, attempt: row.attempt }, row.lifecycle, row.eventSeq, row.outcome); }
+      WHERE e.id IS NULL ORDER BY o.created_at LIMIT ?`).all(limit) as Array<{ runId: string; attempt: number; lifecycle: string; outcome: TaskRun["status"]; eventSeq: number; snapshotJson: string }>;
+    for (const row of rows) { const snapshot = safeJson<TaskRun | null>(row.snapshotJson, null); const run = snapshot ?? this.store.getRun(row.runId); if (run) this.projectRun({ ...run, attempt: row.attempt }, row.lifecycle, row.eventSeq, row.outcome); }
     return rows.length;
   }
 
   projectRun(run: TaskRun, lifecycle = `run.${run.status}`, eventSeq = run.lastEventSeq, projectedStatus: TaskRun["status"] = run.status) {
     const effectiveRun = projectedStatus === run.status ? run : { ...run, status: projectedStatus };
-    const manifest = this.store.getLatestContextManifest(run.id);
+    const manifest = run.supervision.latestContextManifest?.attempt === run.attempt
+      ? run.supervision.latestContextManifest
+      : this.store.getContextManifestForAttempt(run.id, run.attempt);
     const continuations = run.continuations.length;
     const toolRows = this.store.db.prepare(`SELECT tool_name as toolName,args_hash as argsHash,status FROM tool_attempts WHERE run_id=? AND attempt=? ORDER BY id`).all(run.id, run.attempt) as Array<{ toolName: string; argsHash: string; status: string }>;
     const repeatedToolCalls = toolRows.length - new Set(toolRows.map((item) => `${item.toolName}:${item.argsHash}`)).size;
@@ -171,7 +175,7 @@ export class LearningService {
       (id,learning_event_id,run_id,attempt,taxonomy_version,label,value,confidence,evidence_json,idempotency_key,created_at) VALUES (?,?,?,?, 'outcome-v1',?,?,?,?,?,?)`)
       .run(randomUUID(), event.id, run.id, run.attempt, label, value, confidence, JSON.stringify(evidence), `outcome:${event.id}:${label}`, now());
     this.createConservativeFeedbackReceipts(run, manifest?.id ?? "", manifest?.items ?? [], success, correctionCount > 0);
-    if(this.semanticJudge)void this.createSemanticFeedbackReceipts(run,manifest?.id??"",manifest?.items??[],success,correctionCount>0);
+    if (this.semanticJudge) this.store.enqueueSemanticLearningJob("feedback_attribution", { runId: run.id, attempt: run.attempt, manifestId: manifest?.id ?? "", items: manifest?.items ?? [], success, corrected: correctionCount > 0 }, `semantic-feedback:${run.id}:${run.attempt}:${manifest?.id ?? "none"}`, run.id, run.attempt);
     return this.getLearningEvent(event.id);
   }
 
@@ -198,22 +202,56 @@ export class LearningService {
     const selected=items.filter((item)=>item.kind==="memory_card"&&item.selected);if(!selected.length)return;
     const assistant=this.store.listMessages(run.sessionId,30).filter((item)=>item.role==="assistant").at(-1)?.content??"";
     const corrections=this.store.db.prepare("SELECT content FROM user_corrections WHERE run_id=? AND (attempt=? OR attempt IS NULL)").all(run.id,run.attempt) as Array<{content:string}>;
-    const decision=await this.semanticJudge!.feedbackAttribution({assistantAnswer:assistant,corrections:corrections.map((item)=>item.content),records:selected.map((item)=>({id:item.sourceId,reason:item.reason,metadata:item.metadata}))});if(!decision)return;
+    const failuresBefore=this.semanticJudge!.snapshot().failures;
+    const decision=await this.semanticJudge!.feedbackAttribution({assistantAnswer:assistant,corrections:corrections.map((item)=>item.content),records:selected.map((item)=>({id:item.sourceId,reason:item.reason,metadata:item.metadata}))});
+    if(!decision&&this.semanticJudge!.snapshot().failures>failuresBefore)throw new Error("Semantic feedback attribution failed");
+    if(!decision)return;
     const selectedIds=new Set(selected.map((item)=>item.sourceId));
     for(const recordId of decision.usedRecordIds.filter((id)=>selectedIds.has(id))){for(const entry of [{signal:"cited" as const,weight:.1,basis:"semantic_answer_attribution"},...(success&&!corrected?[{signal:"task_success" as const,weight:.15,basis:"semantic_use_and_verified_task_success"}]:[])]){const key=`memory-attribution:${run.id}:${run.attempt}:${recordId}:${entry.signal}`;this.store.db.prepare(`INSERT OR IGNORE INTO feedback_attribution_receipts (id,run_id,attempt,actor_id,record_id,signal,weight,basis,context_manifest_id,evidence_json,status,idempotency_key,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,'pending',?,?)`).run(randomUUID(),run.id,run.attempt,`session:${run.sessionId}`,recordId,entry.signal,entry.weight,entry.basis,manifestId,JSON.stringify([`manifest:${manifestId}`,`semantic-confidence:${decision.confidence}`]),key,now());}}
     if(corrected)for(const recordId of decision.harmfulRecordIds.filter((id)=>selectedIds.has(id))){const key=`memory-attribution:${run.id}:${run.attempt}:${recordId}:corrected`;this.store.db.prepare(`INSERT OR IGNORE INTO feedback_attribution_receipts (id,run_id,attempt,actor_id,record_id,signal,weight,basis,context_manifest_id,evidence_json,status,idempotency_key,created_at) VALUES (?,?,?,?,?,'corrected',-.75,'semantic_correction_attribution',?,?,'pending',?,?)`).run(randomUUID(),run.id,run.attempt,`session:${run.sessionId}`,recordId,manifestId,JSON.stringify([`manifest:${manifestId}`,`semantic-confidence:${decision.confidence}`]),key,now());}
   }
 
+  enqueueUserMessageAnalysis(input:{subjectId:string;scopeId:string;messageId:number;content:string;context?:string;runId?:string;attempt?:number}) {
+    return this.store.enqueueSemanticLearningJob("user_message", input, `semantic-user-message:${input.scopeId}:${input.messageId}`, input.runId, input.attempt);
+  }
+
+  async drainSemanticLearningJobs(limit = 100) {
+    if (!this.semanticJudge) return 0;
+    const rows = this.store.listDueSemanticLearningJobs(limit).filter((row)=>row.kind==="user_message"||row.kind==="feedback_attribution");
+    for (const row of rows) {
+      try {
+        const payload = safeJson<Record<string, unknown>>(row.payloadJson, {});
+        if (row.kind === "user_message") await this.analyzeUserMessage(payload as Parameters<LearningService["analyzeUserMessage"]>[0]);
+        else if (row.kind === "feedback_attribution") await this.createSemanticFeedbackReceipts(
+          this.store.getRun(String(payload.runId)) ?? (()=>{throw new Error("Semantic feedback Run not found")})(),
+          String(payload.manifestId ?? ""),
+          (payload.items ?? []) as ContextManifestItem[],
+          Boolean(payload.success),
+          Boolean(payload.corrected),
+        );
+        else throw new Error(`Unsupported semantic learning job: ${row.kind}`);
+        this.store.completeSemanticLearningJob(row.id);
+      } catch (error) { this.store.failSemanticLearningJob(row.id, row.attempts, redact(error instanceof Error ? error.message : String(error))); }
+    }
+    return rows.length;
+  }
+
   async drainFeedbackAttribution(limit = 100) {
     if (!this.memory?.feedback) return 0;
-    const rows = this.store.db.prepare(`SELECT id,run_id as runId,actor_id as actorId,record_id as recordId,signal,basis FROM feedback_attribution_receipts WHERE status='pending' ORDER BY created_at LIMIT ?`).all(limit) as Array<{ id: string; runId: string; actorId: string; recordId: string; signal: RecallFeedbackSignal; basis: string }>;
+    const timestamp = now();
+    const rows = this.store.db.prepare(`SELECT id,run_id as runId,actor_id as actorId,record_id as recordId,signal,basis,attempts FROM feedback_attribution_receipts WHERE status IN ('pending','failed') AND next_retry_at<=? ORDER BY created_at LIMIT ?`).all(timestamp, limit) as Array<{ id: string; runId: string; actorId: string; recordId: string; signal: RecallFeedbackSignal; basis: string; attempts: number }>;
     for (const row of rows) {
       const run = this.store.getRun(row.runId); if (!run) continue;
       const scope: MemoryScope = { type: "workspace", id: this.memoryScopeId };
       try {
         await this.memory.feedback({ subjectId: row.actorId, scopes: [scope, { type: "session", id: run.sessionId }], purpose: "memory_admin" }, scope, row.recordId, row.signal, { runId: row.runId, note: row.basis });
-        this.store.db.prepare("UPDATE feedback_attribution_receipts SET status='applied',applied_at=?,error='' WHERE id=? AND status='pending'").run(now(), row.id);
-      } catch (error) { this.store.db.prepare("UPDATE feedback_attribution_receipts SET status='failed',error=? WHERE id=? AND status='pending'").run(redact(error instanceof Error ? error.message : String(error)), row.id); }
+        this.store.db.prepare("UPDATE feedback_attribution_receipts SET status='applied',applied_at=?,error='',next_retry_at=0 WHERE id=? AND status IN ('pending','failed')").run(now(), row.id);
+      } catch (error) {
+        const attempts = row.attempts + 1;
+        const status = attempts >= 5 ? "dead_letter" : "failed";
+        const retryAt = status === "dead_letter" ? 0 : now() + Math.min(60 * 60_000, 2 ** attempts * 5_000);
+        this.store.db.prepare("UPDATE feedback_attribution_receipts SET status=?,attempts=?,next_retry_at=?,error=? WHERE id=? AND status IN ('pending','failed')").run(status, attempts, retryAt, redact(error instanceof Error ? error.message : String(error)), row.id);
+      }
     }
     return rows.length;
   }
@@ -221,5 +259,5 @@ export class LearningService {
   getLearningEvent(id: string) { const row = this.store.db.prepare(`SELECT id,run_id as runId,attempt,lifecycle,event_seq as eventSeq,task_classification_json as taskClassificationJson,strategy_selected_json as strategySelectedJson,context_used_json as contextUsedJson,execution_trace_json as executionTraceJson,outcome_json as outcomeJson,attribution_json as attributionJson,policy_json as policyJson,created_at as createdAt FROM learning_events WHERE id=?`).get(id) as Record<string, unknown> | undefined; if (!row) return undefined; return { ...row, taskClassification: safeJson(String(row.taskClassificationJson), {}), strategySelected: safeJson(String(row.strategySelectedJson), []), contextUsed: safeJson(String(row.contextUsedJson), {}), executionTrace: safeJson(String(row.executionTraceJson), {}), outcome: safeJson(String(row.outcomeJson), {}), attribution: safeJson(String(row.attributionJson), {}), policy: safeJson(String(row.policyJson), {}) }; }
   listLearningEvents(sessionId: string, limit = 100) { return (this.store.db.prepare(`SELECT e.id FROM learning_events e JOIN runs r ON r.id=e.run_id WHERE r.session_id=? ORDER BY e.created_at DESC LIMIT ?`).all(sessionId, limit) as Array<{ id: string }>).map((row) => this.getLearningEvent(row.id)!); }
   listCorrections(sessionId: string, limit = 100) { return this.store.db.prepare(`SELECT id,session_id as sessionId,run_id as runId,attempt,message_id as messageId,correction_type as correctionType,target_type as targetType,target_id as targetId,content,source,applied,created_at as createdAt FROM user_corrections WHERE session_id=? ORDER BY created_at DESC LIMIT ?`).all(sessionId, limit); }
-  listFeedbackAttribution(sessionId: string, limit = 100) { return this.store.db.prepare(`SELECT f.id,f.run_id as runId,f.attempt,f.record_id as recordId,f.signal,f.weight,f.basis,f.context_manifest_id as contextManifestId,f.status,f.error,f.created_at as createdAt,f.applied_at as appliedAt FROM feedback_attribution_receipts f JOIN runs r ON r.id=f.run_id WHERE r.session_id=? ORDER BY f.created_at DESC LIMIT ?`).all(sessionId, limit); }
+  listFeedbackAttribution(sessionId: string, limit = 100) { return this.store.db.prepare(`SELECT f.id,f.run_id as runId,f.attempt,f.record_id as recordId,f.signal,f.weight,f.basis,f.context_manifest_id as contextManifestId,f.status,f.attempts,f.next_retry_at as nextRetryAt,f.error,f.created_at as createdAt,f.applied_at as appliedAt FROM feedback_attribution_receipts f JOIN runs r ON r.id=f.run_id WHERE r.session_id=? ORDER BY f.created_at DESC LIMIT ?`).all(sessionId, limit); }
 }

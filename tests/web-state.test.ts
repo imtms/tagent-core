@@ -18,7 +18,8 @@ describe("Web workbench state model", () => {
     const styles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
     expect(app).toContain("function ArtifactsPanel");
     expect(app).toContain("api.artifactContent(run.id, artifact.id)");
-    expect(app).toContain('preview.format === "markdown" ? <Markdown>{preview.content}</Markdown> : <pre>{preview.content}</pre>');
+    expect(app).toContain('role="dialog" aria-modal="true"');
+    expect(app).toContain('preview.format === "markdown" ? <Markdown>{preview.content}</Markdown> : <pre className="artifact-text-preview">{preview.content}</pre>');
     expect(app).toContain("api.artifactDownloadUrl(run.id, artifact.id)");
     expect(app).toContain("<Download size={14} />");
     expect(api).toContain("/artifacts/${encodeURIComponent(artifactId)}/content");

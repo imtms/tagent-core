@@ -1,22 +1,101 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Store } from "../src/store/store.js";
 import { createTools } from "../src/tools/tools.js";
+import { listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "../src/security/workspace-path.js";
+
+async function waitForFile(filename: string) {
+  for (let index = 0; index < 1_000; index += 1) {
+    try { await readFile(filename); return; } catch { await new Promise((resolve) => setTimeout(resolve, 2)); }
+  }
+  throw new Error(`Timed out waiting for ${filename}`);
+}
 
 describe("workspace tools", () => {
-  it("reads workspace files and rejects path escape", async () => {
-    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-"));
+  it("reads the workspace root and rejects traversal into a similar-prefix sibling", async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), "tagent-tools-boundary-"));
+    const workspace = path.join(parent, "work");
+    const sibling = path.join(parent, "work-evil");
+    await mkdir(workspace); await mkdir(sibling);
     await writeFile(path.join(workspace, "hello.txt"), "hello\nworld", "utf8");
+    await writeFile(path.join(sibling, "secret.txt"), "sibling-secret", "utf8");
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "tools");
     const read = createTools(store, run.id, workspace).find((tool) => tool.name === "read")!;
     const result = await read.execute("1", { path: "hello.txt" }, undefined);
     expect(result.content[0]).toMatchObject({ type: "text", text: "hello\nworld" });
-    await expect(read.execute("2", { path: "../secret" }, undefined)).rejects.toThrow("escapes");
+    const list = createTools(store, run.id, workspace).find((tool) => tool.name === "ls")!;
+    expect((await list.execute("root", { path: "." }, undefined)).content[0]).toMatchObject({ type: "text", text: "hello.txt" });
+    await expect(read.execute("2", { path: "../work-evil/secret.txt" }, undefined)).rejects.toThrow("escapes");
     store.close();
+  });
+
+  it("rejects file, directory, nested, and create-target symlink escapes", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-symlink-"));
+    const outside = await mkdtemp(path.join(tmpdir(), "tagent-tools-outside-"));
+    await writeFile(path.join(outside, "secret.txt"), "outside-secret", "utf8");
+    await symlink(path.join(outside, "secret.txt"), path.join(workspace, "file-link"));
+    await symlink(outside, path.join(workspace, "dir-link"));
+    await mkdir(path.join(workspace, "nested"));
+    await symlink(outside, path.join(workspace, "nested", "escape"));
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "symlink boundaries");
+    const tools = createTools(store, run.id, workspace);
+    const read = tools.find((tool) => tool.name === "read")!;
+    const list = tools.find((tool) => tool.name === "ls")!;
+    const write = tools.find((tool) => tool.name === "write")!;
+    const edit = tools.find((tool) => tool.name === "edit")!;
+    await expect(read.execute("read-file-link", { path: "file-link" }, undefined)).rejects.toThrow(/Symbolic/);
+    await expect(read.execute("read-dir-link", { path: "dir-link/secret.txt" }, undefined)).rejects.toThrow(/Symbolic/);
+    await expect(read.execute("read-nested-link", { path: "nested/escape/secret.txt" }, undefined)).rejects.toThrow(/Symbolic/);
+    await expect(list.execute("list-link", { path: "dir-link" }, undefined)).rejects.toThrow(/Symbolic/);
+    await expect(write.execute("write-file-link", { path: "file-link", content: "changed" }, undefined)).rejects.toThrow(/Symbolic/);
+    await expect(write.execute("write-dir-link", { path: "dir-link/new.txt", content: "changed" }, undefined)).rejects.toThrow(/Symbolic/);
+    await expect(edit.execute("edit-link", { path: "file-link", oldText: "outside", newText: "inside" }, undefined)).rejects.toThrow(/Symbolic/);
+    expect(await readFile(path.join(outside, "secret.txt"), "utf8")).toBe("outside-secret");
+    store.close();
+  });
+
+  it("pins parent directory descriptors across concurrent directory-to-symlink swaps", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-race-"));
+    const outside = await mkdtemp(path.join(tmpdir(), "tagent-tools-race-outside-"));
+    const parent = path.join(workspace, "parent");
+    const displaced = path.join(workspace, "parent-displaced");
+    await mkdir(parent);
+    await writeFile(path.join(parent, "inside.txt"), "inside", "utf8");
+    await writeFile(path.join(outside, "inside.txt"), "outside", "utf8");
+    const ready = path.join(workspace, ".ready");
+    const release = path.join(workspace, ".release");
+    const env = { ...process.env, TAGENT_FD_HELPER_READY: ready, TAGENT_FD_HELPER_RELEASE: release };
+
+    const readPromise = readWorkspaceFile(workspace, "parent/inside.txt", { ...env, TAGENT_FD_HELPER_STAGE: "before_open" });
+    await waitForFile(ready);
+    await rename(parent, displaced);
+    await symlink(outside, parent);
+    await writeFile(release, "go");
+    expect((await readPromise).buffer.toString()).toBe("inside");
+    await rm(ready); await rm(release); await rm(parent); await rename(displaced, parent);
+
+    const writePromise = writeWorkspaceFile(workspace, "parent/new.txt", "workspace-only", { ...env, TAGENT_FD_HELPER_STAGE: "after_parent_open" });
+    await waitForFile(ready);
+    await rename(parent, displaced);
+    await symlink(outside, parent);
+    await writeFile(release, "go");
+    await writePromise;
+    expect(await readFile(path.join(displaced, "new.txt"), "utf8")).toBe("workspace-only");
+    await expect(readFile(path.join(outside, "new.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await rm(ready); await rm(release); await rm(parent); await rename(displaced, parent);
+
+    const listPromise = listWorkspaceDirectory(workspace, "parent", { ...env, TAGENT_FD_HELPER_STAGE: "after_directory_open" });
+    await waitForFile(ready);
+    await rename(parent, displaced);
+    await symlink(outside, parent);
+    await writeFile(release, "go");
+    expect((await listPromise).map((entry) => entry.name)).toContain("inside.txt");
+    expect((await listWorkspaceDirectory(outside, ".")).map((entry) => entry.name)).toContain("inside.txt");
   });
 
   it("lists directories, strips UTF-8 BOM, and returns binary metadata", async () => {
@@ -126,15 +205,12 @@ describe("workspace tools", () => {
     store.close();
   });
 
-  it("lets the agent propose a derived TaskRun without launching it", async () => {
+  it("does not expose the removed spawn proposal action", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-"));
     const store = new Store(":memory:");
-    const session = store.createSession();
-    const run = store.createRun(session.id, "discover follow-up");
+    const run = store.createRun(store.createSession().id, "schema");
     const taskRun = createTools(store, run.id, workspace).find((tool) => tool.name === "task_run")!;
-    await taskRun.execute("spawn", { action: "spawn_proposal", goal: "Deploy the verified build", acceptanceCriteria: ["Health check passes"], relation: "follow_up" }, undefined);
-    expect(store.listSpawnProposals(run.id)).toEqual([expect.objectContaining({ goal: "Deploy the verified build", status: "proposed", relation: "follow_up" })]);
-    expect(store.listRuns(session.id)).toHaveLength(1);
+    expect(JSON.stringify(taskRun.parameters)).not.toContain("spawn_proposal");
     store.close();
   });
 

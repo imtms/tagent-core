@@ -192,20 +192,24 @@ function ArtifactsPanel({ run }: { run: TaskRun }) {
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setLoadingId(""); }
   };
+  const closePreview = () => { setSelectedId(""); setPreview(null); setError(""); setLoadingId(""); };
   return <section className="panel-section artifacts-section">
     <div className="section-title"><span>Artifacts</span><small>{run.artifacts.length}</small></div>
     <div className="artifact-list">{run.artifacts.length ? run.artifacts.map((artifact) => {
       const selected = selectedId === artifact.id;
       return <div className={`artifact-entry ${selected ? "selected" : ""}`} key={artifact.id}>
-        <div className="artifact-row"><FileText size={15} /><button type="button" onClick={() => void openArtifact(artifact)} aria-expanded={selected} aria-controls={`artifact-preview-${artifact.id}`}><strong>{artifact.title}</strong><small>{artifact.kind || "artifact"}</small></button><a href={api.artifactDownloadUrl(run.id, artifact.id)} download title={`Download ${artifact.title}`} aria-label={`Download ${artifact.title}`}><Download size={14} /></a></div>
-        {selected && <div className="artifact-preview" id={`artifact-preview-${artifact.id}`}>
-          {loadingId === artifact.id ? <div className="artifact-preview-state"><Activity className="spin" size={15} />Loading preview…</div>
-            : error ? <div className="artifact-preview-state failed">{error}<small>Unsupported or unavailable artifacts can still be downloaded.</small></div>
-            : preview ? <><div className="artifact-preview-meta"><span>{preview.format} · {preview.bytes.toLocaleString()} bytes</span><small>{preview.source === "file" ? "loaded from file" : "stored content"}</small></div>{preview.format === "markdown" ? <Markdown>{preview.content}</Markdown> : <pre>{preview.content}</pre>}</>
-            : null}
-        </div>}
+        <div className="artifact-row"><FileText size={15} /><button type="button" onClick={() => void openArtifact(artifact)} aria-expanded={selected}><strong>{artifact.title}</strong><small>{artifact.kind || "artifact"}</small></button><a href={api.artifactDownloadUrl(run.id, artifact.id)} download title={`Download ${artifact.title}`} aria-label={`Download ${artifact.title}`}><Download size={14} /></a></div>
       </div>;
     }) : <p className="muted">No artifacts.</p>}</div>
+    {selectedId && <div className="artifact-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closePreview(); }}>
+      <section className="artifact-modal" role="dialog" aria-modal="true" aria-labelledby="artifact-modal-title">
+        <header><div><span>Artifact preview</span><strong id="artifact-modal-title">{run.artifacts.find((item) => item.id === selectedId)?.title ?? "Artifact"}</strong></div><span className="artifact-modal-actions"><a href={api.artifactDownloadUrl(run.id, selectedId)} download><Download size={14} /> Download</a><button type="button" onClick={closePreview} aria-label="Close artifact preview"><X size={16} /></button></span></header>
+        <div className="artifact-modal-body">{loadingId === selectedId ? <div className="artifact-preview-state"><Activity className="spin" size={15} />Loading preview…</div>
+          : error ? <div className="artifact-preview-state failed">{error}<small>Unsupported or unavailable artifacts can still be downloaded.</small></div>
+          : preview ? <><div className="artifact-preview-meta"><span>{preview.format} · {preview.bytes.toLocaleString()} bytes</span><small>{preview.source === "file" ? "loaded from workspace file" : "stored content"}</small></div>{preview.format === "markdown" ? <Markdown>{preview.content}</Markdown> : <pre className="artifact-text-preview">{preview.content}</pre>}</>
+          : null}</div>
+      </section>
+    </div>}
   </section>;
 }
 
@@ -218,11 +222,10 @@ function RunDetails({ run, toolEvents, transcriptTools, onRefresh }: { run: Task
     <GateAuditPanel run={run} />
     <ToolActivityPanel transcriptItems={transcriptTools} events={toolEvents} />
     <ContextManifestPanel run={run} />
-    {run.supervision.approvalRequests.length > 0 && <section className="panel-section"><div className="section-title"><span>Approvals</span><small>{run.supervision.approvalRequests.filter((item) => item.status === "pending").length} pending</small></div><div className="task-list">{run.supervision.approvalRequests.map((approval) => <div className="spawn-proposal" key={approval.id}><div><strong>{approval.reason}</strong><small>{approval.status}{approval.resolution ? ` · ${approval.resolution}` : ""}</small></div>{approval.status === "pending" && <span className="proposal-actions"><button onClick={async () => { await api.approveRunApproval(approval.id); await onRefresh?.(); }}>Approve & resume</button><button onClick={async () => { await api.rejectRunApproval(approval.id); await onRefresh?.(); }}>Reject</button></span>}</div>)}</div></section>}
+    {run.supervision.approvalRequests.length > 0 && <section className="panel-section"><div className="section-title"><span>Approvals</span><small>{run.supervision.approvalRequests.filter((item) => item.status === "pending").length} pending</small></div><div className="task-list">{run.supervision.approvalRequests.map((approval) => <div className="approval-row-inline" key={approval.id}><div><strong>{approval.reason}</strong><small>{approval.status}{approval.resolution ? ` · ${approval.resolution}` : ""}</small></div>{approval.status === "pending" && <span className="proposal-actions"><button onClick={async () => { await api.approveRunApproval(approval.id); await onRefresh?.(); }}>Approve & resume</button><button onClick={async () => { await api.rejectRunApproval(approval.id); await onRefresh?.(); }}>Reject</button></span>}</div>)}</div></section>}
     <section className="panel-section"><div className="section-title"><span>Plan</span><small>{run.plan.filter((item) => item.status === "done").length}/{run.plan.length}</small></div><div className="task-list">{run.plan.length ? run.plan.map((item) => <div className="task-row" key={item.key}>{item.status === "done" ? <Check size={15} /> : <Circle size={14} />}<span>{item.title}</span><small>{item.status}</small></div>) : <p className="muted">No structured plan.</p>}</div></section>
     <section className="panel-section"><div className="section-title"><span>Checks</span><small>{run.checks.filter((item) => item.status === "passed" && !item.stale).length}/{run.checks.length}</small></div><div className="task-list">{run.checks.length ? run.checks.map((check) => <div className="task-row" key={check.key}>{check.status === "passed" && !check.stale ? <Check size={15} /> : <Circle size={14} />}<span>{check.title}</span><small>{check.stale ? "stale" : check.status}</small></div>) : <p className="muted">No required checks.</p>}</div></section>
     <section className="panel-section"><div className="section-title"><span>Continuations</span><small>{run.continuations.length}</small></div><div className="task-list">{run.continuations.length ? run.continuations.map((item) => <div className="continuation-row" key={item.id}><div><strong>#{item.ordinal}</strong><span>{item.reason}</span></div><small className={`continuation-status ${item.status}`}>{item.status}{item.leaseUntil && item.status === "running" ? " · leased" : ""}</small></div>) : <p className="muted">No automatic continuation.</p>}</div></section>
-    <section className="panel-section"><div className="section-title"><span>Spawn proposals</span><small>{run.supervision.spawnProposals.length}</small></div><div className="task-list">{run.supervision.spawnProposals.length ? run.supervision.spawnProposals.map((proposal) => <div className="spawn-proposal" key={proposal.id}><div><strong>{proposal.goal}</strong><small>{proposal.relation} · {proposal.status}</small></div><span className="proposal-actions">{proposal.status === "proposed" && <><button onClick={async () => { await api.approveSpawn(proposal.id); await onRefresh?.(); }}>Approve</button><button onClick={async () => { await api.rejectSpawn(proposal.id); await onRefresh?.(); }}>Reject</button></>}{proposal.status === "approved" && <button onClick={async () => { await api.spawnProposal(proposal.id); await onRefresh?.(); }}>Start TaskRun</button>}</span></div>) : <p className="muted">No derived TaskRun proposals.</p>}</div></section>
     <ArtifactsPanel run={run} />
   </div>;
 }
@@ -626,6 +629,11 @@ export function App() {
     if (!sessionId || startingInboxId) return;
     setStartingInboxId(item.id); setError(""); setNotice("");
     try {
+      if (activeRun?.status === "running" && item.analysis.relation === "parallel" && item.analysis.targetRunId === activeRun.id) {
+        await api.requestParallelStart(sessionId, item.id);
+        setNotice("Parallel start sent to the human approval queue. The task remains queued until approval and explicit execution.");
+        return;
+      }
       const result = await api.startInbox(sessionId, item.id);
       const nextRun = result.run;
       setInbox(await api.inbox(sessionId)); const history = await api.messages(sessionId); setMessages(history); setHasOlderMessages(history.length === 80); setActiveRun(nextRun); setSelectedRun(nextRun);

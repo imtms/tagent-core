@@ -1,3 +1,10 @@
+## Unreleased
+
+- Removed the independent SpawnProposal model, API, Agent tool action, Supervisor branch, and Web controls.
+- Related parallel/follow-up work is now persisted through Session Inbox and complete TaskRun Contracts, with TaskRun edges created at launch.
+- Early parallel execution uses the existing Supervisor human-approval flow; related work remains queued by default.
+- Schema 27 migrates legacy unstarted SpawnProposal rows into Session Inbox and drops the legacy table.
+
 # Changelog
 
 ## [Unreleased]

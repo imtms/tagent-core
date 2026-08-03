@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Store } from "../store/store.js";
 import { createInProcessRuntime } from "../runtime/factory.js";
 import type { AgentRuntime, RuntimeFactory } from "../runtime/types.js";
-import type { ContextManifestItem, RunCheckpoint, RunEvent, SessionId, SessionInboxItem, RunId, TaskRun } from "../core/types.js";
+import type { ContextManifestItem, RunCheckpoint, RunEvent, SessionId, SessionInboxItem, SessionInputAnalysis, RunId, TaskRun } from "../core/types.js";
 import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 import { runtimeRunContext } from "./llm-payload.js";
 import { TaskRunSupervisor } from "./supervisor.js";
@@ -56,6 +56,8 @@ export class AgentService {
     if (learningControl?.snapshot().learningEnabled ?? true) {
       void this.workflowService.drainProjectionOutbox();
       this.learningService.drainLearningProjectionLedger();
+      void this.workflowService.drainSemanticLearningJobs();
+      void this.learningService.drainSemanticLearningJobs();
       void this.learningService.drainFeedbackAttribution();
     }
   }
@@ -278,15 +280,14 @@ export class AgentService {
         const followUpObjectives = analysis.objectives.filter((objective) => objective.timing === "follow_up");
         const parallelObjectives = analysis.objectives.filter((objective) => objective.timing === "parallel");
         const steerContent = currentObjectives.length ? currentObjectives.map((objective) => objective.summary).join("\n") : content;
-        const proposals = parallelObjectives.map((objective) => this.store.createSpawnProposal(activeRun.id, objective.summary, analysis.acceptanceCriteria.filter((criterion) => criterion.includes(objective.summary)), "parallel"));
-        for (const proposal of proposals) this.publish(this.store.appendEvent(activeRun.id, "supervisor.spawn.proposed", { proposalId: proposal.id, inboxItemId: item.id, goal: proposal.goal, relation: proposal.relation }));
+        const relatedItems = parallelObjectives.map((objective) => this.enqueueRelatedSessionTask(activeRun, item, objective.summary, "parallel", analysis));
         for (const objective of followUpObjectives) void this.enqueueControl(activeRun.id, "follow_up", objective.summary, `inbox:${item.id}:follow-up:${objective.id}`);
-        const routingNote = [proposals.length ? `${proposals.length} parallel proposal(s)` : "", followUpObjectives.length ? `${followUpObjectives.length} follow-up objective(s)` : ""].filter(Boolean).join("; ");
+        const routingNote = [relatedItems.length ? `${relatedItems.length} parallel Inbox task(s)` : "", followUpObjectives.length ? `${followUpObjectives.length} follow-up objective(s)` : ""].filter(Boolean).join("; ");
         const routed = this.store.routeSessionInboxItem(item.id, sessionId, "steer", activeRun.id, routingNote)!;
         void this.enqueueControl(activeRun.id, "steer", steerContent, `inbox:${item.id}`).then((result) => {
           if (result.status !== "accepted") this.store.routeSessionInboxItem(item.id, sessionId, "steer", activeRun.id, `Control delivery: ${result.status}${routingNote ? `; ${routingNote}` : ""}`);
         });
-        return { item: routed, run: activeRun, proposals };
+        return { item: routed, run: activeRun, relatedItems };
       }
       if (analysis.intent === "follow_up_active") {
         const routed = this.store.routeSessionInboxItem(item.id, sessionId, "follow_up", activeRun.id)!;
@@ -294,16 +295,37 @@ export class AgentService {
         return { item: routed, run: activeRun };
       }
       if (analysis.intent === "parallel_task") {
-        const proposal = this.store.createSpawnProposal(activeRun.id, analysis.summary, analysis.acceptanceCriteria, "parallel");
-        const routed = this.store.routeSessionInboxItem(item.id, sessionId, "spawn_proposal", activeRun.id, `Proposal ${proposal.id}`)!;
-        this.publish(this.store.appendEvent(activeRun.id, "supervisor.spawn.proposed", { proposalId: proposal.id, inboxItemId: item.id, goal: proposal.goal, relation: proposal.relation }));
-        return { item: routed, run: activeRun, proposal };
+        this.publish(this.store.appendEvent(activeRun.id, "session.inbox.related.queued", { inboxItemId: item.id, goal: analysis.summary, relation: "parallel", parentRunId: activeRun.id }));
+        return { item: this.store.getSessionInboxItem(item.id)!, run: activeRun, relatedItem: this.store.getSessionInboxItem(item.id)! };
       }
     }
 
     const run = this.dispatchSessionInbox(sessionId);
     if (run) for (const observed of routerUsage) this.store.recordModelUsage(run.id, "router", observed.model, observed.usage);
     return { item: this.store.getSessionInboxItem(item.id)!, run: run ?? null };
+  }
+
+  private enqueueRelatedSessionTask(parent: TaskRun, sourceItem: SessionInboxItem, summary: string, relation: "parallel" | "follow_up" | "derived", analysis: SessionInputAnalysis) {
+    const objective = analysis.objectives.find((item) => item.summary === summary);
+    const criteria = analysis.acceptanceCriteria.filter((criterion) => {
+      const words = summary.toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u).filter((word) => word.length > 1);
+      const normalized = criterion.toLocaleLowerCase();
+      return words.some((word) => normalized.includes(word));
+    });
+    const relatedAnalysis: SessionInputAnalysis = {
+      ...analysis,
+      summary,
+      objectives: [{ ...(objective ?? { id: `related-${randomUUID()}`, summary, kind: "other" as const }), timing: relation === "parallel" ? "parallel" : "follow_up" }],
+      intent: relation === "parallel" ? "parallel_task" : "new_task",
+      targetRunId: parent.id,
+      relation,
+      acceptanceCriteria: criteria.length ? criteria : analysis.acceptanceCriteria,
+      scope: analysis.scope || summary,
+      reason: `${relation} objective derived from Session Inbox ${sourceItem.id}: ${analysis.reason}`,
+    };
+    const related = this.store.enqueueSessionInbox(parent.sessionId, summary, relatedAnalysis, `related:${sourceItem.id}:${objective?.id ?? summary}`);
+    this.publish(this.store.appendEvent(parent.id, "session.inbox.related.queued", { inboxItemId: related.id, sourceInboxItemId: sourceItem.id, goal: summary, relation, parentRunId: parent.id }));
+    return related;
   }
 
   async updateSessionInput(sessionId: SessionId, itemId: string, content: string) {
@@ -335,10 +357,39 @@ export class AgentService {
 
   startSessionInputNow(sessionId: SessionId, itemId: string) {
     if (this.closing) return { status: "closing" as const };
-    const claimed = this.store.claimSessionInboxNow(itemId, sessionId);
+    const item = this.store.getSessionInboxItem(itemId);
+    const active = this.store.getActiveRun(sessionId);
+    if (item && active && item.analysis.relation === "parallel" && item.analysis.targetRunId === active.id) return { status: "approval_required" as const, item, runId: active.id };
+    return this.launchSessionInboxNow(sessionId, itemId, false);
+  }
+
+  private launchSessionInboxNow(sessionId: SessionId, itemId: string, allowApprovedParallel: boolean) {
+    const claimed = this.store.claimSessionInboxNow(itemId, sessionId, allowApprovedParallel);
     if (claimed.status !== "started") return claimed;
     const run = this.launchClaimedSessionInbox(claimed.item, claimed.run);
     return run ? { status: "started" as const, item: this.store.getSessionInboxItem(claimed.item.id)!, run } : { status: "failed" as const };
+  }
+
+  requestParallelSessionInputApproval(sessionId: SessionId, itemId: string, requestedBy = "governor", reason = "start related parallel TaskRun") {
+    const item = this.store.getSessionInboxItem(itemId);
+    if (!item || item.sessionId !== sessionId || item.status !== "queued" || item.analysis.relation !== "parallel" || !item.analysis.targetRunId) throw new Error("Queued parallel Session Inbox item not found");
+    const decision = this.supervisor.proposeParallelTaskStart(item.analysis.targetRunId, item.id, item.analysis.summary || item.content);
+    return this.store.ensureApprovalRequest(item.analysis.targetRunId, decision.id, reason, { actionType: "start_parallel_taskrun", targetType: "session_inbox_item", targetId: item.id, metadata: { sessionId, inboxItemId: item.id, parentRunId: item.analysis.targetRunId, requestedBy } });
+  }
+
+  async approveRunApproval(approvalId: string, resolution = "Approved by user") {
+    const pending = this.store.getApprovalRequest(approvalId);
+    if (!pending) throw new Error("Approval request is not pending");
+    const metadata = pending.metadata as {sessionId?:string;inboxItemId?:string};
+    const approval = this.store.resolveApprovalRequest(approvalId, "approved", "user", resolution);
+    if (!approval) throw new Error("Approval request is not pending");
+    this.publish(this.store.appendEvent(approval.runId, "supervisor.approval.approved", { approvalId, resolution }));
+    if (pending.actionType === "start_parallel_taskrun" && metadata.sessionId && metadata.inboxItemId) {
+      const launched = this.launchSessionInboxNow(metadata.sessionId, metadata.inboxItemId, true);
+      if (launched.status !== "started") throw new Error(`Parallel Session Inbox task could not start: ${launched.status}`);
+      return launched.run;
+    }
+    return this.resume(approval.runId);
   }
 
   retryInboxLaunch(runId: RunId) {
@@ -584,10 +635,11 @@ export class AgentService {
     try {
       this.workflowService.recordRunApplications(run);
       this.workflowService.recordCanaryOutcome(run);
-      void this.workflowService.drainProjectionOutbox();
+      this.workflowService.drainProjectionOutbox();
+      void this.workflowService.drainSemanticLearningJobs();
       this.learningService.drainLearningProjectionLedger();
       this.learningService.projectRun(run);
-      void this.learningService.drainFeedbackAttribution().catch((error: unknown) => this.publish(this.store.appendEvent(runId, "memory.feedback.attribution.failed", { error: error instanceof Error ? error.message : String(error) })));
+      void this.learningService.drainSemanticLearningJobs().then(()=>this.learningService.drainFeedbackAttribution()).catch((error: unknown) => this.publish(this.store.appendEvent(runId, "memory.feedback.attribution.failed", { error: error instanceof Error ? error.message : String(error) })));
     } catch (error) { this.publish(this.store.appendEvent(runId, "workflow.learning.failed", { error: error instanceof Error ? error.message : String(error) })); }
   }
 
@@ -633,7 +685,6 @@ export class AgentService {
         this.supervisor.markExecuted(decision.id, "executed");
         this.publish(event);
         this.projectWorkflowExperience(runId);
-        for (const spawn of this.supervisor.reviewSpawn(this.store.getRun(runId)!, event.seq)) this.publish(this.store.appendEvent(runId, "supervisor.spawn.proposed", { decisionId: spawn.id, reasonCode: spawn.reasonCode }));
         return false;
       }
       const reason = review.gates.find((gate) => gate.gateType === "completion")?.failures.map((failure) => `${failure.key}: ${failure.reason}`).join("; ") || decision.rationale;
@@ -690,7 +741,10 @@ export class AgentService {
 
   private captureUserMessage(run: TaskRun, messageId: number, content: string) {
     const context = this.store.listRecentMessages(run.sessionId, 8).filter((message) => message.id < messageId).slice(-4).map((message) => `${message.role}: ${message.content}`).join("\n");
-    if (this.learningControl?.snapshot().learningEnabled ?? true) void this.learningService.analyzeUserMessage({subjectId:`session:${run.sessionId}`,scopeId:run.sessionId,messageId,content,context,runId:run.id,attempt:run.attempt});
+    if (this.learningControl?.snapshot().learningEnabled ?? true) {
+      this.learningService.enqueueUserMessageAnalysis({subjectId:`session:${run.sessionId}`,scopeId:run.sessionId,messageId,content,context,runId:run.id,attempt:run.attempt});
+      void this.learningService.drainSemanticLearningJobs();
+    }
     if (!this.memory) return;
     void this.memory.enqueueCapture({ access: this.memoryAccess(run), sourceRefs: [{ sourceType: "message", sourceId: String(messageId), revision: "user" }], content: `<context>\n${context}\n</context>\n<focus_user>\n${content}\n</focus_user>`, idempotencyKey: `user-message:${messageId}`, captureSource: { kind: "user_message", role: "user" } }).then(({ jobId }) => this.publish(this.store.appendEvent(run.id, "memory.capture.queued", { jobId, sourceType: "message", sourceId: String(messageId) }))).catch((error: unknown) => this.publish(this.store.appendEvent(run.id, "memory.capture.failed", { sourceType: "message", sourceId: String(messageId), error: error instanceof Error ? error.message : String(error) })));
   }
@@ -816,44 +870,6 @@ export class AgentService {
 
   getRun(runId: RunId) {
     return this.store.getRun(runId);
-  }
-
-  approveSpawnProposal(proposalId: string) {
-    if (!this.store.updateSpawnProposalStatus(proposalId, "approved")) throw new Error("Proposal is not pending approval");
-    return { ok: true as const };
-  }
-
-  rejectSpawnProposal(proposalId: string) {
-    if (!this.store.updateSpawnProposalStatus(proposalId, "rejected")) throw new Error("Proposal is not pending approval");
-    return { ok: true as const };
-  }
-
-  spawnProposal(proposalId: string) {
-    if (this.closing) throw new Error("Service is shutting down");
-    const run = this.store.spawnFromProposal(proposalId);
-    if (!run) throw new Error("Proposal is not spawnable");
-    if (!this.memory) {
-      try { const history = this.prepareSessionHistoryWithoutRecall(run, run.goal); this.completeSpawnProposal(run, history); return this.store.getRun(run.id)!; }
-      catch (error) { this.store.failSpawnedRun(proposalId, run.id, error instanceof Error ? error.message : String(error)); void this.workflowService.drainProjectionOutbox(); throw error; }
-    }
-    return this.prepareSessionHistory(run, run.goal).then((history) => { this.completeSpawnProposal(run, history); return this.store.getRun(run.id)!; }).catch((error) => { this.store.failSpawnedRun(proposalId, run.id, error instanceof Error ? error.message : String(error)); void this.workflowService.drainProjectionOutbox(); throw error; });
-  }
-
-  private completeSpawnProposal(run: TaskRun, history: ContextAssembly & { recalledMemory?: string; memoryContextItems?: ContextManifestItem[] }) {
-    const userMessage = this.store.appendMessage(run.sessionId, "user", run.goal);
-    this.captureUserMessage(run, userMessage.id, run.goal);
-    this.publish(this.store.appendEvent(run.id, "run.started", { goal: run.goal, source: "spawn_proposal", sessionHistoryCount: history.messages.length }));
-    this.publishContextEvents(run.id, history);
-    this.recalledMemory.set(run.id, history.recalledMemory ?? "");
-    this.launch(run, run.goal, history.messages);
-    if (!this.runtimes.has(run.id)) throw new Error("Spawned runtime did not start");
-  }
-
-  approveRunApproval(approvalId: string, resolution = "Approved by user") {
-    const approval = this.store.resolveApprovalRequest(approvalId, "approved", "user", resolution);
-    if (!approval) throw new Error("Approval request is not pending");
-    this.publish(this.store.appendEvent(approval.runId, "supervisor.approval.approved", { approvalId, resolution }));
-    return this.resume(approval.runId);
   }
 
   rejectRunApproval(approvalId: string, resolution = "Rejected by user") {

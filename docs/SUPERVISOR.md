@@ -3,7 +3,7 @@
 TAgent Core separates two durable control layers:
 
 - **Session Input Router** understands newly admitted user input and chooses how it relates to the active TaskRun.
-- **TaskRun Supervisor** reviews progress, evidence, completion gates, continuations, and explicit spawn proposals.
+- **TaskRun Supervisor** reviews progress, evidence, completion gates, continuations, and explicit approval requests.
 
 ## Session input routing
 
@@ -23,7 +23,7 @@ The current deterministic semantic router uses auditable rules (`semantic-rules-
 | stop, correction, constraint, changed path/port | steer active Run |
 | parameter or evidence for current work | steer/update active context |
 | explicit “after completion” work | Pi follow-up queue |
-| explicit independent parallel work | spawn proposal, not automatic execution |
+| explicit independent parallel work | related queued Session Inbox item; early concurrent start requires approval |
 | independent work | prioritized queued TaskRun contract |
 | question/discussion or clarification | lower-priority lightweight contract (dedicated conversation-only execution remains future work) |
 | explicit postponement | durable deferred item that is not automatically dispatched |
@@ -55,11 +55,11 @@ Automatic selection orders eligible items by:
 
 Equivalent pending summaries are deduplicated at admission. Editing re-runs classification against the active Run, and manual merge combines summaries, scopes, acceptance criteria, urgency, and priority instead of only concatenating prose. Users can still reorder, defer, delete, or run an item explicitly.
 
-## Spawn safety
+## Related-task safety
 
-Parallel input creates a durable `SpawnProposal` and an auditable Run event. The Agent can also create a derived/follow-up proposal through `task_run.spawn_proposal` when execution discovers an independent target.
+Parallel, follow-up, derived, and dependency-related work uses ordinary Session Inbox items with `targetRunId` and `relation` metadata. This preserves the complete TaskRun Contract instead of maintaining a separate proposal record.
 
-A proposed child cannot be launched directly. It must transition through explicit approval (`proposed -> approved -> spawned`), and the Web TaskRun panel exposes Approve, Reject, and Start actions. Non-parallel children additionally wait for the parent to complete.
+Related work remains queued by default. If the parent is still running, an early parallel start must enter the existing Supervisor approval flow. Human approval launches the Inbox item, persists the child contract, and records a `taskrun_edges` relation. The Agent and Router can only queue related work; they cannot launch it directly.
 
 ## Attempt and settled supervision
 
@@ -116,14 +116,14 @@ The semantic-rules-v3 router covers high-confidence safety paths and decomposes 
 
 ## Design alignment audit
 
-The current implementation covers the durable Session Inbox, high-confidence input routing, TaskRun contracts, checkpoint/settled/attempt-terminal reviews, completion/evidence/continuation gates, explicit approval receipts, and approved spawn proposals. Compared with the original Session/Topic/TaskRun design, the following remain intentionally incomplete:
+The current implementation covers the durable Session Inbox, high-confidence input routing, TaskRun contracts, checkpoint/settled/attempt-terminal reviews, completion/evidence/continuation gates, explicit approval receipts, and related-task Inbox/approval integration. Compared with the original Session/Topic/TaskRun design, the following remain intentionally incomplete:
 
 - Topic is not yet a first-class cross-Session graph with message/Run links, confidence, merge, split, and correction receipts.
 - Context Manifests now persist Session/transcript, TaskRun, prompt, and Memory selection. First-class Supervisor Topic links and stable cross-Session message identities remain incomplete.
 - Multi-intent decomposition is deterministic and persisted, but ambiguous low-confidence classification still lacks an optional schema-validated model adjudicator and explicit user confirmation UI.
 - Discussion and clarification still use a lightweight TaskRun contract rather than a dedicated conversation-only runtime.
-- Parallel proposals require explicit approval and manual start; there is no dependency-aware concurrent scheduler.
-- Safety approvals currently govern Supervisor pauses and spawn proposals, not every high-risk operation through one capability-policy system.
+- Early parallel Inbox starts require explicit approval; there is still no dependency-aware concurrent scheduler or resource-conflict planner.
+- Safety approvals govern Supervisor pauses and early parallel Inbox starts, but not every high-risk operation through one capability-policy system.
 
 These are architectural roadmap items rather than claims of completed functionality.
 

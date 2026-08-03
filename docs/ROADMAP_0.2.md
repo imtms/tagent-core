@@ -4,7 +4,7 @@ TAgent Core should not move to `0.2.0` merely because several `0.1.x` features h
 
 ## Current position
 
-`0.1.5 + main` provides durable Session admission, structured TaskRun contracts, progress/evidence/completion supervision, bounded continuation, explicit approvals, spawn proposals, persistent memory governance, and per-attempt Context Manifests.
+`0.1.5 + main` provides durable Session admission, structured TaskRun contracts, progress/evidence/completion supervision, bounded continuation, explicit approvals, related-task Inbox contracts, persistent memory governance, and per-attempt Context Manifests.
 
 The implementation is approaching the original design, but Topic orchestration, ambiguous multi-intent analysis, general capability approvals, and dependency-aware scheduling are not yet complete. Until those gates pass, releases should remain `0.1.x`.
 
