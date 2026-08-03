@@ -30,9 +30,9 @@ npm prune --omit=dev
 mkdir -p "$release/scripts"
 cp -a package.json package-lock.json dist node_modules "$release/"
 # Deployment archives intentionally contain only regular files/directories.
-# npm creates node_modules/.bin symlinks; runtime package resolution does not
-# require them, and deploy-release.sh rejects archive links by policy.
-rm -rf "$release/node_modules/.bin"
+# npm creates nested node_modules/.bin symlinks; runtime package resolution does
+# not require them, and deploy-release.sh rejects archive links by policy.
+find "$release/node_modules" -type d -name .bin -prune -exec rm -rf {} +
 cp scripts/release-manifest.mjs scripts/deploy-release.sh "$release/scripts/"
 RELEASE_COMMIT="$commit" node scripts/release-manifest.mjs create "$release"
 node --check "$release/dist/server.js"

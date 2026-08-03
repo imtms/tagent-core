@@ -72,8 +72,8 @@ const commit = "1".repeat(40);
 describe("production release deployment", () => {
   it("removes npm .bin symlinks before creating an archive that the deployer can accept", async () => {
     const source = await readFile(buildScript, "utf8");
-    expect(source).toContain('rm -rf "$release/node_modules/.bin"');
-    expect(source.indexOf('rm -rf "$release/node_modules/.bin"')).toBeLessThan(source.indexOf('tar -C "$work" -czf'));
+    expect(source).toContain('find "$release/node_modules" -type d -name .bin -prune -exec rm -rf {} +');
+    expect(source.indexOf('find "$release/node_modules" -type d -name .bin')).toBeLessThan(source.indexOf('tar -C "$work" -czf'));
   });
 
   it.each(["native", "manifest", "syntax"] as const)("does not switch or restart when %s preflight fails", async (kind) => {
