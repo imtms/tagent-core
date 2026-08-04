@@ -1,11 +1,11 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Command, Download, Eye, FileText, GripVertical, HelpCircle, Menu, MessageSquarePlus, PanelRight, Pencil, Play, Plus, Send, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TranscriptItem, type UserInputRequest } from "./api";
 import { LiveText, Markdown } from "./Markdown";
 import { createRequestId } from "./id";
 import { deriveCurrentOperation } from "./current-operation";
-import { MemoryPanel } from "./MemoryPanel";
-import { LearningCenter } from "./LearningCenter";
+const MemoryPanel = lazy(() => import("./MemoryPanel").then((module) => ({ default: module.MemoryPanel })));
+const LearningCenter = lazy(() => import("./LearningCenter").then((module) => ({ default: module.LearningCenter })));
 
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
 
@@ -733,8 +733,8 @@ export function App() {
         </section>;
       })}</div>}
     </aside>
-    {runtimeStatus?.memoryEnabled && memoryOpen && <MemoryPanel runtime={runtimeStatus} onClose={() => setMemoryOpen(false)} />}
-    {learningOpen && sessionId && learningSettings?.learningEnabled && <LearningCenter sessionId={sessionId} onClose={() => setLearningOpen(false)} />}
+    {runtimeStatus?.memoryEnabled && memoryOpen && <Suspense fallback={null}><MemoryPanel runtime={runtimeStatus} onClose={() => setMemoryOpen(false)} /></Suspense>}
+    {learningOpen && sessionId && learningSettings?.learningEnabled && <Suspense fallback={null}><LearningCenter sessionId={sessionId} onClose={() => setLearningOpen(false)} /></Suspense>}
     {(leftOpen || rightOpen) && <button className="backdrop mobile-only" onClick={() => { setLeftOpen(false); setRightOpen(false); }} aria-label="Close panel" />}
   </div>;
 }

@@ -590,16 +590,16 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(27);
+    expect(store.getSchemaVersion()).toBe(28);
   });
 
-  it("migrates an older database to schema version 27", () => {
+  it("migrates an older database to schema version 28", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(27);
+    expect(migrated.getSchemaVersion()).toBe(28);
     expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('approval_requests','context_manifests','control_inbox','event_consumers','gate_evaluations','operations','progress_snapshots','run_checkpoints','semantic_learning_jobs','session_supervisor_inbox','supervisor_decisions','taskrun_edges','tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["approval_requests", "context_manifests", "control_inbox", "event_consumers", "gate_evaluations", "operations", "progress_snapshots", "run_checkpoints", "semantic_learning_jobs", "session_supervisor_inbox",  "supervisor_decisions", "taskrun_edges", "tool_attempts"]);
     expect(migrated.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='spawn_proposals'").get()).toBeUndefined();
     migrated.close();

@@ -217,8 +217,13 @@ export class LearningService {
 
   async drainSemanticLearningJobs(limit = 100) {
     if (!this.semanticJudge) return 0;
-    const rows = this.store.listDueSemanticLearningJobs(limit).filter((row)=>row.kind==="user_message"||row.kind==="feedback_attribution");
-    for (const row of rows) {
+    const owner = `semantic:${randomUUID()}`;
+    let processed = 0;
+    while (processed < limit) {
+      const [row] = this.store.claimSemanticLearningJobs(owner, ["user_message", "feedback_attribution"], 1);
+      if (!row) break;
+      const heartbeat = setInterval(() => this.store.renewSemanticLearningJob(row.id, owner, row.leaseToken, row.fence), 10_000);
+      heartbeat.unref?.();
       try {
         const payload = safeJson<Record<string, unknown>>(row.payloadJson, {});
         if (row.kind === "user_message") await this.analyzeUserMessage(payload as Parameters<LearningService["analyzeUserMessage"]>[0]);
@@ -230,10 +235,15 @@ export class LearningService {
           Boolean(payload.corrected),
         );
         else throw new Error(`Unsupported semantic learning job: ${row.kind}`);
-        this.store.completeSemanticLearningJob(row.id);
-      } catch (error) { this.store.failSemanticLearningJob(row.id, row.attempts, redact(error instanceof Error ? error.message : String(error))); }
+        if (!this.store.completeSemanticLearningJob(row.id, owner, row.leaseToken, row.fence)) throw new Error("Semantic learning lease lost before completion");
+      } catch (error) {
+        this.store.failSemanticLearningJob(row.id, owner, row.leaseToken, row.fence, row.attempts, redact(error instanceof Error ? error.message : String(error)));
+      } finally {
+        clearInterval(heartbeat);
+      }
+      processed++;
     }
-    return rows.length;
+    return processed;
   }
 
   async drainFeedbackAttribution(limit = 100) {

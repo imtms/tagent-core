@@ -166,18 +166,28 @@ export class WorkflowService {
 
   async drainSemanticLearningJobs(limit = 100) {
     if (!this.semanticJudge) return 0;
-    const rows = this.store.listDueSemanticLearningJobs(limit).filter((row)=>row.kind==="workflow_eligibility");
-    for (const row of rows) {
+    const owner = `semantic:${randomUUID()}`;
+    let processed = 0;
+    while (processed < limit) {
+      const [row] = this.store.claimSemanticLearningJobs(owner, ["workflow_eligibility"], 1);
+      if (!row) break;
+      const heartbeat = setInterval(() => this.store.renewSemanticLearningJob(row.id, owner, row.leaseToken, row.fence), 10_000);
+      heartbeat.unref?.();
       try {
         const payload=JSON.parse(row.payloadJson) as {runId:string;scopeId:string;taskSignature:string;observationId?:string;input:{taskSignature:string;procedureSummary:string;stepCount?:number;outcome?:string;requiredChecks?:Array<{key:string;status:string;stale:boolean}>}};
         const failuresBefore=this.semanticJudge.snapshot().failures;
         const decision=await this.semanticJudge.learningSample(payload.input);
         if(!decision&&this.semanticJudge.snapshot().failures>failuresBefore)throw new Error("Semantic workflow eligibility failed");
         this.applyWorkflowEligibility(payload.scopeId,payload.runId,payload.taskSignature,payload.observationId,decision,payload.input.stepCount??0);
-        this.store.completeSemanticLearningJob(row.id);
-      } catch(error){this.store.failSemanticLearningJob(row.id,row.attempts,error instanceof Error?error.message:String(error));}
+        if (!this.store.completeSemanticLearningJob(row.id, owner, row.leaseToken, row.fence)) throw new Error("Semantic learning lease lost before completion");
+      } catch(error){
+        this.store.failSemanticLearningJob(row.id,owner,row.leaseToken,row.fence,row.attempts,error instanceof Error?error.message:String(error));
+      } finally {
+        clearInterval(heartbeat);
+      }
+      processed++;
     }
-    return rows.length;
+    return processed;
   }
 
   drainProjectionOutbox(limit = 100) {
@@ -781,7 +791,7 @@ export class WorkflowService {
     FROM workflow_distillation_jobs WHERE scope_id=? ORDER BY updated_at DESC`).all(scopeId); }
   listRunLearningPolicies(scopeId: string) { return this.store.db.prepare(`SELECT p.run_id as runId,p.policy,p.reason,p.updated_at as updatedAt
     FROM run_learning_policies p JOIN runs r ON r.id=p.run_id WHERE r.session_id=? ORDER BY p.updated_at DESC`).all(scopeId); }
-  listWorkflowQuality(scopeId: string) { return this.listWorkflows(scopeId, true).map((workflow) => ({ workflowId: workflow.id, revisionId: workflow.revision?.id, ...(workflow.revision ? this.workflowQuality(workflow.revision.id) : { samples: 0, score: 0 }) })); }
+  listWorkflowQuality(scopeId: string) { const rows=this.store.db.prepare(`SELECT w.id as workflowId,COALESCE(w.active_revision_id,(SELECT r.id FROM workflow_revisions r WHERE r.workflow_id=w.id ORDER BY r.revision DESC LIMIT 1)) as revisionId,COUNT(f.id) as samples,COALESCE(SUM(f.weight),0) as weight FROM workflow_definitions w LEFT JOIN workflow_feedback f ON f.revision_id=COALESCE(w.active_revision_id,(SELECT r2.id FROM workflow_revisions r2 WHERE r2.workflow_id=w.id ORDER BY r2.revision DESC LIMIT 1)) AND f.adopted=1 WHERE w.scope_id=? GROUP BY w.id,w.active_revision_id`).all(scopeId) as Array<{workflowId:string;revisionId?:string;samples:number;weight:number}>;const priorSamples=4,priorSuccess=2;return rows.map((row)=>({workflowId:row.workflowId,revisionId:row.revisionId,samples:row.samples,score:Math.max(0,Math.min(1,(priorSuccess+Math.max(0,row.weight))/(priorSamples+row.samples)))})); }
   listEvaluations(scopeId: string) { return this.store.db.prepare(`SELECT e.id,e.workflow_id as workflowId,e.revision_id as revisionId,e.kind,e.status,e.sample_size as sampleSize,
     e.success_rate as successRate,e.baseline_rate as baselineRate,e.risk_class as riskClass,e.evaluator_id as evaluatorId,e.evaluator_version as evaluatorVersion,
     e.dataset_id as datasetId,e.dataset_hash as datasetHash,e.baseline_revision_id as baselineRevisionId,e.candidate_revision_id as candidateRevisionId,
@@ -791,7 +801,7 @@ export class WorkflowService {
     c.bucket,c.variant,c.revision_id as revisionId,c.receipt_hash as receiptHash,c.outcome_status as outcomeStatus,c.success,c.required_checks as requiredChecks,
     c.passed_checks as passedChecks,c.outcome_recorded_at as outcomeRecordedAt,c.created_at as createdAt FROM workflow_canary_bindings c
     JOIN workflow_definitions w ON w.id=c.workflow_id WHERE w.scope_id=? ORDER BY c.created_at DESC LIMIT ?`).all(scopeId,limit); }
-  getDistillationMetrics() { const rows=this.store.db.prepare("SELECT status,COUNT(*) count,MIN(created_at) oldest FROM workflow_distillation_jobs GROUP BY status").all() as Array<{status:string;count:number;oldest:number}>; const byStatus=Object.fromEntries(rows.map(row=>[row.status,row.count]));const completed=this.store.db.prepare("SELECT checkpoint_json FROM workflow_distillation_jobs WHERE status='completed'").all() as Array<{checkpoint_json:string}>;const outcomes=completed.map(row=>JSON.parse(row.checkpoint_json||"{}") as {result?:string;detail?:{reason?:string}}),withheldReasons:Record<string,number>={};for(const outcome of outcomes)if(outcome.result==="withheld"){const reason=outcome.detail?.reason??"insufficient_evidence";withheldReasons[reason]=(withheldReasons[reason]??0)+1;}return {queued:byStatus.queued??0,running:byStatus.running??0,completed:byStatus.completed??0,deadLetter:byStatus.dead_letter??0,failed:byStatus.failed??0,candidates:outcomes.filter(item=>item.result==="candidate").length,withheld:outcomes.filter(item=>item.result==="withheld").length,withheldReasons,oldestQueuedAgeMs:rows.find(row=>row.status==='queued')?now()-(rows.find(row=>row.status==='queued')!.oldest):0}; }
+  getDistillationMetrics(scopeId?:string) { const where=scopeId?"WHERE scope_id=?":"",params=scopeId?[scopeId]:[];const rows=this.store.db.prepare(`SELECT status,COUNT(*) count,MIN(created_at) oldest FROM workflow_distillation_jobs ${where} GROUP BY status`).all(...params) as Array<{status:string;count:number;oldest:number}>;const outcome=this.store.db.prepare(`SELECT COUNT(*) FILTER (WHERE json_extract(checkpoint_json,'$.result')='candidate') candidates,COUNT(*) FILTER (WHERE json_extract(checkpoint_json,'$.result')='withheld') withheld FROM workflow_distillation_jobs ${where?`${where} AND`:"WHERE"} status='completed'`).get(...params) as {candidates:number;withheld:number};const reasonRows=this.store.db.prepare(`SELECT COALESCE(json_extract(checkpoint_json,'$.detail.reason'),'insufficient_evidence') reason,COUNT(*) count FROM workflow_distillation_jobs ${where?`${where} AND`:"WHERE"} status='completed' AND json_extract(checkpoint_json,'$.result')='withheld' GROUP BY reason`).all(...params) as Array<{reason:string;count:number}>;const byStatus=Object.fromEntries(rows.map(row=>[row.status,row.count])),queued=rows.find(row=>row.status==='queued');return{queued:byStatus.queued??0,running:byStatus.running??0,completed:byStatus.completed??0,deadLetter:byStatus.dead_letter??0,failed:byStatus.failed??0,candidates:Number(outcome?.candidates??0),withheld:Number(outcome?.withheld??0),withheldReasons:Object.fromEntries(reasonRows.map(row=>[row.reason,row.count])),oldestQueuedAgeMs:queued?now()-queued.oldest:0}; }
   listAutonomyAudit(scopeId: string, limit = 300) { return this.store.db.prepare(`SELECT id,scope_id as scopeId,category,action,actor,source_run_id as sourceRunId,
     workflow_id as workflowId,revision_id as revisionId,approval_id as approvalId,evidence_json as evidenceJson,metadata_json as metadataJson,
     receipt_hash as receiptHash,created_at as createdAt FROM autonomy_audit_events WHERE scope_id=? ORDER BY created_at DESC LIMIT ?`).all(scopeId,limit); }
@@ -803,7 +813,7 @@ export class WorkflowService {
       (id,scope_id,category,action,actor,source_run_id,workflow_id,revision_id,approval_id,evidence_json,metadata_json,receipt_hash,created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(randomUUID(),scopeId,category,action,payload.actor,payload.sourceRunId,payload.workflowId,payload.revisionId,payload.approvalId,JSON.stringify(payload.evidence),JSON.stringify(payload.metadata),receiptHash,createdAt);
   }
-  getLearningCenter(scopeId: string) { return { featureState:this.featureControl?.snapshot()??null,workflows:this.listWorkflows(scopeId,true),bindings:this.listBindings(scopeId),canaryBindings:this.listCanaryBindings(scopeId),feedback:this.listFeedback(scopeId),proposals:this.listProposals(scopeId),learningPolicies:this.listRunLearningPolicies(scopeId),quality:this.listWorkflowQuality(scopeId),distillationJobs:this.listDistillationJobs(scopeId),distillationMetrics:this.getDistillationMetrics(),evaluations:this.listEvaluations(scopeId),approvals:this.listApprovals(scopeId),autonomyAudit:this.listAutonomyAudit(scopeId) }; }
+  getLearningCenter(scopeId: string) { return { featureState:this.featureControl?.snapshot()??null,workflows:this.listWorkflows(scopeId,true),bindings:this.listBindings(scopeId),canaryBindings:this.listCanaryBindings(scopeId),feedback:this.listFeedback(scopeId),proposals:this.listProposals(scopeId),learningPolicies:this.listRunLearningPolicies(scopeId),quality:this.listWorkflowQuality(scopeId),distillationJobs:this.listDistillationJobs(scopeId),distillationMetrics:this.getDistillationMetrics(scopeId),evaluations:this.listEvaluations(scopeId),approvals:this.listApprovals(scopeId),autonomyAudit:this.listAutonomyAudit(scopeId) }; }
   executeEvaluation(input: {workflowId:string;candidateRevisionId:string;baselineRevisionId:string;kind:"shadow"|"offline_replay";datasetId:string;baselineRunIds:string[];candidateRunIds:string[]}) {
     const workflow=this.getWorkflow(input.workflowId,true); const candidate=this.getRevision(input.candidateRevisionId); const baseline=this.getRevision(input.baselineRevisionId);
     if(!workflow||!candidate||!baseline||candidate.workflowId!==workflow.id||baseline.workflowId!==workflow.id)throw new Error("Evaluation revisions not found");
