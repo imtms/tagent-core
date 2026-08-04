@@ -2,7 +2,7 @@
 
 Updated: 2026-08-04 (Asia/Singapore)
 
-Current stable release: `0.1.13`. Current SQLite schema: `24`.
+Current stable release: `0.1.13`. Current `main` SQLite schema: `28`.
 
 ## Completed
 
@@ -104,10 +104,10 @@ Current stable release: `0.1.13`. Current SQLite schema: `24`.
 - Store, completion gate, workspace tool, and HTTP API tests.
 - Desktop and mobile Chromium rendering checks.
 - Production dependency audit with no known vulnerabilities at the current lockfile.
-- Full production and development dependency audit with no known high-severity vulnerabilities at the current release lockfile.
+- Dependency inventory is lockfile-pinned and periodically audited. The current lockfile still reports transitive advisories through the pinned Pi runtime stack; remediation requires an independently validated runtime upgrade.
 - ESLint flat configuration, release checklist, security policy, changelog, license, required PostgreSQL memory CI, and tag-triggered stable GitHub Release workflows.
 - Git repository linked to `git@github.com:imtms/tagent-core.git` with incremental commits on `main`.
-- The 2026-07-31 external PR audit merged queue scheduling, manual Inbox start, and workspace status improvements after combined and post-merge validation; deployment artifact and current-operation PRs remain open for rollback/integrity and sensitive-data fixes. See [PR_AUDIT_2026-07-31.md](PR_AUDIT_2026-07-31.md).
+- Queue scheduling, manual Inbox start, and workspace status improvements from the July 2026 PR series are integrated. Historical review detail remains available in Git history; current behavior is documented here and in the runtime/API documents.
 
 ## In Progress
 

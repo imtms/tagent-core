@@ -11,3 +11,6 @@ test-results/
 *.pid
 tmp-*.png
 .DS_Store
+
+# Runtime and agent working tree
+/workspace/

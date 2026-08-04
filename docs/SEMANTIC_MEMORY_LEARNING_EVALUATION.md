@@ -134,4 +134,4 @@ TAGENT_LEARNING_SEMANTIC_JUDGE_MAX_CALLS_PER_MINUTE=120
 
 ## 8. Release boundary
 
-The evaluation was captured before release; deployment evidence is recorded in RELEASE_AUDIT_0.1.11.md. Workflow activation, revision application, canary start and active execution continue to require the existing human-approval path.
+The evaluation was captured before release; deployment evidence is retained in Git history and the current release audit index. Workflow activation, revision application, canary start and active execution continue to require the existing human-approval path.

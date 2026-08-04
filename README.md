@@ -209,26 +209,10 @@ See [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md) and [docs/REL
 
 ## Documentation
 
-- [Development status](docs/STATUS.md)
-- [Roadmap to 0.2.0](docs/ROADMAP_0.2.md)
-- [Runtime architecture](docs/RUNTIME.md)
-- [Pi runtime boundary](docs/PI_RUNTIME_BOUNDARY.md)
-- [Automation API contract](docs/core-api-contract.md)
-- [Long-term memory](docs/MEMORY.md)
-- [Memory-dependent Learning and controlled evolution](docs/LEARNING.md)
-- [Learning release acceptance coverage](docs/LEARNING_RELEASE_COVERAGE.md)
-- [v0.1.13 release audit](docs/RELEASE_AUDIT_0.1.13.md)
-- [v0.1.9 Memory/Learning release audit](docs/LEARNING_RELEASE_AUDIT.md)
-- [Memory architecture](docs/MEMORY_ARCHITECTURE.md)
-- [Memory operations](docs/MEMORY_OPERATIONS.md)
-- [Memory API and UI](docs/MEMORY_API.md)
+The maintained documentation index is [docs/README.md](docs/README.md). Start there for current architecture, operations, API, release, and historical-reference documents.
+
+- [Documentation index](docs/README.md)
 - [Security policy](SECURITY.md)
-- [0.1.0 release audit](docs/RELEASE_AUDIT_0.1.0.md)
-- [0.1.4 release audit](docs/RELEASE_AUDIT_0.1.4.md)
-- [0.1.5 release audit](docs/RELEASE_AUDIT_0.1.5.md)
-- [0.1.6 release audit](docs/RELEASE_AUDIT_0.1.6.md)
-- [0.1.7 release audit](docs/RELEASE_AUDIT_0.1.7.md)
-- [0.1.8 release audit](docs/RELEASE_AUDIT_0.1.8.md)
 - [Changelog](CHANGELOG.md)
 
 ## Authorship and License

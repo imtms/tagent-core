@@ -1,13 +1,12 @@
-## Unreleased
-
-- Removed the independent SpawnProposal model, API, Agent tool action, Supervisor branch, and Web controls.
-- Related parallel/follow-up work is now persisted through Session Inbox and complete TaskRun Contracts, with TaskRun edges created at launch.
-- Early parallel execution uses the existing Supervisor human-approval flow; related work remains queued by default.
-- Schema 27 migrates legacy unstarted SpawnProposal rows into Session Inbox and drops the legacy table.
-
 # Changelog
 
 ## [Unreleased]
+
+### Changed
+
+- Removed the independent SpawnProposal model, API, Agent tool action, Supervisor branch, and Web controls. Related work now uses Session Inbox, TaskRun Contracts, TaskRun edges, and the existing approval flow; Schema 27 migrates legacy unstarted proposals.
+- Removed unused package dependencies, obsolete empty-directory placeholders, a one-off payload measurement script, and superseded point-release/PR audit documents.
+- Added a maintained documentation index and aligned development status with the current `main` schema and dependency-audit state.
 
 ### Fixed
 
