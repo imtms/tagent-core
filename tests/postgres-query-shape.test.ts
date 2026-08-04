@@ -21,9 +21,29 @@ function adapterWith(counter: QueryCounter) {
 const scope = { type: "workspace" as const, id: "performance-test" };
 function expectValidParameters(call: { text: string; values?: unknown[] }) {
   const indexes=[...call.text.matchAll(/\$(\d+)/g)].map((match)=>Number(match[1]));
-  expect(indexes.length).toBeGreaterThan(0);
+  if (!indexes.length) {
+    expect(call.values ?? []).toHaveLength(0);
+    return;
+  }
   expect(Math.max(...indexes)).toBe(call.values?.length ?? 0);
   expect(call.text).not.toMatch(/(?:scope_type|scope_id|LIMIT|ANY\(|&&\s*)\d+/);
+}
+
+function expectTypedDynamicParameters(call: { text: string; values?: unknown[] }) {
+  expectValidParameters(call);
+  const values=call.values ?? [];
+  for (const match of call.text.matchAll(/\bLIMIT\s+\$(\d+)/gi)) {
+    expect(typeof values[Number(match[1])-1], call.text).toBe("number");
+  }
+  for (const match of call.text.matchAll(/(?:ANY\(|&&\s*)\$(\d+)::text\[\]/gi)) {
+    const value=values[Number(match[1])-1];
+    expect(Array.isArray(value), call.text).toBe(true);
+    expect((value as unknown[]).every((item)=>typeof item === "string"), call.text).toBe(true);
+  }
+  for (const match of call.text.matchAll(/\$(\d+)::bigint/gi)) {
+    const value=values[Number(match[1])-1];
+    expect(value === null || typeof value === "number" || typeof value === "bigint", call.text).toBe(true);
+  }
 }
 
 
@@ -57,6 +77,108 @@ describe("PostgreSQL memory query shape", () => {
     await adapter.countTopicSummary([scope]);
     await adapter.getDescriptors(["topic-1"], [scope]);
     await adapter.removeMissing("g1", new Set(), [scope]);
+    for (const call of counter.calls) expectValidParameters(call);
+  });
+
+  it("binds dynamic search, list, vector, graph, topic, and job parameters to query-local values", async () => {
+    const counter = new QueryCounter();
+    const adapter = adapterWith(counter);
+
+    await adapter.search("postgres", [scope], ["fact", "preference"], 7);
+    await adapter.list([scope], ["fact", "preference"], 9);
+    await adapter.searchVectors([0.1, 0.2], [scope], ["fact"], 11, "g1");
+    await adapter.resolveEntities("tagent", [scope], 13);
+    await adapter.neighborhood(["entity-1"], [scope], 2, 15);
+    await adapter.searchTopics("memory", [scope], ["fact"], 17);
+    await adapter.listJobs([scope], 19);
+    await adapter.listReindexJobs([scope], 21);
+
+    expect(counter.calls.length).toBeGreaterThanOrEqual(10);
+    for (const call of counter.calls) expectTypedDynamicParameters(call);
+
+    const preferenceSearch=counter.calls.find((call)=>call.text.includes("FROM memory.preferences") && call.text.includes("ts_rank_cd"));
+    expect(preferenceSearch?.values).toEqual(["postgres", scope.type, scope.id, 7]);
+    expect(preferenceSearch?.text).toContain("LIMIT $4");
+
+    const preferenceList=counter.calls.find((call)=>call.text.includes("FROM memory.preferences") && !call.text.includes("ts_rank_cd"));
+    expect(preferenceList?.values).toEqual([scope.type, scope.id, 9]);
+    expect(preferenceList?.text).toContain("LIMIT $3");
+
+    const captureJobs=counter.calls.find((call)=>call.text.includes("FROM memory.capture_jobs"));
+    expect(captureJobs?.values).toEqual([JSON.stringify([{ type: scope.type, id: scope.id }]), 19]);
+    expect(captureJobs?.text).toContain("LIMIT $2");
+  });
+
+  it("binds each topic lookup LIMIT to the query-local numeric limit parameter", async () => {
+    const counter = new QueryCounter();
+    const adapter = adapterWith(counter);
+
+    await adapter.getByTopicIds(["topic-1"], [scope], ["fact", "preference"], 8);
+
+    expect(counter.calls).toHaveLength(2);
+    const [records, preferences] = counter.calls;
+    expect(records.values).toEqual([scope.type, scope.id, ["topic-1"], ["fact"], 8]);
+    expect(records.text).toContain("kind=ANY($4::text[])");
+    expect(records.text).toContain("LIMIT $5");
+    expect(preferences.values).toEqual([scope.type, scope.id, ["topic-1"], 8]);
+    expect(preferences.text).not.toContain("kind=ANY");
+    expect(preferences.text).toContain("LIMIT $4");
+    expect(typeof preferences.values?.[3]).toBe("number");
+  });
+
+  it("keeps preference-only topic reads independent from the records kind parameter", async () => {
+    const counter = new QueryCounter();
+    const adapter = adapterWith(counter);
+
+    await adapter.getByTopicIds(["topic-1"], [scope], ["preference"], 6);
+
+    expect(counter.calls).toHaveLength(1);
+    expect(counter.calls[0].values).toEqual([scope.type, scope.id, ["topic-1"], 6]);
+    expect(counter.calls[0].text).toContain("topic_ids && $3::text[]");
+    expect(counter.calls[0].text).toContain("LIMIT $4");
+    expect(counter.calls[0].text).not.toContain("$5");
+    expectValidParameters(counter.calls[0]);
+  });
+
+  it("uses direct typed array parameters for id and descriptor reads", async () => {
+    const counter = new QueryCounter();
+    const adapter = adapterWith(counter);
+
+    await adapter.getByIds(["record-1"], [scope]);
+    await adapter.getDescriptors(["topic-1"], [scope]);
+
+    expect(counter.calls).toHaveLength(3);
+    for (const call of counter.calls) {
+      expect(call.values).toEqual([scope.type, scope.id, [expect.any(String)]]);
+      expect(call.text).toContain("ANY($3::text[])");
+      expectValidParameters(call);
+    }
+  });
+
+  it("keeps maintenance descriptor and expiry-cleanup parameters correctly typed", async () => {
+    const counter = new QueryCounter();
+    const adapter = adapterWith(counter);
+    const now = 1_725_000_000_000;
+
+    await adapter.listDescriptors([scope], ["fact", "preference"], 20);
+    await adapter.purgeDeleted([scope], now, 10);
+    await adapter.purgeDeletedTopics([scope], now, 5);
+
+    const descriptor = counter.calls.find((call) => call.text.includes("FROM memory.topics") && call.text.includes("kind=ANY"));
+    expect(descriptor?.values).toEqual([scope.type, scope.id, ["fact", "preference"], 20]);
+    expect(descriptor?.text).toContain("kind=ANY($3::text[])");
+    expect(descriptor?.text).toContain("LIMIT $4");
+
+    const recordPurge = counter.calls.find((call) => call.text.includes("DELETE FROM memory.records"));
+    const preferencePurge = counter.calls.find((call) => call.text.includes("DELETE FROM memory.preferences"));
+    expect(recordPurge?.values).toEqual([scope.type, scope.id, now, 10]);
+    expect(preferencePurge?.values).toEqual([scope.type, scope.id, now, 10]);
+    expect(recordPurge?.text).toContain("::bigint<=$3 LIMIT $4");
+    expect(preferencePurge?.text).toContain("::bigint<=$3 LIMIT $4");
+
+    const topicPurge = counter.calls.find((call) => call.text.includes("SELECT topic_id FROM memory.topics"));
+    expect(topicPurge?.values).toEqual([scope.type, scope.id, now, 5]);
+    expect(topicPurge?.text).toContain("::bigint<=$3 LIMIT $4");
     for (const call of counter.calls) expectValidParameters(call);
   });
 
