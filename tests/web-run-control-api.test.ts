@@ -6,7 +6,8 @@ afterEach(() => vi.unstubAllGlobals());
 const success = (data: unknown) => ({ data, requestId: "web-run-control-test" });
 
 const resumableRun = {
-  id: "resume-run", sessionId: "session", requestId: "request", status: "running", phase: "implement", goal: "test", contract: null,
+  id: "resume-run", sessionId: "session", requestId: "request", status: "running", phase: "implement", goal: "test",
+  modelId: "gpt-5.6-sol", reasoningEffort: "high", contract: null,
   blockedReason: "", lastEventSeq: 0, attempt: 1, resumedAt: 1, createdAt: 1, updatedAt: 1, completedAt: null,
   usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
   transcriptCount: 0, checkpoint: null, continuations: [], plan: [], checks: [], userInputRequests: [], pendingUserInput: null,

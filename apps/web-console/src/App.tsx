@@ -1,5 +1,5 @@
 import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Command, Download, Eye, FileText, GripVertical, HelpCircle, Menu, MessageSquarePlus, PanelRight, Pencil, Play, Plus, Send, ShieldCheck, Square, Terminal, X } from "lucide-react";
+import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Menu, MessageSquarePlus, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Send, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TranscriptItem, type UserInputRequest } from "./api";
 import { LiveText, Markdown } from "./Markdown";
 import { createRequestId } from "./id";
@@ -8,6 +8,19 @@ const MemoryPanel = lazy(() => import("./MemoryPanel").then((module) => ({ defau
 const LearningCenter = lazy(() => import("./LearningCenter").then((module) => ({ default: module.LearningCenter })));
 
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
+const workspaceEmojis = ["💬", "🧠", "🛠️", "🚀", "📚", "🔬", "🎨", "📦", "🧭", "⚙️"] as const;
+const reasoningEfforts = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+function storedBoolean(key: string): boolean {
+  try { return globalThis.localStorage?.getItem(key) === "true"; } catch { return false; }
+}
+
+function storedWorkspaceEmojis(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(globalThis.localStorage?.getItem("tagent.workspace-emojis") ?? "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, string> : {};
+  } catch { return {}; }
+}
 
 function MemoryExtraction({ job }: { job: CaptureJob | null | undefined }) {
   if (job === undefined) return <div className="turn-memory loading"><BrainCircuit size={13} /><span><strong>Memory extraction</strong><small>Checking this turn…</small></span></div>;
@@ -292,6 +305,11 @@ export function App() {
   const [error, setError] = useState("");
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
+  const [leftCollapsed, setLeftCollapsed] = useState(() => storedBoolean("tagent.left-rail-collapsed"));
+  const [rightCollapsed, setRightCollapsed] = useState(() => storedBoolean("tagent.right-panel-collapsed"));
+  const [workspaceEmojiById, setWorkspaceEmojiById] = useState<Record<string, string>>(storedWorkspaceEmojis);
+  const [emojiPickerSessionId, setEmojiPickerSessionId] = useState("");
+  const [savingExecutionProfile, setSavingExecutionProfile] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [learningOpen, setLearningOpen] = useState(false);
   const [memoryJobs, setMemoryJobs] = useState<CaptureJob[]>([]);
@@ -306,9 +324,28 @@ export function App() {
   const activeRunRef = useRef<TaskRun | null>(null);
   const sessionIdRef = useRef("");
   const replaceStreamingOnNextDeltaRef = useRef(false);
+  const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => { activeRunIdRef.current = activeRun?.id ?? ""; activeRunRef.current = activeRun; }, [activeRun]);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+  useEffect(() => {
+    const textarea = composerTextareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "36px";
+    const height = Math.min(Math.max(textarea.scrollHeight, 36), 140);
+    textarea.style.height = `${height}px`;
+    textarea.style.overflowY = textarea.scrollHeight > 140 ? "auto" : "hidden";
+  }, [draft]);
+
+  useEffect(() => {
+    try { globalThis.localStorage?.setItem("tagent.left-rail-collapsed", String(leftCollapsed)); } catch { /* Browser storage is optional. */ }
+  }, [leftCollapsed]);
+  useEffect(() => {
+    try { globalThis.localStorage?.setItem("tagent.right-panel-collapsed", String(rightCollapsed)); } catch { /* Browser storage is optional. */ }
+  }, [rightCollapsed]);
+  useEffect(() => {
+    try { globalThis.localStorage?.setItem("tagent.workspace-emojis", JSON.stringify(workspaceEmojiById)); } catch { /* Browser storage is optional. */ }
+  }, [workspaceEmojiById]);
 
   const loadSessions = useCallback(async () => {
     let items = await api.sessions();
@@ -571,6 +608,17 @@ export function App() {
     finally { renameSubmittingRef.current = false; }
   }
 
+  async function updateExecutionProfile(settings: { modelId?: string; reasoningEffort?: Session["reasoningEffort"] }) {
+    if (!sessionId || savingExecutionProfile) return;
+    setSavingExecutionProfile(true); setError(""); setNotice("");
+    try {
+      const updated = await api.updateSession(sessionId, settings);
+      setSessions((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setNotice(activeRun ? "Execution preference saved for the next TaskRun; the active TaskRun keeps its original profile." : "Workspace execution preference saved.");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setSavingExecutionProfile(false); }
+  }
+
   async function submit() {
     const content = draft.trim();
     const targetSessionId = sessionId;
@@ -675,19 +723,24 @@ export function App() {
     finally { setRetryingRunId(""); }
   }
 
-  return <div className="app-shell">
-    <aside className={`session-rail ${leftOpen ? "mobile-open" : ""}`}>
-      <div className="brand"><div className="brand-mark"><Bot size={18} /></div><div><strong>TAgent</strong><span>Core runtime</span></div><button className="icon-button mobile-only" onClick={() => setLeftOpen(false)} aria-label="Close sessions"><X size={18} /></button></div>
-      <button className="new-session" onClick={createSession}><Plus size={16} />New workspace</button>
+  const selectedSession = sessions.find((session) => session.id === sessionId);
+  const selectableModels = [...new Set([runtimeStatus?.modelId ?? "gpt-5.6-sol", ...(runtimeStatus?.fallbackModelIds ?? [])])];
+
+  return <div className={`app-shell ${leftCollapsed ? "left-collapsed" : ""} ${rightCollapsed ? "right-collapsed" : ""}`}>
+    <aside className={`session-rail ${leftOpen ? "mobile-open" : ""} ${leftCollapsed ? "collapsed" : ""}`}>
+      <div className="brand"><div className="brand-mark"><Bot size={18} /></div><div className="brand-copy"><strong>TAgent</strong><span>Core runtime</span></div><button className="icon-button desktop-only rail-collapse" onClick={() => setLeftCollapsed((current) => !current)} aria-label={leftCollapsed ? "Expand workspace sidebar" : "Collapse workspace sidebar"} title={leftCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{leftCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button><button className="icon-button mobile-only" onClick={() => setLeftOpen(false)} aria-label="Close sessions"><X size={18} /></button></div>
+      <button className="new-session" onClick={createSession} title="New workspace"><Plus size={16} /><span>New workspace</span></button>
       <div className="session-list">
         {sessions.map((session) => <div key={session.id} className={`session-item ${session.id === sessionId ? "active" : ""}`}>
+          <button className="session-emoji" type="button" aria-label={`Choose emoji for ${session.title}`} aria-expanded={emojiPickerSessionId === session.id} onClick={() => setEmojiPickerSessionId((current) => current === session.id ? "" : session.id)}>{workspaceEmojiById[session.id] ?? "💬"}</button>
+          {emojiPickerSessionId === session.id && <div className="emoji-picker" role="listbox" aria-label={`Emoji for ${session.title}`}>{workspaceEmojis.map((emoji) => <button type="button" role="option" aria-selected={(workspaceEmojiById[session.id] ?? "💬") === emoji} key={emoji} onClick={() => { setWorkspaceEmojiById((current) => ({ ...current, [session.id]: emoji })); setEmojiPickerSessionId(""); }}>{emoji}</button>)}</div>}
           {renamingSessionId === session.id ? <div className="session-select session-editor">
-            <span className="session-icon"><Command size={15} /></span><span><input className="session-title-input" value={sessionTitleDraft} autoFocus onChange={(event) => setSessionTitleDraft(event.target.value)} onKeyDown={(event) => {
+            <span><input className="session-title-input" value={sessionTitleDraft} autoFocus onChange={(event) => setSessionTitleDraft(event.target.value)} onKeyDown={(event) => {
               if (event.key === "Enter") { event.preventDefault(); void renameSession(session); }
               if (event.key === "Escape") { event.preventDefault(); cancelRename(); event.currentTarget.blur(); }
             }} onBlur={() => void renameSession(session)} aria-label="Workspace name" /><span className="session-meta"><small>{formatTime(session.updatedAt)}</small><WorkspaceRunStatus session={session} /></span></span>
           </div> : <>
-            <button className="session-select" onClick={() => { setSessionId(session.id); setLeftOpen(false); }}><span className="session-icon"><Command size={15} /></span><span><strong>{session.title}</strong><span className="session-meta"><small>{formatTime(session.updatedAt)}</small><WorkspaceRunStatus session={session} /></span></span></button>
+            <button className="session-select" onClick={() => { setSessionId(session.id); setLeftOpen(false); setEmojiPickerSessionId(""); }}><span><strong>{session.title}</strong><span className="session-meta"><small>{formatTime(session.updatedAt)}</small><WorkspaceRunStatus session={session} /></span></span></button>
             <button className="rename-session" onClick={() => { setRenamingSessionId(session.id); setSessionTitleDraft(session.title); }} title="Rename workspace" aria-label="Rename workspace"><Pencil size={13} /></button>
           </>}
         </div>)}
@@ -698,7 +751,8 @@ export function App() {
     <main className="conversation">
       <header className="topbar">
         <button className="icon-button mobile-only" onClick={() => setLeftOpen(true)} aria-label="Open sessions"><Menu size={19} /></button>
-        <div><h1>{sessions.find((session) => session.id === sessionId)?.title ?? "TAgent Core"}</h1><p>{activeRun ? `${activeRun.phase} · ${activeRun.status}` : runtimeStatus ? `${runtimeStatus.modelId} · ${runtimeStatus.runtime}` : "Ready for a new task"}</p></div>
+        <div className="workspace-heading"><h1>{selectedSession?.title ?? "TAgent Core"}</h1><p>{activeRun ? `${activeRun.phase} · ${activeRun.status} · ${activeRun.modelId || runtimeStatus?.modelId || "default model"} · ${activeRun.reasoningEffort}` : runtimeStatus ? `${runtimeStatus.runtime} · ready` : "Ready for a new task"}</p></div>
+        {selectedSession && <div className="execution-preferences" aria-label="Workspace execution preferences"><label><span>Model</span><select value={selectedSession.modelId || runtimeStatus?.modelId || "gpt-5.6-sol"} disabled={savingExecutionProfile} onChange={(event) => void updateExecutionProfile({ modelId: event.target.value })}>{selectableModels.map((modelId) => <option value={modelId} key={modelId}>{modelId}</option>)}</select></label><label><span>Reasoning</span><select value={selectedSession.reasoningEffort} disabled={savingExecutionProfile} onChange={(event) => void updateExecutionProfile({ reasoningEffort: event.target.value as Session["reasoningEffort"] })}>{reasoningEfforts.map((effort) => <option value={effort} key={effort}>{effort}</option>)}</select></label></div>}
         <div className="top-actions">{learningSettings && <div className={`learning-execution-control ${!learningSettings.memoryEnabled ? "dependency-disabled" : learningSettings.autoExecutionEnabled ? "enabled" : "passive"}`} title={!learningSettings.memoryEnabled ? "Learning requires Memory" : learningSettings.autoExecutionEnabled ? "Learning may participate in execution, but every active action still requires human approval" : "Passive-only: observation, learning, distillation and candidate evolution"}><div><strong>Learning execution</strong><small>{!learningSettings.memoryEnabled ? "Memory required" : learningSettings.autoExecutionEnabled ? "On · approval always required" : "Off · passive learning only"}</small></div><button type="button" role="switch" aria-checked={learningSettings.autoExecutionEnabled} disabled={!learningSettings.learningEnabled || learningToggleBusy} onClick={() => void toggleLearningAutoExecution()}><span /></button></div>}{sessionId && <button className="memory-launch" onClick={() => setLearningOpen(true)} disabled={!learningSettings?.learningEnabled}><ShieldCheck size={16} /><span>Learning</span></button>}{runtimeStatus?.memoryEnabled && <button className="memory-launch" onClick={() => setMemoryOpen(true)}><BrainCircuit size={16} /><span>Memory</span><i /></button>}{selectedRun?.resumable && !activeRun && !selectedRun.supervision.approvalRequests.some((item) => item.status === "pending") && <button className="resume-button" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}{selectedRun?.status === "failed" && selectedRun.launchRetryable && !activeRun && <button className="resume-button" onClick={() => void retryLaunch(selectedRun)} disabled={Boolean(retryingRunId)}><Play size={15} />{retryingRunId === selectedRun.id ? "Retrying…" : "Retry launch"}</button>}{activeRun?.status === "running" && <button className="icon-button danger" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={17} /></button>}<button className="icon-button mobile-only" onClick={() => setRightOpen(true)} aria-label="Open task panel"><PanelRight size={19} /></button></div>
       </header>
 
@@ -719,13 +773,13 @@ export function App() {
         {error && <div className="error-banner">{error}</div>}
         {notice && <div className="success-banner">{notice}</div>}
         <div className="composer-mode"><span><Activity size={13} />Supervisor inbox</span><span>{activeRun ? "New input is classified as steer, context, follow-up, parallel work, or a new TaskRun" : "Supervisor summarizes, prioritizes, and starts the next eligible contract"}</span></div>
-        <div className="composer"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} placeholder="Add a task, correction, constraint, context update, or follow-up" rows={1} /><button onClick={() => void submit()} disabled={!draft.trim() || submitting} aria-label="Add to Supervisor queue">{submitting ? <Activity className="spin" size={18} /> : <Send size={18} />}</button></div>
+        <div className="composer"><textarea ref={composerTextareaRef} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Add a task, correction, constraint, context update, or follow-up" rows={1} aria-label="Message. Enter inserts a new line; use Send to submit." /><button type="button" onClick={() => void submit()} disabled={!draft.trim() || submitting} aria-label="Add to Supervisor queue">{submitting ? <Activity className="spin" size={18} /> : <Send size={18} />}</button></div>
         {inbox.length > 0 && <section className="supervisor-inbox"><div className="inbox-heading"><span>Up next</span><small>{inbox.length} queued</small></div>{inbox.map((item, index) => <QueuePrompt key={item.id} item={item} index={index} editing={editingInboxId === item.id} draft={editingInboxId === item.id ? inboxDraft : item.content} busy={Boolean(startingInboxId || savingInboxId || reorderingInbox || mutatingInboxId)} starting={startingInboxId === item.id} dragging={draggingInboxId === item.id} canMoveUp={index > 0} canMoveDown={index < inbox.length - 1} onEdit={() => { setEditingInboxId(item.id); setInboxDraft(item.content); setError(""); setNotice(""); }} onDraftChange={setInboxDraft} onSave={() => void saveInbox(item)} onCancelEdit={() => { setEditingInboxId(""); setInboxDraft(""); }} onStart={() => void runInboxNow(item)} onToggleDefer={() => void mutateInbox(item.id, () => api.decideInbox(sessionId, item.id, item.decision === "defer" ? "pending" : "defer"))} onMergeFirst={() => void mutateInbox(item.id, () => api.mergeInbox(sessionId, item.id, inbox[0].id))} onDelete={() => void mutateInbox(item.id, () => api.deleteInbox(sessionId, item.id))} onMoveUp={() => void moveInbox(item.id, -1)} onMoveDown={() => void moveInbox(item.id, 1)} onDragStart={(event) => { setDraggingInboxId(item.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); }} onDragEnd={() => setDraggingInboxId("")} onDrop={(event) => { event.preventDefault(); void reorderInbox(item.id); }} />)}</section>}
       </footer>
     </main>
 
-    <aside className={`run-panel ${rightOpen ? "mobile-open" : ""}`}>
-      <div className="panel-heading"><div><span className="eyebrow">Audit workspace</span><h2>Supervisor & execution</h2></div><button className="icon-button mobile-only" onClick={() => setRightOpen(false)} aria-label="Close task panel"><X size={18} /></button></div>
+    <aside className={`run-panel ${rightOpen ? "mobile-open" : ""} ${rightCollapsed ? "collapsed" : ""}`}>
+      <div className="panel-heading"><div><span className="eyebrow">Audit workspace</span><h2>Supervisor & execution</h2></div><button className="icon-button desktop-only panel-collapse" onClick={() => setRightCollapsed((current) => !current)} aria-label={rightCollapsed ? "Expand audit sidebar" : "Collapse audit sidebar"} title={rightCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{rightCollapsed ? <PanelRightOpen size={17} /> : <PanelRightClose size={17} />}</button><button className="icon-button mobile-only" onClick={() => setRightOpen(false)} aria-label="Close task panel"><X size={18} /></button></div>
       {!runs.length ? <div className="panel-empty"><Play size={20} /><p>No TaskRuns</p></div> : <div className="run-history">{runs.map((item, index) => {
         const expanded = item.id === expandedRunId;
         return <section className={`run-history-item ${expanded ? "expanded" : ""}`} key={item.id}>

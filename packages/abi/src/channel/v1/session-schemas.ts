@@ -32,6 +32,11 @@ export type SessionCreateRequest = Static<typeof SessionCreateRequestSchema>;
 export const SessionSchema = Type.Object({
   id: IdentifierSchema,
   title: Type.String({ minLength: 1, maxLength: 256 }),
+  modelId: Type.String({ minLength: 1 }),
+  reasoningEffort: Type.Union([
+    Type.Literal("minimal"), Type.Literal("low"), Type.Literal("medium"),
+    Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max"),
+  ]),
   createdAt: IsoDateTimeSchema,
   updatedAt: IsoDateTimeSchema,
   latestTaskRunStatus: Type.Union([TaskRunStatusSchema, Type.Null()]),

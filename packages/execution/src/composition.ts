@@ -32,3 +32,4 @@ export { RecoveryCoordinator } from "./application/recovery-coordinator.js";
 export { RunContextService } from "./application/run-context-service.js";
 export { RunEventHub } from "./application/run-event-hub.js";
 export { RuntimeRegistry } from "./application/runtime-registry.js";
+export { selectRuntimeModel, type RuntimeModelSelection } from "./application/runtime-model-selection.js";

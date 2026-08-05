@@ -233,6 +233,7 @@ export class LegacyStoreAdapter {
       createSession: mutate(store.createSession.bind(store)),
       listSessions: query(store.listSessions.bind(store)),
       getSession: query(store.getSession.bind(store)),
+      updateSession: mutate(store.updateSession.bind(store)),
       renameSession: mutate(store.renameSession.bind(store)),
       listMessages: query(store.listMessages.bind(store)),
       listRecentMessages: query(store.listRecentMessages.bind(store)),

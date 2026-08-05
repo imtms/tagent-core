@@ -28,6 +28,8 @@ export function mapSession(session: DomainSession): Session {
   return {
     id: session.id,
     title: session.title,
+    modelId: session.modelId,
+    reasoningEffort: session.reasoningEffort,
     createdAt: iso(session.createdAt),
     updatedAt: iso(session.updatedAt),
     latestTaskRunStatus: session.latestRunStatus,
@@ -71,6 +73,8 @@ export function mapTaskRun(run: TaskRun): V1TaskRun {
     status: run.status,
     phase: run.phase,
     goal: run.goal,
+    modelId: run.modelId,
+    reasoningEffort: run.reasoningEffort,
     contract: run.contract ? {
       sourceInput: run.contract.sourceInput,
       summary: run.contract.summary,

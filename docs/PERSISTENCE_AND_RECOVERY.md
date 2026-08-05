@@ -4,7 +4,7 @@
 
 `@tagent/persistence-sqlite` owns the control-plane SQLite schema, repositories, migrations, transaction boundary, writer authority, and restart recovery primitives. Domains depend on its ports through the Core composition root; they do not issue uncontrolled SQL.
 
-The current schema version is 33:
+The current schema version is 34:
 
 | Version | Authority introduced |
 | --- | --- |
@@ -12,8 +12,9 @@ The current schema version is 33:
 | 31 | canonical Governance projections and expanded approval receipts |
 | 32 | capability-authorization uniqueness, indexes, and immutable identity constraints |
 | 33 | Learning integration journal, delivery, checkpoints, reconciliation, authority, effect receipts, migration issue ledger |
+| 34 | Workspace model/reasoning preferences and immutable TaskRun execution-profile snapshots |
 
-Migrations are forward-only for a running release. A 0.1.x binary must never open a schema 33 database.
+Migrations are forward-only for a running release. An older binary must never open a schema 34 database.
 
 ## Startup order
 

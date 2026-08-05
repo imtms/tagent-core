@@ -1,6 +1,6 @@
-# Upgrading to 0.2.0
+# Upgrading to 0.2.x
 
-0.2.0 is a breaking architecture, API, deployment, and persistence release. Upgrade Core before Gateway and Web. Do not perform a rolling multi-writer upgrade.
+0.2.0 introduced the breaking architecture, API, deployment, and persistence boundary. The current 0.2.2 release retains that boundary and advances SQLite to schema 34. Upgrade Core before Gateway and Web. Do not perform a rolling multi-writer upgrade.
 
 ## Breaking changes
 
@@ -8,7 +8,7 @@
 - Core no longer serves the Web Console or an SPA fallback.
 - Submissions use the `Idempotency-Key` header and v1 receipt schema.
 - ABI compatibility namespaces, client decoders, root facades, and legacy DTO names were removed from the supported surface.
-- SQLite advances through schemas 30–33; older binaries cannot open schema 33.
+- SQLite advances through schemas 30–34; older binaries cannot open schema 34.
 - Production requires Node.js `24.18.1` and npm `12+`; the immutable Core artifact targets Linux x64/Node ABI 137.
 
 ## Before the upgrade
@@ -29,7 +29,7 @@ Stop traffic and all 0.1.x Core writers. Confirm no process holds the database. 
 
 ## Database migration
 
-Starting 0.2.0 applies forward migrations:
+The current 0.2.x line applies these forward migrations:
 
 | Schema | Change |
 | --- | --- |
@@ -37,16 +37,17 @@ Starting 0.2.0 applies forward migrations:
 | 31 | canonical Governance projections and approval receipts |
 | 32 | capability authorization constraints and immutable identity |
 | 33 | Learning integration journal, fenced delivery, checkpoints, reconciliation, authority, effect receipts, migration issues |
+| 34 | Workspace execution preferences and immutable TaskRun model/reasoning snapshots |
 
 The v33 preflight writes ambiguous source rows to `migration_issues`. If any issue remains open, startup stops before serving traffic. Preserve the ledger, correct the underlying data, and rerun the migration. Do not delete or bypass issue rows.
 
-Reopening the migrated database must be idempotent and leave `schema_meta.version=33`.
+Reopening the migrated database must be idempotent and leave `schema_meta.version=34`.
 
 ## Deployment order
 
-1. Deploy and start the 0.2.0 Core artifact on the private listener.
+1. Deploy and start the candidate Core artifact on the private listener.
 2. Require `GET /api/v1/health` to return `data.ok=true` and `data.writer.ready=true`.
-3. Verify schema 33, zero open migration issues, one fresh writer lease/fence, and active Learning authority.
+3. Verify schema 34, zero open migration issues, one fresh writer lease/fence, and active Learning authority.
 4. Start exactly one upgraded Gateway consumer.
 5. Claim a new event-consumer generation, replay from the durable ACK position, persist before ACK, and drain lag.
 6. Run `scripts/gateway-readiness-probe.mjs`; require exit 0, `ready=true`, and an empty `reasons` list.
@@ -88,15 +89,15 @@ VITE_TAGENT_CORE_ORIGIN=https://api.example.com
 
 ## Rollback
 
-Do not run a 0.1.x binary against schema 33. There is no in-place schema downgrade.
+Do not run an older binary against schema 34. There is no in-place schema downgrade.
 
 To return to 0.1.x:
 
-1. stop Gateway traffic and all 0.2.0 writers;
+1. stop Gateway traffic and all 0.2.x writers;
 2. preserve the failed-upgrade database and readiness evidence for diagnosis;
 3. restore the complete matching pre-upgrade SQLite/WAL/SHM recovery set;
 4. restore the matching PostgreSQL/Cold state when Memory was enabled;
 5. restore the matching 0.1.x artifact and configuration;
 6. start one old writer and validate it before reopening compatible traffic.
 
-If only Gateway/Web rollback is required, keep schema 33 and use components that understand `/api/v1`, generation-fenced ACKs, and current Learning watermarks. Otherwise keep traffic stopped and deploy a forward-compatible build.
+If only Gateway/Web rollback is required, keep schema 34 and use components that understand `/api/v1`, generation-fenced ACKs, and current Learning watermarks. Otherwise keep traffic stopped and deploy a forward-compatible build.

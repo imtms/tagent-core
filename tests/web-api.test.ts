@@ -9,7 +9,8 @@ const success = (data: unknown) => ({ data, requestId: "web-test-request" });
 
 function consoleRun(id = "run", attempt = 1) {
   return {
-    id, sessionId: "session", requestId: "request", status: "running", phase: "implement", goal: "test", contract: null,
+    id, sessionId: "session", requestId: "request", status: "running", phase: "implement", goal: "test",
+    modelId: "gpt-5.6-sol", reasoningEffort: "high", contract: null,
     blockedReason: "", lastEventSeq: 0, attempt, resumedAt: null, createdAt: 1, updatedAt: 1, completedAt: null,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
     transcriptCount: 0, checkpoint: null, continuations: [], plan: [], checks: [], userInputRequests: [], pendingUserInput: null,
@@ -62,7 +63,7 @@ describe("Web API request headers", () => {
   });
 
   it("renames a workspace through the Session API", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify(success({ id: "session", title: "After", createdAt: 1, updatedAt: 2, latestRunStatus: null, latestRunPhase: null })), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(success({ id: "session", title: "After", modelId: "gpt-5.6-sol", reasoningEffort: "high", createdAt: 1, updatedAt: 2, latestRunStatus: null, latestRunPhase: null })), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
     await api.renameSession("session", "After");
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/console/sessions/session", expect.objectContaining({ method: "PATCH", body: JSON.stringify({ title: "After" }) }));
@@ -91,6 +92,18 @@ describe("Web API request headers", () => {
     expect(source).toContain('aria-label={`Move queued prompt ${index + 1} down`}');
     expect(source).toContain('item.decision === "defer" ? "Resume" : "Defer"');
     expect(source).toContain("Merge first");
+  });
+
+  it("keeps Enter as a newline, auto-sizes the composer, and exposes persistent desktop controls", async () => {
+    const source = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain("ref={composerTextareaRef}");
+    expect(source).toContain("Math.min(Math.max(textarea.scrollHeight, 36), 140)");
+    expect(source).not.toContain('event.key === "Enter" && !event.shiftKey');
+    expect(source).toContain("leftCollapsed");
+    expect(source).toContain("rightCollapsed");
+    expect(source).toContain("workspaceEmojiById");
+    expect(source).toContain("updateExecutionProfile");
+    expect(source).toContain('runtimeStatus?.modelId ?? "gpt-5.6-sol"');
   });
 
   it("posts the selected queued item to the manual start endpoint", async () => {

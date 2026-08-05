@@ -246,6 +246,8 @@ describe("final modular monolith gate", () => {
           createSession: (title: string) => ({
             id: "session-final",
             title,
+            modelId: "gpt-5.6-sol",
+            reasoningEffort: "high" as const,
             createdAt: 0,
             updatedAt: 0,
             latestRunStatus: null,

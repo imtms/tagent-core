@@ -16,6 +16,7 @@ export type ConsoleLearningFeatureState = Static<typeof ConsoleLearningFeatureSt
 /** @deprecated Use AdminConfigStatus from admin/v1. */
 export const ConsoleRuntimeStatusSchema = Type.Object({
   runtime: Type.String(), provider: Type.String(), api: Type.String(), baseUrl: Type.String(), modelId: Type.String(),
+  fallbackModelIds: Type.Array(Type.String()),
   credentialConfigured: Type.Boolean(), providerTimeoutMs: Type.Number(), providerMaxRetries: Type.Number(),
   runTimeoutMs: Type.Number(), maxContinuations: Type.Number(), schemaVersion: Type.Optional(Type.Number()),
   memoryEnabled: Type.Boolean(), memoryWorkspaceScopeId: Type.Optional(Type.String()),

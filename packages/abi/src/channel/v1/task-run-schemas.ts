@@ -115,6 +115,11 @@ export const TaskRunSchema = Type.Object({
   status: TaskRunStatusSchema,
   phase: TaskRunPhaseSchema,
   goal: Type.String(),
+  modelId: Type.String({ minLength: 1 }),
+  reasoningEffort: Type.Union([
+    Type.Literal("minimal"), Type.Literal("low"), Type.Literal("medium"),
+    Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max"),
+  ]),
   contract: Type.Union([TaskRunContractSchema, Type.Null()]),
   blockedReason: Type.String(),
   lastEventSequence: Type.Integer({ minimum: 0 }),

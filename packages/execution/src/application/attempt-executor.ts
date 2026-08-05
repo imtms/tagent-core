@@ -7,6 +7,7 @@ import type { TaskRun } from "../domain/task-run.js";
 import type { ExecutionStateView } from "./execution-state.js";
 import { failRuntimeTaskRun, publishTransitionOutcome } from "./task-run-transition-helpers.js";
 import { settleRuntimeInitializationFailure } from "./runtime-initialization-failure.js";
+import { selectRuntimeModel } from "./runtime-model-selection.js";
 import type {
   AttemptSettlementPort,
   ContinuationControlPort,
@@ -59,7 +60,6 @@ export class AttemptExecutor {
     let runtime: AttemptRuntimePort;
     let lastActivityAt = Date.now();
     let runtimeSettled = false;
-
     const failTimeout = (reason: "idle_timeout" | "hard_timeout", limitMs: number) => {
       const current = this.state.persistence.taskRuns.getRun(run.id);
       if (!current || current.status !== "running" || current.attempt !== token.ordinal) return;
@@ -173,6 +173,7 @@ export class AttemptExecutor {
       memorySubjectId: `session:${run.sessionId}`,
     });
     try {
+      const executionProfile = selectRuntimeModel(run, this.state.runtimeDefaults.model, this.state.runtimeDefaults.fallbackModels);
       runtime = this.state.runtimeFactory({
         token,
         workspace: this.state.workspace,
@@ -180,8 +181,9 @@ export class AttemptExecutor {
         capabilities: runtimeHost.capabilities,
         eventSink: runtimeHost.eventSink,
         initialMessages,
-        model: this.state.runtimeDefaults.model,
-        fallbackModels: this.state.runtimeDefaults.fallbackModels,
+        model: executionProfile.model,
+        fallbackModels: executionProfile.fallbackModels,
+        reasoningEffort: executionProfile.reasoningEffort,
         apiKey: this.state.runtimeDefaults.apiKey,
         providerTimeoutMs: this.state.runtimeDefaults.providerTimeoutMs,
         providerMaxRetries: this.state.runtimeDefaults.providerMaxRetries,

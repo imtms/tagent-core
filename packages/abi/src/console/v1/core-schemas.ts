@@ -2,11 +2,17 @@ import { Type, type Static } from "typebox";
 import { JsonObjectSchema, TimestampMillisecondsSchema } from "../../shared/primitives.js";
 
 const ConsoleNullableTimestampSchema = Type.Union([TimestampMillisecondsSchema, Type.Null()]);
+export const ConsoleReasoningEffortSchema = Type.Union([
+  Type.Literal("minimal"), Type.Literal("low"), Type.Literal("medium"),
+  Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max"),
+]);
 
 /** @deprecated Use Session from channel/v1. */
 export const ConsoleSessionSchema = Type.Object({
   id: Type.String(),
   title: Type.String(),
+  modelId: Type.String({ minLength: 1 }),
+  reasoningEffort: ConsoleReasoningEffortSchema,
   createdAt: TimestampMillisecondsSchema,
   updatedAt: TimestampMillisecondsSchema,
   latestRunStatus: Type.Union([Type.String(), Type.Null()]),
@@ -155,7 +161,8 @@ export type ConsoleUserInputRequest = Static<typeof ConsoleUserInputRequestSchem
 /** @deprecated Use TaskRun from channel/v1. */
 export const ConsoleTaskRunSchema = Type.Object({
   id: Type.String(), sessionId: Type.String(), requestId: Type.String(), status: Type.String(), phase: Type.String(),
-  goal: Type.String(), contract: Type.Union([ConsoleTaskRunContractSchema, Type.Null()]),
+  goal: Type.String(), modelId: Type.String({ minLength: 1 }), reasoningEffort: ConsoleReasoningEffortSchema,
+  contract: Type.Union([ConsoleTaskRunContractSchema, Type.Null()]),
   blockedReason: Type.String(), lastEventSeq: Type.Number(), attempt: Type.Number(), resumedAt: ConsoleNullableTimestampSchema,
   createdAt: TimestampMillisecondsSchema, updatedAt: TimestampMillisecondsSchema, completedAt: ConsoleNullableTimestampSchema,
   usage: Type.Object({

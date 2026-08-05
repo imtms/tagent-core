@@ -165,6 +165,7 @@ export const api = {
   sessions: () => request("/api/v1/console/sessions", undefined, ConsoleDecode.sessions),
   createSession: (title = "New workspace") => request("/api/v1/console/sessions", { method: "POST", body: JSON.stringify({ title }) }, ConsoleDecode.session),
   renameSession: (sessionId: string, title: string) => request(`/api/v1/console/sessions/${sessionId}`, { method: "PATCH", body: JSON.stringify({ title }) }, ConsoleDecode.session),
+  updateSession: (sessionId: string, settings: Partial<Pick<Session, "title" | "modelId" | "reasoningEffort">>) => request(`/api/v1/console/sessions/${sessionId}`, { method: "PATCH", body: JSON.stringify(settings) }, ConsoleDecode.session),
   messages: (sessionId: string, limit = 80, beforeId?: number) => request(`/api/v1/console/sessions/${sessionId}/messages?limit=${limit}${beforeId ? `&beforeId=${beforeId}` : ""}`, undefined, ConsoleDecode.messages),
   runs: (sessionId: string, limit = 50) => request(`/api/v1/console/sessions/${sessionId}/task-runs?limit=${limit}`, undefined, ConsoleDecode.taskRuns),
   latestRun: (sessionId: string) => request(`/api/v1/console/sessions/${sessionId}/task-run`, undefined, ConsoleDecode.taskRunOrNull),

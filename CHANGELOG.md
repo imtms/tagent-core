@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-06
+
+### Web workbench
+
+- Changed the conversation composer so Enter always inserts a newline and submission occurs only through the Send button.
+- Added single-line-to-multiline composer auto-sizing with a bounded 140-pixel height and overflow scrolling.
+- Added independently collapsible desktop Workspace and Audit sidebars with browser-local preferences while preserving the existing mobile drawers.
+- Replaced fixed Workspace SVG glyphs with browser-local selectable emoji at the same 26-by-26-pixel footprint.
+- Fixed the local Vite reverse proxy so development requests use same-origin proxy semantics without weakening production Core CORS policy.
+
+### Workspace execution profiles
+
+- Added Workspace-level model and reasoning controls above the conversation. New Workspaces default to the configured primary model (`gpt-5.6-sol` by default) and `high` reasoning.
+- Restricted model selection to the Core primary/fallback allowlist and reasoning to `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; non-reasoning models execute with reasoning disabled.
+- Snapshot the concrete model ID and reasoning effort onto every admitted TaskRun so retries, recovery, and continuations retain their original execution profile when Workspace or Core defaults later change.
+- Removed Pi's hard-coded `medium` reasoning choice and propagated the authoritative TaskRun profile through the Execution runtime port.
+
+### Persistence and ABI
+
+- Advanced the control-plane SQLite schema to 34 with durable `sessions` and immutable `runs` execution-profile columns. Existing TaskRuns are backfilled with the configured primary model and retain the pre-0.2.2 `medium` reasoning behavior; existing and new Workspaces default to `high`.
+- Extended the Session, TaskRun, runtime-status, Console, Fastify, Core Client, readiness-probe, and documentation contracts for the new fields and configured model allowlist.
+- Added migration drift checks and end-to-end regressions for model selection, TaskRun snapshotting, recovery behavior, ABI decoding, HTTP validation, and the Web controls.
+
+### Upgrade notice
+
+- Stop Core and back up SQLite together with WAL/SHM before upgrading. Starting 0.2.2 migrates schema 33 to 34; older binaries must not open the migrated database.
+- Deploy Core before Gateway/Web, require schema 34 readiness, then deploy the matching 0.2.2 Web Console artifact.
+
 ## [0.2.1] - 2026-08-06
 
 ### Memory Console reliability

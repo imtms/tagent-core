@@ -35,10 +35,12 @@ import type {
 } from "@tagent/execution/domain";
 import type {
   Message,
+  ReasoningEffort,
   Session,
   SessionId,
   SessionInboxItem,
   SessionInputAnalysis,
+  SessionSettingsUpdate,
   TaskObjective,
 } from "@tagent/admission/domain";
 import {
@@ -54,15 +56,22 @@ import {
   migrateLearningIntegrationV33,
   prepareLearningIntegrationV33,
 } from "./migrations/v33-learning-integration.js";
+import {
+  assertWorkspaceExecutionProfileV34Schema,
+  migrateWorkspaceExecutionProfileV34,
+} from "./migrations/v34-workspace-execution-profile.js";
 import { mapLegacyRunApprovalOperation } from "./sqlite/canonical-approval-mapper.js";
 import { appendProjectionPair, finalizeProjectionCheckpoint } from "./sqlite/canonical-integration-event.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 33;
+const SCHEMA_VERSION = 34;
+const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
 export interface StoreOptions {
   deferPostMigrationRecovery?: boolean;
+  /** Concrete Core primary model captured by new Workspaces and v34 migration. */
+  defaultModelId?: string;
 }
 
 export type StoreSynchronousResult<T> = T extends PromiseLike<unknown> ? never : T;
@@ -73,8 +82,10 @@ export interface StoreMutationRunner {
 
 export class Store {
   readonly db: Database.Database;
+  private readonly defaultModelId: string;
 
   constructor(filename = process.env.TAGENT_DB ?? "./data/tagent.db", options: StoreOptions = {}) {
+    this.defaultModelId = options.defaultModelId?.trim() || "gpt-5.6-sol";
     this.db = new Database(filename);
     try {
       this.db.pragma("journal_mode = WAL");
@@ -195,6 +206,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
+        model_id TEXT NOT NULL DEFAULT 'gpt-5.6-sol',
+        reasoning_effort TEXT NOT NULL DEFAULT 'high' CHECK(reasoning_effort IN ('minimal','low','medium','high','xhigh','max')),
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -218,6 +231,8 @@ export class Store {
         status TEXT NOT NULL,
         phase TEXT NOT NULL,
         goal TEXT NOT NULL,
+        model_id TEXT NOT NULL DEFAULT 'gpt-5.6-sol',
+        reasoning_effort TEXT NOT NULL DEFAULT 'high' CHECK(reasoning_effort IN ('minimal','low','medium','high','xhigh','max')),
         gate_required INTEGER NOT NULL DEFAULT 1,
         blocked_reason TEXT NOT NULL DEFAULT '',
         last_event_seq INTEGER NOT NULL DEFAULT 0,
@@ -1010,14 +1025,20 @@ export class Store {
     });
     foundationMigration();
 
-    const v33PreviousVersion = previousVersion === SCHEMA_VERSION ? SCHEMA_VERSION : 32;
+    const v33PreviousVersion = previousVersion !== undefined && previousVersion >= 33 ? 33 : 32;
     prepareLearningIntegrationV33(this.db, v33PreviousVersion, now());
     const learningIntegrationMigration = this.db.transaction(() => {
       migrateLearningIntegrationV33(this.db, v33PreviousVersion, now());
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`)
-        .run(SCHEMA_VERSION, now());
+      this.db.prepare(`UPDATE schema_meta SET version=33,updated_at=? WHERE id=1`).run(now());
     });
     learningIntegrationMigration();
+
+    const workspaceExecutionProfileMigration = this.db.transaction(() => {
+      migrateWorkspaceExecutionProfileV34(this.db, previousVersion === 34 ? 34 : 33, this.defaultModelId);
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+    });
+    workspaceExecutionProfileMigration();
+    assertWorkspaceExecutionProfileV34Schema(this.db);
   }
 
   private attemptId(runId: string, ordinal: number) {
@@ -1170,8 +1191,8 @@ export class Store {
         const existing = this.db.prepare("SELECT session_id as sessionId FROM session_requests WHERE request_id = ?").get(requestId) as { sessionId: string } | undefined;
         if (existing) return this.getSession(existing.sessionId)!;
       }
-      const session: Session = { id: randomUUID(), title, createdAt: now(), updatedAt: now(), latestRunStatus: null, latestRunPhase: null };
-      this.db.prepare("INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)").run(session.id, session.title, session.createdAt, session.updatedAt);
+      const session: Session = { id: randomUUID(), title, modelId: this.defaultModelId, reasoningEffort: "high", createdAt: now(), updatedAt: now(), latestRunStatus: null, latestRunPhase: null };
+      this.db.prepare("INSERT INTO sessions (id, title, model_id, reasoning_effort, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(session.id, session.title, session.modelId, session.reasoningEffort, session.createdAt, session.updatedAt);
       if (requestId) this.db.prepare("INSERT INTO session_requests (request_id,session_id,created_at) VALUES (?,?,?)").run(requestId, session.id, session.createdAt);
       return session;
     });
@@ -1180,7 +1201,8 @@ export class Store {
 
   listSessions(): Session[] {
     return this.db.prepare(`
-      SELECT sessions.id, sessions.title, sessions.created_at as createdAt, sessions.updated_at as updatedAt,
+      SELECT sessions.id, sessions.title, sessions.model_id as modelId, sessions.reasoning_effort as reasoningEffort,
+        sessions.created_at as createdAt, sessions.updated_at as updatedAt,
         latest.status as latestRunStatus, latest.phase as latestRunPhase
       FROM sessions
       LEFT JOIN runs latest ON latest.id = (
@@ -1192,7 +1214,8 @@ export class Store {
 
   getSession(id: SessionId): Session | undefined {
     return this.db.prepare(`
-      SELECT sessions.id, sessions.title, sessions.created_at as createdAt, sessions.updated_at as updatedAt,
+      SELECT sessions.id, sessions.title, sessions.model_id as modelId, sessions.reasoning_effort as reasoningEffort,
+        sessions.created_at as createdAt, sessions.updated_at as updatedAt,
         latest.status as latestRunStatus, latest.phase as latestRunPhase
       FROM sessions
       LEFT JOIN runs latest ON latest.id = (
@@ -1202,11 +1225,20 @@ export class Store {
     `).get(id) as Session | undefined;
   }
 
-  renameSession(id: SessionId, title: string): Session | undefined {
-    const trimmed = title.trim();
-    if (!trimmed) return undefined;
-    this.db.prepare("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?").run(trimmed, now(), id);
+  updateSession(id: SessionId, settings: SessionSettingsUpdate): Session | undefined {
+    const current = this.getSession(id);
+    if (!current) return undefined;
+    const title = settings.title === undefined ? current.title : settings.title.trim();
+    const modelId = settings.modelId === undefined ? current.modelId : settings.modelId.trim();
+    const reasoningEffort = settings.reasoningEffort ?? current.reasoningEffort;
+    if (!title || !modelId || !REASONING_EFFORTS.has(reasoningEffort)) return undefined;
+    this.db.prepare("UPDATE sessions SET title = ?, model_id = ?, reasoning_effort = ?, updated_at = ? WHERE id = ?")
+      .run(title, modelId, reasoningEffort, now(), id);
     return this.getSession(id);
+  }
+
+  renameSession(id: SessionId, title: string): Session | undefined {
+    return this.updateSession(id, { title });
   }
 
   private touchSession(id: SessionId) {
@@ -1465,10 +1497,12 @@ ${source.content}`;
     const transaction = this.db.transaction(() => {
       const id = randomUUID();
       const timestamp = now();
+      const session = this.getSession(sessionId);
+      if (!session) throw new Error(`Session ${sessionId} not found`);
       this.db.prepare(`
-        INSERT INTO runs (id, session_id, request_id, status, phase, goal, created_at, updated_at, contract_json)
-        VALUES (?, ?, ?, 'running', 'discover', ?, ?, ?, ?)
-      `).run(id, sessionId, requestId, goal, timestamp, timestamp, contract ? JSON.stringify(contract) : "");
+        INSERT INTO runs (id, session_id, request_id, status, phase, goal, model_id, reasoning_effort, created_at, updated_at, contract_json)
+        VALUES (?, ?, ?, 'running', 'discover', ?, ?, ?, ?, ?, ?)
+      `).run(id, sessionId, requestId, goal, session.modelId, session.reasoningEffort, timestamp, timestamp, contract ? JSON.stringify(contract) : "");
       this.projectAttempt({
         runId: id, ordinal: 1, trigger: "initial", status: "running", scenario: "initial",
         legacyEventSeq: 0, timestamp,
@@ -1490,7 +1524,8 @@ ${source.content}`;
       transcriptCount: number;
     };
     const row = this.db.prepare(`
-      SELECT id, session_id as sessionId, request_id as requestId, status, phase, goal, contract_json as contractJson,
+      SELECT id, session_id as sessionId, request_id as requestId, status, phase, goal,
+             model_id as modelId, reasoning_effort as reasoningEffort, contract_json as contractJson,
              gate_required as gateRequired, blocked_reason as blockedReason,
              last_event_seq as lastEventSeq, created_at as createdAt,
              updated_at as updatedAt, completed_at as completedAt,

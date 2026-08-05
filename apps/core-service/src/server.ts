@@ -177,7 +177,10 @@ export async function bootstrapCore(
 
   try {
     instanceLock = await acquireCoreInstanceLock(config.database);
-    store = new Store(config.database, { deferPostMigrationRecovery: true });
+    store = new Store(config.database, {
+      deferPostMigrationRecovery: true,
+      defaultModelId: config.model.modelId,
+    });
     writerConnection = await claimCoreWriterConnectionWithRetry(store, {
       ownerId: instanceLock.metadata.instanceId,
       pid: instanceLock.metadata.pid,

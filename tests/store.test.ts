@@ -59,6 +59,17 @@ describe("Store", () => {
     expect(store.renameSession("missing", "Name")).toBeUndefined();
   });
 
+  it("persists Workspace execution preferences and snapshots them onto each TaskRun", () => {
+    const store = createStore();
+    const session = store.createSession("Configured");
+    expect(session).toMatchObject({ modelId: "gpt-5.6-sol", reasoningEffort: "high" });
+    const configured = store.updateSession(session.id, { modelId: "gpt-5.6-sol", reasoningEffort: "xhigh" });
+    expect(configured).toMatchObject({ modelId: "gpt-5.6-sol", reasoningEffort: "xhigh" });
+    const run = store.createRun(session.id, "snapshot settings");
+    store.updateSession(session.id, { modelId: "gpt-5.6-luna", reasoningEffort: "low" });
+    expect(store.getRun(run.id)).toMatchObject({ modelId: "gpt-5.6-sol", reasoningEffort: "xhigh" });
+  });
+
   it("exposes the latest TaskRun status with each workspace", () => {
     const store = createStore();
     const idle = store.createSession("Idle");
@@ -603,16 +614,18 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(33);
+    expect(store.getSchemaVersion()).toBe(34);
   });
 
-  it("migrates an older database to schema version 33", () => {
+  it("migrates an older database to schema version 34", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE core_writer_lease; DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(33);
+    expect(migrated.getSchemaVersion()).toBe(34);
+    expect((migrated.db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
+    expect((migrated.db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
     expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('approval_receipts','approval_requests','attempt_authority_receipts','attempt_authority_state','attempt_shadow_comparisons','attempt_transition_audit','attempts','candidate_results','context_manifests','control_inbox','core_writer_lease','event_consumers','execution_leases','gate_evaluations','operations','progress_snapshots','run_checkpoints','semantic_learning_jobs','session_supervisor_inbox','supervisor_decisions','taskrun_edges','tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["approval_receipts", "approval_requests", "attempt_authority_receipts", "attempt_authority_state", "attempt_shadow_comparisons", "attempt_transition_audit", "attempts", "candidate_results", "context_manifests", "control_inbox", "core_writer_lease", "event_consumers", "execution_leases", "gate_evaluations", "operations", "progress_snapshots", "run_checkpoints", "semantic_learning_jobs", "session_supervisor_inbox",  "supervisor_decisions", "taskrun_edges", "tool_attempts"]);
     expect((migrated.db.prepare("PRAGMA table_info(core_writer_lease)").all() as Array<{ name: string; type: string; notnull: number; pk: number }>).map(({ name, type, notnull, pk }) => ({ name, type, notNull: notnull, primaryKey: pk }))).toEqual([
       { name: "lock_name", type: "TEXT", notNull: 0, primaryKey: 1 },
@@ -635,6 +648,14 @@ describe("Store", () => {
     ]) expect(writerLeaseSql).toContain(constraint);
     expect(migrated.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='spawn_proposals'").get()).toBeUndefined();
     migrated.close();
+  });
+
+  it("fails closed when a schema-v34 execution-profile column is missing", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-v34-drift-")), "core.db");
+    const store = new Store(filename);
+    store.db.exec("ALTER TABLE sessions RENAME COLUMN model_id TO incompatible_model_id");
+    store.close();
+    expect(() => new Store(filename)).toThrow("Workspace execution profile v34 schema has incompatible sessions.model_id");
   });
 
   it("migrates legacy SpawnProposal rows into related Session Inbox items before dropping the table", () => {

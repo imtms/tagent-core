@@ -89,11 +89,15 @@ function testApp(overrides: Partial<Parameters<typeof createApp>[0]> = {}) {
         createSession: (title: string) => ({
           id: "session-http-package",
           title,
+          modelId: "gpt-5.6-sol",
+          reasoningEffort: "high" as const,
           createdAt: 0,
           updatedAt: 0,
           latestRunStatus: null,
           latestRunPhase: null,
         }),
+        getSession: (id: string) => ({ id, title: "Workspace", modelId: "gpt-5.6-sol", reasoningEffort: "high" as const, createdAt: 0, updatedAt: 0, latestRunStatus: null, latestRunPhase: null }),
+        updateSession: (id: string, settings: { title?: string; modelId?: string; reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" }) => ({ id, title: settings.title ?? "Workspace", modelId: settings.modelId ?? "gpt-5.6-sol", reasoningEffort: settings.reasoningEffort ?? "high", createdAt: 0, updatedAt: 1, latestRunStatus: null, latestRunPhase: null }),
       },
       submissions: {},
       taskRuns: {},
@@ -122,15 +126,15 @@ describe("Fastify HTTP adapter workspace package", () => {
   it("publishes only the compiled root, ports, and v1 package entry points", () => {
     const root = readJson<{ dependencies: Record<string, string>; devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const manifest = readJson<PackageManifest>(`${packageRoot}/package.json`);
-    expect(manifest).toMatchObject({ name: "@tagent/http-fastify", version: "0.2.1", private: true });
+    expect(manifest).toMatchObject({ name: "@tagent/http-fastify", version: "0.2.2", private: true });
     expect(root.devDependencies[manifest.name]).toBe(manifest.version);
     expect(root.dependencies).not.toHaveProperty("fastify");
     expect(Object.keys(manifest.exports).sort()).toEqual([".", "./ports", "./v1"]);
     expect(manifest.dependencies).toEqual({
-      "@tagent/abi": "0.2.1",
-      "@tagent/admission": "0.2.1",
-      "@tagent/execution": "0.2.1",
-      "@tagent/governance": "0.2.1",
+      "@tagent/abi": "0.2.2",
+      "@tagent/admission": "0.2.2",
+      "@tagent/execution": "0.2.2",
+      "@tagent/governance": "0.2.2",
       fastify: "^5.10.0",
     });
     for (const target of Object.values(manifest.exports)) {
@@ -272,12 +276,13 @@ describe("Fastify HTTP adapter workspace package", () => {
       api: "openai-responses",
       baseUrl: "https://example.test/v1",
       modelId: "model-fixture",
+      fallbackModelIds: [],
       credentialConfigured: true,
       providerTimeoutMs: 15_000,
       providerMaxRetries: 2,
       runTimeoutMs: 900_000,
       maxContinuations: 3,
-      schemaVersion: 33,
+      schemaVersion: 34,
       memoryEnabled: true,
       memoryBackend: "postgres",
       memoryColdBackend: "s3",
@@ -292,6 +297,17 @@ describe("Fastify HTTP adapter workspace package", () => {
     expect(decodeAbi(AdminConfigStatusResponseSchema, response.json())).toMatchObject({
       data: { runTimeoutMs: 900_000 },
     });
+  });
+
+  it("allows only configured Workspace execution profiles", async () => {
+    const runtimeConfig = { modelId: "gpt-5.6-sol", fallbackModelIds: ["gpt-5.6-luna"] };
+    const app = testApp({ runtimeConfig });
+    const accepted = await app.inject({ method: "PATCH", url: "/api/v1/console/sessions/session", payload: { modelId: "gpt-5.6-luna", reasoningEffort: "xhigh" } });
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toMatchObject({ data: { modelId: "gpt-5.6-luna", reasoningEffort: "xhigh" } });
+    const rejected = await app.inject({ method: "PATCH", url: "/api/v1/console/sessions/session", payload: { modelId: "unconfigured" } });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json()).toMatchObject({ error: { code: "session.model_not_allowed" } });
   });
 
   it("exports only current credential helpers and v1 route components", () => {

@@ -124,7 +124,7 @@ export class PiRuntime implements AttemptRuntimePort {
       cwd: this.options.workspace,
       model: this.options.model,
       modelRuntime,
-      thinkingLevel: this.options.model?.reasoning ? "medium" : "off",
+      thinkingLevel: this.options.model?.reasoning ? (this.options.reasoningEffort ?? "high") : "off",
       noTools: "builtin",
       customTools: [...this.options.capabilities.tools] as AgentTool[],
       resourceLoader,

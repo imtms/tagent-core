@@ -325,10 +325,10 @@ describe("Governance schema v31 migration", () => {
     }
   });
 
-  it("opens Store at v33, preserves legacy APIs, and guards the receipt table", () => {
+  it("opens Store at v34, preserves legacy APIs, and guards the receipt table", () => {
     const store = new Store(":memory:", { deferPostMigrationRecovery: true });
     databases.push(store.db);
-    expect(store.getSchemaVersion()).toBe(33);
+    expect(store.getSchemaVersion()).toBe(34);
     const session = store.createSession("legacy authority", "session-v31");
     const run = store.createRun(session.id, "legacy run", "run-v31");
     store.db.prepare(`INSERT INTO supervisor_decisions

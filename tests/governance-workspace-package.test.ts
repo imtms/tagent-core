@@ -76,7 +76,7 @@ describe("Governance workspace package", () => {
     const root = readJson<{ devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const governance = readJson<PackageManifest>("packages/governance/package.json");
 
-    expect(governance).toMatchObject({ name: "@tagent/governance", version: "0.2.1", private: true });
+    expect(governance).toMatchObject({ name: "@tagent/governance", version: "0.2.2", private: true });
     expect(root.devDependencies[governance.name]).toBe(governance.version);
     expect(Object.keys(governance.exports).sort()).toEqual(expectedExports);
     expect(governance.dependencies).toEqual({});

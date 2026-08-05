@@ -107,6 +107,8 @@ export interface RuntimeModelSpec {
   maxTokens: number;
 }
 
+export type RuntimeReasoningEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
 export interface AttemptRuntimeSpec {
   token: AttemptExecutionToken;
   workspace: string;
@@ -115,6 +117,7 @@ export interface AttemptRuntimeSpec {
   eventSink: RuntimeEventSink;
   model?: RuntimeModelSpec;
   fallbackModels?: RuntimeModelSpec[];
+  reasoningEffort?: RuntimeReasoningEffort;
   apiKey?: string;
   initialMessages?: RuntimeMessage[];
   providerTimeoutMs?: number;

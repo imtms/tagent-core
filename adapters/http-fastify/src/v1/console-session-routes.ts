@@ -27,9 +27,27 @@ export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencie
 
   app.patch("/api/v1/console/sessions/:id", { onRequest: write }, async (request) => {
     const { id } = request.params as { id: string };
-    const title = (request.body as { title?: string })?.title?.trim();
-    if (!title) throw consoleError(400, "session.title_required", "title is required");
-    const session = sessions.renameSession(id, title);
+    const body = (request.body ?? {}) as { title?: unknown; modelId?: unknown; reasoningEffort?: unknown };
+    const settings: { title?: string; modelId?: string; reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" } = {};
+    if (body.title !== undefined) {
+      if (typeof body.title !== "string" || !body.title.trim() || body.title.length > 256) throw consoleError(400, "session.title_invalid", "title must be a non-empty string of at most 256 characters");
+      settings.title = body.title.trim();
+    }
+    if (body.modelId !== undefined) {
+      if (typeof body.modelId !== "string" || !body.modelId.trim()) throw consoleError(400, "session.model_invalid", "modelId must be a non-empty string");
+      const runtime = dependencies.runtimeConfig as { modelId?: unknown; fallbackModelIds?: unknown } | undefined;
+      const allowed = [runtime?.modelId, ...(Array.isArray(runtime?.fallbackModelIds) ? runtime.fallbackModelIds : [])]
+        .filter((value): value is string => typeof value === "string" && Boolean(value));
+      if (!allowed.includes(body.modelId.trim())) throw consoleError(400, "session.model_not_allowed", "modelId is not configured for this Core");
+      settings.modelId = body.modelId.trim();
+    }
+    if (body.reasoningEffort !== undefined) {
+      const allowed = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+      if (typeof body.reasoningEffort !== "string" || !allowed.includes(body.reasoningEffort as typeof allowed[number])) throw consoleError(400, "session.reasoning_effort_invalid", "reasoningEffort is invalid");
+      settings.reasoningEffort = body.reasoningEffort as typeof allowed[number];
+    }
+    if (!Object.keys(settings).length) throw consoleError(400, "session.settings_required", "at least one session setting is required");
+    const session = sessions.updateSession(id, settings);
     if (!session) throw consoleError(404, "session.not_found", "session not found");
     return successEnvelope(request, session);
   });

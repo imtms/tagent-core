@@ -7,6 +7,7 @@ export const AdminConfigStatusSchema = Type.Object({
   api: Type.String({ minLength: 1 }),
   baseUrl: Type.String(),
   modelId: Type.String({ minLength: 1 }),
+  fallbackModelIds: Type.Array(Type.String({ minLength: 1 })),
   credentialConfigured: Type.Boolean(),
   providerTimeoutMs: Type.Integer({ minimum: 0 }),
   providerMaxRetries: Type.Integer({ minimum: 0 }),

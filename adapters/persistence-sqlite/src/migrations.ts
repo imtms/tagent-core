@@ -20,3 +20,7 @@ export {
   migrateLearningIntegrationV33,
   prepareLearningIntegrationV33,
 } from "./migrations/v33-learning-integration.js";
+export {
+  assertWorkspaceExecutionProfileV34Schema,
+  migrateWorkspaceExecutionProfileV34,
+} from "./migrations/v34-workspace-execution-profile.js";

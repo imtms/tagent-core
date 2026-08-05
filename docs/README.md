@@ -21,7 +21,7 @@ This directory contains the maintained contracts for TAgent Core 0.2.0. Git hist
 
 ## Persistence and execution
 
-- [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md) — SQLite ownership, schema 33, writer fencing, Unit of Work, lifecycle, and restart recovery.
+- [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md) — SQLite ownership, schema 34, writer fencing, Unit of Work, lifecycle, and restart recovery.
 - [Runtime](RUNTIME.md) — in-process Pi boundary, `TaskRun`/`Attempt` execution, timeouts, and tool authority.
 - [Supervisor](SUPERVISOR.md) — completion gates, evidence, approvals, candidate delivery, and continuations.
 
@@ -35,7 +35,7 @@ This directory contains the maintained contracts for TAgent Core 0.2.0. Git hist
 ## Memory and Learning
 
 - [Memory](MEMORY.md) — optional PostgreSQL/Hot/Warm/Cold architecture, policy, operations, and admin surface.
-- [Learning](LEARNING.md) — dependency on Memory, passive/active modes, schema 33 authority, and approval boundary.
+- [Learning](LEARNING.md) — dependency on Memory, passive/active modes, durable authority, and approval boundary.
 
 ## Release
 

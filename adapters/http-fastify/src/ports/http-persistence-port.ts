@@ -15,7 +15,7 @@ import type {
 export interface HttpPersistencePort {
   sessions: Pick<
     SessionRepository,
-    "createSession" | "listSessions" | "getSession" | "renameSession" | "listMessages"
+    "createSession" | "listSessions" | "getSession" | "updateSession" | "renameSession" | "listMessages"
   >;
   submissions: Pick<SubmissionQueue, "getSessionSubmission" | "listSessionInbox">;
   taskRuns: Pick<

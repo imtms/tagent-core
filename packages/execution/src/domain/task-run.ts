@@ -27,6 +27,7 @@ export type {
 /** Consumer-neutral reference to a conversation identifier owned outside Execution. */
 export type ExecutionSessionRef = string;
 export type RunId = string;
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type RunStatus = "running" | "waiting_input" | "completed" | "blocked" | "interrupted" | "cancelled" | "failed";
 export type RunPhase = "discover" | "plan" | "implement" | "verify" | "review" | "waiting_input" | "done" | "blocked";
 export type PlanStatus = PlanItem["status"];
@@ -87,6 +88,9 @@ export interface TaskRun {
   status: RunStatus;
   phase: RunPhase;
   goal: string;
+  /** Immutable execution profile captured when the TaskRun is admitted. */
+  modelId: string;
+  reasoningEffort: ReasoningEffort;
   contract: TaskRunContractSnapshot | null;
   gateRequired: boolean;
   blockedReason: string;

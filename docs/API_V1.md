@@ -108,6 +108,8 @@ curl -fsS -X POST http://127.0.0.1:3100/api/v1/sessions/SESSION_ID/submissions \
 
 Reusing a key with the same canonical content returns the existing submission state. Reusing it with different content returns `submission.idempotency_conflict`. The optional `modelId` is advisory and is excluded from idempotency semantics.
 
+The operator Console updates a Workspace title and next-TaskRun execution preferences through `PATCH /api/v1/console/sessions/:id`. `modelId` must be the configured primary or fallback model, and `reasoningEffort` must be one of `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. These preferences do not mutate an active TaskRun; each admitted TaskRun carries its own immutable execution-profile snapshot.
+
 ## Event consumption
 
 Event consumers are durable and generation-fenced:

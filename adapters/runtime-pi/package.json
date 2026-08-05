@@ -1,6 +1,6 @@
 {
   "name": "@tagent/runtime-pi",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "sideEffects": false,
@@ -30,7 +30,7 @@
     "@earendil-works/pi-agent-core": "0.83.0",
     "@earendil-works/pi-ai": "0.83.0",
     "@earendil-works/pi-coding-agent": "0.83.0",
-    "@tagent/execution": "0.2.1"
+    "@tagent/execution": "0.2.2"
   },
   "engines": {
     "node": ">=24.18.1",

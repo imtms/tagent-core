@@ -49,9 +49,9 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 ## Migration and recovery gate
 
 - [ ] A representative 0.1.x database plus WAL/SHM was backed up and restored in isolation.
-- [ ] The candidate migrated v30 → v31 → v32 → v33 and reopened idempotently.
-- [ ] `schema_meta.version` is 33 and `migration_issues` has zero open rows.
-- [ ] A second 0.2.0 process is rejected by the OS lock/writer authority.
+- [ ] The candidate migrated v30 → v31 → v32 → v33 → v34 and reopened idempotently.
+- [ ] `schema_meta.version` is 34 and `migration_issues` has zero open rows.
+- [ ] A second Core process is rejected by the OS lock/writer authority.
 - [ ] Writer lease/fence loss clears health readiness and closes Core.
 - [ ] Restart recovery produces `outcome_unknown` for effects/deliveries whose outcome cannot be proven and `restart_before_effect` cancellation only before effect start.
 - [ ] Restoring the pre-upgrade backup with the old artifact was tested as the 0.1.x rollback path.

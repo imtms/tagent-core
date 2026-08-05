@@ -33,7 +33,7 @@ Before an Attempt starts, Core persists an immutable Context Manifest describing
 
 ## Provider configuration
 
-The main runtime accepts an ordered comma-separated `TAGENT_MODEL` chain. A rate-limit response may switch to the next model without restarting the Attempt. Router and Supervisor use separately bounded model, context, timeout, and output settings.
+The main runtime accepts an ordered comma-separated `TAGENT_MODEL` chain. The Web Console may select the primary model only from that configured allowlist and may set `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` reasoning; new Workspaces default to the configured primary model and `high`. Core snapshots both values onto the TaskRun before launching its first Attempt, so recovery and continuations retain the same execution profile. Non-reasoning models are forced to `off`. A rate-limit response may switch to another configured model without restarting the Attempt. Router and Supervisor use separately bounded model, context, timeout, and output settings.
 
 The runtime records provider-reported input, output, cache, total token, cost, and latency data for observability. Token totals do not override wall-clock, continuation, approval, or evidence policy.
 

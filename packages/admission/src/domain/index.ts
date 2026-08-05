@@ -12,6 +12,8 @@ export type {
   Message,
   Session,
   SessionId,
+  SessionSettingsUpdate,
+  ReasoningEffort,
   SessionRunPhaseView,
   SessionRunStatusView,
 } from "./session.js";

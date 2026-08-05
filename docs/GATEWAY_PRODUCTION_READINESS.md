@@ -37,7 +37,7 @@ The command must exit `0` and return one credential with both scopes and the exa
 
 ## Schema migration gate
 
-Migration v30 → v31 → v32 → v33 is performed by the production `Store` opener. Back up the database and its WAL/SHM files, then run this command twice:
+Migration v30 → v31 → v32 → v33 → v34 is performed by the production `Store` opener. Back up the database and its WAL/SHM files, then run this command twice:
 
 ```sh
 TAGENT_DB=/var/lib/tagent/core.sqlite \
@@ -57,7 +57,7 @@ NODE
 Both runs must exit `0` and return exactly:
 
 ```json
-{"schemaVersion":33,"objects":["approval_receipts","attempts","idx_operations_attempt_created","integration_outbox","learning_projection_authority_state"]}
+{"schemaVersion":34,"objects":["approval_receipts","attempts","idx_operations_attempt_created","integration_outbox","learning_projection_authority_state"]}
 ```
 
 The second open is the idempotence proof. A different version or object inventory blocks deployment.
@@ -116,7 +116,7 @@ These are embedded in the probe output under `thresholds`:
 | `writerLeaseFresh` | `true` | Not applicable | `false` |
 | `migrationOpenIssues` | `0` | Not applicable | Missing table or any open issue |
 | `authorityReady` | `true` | Transition state `switching` or `rollback` | Missing authority state |
-| `schemaVersion` | `33` | Not applicable | Missing or not `33` |
+| `schemaVersion` | `34` | Not applicable | Missing or not `34` |
 
 Consumer lag semantics are strict: any value greater than zero makes the Gateway not ready immediately. Warning and critical distinguish alert urgency; they never permit traffic.
 
@@ -187,7 +187,7 @@ Use **Core before Gateway** order:
 
 ## Rollback point
 
-The Rollback point is the last verified prior compatible Gateway source plus the recorded v33 Core consumer and learning watermarks. Schema v33 is forward-only during application rollback.
+The Rollback point is the last verified prior compatible Gateway source plus the recorded Core consumer and Learning watermarks. Schema v34 is forward-only during application rollback.
 
 Rollback steps:
 
@@ -197,7 +197,7 @@ Rollback steps:
 4. Activate the prior compatible Gateway source through the production learning authority rollback API.
 5. Reclaim the Core event consumer, receiving a new generation.
 6. Resume after the durable ACK watermark; replay persisted-but-unacked events and persist the new-generation exact receipt before ACK.
-7. Keep schema version `33`. Do not restore a v30-v32 database over it.
+7. Keep schema version `34`. Do not restore an older database over it.
 8. Run the release-local readiness probe again and reopen traffic only after exit `0`.
 
-If the prior Gateway source cannot open schema v33 or honor the v1 receipt/ACK contract, keep traffic stopped and deploy a forward-compatible Gateway build. Do not perform a destructive schema downgrade.
+If the prior Gateway source cannot open schema v34 or honor the v1 receipt/ACK contract, keep traffic stopped and deploy a forward-compatible Gateway build. Do not perform a destructive schema downgrade.

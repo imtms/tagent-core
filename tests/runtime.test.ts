@@ -898,6 +898,20 @@ describe("AgentService runtime boundary", () => {
     expect(store.listEvents(store.getLatestRun(session.id)!.id).some((event) => event.type.includes("token_budget"))).toBe(false); store.close();
   });
 
+  it("launches each TaskRun with its persisted Workspace model and reasoning effort", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    store.updateSession(session.id, { modelId: "fallback-model", reasoningEffort: "xhigh" });
+    let captured: Parameters<RuntimeFactory>[0] | undefined;
+    const primary = { id: "primary-model", provider: "test", api: "openai-responses", baseUrl: "https://example.test/v1", reasoning: true, contextWindow: 10_000, maxTokens: 1_000 };
+    const fallback = { ...primary, id: "fallback-model" };
+    const service = new AgentService(agentPersistence(store), "/tmp", (options) => { captured = options; return new CallbackRuntime(assistantMessage("profile applied")); }, { model: primary, fallbackModels: [fallback] });
+    await service.start(session.id, "use workspace profile");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(captured).toMatchObject({ model: { id: "fallback-model" }, fallbackModels: [{ id: "primary-model" }], reasoningEffort: "xhigh" });
+    store.close();
+  });
+
   it("reports the configured 120-second default when the Run idle watchdog expires", async () => {
     vi.useFakeTimers();
     try {
