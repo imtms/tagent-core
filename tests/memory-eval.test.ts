@@ -1,15 +1,199 @@
-import {describe,it,expect} from "vitest";import {InMemoryMemoryAdapter} from "../src/memory/adapters/in-memory.js";import {MemoryService} from "../src/memory/memory-service.js";import {DefaultPolicyEngine} from "../src/memory/policy/policy-engine.js";import {LocalBlobStore} from "../src/memory/storage/local-blob-store.js";import {mkdtemp} from "node:fs/promises";import {tmpdir} from "node:os";import path from "node:path";
-const scope={type:"workspace" as const,id:"eval"},other={type:"workspace" as const,id:"isolated"},access={subjectId:"eval",scopes:[scope],purpose:"agent_recall" as const},now=Date.now();
-const fact=(id:string,title:string,content:string,semantic?:any,status:any="active",updatedAt=now,topicIds=[`workspace.eval.fact.general`])=>({id,kind:"fact" as const,tier:"warm" as const,scope,title,content,summary:content,topicIds,entityIds:[],status,confidence:1,importance:.9,sourceRefs:[],semantic,createdAt:updatedAt,updatedAt});
-describe("memory retrieval benchmark fixture",()=>{it("covers preference, temporal change, contradiction, organization, project, residence, cross-language, scope, stale and false positives",async()=>{const a=new InMemoryMemoryAdapter(),s=new MemoryService({records:a,topics:a,graph:a,vectors:a,jobs:a,policy:new DefaultPolicyEngine(a),blobs:new LocalBlobStore(await mkdtemp(path.join(tmpdir(),"memory-eval-")))});await s.upsert({...access,purpose:"capture"},[
- fact("00000000-0000-4000-8000-000000000001","User profile: name","用户姓名或称呼是 TMs",undefined,"active",now,[`workspace.eval.fact.user-profile.identity`]),
- {id:"00000000-0000-4000-8000-000000000002",kind:"preference",tier:"warm",scope,dimension:"communication",value:"用户偏好中文回答",summary:"偏好中文",topicIds:["workspace.eval.preference.communication"],entityIds:[],applicability:"global",strength:1,origin:"explicit",status:"active",confidence:1,sourceRefs:[],createdAt:now,updatedAt:now},
- fact("00000000-0000-4000-8000-000000000003","Residence","用户住在杭州",{subject:"用户",predicate:"住在",object:"杭州",polarity:"positive"}),
- fact("00000000-0000-4000-8000-000000000004","Old residence","用户曾住在上海",{subject:"用户",predicate:"住在",object:"上海",polarity:"positive"},"superseded",now-10000),
- fact("00000000-0000-4000-8000-000000000005","Organization","实习生E向主管C汇报",{subject:"实习生E",predicate:"汇报给",object:"主管C",polarity:"positive"}),
- fact("00000000-0000-4000-8000-000000000006","Project decision","项目决定使用PostgreSQL",{subject:"项目",predicate:"使用",object:"PostgreSQL",polarity:"positive"}),
- fact("00000000-0000-4000-8000-000000000007","Neighbor","Sway与乔哲是邻居",{subject:"Sway",predicate:"邻居",object:"乔哲",polarity:"positive"}),
- fact("00000000-0000-4000-8000-000000000008","Stale procedure","旧部署流程",undefined,"stale")
- ]);await a.upsertRecords([{...fact("00000000-0000-4000-8000-000000000009","Other secret","隔离空间秘密"),scope:other}]);const cases=[
- ["我叫什么","TMs"],["what is my name","TMs"],["我偏好什么语言","中文"],["where do I live now","杭州"],["E向谁汇报","主管C"],["项目数据库决定","PostgreSQL"],["Are Sway and Qiaozhe neighbors","邻居"],["从未记录的量子考古主题",""]
- ] as const;let hits=0,rr=0,zero=0;for(const [q,expected] of cases){const r=await s.recall({access,cue:q,maxColdTopics:0,maxCards:5});const rank=r.cards.findIndex(x=>x.content.includes(expected));if(expected){if(rank>=0){hits++;rr+=1/(rank+1);}}else if(!r.cards.length)zero++;expect(r.cards.some(x=>x.content.includes("隔离空间秘密"))).toBe(false);expect(r.cards.some(x=>x.status==="stale"||x.status==="superseded")).toBe(false);}expect(hits/7).toBeGreaterThanOrEqual(.85);expect(rr/7).toBeGreaterThanOrEqual(.8);expect(zero).toBe(1);});});
+import { describe, it, expect } from "vitest";
+import { InMemoryMemoryAdapter } from "../packages/memory/src/adapters/in-memory.js";
+import { MemoryService } from "../packages/memory/src/memory-service.js";
+import { DefaultPolicyEngine } from "../packages/memory/src/policy/policy-engine.js";
+import { LocalBlobStore } from "../packages/memory/src/storage/local-blob-store.js";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+const scope = { type: "workspace" as const, id: "eval" },
+  other = { type: "workspace" as const, id: "isolated" },
+  access = {
+    subjectId: "eval",
+    scopes: [scope],
+    purpose: "agent_recall" as const,
+  },
+  now = Date.now();
+const fact = (
+  id: string,
+  title: string,
+  content: string,
+  semantic?: any,
+  status: any = "active",
+  updatedAt = now,
+  topicIds = [`workspace.eval.fact.general`],
+) => ({
+  id,
+  kind: "fact" as const,
+  tier: "warm" as const,
+  scope,
+  title,
+  content,
+  summary: content,
+  topicIds,
+  entityIds: [],
+  status,
+  confidence: 1,
+  importance: 0.9,
+  sourceRefs: [],
+  semantic,
+  createdAt: updatedAt,
+  updatedAt,
+});
+describe("memory retrieval benchmark fixture", () => {
+  it("covers preference, temporal change, contradiction, organization, project, residence, cross-language, scope, stale and false positives", async () => {
+    const a = new InMemoryMemoryAdapter(),
+      s = new MemoryService({
+        records: a,
+        topics: a,
+        graph: a,
+        vectors: a,
+        jobs: a,
+        policy: new DefaultPolicyEngine(a),
+        blobs: new LocalBlobStore(
+          await mkdtemp(path.join(tmpdir(), "memory-eval-")),
+        ),
+      });
+    await s.upsert({ ...access, purpose: "capture" }, [
+      fact(
+        "00000000-0000-4000-8000-000000000001",
+        "User profile: name",
+        "用户姓名或称呼是 TMs",
+        undefined,
+        "active",
+        now,
+        [`workspace.eval.fact.user-profile.identity`],
+      ),
+      {
+        id: "00000000-0000-4000-8000-000000000002",
+        kind: "preference",
+        tier: "warm",
+        scope,
+        dimension: "communication",
+        value: "用户偏好中文回答",
+        summary: "偏好中文",
+        topicIds: ["workspace.eval.preference.communication"],
+        entityIds: [],
+        applicability: "global",
+        strength: 1,
+        origin: "explicit",
+        status: "active",
+        confidence: 1,
+        sourceRefs: [],
+        createdAt: now,
+        updatedAt: now,
+      },
+      fact(
+        "00000000-0000-4000-8000-000000000003",
+        "Residence",
+        "用户住在杭州",
+        {
+          subject: "用户",
+          predicate: "住在",
+          object: "杭州",
+          polarity: "positive",
+        },
+      ),
+      fact(
+        "00000000-0000-4000-8000-000000000004",
+        "Old residence",
+        "用户曾住在上海",
+        {
+          subject: "用户",
+          predicate: "住在",
+          object: "上海",
+          polarity: "positive",
+        },
+        "superseded",
+        now - 10000,
+      ),
+      fact(
+        "00000000-0000-4000-8000-000000000005",
+        "Organization",
+        "实习生E向主管C汇报",
+        {
+          subject: "实习生E",
+          predicate: "汇报给",
+          object: "主管C",
+          polarity: "positive",
+        },
+      ),
+      fact(
+        "00000000-0000-4000-8000-000000000006",
+        "Project decision",
+        "项目决定使用PostgreSQL",
+        {
+          subject: "项目",
+          predicate: "使用",
+          object: "PostgreSQL",
+          polarity: "positive",
+        },
+      ),
+      fact(
+        "00000000-0000-4000-8000-000000000007",
+        "Neighbor",
+        "Sway与乔哲是邻居",
+        {
+          subject: "Sway",
+          predicate: "邻居",
+          object: "乔哲",
+          polarity: "positive",
+        },
+      ),
+      fact(
+        "00000000-0000-4000-8000-000000000008",
+        "Stale procedure",
+        "旧部署流程",
+        undefined,
+        "stale",
+      ),
+    ]);
+    await a.upsertRecords([
+      {
+        ...fact(
+          "00000000-0000-4000-8000-000000000009",
+          "Other secret",
+          "隔离空间秘密",
+        ),
+        scope: other,
+      },
+    ]);
+    const cases = [
+      ["我叫什么", "TMs"],
+      ["what is my name", "TMs"],
+      ["我偏好什么语言", "中文"],
+      ["where do I live now", "杭州"],
+      ["E向谁汇报", "主管C"],
+      ["项目数据库决定", "PostgreSQL"],
+      ["Are Sway and Qiaozhe neighbors", "邻居"],
+      ["从未记录的量子考古主题", ""],
+    ] as const;
+    let hits = 0,
+      rr = 0,
+      zero = 0;
+    for (const [q, expected] of cases) {
+      const r = await s.recall({
+        access,
+        cue: q,
+        maxColdTopics: 0,
+        maxCards: 5,
+      });
+      const rank = r.cards.findIndex((x) => x.content.includes(expected));
+      if (expected) {
+        if (rank >= 0) {
+          hits++;
+          rr += 1 / (rank + 1);
+        }
+      } else if (!r.cards.length) zero++;
+      expect(r.cards.some((x) => x.content.includes("隔离空间秘密"))).toBe(
+        false,
+      );
+      expect(
+        r.cards.some((x) => x.status === "stale" || x.status === "superseded"),
+      ).toBe(false);
+    }
+    expect(hits / 7).toBeGreaterThanOrEqual(0.85);
+    expect(rr / 7).toBeGreaterThanOrEqual(0.8);
+    expect(zero).toBe(1);
+  });
+});

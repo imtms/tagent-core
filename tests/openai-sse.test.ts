@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { OpenAiSseIdleTimeoutError, readOpenAiChatContent } from "../src/core/openai-sse.js";
+import { OpenAiSseIdleTimeoutError, readOpenAiChatContent } from "@tagent/core-service/composition";
 
 const encoder = new TextEncoder();
 function sseResponse(parts: Array<{ delayMs: number; data: string }>) {

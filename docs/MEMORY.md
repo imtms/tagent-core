@@ -1,42 +1,37 @@
-# Long-Term Memory
+# Memory
 
-Long-term memory is an optional TAgent Core extension. It is disabled by default and does not change the original SQLite-backed session, transcript, TaskRun, checkpoint, or continuation behavior when disabled.
+## Boundary
 
-## Documentation map
+Memory is an optional `@tagent/memory` domain. With `TAGENT_MEMORY_ENABLED=false`, Core does not construct Memory adapters, connect to PostgreSQL/S3, access Local Cold storage, or start Memory workers. SQLite sessions, TaskRuns, transcripts, and recovery remain available.
 
-| Document | Purpose |
-| --- | --- |
-| [MEMORY_ARCHITECTURE.md](MEMORY_ARCHITECTURE.md) | Release-facing description of the implemented architecture, invariants, data flow, storage, and known limits |
-| [MEMORY_OPERATIONS.md](MEMORY_OPERATIONS.md) | Enablement, configuration profiles, PostgreSQL/Local Cold setup, backup, restore, diagnostics, and upgrades |
-| [MEMORY_API.md](MEMORY_API.md) | HTTP API, Agent tools, Web Memory Center, scopes, and response semantics |
-| [MEMORY_RELEASE_CHECKLIST.md](MEMORY_RELEASE_CHECKLIST.md) | Memory-specific release and deployment gate |
-| [MEMORY_DESIGN_PLAN.md](MEMORY_DESIGN_PLAN.md) | Original detailed design baseline; useful background, not the current implementation contract |
+The supported persistent profile uses one Core process with PostgreSQL 17, `vector`, `pg_trgm`, and Local Cold storage. The in-memory backend is for tests/development. S3 is implemented as a Cold adapter but is not the primary release-gated deployment profile.
 
-## Implemented release profile
+## Storage model
 
-The recommended first deployment is one trusted TAgent Core process with:
+```text
+Capture -> policy -> Hot/Warm record + Topic descriptor
+                                   |
+Recall <- lexical/vector/graph ----+
+                                   |
+                             exact Topic ID
+                                   |
+                       immutable Cold Markdown revision
+```
 
-- PostgreSQL 17 for Hot/Warm records, preferences, topic descriptors, entity/relationship graph, capture jobs, policy receipts, and metadata;
-- `pgvector` for Hot/Warm record and Topic Descriptor vectors;
-- `pg_trgm`, substring matching, and PostgreSQL FTS for lexical fallback and Chinese-friendly matching;
-- Local Cold storage for immutable, complete Markdown Topic revisions;
-- an OpenAI-compatible embedding provider for production semantic retrieval;
-- hybrid extraction: deterministic safety rules plus a structured LLM extractor;
-- an optional shared schema-validated LLM Semantic Judge for durable capture intent and extracted-record quality, with confidence, timeout, rate and persistent-cache controls;
-- in-process capture and maintenance loops;
-- the Web Memory Center and guarded Agent memory tools.
+- Hot/Warm stores facts, preferences, episodes, procedures, topics, graph links, capture jobs, lifecycle state, and metadata.
+- Vector and lexical retrieval cover Hot/Warm records and Topic descriptors.
+- Cold stores complete immutable Markdown Topic revisions.
+- Cold page bodies are never chunk-vectorized. Recall selects a Topic ID, verifies the revision checksum, and loads the complete page.
 
-Cold bodies are never embedded. Hot/Warm retrieval routes to Topic IDs; selected Cold Topic pages are checksum-verified and read in full.
+## Configuration
 
-## Quick start
-
-Memory-off compatibility mode:
+Disabled mode:
 
 ```env
 TAGENT_MEMORY_ENABLED=false
 ```
 
-Recommended Local Cold profile:
+Persistent Local Cold profile:
 
 ```bash
 docker compose -f deploy/postgres/compose.yml up -d
@@ -52,19 +47,48 @@ TAGENT_MEMORY_WORKSPACE_SCOPE_ID=default
 
 TAGENT_MEMORY_EMBEDDING_PROVIDER=openai
 TAGENT_MEMORY_EMBEDDING_BASE_URL=https://embedding-provider.example/v1
-TAGENT_MEMORY_EMBEDDING_API_KEY=...
-TAGENT_MEMORY_EMBEDDING_MODEL=...
-
+TAGENT_MEMORY_EMBEDDING_API_KEY=
+TAGENT_MEMORY_EMBEDDING_MODEL=
 TAGENT_MEMORY_EXTRACTOR_PROVIDER=hybrid
-# If omitted, extractor endpoint/key/model fall back to the main model settings.
-
-# Optional shared semantic judgment for durable intent/quality and Learning.
-TAGENT_LEARNING_SEMANTIC_JUDGE_ENABLED=true
-# URL/key/model may be omitted to reuse router/main provider settings.
 ```
 
-See [MEMORY_OPERATIONS.md](MEMORY_OPERATIONS.md) before using this profile with existing data or exposing it outside a trusted private network.
+`openai` embeddings require base URL, key, and model. `none` enables lexical-only retrieval. `hash` is deterministic test/development behavior. Hybrid extraction may fall back to the main provider configuration when dedicated extractor settings are absent.
 
-## Release boundary
+## Capture and policy
 
-The current implementation is suitable for a trusted, single-service Local Cold deployment. It is not a claim of production-ready multi-tenant isolation. Built-in API authentication, formal server-side user membership, independent worker services, distributed provider scheduling, and multi-user approval roles remain outside this release boundary. Workspace-admin governance, reversible record/Topic tombstones, retention, durable reindex, feedback, and Core Memory projection are included in 0.1.5.
+Capture is proposal-based. Source classification, model-egress policy, secret/prompt-injection checks, quality thresholds, scope, provenance, and conflict handling run before durable publication. A user message is not automatically a durable fact.
+
+The optional shared Semantic Judge may improve intent, quality, correction, preference, and Learning evidence classification. Invalid, timed-out, rate-limited, or low-confidence output is withheld or follows conservative deterministic fallback; it cannot grant capability or bypass approval.
+
+## Recall
+
+Recall applies caller resource scope, workspace scope, lifecycle state, lexical/vector/topic thresholds, contradiction handling, and token budgets. Empty recall is valid. Selected content is persisted in the Attempt's Context Manifest with provenance and omission reasons.
+
+## Lifecycle
+
+Records support correction, supersession, stale/delete thresholds, feedback, reversible tombstones, and retention. Topic deletion retains immutable revisions through the configured grace period; restore targets explicit record or Topic IDs. Maintenance removes expired objects only after the policy boundary permits it.
+
+Reindex is durable and generation-based. A new embedding generation is staged, checkpointed, validated, and activated only after completion; readers continue using the active generation during the build.
+
+## Admin surface
+
+Memory administration uses `/api/v1/admin/memory/*`, including recall, capture, jobs/status, export, forget, restore, reindex, governance, feedback, and Core Memory snapshot operations. Use the `@tagent/abi/admin/v1` schemas rather than copying payload shapes from old routes.
+
+When service credentials are configured, routes require `admin` and/or their declared governance scope plus resource-scope checks. The independent Web Console uses versioned console/admin projections through the Core client.
+
+## Operations
+
+Before enabling Memory in production:
+
+1. initialize PostgreSQL extensions and schema using the repository deployment profile;
+2. put PostgreSQL and Cold storage on protected durable volumes;
+3. configure backup/restore for PostgreSQL and Cold revisions as one logical set;
+4. run the PostgreSQL integration test and retrieval/reindex rehearsal;
+5. verify resource-scope isolation and the Memory-off path;
+6. monitor capture failures, empty/filtered results, reindex generation, recall latency, and worker readiness.
+
+Back up Memory consistently with the SQLite control plane before an upgrade. A SQLite rollback without matching Memory/Cold state may restore obsolete authority or references.
+
+## Relationship to Learning
+
+Learning depends on Memory. Disabling Memory forces Learning and automatic execution off. See [LEARNING.md](LEARNING.md).

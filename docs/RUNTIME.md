@@ -1,101 +1,56 @@
-# Agent Runtime Decision
+# Runtime
 
-Updated: 2026-07-30
+## Boundary
 
-## Decision
+The production runtime is `TAGENT_RUNTIME=in-process`, implemented by `@tagent/runtime-pi`. It adapts Pi `AgentSession` to TAgent-owned execution ports. There is no runtime RPC boundary in 0.2.0.
 
-TAgent Core uses a hybrid runtime strategy:
+Pi owns the ephemeral model/tool loop within one bounded `Attempt`. TAgent Core owns:
 
-- The primary interactive agent uses pi coding-agent `AgentSession` in-process.
-- Isolated, concurrent, or delegated workers will use pi RPC behind the same TAgent-owned runtime interface.
-- Codex app-server is reserved for specialized high-complexity coding implementation and review, not as the universal runtime.
+- durable `TaskRun` and `Attempt` identity and transitions;
+- execution leases, fencing, checkpoints, transcripts, and event sequence;
+- input admission, continuation limits, timeouts, cancellation, steering, and follow-up delivery;
+- operation idempotency and effect receipts;
+- workspace/capability policy, approvals, evidence, and final settlement.
 
-The immediate implementation introduces the runtime interface and factory while retaining the in-process adapter as the only enabled implementation.
+The runtime cannot mark a TaskRun complete or grant itself capability.
 
-## Why In-Process Remains the Primary Runtime
-
-The main Web conversation is already hosted inside one TAgent Core process. In-process pi has concrete advantages here:
-
-- Tool implementations remain direct TAgent capability calls rather than being re-exposed through another protocol.
-- Streaming and cancellation have no subprocess transport latency.
-- The first version has one source of runtime state and fewer crash boundaries.
-- The runtime can share the current TaskRun transaction and event publisher without protocol translation.
-- Debugging is simpler while the durable control-plane contracts are still being stabilized.
-
-Moving the primary agent to pi RPC now would add subprocess lifecycle, JSONL framing, handshake, event correlation, worker cleanup, and recovery semantics before the Worker contract is mature. It would not by itself solve durable transcript recovery because RPC session entries still need to be mapped into TAgent storage.
-
-## Why RPC Is Still Required
-
-In-process execution is not the long-term answer for every task. pi RPC is preferred for worker execution when one or more of these conditions apply:
-
-- Multiple agent jobs should run concurrently.
-- A task needs a separate process, HOME, environment, user, container, or worktree.
-- Worker failure must not destabilize the main API process.
-- A bounded delegated task needs independent cancellation and resource limits.
-- TAgent needs to compare or replace worker implementations without changing AgentService.
-
-## Runtime Contract
-
-TAgent owns this minimal contract:
+## Execution flow
 
 ```text
-prompt(query) -> Promise<void>
-steer(instruction) -> Promise<"accepted" | "settled">
-followUp(instruction) -> Promise<"accepted" | "settled">
-compact(instructions?) -> Promise<void>
-abort() -> void | Promise<void>
-dispose() -> void
-getMessages() -> AgentMessage[]
-getError() -> string | undefined
+submission -> TaskRun -> execution lease -> Attempt -> Pi model/tool loop
+                                            |
+                                            v
+                             candidate -> Supervisor settlement
+                                            |
+                      complete | continue | approval | blocked
 ```
 
-The runtime factory receives Run ID, workspace, system prompt, tools, and an event sink. The adapter owns pi SessionManager, SettingsManager, ModelRuntime, queue, retry, and compaction details; pi-specific classes and protocol events must not leak into AgentService or the database schema. AgentService aggregates persisted runtime events into a throttled durable Run checkpoint, keeping checkpoint semantics runtime-neutral for future RPC workers.
-Run events are consumed through Schema v5 durable consumer cursors. Each `(run, consumer)` claim increments a generation; replay starts after the durable ACK, ACKs are monotonic and bounded by the persisted event tail, and stale generations cannot advance delivery state.
+Each resume, retry, or automatic continuation creates/uses the next bounded Attempt under durable authority. Continuations retain the TaskRun contract and selected durable context; they are not independent tasks.
 
-Pi 0.83 abort is asynchronous and does not complete until the session is idle. Runtime adapters must preserve an abort requested during initialization, and must not dispose a busy session before that abort settles. Service close must also join the AgentService execution task before closing durable storage. Intermediate `agent_end` events with `willRetry: true` are retry progress, not completed assistant messages.
-Pi queue methods are used only while `AgentSession.isStreaming`; `agent_settled` closes admission, `queue_update` is the authoritative in-memory queue snapshot, and cancellation calls Pi `clearQueue()` before asynchronous abort. See [PI_RUNTIME_BOUNDARY.md](PI_RUNTIME_BOUNDARY.md).
-Schema v6 places a bounded durable control inbox before Pi. SQLite owns idempotent admission, attempt binding, FIFO claim, restart ambiguity, and delivery receipts; Pi still owns the actual steer/follow-up queue and turn ordering after acceptance.
+## Context
 
-Pi installs Agent-level before/after tool hooks for its own runtime and extension semantics. TAgent adapters must compose those hooks rather than replace them, preserve Pi block/result transformations, and bind operation guards to Pi's prepared and validated arguments.
+Before an Attempt starts, Core persists an immutable Context Manifest describing selected Session messages, transcript material, TaskRun contract, prompt, Core Memory, dynamic Memory records, Cold Topics, omissions, token estimates, and a content hash. Runtime input is assembled from this manifest, not by letting the provider read the database.
 
-A later worker-oriented interface can add:
+## Provider configuration
 
-```text
-start(WorkerSpec) -> workerId
-snapshot(workerId) -> WorkerSnapshot
-result(workerId) -> WorkerResult
-close() -> Promise<void>
-```
+The main runtime accepts an ordered comma-separated `TAGENT_MODEL` chain. A rate-limit response may switch to the next model without restarting the Attempt. Router and Supervisor use separately bounded model, context, timeout, and output settings.
 
-## Scheduling Policy
+The runtime records provider-reported input, output, cache, total token, cost, and latency data for observability. Token totals do not override wall-clock, continuation, approval, or evidence policy.
 
-Initial scheduling policy:
+## Timeouts and progress
 
-| Work type | Runtime |
-|---|---|
-| Primary interactive Web conversation | In-process pi |
-| Deterministic build/test/query | Deterministic runtime, planned |
-| One model request with structured output | Single-shot runtime, planned |
-| Explorer, bounded subtask, isolated operations | pi RPC, planned |
-| Complex code implementation or review | Codex RPC, planned |
+`TAGENT_RUN_TIMEOUT_MS` is an inactivity watchdog refreshed by model chunks and tool progress. `TAGENT_RUN_HARD_TIMEOUT_MS` is the absolute TaskRun wall-clock ceiling. Provider, Router, and Supervisor transports have their own bounded idle/retry settings.
 
-Runtime completion is always a candidate result. Only the TAgent TaskRun completion gate can set the durable run to completed.
+Timeout or transport failure is classified through durable Attempt settlement. A transient failure may schedule a bounded continuation; missing user input, permission, approval, or a non-recoverable condition blocks or pauses instead of looping indefinitely.
 
-## Migration Gates for pi RPC
+## Controls
 
-Do not switch the primary agent to RPC until these are implemented and tested:
+Steer and follow-up controls enter a bounded durable inbox. They are delivered to the active runtime under lease and fence. Pending delivery prevents settled completion. Recovery classifies an in-flight delivery conservatively when its outcome cannot be proven.
 
-1. Stable WorkerSpec, WorkerEvent, WorkerSnapshot, and WorkerResult schemas.
-2. Subprocess handshake and protocol version negotiation.
-3. Event sequence correlation and duplicate suppression.
-4. Timeouts, process cleanup, cancellation, and orphan recovery.
-5. Sanitized environment and explicit capability exposure.
-6. Transcript/session persistence mapped into TAgent-owned storage.
-7. Contract tests that run against both in-process and RPC adapters.
+## Tools
 
-## Consequences
+`@tagent/workspace-local` provides contained `ls`, `read`, `write`, `edit`, and `bash` behavior plus TaskRun control integration. Path containment and command policy are guardrails, not an OS sandbox. Operation receipts and approval policy remain Core-owned even when Pi initiated the tool call.
 
-- TAgent Core gains a replaceable runtime boundary now without premature process complexity.
-- The current primary agent remains efficient and easy to inspect.
-- Worker isolation is acknowledged as unfinished and tracked as a priority milestone.
-- Future pi RPC adoption does not require rewriting AgentService or HTTP routes.
+## Web separation
+
+The runtime does not host a browser conversation or Web assets. The independent Web Console observes and controls Core through `/api/v1` using `@tagent/core-client`.

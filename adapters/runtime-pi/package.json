@@ -1,0 +1,38 @@
+{
+  "name": "@tagent/runtime-pi",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist"],
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./factory": {
+      "types": "./dist/factory.d.ts",
+      "import": "./dist/factory.js"
+    },
+    "./provider-errors": {
+      "types": "./dist/provider-errors.d.ts",
+      "import": "./dist/provider-errors.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean && rm -rf dist"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.83.0",
+    "@earendil-works/pi-ai": "0.83.0",
+    "@earendil-works/pi-coding-agent": "0.83.0",
+    "@tagent/execution": "0.2.0"
+  },
+  "engines": {
+    "node": ">=24.18.1",
+    "npm": ">=12"
+  },
+  "license": "MIT"
+}

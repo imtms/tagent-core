@@ -2,15 +2,51 @@
 
 ## [Unreleased]
 
-### Changed
+## [0.2.0] - 2026-08-05
 
-- Removed the independent SpawnProposal model, API, Agent tool action, Supervisor branch, and Web controls. Related work now uses Session Inbox, TaskRun Contracts, TaskRun edges, and the existing approval flow; Schema 27 migrates legacy unstarted proposals.
-- Removed unused package dependencies, obsolete empty-directory placeholders, a one-off payload measurement script, and superseded point-release/PR audit documents.
-- Added a maintained documentation index and aligned development status with the current `main` schema and dependency-audit state.
+### Breaking changes
 
-### Fixed
+- Removed unversioned `/api/*` compatibility routes. Core now exposes supported HTTP contracts only under `/api/v1`.
+- Removed legacy ABI namespaces, compatibility client decoders, root source facades, and legacy DTO naming from the supported surface.
+- Split the Web Console from Core. Core is API-only and no longer serves Web assets or an SPA fallback.
+- Changed durable submissions to use the `Idempotency-Key` header and the v1 receipt shape.
+- Advanced the control-plane SQLite schema to 33. Older binaries cannot open the upgraded database.
+- Standardized the release toolchain on Node.js `24.18.1` and npm `12+`.
 
-- Remove npm-created `node_modules/.bin` symlinks from production archives so the immutable release builder and the deployer's no-links archive policy remain compatible.
+### Architecture
+
+- Reorganized the repository into an acyclic 13-workspace npm modular monolith with explicit ABI, client, domain, adapter, Core composition-root, and Web application boundaries.
+- Restricted the Web Console to `@tagent/abi` and `@tagent/core-client`; no production workspace depends on the Web Console.
+- Added workspace export and dependency-boundary checks and removed obsolete pre-refactor source, tests, design notes, and compatibility documentation.
+
+### API and security
+
+- Added runtime-validated public, channel, console, admin, and internal v1 schemas with standard success and error envelopes.
+- Added scoped service principals and server-configured resource scopes for protected routes.
+- Added exact-origin CORS validation and a production boundary for Gateway-managed OIDC-to-Core credential translation.
+- Added generation-fenced event consumers with replay and explicit acknowledgements.
+
+### Persistence and recovery
+
+- Added schema 30 `Attempt` authority and restart classification.
+- Added schema 31 canonical Governance projections and approval receipts.
+- Added schema 32 capability-authorization uniqueness, indexing, and immutable identity constraints.
+- Added schema 33 Learning integration events, delivery fencing, checkpoints, reconciliation, authority state, effect receipts, and migration issue ledger.
+- Added an OS instance lock, single-writer lease and fence enforcement, synchronous Unit of Work, connection-level mutation guards, writer readiness, and fail-closed recovery.
+
+### Build and deployment
+
+- Added separate checksum-manifested Core and Web Console artifacts. The Core archive materializes internal workspaces and excludes Web assets.
+- Added Core-before-Gateway deployment guidance and schema, writer, migration-issue, and consumer-watermark readiness gates.
+- Removed npm-created `node_modules/.bin` links from production archives so the no-links artifact policy remains enforceable.
+
+### Upgrade notice
+
+- Stop every 0.1.x writer and back up SQLite together with WAL/SHM before starting 0.2.0.
+- Upgrade Core first and allow forward migration to schema 33. If v33 preflight leaves open `migration_issues`, startup stops; do not bypass the ledger.
+- Update Gateway and client routes to `/api/v1`, then deploy the Web Console separately with its Core origin and OIDC Gateway integration.
+- Rollback to 0.1.x requires restoring the matching pre-upgrade database backup. Never run a 0.1.x binary against schema 33.
+- Follow [docs/UPGRADING_TO_0.2.md](docs/UPGRADING_TO_0.2.md) and complete the release checklist before publishing. This changelog does not assert that a particular CI or artifact run has passed.
 
 ## [0.1.13] - 2026-08-04
 

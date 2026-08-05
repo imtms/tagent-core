@@ -32,10 +32,13 @@ jobs:
           --health-retries 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24.18.1
           cache: npm
+      - run: npm install --global npm@12
       - run: npm ci
       - env:
           TAGENT_TEST_POSTGRES_URL: postgresql://tagent_test:tagent_test@127.0.0.1:5432/tagent_memory_test
@@ -46,22 +49,44 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24.18.1
           cache: npm
+      - run: npm install --global npm@12
       - run: npm ci
       - run: npm run lint
       - run: npm run check
       - run: npm test -- --run
       - run: npm run build
-      - run: npm audit --omit=dev --audit-level=high
-      - run: npm audit --audit-level=high
+      - run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
+      - run: npm audit --audit-level=high --registry=https://registry.npmjs.org
       - name: Verify tag matches package version
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
-      - name: Create GitHub release
+      - name: Build immutable Core and Web Console artifacts
+        run: |
+          scripts/build-release.sh \
+            "$RUNNER_TEMP/tagent-core-${RELEASE_TAG}-linux-x64-node24-abi137.tar.gz" \
+            "$RUNNER_TEMP/tagent-web-console-${RELEASE_TAG}.tar.gz"
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      - name: Retain verified release artifacts in Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: tagent-${{ inputs.tag || github.ref_name }}-linux-x64-node24-abi137
+          path: |
+            ${{ runner.temp }}/tagent-core-${{ inputs.tag || github.ref_name }}-linux-x64-node24-abi137.tar.gz
+            ${{ runner.temp }}/tagent-core-${{ inputs.tag || github.ref_name }}-linux-x64-node24-abi137.tar.gz.sha256
+            ${{ runner.temp }}/tagent-web-console-${{ inputs.tag || github.ref_name }}.tar.gz
+            ${{ runner.temp }}/tagent-web-console-${{ inputs.tag || github.ref_name }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
+      - name: Create GitHub release with verified artifacts
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
@@ -73,4 +98,11 @@ jobs:
             flag
           ' CHANGELOG.md > release-notes.md
           test -s release-notes.md
-          gh release create "$RELEASE_TAG" --title "TAgent Core ${RELEASE_TAG}" --notes-file release-notes.md
+          gh release create "$RELEASE_TAG" \
+            "$RUNNER_TEMP/tagent-core-${RELEASE_TAG}-linux-x64-node24-abi137.tar.gz" \
+            "$RUNNER_TEMP/tagent-core-${RELEASE_TAG}-linux-x64-node24-abi137.tar.gz.sha256" \
+            "$RUNNER_TEMP/tagent-web-console-${RELEASE_TAG}.tar.gz" \
+            "$RUNNER_TEMP/tagent-web-console-${RELEASE_TAG}.tar.gz.sha256" \
+            --verify-tag \
+            --title "TAgent Core ${RELEASE_TAG}" \
+            --notes-file release-notes.md

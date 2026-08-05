@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { classifyProviderFailure, isRetryableProviderFailure } from "../src/runtime/provider-errors.js";
+import { classifyProviderFailure, isRetryableProviderFailure } from "@tagent/runtime-pi/provider-errors";
 
 function error(message: string, stopReason: AssistantMessage["stopReason"] = "error"): AssistantMessage {
   return { role: "assistant", content: [], api: "openai-completions", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason, errorMessage: message, timestamp: 1 };

@@ -1,7 +1,20 @@
 {
   "files": [],
   "references": [
+    { "path": "./packages/abi" },
+    { "path": "./packages/core-client" },
+    { "path": "./packages/governance" },
+    { "path": "./packages/execution" },
+    { "path": "./adapters/runtime-pi" },
+    { "path": "./packages/admission" },
+    { "path": "./packages/memory" },
+    { "path": "./packages/learning" },
+    { "path": "./adapters/persistence-sqlite" },
+    { "path": "./adapters/workspace-local" },
+    { "path": "./adapters/http-fastify" },
+    { "path": "./apps/core-service" },
     { "path": "./tsconfig.server.json" },
+    { "path": "./tsconfig.test.json" },
     { "path": "./tsconfig.web.json" }
   ]
 }

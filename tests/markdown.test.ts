@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderMarkdown } from "../web/src/Markdown";
+import { renderMarkdown } from "../apps/web-console/src/Markdown";
 
 describe("web markdown rendering", () => {
   it("renders GFM-style tables, nested lists, strikethrough, and soft line breaks", () => {

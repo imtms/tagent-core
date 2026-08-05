@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRequestId } from "../web/src/id";
+import { createRequestId } from "../apps/web-console/src/id";
 
 describe("createRequestId", () => {
   it("uses randomUUID when available", () => {

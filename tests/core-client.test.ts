@@ -1,0 +1,271 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createCoreClient,
+  createReplayAckCoordinator,
+  decodeJsonSse,
+  type CoreFetch,
+} from "@tagent/core-client";
+import { submissionIdempotencyFixtures, taskRunEventFixture, unknownTaskRunEventFixture } from "@tagent/abi";
+
+afterEach(() => vi.restoreAllMocks());
+
+describe("core-client transport", () => {
+  it("adds Bearer, request, and idempotency headers without mutating the v1 body", async () => {
+    const fetchMock = vi.fn<CoreFetch>(async () => new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    const client = createCoreClient({ bearerToken: "service-token", fetch: fetchMock, requestIdFactory: () => "generated-request" });
+
+    await client.request("/api/v1/sessions/session/submissions", {
+      idempotencyKey: "submission-1",
+      json: { content: "hello" },
+      method: "POST",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    const headers = new Headers(init?.headers);
+    expect(url).toBe("/api/v1/sessions/session/submissions");
+    expect(headers.get("Authorization")).toBe("Bearer service-token");
+    expect(headers.get("Idempotency-Key")).toBe("submission-1");
+    expect(headers.get("X-Request-Id")).toBe("generated-request");
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(JSON.parse(String(init?.body))).toEqual({ content: "hello" });
+  });
+
+  it("rejects invalid idempotency keys before issuing a request", async () => {
+    const fetchMock = vi.fn<CoreFetch>();
+    const client = createCoreClient({ fetch: fetchMock });
+
+    await expect(client.request("/api/v1/sessions", { idempotencyKey: "not allowed", method: "POST" }))
+      .rejects.toMatchObject({ code: "client.protocol_mismatch", retryable: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes v1 failures into stable CoreClientError values", async () => {
+    const v1 = createCoreClient({ fetch: async () => new Response(JSON.stringify({
+      error: {
+        code: "submission.idempotency_conflict",
+        message: "payload changed",
+        requestId: "request-1",
+        retryable: false,
+        details: { submissionId: "submission-1" },
+      },
+    }), { status: 409, headers: { "Content-Type": "application/json" } }) });
+
+    await expect(v1.request("/api/v1/submissions", { method: "POST" })).rejects.toEqual(expect.objectContaining({
+      category: "conflict",
+      code: "submission.idempotency_conflict",
+      details: { submissionId: "submission-1" },
+      message: "payload changed",
+      requestId: "request-1",
+      retryable: false,
+      status: 409,
+    }));
+  });
+
+  it("rejects forbidden fields in v1 error envelopes", async () => {
+    const client = createCoreClient({ fetch: async () => new Response(JSON.stringify({
+      error: {
+        category: "conflict",
+        code: "submission.idempotency_conflict",
+        details: {},
+        message: "payload changed",
+        requestId: "request-1",
+        retryable: false,
+      },
+    }), { status: 409, headers: { "Content-Type": "application/json" } }) });
+
+    await expect(client.request("/api/v1/submissions", { method: "POST" })).rejects.toMatchObject({
+      category: "protocol",
+      code: "client.protocol_mismatch",
+      message: expect.stringContaining("error envelope validation failed"),
+    });
+  });
+
+  it("passes 204 responses through typed decoders while preserving untyped undefined", async () => {
+    const fetchMock = vi.fn<CoreFetch>(async () => new Response(null, { status: 204 }));
+    const client = createCoreClient({ fetch: fetchMock });
+    const decode = vi.fn((_payload: unknown): string => { throw new TypeError("expected a JSON value"); });
+
+    await expect(client.request("/api/v1/empty", { decode })).rejects.toMatchObject({
+      category: "protocol",
+      code: "client.protocol_mismatch",
+      message: expect.stringContaining("expected a JSON value"),
+    });
+    expect(decode).toHaveBeenCalledWith(undefined);
+    await expect(client.request("/api/v1/empty")).resolves.toBeUndefined();
+  });
+
+  it("retries only requests with safe or idempotent semantics", async () => {
+    const idempotentFetch = vi.fn<CoreFetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: "core.busy", details: {}, message: "busy", requestId: "retry-1", retryable: true } }), { status: 503, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const unsafeFetch = vi.fn<CoreFetch>(async () => new Response(JSON.stringify({ error: { code: "core.busy", details: {}, message: "busy", requestId: "retry-2", retryable: true } }), {
+      status: 503,
+      headers: { "Content-Type": "application/json" },
+    }));
+
+    await createCoreClient({ fetch: idempotentFetch, retry: { baseDelayMs: 0, maxAttempts: 2 } })
+      .request("/api/v1/sessions", { idempotencyKey: "session-1", method: "POST" });
+    await expect(createCoreClient({ fetch: unsafeFetch, retry: { baseDelayMs: 0, maxAttempts: 2 } })
+      .request("/api/v1/actions", { method: "POST" })).rejects.toMatchObject({ status: 503 });
+
+    expect(idempotentFetch).toHaveBeenCalledTimes(2);
+    expect(unsafeFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("streams JSON SSE over authenticated fetch and ignores heartbeat comments", async () => {
+    const fetchMock = vi.fn<CoreFetch>(async () => new Response([
+      ": heartbeat",
+      "",
+      "id: 41",
+      "event: task_run.updated",
+      "data: {\"sequence\":41,",
+      "data: \"type\":\"task_run.updated\"}",
+      "",
+    ].join("\n"), { status: 200, headers: { "Content-Type": "text/event-stream; charset=utf-8" } }));
+    const client = createCoreClient({ baseUrl: "https://core.example/", bearerToken: "events-token", fetch: fetchMock });
+    const events: Array<{ sequence: number; type: string }> = [];
+    const subscription = client.subscribeSse("/api/v1/task-runs/run/events", {
+      decode: decodeJsonSse<{ sequence: number; type: string }>((payload) => payload as { sequence: number; type: string }),
+      onMessage: (event) => { events.push(event); },
+    });
+
+    await subscription.completed;
+
+    expect(events).toEqual([{ sequence: 41, type: "task_run.updated" }]);
+    const [url, init] = fetchMock.mock.calls[0];
+    const headers = new Headers(init?.headers);
+    expect(url).toBe("https://core.example/api/v1/task-runs/run/events");
+    expect(headers.get("Accept")).toBe("text/event-stream");
+    expect(headers.get("Authorization")).toBe("Bearer events-token");
+  });
+});
+
+describe("channel v1 helpers", () => {
+  it("validates submission fixtures and maps the idempotency contract", async () => {
+    const fetchMock = vi.fn<CoreFetch>(async () => new Response(JSON.stringify(submissionIdempotencyFixtures.originalResponse), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    const client = createCoreClient({ baseUrl: "https://core.example", fetch: fetchMock });
+
+    await expect(client.submit(
+      "session/fixture",
+      submissionIdempotencyFixtures.headers["idempotency-key"],
+      submissionIdempotencyFixtures.originalPayload,
+    )).resolves.toEqual(submissionIdempotencyFixtures.originalResponse.data.receipt);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://core.example/api/v1/sessions/session%2Ffixture/submissions");
+    expect(new Headers(init?.headers).get("Idempotency-Key")).toBe("submission.fixture-001");
+    expect(JSON.parse(String(init?.body))).toEqual(submissionIdempotencyFixtures.originalPayload);
+  });
+
+  it("validates task-run responses instead of trusting the JSON shape", async () => {
+    const client = createCoreClient({ fetch: async () => new Response(JSON.stringify({
+      data: { id: "task-run-with-missing-fields" },
+      requestId: "request-1",
+    }), { status: 200, headers: { "Content-Type": "application/json" } }) });
+
+    await expect(client.getTaskRun("task-run-1")).rejects.toMatchObject({
+      code: "client.protocol_mismatch",
+      message: expect.stringContaining("response validation failed"),
+      retryable: false,
+    });
+  });
+
+  it("claims and acknowledges consumers with ABI-validated cursors", async () => {
+    const cursor = {
+      taskRunId: "task-run-1",
+      consumerId: "gateway/main",
+      generation: 2,
+      acknowledgedSequence: 7,
+      terminalAcknowledgedSequence: null,
+      claimedAt: "2026-08-04T12:34:56.789Z",
+      updatedAt: "2026-08-04T12:34:56.789Z",
+    };
+    const fetchMock = vi.fn<CoreFetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { cursor }, requestId: "claim-request" }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { status: "accepted", cursor: { ...cursor, acknowledgedSequence: 8 } }, requestId: "ack-request" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const client = createCoreClient({ fetch: fetchMock });
+
+    await expect(client.claimEventConsumer("task-run-1", "gateway/main")).resolves.toEqual(cursor);
+    await expect(client.ackEventConsumer("task-run-1", "gateway/main", { generation: 2, sequence: 8 }))
+      .resolves.toMatchObject({ acknowledgedSequence: 8 });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/task-runs/task-run-1/event-consumers/gateway%2Fmain/claim");
+    expect(fetchMock.mock.calls[0][1]?.body).toBeUndefined();
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has("Content-Type")).toBe(false);
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/v1/task-runs/task-run-1/event-consumers/gateway%2Fmain/ack");
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ generation: 2, sequence: 8 });
+  });
+
+  it("decodes TaskRunEvent fixtures through the typed SSE helper", async () => {
+    const fetchMock = vi.fn<CoreFetch>(async () => new Response([
+      `data: ${JSON.stringify(taskRunEventFixture)}`,
+      "",
+      `data: ${JSON.stringify(unknownTaskRunEventFixture)}`,
+      "",
+    ].join("\n"), {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    }));
+    const events: unknown[] = [];
+    const subscription = createCoreClient({ fetch: fetchMock }).subscribeTaskRunEvents("task-run-1", {
+      after: 41,
+      consumerId: "gateway",
+      generation: 3,
+      onMessage: (event) => { events.push(event); },
+    });
+
+    await subscription.completed;
+
+    expect(events).toEqual([taskRunEventFixture, unknownTaskRunEventFixture]);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/task-runs/task-run-1/events?consumerId=gateway&generation=3&after=41");
+  });
+
+  it("rejects invalid event stream cursors before starting a subscription", () => {
+    const fetchMock = vi.fn<CoreFetch>();
+    const client = createCoreClient({ fetch: fetchMock });
+
+    expect(() => client.subscribeTaskRunEvents("task-run-1", {
+      consumerId: "gateway",
+      generation: 0,
+      onMessage: () => undefined,
+    })).toThrow(expect.objectContaining({ code: "client.protocol_mismatch" }));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("replay ACK coordination", () => {
+  it("persists each new event before ACK and ignores an already acknowledged replay", async () => {
+    const calls: string[] = [];
+    const coordinator = createReplayAckCoordinator<{ seq: number }>({
+      ack: async (sequence) => { calls.push(`ack:${sequence}`); },
+      initialAcknowledgedSequence: 3,
+      persist: async (event) => { calls.push(`persist:${event.seq}`); },
+      sequence: (event) => event.seq,
+    });
+
+    await expect(coordinator.handle({ seq: 3 })).resolves.toBe("duplicate");
+    await expect(coordinator.handle({ seq: 4 })).resolves.toBe("acknowledged");
+    expect(calls).toEqual(["persist:4", "ack:4"]);
+    expect(coordinator.getAcknowledgedSequence()).toBe(4);
+  });
+
+  it("does not ACK or advance when durable persistence fails", async () => {
+    const ack = vi.fn(async () => undefined);
+    const coordinator = createReplayAckCoordinator<{ seq: number }>({
+      ack,
+      persist: async () => { throw new Error("outbox unavailable"); },
+      sequence: (event) => event.seq,
+    });
+
+    await expect(coordinator.handle({ seq: 1 })).rejects.toThrow("outbox unavailable");
+    expect(ack).not.toHaveBeenCalled();
+    expect(coordinator.getAcknowledgedSequence()).toBe(0);
+    await coordinator.idle();
+  });
+});

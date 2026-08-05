@@ -4,11 +4,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Pool } from "pg";
-import { PostgresMemoryAdapter } from "../src/memory/postgres/postgres-adapter.js";
-import { LocalBlobStore } from "../src/memory/storage/local-blob-store.js";
-import { DefaultPolicyEngine } from "../src/memory/policy/policy-engine.js";
-import { HashEmbeddingAdapter } from "../src/memory/adapters/hash-embedding.js";
-import { MemoryService } from "../src/memory/memory-service.js";
+import { PostgresMemoryAdapter } from "../packages/memory/src/postgres/postgres-adapter.js";
+import { LocalBlobStore } from "../packages/memory/src/storage/local-blob-store.js";
+import { DefaultPolicyEngine } from "../packages/memory/src/policy/policy-engine.js";
+import { HashEmbeddingAdapter } from "../packages/memory/src/adapters/hash-embedding.js";
+import { MemoryService } from "@tagent/memory";
 
 const configuredUrl = process.env.TAGENT_TEST_POSTGRES_URL;
 const databaseName = configuredUrl ? decodeURIComponent(new URL(configuredUrl).pathname.slice(1)) : "";
@@ -81,6 +81,9 @@ suite("PostgreSQL memory adapter", () => {
     expect(exported.records.some((record) => record.id === recalled.cards[0].id)).toBe(true);
     expect(exported.topics.some((topic) => topic.descriptor.topicId === descriptor.topicId)).toBe(true);
     const queued = await service.enqueueCapture({ access, sourceRefs: [], content: "User prefers concise answers", idempotencyKey: `job-${scope.id}` });
+    expect(await service.listCaptureJobs(access, 10)).toEqual([
+      expect.objectContaining({ id: queued.jobId, status: "queued" }),
+    ]);
     const claimed = await adapter.claim("test", 1000);
     expect(claimed?.id).toBe(queued.jobId);
     await adapter.complete(queued.jobId,"test",claimed!.leaseToken!,claimed!.fencingToken!);
@@ -90,8 +93,8 @@ suite("PostgreSQL memory adapter", () => {
   });
 
   it("extracts graph projections and promotes records through the local lifecycle", async () => {
-    const { RuleBasedExtractor } = await import("../src/memory/adapters/rule-extractor.js");
-    const { MemoryLifecycle } = await import("../src/memory/lifecycle.js");
+    const { RuleBasedExtractor } = await import("../packages/memory/src/adapters/rule-extractor.js");
+    const { MemoryLifecycle } = await import("../packages/memory/src/lifecycle.js");
     const proposal = await new RuleBasedExtractor().extract("tagent-core uses PostgreSQL database. tagent-core depends on pgvector.", [], scope);
     const lifecycle = new MemoryLifecycle(adapter, adapter, adapter, adapter, { warmAfterMs: 0, coldMinimumRecords: 1 });
     const integrated = await lifecycle.integrate(access, proposal);

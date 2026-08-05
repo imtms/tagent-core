@@ -1,14 +1,8 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "strict": true,
-    "skipLibCheck": true,
-    "jsx": "react-jsx",
-    "noEmit": true,
-    "types": ["vite/client"]
-  },
-  "include": ["web", "vite.config.ts"]
+  "extends": "./apps/web-console/tsconfig.json",
+  "include": ["apps/web-console/src", "apps/web-console/vite.config.ts"],
+  "references": [
+    { "path": "./packages/abi" },
+    { "path": "./packages/core-client" }
+  ]
 }

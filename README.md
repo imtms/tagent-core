@@ -2,223 +2,141 @@
 
 **TAgent Core is designed by TMs and developed with AI assistance.**
 
-TAgent Core is a durable, self-hosted control plane for an in-process coding agent. It combines Pi's model and tool loop with TAgent-owned persistence, TaskRun supervision, verification gates, operation receipts, a responsive Web workbench, scoped automation credentials, and an optional Hot/Warm/Cold long-term memory platform.
+TAgent Core is a durable, self-hosted control plane for a single agent instance. It turns routed user intent into a persistent `TaskRun`, supervises bounded `Attempt`s, owns authoritative state, evidence, approvals, recovery, Memory, and Learning, and produces verifiable delivery results.
 
-Version `0.1.13` is the current stable release. It adds execution-model rate-limit fallback, complete Router/Supervisor usage attribution, token-aware context selection, stalled-continuation detection, a narrow deterministic completion path for low-risk single-answer discussions, compact continuation and Supervisor repair inputs, and resilient mobile/Web event recovery. Deterministic safety, provenance, verification, risk/capability policy and human approval remain authoritative. `0.1.0` was the first stable source release for the documented **trusted single-service deployment profile**. Stable means the supported profile has passed the repository's release gates; it does not mean that the service is a public multi-tenant sandbox.
+Version `0.2.0` reorganizes the system as a two-step npm-workspaces modular monolith. Core is now API-only. The Web Console is an independent application and deployment artifact.
 
-## Highlights
+## Supported boundary
 
-- Durable SQLite sessions, messages, transcripts, TaskRuns, structured TaskRun contracts, events, plans, checks, artifacts, continuations, queues, and operation receipts
-- Deterministic completion gates with verification evidence invalidated after workspace mutations
-- Transactional continuation claims, leases, recovery, and bounded automatic continuation
-- Idempotent mutating tools with restart-safe `outcome_unknown` handling
-- Pi `0.83.0` `AgentSession` integration for model/tool execution, retry, steering, follow-up, and compaction
-- Workspace-contained `ls`, `read`, `write`, `edit`, `bash`, and `task_run` tools
-- Fastify HTTP/SSE API and React workbench with queue management, run diagnostics, Markdown, and tool inspection
-- Optional scoped Bearer credentials for external automation clients
-- Optional PostgreSQL/pgvector memory with Local Cold Markdown pages and a Web Memory Center
-- Durable memory reindex/readiness, lifecycle governance and feedback, plus a revisioned human-editable Core Memory Markdown snapshot
-- Memory-dependent controlled Learning with passive observation/distillation, versioned Workflow evolution, and human-approved active execution
+The supported production profile is:
 
-## Supported 0.1 Profile
+- one TAgent Core process and one SQLite control-plane database;
+- one trusted tool workspace;
+- Node.js `24.18.1` and npm `12+`;
+- Linux x64 for the immutable Core production artifact;
+- Core on a private upstream network, with a trusted Gateway for browser identity;
+- optional PostgreSQL 17 with `vector` and `pg_trgm` plus Local Cold storage for Memory.
 
-The stable `0.1.x` support boundary is:
+This release does not provide an operating-system sandbox for `bash`, built-in browser OIDC login or token refresh, public multi-tenant isolation, or multi-process SQLite writers. Read [SECURITY.md](SECURITY.md) before deployment.
 
-- one trusted TAgent Core process;
-- one trusted workspace;
-- one SQLite control-plane database;
-- Node.js `24.18.1` on Linux x64 for the production artifact;
-- localhost or a private network, preferably behind an authenticated reverse proxy;
-- optional memory in a single service using PostgreSQL 17, pgvector, pg_trgm, and Local Cold storage.
+## Architecture
 
-Not included in the stable boundary:
+The repository contains 13 workspaces in one acyclic dependency graph:
 
-- public-Internet exposure without a separate authentication proxy;
-- browser login, CSRF protection, or complete multi-tenant user/workspace membership;
-- an operating-system sandbox for `bash`;
-- multiple processes sharing one SQLite database;
-- S3 Cold and independently deployed memory workers as release-gated production profiles.
+| Layer | Workspace | Responsibility |
+| --- | --- | --- |
+| Contract | `@tagent/abi` | Runtime-validated public, channel, console, admin, and internal v1 schemas |
+| Client | `@tagent/core-client` | Typed Core HTTP/SSE client |
+| Domain | `@tagent/governance` | Approval, capability, and policy authority |
+| Domain | `@tagent/execution` | `TaskRun`, `Attempt`, continuation, settlement, and recovery coordination |
+| Domain | `@tagent/admission` | Session input admission and inbox scheduling |
+| Domain | `@tagent/memory` | Optional Hot/Warm/Cold long-term Memory |
+| Domain | `@tagent/learning` | Optional governed Learning projections and workflows |
+| Adapter | `@tagent/http-fastify` | API-only Fastify adapter for `/api/v1` |
+| Adapter | `@tagent/persistence-sqlite` | Schema 33, repositories, migrations, writer fencing, and Unit of Work |
+| Adapter | `@tagent/runtime-pi` | In-process Pi runtime integration |
+| Adapter | `@tagent/workspace-local` | Workspace-contained tools and path enforcement |
+| Application | `@tagent/core-service` | Core composition root and lifecycle |
+| Application | `@tagent/web-console` | Independent React/Vite operator console |
 
-Read [SECURITY.md](SECURITY.md) before deployment.
+The Web Console depends only on `@tagent/abi` and `@tagent/core-client`. Core never imports or serves the Web Console. See [docs/MODULAR_MONOLITH.md](docs/MODULAR_MONOLITH.md).
 
 ## Requirements
 
-- Node.js `>=24.18.1`
-- npm `>=11`
-- an OpenAI Chat Completions-compatible provider and `OPENAI_API_KEY`
+- Node.js `24.18.1`
+- npm `12+`
+- an OpenAI Chat Completions-compatible provider and API key
 - a trusted workspace directory
-- optional: PostgreSQL 17 with `vector` and `pg_trgm` when persistent memory is enabled
+- optional PostgreSQL 17 with `vector` and `pg_trgm` for persistent Memory
 
-## Quick Start
+## Local development
 
 ```bash
 cp .env.example .env
-# Edit .env and set OPENAI_API_KEY and TAGENT_WORKSPACE.
 npm ci
-npm run build
-npm start
-```
-
-Open <http://localhost:3100>.
-
-For development:
-
-```bash
 npm run dev
 ```
 
-The checked-in provider defaults are examples and can be replaced:
+Set `OPENAI_API_KEY` and `TAGENT_WORKSPACE` in `.env` before submitting work. Development endpoints are separate:
 
-```env
-TAGENT_PROVIDER=openai-compatible
-TAGENT_API_BASE=https://one.tms.im/v1
-TAGENT_MODEL=gpt-5.6-sol
-OPENAI_API_KEY=
-```
+- Core API: <http://127.0.0.1:3100/api/v1/health>
+- Web Console: <http://127.0.0.1:5173>
 
-Credentials are supplied at runtime and are not written to Pi auth files, SQLite, transcripts, or source control.
+`npm run dev` builds the workspaces, then runs Core and the Vite development server together.
 
-## Core Configuration
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `OPENAI_API_KEY` | none | Runtime model credential |
-| `TAGENT_RUNTIME` | `in-process` | Runtime implementation; only `in-process` is supported |
-| `TAGENT_PROVIDER` | `openai-compatible` | Pi provider identifier |
-| `TAGENT_API_BASE` | `https://one.tms.im/v1` | OpenAI-compatible API base URL |
-| `TAGENT_MODEL` | `gpt-5.6-sol` | Upstream execution model identifier, or an ordered comma-separated fallback chain; rate-limit failures switch to the next model without restarting |
-| `TAGENT_CONTEXT_WINDOW` | `200000` | Advertised model context window |
-| `TAGENT_MAX_TOKENS` | `32768` | Maximum output tokens per provider response |
-| `TAGENT_PROVIDER_TIMEOUT_MS` | `15000` | Provider transport idle window (main model uses the activity watchdog below) |
-| `TAGENT_PROVIDER_MAX_RETRIES` | `1` | Pi retry count per attempt |
-| `TAGENT_RUN_TIMEOUT_MS` | `120000` | Run/SSE inactivity timeout; refreshed by model chunks and tool progress |
-| `TAGENT_RUN_HARD_TIMEOUT_MS` | `86400000` | Absolute Run wall-clock ceiling |
-| `TAGENT_MAX_CONTINUATIONS` | `128` | Automatic continuation ceiling |
-| `TAGENT_MAX_CONTEXT_TURNS` | `20` | Complete turns loaded into a new runtime |
-| `TAGENT_CONTROL_INBOX_CAPACITY` | `32` | Active-Run control inbox capacity |
-| `TAGENT_DB` | `./data/tagent.db` | SQLite database path |
-| `TAGENT_WORKSPACE` | current directory | Workspace exposed to tools |
-| `PORT` | `3100` | HTTP, SSE, and Web port |
-| `TAGENT_SERVICE_CREDENTIALS` | none | Optional scoped Bearer credentials for automation |
-| `TAGENT_MEMORY_ENABLED` | `false` | Opt in to long-term memory |
-| `TAGENT_LEARNING_ENABLED` | `false` | Enable Learning; forced off unless Memory is enabled |
-| `TAGENT_LEARNING_AUTO_EXECUTION_ENABLED` | `false` | Allow Workflow execution participation; active actions still require human approval |
-| `TAGENT_LEARNING_SEMANTIC_JUDGE_ENABLED` | `false` | Enable the shared structured LLM judge for Memory/Learning semantics |
-| `TAGENT_LEARNING_SEMANTIC_JUDGE_MODEL` | main/router fallback | Semantic judge model; base URL and API key have matching optional settings |
-
-See [.env.example](.env.example) for every supported setting.
-
-### Token usage
-
-TAgent Core records provider-reported input, output, cache, total token, and cost fields for observability only. It does not warn, steer, stop, rank, or continue a TaskRun based on cumulative token use. Per-response output limits and provider-side account/model limits remain upstream provider concerns. Core retains wall-clock, continuation-count, approval, policy, and evidence controls because those govern execution safety rather than token consumption.
-
-## Optional Long-Term Memory
-
-Memory is disabled by default. In disabled mode TAgent Core does not connect to PostgreSQL, initialize memory adapters or workers, or access Local Cold/S3 storage:
-
-```env
-TAGENT_MEMORY_ENABLED=false
-```
-
-To run the stable persistent Local Cold profile:
+To build and run Core only:
 
 ```bash
-docker compose -f deploy/postgres/compose.yml up -d
+npm run build
+npm start
+curl -fsS http://127.0.0.1:3100/api/v1/health
 ```
 
-```env
-TAGENT_MEMORY_ENABLED=true
-TAGENT_MEMORY_BACKEND=postgres
-TAGENT_MEMORY_POSTGRES_URL=postgresql://tagent:tagent@127.0.0.1:5432/tagent_memory
-TAGENT_MEMORY_COLD_BACKEND=local
-TAGENT_MEMORY_COLD_PATH=./data/memory-cold
-TAGENT_MEMORY_WORKSPACE_SCOPE_ID=default
+Port 3100 serves the Core API, not a Web page.
 
-# Recommended semantic-quality profile
-TAGENT_MEMORY_EMBEDDING_PROVIDER=openai
-TAGENT_MEMORY_EMBEDDING_BASE_URL=https://embedding-provider.example/v1
-TAGENT_MEMORY_EMBEDDING_API_KEY=
-TAGENT_MEMORY_EMBEDDING_MODEL=
-TAGENT_MEMORY_EXTRACTOR_PROVIDER=hybrid
+## API and authentication
+
+All supported HTTP routes use `/api/v1`. Use `@tagent/abi` for wire schemas and `@tagent/core-client` for typed access. Every JSON success is `{ data, requestId }`; every JSON failure is `{ error: { code, message, requestId, retryable, details } }`.
+
+Submission idempotency uses the `Idempotency-Key` request header:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:3100/api/v1/sessions \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Local session"}'
 ```
 
-The design separates facts from preferences and uses:
+When `TAGENT_SERVICE_CREDENTIALS` is empty, Core uses local-admin mode. Keep that mode bound to the default `127.0.0.1`. When credentials are configured, protected routes fail closed and require a scoped opaque Bearer credential.
+
+Core does not validate browser OIDC/JWT tokens. In production, a Gateway validates browser identity, strips the browser token, and forwards a minimal Core service credential. Configure exact origins with `TAGENT_CORS_ALLOWED_ORIGINS`; a non-empty allowlist requires at least one service credential. See [docs/API_V1.md](docs/API_V1.md) and [docs/WEB_CONSOLE_SECURITY.md](docs/WEB_CONSOLE_SECURITY.md).
+
+## Persistence and recovery
+
+Core owns a schema 33 SQLite database. Startup acquires an OS instance lock, applies migrations, claims a writer lease and fence, installs connection-level mutation guards, performs guarded recovery, starts services and workers, then reports the writer ready.
+
+Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Back up the SQLite database together with its WAL/SHM files before an upgrade. Older binaries cannot open schema 33; rollback requires the matching pre-upgrade database backup. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md) and [docs/UPGRADING_TO_0.2.md](docs/UPGRADING_TO_0.2.md).
+
+## Optional Memory and Learning
+
+Memory and Learning are disabled by default. Learning has a hard dependency on Memory:
 
 ```text
-Hot/Warm records + lexical/vector/graph routing
-                      -> Topic ID
-                      -> complete immutable Cold Markdown page
+Memory off => Learning off => automatic execution off
 ```
 
-Cold page bodies are not chunk-vectorized. Capture, persistence, embedding, publication, recall, and prompt injection pass through policy gates. The Web displays Memory Center only when memory is enabled. Start with [docs/MEMORY.md](docs/MEMORY.md). For the Memory dependency, passive/active Learning boundary, automatic-execution switch and approval flow, see [docs/LEARNING.md](docs/LEARNING.md).
+Passive Learning may run with automatic execution disabled. Enabling automatic execution participation never bypasses human approval, capability policy, or completion evidence. Manage these features through the `/api/v1/admin/*` surface. See [docs/MEMORY.md](docs/MEMORY.md) and [docs/LEARNING.md](docs/LEARNING.md).
 
-## Execution Model
+## Build and release
 
-Each admitted user request is associated with a durable TaskRun:
-
-```text
-discover -> plan -> implement -> verify -> review -> done
-                                             \-> blocked
-```
-
-A Run completes only when its durable completion gate passes:
-
-- at least one required plan item exists and all required items are done;
-- all required checks pass;
-- verification evidence is fresh after the last workspace mutation.
-
-Pi owns the ephemeral model/tool loop inside an attempt. TAgent Core owns durable state, operation receipts, supervision, continuation policy, transcripts, queues, and terminal completion.
-
-## API and Authentication
-
-The Fastify API provides health/config status, sessions, durable submissions, runs, replayable SSE events, transcripts, operations, cancellation, controls, compaction, resume, and optional memory administration.
-
-`TAGENT_SERVICE_CREDENTIALS` enables least-privilege Bearer credentials for external automation scopes such as `sessions:read`, `sessions:write`, `runs:read`, `runs:control`, and `events:consume`. These credentials intentionally do not provide administrator/Web access.
-
-The interactive Web and administrative routes do **not** include a built-in login boundary in `0.1.x`. Keep the service private or put it behind an authenticated reverse proxy. See [docs/core-api-contract.md](docs/core-api-contract.md).
-
-## Security Boundary
-
-- Run under a dedicated low-privilege operating-system account.
-- Do not expose port 3100/3220 directly to the public Internet.
-- Do not use a workspace containing provider keys, SSH keys, cloud credentials, or unrelated secrets.
-- Treat `bash` as code execution. The command policy is a guardrail, not a sandbox.
-- Keep `.env`, databases, Cold memory, logs, backups, and release artifacts out of Git.
-- Back up SQLite (including WAL state) and PostgreSQL/Local Cold together before upgrades.
-
-## Verification and Release
+The release builder creates separate checksum-manifested Core and Web Console archives. Core explicitly excludes Web assets. The tag-triggered release workflow uploads both archives and checksums as a 30-day Actions artifact and attaches them to the GitHub Release.
 
 ```bash
 npm run lint
 npm run check
 npm test -- --run
-TAGENT_TEST_POSTGRES_URL=postgresql://... npm test -- --run tests/postgres-memory.test.ts
 npm run build
-npm audit --omit=dev --audit-level=high
-npm audit --audit-level=high
-git diff --check
 ```
 
-For immutable Linux x64 production artifacts:
+The immutable artifact build additionally requires Linux x64, Node.js `24.18.1`, Node ABI 137, and npm `12+`:
 
 ```bash
 npm run release:build
 ```
 
-See [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md) and [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
+See [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
 
 ## Documentation
 
-The maintained documentation index is [docs/README.md](docs/README.md). Start there for current architecture, operations, API, release, and historical-reference documents.
-
 - [Documentation index](docs/README.md)
-- [Security policy](SECURITY.md)
+- [Architecture](docs/MODULAR_MONOLITH.md)
+- [API v1](docs/API_V1.md)
+- [Deployment and Gateway](docs/DEPLOYMENT_AND_GATEWAY.md)
+- [Upgrade from 0.1.x](docs/UPGRADING_TO_0.2.md)
+- [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
 
-## Authorship and License
+## Authorship and license
 
-TAgent Core was **designed by TMs** and **developed with AI assistance**, under TMs's direction and review. AI assistance is a development method and does not replace human project ownership or release accountability.
+TAgent Core was designed by TMs and developed with AI assistance under TMs's direction and review. AI assistance is a development method and does not replace human project ownership or release accountability.
 
-Copyright (c) 2026 TMs and TAgent Core contributors.
-
-Licensed under the [MIT License](LICENSE).
+Copyright (c) 2026 TMs and TAgent Core contributors. Licensed under the [MIT License](LICENSE).

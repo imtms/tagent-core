@@ -1,0 +1,36 @@
+{
+  "name": "@tagent/core-service",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist"],
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "tagent-core-service": "./dist/cli.js"
+  },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./application": { "types": "./dist/application.d.ts", "import": "./dist/application.js" },
+    "./composition": { "types": "./dist/composition.d.ts", "import": "./dist/composition.js" },
+    "./config": { "types": "./dist/config.d.ts", "import": "./dist/config.js" }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean && rm -rf dist"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.83.0",
+    "@tagent/admission": "0.2.0",
+    "@tagent/execution": "0.2.0",
+    "@tagent/governance": "0.2.0",
+    "@tagent/http-fastify": "0.2.0",
+    "@tagent/learning": "0.2.0",
+    "@tagent/memory": "0.2.0",
+    "@tagent/persistence-sqlite": "0.2.0",
+    "@tagent/runtime-pi": "0.2.0",
+    "@tagent/workspace-local": "0.2.0"
+  },
+  "engines": { "node": ">=24.18.1", "npm": ">=12" },
+  "license": "MIT"
+}

@@ -1,39 +1,93 @@
-# Release Checklist
+# Release checklist
 
-## Scope
+This repository publishes a GitHub source/binary release, not npm packages. Every workspace is private and no workflow runs `npm publish`.
 
-This checklist applies to source releases. TAgent Core is not published to npm in `0.1.x`; `private: true` is intentional.
+Do not prefill this checklist or infer a pass from a previous release. Record the commit, command output, artifact checksums, migration rehearsal, and Gateway probe for the candidate being tagged.
 
-## Before tagging
+## Toolchain
 
-If long-term memory is included in the release, complete [MEMORY_RELEASE_CHECKLIST.md](MEMORY_RELEASE_CHECKLIST.md) in addition to the general checks below. Memory-off compatibility is a required release gate because long-term memory is opt-in. If Learning is included, also verify [LEARNING.md](LEARNING.md), the reviewable [LEARNING_RELEASE_COVERAGE.md](LEARNING_RELEASE_COVERAGE.md) matrix, and the compact [LEARNING_RELEASE_AUDIT.md](LEARNING_RELEASE_AUDIT.md) implementation/deployment evidence index: Memory-off must force Learning and its Worker off; passive mode must continue observation/distillation without Workflow injection; execution mode must still require human approval; the persisted switch must survive restart.
+- [ ] Candidate version is identical in the root and all 13 workspace manifests.
+- [ ] Every internal `@tagent/*` dependency pin and `package-lock.json` uses that version.
+- [ ] Node.js is exactly `24.18.1`.
+- [ ] npm major is 12 or newer.
+- [ ] Linux x64/Node ABI 137 is used for production artifacts.
+- [ ] `CHANGELOG.md` contains a non-empty `## [VERSION]` section.
 
-1. Confirm `package.json` and `package-lock.json` use the target version.
-2. Update `CHANGELOG.md`, `README.md`, `docs/STATUS.md`, and known limitations.
-3. Confirm the worktree is clean and the release commit is on `main`.
-4. Run `npm ci` from the lockfile in a clean Node.js `24.18.1` and npm `11` or newer environment.
-5. Run `npm run lint`, `npm run check`, `npm test -- --run`, and `npm run build`.
-6. Build the production archive with `scripts/build-release.sh` on Linux x64, Node `24.18.1` / ABI `137`, in an environment that has the compiler toolchain required by native dependencies. Do not install or compile dependencies on a production host; follow [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md).
-7. Run production and full dependency audits at high severity. Pi's upstream shrinkwrap issue is accepted for `main` development if it recurs, but stable release remains blocked until the lockfile audits cleanly.
-8. Start the built server with a temporary SQLite database and workspace; verify `/api/health`, `/api/config/status`, session creation, run history, and the Web shell.
-9. Verify desktop and mobile layouts, immediate optimistic message visibility, workspace-switch fencing, safe Markdown, collapsed/expanded tool activity, and no horizontal overflow.
-10. Submit representative opaque automation markers (`release-<digits>`, `ui-sync-<digits>`) and confirm HTTP 422 with no Message or TaskRun persistence; confirm a natural-language release request is still admitted.
-11. Confirm dynamic token tiers are guidance checkpoints, the configured hard ceiling remains enforced, and the Web labels checkpoint versus maximum correctly.
-12. Confirm no credentials, `.env` files, databases, logs, screenshots, or temporary artifacts are tracked.
+## Source gates
 
-## Tag and publish
+Run from a clean checkout with the official npm registry:
 
-1. Create an annotated tag named `v<version>`.
-2. Push `main` and the tag.
-3. Let `.github/workflows/release.yml` rerun the release gate and create a GitHub release using the matching changelog section.
-4. Verify the GitHub release points to the expected commit and has the intended stable/prerelease state.
+```bash
+npm ci --registry=https://registry.npmjs.org
+npm run lint
+npm run check
+npm test -- --run
+npm run build
+npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
+npm audit --audit-level=high --registry=https://registry.npmjs.org
+git diff --check
+```
 
-## Rollback
+- [ ] All commands exit 0.
+- [ ] No generated `*.tsbuildinfo`, database, WAL/SHM, secret, log, or release archive is tracked.
+- [ ] Architecture tests confirm the 13-workspace DAG, package exports, API-only Core, and Web dependency boundary.
+- [ ] Differential API tests confirm removed unversioned routes return 404.
 
-Code rollback does not downgrade the SQLite schema. Before upgrading:
+## PostgreSQL Memory gate
 
-1. Stop TAgent Core cleanly.
-2. Copy the SQLite database and its `-wal`/`-shm` files together, or use SQLite `.backup` while the service is running.
-3. Record the previous Git tag, Node.js version, and environment configuration names without recording secret values.
+Run against PostgreSQL 17 with `vector` and `pg_trgm`:
 
-To roll back, stop the service, restore the matching database backup, check out the previous tag, run `npm ci && npm run build`, and restart. Never run an older binary against a database whose schema version it rejects.
+```bash
+TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tagent_memory_test \
+  npx vitest run tests/postgres-memory.test.ts
+```
+
+- [ ] The persistent Memory profile passes.
+- [ ] Memory-disabled startup does not connect to PostgreSQL/Cold storage or start Memory/Learning workers.
+- [ ] Backup/restore and reindex generation behavior were rehearsed for production configuration changes.
+
+## Migration and recovery gate
+
+- [ ] A representative 0.1.x database plus WAL/SHM was backed up and restored in isolation.
+- [ ] The candidate migrated v30 → v31 → v32 → v33 and reopened idempotently.
+- [ ] `schema_meta.version` is 33 and `migration_issues` has zero open rows.
+- [ ] A second 0.2.0 process is rejected by the OS lock/writer authority.
+- [ ] Writer lease/fence loss clears health readiness and closes Core.
+- [ ] Restart recovery produces `outcome_unknown` for effects/deliveries whose outcome cannot be proven and `restart_before_effect` cancellation only before effect start.
+- [ ] Restoring the pre-upgrade backup with the old artifact was tested as the 0.1.x rollback path.
+
+## API, Web, and Gateway gate
+
+- [ ] `GET /api/v1/health` reports writer readiness; `/api/health` returns 404.
+- [ ] Credential mode fails closed for missing, invalid, and under-scoped opaque tokens.
+- [ ] Resource scopes are enforced from server configuration.
+- [ ] Exact CORS origins pass and wildcard/invalid origins fail startup or request policy as designed.
+- [ ] The Gateway validates OIDC claims and translates to a minimal Core credential; Core is private.
+- [ ] Event-consumer replay persists before ACK, reclaims a new generation, reaches zero lag, and terminal events are acknowledged.
+- [ ] `scripts/gateway-readiness-probe.mjs` exits 0 with `ready=true` and no reasons.
+- [ ] Web is served from its independent artifact and targets the Gateway/Core origin; Core serves no static Web content.
+
+## Artifact gate
+
+On Linux x64 with the exact toolchain:
+
+```bash
+npm run release:build
+```
+
+- [ ] Core and Web Console tarballs and both SHA-256 files exist.
+- [ ] Both release manifests verify from unpacked archives.
+- [ ] Core contains materialized required workspaces, no symbolic links, no Web assets, and a working native SQLite binding.
+- [ ] Web contains `dist/index.html`, its manifest, no Core runtime, and the expected build-time origin policy.
+- [ ] An isolated Core artifact starts and passes `/api/v1/health`.
+
+## Publish
+
+- [ ] `main` is clean, pushed, and the candidate commit equals `origin/main`.
+- [ ] Create and push the annotated `vVERSION` tag.
+- [ ] The tag-triggered release workflow checks out the tag, installs npm 12, runs PostgreSQL and repository gates, verifies tag/version equality, and builds both immutable artifacts.
+- [ ] The workflow uploads both tarballs and checksums as one 30-day Actions artifact.
+- [ ] The workflow creates the GitHub Release with non-empty changelog notes, verifies the tag, and attaches all four files.
+- [ ] Downloaded release assets match their attached checksums and manifests.
+
+Release only when every required gate passes or the release is explicitly stopped. Do not publish a stable tag with an undocumented exception.

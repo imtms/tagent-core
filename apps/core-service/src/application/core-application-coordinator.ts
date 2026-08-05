@@ -1,0 +1,73 @@
+import type { CoreApplicationServices } from "./core-application-services.js";
+
+/** Compatibility/application facade assembled at the outer Core boundary. */
+export class CoreApplicationCoordinator {
+  constructor(private readonly services: CoreApplicationServices) {}
+
+  initialize(...args: Parameters<CoreApplicationServices["execution"]["initialize"]>) { return this.services.execution.initialize(...args); }
+  startBackgroundWork(...args: Parameters<CoreApplicationServices["execution"]["startBackgroundWork"]>) { return this.services.execution.startBackgroundWork(...args); }
+  closeRuntimes(...args: Parameters<CoreApplicationServices["execution"]["closeRuntimes"]>) { return this.services.execution.closeRuntimes(...args); }
+  recoverContinuations(...args: Parameters<CoreApplicationServices["execution"]["recoverContinuations"]>) { return this.services.execution.recoverContinuations(...args); }
+  recoverSessionInbox(...args: Parameters<CoreApplicationServices["admission"]["recoverSessionInbox"]>) { return this.services.admission.recoverSessionInbox(...args); }
+  enqueueControl(...args: Parameters<CoreApplicationServices["execution"]["enqueueControl"]>) { return this.services.execution.enqueueControl(...args); }
+  followUp(...args: Parameters<CoreApplicationServices["execution"]["followUp"]>) { return this.services.execution.followUp(...args); }
+  steer(...args: Parameters<CoreApplicationServices["execution"]["steer"]>) { return this.services.execution.steer(...args); }
+  compact(...args: Parameters<CoreApplicationServices["execution"]["compact"]>) { return this.services.execution.compact(...args); }
+  cancel(...args: Parameters<CoreApplicationServices["execution"]["cancel"]>) { return this.services.execution.cancel(...args); }
+  resume(...args: Parameters<CoreApplicationServices["execution"]["resume"]>) { return this.services.execution.resume(...args); }
+  approveRunApproval(...args: Parameters<CoreApplicationServices["admission"]["approveRunApproval"]>) { return this.services.admission.approveRunApproval(...args); }
+  rejectRunApproval(...args: Parameters<CoreApplicationServices["execution"]["rejectRunApproval"]>) { return this.services.execution.rejectRunApproval(...args); }
+  submitUserInput(...args: Parameters<CoreApplicationServices["execution"]["submitUserInput"]>) { return this.services.execution.submitUserInput(...args); }
+  subscribe(...args: Parameters<CoreApplicationServices["execution"]["subscribe"]>) { return this.services.execution.subscribe(...args); }
+  replay(...args: Parameters<CoreApplicationServices["execution"]["replay"]>) { return this.services.execution.replay(...args); }
+  getRun(...args: Parameters<CoreApplicationServices["execution"]["getRun"]>) { return this.services.execution.getRun(...args); }
+  getCurrentAttemptId(...args: Parameters<CoreApplicationServices["execution"]["getCurrentAttemptId"]>) { return this.services.execution.getCurrentAttemptId(...args); }
+  enqueueSessionInput(...args: Parameters<CoreApplicationServices["admission"]["enqueueSessionInput"]>) { return this.services.admission.enqueueSessionInput(...args); }
+  updateSessionInput(...args: Parameters<CoreApplicationServices["admission"]["updateSessionInput"]>) { return this.services.admission.updateSessionInput(...args); }
+  reorderSessionInputs(...args: Parameters<CoreApplicationServices["admission"]["reorderSessionInputs"]>) { return this.services.admission.reorderSessionInputs(...args); }
+  deleteSessionInput(...args: Parameters<CoreApplicationServices["admission"]["deleteSessionInput"]>) { return this.services.admission.deleteSessionInput(...args); }
+  decideSessionInput(...args: Parameters<CoreApplicationServices["admission"]["decideSessionInput"]>) { return this.services.admission.decideSessionInput(...args); }
+  mergeSessionInputs(...args: Parameters<CoreApplicationServices["admission"]["mergeSessionInputs"]>) { return this.services.admission.mergeSessionInputs(...args); }
+  startSessionInputNow(...args: Parameters<CoreApplicationServices["admission"]["startSessionInputNow"]>) { return this.services.admission.startSessionInputNow(...args); }
+  requestParallelSessionInputApproval(...args: Parameters<CoreApplicationServices["admission"]["requestParallelSessionInputApproval"]>) { return this.services.admission.requestParallelSessionInputApproval(...args); }
+  retryInboxLaunch(...args: Parameters<CoreApplicationServices["admission"]["retryInboxLaunch"]>) { return this.services.admission.retryInboxLaunch(...args); }
+  start(...args: Parameters<CoreApplicationServices["admission"]["start"]>) { return this.services.admission.start(...args); }
+  teachWorkflow(...args: Parameters<CoreApplicationServices["learning"]["teachWorkflow"]>) { return this.services.learning.teachWorkflow(...args); }
+  listWorkflows(...args: Parameters<CoreApplicationServices["learning"]["listWorkflows"]>) { return this.services.learning.listWorkflows(...args); }
+  getWorkflow(...args: Parameters<CoreApplicationServices["learning"]["getWorkflow"]>) { return this.services.learning.getWorkflow(...args); }
+  requestWorkflowActivation(...args: Parameters<CoreApplicationServices["learning"]["requestWorkflowActivation"]>) { return this.services.learning.requestWorkflowActivation(...args); }
+  activateWorkflow(...args: Parameters<CoreApplicationServices["governance"]["activateWorkflow"]>) { return this.services.governance.activateWorkflow(...args); }
+  suspendWorkflow(...args: Parameters<CoreApplicationServices["governance"]["suspendWorkflow"]>) { return this.services.governance.suspendWorkflow(...args); }
+  rollbackWorkflow(...args: Parameters<CoreApplicationServices["governance"]["rollbackWorkflow"]>) { return this.services.governance.rollbackWorkflow(...args); }
+  forgetWorkflow(...args: Parameters<CoreApplicationServices["governance"]["forgetWorkflow"]>) { return this.services.governance.forgetWorkflow(...args); }
+  restoreWorkflow(...args: Parameters<CoreApplicationServices["governance"]["restoreWorkflow"]>) { return this.services.governance.restoreWorkflow(...args); }
+  setWorkflowBindingMode(...args: Parameters<CoreApplicationServices["learning"]["setWorkflowBindingMode"]>) { return this.services.learning.setWorkflowBindingMode(...args); }
+  recordWorkflowApplication(...args: Parameters<CoreApplicationServices["learning"]["recordWorkflowApplication"]>) { return this.services.learning.recordWorkflowApplication(...args); }
+  getLearningCenter(...args: Parameters<CoreApplicationServices["learning"]["getLearningCenter"]>) { return this.services.learning.getLearningCenter(...args); }
+  decideWorkflowProposal(...args: Parameters<CoreApplicationServices["learning"]["decideWorkflowProposal"]>) { return this.services.learning.decideWorkflowProposal(...args); }
+  requestWorkflowProposalApplication(...args: Parameters<CoreApplicationServices["learning"]["requestWorkflowProposalApplication"]>) { return this.services.learning.requestWorkflowProposalApplication(...args); }
+  applyWorkflowProposal(...args: Parameters<CoreApplicationServices["governance"]["applyWorkflowProposal"]>) { return this.services.governance.applyWorkflowProposal(...args); }
+  runWorkflowDistiller(...args: Parameters<CoreApplicationServices["learning"]["runWorkflowDistiller"]>) { return this.services.learning.runWorkflowDistiller(...args); }
+  retryWorkflowDistillation(...args: Parameters<CoreApplicationServices["learning"]["retryWorkflowDistillation"]>) { return this.services.learning.retryWorkflowDistillation(...args); }
+  listDeadLetterDistillations(...args: Parameters<CoreApplicationServices["learning"]["listDeadLetterDistillations"]>) { return this.services.learning.listDeadLetterDistillations(...args); }
+  executeWorkflowEvaluation(...args: Parameters<CoreApplicationServices["learning"]["executeWorkflowEvaluation"]>) { return this.services.learning.executeWorkflowEvaluation(...args); }
+  verifyWorkflowEvaluation(...args: Parameters<CoreApplicationServices["learning"]["verifyWorkflowEvaluation"]>) { return this.services.learning.verifyWorkflowEvaluation(...args); }
+  requestWorkflowPromotion(...args: Parameters<CoreApplicationServices["learning"]["requestWorkflowPromotion"]>) { return this.services.learning.requestWorkflowPromotion(...args); }
+  promoteWorkflow(...args: Parameters<CoreApplicationServices["governance"]["promoteWorkflow"]>) { return this.services.governance.promoteWorkflow(...args); }
+  listAutonomyApprovals(...args: Parameters<CoreApplicationServices["learning"]["listAutonomyApprovals"]>) { return this.services.learning.listAutonomyApprovals(...args); }
+  decideAutonomyApproval(...args: Parameters<CoreApplicationServices["learning"]["decideAutonomyApproval"]>) { return this.services.learning.decideAutonomyApproval(...args); }
+  revokeAutonomyApproval(...args: Parameters<CoreApplicationServices["learning"]["revokeAutonomyApproval"]>) { return this.services.learning.revokeAutonomyApproval(...args); }
+  executeAutonomyApproval(...args: Parameters<CoreApplicationServices["governance"]["executeAutonomyApproval"]>) { return this.services.governance.executeAutonomyApproval(...args); }
+  updateLearningSettings(...args: Parameters<CoreApplicationServices["governance"]["updateLearningSettings"]>) { return this.services.governance.updateLearningSettings(...args); }
+  reviseWorkflow(...args: Parameters<CoreApplicationServices["learning"]["reviseWorkflow"]>) { return this.services.learning.reviseWorkflow(...args); }
+  setRunLearningPolicy(...args: Parameters<CoreApplicationServices["learning"]["setRunLearningPolicy"]>) { return this.services.learning.setRunLearningPolicy(...args); }
+  recordWorkflowFeedback(...args: Parameters<CoreApplicationServices["learning"]["recordWorkflowFeedback"]>) { return this.services.learning.recordWorkflowFeedback(...args); }
+  setCommunicationPreference(...args: Parameters<CoreApplicationServices["learning"]["setCommunicationPreference"]>) { return this.services.learning.setCommunicationPreference(...args); }
+  listCommunicationProfiles(...args: Parameters<CoreApplicationServices["learning"]["listCommunicationProfiles"]>) { return this.services.learning.listCommunicationProfiles(...args); }
+  lockCommunicationProfile(...args: Parameters<CoreApplicationServices["learning"]["lockCommunicationProfile"]>) { return this.services.learning.lockCommunicationProfile(...args); }
+  listLearningEvents(...args: Parameters<CoreApplicationServices["learning"]["listLearningEvents"]>) { return this.services.learning.listLearningEvents(...args); }
+  listCorrections(...args: Parameters<CoreApplicationServices["learning"]["listCorrections"]>) { return this.services.learning.listCorrections(...args); }
+  recordCorrection(...args: Parameters<CoreApplicationServices["learning"]["recordCorrection"]>) { return this.services.learning.recordCorrection(...args); }
+  listFeedbackAttribution(...args: Parameters<CoreApplicationServices["learning"]["listFeedbackAttribution"]>) { return this.services.learning.listFeedbackAttribution(...args); }
+  drainFeedbackAttribution(...args: Parameters<CoreApplicationServices["learning"]["drainFeedbackAttribution"]>) { return this.services.learning.drainFeedbackAttribution(...args); }
+}

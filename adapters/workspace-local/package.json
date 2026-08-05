@@ -1,0 +1,25 @@
+{
+  "name": "@tagent/workspace-local",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist"],
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./tools": { "types": "./dist/tools.d.ts", "import": "./dist/tools.js" },
+    "./workspace-path": { "types": "./dist/workspace-path.d.ts", "import": "./dist/workspace-path.js" }
+  },
+  "scripts": {
+    "build": "tsc -b && cp src/workspace-fd-helper.py dist/workspace-fd-helper.py && chmod 755 dist/workspace-fd-helper.py",
+    "clean": "tsc -b --clean && rm -rf dist"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.83.0",
+    "@tagent/execution": "0.2.0",
+    "typebox": "^1.1.24"
+  },
+  "engines": { "node": ">=24.18.1", "npm": ">=12" },
+  "license": "MIT"
+}

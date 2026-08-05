@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { ContextAssembler, estimateTextTokens } from "../src/core/context-assembler.js";
+import { ContextAssembler, estimateTextTokens } from "@tagent/execution/composition";
 
 function assistant(text: string, content?: Extract<AgentMessage, { role: "assistant" }>["content"]): AgentMessage {
   return {
@@ -73,13 +73,21 @@ describe("ContextAssembler", () => {
 });
 
 describe("historical tool-result projection", () => {
-  const toolResult = (text: string): AgentMessage => ({ role: "toolResult", toolCallId: "call-1", toolName: "read", content: [{ type: "text", text }], details: {}, isError: false, timestamp: 2 });
+  const toolResult = (text: string, toolCallId = "call-1", timestamp = 2): AgentMessage => ({
+    role: "toolResult",
+    toolCallId,
+    toolName: "read",
+    content: [{ type: "text", text }],
+    details: {},
+    isError: false,
+    timestamp,
+  });
 
   it("truncates old tool results while preserving the latest turn", () => {
     const large = "X".repeat(20_000);
     const messages: AgentMessage[] = [
       { role: "user", content: "old", timestamp: 1 }, assistant("calling", [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }]), toolResult(large),
-      { role: "user", content: "latest", timestamp: 3 }, assistant("calling latest", [{ type: "toolCall", id: "call-2", name: "read", arguments: {} }]), { ...toolResult(large), toolCallId: "call-2", timestamp: 4 },
+      { role: "user", content: "latest", timestamp: 3 }, assistant("calling latest", [{ type: "toolCall", id: "call-2", name: "read", arguments: {} }]), toolResult(large, "call-2", 4),
     ];
     const result = new ContextAssembler({ contextWindow: 100_000, maxOutputTokens: 1_000, maxTurns: 10, historicalToolResultChars: 1_000 }).assemble("transcript", messages, "system", "prompt");
     const oldResult = result.messages[2] as Extract<AgentMessage, { role: "toolResult" }>;

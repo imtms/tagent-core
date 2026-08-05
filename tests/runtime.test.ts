@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { AgentService } from "../src/core/agent-service.js";
-import { loadConfig } from "../src/config.js";
-import { Store } from "../src/store/store.js";
-import { TaskRunSupervisor } from "../src/core/supervisor.js";
-import { SupervisorReviewError, TestSupervisorReviewer, passingTestAudit, type SupervisorAudit, type SupervisorReviewer } from "../src/core/supervisor-reviewer.js";
-import type { AgentRuntime, RuntimeFactory } from "../src/runtime/types.js";
-import type { MemoryFacade } from "../src/memory/memory-service.js";
+import { AgentService } from "@tagent/core-service/application";
+import { loadConfig } from "@tagent/core-service/config";
+import { Store } from "@tagent/persistence-sqlite/store";
+import { TaskRunSupervisor, SupervisorReviewError, TestSupervisorReviewer, passingTestAudit, type SupervisorAudit, type SupervisorReviewer } from "@tagent/core-service/composition";
+import type {
+  AttemptRuntimeFactory as RuntimeFactory,
+  AttemptRuntimePort as AgentRuntime,
+} from "@tagent/execution/ports";
+import type { MemoryFacade } from "@tagent/memory";
+import { agentPersistence } from "./support/test-persistence.js";
 
 function assistantMessage(text: string): AgentMessage {
   return { role: "assistant", content: [{ type: "text", text }], api: "openai-completions", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: Date.now() };
@@ -26,12 +29,10 @@ class CheckpointRuntime implements AgentRuntime {
   prompt() { return new Promise<void>((resolve) => { this.resolvePrompt = resolve; }); }
   async steer() { return "accepted" as const; }
   abort() { this.resolvePrompt?.(); }
-  getMessages() { return []; }
+  getMessages(): AgentMessage[] { return []; }
   getError() { return undefined; }
   emit(type: string, data: Record<string, unknown>) {
-    const event = this.options.store.appendEvent(this.options.runId, type, data);
-    this.options.onEvent?.(event);
-    return event;
+    this.options.eventSink.publish(type, data);
   }
 }
 
@@ -71,6 +72,28 @@ class InboxRuntime implements AgentRuntime {
   getError() { return undefined; }
 }
 
+class BlockingControlRuntime implements AgentRuntime {
+  private resolvePrompt?: () => void;
+  private resolveSteer?: (result: "accepted") => void;
+  steerStarted = false;
+  prompt() { return new Promise<void>((resolve) => { this.resolvePrompt = resolve; }); }
+  steer() {
+    this.steerStarted = true;
+    return new Promise<"accepted">((resolve) => { this.resolveSteer = resolve; });
+  }
+  releaseSteer() { this.resolveSteer?.("accepted"); }
+  abort() { this.resolvePrompt?.(); }
+  getMessages() { return []; }
+  getError() { return undefined; }
+}
+
+class BlockingSupervisorSteerRuntime extends BlockingControlRuntime {
+  constructor(private readonly options: Parameters<RuntimeFactory>[0]) { super(); }
+  emit(type: string, data: Record<string, unknown>) {
+    this.options.eventSink.publish(type, data);
+  }
+}
+
 class CallbackRuntime implements AgentRuntime {
   prompts: string[] = [];
   constructor(private readonly message: AgentMessage, private readonly onPrompt: (query: string) => void = () => {}) {}
@@ -87,7 +110,7 @@ class DeferredRuntime implements AgentRuntime {
   prompt() { return new Promise<void>((_resolve, reject) => { this.rejectPrompt = reject; }); }
   async steer() { return "accepted" as const; }
   abort() { this.aborted = true; this.rejectPrompt?.(new Error("aborted")); }
-  getMessages() { return []; }
+  getMessages(): AgentMessage[] { return []; }
   getError() { return undefined; }
 }
 
@@ -124,14 +147,28 @@ describe("AgentService runtime boundary", () => {
     let finishRecall!: (value: Awaited<ReturnType<MemoryFacade["recall"]>>) => void;
     const recall = new Promise<Awaited<ReturnType<MemoryFacade["recall"]>>>((resolve) => { finishRecall = resolve; });
     const memory = { recall: vi.fn(() => recall), enqueueCapture: vi.fn(async () => ({ jobId: "capture-1" })) } as unknown as MemoryFacade;
-    const service = new AgentService(store, "/tmp", () => new DeferredRuntime(), {}, memory, "test-scope");
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new DeferredRuntime(), {}, memory, "test-scope");
 
     const admitted = await service.enqueueSessionInput(session.id, "visible immediately", "async-memory-admission");
 
     expect(admitted.run).toMatchObject({ goal: "visible immediately", status: "running" });
     expect(store.listMessages(session.id)).toEqual([expect.objectContaining({ role: "user", content: "visible immediately" })]);
     expect(memory.recall).toHaveBeenCalledOnce();
-    finishRecall({ cards: [], coldTopics: [], promptSection: "", trace: { topicIds: [], candidateCount: 0, deniedCount: 0 } });
+    finishRecall({
+      cards: [],
+      coldTopics: [],
+      promptSection: "",
+      trace: {
+        version: 2,
+        topicIds: [],
+        candidateCount: 0,
+        deniedCount: 0,
+        embedding: { configured: false, degraded: false },
+        policyTransforms: 0,
+        coldTopicRoutes: [],
+        candidates: [],
+      },
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
     await service.closeRuntimes();
     store.close();
@@ -141,7 +178,7 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new InboxRuntime();
-    const service = new AgentService(store, "/tmp", () => runtime, { controlInboxCapacity: 4 });
+    const service = new AgentService(agentPersistence(store), "/tmp", () => runtime, { controlInboxCapacity: 4 });
     const first = await service.enqueueSessionInput(session.id, "发布 0.1.4", "route-base");
     const routed = await service.enqueueSessionInput(session.id, "不要重启服务，端口改成 3220", "route-steer");
     await new Promise((resolve) => setImmediate(resolve));
@@ -152,17 +189,15 @@ describe("AgentService runtime boundary", () => {
   });
 
   it("splits compound active input into steer, follow-up, and parallel governance actions", async () => {
-    const store = new Store(":memory:"); const session = store.createSession(); const controls: Array<{ kind: string; content: string }> = [];
-    const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
+    const store = new Store(":memory:"); const session = store.createSession();
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new DeferredRuntime());
     const first = await service.enqueueSessionInput(session.id, "修复 Supervisor", "compound-base");
     const active = first.run!;
-    const original = service.enqueueControl.bind(service);
-    service.enqueueControl = (async (runId: string, kind: "steer" | "follow_up", content: string, requestId?: string) => { controls.push({ kind, content }); return original(runId, kind, content, requestId); }) as typeof service.enqueueControl;
     const routed = await service.enqueueSessionInput(session.id, "先不要部署。完成后更新文档。同时并行检查另一个仓库", "compound-route");
     expect(routed.run?.id).toBe(active.id);
     expect((routed as { relatedItems?: unknown[] }).relatedItems).toHaveLength(1);
     await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(controls).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "steer", content: expect.stringContaining("先不要部署") }), expect.objectContaining({ kind: "follow_up", content: expect.stringContaining("完成后更新文档") })]));
+    expect(store.listControlInbox(active.id)).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "steer", content: expect.stringContaining("先不要部署") }), expect.objectContaining({ kind: "follow_up", content: expect.stringContaining("完成后更新文档") })]));
     expect(store.listSessionInbox(session.id)).toEqual([expect.objectContaining({ content: expect.stringContaining("并行检查另一个仓库"), status: "queued", analysis: expect.objectContaining({ relation: "parallel", targetRunId: active.id }) })]);
     await service.closeRuntimes(); store.close();
   });
@@ -170,7 +205,7 @@ describe("AgentService runtime boundary", () => {
   it("keeps explicit postponed work deferred", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new DeferredRuntime());
     const routed = await service.enqueueSessionInput(session.id, "暂时不做", "defer-one");
     expect(routed.run).toBeNull();
     expect(routed.item).toMatchObject({ decision: "defer", analysis: { intent: "defer" } });
@@ -181,7 +216,7 @@ describe("AgentService runtime boundary", () => {
   it("keeps explicit parallel input as a related queued Session Inbox task", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new DeferredRuntime());
     const first = await service.enqueueSessionInput(session.id, "修复 Web UI", "parallel-base");
     const routed = await service.enqueueSessionInput(session.id, "同时并行设计另一个独立的移动端客户端", "parallel-child");
     expect(store.listRuns(session.id)).toHaveLength(1);
@@ -194,7 +229,7 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtimes: ControlledRuntime[] = [];
-    const service = new AgentService(store, "/tmp", () => {
+    const service = new AgentService(agentPersistence(store), "/tmp", () => {
       const runtime = new ControlledRuntime([assistantMessage(runtimes.length === 0 ? "The first task is complete. The requested first task was executed and its result was verified; there are no remaining blockers or incomplete acceptance criteria." : "The second task is now running and will produce its own complete verified result before TaskRun completion.")]);
       runtimes.push(runtime);
       return runtime;
@@ -219,7 +254,7 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtimes: ControlledRuntime[] = [];
-    const service = new AgentService(store, "/tmp", () => {
+    const service = new AgentService(agentPersistence(store), "/tmp", () => {
       const runtime = new ControlledRuntime([assistantMessage("not complete")]);
       runtimes.push(runtime);
       return runtime;
@@ -244,7 +279,7 @@ describe("AgentService runtime boundary", () => {
       scope: "recover me", nonGoals: [], confidence: 1, reason: "test", routerVersion: "test",
     }, "recover-inbox");
     store.finalizeRun(blocking.id, "completed");
-    const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new DeferredRuntime());
     expect(service.recoverSessionInbox()).toHaveLength(1);
     expect(store.getActiveRun(session.id)?.goal).toBe("recover me");
     await service.closeRuntimes();
@@ -255,7 +290,7 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let runtime!: InboxRuntime;
-    const service = new AgentService(store, "/tmp", () => runtime = new InboxRuntime(), { controlInboxCapacity: 4 });
+    const service = new AgentService(agentPersistence(store), "/tmp", () => runtime = new InboxRuntime(), { controlInboxCapacity: 4 });
     const run = await service.start(session.id, "durable controls");
     const [first, duplicate, second] = await Promise.all([
       service.steer(run.id, "change direction", "control-1"),
@@ -278,17 +313,84 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
+  it("supersedes a control delivery that returns after its Attempt was cancelled", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const runtime = new BlockingControlRuntime();
+    const service = new AgentService(agentPersistence(store), "/tmp", () => runtime);
+    const run = await service.start(session.id, "cancel a delivering control");
+    const delivery = service.steer(run.id, "late steering", "late-control");
+    for (let index = 0; index < 100 && !runtime.steerStarted; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    expect(runtime.steerStarted).toBe(true);
+    expect(service.cancel(run.id)).toBe(true);
+    const cancelSeq = store.listEvents(run.id).find((event) => event.type === "run.cancelled")!.seq;
+
+    runtime.releaseSteer();
+    await delivery;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(store.listControlInbox(run.id)).toEqual([
+      expect.objectContaining({ requestId: "late-control", status: "superseded" }),
+    ]);
+    expect(store.listEvents(run.id).filter((event) => event.seq > cancelSeq)).toEqual([]);
+    expect(store.listEvents(run.id).some((event) => event.type === "control.delivered")).toBe(false);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("does not commit a late Supervisor steer decision after cancellation", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let runtime!: BlockingSupervisorSteerRuntime;
+    const service = new AgentService(agentPersistence(store), "/tmp", (options) => {
+      runtime = new BlockingSupervisorSteerRuntime(options);
+      return runtime;
+    });
+    const run = await service.start(session.id, "cancel a Supervisor steer");
+    for (let index = 1; index <= 3; index += 1) {
+      runtime.emit("tool.completed", {
+        toolCallId: `failed-${index}`,
+        toolName: "read",
+        isError: true,
+      });
+    }
+    for (let index = 0; index < 100 && !runtime.steerStarted; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    expect(runtime.steerStarted).toBe(true);
+    expect(store.listSupervisorDecisions(run.id, 1)).toEqual([
+      expect.objectContaining({ action: "steer", status: "proposed" }),
+    ]);
+    expect(service.cancel(run.id)).toBe(true);
+    const cancelSeq = store.listEvents(run.id).find((event) => event.type === "run.cancelled")!.seq;
+
+    runtime.releaseSteer();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(store.listSupervisorDecisions(run.id, 1)).toEqual([
+      expect.objectContaining({ action: "steer", status: "superseded" }),
+    ]);
+    expect(store.listEvents(run.id).filter((event) => event.seq > cancelSeq)).toEqual([]);
+    expect(store.listEvents(run.id).some((event) => event.type === "supervisor.decision")).toBe(false);
+    await service.closeRuntimes();
+    store.close();
+  });
+
   it("requires unified approval before a related parallel Inbox task can start", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new DeferredRuntime());
     const parent = await service.enqueueSessionInput(session.id, "parent", "parallel-approval-parent");
     const related = await service.enqueueSessionInput(session.id, "同时并行处理独立子任务", "parallel-approval-child");
     expect(service.startSessionInputNow(session.id, related.item.id)).toMatchObject({ status: "approval_required", runId: parent.run!.id });
     const approval = service.requestParallelSessionInputApproval(session.id, related.item.id);
-    const child = await service.approveRunApproval(approval.id);
-    expect(store.getRun(child.id)?.contract).toMatchObject({ parentRunId: parent.run!.id, relation: "parallel", sourceInboxIds: [related.item.id] });
-    expect(store.listTaskRunEdges(parent.run!.id)).toEqual([expect.objectContaining({ toRunId: child.id, relation: "parallel" })]);
+    await service.approveRunApproval(approval.id);
+    const [edge] = store.listTaskRunEdges(parent.run!.id);
+    expect(edge).toMatchObject({ relation: "parallel" });
+    if (!edge) throw new Error("parallel TaskRun edge was not created");
+    expect(store.getRun(edge.toRunId)?.contract).toMatchObject({ parentRunId: parent.run!.id, relation: "parallel", sourceInboxIds: [related.item.id] });
     await service.closeRuntimes(); store.close();
   });
 
@@ -297,7 +399,7 @@ describe("AgentService runtime boundary", () => {
     const writes = vi.spyOn(store, "upsertCheckpoint");
     const session = store.createSession();
     let runtime!: CheckpointRuntime;
-    const service = new AgentService(store, "/tmp", (options) => runtime = new CheckpointRuntime(options));
+    const service = new AgentService(agentPersistence(store), "/tmp", (options) => runtime = new CheckpointRuntime(options));
     const run = await service.start(session.id, "checkpoint stream");
     expect(writes).toHaveBeenCalledTimes(1);
     runtime.emit("runtime.queue", { pendingMessageCount: 0 });
@@ -336,16 +438,16 @@ describe("AgentService runtime boundary", () => {
     const complete = "Root cause found and fixed. The durable completed response is preserved and the regression test passed.";
     const runtimeFactory: RuntimeFactory = (options) => ({
       async prompt() {
-        const started = options.store.appendEvent(options.runId, "message.started", { ordinal: 1 }); options.onEvent?.(started);
-        const delta = options.store.appendEvent(options.runId, "message.delta", { ordinal: 1, delta: complete }); options.onEvent?.(delta);
-        const completed = options.store.appendEvent(options.runId, "message.completed", { ordinal: 1, content: complete }); options.onEvent?.(completed);
+        options.eventSink.publish("message.started", { ordinal: 1 });
+        options.eventSink.publish("message.delta", { ordinal: 1, delta: complete });
+        options.eventSink.publish("message.completed", { ordinal: 1, content: complete });
       },
       async steer() { return "accepted" as const; },
       abort() {},
       getMessages() { return [assistantMessage(complete), assistantMessage("")]; },
       getError() { return undefined; },
     });
-    const service = new AgentService(store, "/tmp", runtimeFactory);
+    const service = new AgentService(agentPersistence(store), "/tmp", runtimeFactory);
     const run = await service.start(session.id, "find and fix the missing final response");
     store.upsertPlanItem(run.id, { key: "done", title: "Done", status: "done", required: true, position: 1 });
     store.upsertCheck(run.id, { key: "verify", title: "Verify", status: "passed", required: true, command: "npm test", evidence: "regression test passed", stale: false });
@@ -359,7 +461,7 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let runtime!: CheckpointRuntime;
-    const service = new AgentService(store, "/tmp", (options) => runtime = new CheckpointRuntime(options));
+    const service = new AgentService(agentPersistence(store), "/tmp", (options) => runtime = new CheckpointRuntime(options));
     const run = await service.start(session.id, "multi-message stream");
     runtime.emit("message.started", { ordinal: 1 });
     runtime.emit("message.delta", { delta: "first answer" });
@@ -373,7 +475,7 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
-  it("preserves partial progress across restart and resets it for resume", async () => {
+  it("clears an inactive partial across restart and starts resume with a fresh checkpoint", async () => {
     const directory = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp("/tmp/tagent-checkpoint-restart-"));
     const filename = `${directory}/tagent.db`;
     const firstStore = new Store(filename);
@@ -383,8 +485,8 @@ describe("AgentService runtime boundary", () => {
     firstStore.close();
 
     const secondStore = new Store(filename);
-    const service = new AgentService(secondStore, "/tmp", () => new DeferredRuntime());
-    expect(secondStore.getRun(run.id)).toMatchObject({ status: "interrupted", checkpoint: { active: false, assistantPartial: "partial answer", currentTool: null, attempt: 1 } });
+    const service = new AgentService(agentPersistence(secondStore), "/tmp", () => new DeferredRuntime());
+    expect(secondStore.getRun(run.id)).toMatchObject({ status: "interrupted", checkpoint: { active: false, assistantPartial: "", currentTool: null, attempt: 1 } });
     const resumed = await service.resume(run.id);
     expect(resumed).toMatchObject({ status: "running", attempt: 2, checkpoint: { active: true, assistantPartial: "", currentTool: null, attempt: 2 } });
     await service.closeRuntimes();
@@ -396,7 +498,7 @@ describe("AgentService runtime boundary", () => {
     const session = store.createSession();
     const runtime = new FakeRuntime([assistantMessage("done")]);
     const factory: RuntimeFactory = vi.fn(() => runtime);
-    const service = new AgentService(store, "/tmp", factory, { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit()) });
+    const service = new AgentService(agentPersistence(store), "/tmp", factory, { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit()) });
     const run = await service.start(session.id, "test factory");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(factory).toHaveBeenCalledOnce();
@@ -413,7 +515,7 @@ describe("AgentService runtime boundary", () => {
     store.queueContinuation(run.id, "gate");
     let oldRuntime!: ControlledRuntime;
     let calls = 0;
-    const service = new AgentService(store, "/tmp", () => {
+    const service = new AgentService(agentPersistence(store), "/tmp", () => {
       calls += 1;
       if (calls === 1) return oldRuntime = new ControlledRuntime([assistantMessage("late")]);
       return new CallbackRuntime(assistantMessage("new owner"), () => {
@@ -436,7 +538,7 @@ describe("AgentService runtime boundary", () => {
   it("runs Supervisor restart reconciliation only once per service instance", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const service = new AgentService(store, "/tmp", () => new DeferredRuntime());
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new DeferredRuntime());
     service.recoverContinuations();
     const run = store.createRun(session.id, "active supervisor decision");
     const decision = new TaskRunSupervisor(store, reviewer(passingTestAudit()), { repeatedFailureThreshold: 1, maxSteersPerAttempt: 1, minEventsBetweenInterventions: 1 }).reviewCheckpoint(run.id, { runId: run.id, seq: 1, type: "tool.completed", data: { toolName: "bash", isError: true }, createdAt: Date.now() });
@@ -455,7 +557,7 @@ describe("AgentService runtime boundary", () => {
     const old = store.claimContinuation(run.id, "dead-owner", 30_000)!;
     store.db.prepare("UPDATE run_continuations SET lease_until = ? WHERE id = ?").run(Date.now() + 25, old.continuation.id);
     let calls = 0;
-    const service = new AgentService(store, "/tmp", () => new CallbackRuntime(assistantMessage("recovered"), () => {
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new CallbackRuntime(assistantMessage("recovered"), () => {
       calls += 1;
       store.upsertPlanItem(run.id, { key: "recover", title: "Recover", status: "done", required: true, position: 1 });
     }), { maxContinuations: 1 });
@@ -472,7 +574,7 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new SlowAbortRuntime();
-    const service = new AgentService(store, "/tmp", () => runtime);
+    const service = new AgentService(agentPersistence(store), "/tmp", () => runtime);
     await service.start(session.id, "graceful close");
     const closing = service.closeRuntimes();
     expect(runtime.settled).toBe(false);
@@ -489,7 +591,7 @@ describe("AgentService runtime boundary", () => {
     store.blockRun(run.id, "gate");
     store.queueContinuation(run.id, "gate");
     const runtime = new SlowAbortRuntime();
-    const service = new AgentService(store, "/tmp", () => runtime);
+    const service = new AgentService(agentPersistence(store), "/tmp", () => runtime);
     service.recoverContinuations();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(store.listContinuations(run.id)[0].status).toBe("running");
@@ -503,7 +605,7 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new RejectingAbortRuntime();
-    const service = new AgentService(store, "/tmp", () => runtime);
+    const service = new AgentService(agentPersistence(store), "/tmp", () => runtime);
     const run = await service.start(session.id, "async abort failure");
     expect(service.cancel(run.id)).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -521,7 +623,7 @@ describe("AgentService runtime boundary", () => {
     });
     batch();
     let options: Parameters<RuntimeFactory>[0] | undefined;
-    const service = new AgentService(store, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, maxContextTurns: 2 });
+    const service = new AgentService(agentPersistence(store), "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, maxContextTurns: 2 });
     await service.start(session.id, "latest?");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(options?.initialMessages?.at(-1)).toMatchObject({ role: "user", content: "message-10001" });
@@ -540,7 +642,7 @@ describe("AgentService runtime boundary", () => {
 
     const secondStore = new Store(filename);
     let options: Parameters<RuntimeFactory>[0] | undefined;
-    const service = new AgentService(secondStore, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("stable")]); }, { maxContinuations: 0 });
+    const service = new AgentService(agentPersistence(secondStore), "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("stable")]); }, { maxContinuations: 0 });
     await service.start(session.id, "Which release channel did we choose?");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -556,7 +658,7 @@ describe("AgentService runtime boundary", () => {
     store.appendMessage(session.id, "assistant", "The project codename is Atlas.");
     let options: Parameters<RuntimeFactory>[0] | undefined;
     const runtime = new FakeRuntime([assistantMessage("Atlas")]);
-    const service = new AgentService(store, "/tmp", (value) => { options = value; return runtime; }, { maxContinuations: 0 });
+    const service = new AgentService(agentPersistence(store), "/tmp", (value) => { options = value; return runtime; }, { maxContinuations: 0 });
 
     const run = await service.start(session.id, "What is the project codename?");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -583,7 +685,7 @@ describe("AgentService runtime boundary", () => {
     store.appendMessage(session.id, "user", "latest user fact");
     store.appendMessage(session.id, "assistant", "latest assistant answer");
     let options: Parameters<RuntimeFactory>[0] | undefined;
-    const service = new AgentService(store, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 2_000, maxContextTurns: 1, model: { contextWindow: 2_000, maxTokens: 200 } as never });
+    const service = new AgentService(agentPersistence(store), "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 2_000, maxContextTurns: 1, model: { contextWindow: 2_000, maxTokens: 200 } as never });
 
     const run = await service.start(session.id, "follow up");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -604,7 +706,7 @@ describe("AgentService runtime boundary", () => {
       options.push(runtimeOptions);
       return options.length === 1 ? first : second;
     });
-    const service = new AgentService(store, "/tmp", factory, { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit(), continuationAudit()) });
+    const service = new AgentService(agentPersistence(store), "/tmp", factory, { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit(), continuationAudit()) });
     const started = await service.start(session.id, "resume goal", "stable-request");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(store.getRun(started.id)?.status).toBe("blocked");
@@ -637,7 +739,7 @@ describe("AgentService runtime boundary", () => {
     store.blockRun(run.id, "gate");
     let options: Parameters<RuntimeFactory>[0] | undefined;
     const runtime = new FakeRuntime([assistantMessage("done")]);
-    const service = new AgentService(store, "/tmp", (value) => { options = value; return runtime; });
+    const service = new AgentService(agentPersistence(store), "/tmp", (value) => { options = value; return runtime; });
     await service.resume(run.id);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(options?.initialMessages).toEqual([user, assistant]);
@@ -673,7 +775,7 @@ describe("AgentService runtime boundary", () => {
     const continuation = store.queueContinuation(run.id, "plan missing");
     store.updateContinuation(continuation.id, "running");
     store.resumeRun(run.id);
-    const service = new AgentService(store, "/tmp", () => new CallbackRuntime(assistantMessage("recovered"), () => {
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new CallbackRuntime(assistantMessage("recovered"), () => {
       store.upsertPlanItem(run.id, { key: "recover", title: "Recover", status: "done", required: true, position: 1 });
     }), { maxContinuations: 2 });
     expect(service.recoverContinuations()).toEqual([run.id]);
@@ -695,7 +797,7 @@ describe("AgentService runtime boundary", () => {
     for (const message of [oldUser, oldAssistant, newUser, newAssistant]) store.appendTranscript(run.id, 1, message);
     store.blockRun(run.id, "gate");
     let options: Parameters<RuntimeFactory>[0] | undefined;
-    const service = new AgentService(store, "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 1_000, maxContextTurns: 1, model: { contextWindow: 1_000, maxTokens: 100 } as never });
+    const service = new AgentService(agentPersistence(store), "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 1_000, maxContextTurns: 1, model: { contextWindow: 1_000, maxTokens: 100 } as never });
     await service.resume(run.id);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(options?.initialMessages).toEqual([newUser, newAssistant]);
@@ -709,7 +811,7 @@ describe("AgentService runtime boundary", () => {
     let runId = "";
     let calls = 0;
     const runtimes: CallbackRuntime[] = [];
-    const service = new AgentService(store, "/tmp", () => {
+    const service = new AgentService(agentPersistence(store), "/tmp", () => {
       calls += 1;
       const runtime = new CallbackRuntime(assistantMessage(calls === 1 ? "blocked" : "done"), () => {
         if (calls === 2) {
@@ -736,16 +838,16 @@ describe("AgentService runtime boundary", () => {
     const session = store.createSession();
     let calls = 0;
     const captured: Array<Parameters<RuntimeFactory>[0]> = [];
-    const service = new AgentService(store, "/tmp", (options) => {
+    const service = new AgentService(agentPersistence(store), "/tmp", (options) => {
       captured.push(options);
       calls += 1;
       return new CallbackRuntime(assistantMessage(calls === 1 ? "needs one repair" : "repaired and verified"), () => {
         if (calls === 1) {
-          store.appendTranscript(options.runId, 1, { role: "user", content: "old attempt detail", timestamp: 1 });
-          store.appendTranscript(options.runId, 1, assistantMessage("latest failed candidate"));
+          store.appendTranscript(options.token.runId, 1, { role: "user", content: "old attempt detail", timestamp: 1 });
+          store.appendTranscript(options.token.runId, 1, assistantMessage("latest failed candidate"));
         } else {
-          store.upsertPlanItem(options.runId, { key: "work", title: "Work", status: "done", required: true, position: 1 });
-          store.upsertCheck(options.runId, { key: "verify", title: "Verify", status: "passed", required: true, command: "test", evidence: "passed", stale: false });
+          store.upsertPlanItem(options.token.runId, { key: "work", title: "Work", status: "done", required: true, position: 1 });
+          store.upsertCheck(options.token.runId, { key: "verify", title: "Verify", status: "passed", required: true, command: "test", evidence: "passed", stale: false });
         }
       });
     }, { maxContinuations: 1, supervisorReviewer: reviewer(continuationAudit(), passingTestAudit()) });
@@ -764,7 +866,7 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let calls = 0;
-    const service = new AgentService(store, "/tmp", () => { calls += 1; return new CallbackRuntime(assistantMessage("continue")); }, { maxContinuations: 64, runTimeoutMs: 60_000, supervisorReviewer: reviewer(continuationAudit(), continuationAudit(), continuationAudit()) });
+    const service = new AgentService(agentPersistence(store), "/tmp", () => { calls += 1; return new CallbackRuntime(assistantMessage("continue")); }, { maxContinuations: 64, runTimeoutMs: 60_000, supervisorReviewer: reviewer(continuationAudit(), continuationAudit(), continuationAudit()) });
     const run = await service.start(session.id, "stalled durable run");
     for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "continuation.stalled"); index += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     expect(calls).toBe(3);
@@ -778,7 +880,7 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let calls = 0;
-    const service = new AgentService(store, "/tmp", () => { calls += 1; return new CallbackRuntime(assistantMessage("blocked")); }, { maxContinuations: 1, supervisorReviewer: reviewer(continuationAudit(), continuationAudit()) });
+    const service = new AgentService(agentPersistence(store), "/tmp", () => { calls += 1; return new CallbackRuntime(assistantMessage("blocked")); }, { maxContinuations: 1, supervisorReviewer: reviewer(continuationAudit(), continuationAudit()) });
     const run = await service.start(session.id, "stay blocked");
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(calls).toBe(2);
@@ -790,7 +892,7 @@ describe("AgentService runtime boundary", () => {
 
   it("keeps token use observational and does not install Core token controls", async () => {
     const store = new Store(":memory:"); const session = store.createSession(); let captured: Parameters<RuntimeFactory>[0] | undefined;
-    const service = new AgentService(store, "/tmp", (options) => { captured = options; return new CallbackRuntime(assistantMessage("observed usage only")); });
+    const service = new AgentService(agentPersistence(store), "/tmp", (options) => { captured = options; return new CallbackRuntime(assistantMessage("observed usage only")); });
     await service.start(session.id, "observe token usage"); await new Promise((resolve) => setTimeout(resolve, 20));
     expect(captured).not.toHaveProperty("maxRunTokens"); expect(captured).not.toHaveProperty("softRunTokens");
     expect(store.listEvents(store.getLatestRun(session.id)!.id).some((event) => event.type.includes("token_budget"))).toBe(false); store.close();
@@ -802,7 +904,7 @@ describe("AgentService runtime boundary", () => {
       const store = new Store(":memory:");
       const session = store.createSession();
       const runtime = new DeferredRuntime();
-      const service = new AgentService(store, "/tmp", () => runtime, { runTimeoutMs: loadConfig({}).runTimeoutMs, runHardTimeoutMs: 86_400_000 });
+      const service = new AgentService(agentPersistence(store), "/tmp", () => runtime, { runTimeoutMs: loadConfig({}).runTimeoutMs, runHardTimeoutMs: 86_400_000 });
       const run = await service.start(session.id, "default timeout");
 
       await vi.advanceTimersByTimeAsync(119_999);
@@ -822,7 +924,7 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new DeferredRuntime();
-    const service = new AgentService(store, "/tmp", () => runtime, { runTimeoutMs: 10, runHardTimeoutMs: 1_000 });
+    const service = new AgentService(agentPersistence(store), "/tmp", () => runtime, { runTimeoutMs: 10, runHardTimeoutMs: 1_000 });
     const run = await service.start(session.id, "timeout");
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(runtime.aborted).toBe(true);
@@ -837,7 +939,7 @@ describe("AgentService runtime boundary", () => {
     const first = new SlowAbortRuntime();
     const second = new DeferredRuntime();
     let calls = 0;
-    const service = new AgentService(store, "/tmp", () => ++calls === 1 ? first : second, { runTimeoutMs: 10, runHardTimeoutMs: 1_000 });
+    const service = new AgentService(agentPersistence(store), "/tmp", () => ++calls === 1 ? first : second, { runTimeoutMs: 10, runHardTimeoutMs: 1_000 });
     const run = await service.start(session.id, "timeout then resume");
     await new Promise((resolve) => setTimeout(resolve, 15));
     expect(store.getRun(run.id)).toMatchObject({ status: "failed", resumable: true });
@@ -864,7 +966,7 @@ describe("AgentService runtime boundary", () => {
       },
       async reviewAttemptFailure() { return { action: "block_taskrun", reasonCode: "failed", rationale: "failed", confidence: 1 }; },
     };
-    const service = new AgentService(store, "/tmp", () => new CallbackRuntime(assistantMessage("complete candidate")), { runTimeoutMs: 10, runHardTimeoutMs: 1_000, supervisorReviewer: slowReviewer });
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new CallbackRuntime(assistantMessage("complete candidate")), { runTimeoutMs: 10, runHardTimeoutMs: 1_000, supervisorReviewer: slowReviewer });
     const run = await service.start(session.id, "slow bounded review");
     await new Promise((resolve) => setTimeout(resolve, 70));
     expect(store.getRun(run.id)).toMatchObject({ status: "completed", blockedReason: "" });
@@ -877,8 +979,8 @@ describe("AgentService runtime boundary", () => {
     const session = store.createSession();
     let runtime!: ActiveDeferredRuntime;
     let activityCount = 0;
-    const service = new AgentService(store, "/tmp", (options) => {
-      runtime = new ActiveDeferredRuntime(() => { activityCount += 1; options.onActivity?.(); }, 5);
+    const service = new AgentService(agentPersistence(store), "/tmp", (options) => {
+      runtime = new ActiveDeferredRuntime(() => { activityCount += 1; options.eventSink.activity(); }, 5);
       return runtime;
     }, { runTimeoutMs: 40, runHardTimeoutMs: 1_000 });
     const run = await service.start(session.id, "active long run");
@@ -895,8 +997,8 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let runtime!: ActiveDeferredRuntime;
-    const service = new AgentService(store, "/tmp", (options) => {
-      runtime = new ActiveDeferredRuntime(() => options.onActivity?.(), 5);
+    const service = new AgentService(agentPersistence(store), "/tmp", (options) => {
+      runtime = new ActiveDeferredRuntime(() => options.eventSink.activity(), 5);
       return runtime;
     }, { runTimeoutMs: 40, runHardTimeoutMs: 70 });
     const run = await service.start(session.id, "hard timeout");
@@ -911,7 +1013,7 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new DeferredRuntime();
-    const service = new AgentService(store, "/tmp", () => runtime);
+    const service = new AgentService(agentPersistence(store), "/tmp", () => runtime);
     const run = await service.start(session.id, "cancel race");
     expect(service.cancel(run.id)).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -925,7 +1027,7 @@ describe("AgentService runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new DeferredRuntime();
-    const service = new AgentService(store, "/tmp", () => runtime);
+    const service = new AgentService(agentPersistence(store), "/tmp", () => runtime);
     const run = await service.start(session.id, "cancel repair");
     store.appendTranscript(run.id, 1, {
       role: "assistant", content: [{ type: "toolCall", id: "pending-call", name: "read", arguments: { path: "a.txt" } }], api: "openai-completions", provider: "test", model: "test",
@@ -943,9 +1045,10 @@ describe("AgentService runtime boundary", () => {
     const run = store.createRun(session.id, "production deployment");
     store.upsertPlanItem(run.id, { key: "approval", title: "Production deployment approval", status: "blocked", required: true, position: 1 });
     class ApprovalRuntime extends DeferredRuntime {
-      override async prompt() { this.messages = [assistantMessage("waiting")]; }
+      override async prompt() {}
+      override getMessages() { return [assistantMessage("waiting")]; }
     }
-    const service = new AgentService(store, "/tmp", () => new ApprovalRuntime());
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new ApprovalRuntime());
     // Exercise the same durable state produced by settled supervision without relying on provider timing.
     const approvalAudit = { ...continuationAudit("Production approval is required."), action: "pause_for_approval" as const, reasonCode: "approval_required" };
     const decision = (await new TaskRunSupervisor(store, reviewer(approvalAudit)).reviewSettled(store.getRun(run.id)!, 1, "waiting")).decision;
@@ -968,7 +1071,7 @@ describe("AgentService runtime boundary", () => {
       async reviewSettled() { throw new SupervisorReviewError("invalid structured audit"); },
       async reviewAttemptFailure() { throw new Error("Supervisor review failures must not be reclassified as Agent runtime failures"); },
     };
-    const service = new AgentService(store, "/tmp", () => { runtimeCalls += 1; return new FakeRuntime([assistantMessage("candidate result")]); }, { maxContinuations: 8, supervisorReviewer: failedReviewer });
+    const service = new AgentService(agentPersistence(store), "/tmp", () => { runtimeCalls += 1; return new FakeRuntime([assistantMessage("candidate result")]); }, { maxContinuations: 8, supervisorReviewer: failedReviewer });
     const run = await service.start(session.id, "audit failure isolation");
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(runtimeCalls).toBe(1);

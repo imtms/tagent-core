@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { PostgresMemoryAdapter } from "../src/memory/postgres/postgres-adapter.js";
-import type { GraphEdge, GraphNode, TopicDescriptor, VectorDocument, WarmMemory } from "../src/memory/types.js";
+import { PostgresMemoryAdapter } from "../packages/memory/src/postgres/postgres-adapter.js";
+import type { GraphEdge, GraphNode, TopicDescriptor, VectorDocument, WarmMemory } from "@tagent/memory/domain";
 
 class QueryCounter {
   calls: Array<{ text: string; values?: unknown[] }> = [];
@@ -106,6 +106,7 @@ describe("PostgreSQL memory query shape", () => {
 
     const captureJobs=counter.calls.find((call)=>call.text.includes("FROM memory.capture_jobs"));
     expect(captureJobs?.values).toEqual([JSON.stringify([{ type: scope.type, id: scope.id }]), 19]);
+    expect(captureJobs?.text).toContain("request->'access'->'scopes' @> $1::jsonb");
     expect(captureJobs?.text).toContain("LIMIT $2");
   });
 

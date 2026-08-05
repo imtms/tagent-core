@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { Store } from "../src/store/store.js";
-import { WorkflowService, type WorkflowSpec } from "../src/learning/workflow-service.js";
+import { WorkflowService } from "@tagent/learning";
+import type { WorkflowSpec } from "@tagent/learning/domain";
+import { Store } from "@tagent/persistence-sqlite";
+import { workflowPersistence } from "./support/test-persistence.js";
 
 const stores: Store[] = [];
-const make = () => { const store = new Store(":memory:"); stores.push(store); return { store, service: new WorkflowService(store) }; };
+const make = () => { const store = new Store(":memory:"); stores.push(store); return { store, service: new WorkflowService(workflowPersistence(store)) }; };
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
 
 function observe(store: Store, service: WorkflowService, scopeId: string, signature: string, summary: string, success = true, failedChecks: string[] = []) {
@@ -58,7 +60,7 @@ describe("persistent asynchronous experience distiller", () => {
     observe(store, service, session.id, "validate software release update", "1. Run the tests\n2. Build release artifact\n3. Notify team");
     observe(store, service, session.id, "verification of software release failed", "1. Build first\n2. Run tests", false, ["tests"]);
     service.enqueueDistillation(session.id, "verify software release change");
-    const result = await service.runNextDistillationJob("distiller")!;
+    const result = (await service.runNextDistillationJob("distiller"))!;
     expect(result.revision!.steps).toHaveLength(2);
     expect(result.revision!.steps[0].instruction).toMatch(/Run (?:the )?tests/);
     expect(result.revision!.steps[1].instruction).toBe("Build release artifact");
@@ -83,7 +85,7 @@ describe("persistent asynchronous experience distiller", () => {
     observe(store, service, session.id, "validate software release update", "1. Run the tests\n2. Build release artifact");
     observe(store, service, session.id, "verify software release change", "Please provide the release identifier", false, []);
     service.enqueueDistillation(session.id, "verify software release change");
-    const result = await service.runNextDistillationJob("distiller")!;
+    const result = (await service.runNextDistillationJob("distiller"))!;
     expect(result.revision!.counterexampleIds).toEqual([]);
     expect(result.revision!.nonApplicability).toEqual([]);
   });

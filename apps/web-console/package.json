@@ -1,0 +1,38 @@
+{
+  "name": "@tagent/web-console",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": ["**/*.css"],
+  "files": ["dist"],
+  "exports": {},
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "check": "tsc --noEmit",
+    "preview": "vite preview --host 0.0.0.0",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@tagent/abi": "0.2.0",
+    "@tagent/core-client": "0.2.0",
+    "highlight.js": "^11.11.1",
+    "lucide-react": "0.553.0",
+    "markdown-it": "^14.3.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@vitejs/plugin-react": "5.1.1",
+    "typescript": "5.9.3",
+    "vite": "^7.3.6"
+  },
+  "engines": {
+    "node": ">=24.18.1",
+    "npm": ">=12"
+  },
+  "license": "MIT"
+}

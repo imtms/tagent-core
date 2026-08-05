@@ -2,10 +2,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Store } from "../src/store/store.js";
+import { Store } from "@tagent/persistence-sqlite";
 
 const stores: Store[] = [];
-const analysis = (summary: string, priority = 500) => ({ summary, intent: "new_task" as const, targetRunId: null, priority, urgency: "normal" as const, relation: "independent" as const, acceptanceCriteria: [`Complete ${summary}`], scope: summary, nonGoals: [], confidence: 1, reason: "test", routerVersion: "test" });
+const analysis = (summary: string, priority = 500) => ({ summary, objectives: [{ id: `objective:${summary}`, summary, timing: "current" as const, kind: "other" as const }], intent: "new_task" as const, targetRunId: null, priority, urgency: "normal" as const, relation: "independent" as const, acceptanceCriteria: [`Complete ${summary}`], scope: summary, nonGoals: [], confidence: 1, reason: "test", routerVersion: "test" });
+const totalChanges = (store: Store) => (store.db.prepare("SELECT total_changes() value").get() as { value: number }).value;
 const createStore = () => {
   const store = new Store(":memory:");
   stores.push(store);
@@ -376,6 +377,18 @@ describe("Store", () => {
     expect(store.getControlItem(second.item!.id)).toMatchObject({ status: "superseded" });
   });
 
+  it("preserves control admission order when timestamps tie", () => {
+    const store = createStore();
+    const run = store.createRun(store.createSession().id, "control ordering");
+    const first = store.enqueueControl(run.id, "request-1", "steer", "first", 2);
+    const second = store.enqueueControl(run.id, "request-2", "follow_up", "second", 2);
+    store.db.prepare("UPDATE control_inbox SET created_at = 1 WHERE run_id = ?").run(run.id);
+
+    expect(store.listControlInbox(run.id).map((item) => item.requestId)).toEqual(["request-1", "request-2"]);
+    expect(store.claimControlItem(run.id, 1)?.id).toBe(first.item!.id);
+    expect(store.claimControlItem(run.id, 1)?.id).toBe(second.item!.id);
+  });
+
   it("persists event consumer ACKs and fences stale generations", () => {
     const store = createStore();
     const session = store.createSession();
@@ -415,7 +428,7 @@ describe("Store", () => {
     expect(claimed.run.attempt).toBe(2);
     expect(store.transitionRun(run.id, ["running"], "failed", "run.failed", { error: "late" }, "late", 1)).toBeUndefined();
     expect(store.getRun(run.id)).toMatchObject({ status: "running", attempt: 2 });
-    expect(store.listEvents(run.id).map((event) => event.type)).toEqual(["continuation.started"]);
+    expect(store.listEvents(run.id).map((event) => event.type)).toEqual(["run.blocked", "continuation.started"]);
   });
 
   it("advances task phases from structured work without allowing regressions", () => {
@@ -544,9 +557,9 @@ describe("Store", () => {
       Promise.resolve().then(() => secondStore.claimContinuation(run.id, "worker-b", 30_000)),
     ]);
     expect(claims.filter(Boolean)).toHaveLength(1);
-    expect(firstStore.getRun(run.id)).toMatchObject({ status: "running", attempt: 2, lastEventSeq: 1 });
+    expect(firstStore.getRun(run.id)).toMatchObject({ status: "running", attempt: 2, lastEventSeq: 2 });
     expect(firstStore.listContinuations(run.id)[0]).toMatchObject({ status: "running", leaseOwner: expect.stringMatching(/^worker-/), leaseUntil: expect.any(Number) });
-    expect(firstStore.listEvents(run.id)).toHaveLength(1);
+    expect(firstStore.listEvents(run.id)).toHaveLength(2);
     firstStore.close();
     secondStore.close();
   });
@@ -590,17 +603,36 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(28);
+    expect(store.getSchemaVersion()).toBe(33);
   });
 
-  it("migrates an older database to schema version 28", () => {
+  it("migrates an older database to schema version 33", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
-    store.db.exec("DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
+    store.db.exec("DROP TABLE core_writer_lease; DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(28);
-    expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('approval_requests','context_manifests','control_inbox','event_consumers','gate_evaluations','operations','progress_snapshots','run_checkpoints','semantic_learning_jobs','session_supervisor_inbox','supervisor_decisions','taskrun_edges','tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["approval_requests", "context_manifests", "control_inbox", "event_consumers", "gate_evaluations", "operations", "progress_snapshots", "run_checkpoints", "semantic_learning_jobs", "session_supervisor_inbox",  "supervisor_decisions", "taskrun_edges", "tool_attempts"]);
+    expect(migrated.getSchemaVersion()).toBe(33);
+    expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('approval_receipts','approval_requests','attempt_authority_receipts','attempt_authority_state','attempt_shadow_comparisons','attempt_transition_audit','attempts','candidate_results','context_manifests','control_inbox','core_writer_lease','event_consumers','execution_leases','gate_evaluations','operations','progress_snapshots','run_checkpoints','semantic_learning_jobs','session_supervisor_inbox','supervisor_decisions','taskrun_edges','tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["approval_receipts", "approval_requests", "attempt_authority_receipts", "attempt_authority_state", "attempt_shadow_comparisons", "attempt_transition_audit", "attempts", "candidate_results", "context_manifests", "control_inbox", "core_writer_lease", "event_consumers", "execution_leases", "gate_evaluations", "operations", "progress_snapshots", "run_checkpoints", "semantic_learning_jobs", "session_supervisor_inbox",  "supervisor_decisions", "taskrun_edges", "tool_attempts"]);
+    expect((migrated.db.prepare("PRAGMA table_info(core_writer_lease)").all() as Array<{ name: string; type: string; notnull: number; pk: number }>).map(({ name, type, notnull, pk }) => ({ name, type, notNull: notnull, primaryKey: pk }))).toEqual([
+      { name: "lock_name", type: "TEXT", notNull: 0, primaryKey: 1 },
+      { name: "owner_id", type: "TEXT", notNull: 1, primaryKey: 0 },
+      { name: "fence", type: "INTEGER", notNull: 1, primaryKey: 0 },
+      { name: "pid", type: "INTEGER", notNull: 1, primaryKey: 0 },
+      { name: "host", type: "TEXT", notNull: 1, primaryKey: 0 },
+      { name: "acquired_at", type: "INTEGER", notNull: 1, primaryKey: 0 },
+      { name: "heartbeat_at", type: "INTEGER", notNull: 1, primaryKey: 0 },
+      { name: "expires_at", type: "INTEGER", notNull: 1, primaryKey: 0 },
+      { name: "released_at", type: "INTEGER", notNull: 0, primaryKey: 0 },
+    ]);
+    const writerLeaseSql = (migrated.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'core_writer_lease'").get() as { sql: string }).sql;
+    for (const constraint of [
+      "CHECK (lock_name = 'core-writer')",
+      "CHECK (fence > 0)",
+      "CHECK (pid > 0)",
+      "CHECK (expires_at >= heartbeat_at)",
+      "CHECK (released_at IS NULL OR released_at >= acquired_at)",
+    ]) expect(writerLeaseSql).toContain(constraint);
     expect(migrated.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='spawn_proposals'").get()).toBeUndefined();
     migrated.close();
   });
@@ -630,7 +662,7 @@ describe("Store", () => {
     store.upsertCheckpoint({ runId: run.id, attempt: 1, active: true, assistantPartial: "hello", currentTool: { toolCallId: "call-1", toolName: "read" }, lastEventSeq: 3, lastTranscriptSeq: 1 });
     expect(store.getRun(run.id)?.checkpoint).toMatchObject({ active: true, assistantPartial: "hello", currentTool: { toolName: "read" }, lastEventSeq: 3 });
     store.transitionRun(run.id, ["running"], "cancelled", "run.cancelled", {}, "cancelled", 1);
-    expect(store.getCheckpoint(run.id)).toMatchObject({ active: false, assistantPartial: "hello", currentTool: null, lastEventSeq: 3 });
+    expect(store.getCheckpoint(run.id)).toMatchObject({ active: false, assistantPartial: "", currentTool: null, lastEventSeq: 3 });
   });
 
   it("does not rewrite an unchanged checkpoint", () => {
@@ -639,9 +671,9 @@ describe("Store", () => {
     const run = store.createRun(session.id, "checkpoint dedupe");
     const checkpoint = { runId: run.id, attempt: 1, active: true, assistantPartial: "same", currentTool: null, lastEventSeq: 2, lastTranscriptSeq: 1 };
     const first = store.upsertCheckpoint(checkpoint);
-    const writesBefore = store.db.totalChanges;
+    const writesBefore = totalChanges(store);
     const second = store.upsertCheckpoint(checkpoint);
-    expect(store.db.totalChanges).toBe(writesBefore);
+    expect(totalChanges(store)).toBe(writesBefore);
     expect(second.updatedAt).toBe(first.updatedAt);
   });
 
@@ -661,27 +693,6 @@ describe("Store", () => {
     store.upsertCheckpoint({ runId: run.id, attempt: 2, active: true, assistantPartial: "new", currentTool: null, lastEventSeq: 5, lastTranscriptSeq: 2 });
     store.upsertCheckpoint({ runId: run.id, attempt: 1, active: true, assistantPartial: "old", currentTool: null, lastEventSeq: 9, lastTranscriptSeq: 3 });
     expect(store.getCheckpoint(run.id)).toMatchObject({ attempt: 2, assistantPartial: "new", lastEventSeq: 5 });
-  });
-
-  it("cancels duplicate active continuations before creating the schema v3 unique index", () => {
-    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "continuation-migration.db");
-    const store = new Store(filename);
-    const session = store.createSession();
-    const run = store.createRun(session.id, "migration duplicates");
-    store.blockRun(run.id, "gate");
-    store.db.exec("DROP INDEX idx_continuations_one_active");
-    const insert = store.db.prepare("INSERT INTO run_continuations (id, run_id, ordinal, status, reason, created_at) VALUES (?, ?, ?, 'queued', 'gate', ?)");
-    insert.run("first", run.id, 1, 1);
-    insert.run("second", run.id, 2, 2);
-    store.db.prepare("UPDATE schema_meta SET version = 2 WHERE id = 1").run();
-    store.close();
-
-    const migrated = new Store(filename);
-    expect(migrated.listContinuations(run.id).map((item) => ({ id: item.id, status: item.status }))).toEqual([
-      { id: "first", status: "queued" },
-      { id: "second", status: "cancelled" },
-    ]);
-    migrated.close();
   });
 
   it("claims and replays operation receipts by canonical payload", () => {

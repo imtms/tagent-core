@@ -1,131 +1,65 @@
-# Session and TaskRun Supervisor
+# Supervisor
 
-TAgent Core separates two durable control layers:
+## Authority
 
-- **Session Input Router** understands newly admitted user input and chooses how it relates to the active TaskRun.
-- **TaskRun Supervisor** reviews progress, evidence, completion gates, continuations, and explicit approval requests.
+The TaskRun Supervisor governs settlement; the Agent runtime cannot declare durable success by itself. Assistant output streamed during an Attempt is provisional until the Supervisor accepts the candidate and Core persists it as the Session answer.
 
-## Session input routing
+## Deterministic floor
 
-Every composer submission is persisted with a structured analysis:
+Before semantic review, Core checks authoritative prerequisites:
 
-- concise `summary`;
-- `intent` and target Run;
-- priority and urgency;
-- relation to current work;
-- acceptance criteria;
-- confidence, reason, and router version.
+- the TaskRun has a contract and required plan state where applicable;
+- every required plan item is complete;
+- every required check has a passing receipt;
+- verification evidence is newer than the last relevant workspace mutation;
+- required approvals and operation receipts exist;
+- the delivery is non-empty and not provider-truncated;
+- no durable steer/follow-up remains pending delivery.
 
-The current deterministic semantic router uses auditable rules (`semantic-rules-v3`). It decomposes compound input into persisted objectives with timing and work-kind metadata before policy selects the durable action. It does not let an LLM directly mutate durable state.
+A semantic reviewer cannot convert a failed deterministic prerequisite into success.
 
-| Input class | Durable action |
-|---|---|
-| stop, correction, constraint, changed path/port | steer active Run |
-| parameter or evidence for current work | steer/update active context |
-| explicit “after completion” work | Pi follow-up queue |
-| explicit independent parallel work | related queued Session Inbox item; early concurrent start requires approval |
-| independent work | prioritized queued TaskRun contract |
-| question/discussion or clarification | lower-priority lightweight contract (dedicated conversation-only execution remains future work) |
-| explicit postponement | durable deferred item that is not automatically dispatched |
+## Settled review
 
-Low-confidence input remains independent queued work. It is not silently delivered into an active Run.
+For substantial work, the Supervisor produces a schema-validated audit of progress, evidence, contract coverage, completion, and continuation. Every acceptance criterion receives one of:
 
-## TaskRun contract
-
-A queued item no longer copies its full raw prompt into `runs.goal`. Selection persists:
-
-- immutable source input;
-- concise goal summary;
-- scope and non-goals;
-- acceptance criteria;
-- source Inbox IDs;
-- parent/target Run and relation;
-- routing reason and version.
-
-The runtime receives this contract plus the original input. The Web task panel displays the contract and routing rationale.
-
-## Scheduling and deduplication
-
-Automatic selection orders eligible items by:
-
-1. manual ordering override;
-2. urgency;
-3. priority;
-4. stable queue position and age.
-
-Equivalent pending summaries are deduplicated at admission. Editing re-runs classification against the active Run, and manual merge combines summaries, scopes, acceptance criteria, urgency, and priority instead of only concatenating prose. Users can still reorder, defer, delete, or run an item explicitly.
-
-## Related-task safety
-
-Parallel, follow-up, derived, and dependency-related work uses ordinary Session Inbox items with `targetRunId` and `relation` metadata. This preserves the complete TaskRun Contract instead of maintaining a separate proposal record.
-
-Related work remains queued by default. If the parent is still running, an early parallel start must enter the existing Supervisor approval flow. Human approval launches the Inbox item, persists the child contract, and records a `taskrun_edges` relation. The Agent and Router can only queue related work; they cannot launch it directly.
-
-## Attempt and settled supervision
-
-The TaskRun Supervisor distinguishes the designed terminal and runtime actions:
-
-- evidence-only completion failures -> `request_evidence` and an automatic continuation dedicated to verification;
-- blocked approval/permission items -> `pause_for_approval`, a durable approval request, and no automatic continuation;
-- pending durable steer/follow-up delivery at settle time -> `wait_for_runtime`;
-- repeated identical successful tool operations -> bounded `steer`, not only repeated failures;
-- transient provider/network attempt failures -> `start_continuation`;
-- missing user parameters or non-transient runtime failures -> durable block.
-
-These decisions are persisted with the `attempt_terminal` or `settled` trigger instead of converting every runtime exception directly to `run.failed`.
-
-## Candidate response governance
-
-Assistant text shown while a TaskRun is running is provisional runtime output. It is not a durable chat answer until settled review approves it.
-
-At every assistant-message boundary the runtime emits `message.started`, which resets the durable partial checkpoint and the Web live card before accepting new deltas. This prevents a steer, retry, or continuation response from being concatenated onto an earlier draft. If completion gates reject the candidate, the service emits `message.rejected`, retains the candidate in the Run transcript for audit, and does not append it to Session chat history.
-
-In addition to Plan, Check, evidence, progress, and non-empty delivery checks, settled review now produces criterion-by-criterion contract coverage and validates completion claims against independent Check evidence, successful Operation receipts, or published Artifacts. A short generic acknowledgement such as “received, completed” cannot finish a substantial contract merely because agent-authored state says that work passed. Auto-fixable delivery failures create a continuation whose prompt explicitly requires a complete standalone replacement addressing the original contract.
-
-This is a deterministic, independently evidenced safety floor rather than a second free-form agent. Criterion receipts expose covered, unsupported, contradicted, and blocked outcomes; unsupported completion claims trigger continuation instead of durable delivery.
-
-## Eval-engineering policy
-
-The completion gate follows an evidence-first policy:
-
-- objectively checkable facts remain owned by deterministic Plan, Check, Operation, and Artifact receipts;
-- the semantic judge evaluates criterion-level meaning and delivery quality, but may not turn generic evidence or confidence into approval;
-- trajectory signals such as repeated operations, consecutive failures, and meaningful changes are part of review rather than grading only the final prose;
-- the configured judge model ID is persisted with every Gate Evaluation and Supervisor Decision; production operators should pin this model and prefer a model family independent from the generating Agent when providers permit it;
-- a retryable judge transport failure permits one bounded continuation, but never fabricates acceptance-criterion coverage; a repeated transport failure blocks for explicit recovery instead of creating an unbounded continuation loop;
-- high-impact production changes still require explicit approval boundaries. A future capability policy will make blast-radius lanes first-class rather than inferring them only from declared Plan and approval items.
-
-The compact Supervisor request uses SSE and is bounded by a configured inactivity timeout plus output tokens. Each received SSE chunk refreshes the timer, so actively generating reviews are not cut off by an absolute deadline. When the lightweight and fallback models share one upstream base URL, the same outage is not retried against a second model ID.
-
-## Context Manifest
-
-Every new Run, resume, and continuation now persists an immutable per-attempt Context Manifest. It records the required system instruction, TaskRun contract, selected and omitted Session/transcript messages, Core Memory, dynamic Memory Cards, Cold Topics, current prompt, selection reasons, token estimates, and a SHA-256 manifest hash.
-
-The latest manifest is visible in the TaskRun panel, and the full history is available from:
-
-```http
-GET /api/runs/:id/context-manifests
+```text
+covered | unsupported | contradicted | blocked
 ```
 
-This closes the basic explainability gap between Context Assembler decisions and durable Supervisor diagnostics. The current manifest uses derived message identities; stable Message/Transcript IDs and Supervisor Topic links are part of the 0.2 roadmap.
+Evidence references may point only to durable checks, artifacts, operations, or Memory records/revisions supplied to the review. Candidate prose is not independent proof of its own claims.
 
-## Current boundary
+A narrow low-risk single-answer discussion may use deterministic lightweight completion when it has no side effects, required checks, artifacts, truncation, or risky release/security semantics.
 
-The semantic-rules-v3 router covers high-confidence safety paths and decomposes compound requests into explicit objectives, acceptance criteria, timing, scope, and relation metadata. Durable Run approval requests and their Approve/Reject Web flow are implemented. Future versions may add a schema-validated classifier for ambiguous multi-intent input, semantic clustering beyond canonical summary equality, dedicated lightweight discussion turns, dependency-aware parallel execution, and cross-Session Topic routing.
+## Actions
 
+| Action | Meaning |
+| --- | --- |
+| `complete_taskrun` | persist the candidate as the final Session answer |
+| `request_evidence` | continue specifically to produce missing verification evidence |
+| `start_continuation` | start bounded repair or completion work |
+| `pause_for_approval` | create/retain a durable approval request; do not auto-continue |
+| `wait_for_runtime` | wait for pending durable control delivery |
+| `block_taskrun` | stop on missing user/external state or non-recoverable failure |
+| `steer` / `follow_up` | bounded intervention while an Attempt is active |
 
-## Design alignment audit
+If a candidate is rejected, Core emits/persists rejection state, keeps the candidate in the TaskRun transcript for audit, and does not append it as the final chat answer. The next continuation must produce a complete standalone replacement.
 
-The current implementation covers the durable Session Inbox, high-confidence input routing, TaskRun contracts, checkpoint/settled/attempt-terminal reviews, completion/evidence/continuation gates, explicit approval receipts, and related-task Inbox/approval integration. Compared with the original Session/Topic/TaskRun design, the following remain intentionally incomplete:
+## Attempt-terminal review
 
-- Topic is not yet a first-class cross-Session graph with message/Run links, confidence, merge, split, and correction receipts.
-- Context Manifests now persist Session/transcript, TaskRun, prompt, and Memory selection. First-class Supervisor Topic links and stable cross-Session message identities remain incomplete.
-- Multi-intent decomposition is deterministic and persisted, but ambiguous low-confidence classification still lacks an optional schema-validated model adjudicator and explicit user confirmation UI.
-- Discussion and clarification still use a lightweight TaskRun contract rather than a dedicated conversation-only runtime.
-- Early parallel Inbox starts require explicit approval; there is still no dependency-aware concurrent scheduler or resource-conflict planner.
-- Safety approvals govern Supervisor pauses and early parallel Inbox starts, but not every high-risk operation through one capability-policy system.
+Runtime failures are classified separately from settled candidate quality. Transient provider/network failures may continue; approval or permission failures pause; missing parameters and non-transient failures block. Bounded retry policy prevents an unavailable Supervisor from causing an unbounded Agent loop.
 
-These are architectural roadmap items rather than claims of completed functionality.
+## Approval boundary
 
+The Supervisor may request approval but cannot approve its own action. Governance owns canonical approval receipts. Early parallel related-task starts, high-impact operations, and active Learning actions remain subject to their explicit capability and approval policies.
 
-The explicit promotion criteria for the next minor version are maintained in [Roadmap to 0.2.0](ROADMAP_0.2.md).
+## Inspection
+
+The Web Console reads versioned console projections:
+
+```text
+GET /api/v1/console/task-runs/:id
+GET /api/v1/console/task-runs/:id/context-manifests
+GET /api/v1/console/task-runs/:id/transcript
+```
+
+Channel integrations should use the stable TaskRun, transcript, artifact, and event-consumer routes documented in [API_V1.md](API_V1.md).

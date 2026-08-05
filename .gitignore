@@ -9,8 +9,11 @@ test-results/
 !.env.example
 *.log
 *.pid
+*.tsbuildinfo
+*.d.ts.map
 tmp-*.png
 .DS_Store
 
 # Runtime and agent working tree
 /workspace/
+.omx/

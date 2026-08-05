@@ -1,11 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { createServer } from "node:http";
+import type { Model } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider, fauxThinking } from "@earendil-works/pi-ai/providers/faux";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { PiRuntime } from "../src/runtime/pi-runtime.js";
-import { Store } from "../src/store/store.js";
+import { PiRuntime, type PiRuntimeOptions } from "@tagent/runtime-pi";
+import { Store } from "@tagent/persistence-sqlite/store";
+import { createRuntimeHost } from "@tagent/core-service/composition";
+import { attemptIdFor } from "@tagent/execution/domain";
+import { agentPersistence } from "./support/test-persistence.js";
 
 describe("Pi 0.83 AgentSession integration", () => {
+  function runtimeSpec(store: Store, run: ReturnType<Store["createRun"]>, options: Omit<PiRuntimeOptions, "token" | "capabilities" | "eventSink">): PiRuntimeOptions {
+    const attempt = agentPersistence(store).attempts.getAttemptForRun(run.id, run.attempt)!;
+    const ownerId = `pi-test:${run.id}`;
+    const lease = agentPersistence(store).attempts.acquireExecutionLease({ attemptId: attempt.id, expectedVersion: attempt.version, ownerId, leaseMs: 30_000 });
+    const token = {
+      runId: run.id, attemptId: attemptIdFor(run.id, run.attempt), ordinal: run.attempt,
+      expectedVersion: attempt.version, ownerId, leaseToken: lease.token, executionFence: lease.fence,
+    };
+    const host = createRuntimeHost({
+      persistence: agentPersistence(store), token, workspace: options.workspace,
+      onActivity: () => undefined, onEvent: () => undefined,
+      memoryScopeId: "test", memorySubjectId: `session:${run.sessionId}`,
+    });
+    return { ...options, token, ...host };
+  }
+
   async function setup(responses: ReturnType<typeof fauxAssistantMessage>[], tokensPerSecond = 10_000) {
     const faux = fauxProvider({ models: [{ id: "faux-session", contextWindow: 32_000, maxTokens: 2_000 }], tokensPerSecond });
     faux.setResponses(responses);
@@ -14,7 +34,7 @@ describe("Pi 0.83 AgentSession integration", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "sdk session");
-    const runtime = new PiRuntime({ store, runId: run.id, workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), modelRuntime, initialMessages: [], providerMaxRetries: 1 });
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), modelRuntime, initialMessages: [], providerMaxRetries: 1 }));
     return { faux, store, run, runtime };
   }
 
@@ -64,7 +84,7 @@ describe("Pi 0.83 AgentSession integration", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "cancel events");
-    const runtime = new PiRuntime({ store, runId: run.id, workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), modelRuntime, initialMessages: [] });
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), modelRuntime, initialMessages: [] }));
     const prompt = runtime.prompt("start");
     await new Promise((resolve) => setTimeout(resolve, 20));
     store.transitionRun(run.id, ["running"], "cancelled", "run.cancelled", {}, "Cancelled by user");
@@ -74,7 +94,7 @@ describe("Pi 0.83 AgentSession integration", () => {
     expect(eventTypes).not.toContain("message.completed");
     expect(eventTypes).not.toContain("message.retrying");
     expect(eventTypes).not.toContain("provider.failure");
-    expect(store.listTranscript(run.id).some((message) => message.role === "assistant" && message.stopReason === "aborted")).toBe(true);
+    expect(store.listTranscript(run.id).some((message) => message.role === "assistant" && message.stopReason === "aborted")).toBe(false);
     runtime.dispose();
     store.close();
   });
@@ -87,7 +107,7 @@ describe("Pi 0.83 AgentSession integration", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "abort active tool");
-    const runtime = new PiRuntime({ store, runId: run.id, workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), modelRuntime, initialMessages: [] });
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), modelRuntime, initialMessages: [] }));
     const prompt = runtime.prompt("start");
     for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "tool.started"); index += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     await runtime.abort();
@@ -111,7 +131,7 @@ describe("Pi 0.83 AgentSession integration", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "abort initialization");
-    const runtime = new PiRuntime({ store, runId: run.id, workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), modelRuntime, initialMessages: [] });
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), modelRuntime, initialMessages: [] }));
     const prompt = runtime.prompt("hello");
     await runtime.abort();
     await expect(prompt).rejects.toThrow("Runtime aborted");
@@ -211,12 +231,12 @@ describe("Pi 0.83 AgentSession integration", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "custom provider");
-    const model = {
-      id: "custom-model", name: "custom-model", api: "openai-completions" as const, provider: "openai-compatible",
-      baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"] as const,
+    const model: Model<"openai-completions"> = {
+      id: "custom-model", name: "custom-model", api: "openai-completions", provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
     };
-    const runtime = new PiRuntime({ store, runId: run.id, workspace: process.cwd(), systemPrompt: "Controlled prompt", model, modelRuntime, apiKey: "test-runtime-key", initialMessages: [], providerMaxRetries: 0 });
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, modelRuntime, apiKey: "test-runtime-key", initialMessages: [], providerMaxRetries: 0 }));
     try {
       await runtime.prompt("hello");
       expect(modelRuntime.getProvider(model.provider)).toBeDefined();
@@ -238,7 +258,7 @@ describe("Pi 0.83 AgentSession integration", () => {
     const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
     modelRuntime.registerNativeProvider(faux.provider);
     const store = new Store(":memory:"); const session = store.createSession(); const run = store.createRun(session.id, "fallback");
-    const runtime = new PiRuntime({ store, runId: run.id, workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel("primary"), fallbackModels: [faux.getModel("fallback")], modelRuntime, providerMaxRetries: 0 });
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel("primary")!, fallbackModels: [faux.getModel("fallback")!], modelRuntime, providerMaxRetries: 0 }));
     await runtime.prompt("hello");
     expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", model: "fallback", content: [{ type: "text", text: "fallback recovered" }] });
     expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([expect.objectContaining({ type: "provider.fallback", data: expect.objectContaining({ previousModel: "primary", model: "fallback" }) })]));

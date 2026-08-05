@@ -19,7 +19,7 @@ fail() { log "ERROR: $*"; exit 1; }
 artifact=$(realpath "$1")
 release_root=${2:-/opt/tagent-core}
 service=${3:-tagent-core.service}
-health_url=${TAGENT_HEALTH_URL:-http://127.0.0.1:3100/api/health}
+health_url=${TAGENT_HEALTH_URL:-http://127.0.0.1:3100/api/v1/health}
 health_attempts=${TAGENT_HEALTH_ATTEMPTS:-30}
 [[ -f "$artifact" ]] || fail "artifact does not exist: $artifact"
 for command in node tar systemctl curl python3; do command -v "$command" >/dev/null || fail "$command is required"; done
@@ -68,13 +68,21 @@ ln -s "releases/$commit" "$next_link"
 mv -Tf "$next_link" "$release_root/current"
 
 rollback() {
-  log "new release failed; restoring previous release"
+  log "new release failed; rolling back"
   if [[ -n "$old_target" ]]; then
     rollback_link="$release_root/.rollback.$commit"
     ln -s "$old_target" "$rollback_link"
     mv -Tf "$rollback_link" "$release_root/current"
     systemctl restart "$service" || true
+  else
+    current_target=$(readlink "$release_root/current" 2>/dev/null || true)
+    if [[ "$current_target" == "releases/$commit" ]]; then
+      rm -f -- "$release_root/current"
+    fi
+    systemctl stop "$service" || true
   fi
+  chmod -R u+w "$release_dir"
+  rm -rf "$release_dir"
 }
 
 if ! systemctl restart "$service"; then rollback; fail "service restart failed"; fi

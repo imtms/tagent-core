@@ -1,0 +1,53 @@
+{
+  "name": "@tagent/abi",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./admin/v1": {
+      "types": "./dist/admin/v1/index.d.ts",
+      "import": "./dist/admin/v1/index.js"
+    },
+    "./channel/v1": {
+      "types": "./dist/channel/v1/index.d.ts",
+      "import": "./dist/channel/v1/index.js"
+    },
+    "./channel/v1/fixtures": {
+      "types": "./dist/channel/v1/fixtures.d.ts",
+      "import": "./dist/channel/v1/fixtures.js"
+    },
+    "./console/v1": {
+      "types": "./dist/console/v1/index.d.ts",
+      "import": "./dist/console/v1/index.js"
+    },
+    "./internal/v1": {
+      "types": "./dist/internal/v1/index.d.ts",
+      "import": "./dist/internal/v1/index.js"
+    },
+    "./shared": {
+      "types": "./dist/shared/index.d.ts",
+      "import": "./dist/shared/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean && rm -rf dist"
+  },
+  "dependencies": {
+    "typebox": "^1.1.24"
+  },
+  "engines": {
+    "node": ">=24.18.1",
+    "npm": ">=12"
+  },
+  "license": "MIT"
+}

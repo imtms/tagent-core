@@ -2,15 +2,45 @@ import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Store } from "../src/store/store.js";
-import { createTools } from "../src/tools/tools.js";
-import { listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "../src/security/workspace-path.js";
+import { Store } from "@tagent/persistence-sqlite/store";
+import type { RunEvent, RunId } from "@tagent/execution/domain";
+import type { ToolCapabilityApplicationPort } from "@tagent/execution/ports";
+import { createTools, listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "@tagent/workspace-local";
 
 async function waitForFile(filename: string) {
   for (let index = 0; index < 1_000; index += 1) {
     try { await readFile(filename); return; } catch { await new Promise((resolve) => setTimeout(resolve, 2)); }
   }
   throw new Error(`Timed out waiting for ${filename}`);
+}
+
+function createTestTools(
+  store: Store,
+  runId: RunId,
+  workspace: string,
+  onEvent: (event: RunEvent) => void = () => undefined,
+) {
+  const capabilities: ToolCapabilityApplicationPort = {
+    runId,
+    getRun: () => store.getRun(runId),
+    advanceRunPhase: (phase) => store.advanceRunPhase(runId, phase),
+    setRunPhase: (phase) => store.setRunPhase(runId, phase),
+    claimOperation: (id, operationType, payload) =>
+      store.claimOperation(id, runId, store.getRun(runId)!.attempt, operationType, payload),
+    updateOperation: (id, update) => store.updateOperation(id, update),
+    listOperations: () => store.listOperations(runId),
+    upsertPlanItem: (item) => store.upsertPlanItem(runId, item),
+    markChecksStale: () => store.markChecksStale(runId),
+    upsertCheck: (check) => store.upsertCheck(runId, check),
+    addArtifact: (artifact) => store.addArtifact(runId, artifact),
+    requestUserInput: (_toolCallId, prompt, fields) => store.requestUserInput(runId, prompt, fields),
+    publish: (type, data) => {
+      const event = store.appendEvent(runId, type, data);
+      onEvent(event);
+      return event;
+    },
+  };
+  return createTools(capabilities, workspace);
 }
 
 describe("workspace tools", () => {
@@ -24,10 +54,10 @@ describe("workspace tools", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "tools");
-    const read = createTools(store, run.id, workspace).find((tool) => tool.name === "read")!;
+    const read = createTestTools(store, run.id, workspace).find((tool) => tool.name === "read")!;
     const result = await read.execute("1", { path: "hello.txt" }, undefined);
     expect(result.content[0]).toMatchObject({ type: "text", text: "hello\nworld" });
-    const list = createTools(store, run.id, workspace).find((tool) => tool.name === "ls")!;
+    const list = createTestTools(store, run.id, workspace).find((tool) => tool.name === "ls")!;
     expect((await list.execute("root", { path: "." }, undefined)).content[0]).toMatchObject({ type: "text", text: "hello.txt" });
     await expect(read.execute("2", { path: "../work-evil/secret.txt" }, undefined)).rejects.toThrow("escapes");
     store.close();
@@ -43,7 +73,7 @@ describe("workspace tools", () => {
     await symlink(outside, path.join(workspace, "nested", "escape"));
     const store = new Store(":memory:");
     const run = store.createRun(store.createSession().id, "symlink boundaries");
-    const tools = createTools(store, run.id, workspace);
+    const tools = createTestTools(store, run.id, workspace);
     const read = tools.find((tool) => tool.name === "read")!;
     const list = tools.find((tool) => tool.name === "ls")!;
     const write = tools.find((tool) => tool.name === "write")!;
@@ -105,7 +135,7 @@ describe("workspace tools", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "inspect tools");
-    const tools = createTools(store, run.id, workspace);
+    const tools = createTestTools(store, run.id, workspace);
     const list = tools.find((tool) => tool.name === "ls")!;
     const read = tools.find((tool) => tool.name === "read")!;
     expect((await list.execute("list", {}, undefined)).content[0]).toMatchObject({ type: "text", text: "binary.bin\nbom.txt" });
@@ -120,7 +150,7 @@ describe("workspace tools", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "append");
-    const edit = createTools(store, run.id, workspace).find((tool) => tool.name === "edit")!;
+    const edit = createTestTools(store, run.id, workspace).find((tool) => tool.name === "edit")!;
     const result = await edit.execute("append-call", { path: "notes.txt", oldText: "", newText: "three\n" }, undefined);
     expect(await readFile(path.join(workspace, "notes.txt"), "utf8")).toBe("one\ntwo\nthree\n");
     expect(result.details).toMatchObject({ mode: "append", firstChangedLine: 3 });
@@ -132,7 +162,7 @@ describe("workspace tools", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "large output");
-    const bash = createTools(store, run.id, workspace).find((tool) => tool.name === "bash")!;
+    const bash = createTestTools(store, run.id, workspace).find((tool) => tool.name === "bash")!;
     const result = await bash.execute("large-output", { command: "yes x | head -c 400000", timeoutSeconds: 10 }, undefined);
     expect(result.details).toMatchObject({ exitCode: 0, captureTruncated: true });
     expect((result.content[0] as { type: string; text: string }).text.length).toBeLessThanOrEqual(24_030);
@@ -145,7 +175,7 @@ describe("workspace tools", () => {
     const session = store.createSession();
     const run = store.createRun(session.id, "idempotent write");
     store.upsertCheck(run.id, { key: "test", title: "Tests", status: "passed", required: true, command: "npm test", evidence: "old", stale: false });
-    const write = createTools(store, run.id, workspace).find((tool) => tool.name === "write")!;
+    const write = createTestTools(store, run.id, workspace).find((tool) => tool.name === "write")!;
     const params = { path: "result.txt", content: "first" };
     const first = await write.execute("stable-call", params, undefined);
     expect(await readFile(path.join(workspace, "result.txt"), "utf8")).toBe("first");
@@ -164,7 +194,7 @@ describe("workspace tools", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "tools");
-    const bash = createTools(store, run.id, workspace).find((tool) => tool.name === "bash")!;
+    const bash = createTestTools(store, run.id, workspace).find((tool) => tool.name === "bash")!;
     await expect(bash.execute("1", { command: "rm -rf ." }, undefined)).rejects.toThrow("blocked");
     store.close();
   });
@@ -175,7 +205,7 @@ describe("workspace tools", () => {
     const session = store.createSession();
     const run = store.createRun(session.id, "phase events");
     const events: string[] = [];
-    const tools = createTools(store, run.id, workspace, (event) => events.push(`${event.type}:${event.data.phase}`));
+    const tools = createTestTools(store, run.id, workspace, (event) => events.push(`${event.type}:${event.data.phase}`));
     const taskRun = tools.find((tool) => tool.name === "task_run")!;
     const write = tools.find((tool) => tool.name === "write")!;
     await taskRun.execute("get", { action: "get" }, undefined);
@@ -198,7 +228,7 @@ describe("workspace tools", () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-"));
     const store = new Store(":memory:");
     const run = store.createRun(store.createSession().id, "schema");
-    const taskRun = createTools(store, run.id, workspace).find((tool) => tool.name === "task_run")!;
+    const taskRun = createTestTools(store, run.id, workspace).find((tool) => tool.name === "task_run")!;
     expect((taskRun.parameters as { type?: string }).type).toBe("object");
     expect(taskRun.parameters).not.toHaveProperty("anyOf");
     await expect(taskRun.execute("missing", { action: "artifact", title: "Result" }, undefined)).rejects.toThrow('requires "id"');
@@ -209,7 +239,7 @@ describe("workspace tools", () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-"));
     const store = new Store(":memory:");
     const run = store.createRun(store.createSession().id, "schema");
-    const taskRun = createTools(store, run.id, workspace).find((tool) => tool.name === "task_run")!;
+    const taskRun = createTestTools(store, run.id, workspace).find((tool) => tool.name === "task_run")!;
     expect(JSON.stringify(taskRun.parameters)).not.toContain("spawn_proposal");
     store.close();
   });

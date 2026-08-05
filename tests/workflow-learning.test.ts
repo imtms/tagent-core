@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { Store } from "../src/store/store.js";
-import { WorkflowService, type WorkflowSpec } from "../src/learning/workflow-service.js";
+import { WorkflowService } from "@tagent/learning";
+import type { WorkflowSpec } from "@tagent/learning/domain";
+import { Store } from "@tagent/persistence-sqlite";
+import { workflowPersistence } from "./support/test-persistence.js";
 
 const stores: Store[] = [];
-const create = () => { const store = new Store(":memory:"); stores.push(store); return { store, workflows: new WorkflowService(store) }; };
-const activate = (workflows: WorkflowService, workflowId: string, revisionId?: string) => { const approval=workflows.requestActivation(workflowId,revisionId,"test");workflows.decideApproval(approval.id,"approved","test");return workflows.executeApproval(approval.id,"test"); };
+const create = () => { const store = new Store(":memory:"); stores.push(store); return { store, workflows: new WorkflowService(workflowPersistence(store)) }; };
+const activate = (store: Store, workflows: WorkflowService, workflowId: string, revisionId?: string) => {
+  const selectedRevisionId = revisionId ?? workflows.getWorkflow(workflowId, true)!.revision!.id;
+  store.db.prepare("UPDATE workflow_definitions SET status='active',active_revision_id=?,updated_at=? WHERE id=?").run(selectedRevisionId, Date.now(), workflowId);
+};
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
 
 const spec = (name = "Safe release workflow"): WorkflowSpec => ({
@@ -32,7 +37,7 @@ describe("controlled workflow learning", () => {
     expect(candidate).toMatchObject({ status: "candidate", revision: { revision: 1, sourceType: "explicit_user", sourceEvidenceIds: ["message:1"], counterexampleIds: [], inputContract: [{ name: "releaseVersion", required: true }], outputContract: [{ name: "releaseArtifact", required: true }] } });
     expect(store.db.prepare("SELECT source_type as sourceType, source_evidence_json as evidenceJson FROM workflow_revisions WHERE id = ?").get(candidate.revision!.id)).toEqual({ sourceType: "explicit_user", evidenceJson: JSON.stringify(["message:1"]) });
     expect(workflows.recall(session.id, "prepare release", run.id, 1).workflows).toHaveLength(0);
-    activate(workflows,candidate.id);
+    activate(store,workflows,candidate.id);
     const recalled = workflows.recall(session.id, "prepare release and verify it", run.id, 1);
     expect(recalled.workflows[0]).toMatchObject({ definition: { id: candidate.id }, revision: { revision: 1 } });
     expect(recalled.promptSection).toContain("Inputs:");
@@ -99,7 +104,11 @@ describe("controlled workflow learning", () => {
 
   it("hard-filters high-risk workflows even when they declare no capability", async () => {
     const { store, workflows } = create(); const session = store.createSession(); const run = store.createRun(session.id, "deploy production");
-    const workflow = workflows.createWorkflow(session.id, { ...spec("High risk release"), riskClass: "high", requiredCapabilities: [] }, "explicit_user", ["message:high"], "active");
+    const highRiskSpec = { ...spec("High risk release"), riskClass: "high" as const, requiredCapabilities: [] };
+    expect(() => workflows.createWorkflow(session.id, highRiskSpec, "explicit_user", ["message:high"], "active" as never))
+      .toThrow(/only create candidate workflows/);
+    const workflow = workflows.createWorkflow(session.id, highRiskSpec, "explicit_user", ["message:high"]);
+    activate(store,workflows, workflow.id);
     expect(workflows.recall(session.id, "prepare release", run.id, 1, ["production_write"]).workflows).toHaveLength(0);
     expect(store.db.prepare("SELECT decision, reasons_json as reasons FROM workflow_selector_receipts WHERE workflow_id=?").get(workflow.id)).toMatchObject({ decision: "excluded", reasons: expect.stringContaining("hard-filtered") });
   });
@@ -136,31 +145,24 @@ describe("controlled workflow learning", () => {
   it("filters non-applicable and capability-gated workflows", async () => {
     const { store, workflows } = create(); const session = store.createSession(); const run = store.createRun(session.id, "release production");
     const gated = workflows.teach(session.id, { ...spec("Production release"), requiredCapabilities: ["production_write"] }, "message:2");
-    activate(workflows,gated.id);
+    activate(store,workflows,gated.id);
     expect(workflows.recall(session.id, "prepare release", run.id, 1).workflows).toHaveLength(0);
     expect(workflows.recall(session.id, "draft announcement only for release", run.id, 1, ["production_write"]).workflows).toHaveLength(0);
     expect(workflows.recall(session.id, "prepare release", run.id, 1, ["production_write"]).workflows[0].definition.id).toBe(gated.id);
   });
 
-  it("deduplicates feedback, suspends harmful workflows, and rolls back revisions", async () => {
+  it("deduplicates harmful feedback and proposes a corrective revision", async () => {
     const { store, workflows } = create(); const session = store.createSession(); const run = store.createRun(session.id, "prepare release");
     const workflow = workflows.teach(session.id, spec(), "message:3");
-    activate(workflows,workflow.id);
+    activate(store,workflows,workflow.id);
     const revision2 = workflows.revise(workflow.id, { steps: [...spec().steps, { stepId: "sign", instruction: "Sign artifact", required: true }] }, "user_correction", ["message:4"], "Add signing");
     expect(store.db.prepare("SELECT source_type as sourceType, source_evidence_json as evidenceJson FROM workflow_revisions WHERE id = ?").get(revision2.id)).toEqual({ sourceType: "user_correction", evidenceJson: JSON.stringify(["message:4"]) });
-    activate(workflows,workflow.id, revision2.id);
+    activate(store,workflows,workflow.id, revision2.id);
     workflows.feedback({ workflowId: workflow.id, revisionId: revision2.id, runId: run.id, attempt: 1, signal: "harmful", idempotencyKey: "feedback:1", note: "Signing is wrong here" });
     workflows.feedback({ workflowId: workflow.id, revisionId: revision2.id, runId: run.id, attempt: 1, signal: "harmful", idempotencyKey: "feedback:1", note: "duplicate" });
-    expect(workflows.getWorkflow(workflow.id)?.status).toBe("suspended");
+    expect(workflows.getWorkflow(workflow.id)?.status).toBe("active");
     expect(store.db.prepare("SELECT COUNT(*) as count FROM workflow_feedback").get()).toEqual({ count: 1 });
     expect(store.db.prepare("SELECT COUNT(*) as count FROM workflow_revision_proposals").get()).toEqual({ count: 1 });
-    const rollbackApproval=workflows.requestActivation(workflow.id,workflow.revision!.id,"test","rollback");workflows.decideApproval(rollbackApproval.id,"approved","test");
-    const rolledBack = workflows.rollback(workflow.id, workflow.revision!.id, rollbackApproval.id);
-    expect(rolledBack).toMatchObject({ status: "active", activeRevisionId: workflow.revision!.id, revision: { revision: 1 } });
-    expect(workflows.forget(workflow.id, "user requested", 60_000)).toBe(true);
-    expect(workflows.getWorkflow(workflow.id)).toBeUndefined();
     expect(store.db.prepare("SELECT COUNT(*) as count FROM workflow_revisions WHERE workflow_id=?").get(workflow.id)).toEqual({ count: 2 });
-    expect(store.db.prepare("SELECT COUNT(*) as count FROM workflow_governance_receipts WHERE workflow_id=? AND action='forget'").get(workflow.id)).toEqual({ count: 1 });
-    expect(workflows.restore(workflow.id)).toMatchObject({ id: workflow.id, status: "active" });
   });
 });

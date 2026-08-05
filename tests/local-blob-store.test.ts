@@ -2,7 +2,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { LocalBlobStore } from "../src/memory/storage/local-blob-store.js";
+import { LocalBlobStore } from "../packages/memory/src/storage/local-blob-store.js";
 
 describe("LocalBlobStore", () => {
   it("treats retrying the same immutable payload as idempotent", async () => {
