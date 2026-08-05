@@ -212,7 +212,7 @@ describe("Memory-owned semantic judge port", () => {
   });
 
   it("has no source dependency from Memory to Learning", () => {
-    const memoryRoot = path.join(process.cwd(), "src", "memory");
+    const memoryRoot = path.join(process.cwd(), "packages", "memory", "src");
     const violations = sourceFiles(memoryRoot).flatMap((filename) => {
       const imported = ts.preProcessFile(readFileSync(filename, "utf8"), true, true).importedFiles;
       return imported

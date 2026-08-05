@@ -70,8 +70,8 @@ describe("Memory package boundary", () => {
   });
 
   it("has no source dependency from Memory to surrounding domains", () => {
-    const srcRoot = path.join(process.cwd(), "src");
-    const memoryRoot = path.join(srcRoot, "memory");
+    const srcRoot = path.join(process.cwd(), "packages");
+    const memoryRoot = path.join(srcRoot, "memory", "src");
     const violations = sourceFiles(memoryRoot).flatMap((filename) => {
       const imported = ts.preProcessFile(readFileSync(filename, "utf8"), true, true).importedFiles;
       return imported.flatMap((entry) => {
