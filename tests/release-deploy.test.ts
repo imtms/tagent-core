@@ -9,6 +9,7 @@ import { createRequire } from "node:module";
 const deployScript = path.resolve("scripts/deploy-release.sh");
 const buildScript = path.resolve("scripts/build-release.sh");
 const manifestScript = path.resolve("scripts/release-manifest.mjs");
+const ciWorkflow = path.resolve(".github/workflows/ci.yml");
 const releaseWorkflow = path.resolve(".github/workflows/release.yml");
 
 async function executable(file: string, content: string) {
@@ -159,6 +160,16 @@ describe("production release deployment", () => {
     expect(source).toContain("--verify-tag");
     expect(source).not.toContain("RELEASE_COMMIT: ${{ github.sha }}");
     await expect(readFile(path.resolve(".github/workflows/production-artifact.yml"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("builds the Memory workspace before standalone PostgreSQL integration gates", async () => {
+    for (const workflow of [ciWorkflow, releaseWorkflow]) {
+      const source = await readFile(workflow, "utf8");
+      const build = source.indexOf("npm run build -w @tagent/memory");
+      const integration = source.indexOf("npx vitest run tests/postgres-memory.test.ts");
+      expect(build, workflow).toBeGreaterThanOrEqual(0);
+      expect(integration, workflow).toBeGreaterThan(build);
+    }
   });
 
   it("binds release provenance to the checked-out Git HEAD", async () => {

@@ -46,6 +46,7 @@ jobs:
           node-version: 24.18.1
           cache: npm
       - run: npm ci
+      - run: npm run build -w @tagent/memory
       - name: Required PostgreSQL 17, pgvector and pg_trgm integration
         env:
           TAGENT_TEST_POSTGRES_URL: postgresql://tagent_test:tagent_test@127.0.0.1:5432/tagent_memory_test
