@@ -11,7 +11,9 @@ export interface CaptureSource { kind: CaptureSourceKind; role: MemorySourceRole
 export type MemoryTrustLevel = "high" | "medium" | "low" | "untrusted";
 export type MemorySourceRole = "user" | "tool" | "task" | "assistant" | "system";
 export type MemoryVerificationState = "explicit" | "verified" | "structured" | "inferred" | "unverified";
-export interface SourceReference { sourceType: "message" | "run" | "transcript" | "manual" | "check" | "artifact" | "operation"; sourceId: string; revision?: string }
+export const MEMORY_SOURCE_TYPES = ["message", "run", "transcript", "manual", "check", "artifact", "operation"] as const;
+export type MemorySourceType = typeof MEMORY_SOURCE_TYPES[number];
+export interface SourceReference { sourceType: MemorySourceType; sourceId: string; revision?: string }
 export interface MemoryProvenance { evidenceClass: MemoryEvidenceClass; trustLevel: MemoryTrustLevel; sourceRole: MemorySourceRole; verificationState: MemoryVerificationState; sourceReliability?: number }
 export interface CanonicalSPO { subject: string; predicate: string; object: string; polarity: "positive" | "negative" | "unknown" }
 export interface MemoryLifecycleState {

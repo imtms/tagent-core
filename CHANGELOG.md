@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-06
+
+### Memory Console reliability
+
+- Fixed Web Console decoding of `/api/v1/admin/memory/jobs` when capture-job provenance uses the valid `check`, `artifact`, or `operation` source types.
+- Replaced the divergent Console source-reference schema with the Admin v1 ABI definition and aligned that definition with the Memory domain's `message`, `run`, `transcript`, `manual`, `check`, `artifact`, and `operation` vocabulary.
+- Preserved historical provenance without deleting records, rewriting source types, or weakening strict response validation.
+
+### ABI contract hardening
+
+- Added domain-to-ABI, capture-job schema, Core Client decoder, and Fastify route regressions covering every Memory source type.
+- Aligned `AdminConfigStatusSchema` and its success envelope with the response served by `/api/v1/admin/config/status`.
+
+### Upgrade notice
+
+- There is no database migration in 0.2.1; the control-plane schema remains 33.
+- Redeploy the 0.2.1 Web Console to resolve the Memory Center parse failure. Upgrade Core and Web together when using the immutable release artifacts so their package manifests and ABI remain aligned.
+
 ## [0.2.0] - 2026-08-05
 
 ### Breaking changes

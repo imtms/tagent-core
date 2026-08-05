@@ -1,13 +1,33 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  ConsoleDecode,
   createCoreClient,
   createReplayAckCoordinator,
   decodeJsonSse,
   type CoreFetch,
 } from "@tagent/core-client";
-import { submissionIdempotencyFixtures, taskRunEventFixture, unknownTaskRunEventFixture } from "@tagent/abi";
+import { MEMORY_SOURCE_TYPES, submissionIdempotencyFixtures, taskRunEventFixture, unknownTaskRunEventFixture } from "@tagent/abi";
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("console v1 response decoders", () => {
+  it("accepts capture jobs carrying every legal Memory provenance source", async () => {
+    const jobs = MEMORY_SOURCE_TYPES.map((sourceType, index) => ({
+      id: `capture-job-${index}`,
+      status: "completed",
+      attempts: 1,
+      proposalCount: 1,
+      persistedCount: 1,
+      createdAt: 1_788_000_000_000 + index,
+      updatedAt: 1_788_000_001_000 + index,
+      request: {
+        sourceRefs: [{ sourceType, sourceId: `${sourceType}:fixture`, revision: "1" }],
+      },
+    }));
+
+    await expect(ConsoleDecode.captureJobs(jobs)).resolves.toEqual(jobs);
+  });
+});
 
 describe("core-client transport", () => {
   it("adds Bearer, request, and idempotency headers without mutating the v1 body", async () => {

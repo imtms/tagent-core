@@ -13,8 +13,12 @@ export const MemoryScopeSchema = Type.Object({
 });
 export type MemoryScope = Static<typeof MemoryScopeSchema>;
 
+export const MEMORY_SOURCE_TYPES = ["message", "run", "transcript", "manual", "check", "artifact", "operation"] as const;
+export const MemorySourceTypeSchema = Type.Union(MEMORY_SOURCE_TYPES.map((sourceType) => Type.Literal(sourceType)));
+export type MemorySourceType = Static<typeof MemorySourceTypeSchema>;
+
 export const MemorySourceReferenceSchema = Type.Object({
-  sourceType: Type.Union([Type.Literal("message"), Type.Literal("task_run"), Type.Literal("transcript"), Type.Literal("manual")]),
+  sourceType: MemorySourceTypeSchema,
   sourceId: IdentifierSchema,
   revision: Type.Optional(Type.String({ minLength: 1 })),
 });

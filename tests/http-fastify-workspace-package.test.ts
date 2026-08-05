@@ -3,6 +3,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
+import { AdminConfigStatusResponseSchema, decodeAbi, MEMORY_SOURCE_TYPES } from "@tagent/abi";
+import { ConsoleDecode } from "@tagent/core-client";
 import { createApp, secureEqual, type ServiceCredential } from "@tagent/http-fastify";
 import * as V1 from "@tagent/http-fastify/v1";
 
@@ -80,7 +82,7 @@ function routeInventory(relativePath: string): string[] {
   return routes;
 }
 
-function testApp() {
+function testApp(overrides: Partial<Parameters<typeof createApp>[0]> = {}) {
   const app = createApp({
     persistence: {
       sessions: {
@@ -106,6 +108,7 @@ function testApp() {
     service: { closeRuntimes: async () => undefined } as never,
     logger: false,
     onClose: async () => undefined,
+    ...overrides,
   });
   apps.push(app);
   return app;
@@ -119,15 +122,15 @@ describe("Fastify HTTP adapter workspace package", () => {
   it("publishes only the compiled root, ports, and v1 package entry points", () => {
     const root = readJson<{ dependencies: Record<string, string>; devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const manifest = readJson<PackageManifest>(`${packageRoot}/package.json`);
-    expect(manifest).toMatchObject({ name: "@tagent/http-fastify", version: "0.2.0", private: true });
+    expect(manifest).toMatchObject({ name: "@tagent/http-fastify", version: "0.2.1", private: true });
     expect(root.devDependencies[manifest.name]).toBe(manifest.version);
     expect(root.dependencies).not.toHaveProperty("fastify");
     expect(Object.keys(manifest.exports).sort()).toEqual([".", "./ports", "./v1"]);
     expect(manifest.dependencies).toEqual({
-      "@tagent/abi": "0.2.0",
-      "@tagent/admission": "0.2.0",
-      "@tagent/execution": "0.2.0",
-      "@tagent/governance": "0.2.0",
+      "@tagent/abi": "0.2.1",
+      "@tagent/admission": "0.2.1",
+      "@tagent/execution": "0.2.1",
+      "@tagent/governance": "0.2.1",
       fastify: "^5.10.0",
     });
     for (const target of Object.values(manifest.exports)) {
@@ -236,6 +239,59 @@ describe("Fastify HTTP adapter workspace package", () => {
         },
       });
     }
+  });
+
+  it("preserves every legal Memory provenance source through the jobs route and Console decoder", async () => {
+    const jobs = MEMORY_SOURCE_TYPES.map((sourceType, index) => ({
+      id: `capture-job-${index}`,
+      status: "completed",
+      attempts: 1,
+      createdAt: 1_788_000_000_000 + index,
+      updatedAt: 1_788_000_001_000 + index,
+      request: { sourceRefs: [{ sourceType, sourceId: `${sourceType}:fixture`, revision: "1" }] },
+    }));
+    const app = testApp({
+      memory: { listCaptureJobs: async () => jobs } as never,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/memory/jobs",
+      payload: { scopes: [{ type: "session", id: "session-fixture" }], limit: 100 },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const envelope = response.json() as { data: unknown; requestId: string };
+    await expect(ConsoleDecode.captureJobs(envelope.data)).resolves.toEqual(jobs);
+  });
+
+  it("serves config status in the published Admin v1 response shape", async () => {
+    const runtimeConfig = {
+      runtime: "in-process",
+      provider: "openai-compatible",
+      api: "openai-responses",
+      baseUrl: "https://example.test/v1",
+      modelId: "model-fixture",
+      credentialConfigured: true,
+      providerTimeoutMs: 15_000,
+      providerMaxRetries: 2,
+      runTimeoutMs: 900_000,
+      maxContinuations: 3,
+      schemaVersion: 33,
+      memoryEnabled: true,
+      memoryBackend: "postgres",
+      memoryColdBackend: "s3",
+      learningEnabled: true,
+      learningAutoExecutionEnabled: false,
+    };
+    const app = testApp({ runtimeConfig });
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/admin/config/status" });
+
+    expect(response.statusCode).toBe(200);
+    expect(decodeAbi(AdminConfigStatusResponseSchema, response.json())).toMatchObject({
+      data: { runTimeoutMs: 900_000 },
+    });
   });
 
   it("exports only current credential helpers and v1 route components", () => {

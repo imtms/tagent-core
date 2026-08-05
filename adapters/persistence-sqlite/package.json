@@ -1,34 +1,57 @@
 {
   "name": "@tagent/persistence-sqlite",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "sideEffects": false,
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./store": { "types": "./dist/store.d.ts", "import": "./dist/store.js" },
-    "./sqlite": { "types": "./dist/sqlite.d.ts", "import": "./dist/sqlite.js" },
-    "./writer": { "types": "./dist/writer.d.ts", "import": "./dist/writer.js" },
-    "./migrations": { "types": "./dist/migrations.d.ts", "import": "./dist/migrations.js" },
-    "./unit-of-work": { "types": "./dist/unit-of-work.d.ts", "import": "./dist/unit-of-work.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./store": {
+      "types": "./dist/store.d.ts",
+      "import": "./dist/store.js"
+    },
+    "./sqlite": {
+      "types": "./dist/sqlite.d.ts",
+      "import": "./dist/sqlite.js"
+    },
+    "./writer": {
+      "types": "./dist/writer.d.ts",
+      "import": "./dist/writer.js"
+    },
+    "./migrations": {
+      "types": "./dist/migrations.d.ts",
+      "import": "./dist/migrations.js"
+    },
+    "./unit-of-work": {
+      "types": "./dist/unit-of-work.d.ts",
+      "import": "./dist/unit-of-work.js"
+    }
   },
   "scripts": {
     "build": "tsc -b",
     "clean": "tsc -b --clean && rm -rf dist"
   },
   "dependencies": {
-    "@tagent/admission": "0.2.0",
-    "@tagent/execution": "0.2.0",
-    "@tagent/governance": "0.2.0",
-    "@tagent/learning": "0.2.0",
-    "@tagent/memory": "0.2.0",
+    "@tagent/admission": "0.2.1",
+    "@tagent/execution": "0.2.1",
+    "@tagent/governance": "0.2.1",
+    "@tagent/learning": "0.2.1",
+    "@tagent/memory": "0.2.1",
     "better-sqlite3": "12.4.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13"
   },
-  "engines": { "node": ">=24.18.1", "npm": ">=12" },
+  "engines": {
+    "node": ">=24.18.1",
+    "npm": ">=12"
+  },
   "license": "MIT"
 }

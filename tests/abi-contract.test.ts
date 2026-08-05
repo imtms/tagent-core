@@ -6,12 +6,17 @@ import * as ChannelV1 from "@tagent/abi/channel/v1";
 import * as InternalV1 from "@tagent/abi/internal/v1";
 import {
   AdminConfigStatusSchema,
+  AdminConfigStatusResponseSchema,
   CommandResponseSchema,
+  ConsoleCaptureJobSchema,
+  ConsoleMemorySourceRefSchema,
   ErrorEnvelopeSchema,
   EventConsumerParamsSchema,
   EventConsumerAckRequestSchema,
   EventConsumerCursorSchema,
   MemoryCaptureRequestSchema,
+  MEMORY_SOURCE_TYPES as ABI_MEMORY_SOURCE_TYPES,
+  MemorySourceReferenceSchema,
   SessionParamsSchema,
   SubmissionLookupParamsSchema,
   SubmissionCreateHeadersSchema,
@@ -37,6 +42,7 @@ import {
   type TaskRunCommand,
   type TaskRunEvent,
 } from "@tagent/abi";
+import { MEMORY_SOURCE_TYPES as DOMAIN_MEMORY_SOURCE_TYPES } from "@tagent/memory";
 
 describe("ABI runtime decoding", () => {
   it("decodes unknown input before a typed consumer can use it", () => {
@@ -53,6 +59,56 @@ describe("ABI runtime decoding", () => {
     expectTypeOf<SubmissionCreateRequest>().toEqualTypeOf<Static<typeof SubmissionCreateRequestSchema>>();
     expectTypeOf<TaskRunCommand>().toEqualTypeOf<Static<typeof TaskRunCommandSchema>>();
     expectTypeOf<TaskRunEvent>().toEqualTypeOf<Static<typeof TaskRunEventSchema>>();
+  });
+
+  it("uses one complete Memory provenance contract across admin and console ABI", () => {
+    expect(ABI_MEMORY_SOURCE_TYPES).toEqual(DOMAIN_MEMORY_SOURCE_TYPES);
+
+    for (const sourceType of ABI_MEMORY_SOURCE_TYPES) {
+      const sourceRef = { sourceType, sourceId: `${sourceType}:fixture`, revision: "1" };
+      expect(decodeAbi(MemorySourceReferenceSchema, sourceRef)).toEqual(sourceRef);
+      expect(decodeAbi(ConsoleMemorySourceRefSchema, sourceRef)).toEqual(sourceRef);
+      expect(decodeAbi(ConsoleCaptureJobSchema, {
+        id: `job-${sourceType}`,
+        status: "completed",
+        attempts: 1,
+        createdAt: 1,
+        updatedAt: 2,
+        request: { sourceRefs: [sourceRef] },
+      })).toMatchObject({ request: { sourceRefs: [sourceRef] } });
+    }
+
+    expect(() => decodeAbi(MemorySourceReferenceSchema, {
+      sourceType: "task_run",
+      sourceId: "legacy-abi-typo",
+    })).toThrow();
+  });
+
+  it("decodes the production admin config status response shape", () => {
+    const status = {
+      runtime: "in-process",
+      provider: "openai-compatible",
+      api: "openai-responses",
+      baseUrl: "https://example.test/v1",
+      modelId: "model-fixture",
+      credentialConfigured: true,
+      providerTimeoutMs: 15_000,
+      providerMaxRetries: 2,
+      runTimeoutMs: 900_000,
+      maxContinuations: 3,
+      schemaVersion: 33,
+      memoryEnabled: true,
+      memoryBackend: "postgres",
+      memoryColdBackend: "s3",
+      learningEnabled: true,
+      learningAutoExecutionEnabled: false,
+    };
+
+    expect(decodeAbi(AdminConfigStatusSchema, status)).toEqual(status);
+    expect(decodeAbi(AdminConfigStatusResponseSchema, {
+      data: status,
+      requestId: "config-status-fixture",
+    })).toMatchObject({ data: { runTimeoutMs: 900_000 } });
   });
 });
 

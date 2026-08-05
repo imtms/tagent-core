@@ -4,7 +4,7 @@
 
 TAgent Core is a durable, self-hosted control plane for a single agent instance. It turns routed user intent into a persistent `TaskRun`, supervises bounded `Attempt`s, owns authoritative state, evidence, approvals, recovery, Memory, and Learning, and produces verifiable delivery results.
 
-Version `0.2.0` reorganizes the system as a two-step npm-workspaces modular monolith. Core is now API-only. The Web Console is an independent application and deployment artifact.
+Version `0.2.0` introduced the two-step npm-workspaces modular monolith. Version `0.2.1` keeps that architecture and fixes Memory provenance decoding in the independent Web Console. Core remains API-only.
 
 ## Supported boundary
 

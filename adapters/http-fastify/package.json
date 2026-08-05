@@ -1,27 +1,41 @@
 {
   "name": "@tagent/http-fastify",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "sideEffects": false,
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./ports": { "types": "./dist/ports.d.ts", "import": "./dist/ports.js" },
-    "./v1": { "types": "./dist/v1.d.ts", "import": "./dist/v1.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./ports": {
+      "types": "./dist/ports.d.ts",
+      "import": "./dist/ports.js"
+    },
+    "./v1": {
+      "types": "./dist/v1.d.ts",
+      "import": "./dist/v1.js"
+    }
   },
   "scripts": {
     "build": "tsc -b",
     "clean": "tsc -b --clean && rm -rf dist"
   },
   "dependencies": {
-    "@tagent/abi": "0.2.0",
-    "@tagent/admission": "0.2.0",
-    "@tagent/execution": "0.2.0",
-    "@tagent/governance": "0.2.0",
+    "@tagent/abi": "0.2.1",
+    "@tagent/admission": "0.2.1",
+    "@tagent/execution": "0.2.1",
+    "@tagent/governance": "0.2.1",
     "fastify": "^5.10.0"
   },
-  "engines": { "node": ">=24.18.1", "npm": ">=12" },
+  "engines": {
+    "node": ">=24.18.1",
+    "npm": ">=12"
+  },
   "license": "MIT"
 }

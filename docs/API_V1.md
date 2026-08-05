@@ -34,6 +34,16 @@ POST /api/v1/task-runs/:taskRunId/event-consumers/:consumerId/ack
 
 Use the exported schemas for the complete route payload inventory. Console projections are richer than channel resources and are not a substitute for the stable channel contract.
 
+### Memory provenance
+
+Memory source references use one Admin v1 ABI vocabulary across the Memory domain and Console projections:
+
+```text
+message  run  transcript  manual  check  artifact  operation
+```
+
+`POST /api/v1/admin/memory/jobs` preserves these source types in `request.sourceRefs`; clients must validate them with `MemorySourceReferenceSchema` (or the Console alias) without rewriting historical provenance.
+
 ## JSON envelopes
 
 Every successful JSON response has this shape:

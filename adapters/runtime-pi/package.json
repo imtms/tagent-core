@@ -1,10 +1,12 @@
 {
   "name": "@tagent/runtime-pi",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "sideEffects": false,
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
@@ -28,7 +30,7 @@
     "@earendil-works/pi-agent-core": "0.83.0",
     "@earendil-works/pi-ai": "0.83.0",
     "@earendil-works/pi-coding-agent": "0.83.0",
-    "@tagent/execution": "0.2.0"
+    "@tagent/execution": "0.2.1"
   },
   "engines": {
     "node": ">=24.18.1",

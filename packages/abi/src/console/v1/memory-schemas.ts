@@ -1,4 +1,8 @@
 import { Type, type Static } from "typebox";
+import {
+  MemorySourceReferenceSchema,
+  type MemorySourceReference,
+} from "../../admin/v1/memory-schemas.js";
 import { TimestampMillisecondsSchema } from "../../shared/primitives.js";
 
 /** @deprecated Use MemoryKind from admin/v1. */
@@ -25,12 +29,10 @@ export const ConsoleMemoryScopeSchema = Type.Object({
 /** @deprecated Use MemoryScope from admin/v1. */
 export type ConsoleMemoryScope = Static<typeof ConsoleMemoryScopeSchema>;
 
-export const ConsoleMemorySourceRefSchema = Type.Object({
-  sourceType: Type.Union([Type.Literal("message"), Type.Literal("run"), Type.Literal("transcript"), Type.Literal("manual")]),
-  sourceId: Type.String(),
-  revision: Type.Optional(Type.String()),
-});
-export type ConsoleMemorySourceRef = Static<typeof ConsoleMemorySourceRefSchema>;
+/** @deprecated Use MemorySourceReference from admin/v1. */
+export const ConsoleMemorySourceRefSchema = MemorySourceReferenceSchema;
+/** @deprecated Use MemorySourceReference from admin/v1. */
+export type ConsoleMemorySourceRef = MemorySourceReference;
 
 export const ConsoleMemoryRecordSchema = Type.Object({
   id: Type.String(),
