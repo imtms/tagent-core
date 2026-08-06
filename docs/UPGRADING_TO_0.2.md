@@ -1,6 +1,6 @@
 # Upgrading to 0.2.x
 
-0.2.0 introduced the breaking architecture, API, deployment, and persistence boundary. The current 0.2.2 release retains that boundary and advances SQLite to schema 34. Upgrade Core before Gateway and Web. Do not perform a rolling multi-writer upgrade.
+0.2.0 introduced the breaking architecture, API, deployment, and persistence boundary. The current 0.2.3 release retains that boundary and SQLite schema 34 while updating the independent Web Console design system. Upgrade Core before Gateway and Web. Do not perform a rolling multi-writer upgrade.
 
 ## Breaking changes
 

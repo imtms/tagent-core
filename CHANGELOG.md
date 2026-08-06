@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-06
+
+### Web Console design system
+
+- Reworked the independent Web Console around semantic color, surface, border, radius, shadow, spacing, and motion tokens shared by the conversation workbench, Audit panel, Memory Center, and Learning Center.
+- Replaced the broad green-tinted surfaces with warm neutral backgrounds; green is now reserved for primary actions, selected states, and compact operational signals.
+- Added persistent light and dark themes with system-preference fallback, early theme initialization, synchronized browser chrome color, and complete reduced-motion behavior.
+- Refined the three-column desktop workbench, collapsible rails, message hierarchy, execution trace, Supervisor composer, empty states, dialogs, and governed Memory/Learning surfaces without changing Console ABI or runtime behavior.
+
+### Responsive and accessible operation
+
+- Added a two-row mobile header that keeps Workspace model and reasoning controls readable at narrow widths.
+- Added a compact mobile Workspace tools menu so theme, Memory, Learning, and Learning-execution controls remain available without crowding navigation.
+- Reflowed the Memory toolbar and full-screen centers for narrow devices, preserved drawer-based Workspace/Audit navigation, and verified the interface at 390-by-844 pixels.
+- Added explicit accessible names for icon actions, model/reasoning controls, center refresh/close actions, and the Learning execution switch, with consistent `focus-visible`, hover, active, and disabled states.
+- Added regression coverage for theme persistence, semantic tokens, responsive tools, reduced motion, and protected Console entry points.
+
+### Compatibility
+
+- There is no API, ABI, configuration, or database migration in 0.2.3; SQLite remains schema 34.
+- Core and Web Console keep the 0.2 v1 production boundary. Deploy the matching 0.2.3 artifacts together when using the immutable release bundle.
+
 ## [0.2.2] - 2026-08-06
 
 ### Web workbench

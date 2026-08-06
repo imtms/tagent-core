@@ -2,6 +2,24 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 describe("Web workbench state model", () => {
+  it("uses a semantic, themeable and responsive console design system", async () => {
+    const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    const entry = await readFile(new URL("../apps/web-console/src/main.tsx", import.meta.url), "utf8");
+    const design = await readFile(new URL("../apps/web-console/src/design-system.css", import.meta.url), "utf8");
+    expect(entry).toContain('import "./design-system.css"');
+    expect(app).toContain('type Theme = "light" | "dark"');
+    expect(app).toContain('document.documentElement.dataset.theme = theme');
+    expect(app).toContain('globalThis.localStorage?.setItem("tagent.theme", theme)');
+    expect(app).toContain('aria-label="Open workspace tools"');
+    expect(app).toContain('aria-label="Open memory center"');
+    expect(app).toContain('aria-label="Open learning center"');
+    expect(design).toContain(':root[data-theme="dark"]');
+    expect(design).toContain('--background:');
+    expect(design).toContain('--surface-raised:');
+    expect(design).toContain('.mobile-tools-menu');
+    expect(design).toContain('@media (prefers-reduced-motion: reduce)');
+  });
+
   it("renders the persisted user-input form and submits it to resume", async () => {
     const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
     const api = await readFile(new URL("../apps/web-console/src/api.ts", import.meta.url), "utf8");

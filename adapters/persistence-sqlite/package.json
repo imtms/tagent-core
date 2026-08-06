@@ -1,6 +1,6 @@
 {
   "name": "@tagent/persistence-sqlite",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "sideEffects": false,
@@ -39,11 +39,11 @@
     "clean": "tsc -b --clean && rm -rf dist"
   },
   "dependencies": {
-    "@tagent/admission": "0.2.2",
-    "@tagent/execution": "0.2.2",
-    "@tagent/governance": "0.2.2",
-    "@tagent/learning": "0.2.2",
-    "@tagent/memory": "0.2.2",
+    "@tagent/admission": "0.2.3",
+    "@tagent/execution": "0.2.3",
+    "@tagent/governance": "0.2.3",
+    "@tagent/learning": "0.2.3",
+    "@tagent/memory": "0.2.3",
     "better-sqlite3": "12.4.1"
   },
   "devDependencies": {
