@@ -282,7 +282,7 @@ describe("Fastify HTTP adapter workspace package", () => {
       providerMaxRetries: 2,
       runTimeoutMs: 900_000,
       maxContinuations: 3,
-      schemaVersion: 34,
+      schemaVersion: 35,
       memoryEnabled: true,
       memoryBackend: "postgres",
       memoryColdBackend: "s3",

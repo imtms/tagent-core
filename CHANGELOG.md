@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-07
+
+### Lightweight Workspace Goals
+
+- Added durable Workspace Goals with immutable definition and plan revisions, canonical content hashes, human decisions, partial plan-item approval, linked TaskRuns and evidence-backed completion criteria.
+- Added a lazily loaded Goals panel for creating, revising and approving Goal definitions and plans, selecting the approved plan slice, inspecting progress and linked Runs, pausing/resuming/cancelling, and explicitly closing a verified Goal.
+- Kept TaskRun as the only execution runtime: Goal reads and next-action projection do not call an LLM, Goal approval does not start work, automatic successors and automatic Goal completion remain disabled, and ordinary TaskRuns do not query Goal state.
+- Added scoped Console v1 Goal routes and runtime-validated ABI schemas. The Goal surface is an operator Console contract rather than a new Gateway/channel contract.
+
+### Reliable workspace execution
+
+- Added snapshot/content-hash-bound edits and atomic multi-file patches with preflight validation, commit-time stale checks, rollback on normal commit failure, durable operation identity and check invalidation.
+- Added durable Artifact spill for large tool output with bounded head/tail previews, SHA-256 and byte metadata, explicit source-truncation reporting, and configurable storage limits.
+- Added Core-owned, hash-tracked project context discovery for `AGENTS.md` and allowlisted rule files while preserving the rule that project content cannot grant capability or override approval/completion authority.
+
+### Runtime efficiency
+
+- Added batched TaskRun mutations, per-provider-request projection of historical tool results, compact historical TaskRun receipts, Bash timeout classification, identical failed-command fencing, composite-command guidance and evidence-aware continuation stall detection.
+- Preserved existing governance and token behavior: this release does not add a cumulative Run token cap or hard model/tool-call budget.
+
+### Persistence and upgrade
+
+- Advanced SQLite from schema 34 to schema 35 with additive Workspace Goal tables. Existing TaskRuns are not backfilled into Goals.
+- Stop Core and back up SQLite together with WAL/SHM before upgrading. A binary that only understands schema 34 must not open the migrated database.
+- Deploy matching Core and Web Console 0.3.0 artifacts together. The Web Console remains independently hosted and Core remains API-only.
+
 ## [0.2.3] - 2026-08-06
 
 ### Web Console design system

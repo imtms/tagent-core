@@ -35,7 +35,7 @@ Before an Attempt starts, Core persists an immutable Context Manifest describing
 
 The main runtime accepts an ordered comma-separated `TAGENT_MODEL` chain. The Web Console may select the primary model only from that configured allowlist and may set `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` reasoning; new Workspaces default to the configured primary model and `high`. Core snapshots both values onto the TaskRun before launching its first Attempt, so recovery and continuations retain the same execution profile. Non-reasoning models are forced to `off`. A rate-limit response may switch to another configured model without restarting the Attempt. Router and Supervisor use separately bounded model, context, timeout, and output settings.
 
-The runtime records provider-reported input, output, cache, total token, cost, and latency data for observability. Token totals do not override wall-clock, continuation, approval, or evidence policy.
+The runtime records provider-reported input, output, cache, total token, cost, and latency data for observability. Token totals do not override wall-clock, continuation, approval, or evidence policy. Core does not install a cumulative Run token cap or hard model/tool-call budget; `TAGENT_MAX_TOKENS` remains a per-provider-response output cap.
 
 ## Timeouts and progress
 
@@ -49,7 +49,9 @@ Steer and follow-up controls enter a bounded durable inbox. They are delivered t
 
 ## Tools
 
-`@tagent/workspace-local` provides contained `ls`, `read`, `write`, `edit`, and `bash` behavior plus TaskRun control integration. Path containment and command policy are guardrails, not an OS sandbox. Operation receipts and approval policy remain Core-owned even when Pi initiated the tool call.
+`@tagent/workspace-local` provides contained `ls`, `read`, `write`, snapshot-bound `edit`, atomic multi-file `patch`, and `bash` behavior plus TaskRun control integration. Large output may spill to a durable Artifact with a bounded preview. Failed or timed-out identical Bash commands are fenced from blind re-execution, and composite commands receive split-stage guidance. Path containment and command policy are guardrails, not an OS sandbox. Operation receipts and approval policy remain Core-owned even when Pi initiated the tool call.
+
+See [EXECUTION_EFFICIENCY.md](EXECUTION_EFFICIENCY.md) for snapshot, Artifact, project-context and context-projection details.
 
 ## Web separation
 

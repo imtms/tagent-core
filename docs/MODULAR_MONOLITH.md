@@ -12,13 +12,13 @@ The system deploys as one Core process but is developed as an acyclic npm-worksp
 | --- | --- | --- |
 | Contract | `@tagent/abi` | v1 schemas, codecs, shared primitives, fixtures |
 | Client | `@tagent/core-client` | typed HTTP, SSE, acknowledgements, transport errors |
-| Domain | `@tagent/governance` | capability, approval, policy, canonical authority |
+| Domain | `@tagent/governance` | capability, approval, policy, Workspace Goal, canonical authority |
 | Domain | `@tagent/execution` | `TaskRun`, `Attempt`, settlement, continuation, recovery |
 | Domain | `@tagent/admission` | sessions, submissions, inbox admission and scheduling |
 | Domain | `@tagent/memory` | recall, capture, lifecycle, Hot/Warm/Cold storage ports |
 | Domain | `@tagent/learning` | observations, projections, workflow evolution and authority |
 | Adapter | `@tagent/http-fastify` | `/api/v1`, auth, CORS, media protocols |
-| Adapter | `@tagent/persistence-sqlite` | schema 34, repositories, migrations, UOW, writer fence |
+| Adapter | `@tagent/persistence-sqlite` | schema 35, repositories, migrations, UOW, writer fence |
 | Adapter | `@tagent/runtime-pi` | Pi `AgentSession` integration and provider normalization |
 | Adapter | `@tagent/workspace-local` | contained filesystem and shell tools |
 | App | `@tagent/core-service` | configuration, composition, startup, recovery, shutdown |

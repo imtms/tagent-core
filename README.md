@@ -4,7 +4,7 @@
 
 TAgent Core is a durable, self-hosted control plane for a single agent instance. It turns routed user intent into a persistent `TaskRun`, supervises bounded `Attempt`s, owns authoritative state, evidence, approvals, recovery, Memory, and Learning, and produces verifiable delivery results.
 
-Version `0.2.0` introduced the two-step npm-workspaces modular monolith, `0.2.1` fixed Memory provenance decoding, `0.2.2` added durable Workspace execution profiles, and `0.2.3` delivers the unified responsive Web Console design system. Core remains API-only.
+Version `0.3.0` adds lightweight Workspace Goals, snapshot-aware workspace mutation, durable large-output Artifacts, Core-owned project context and runtime-efficiency improvements on the established 0.2 modular boundary. Core remains API-only and TaskRun remains the only execution runtime.
 
 ## Supported boundary
 
@@ -27,13 +27,13 @@ The repository contains 13 workspaces in one acyclic dependency graph:
 | --- | --- | --- |
 | Contract | `@tagent/abi` | Runtime-validated public, channel, console, admin, and internal v1 schemas |
 | Client | `@tagent/core-client` | Typed Core HTTP/SSE client |
-| Domain | `@tagent/governance` | Approval, capability, and policy authority |
+| Domain | `@tagent/governance` | Approval, capability, policy, and lightweight Workspace Goal authority |
 | Domain | `@tagent/execution` | `TaskRun`, `Attempt`, continuation, settlement, and recovery coordination |
 | Domain | `@tagent/admission` | Session input admission and inbox scheduling |
 | Domain | `@tagent/memory` | Optional Hot/Warm/Cold long-term Memory |
 | Domain | `@tagent/learning` | Optional governed Learning projections and workflows |
 | Adapter | `@tagent/http-fastify` | API-only Fastify adapter for `/api/v1` |
-| Adapter | `@tagent/persistence-sqlite` | Schema 34, repositories, migrations, writer fencing, and Unit of Work |
+| Adapter | `@tagent/persistence-sqlite` | Schema 35, repositories, migrations, writer fencing, and Unit of Work |
 | Adapter | `@tagent/runtime-pi` | In-process Pi runtime integration |
 | Adapter | `@tagent/workspace-local` | Workspace-contained tools and path enforcement |
 | Application | `@tagent/core-service` | Core composition root and lifecycle |
@@ -92,9 +92,9 @@ Core does not validate browser OIDC/JWT tokens. In production, a Gateway validat
 
 ## Persistence and recovery
 
-Core owns a schema 34 SQLite database. Startup acquires an OS instance lock, applies migrations, claims a writer lease and fence, installs connection-level mutation guards, performs guarded recovery, starts services and workers, then reports the writer ready.
+Core owns a schema 35 SQLite database. Startup acquires an OS instance lock, applies migrations, claims a writer lease and fence, installs connection-level mutation guards, performs guarded recovery, starts services and workers, then reports the writer ready.
 
-Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Back up the SQLite database together with its WAL/SHM files before an upgrade. Older binaries cannot open schema 34; rollback requires the matching pre-upgrade database backup. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md) and [docs/UPGRADING_TO_0.2.md](docs/UPGRADING_TO_0.2.md).
+Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Back up the SQLite database together with its WAL/SHM files before an upgrade. Binaries that only understand schema 34 cannot open schema 35; rollback requires the matching pre-upgrade database backup. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md) and [docs/UPGRADING_TO_0.2.md](docs/UPGRADING_TO_0.2.md).
 
 ## Optional Memory and Learning
 
@@ -130,6 +130,8 @@ See [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
 - [Documentation index](docs/README.md)
 - [Architecture](docs/MODULAR_MONOLITH.md)
 - [API v1](docs/API_V1.md)
+- [Workspace Goals](docs/WORKSPACE_GOALS.md)
+- [Execution reliability and efficiency](docs/EXECUTION_EFFICIENCY.md)
 - [Deployment and Gateway](docs/DEPLOYMENT_AND_GATEWAY.md)
 - [Upgrade from 0.1.x](docs/UPGRADING_TO_0.2.md)
 - [Contributing](CONTRIBUTING.md)

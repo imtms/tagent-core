@@ -1,6 +1,6 @@
 # TAgent Core documentation
 
-This directory contains the maintained contracts for TAgent Core 0.2.0. Git history and release tags retain superseded design notes and point-release evidence; files not listed here are not current contracts.
+This directory contains the maintained contracts for TAgent Core 0.3.0. Git history and release tags retain superseded design notes and point-release evidence; files not listed here are not current contracts.
 
 ## Start here
 
@@ -13,6 +13,7 @@ This directory contains the maintained contracts for TAgent Core 0.2.0. Git hist
 
 - [Modular monolith](MODULAR_MONOLITH.md) — workspace map, dependency direction, composition roots, and Core/Web separation.
 - [Naming conventions](NAMING_CONVENTIONS.md) — canonical domain and wire terminology.
+- [Workspace Goals](WORKSPACE_GOALS.md) — lightweight long-term outcome, plan approval, TaskRun/evidence links, and explicit closure.
 
 ## ABI and HTTP
 
@@ -21,8 +22,9 @@ This directory contains the maintained contracts for TAgent Core 0.2.0. Git hist
 
 ## Persistence and execution
 
-- [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md) — SQLite ownership, schema 34, writer fencing, Unit of Work, lifecycle, and restart recovery.
+- [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md) — SQLite ownership, schema 35, writer fencing, Unit of Work, lifecycle, and restart recovery.
 - [Runtime](RUNTIME.md) — in-process Pi boundary, `TaskRun`/`Attempt` execution, timeouts, and tool authority.
+- [Execution reliability and efficiency](EXECUTION_EFFICIENCY.md) — snapshot edits, Artifact spill, project context, batching, context projection, Bash repeat protection, and continuation stalls.
 - [Supervisor](SUPERVISOR.md) — completion gates, evidence, approvals, candidate delivery, and continuations.
 
 ## Security, Web, and Gateway

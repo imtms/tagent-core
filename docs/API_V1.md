@@ -34,6 +34,23 @@ POST /api/v1/task-runs/:taskRunId/event-consumers/:consumerId/ack
 
 Use the exported schemas for the complete route payload inventory. Console projections are richer than channel resources and are not a substitute for the stable channel contract.
 
+### Workspace Goal Console routes
+
+The first-party Web Console manages lightweight Workspace Goals through the operator surface:
+
+```text
+GET  /api/v1/console/workspaces/:workspaceId/goals
+POST /api/v1/console/workspaces/:workspaceId/goals
+GET  /api/v1/console/workspace-goals/:goalId
+POST /api/v1/console/workspace-goals/:goalId/definition-revisions
+POST /api/v1/console/workspace-goals/:goalId/plans
+POST /api/v1/console/workspace-goals/:goalId/decisions
+POST /api/v1/console/workspace-goals/:goalId/run-links
+POST /api/v1/console/workspace-goals/:goalId/evidence
+```
+
+These routes use `sessions:read` or `sessions:write`, the standard v1 envelopes and the Console Goal ABI schemas. They do not start TaskRuns or provide an automatic Goal controller. See [WORKSPACE_GOALS.md](WORKSPACE_GOALS.md).
+
 ### Memory provenance
 
 Memory source references use one Admin v1 ABI vocabulary across the Memory domain and Console projections:

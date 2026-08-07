@@ -57,7 +57,7 @@ NODE
 Both runs must exit `0` and return exactly:
 
 ```json
-{"schemaVersion":34,"objects":["approval_receipts","attempts","idx_operations_attempt_created","integration_outbox","learning_projection_authority_state"]}
+{"schemaVersion":35,"objects":["approval_receipts","attempts","idx_operations_attempt_created","integration_outbox","learning_projection_authority_state"]}
 ```
 
 The second open is the idempotence proof. A different version or object inventory blocks deployment.
@@ -116,7 +116,7 @@ These are embedded in the probe output under `thresholds`:
 | `writerLeaseFresh` | `true` | Not applicable | `false` |
 | `migrationOpenIssues` | `0` | Not applicable | Missing table or any open issue |
 | `authorityReady` | `true` | Transition state `switching` or `rollback` | Missing authority state |
-| `schemaVersion` | `34` | Not applicable | Missing or not `34` |
+| `schemaVersion` | `35` | Not applicable | Missing or not `35` |
 
 Consumer lag semantics are strict: any value greater than zero makes the Gateway not ready immediately. Warning and critical distinguish alert urgency; they never permit traffic.
 
@@ -197,7 +197,7 @@ Rollback steps:
 4. Activate the prior compatible Gateway source through the production learning authority rollback API.
 5. Reclaim the Core event consumer, receiving a new generation.
 6. Resume after the durable ACK watermark; replay persisted-but-unacked events and persist the new-generation exact receipt before ACK.
-7. Keep schema version `34`. Do not restore an older database over it.
+7. Keep schema version `35`. Do not restore an older database over it.
 8. Run the release-local readiness probe again and reopen traffic only after exit `0`.
 
-If the prior Gateway source cannot open schema v34 or honor the v1 receipt/ACK contract, keep traffic stopped and deploy a forward-compatible Gateway build. Do not perform a destructive schema downgrade.
+If the prior Gateway source cannot open schema v35 or honor the v1 receipt/ACK contract, keep traffic stopped and deploy a forward-compatible Gateway build. Do not perform a destructive schema downgrade.
