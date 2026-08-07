@@ -64,12 +64,16 @@ import {
   assertWorkspaceGoalsV35Schema,
   migrateWorkspaceGoalsV35,
 } from "./migrations/v35-workspace-goals.js";
+import {
+  assertWorkspaceGoalReliabilityV36Schema,
+  migrateWorkspaceGoalReliabilityV36,
+} from "./migrations/v36-workspace-goal-reliability.js";
 import { mapLegacyRunApprovalOperation } from "./sqlite/canonical-approval-mapper.js";
 import { appendProjectionPair, finalizeProjectionCheckpoint } from "./sqlite/canonical-integration-event.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 35;
+const SCHEMA_VERSION = 36;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
 export interface StoreOptions {
@@ -1045,11 +1049,19 @@ export class Store {
     assertWorkspaceExecutionProfileV34Schema(this.db);
 
     const workspaceGoalsMigration = this.db.transaction(() => {
-      migrateWorkspaceGoalsV35(this.db, previousVersion === 35 ? 35 : 34);
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+      const hasWorkspaceGoals = Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workspace_goals'").get());
+      migrateWorkspaceGoalsV35(this.db, hasWorkspaceGoals ? 35 : 34);
+      this.db.prepare(`UPDATE schema_meta SET version=35,updated_at=? WHERE id=1`).run(now());
     });
     workspaceGoalsMigration();
     assertWorkspaceGoalsV35Schema(this.db);
+
+    const workspaceGoalReliabilityMigration = this.db.transaction(() => {
+      migrateWorkspaceGoalReliabilityV36(this.db, previousVersion === 36 ? 36 : 35);
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+    });
+    workspaceGoalReliabilityMigration();
+    assertWorkspaceGoalReliabilityV36Schema(this.db);
   }
 
   private attemptId(runId: string, ordinal: number) {

@@ -1,5 +1,5 @@
 import type { ContextManifest, ExecutionSessionRef } from "../domain/task-run.js";
-import type { ApprovalRepository, SupervisorDecisionJournal } from "@tagent/governance/ports";
+import type { ApprovalRepository, SupervisorDecisionJournal, WorkspaceGoalRepository } from "@tagent/governance/ports";
 import type { AttemptAuthorityRepository, AttemptRepository, FencedRuntimeMutationPort } from "./attempt-repository.js";
 import type { CheckpointRepository } from "./checkpoint-repository.js";
 import type { ContinuationQueue } from "./continuation-queue.js";
@@ -56,4 +56,5 @@ export interface ExecutionPersistencePort {
   readonly approvals: ExecutionApprovalPort;
   readonly contextManifests: ExecutionContextManifestPort;
   readonly supervisorDecisions: ExecutionSupervisorDecisionPort;
+  readonly workspaceGoals: Pick<WorkspaceGoalRepository, "authorizeRunMutation">;
 }

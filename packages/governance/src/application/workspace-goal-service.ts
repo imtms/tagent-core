@@ -44,6 +44,7 @@ export class WorkspaceGoalService {
     return this.goals.decideGoal({
       ...input,
       goalId: required(input.goalId, "goalId", 300),
+      requestId: input.requestId?.trim() || undefined,
       targetRevisionId: required(input.targetRevisionId, "targetRevisionId", 300),
       targetHash: required(input.targetHash, "targetHash", 128),
       actorId: required(input.actorId, "actorId", 300),
@@ -68,13 +69,14 @@ export class WorkspaceGoalService {
     return this.goals.linkEvidence({
       ...input,
       goalId: required(input.goalId, "goalId", 300),
+      requestId: input.requestId?.trim() || undefined,
       runId: required(input.runId, "runId", 300),
       criterionKey: required(input.criterionKey, "criterionKey", 200),
       goalRevision: positiveInteger(input.goalRevision, "goalRevision"),
       checkKey: input.checkKey?.trim() || null,
       artifactId: input.artifactId?.trim() || null,
       operationId: input.operationId?.trim() || null,
-      sourceDigest: required(input.sourceDigest, "sourceDigest", 256),
+      sourceDigest: input.sourceDigest?.trim() || undefined,
       status: input.status ?? "valid",
     });
   }

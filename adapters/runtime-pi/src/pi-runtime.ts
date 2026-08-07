@@ -31,7 +31,11 @@ function projectRuntimeHistory(messages: AgentMessage[], toolResultLimit: number
   return messages.map((message, index) => {
     if (index >= latestUserIndex || !("content" in message) || typeof message.content === "string") return message;
     let changed = false;
-    const content = message.content.map((part) => {
+    const content = message.content.flatMap((part) => {
+      if (part.type === "thinking") {
+        changed = true;
+        return [];
+      }
       if (part.type === "toolCall") {
         const serialized = JSON.stringify(part.arguments);
         const limit = part.name === "task_run" ? taskRunReceiptLimit : toolResultLimit;
@@ -341,9 +345,9 @@ export class PiRuntime implements AttemptRuntimePort {
 
   private queueDelta(delta: string) {
     this.pendingDelta += delta;
-    if (this.pendingDelta.length >= 256) return this.flushDelta();
+    if (this.pendingDelta.length >= 1024) return this.flushDelta();
     if (this.deltaTimer) return;
-    this.deltaTimer = setTimeout(() => this.flushDelta(), 50);
+    this.deltaTimer = setTimeout(() => this.flushDelta(), 150);
     this.deltaTimer.unref?.();
   }
 
@@ -358,9 +362,9 @@ export class PiRuntime implements AttemptRuntimePort {
 
   private queueThinkingDelta(delta: string) {
     this.pendingThinkingDelta += delta;
-    if (this.pendingThinkingDelta.length >= 256) return this.flushThinkingDelta();
+    if (this.pendingThinkingDelta.length >= 1024) return this.flushThinkingDelta();
     if (this.thinkingDeltaTimer) return;
-    this.thinkingDeltaTimer = setTimeout(() => this.flushThinkingDelta(), 50);
+    this.thinkingDeltaTimer = setTimeout(() => this.flushThinkingDelta(), 150);
     this.thinkingDeltaTimer.unref?.();
   }
 

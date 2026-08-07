@@ -17,13 +17,6 @@ export function assertWorkspaceGoalsV35Schema(db: Database.Database): void {
 export function migrateWorkspaceGoalsV35(db: Database.Database, previousVersion: number): void {
   if (previousVersion !== 34 && previousVersion !== 35) throw new Error(`Workspace Goal v35 migration requires schema version 34 or 35, found ${previousVersion}`);
   if (previousVersion === 35) return assertWorkspaceGoalsV35Schema(db);
-  const existing = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((row) => row.name));
-  for (const table of [...REQUIRED_TABLES].reverse()) {
-    if (!existing.has(table)) continue;
-    const count = (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
-    if (count > 0) throw new Error(`Workspace Goal v35 migration found non-empty pre-existing ${table}`);
-    db.exec(`DROP TABLE ${table}`);
-  }
   db.exec(`
     CREATE TABLE workspace_goals (
       id TEXT PRIMARY KEY,

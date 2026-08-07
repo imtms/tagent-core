@@ -31,7 +31,7 @@ export const ConsoleWorkspaceGoalRevisionSchema = Type.Object({
   contentHash: Type.String(), sourceArtifactId: Type.Union([Type.String(), Type.Null()]), createdBy: Type.String(), createdAt: TimestampMillisecondsSchema,
 });
 export const ConsoleWorkspaceGoalDecisionSchema = Type.Object({
-  id: Type.String(), goalId: Type.String(), targetRevisionId: Type.String(), targetHash: Type.String(),
+  id: Type.String(), requestId: Type.String(), payloadHash: Type.String(), goalId: Type.String(), targetRevisionId: Type.String(), targetHash: Type.String(),
   kind: Type.Union([Type.Literal("approve_goal"), Type.Literal("approve_plan"), Type.Literal("request_change"), Type.Literal("pause"), Type.Literal("resume"), Type.Literal("close"), Type.Literal("cancel")]),
   approvedItemIds: Type.Array(Type.String()), reason: Type.String(), actorId: Type.String(), createdAt: TimestampMillisecondsSchema,
 });

@@ -78,7 +78,7 @@ They are Console projections, not a Gateway/channel contract. They require the e
 
 ## Persistence and upgrade
 
-SQLite schema 35 adds:
+SQLite schema 36 adds:
 
 ```text
 workspace_goals
@@ -101,3 +101,11 @@ This release does not add:
 - an independent Goal recovery engine;
 - generic RBAC or a new capability platform;
 - automatic Goal completion.
+
+## Reliability boundaries added in schema 36
+
+- Goal decisions use a caller request ID plus a canonical payload hash. Repeating the same request is idempotent; reusing it with a different approved slice is rejected.
+- Completed and cancelled Goals are terminal and cannot be resumed, paused, re-approved, revised, or given new evidence.
+- Evidence digests are computed by Core from the referenced Check, Artifact, or Operation. Goal reads re-evaluate freshness, so stale Checks or changed receipts remove completion credit and return `ready_to_close` Goals to `active`.
+- A TaskRun cannot be attached to a Goal after a mutating operation has started. Once attached, write/edit/patch/bash are checked both before the runtime tool call and again inside the local Workspace tool adapter against the active approved Plan slice.
+- Ordinary TaskRuns without a Goal link retain their existing behavior and do not pay for Goal lookups beyond one indexed guard query at mutation time.

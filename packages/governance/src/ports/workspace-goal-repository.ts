@@ -20,4 +20,5 @@ export interface WorkspaceGoalRepository {
   decideGoal(input: WorkspaceGoalDecisionInput): WorkspaceGoalDecision;
   linkRun(input: LinkWorkspaceGoalRunInput): WorkspaceGoal;
   linkEvidence(input: LinkWorkspaceGoalEvidenceInput): WorkspaceGoalEvidenceLink;
+  authorizeRunMutation(runId: string): { allowed: boolean; reason: string };
 }

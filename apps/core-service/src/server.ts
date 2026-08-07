@@ -131,6 +131,7 @@ function assembleAgentServicePersistence(
     workflowGovernance: persistence.workflowGovernance,
     learning: persistence.learning,
     workflow: persistence.workflow,
+    workspaceGoals: persistence.workspaceGoals,
   });
 }
 

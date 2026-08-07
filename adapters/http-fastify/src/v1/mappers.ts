@@ -178,12 +178,12 @@ export function mapTranscriptItem(item: TranscriptViewItem): TranscriptItem {
     kind: item.kind,
     toolCallId: item.toolCallId,
     toolName: item.toolName,
-    arguments: item.arguments,
-    result: item.result,
+    arguments: publicToolArguments(item.toolName, item.arguments),
+    result: publicToolResult(item.toolName, item.result),
     isError: item.isError,
     status: item.status,
   };
-  if (item.kind === "thinking") return { ...base, kind: item.kind, text: item.text, redacted: item.redacted };
+  if (item.kind === "thinking") return { ...base, kind: item.kind, text: "Model reasoning is hidden in the public transcript.", redacted: true };
   return { ...base, kind: item.kind, text: item.text };
 }
 
@@ -216,4 +216,25 @@ export function mapCommandReceipt(command: TaskRunCommand, taskRunId: string, re
     createdAt: iso(operation?.createdAt ?? timestamp),
     updatedAt: iso(operation?.updatedAt ?? timestamp),
   };
+}
+
+
+const SENSITIVE_KEY = /(?:api[_-]?key|token|secret|password|authorization|cookie|credential)/i;
+
+function publicToolArguments(toolName: string, value: unknown): unknown {
+  if (toolName === "bash") return { summary: "Bash arguments hidden from the public transcript." };
+  return redactPublicValue(value, 0);
+}
+
+function redactPublicValue(value: unknown, depth: number): unknown {
+  if (depth > 4) return "[nested value omitted]";
+  if (Array.isArray(value)) return value.slice(0, 50).map((item) => redactPublicValue(item, depth + 1));
+  if (!value || typeof value !== "object") return typeof value === "string" && value.length > 2_000 ? `${value.slice(0, 2_000)}\n[truncated]` : value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, SENSITIVE_KEY.test(key) ? "[redacted]" : redactPublicValue(item, depth + 1)]));
+}
+
+function publicToolResult(toolName: string, result: string): string {
+  if (!result) return "";
+  if (toolName === "bash") return result.length <= 4_000 ? result : `${result.slice(0, 2_000)}\n[public transcript truncated; inspect the authorized Artifact for full output]\n${result.slice(-2_000)}`;
+  return result.length <= 8_000 ? result : `${result.slice(0, 4_000)}\n[public transcript truncated]\n${result.slice(-4_000)}`;
 }

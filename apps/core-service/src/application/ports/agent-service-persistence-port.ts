@@ -18,6 +18,7 @@ import type {
   SupervisorDecisionJournal,
   SupervisorPersistencePort,
   WorkflowGovernancePersistencePort,
+  WorkspaceGoalRepository,
 } from "@tagent/governance/ports";
 import type {
   LearningServicePersistencePort,
@@ -46,4 +47,5 @@ export interface AgentServicePersistencePort {
   readonly workflowGovernance: WorkflowGovernancePersistencePort;
   readonly learning: LearningServicePersistencePort;
   readonly workflow: WorkflowServicePersistencePort;
+  readonly workspaceGoals: Pick<WorkspaceGoalRepository, "authorizeRunMutation">;
 }

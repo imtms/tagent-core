@@ -21,10 +21,10 @@ function definition() {
 }
 
 describe("lightweight Workspace Goals", () => {
-  it("migrates schema v34 to v35 additively and leaves ordinary TaskRuns independent", () => {
+  it("migrates schema v34 to v36 additively and leaves ordinary TaskRuns independent", () => {
     const store = new Store(":memory:");
     try {
-      expect(store.getSchemaVersion()).toBe(35);
+      expect(store.getSchemaVersion()).toBe(36);
       const workspace = store.createSession("Goal workspace");
       const run = store.createRun(workspace.id, "ordinary task");
       expect(store.getRun(run.id)).toMatchObject({ goal: "ordinary task", contract: null });
@@ -112,4 +112,64 @@ describe("lightweight Workspace Goals", () => {
       expect(goals.get(draft.id)?.status).toBe("completed");
     } finally { store.close(); }
   });
+
+  it("prevents terminal revival and detects decision idempotency conflicts", () => {
+    const store = new Store(":memory:");
+    try {
+      const workspace = store.createSession("Goal transitions");
+      const goals = new WorkspaceGoalService(persistence(store).workspaceGoals);
+      const goal = goals.create({ workspaceId: workspace.id, definition: definition(), createdBy: "test" });
+      goals.decide({ goalId: goal.id, requestId: "approve-goal", targetRevisionId: goal.definition!.id, targetHash: goal.definition!.contentHash, kind: "approve_goal", actorId: "user" });
+      const plan = goals.addPlan(goal.id, { summary: "Plan", items: [{ id: "a", title: "A", outcome: "A", verification: "A" }, { id: "b", title: "B", outcome: "B", verification: "B" }] }, null, "test");
+      goals.decide({ goalId: goal.id, requestId: "approve-plan", targetRevisionId: plan.id, targetHash: plan.contentHash, kind: "approve_plan", approvedItemIds: ["a"], actorId: "user" });
+      expect(() => goals.decide({ goalId: goal.id, requestId: "approve-plan", targetRevisionId: plan.id, targetHash: plan.contentHash, kind: "approve_plan", approvedItemIds: ["b"], actorId: "user" })).toThrow("idempotency conflict");
+      goals.decide({ goalId: goal.id, requestId: "cancel", targetRevisionId: goal.definition!.id, targetHash: goal.definition!.contentHash, kind: "cancel", actorId: "user" });
+      expect(() => goals.decide({ goalId: goal.id, requestId: "resume", targetRevisionId: goal.definition!.id, targetHash: goal.definition!.contentHash, kind: "resume", actorId: "user" })).toThrow("terminal");
+    } finally { store.close(); }
+  });
+
+  it("reprojects stale evidence and clears terminal current runs", () => {
+    const store = new Store(":memory:");
+    try {
+      const workspace = store.createSession("Goal evidence");
+      const goals = new WorkspaceGoalService(persistence(store).workspaceGoals);
+      const goal = goals.create({ workspaceId: workspace.id, definition: { ...definition(), criteria: [{ key: "stored", title: "Stored", required: true }] }, createdBy: "test" });
+      goals.decide({ goalId: goal.id, requestId: "approve", targetRevisionId: goal.definition!.id, targetHash: goal.definition!.contentHash, kind: "approve_goal", actorId: "user" });
+      const plan = goals.addPlan(goal.id, { summary: "Plan", items: [{ id: "store", title: "Store", outcome: "Stored", verification: "check" }] }, null, "test");
+      goals.decide({ goalId: goal.id, requestId: "plan", targetRevisionId: plan.id, targetHash: plan.contentHash, kind: "approve_plan", approvedItemIds: ["store"], actorId: "user" });
+      const run = store.createRun(workspace.id, "bounded implementation");
+      goals.linkRun({ goalId: goal.id, runId: run.id, goalRevision: 1, planRevisionId: plan.id, approvedItemIds: ["store"], criterionKeys: ["stored"] });
+      store.upsertCheck(run.id, { key: "stored", title: "stored", status: "passed", required: true, command: "test", evidence: "stored", stale: false });
+      const link = goals.linkEvidence({ goalId: goal.id, requestId: "evidence", goalRevision: 1, criterionKey: "stored", runId: run.id, checkKey: "stored" });
+      expect(link.sourceDigest).toMatch(/^sha256:/);
+      expect(goals.get(goal.id)).toMatchObject({ status: "ready_to_close", verifiedCriteria: 1 });
+      store.markChecksStale(run.id);
+      expect(goals.get(goal.id)).toMatchObject({ status: "active", verifiedCriteria: 0 });
+      store.db.prepare("UPDATE runs SET status='completed',phase='done',completed_at=? WHERE id=?").run(Date.now(), run.id);
+      expect(goals.get(goal.id)?.currentRunId).toBeNull();
+    } finally { store.close(); }
+  });
+
+  it("enforces the approved Goal Plan slice at both mutation guard boundaries", () => {
+    const store = new Store(":memory:");
+    try {
+      const workspace = store.createSession("Goal mutation guard");
+      const adapter = persistence(store);
+      const goals = new WorkspaceGoalService(adapter.workspaceGoals);
+      const goal = goals.create({ workspaceId: workspace.id, definition: definition(), createdBy: "test" });
+      goals.decide({ goalId: goal.id, requestId: "approve", targetRevisionId: goal.definition!.id, targetHash: goal.definition!.contentHash, kind: "approve_goal", actorId: "user" });
+      const plan = goals.addPlan(goal.id, { summary: "Plan", items: [{ id: "write", title: "Write", outcome: "Written", verification: "check" }] }, null, "test");
+      goals.decide({ goalId: goal.id, requestId: "plan", targetRevisionId: plan.id, targetHash: plan.contentHash, kind: "approve_plan", approvedItemIds: ["write"], actorId: "user" });
+      const run = store.createRun(workspace.id, "bounded implementation");
+      expect(adapter.workspaceGoals.authorizeRunMutation(run.id).allowed).toBe(true);
+      const alreadyMutated = store.createRun(workspace.id, "already mutated");
+      store.claimOperation("write-before-link", alreadyMutated.id, alreadyMutated.attempt, "tool.write", { path: "x" });
+      expect(() => goals.linkRun({ goalId: goal.id, runId: alreadyMutated.id, goalRevision: 1, planRevisionId: plan.id, approvedItemIds: ["write"] })).toThrow("after mutation has started");
+      goals.linkRun({ goalId: goal.id, runId: run.id, goalRevision: 1, planRevisionId: plan.id, approvedItemIds: ["write"] });
+      expect(adapter.workspaceGoals.authorizeRunMutation(run.id)).toEqual({ allowed: true, reason: "Goal Plan slice is approved" });
+      goals.addPlan(goal.id, { summary: "Changed", items: [{ id: "other", title: "Other", outcome: "Other", verification: "check" }] }, null, "test");
+      expect(adapter.workspaceGoals.authorizeRunMutation(run.id)).toMatchObject({ allowed: false });
+    } finally { store.close(); }
+  });
+
 });

@@ -127,6 +127,10 @@ async function executeMutation(
 }
 
 export function createTools(capabilities: ToolCapabilityApplicationPort, workspace: string): AgentTool[] {
+  const requireWorkspaceMutationAuthorization = () => {
+    const authorization = capabilities.authorizeWorkspaceMutation();
+    if (!authorization.allowed) throw new Error(`Workspace Goal mutation guard: ${authorization.reason}`);
+  };
   const { runId } = capabilities;
   const listTool: AgentTool<typeof ListSchema, Record<string, unknown>> = {
     name: "ls", label: "List directory", description: "List entries in a workspace directory.", parameters: ListSchema,
@@ -157,6 +161,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
   const writeTool: AgentTool<typeof WriteSchema, Record<string, unknown>> = {
     name: "write", label: "Write file", description: "Create or overwrite a UTF-8 file inside the workspace.", parameters: WriteSchema, executionMode: "sequential",
     async execute(id, params: Static<typeof WriteSchema>) {
+      requireWorkspaceMutationAuthorization();
       return executeMutation(capabilities, id, "tool.write", params, async () => {
         const { path: filename } = await writeWorkspaceFile(workspace, params.path, params.content);
         return textResult(`Wrote ${Buffer.byteLength(params.content)} bytes to ${params.path}`, { path: filename, bytes: Buffer.byteLength(params.content) });
@@ -167,6 +172,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
   const editTool: AgentTool<typeof EditSchema, Record<string, unknown>> = {
     name: "edit", label: "Edit file", description: "Apply a snapshot-bound exact edit. Use snapshotId/contentHash returned by read; stale snapshots are rejected.", parameters: EditSchema, executionMode: "sequential",
     async execute(id, params: Static<typeof EditSchema>) {
+      requireWorkspaceMutationAuthorization();
       if (!capabilities.workspaceEdit) throw new Error("Workspace edit port is unavailable");
       const payload = { patchId: operationId(runId, capabilities.getRun()?.attempt ?? 0, id), files: [{ path: params.path, snapshotId: params.snapshotId, contentHash: params.contentHash, hunks: [{ oldText: params.oldText, newText: params.newText }] }] };
       return executeMutation(capabilities, id, "tool.edit", payload, async () => {
@@ -186,6 +192,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
   const patchTool: AgentTool<typeof PatchSchema, Record<string, unknown>> = {
     name: "patch", label: "Patch files", description: "Atomically apply a snapshot-bound multi-file patch after preflighting every file and hunk.", parameters: PatchSchema, executionMode: "sequential",
     async execute(id, params: Static<typeof PatchSchema>) {
+      requireWorkspaceMutationAuthorization();
       if (!capabilities.workspaceEdit) throw new Error("Workspace edit port is unavailable");
       const payload = { patchId: params.patchId ?? operationId(runId, capabilities.getRun()?.attempt ?? 0, id), files: params.files };
       return executeMutation(capabilities, id, "tool.patch", payload, async () => {
@@ -205,6 +212,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
   const bashTool: AgentTool<typeof BashSchema, Record<string, unknown>> = {
     name: "bash", label: "Run command", description: "Run a non-interactive shell command in the workspace. Destructive commands are blocked.", parameters: BashSchema, executionMode: "sequential",
     async execute(id, params: Static<typeof BashSchema>, signal, onUpdate) {
+      requireWorkspaceMutationAuthorization();
       return executeMutation(capabilities, id, "tool.bash", params, async () => {
         if (/\b(rm\s+-rf|mkfs|shutdown|reboot|poweroff|git\s+reset\s+--hard|git\s+clean\s+-[a-z]*f)\b/i.test(params.command)) throw new Error("Command blocked by the minimal safety policy");
         const chainedStages = (params.command.match(/(?:&&|;|\|\||\n)/g) ?? []).length + 1;

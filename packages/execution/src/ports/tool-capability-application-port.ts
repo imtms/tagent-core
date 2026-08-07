@@ -15,6 +15,7 @@ export interface ToolCapabilityApplicationPort {
   readonly artifactSink?: ArtifactSinkPort;
   readonly workspaceEdit?: WorkspaceEditPort;
   getRun(): TaskRun | undefined;
+  authorizeWorkspaceMutation(): { allowed: boolean; reason: string };
   advanceRunPhase(phase: "implement"): boolean;
   setRunPhase(phase: "discover" | "plan" | "implement" | "verify" | "review"): boolean;
   claimOperation(id: string, operationType: string, payload: unknown): {

@@ -145,6 +145,7 @@ export class LegacyStoreAdapter {
       decideGoal: mutate(sqliteWorkspaceGoals.decideGoal.bind(sqliteWorkspaceGoals)),
       linkRun: mutate(sqliteWorkspaceGoals.linkRun.bind(sqliteWorkspaceGoals)),
       linkEvidence: mutate(sqliteWorkspaceGoals.linkEvidence.bind(sqliteWorkspaceGoals)),
+      authorizeRunMutation: query(sqliteWorkspaceGoals.authorizeRunMutation.bind(sqliteWorkspaceGoals)),
     });
 
     this.learningIntegration = Object.freeze({

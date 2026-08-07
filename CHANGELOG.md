@@ -25,7 +25,8 @@
 ### Persistence and upgrade
 
 - Advanced SQLite from schema 34 to schema 35 with additive Workspace Goal tables. Existing TaskRuns are not backfilled into Goals.
-- Stop Core and back up SQLite together with WAL/SHM before upgrading. A binary that only understands schema 34 must not open the migrated database.
+- Advanced SQLite from schema 35 to schema 36 for Goal decision/evidence idempotency, dynamic evidence freshness, and mutation authorization.
+- Stop Core and back up SQLite together with WAL/SHM before upgrading. A binary that only understands schema 35 must not open the migrated database.
 - Deploy matching Core and Web Console 0.3.0 artifacts together. The Web Console remains independently hosted and Core remains API-only.
 
 ## [0.2.3] - 2026-08-06

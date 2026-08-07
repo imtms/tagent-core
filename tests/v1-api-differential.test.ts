@@ -175,6 +175,9 @@ describe("v1 API contracts", () => {
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
     const claim = await app.inject({ method: "POST", url: `/api/v1/task-runs/${run.id}/event-consumers/gateway/claim` });
     const cursor = decodeAbi(EventConsumerClaimResponseSchema, claim.json()).data.cursor;
+    const skipped = await app.inject({ method: "GET", url: `/api/v1/task-runs/${run.id}/events?consumerId=gateway&generation=${cursor.generation}&after=1` });
+    expect(skipped.statusCode).toBe(409);
+    expect(decodeAbi(ErrorEnvelopeSchema, skipped.json()).error.code).toBe("event_consumer.cursor_mismatch");
     const controller = new AbortController();
     const replay = await fetch(`${address}/api/v1/task-runs/${run.id}/events?consumerId=gateway&generation=${cursor.generation}&after=0`, { signal: controller.signal });
     try {

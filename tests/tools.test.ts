@@ -25,6 +25,7 @@ function createTestTools(
     artifactSink: createWorkspaceArtifactSink(workspace),
     workspaceEdit: createWorkspaceEditPort(workspace),
     getRun: () => store.getRun(runId),
+    authorizeWorkspaceMutation: () => ({ allowed: true, reason: "ordinary TaskRun" }),
     advanceRunPhase: (phase) => store.advanceRunPhase(runId, phase),
     setRunPhase: (phase) => store.setRunPhase(runId, phase),
     claimOperation: (id, operationType, payload) =>

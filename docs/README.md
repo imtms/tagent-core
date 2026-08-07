@@ -22,7 +22,7 @@ This directory contains the maintained contracts for TAgent Core 0.3.0. Git hist
 
 ## Persistence and execution
 
-- [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md) — SQLite ownership, schema 35, writer fencing, Unit of Work, lifecycle, and restart recovery.
+- [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md) — SQLite ownership, schema 36, writer fencing, Unit of Work, lifecycle, and restart recovery.
 - [Runtime](RUNTIME.md) — in-process Pi boundary, `TaskRun`/`Attempt` execution, timeouts, and tool authority.
 - [Execution reliability and efficiency](EXECUTION_EFFICIENCY.md) — snapshot edits, Artifact spill, project context, batching, context projection, Bash repeat protection, and continuation stalls.
 - [Supervisor](SUPERVISOR.md) — completion gates, evidence, approvals, candidate delivery, and continuations.

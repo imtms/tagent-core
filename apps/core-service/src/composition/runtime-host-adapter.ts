@@ -16,7 +16,7 @@ import { createTools } from "@tagent/workspace-local/tools";
 export interface RuntimeHostOptions {
   persistence: Pick<
     AgentServicePersistencePort,
-    "attempts" | "runtime" | "runtimeMutations" | "taskRuns"
+    "attempts" | "runtime" | "runtimeMutations" | "taskRuns" | "workspaceGoals"
   >;
   token: AttemptExecutionToken;
   workspace: string;
@@ -81,6 +81,7 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     artifactSink: options.artifactSink,
     workspaceEdit: options.workspaceEdit,
     getRun: currentRun,
+    authorizeWorkspaceMutation: () => persistence.workspaceGoals.authorizeRunMutation(token.runId),
     advanceRunPhase: (phase) => persistence.runtimeMutations.advanceRunPhase(mutationContext, phase),
     setRunPhase: (phase) => persistence.runtimeMutations.setRunPhase(mutationContext, phase),
     claimOperation: (id, operationType, payload) => persistence.runtimeMutations.claimOperation(mutationContext, id, operationType, payload),
@@ -138,8 +139,11 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     isRunning: () => currentRun()?.status === "running",
     isWaitingForInput: () => Boolean(waitingRun()),
     beforeToolCall(input) {
-      if (!currentRun()) return { blocked: true, reason: "Attempt is no longer current" };
+        const run = currentRun();
+      if (!run) return { blocked: true, reason: "Attempt is no longer current" };
       if (["write", "edit", "patch", "bash"].includes(input.toolName)) {
+        const goalGuard = persistence.workspaceGoals.authorizeRunMutation(run.id);
+        if (!goalGuard.allowed) return { blocked: true, reason: `Workspace Goal mutation guard: ${goalGuard.reason}` };
         persistence.runtimeMutations.advanceRunPhase(mutationContext, "implement");
       }
       const attempt = persistence.runtimeMutations.recordToolAttempt(

@@ -70,6 +70,16 @@ describe("ContextAssembler", () => {
     expect(result.stats.keptTurns).toBe(1);
     expect(result.stats.estimatedMessageTokens).toBeGreaterThan(1_000);
   });
+  it("removes historical thinking while preserving the latest active turn", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "old", timestamp: 1 }, assistant("old answer", [{ type: "thinking", thinking: "private old reasoning" }, { type: "text", text: "old answer" }]),
+      { role: "user", content: "latest", timestamp: 2 }, assistant("latest answer", [{ type: "thinking", thinking: "current reasoning" }, { type: "text", text: "latest answer" }]),
+    ];
+    const result = new ContextAssembler({ contextWindow: 50_000, maxOutputTokens: 1_000, maxTurns: 10 }).assemble("transcript", messages, "system", "prompt");
+    expect((result.messages[1] as Extract<AgentMessage, { role: "assistant" }>).content.some((part) => part.type === "thinking")).toBe(false);
+    expect((result.messages[3] as Extract<AgentMessage, { role: "assistant" }>).content.some((part) => part.type === "thinking")).toBe(true);
+  });
+
 });
 
 describe("historical tool-result projection", () => {

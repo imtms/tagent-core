@@ -845,7 +845,7 @@ describe("Gateway production readiness", () => {
     }
   });
 
-  it("opens a real v30 SQLite fixture through Store v35 and rolls authority back with replay", () => {
+  it("opens a real v30 SQLite fixture through Store v36 and rolls authority back with replay", () => {
     const directory = temporaryDirectory("tagent-gateway-migration-");
     const databasePath = path.join(directory, "core.sqlite");
     createV30DatabaseFixture(databasePath);
@@ -853,7 +853,7 @@ describe("Gateway production readiness", () => {
     const firstOpen = new Store(databasePath);
     const firstInventory = schemaInventory(firstOpen);
     expect(firstOpen.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-      .toEqual({ version: 35 });
+      .toEqual({ version: 36 });
     expect(firstInventory.map((entry) => [entry.type, entry.name])).toEqual([
       ["table", "approval_receipts"],
       ["table", "attempts"],
@@ -869,7 +869,7 @@ describe("Gateway production readiness", () => {
     try {
       expect(schemaInventory(store)).toEqual(firstInventory);
       expect(store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-        .toEqual({ version: 35 });
+        .toEqual({ version: 36 });
 
       const writer = CoreWriterLease.claim(store.db, {
         ownerId: "gateway-authority-test",
@@ -982,7 +982,7 @@ describe("Gateway production readiness", () => {
         legacyLastAcked: 2,
       });
       expect(store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-        .toEqual({ version: 35 });
+        .toEqual({ version: 36 });
       writer.release();
     } finally {
       store.close();
@@ -1116,7 +1116,7 @@ describe("Gateway production readiness", () => {
     );
     expect(secondSchemaOpen.status, secondSchemaOpen.stderr).toBe(0);
     const schemaEvidence = {
-      schemaVersion: 35,
+      schemaVersion: 36,
       objects: [
         "approval_receipts",
         "attempts",
@@ -1175,7 +1175,7 @@ describe("Gateway production readiness", () => {
         thresholds: ready.thresholds,
       }).toEqual({
         probeVersion: 1,
-        schemaVersion: 35,
+        schemaVersion: 36,
         migrationOpenIssues: 0,
         writerReady: true,
         writerFence: readinessLease.authority.fence,
@@ -1223,7 +1223,7 @@ describe("Gateway production readiness", () => {
         severity: rejected.severity,
         reasons: rejected.reasons,
       }).toEqual({
-        schemaVersion: 35,
+        schemaVersion: 36,
         writerReady: false,
         writerLeaseFresh: false,
         consumerLag: 0,

@@ -44,6 +44,8 @@ export interface WorkspaceGoalRevision {
 
 export interface WorkspaceGoalDecision {
   id: string;
+  requestId: string;
+  payloadHash: string;
   goalId: string;
   targetRevisionId: string;
   targetHash: string;
@@ -130,6 +132,7 @@ export interface CreateWorkspaceGoalInput {
 
 export interface WorkspaceGoalDecisionInput {
   goalId: string;
+  requestId?: string;
   targetRevisionId: string;
   targetHash: string;
   kind: WorkspaceGoalDecisionKind;
@@ -149,12 +152,13 @@ export interface LinkWorkspaceGoalRunInput {
 
 export interface LinkWorkspaceGoalEvidenceInput {
   goalId: string;
+  requestId?: string;
   goalRevision: number;
   criterionKey: string;
   runId: string;
   checkKey?: string | null;
   artifactId?: string | null;
   operationId?: string | null;
-  sourceDigest: string;
+  sourceDigest?: string;
   status?: WorkspaceGoalEvidenceStatus;
 }

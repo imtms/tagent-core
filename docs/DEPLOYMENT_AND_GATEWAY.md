@@ -63,7 +63,7 @@ Use Core-before-Gateway order:
 3. back up SQLite with WAL/SHM, optional PostgreSQL/Cold state, current artifact, config, and watermarks;
 4. verify the Core archive and checksum;
 5. switch to the new Core artifact and start it;
-6. allow migration to schema 35 and resolve no issue by bypassing `migration_issues`;
+6. allow migration to schema 36 and resolve no issue by bypassing `migration_issues`;
 7. require `GET /api/v1/health` to report `data.ok=true` and `data.writer.ready=true`;
 8. start one Gateway consumer, claim a new event-consumer generation, replay, persist, then ACK;
 9. run the readiness probe and require zero lag and no terminal unacknowledged events;
@@ -85,9 +85,9 @@ The script's service rollback changes the binary pointer only. It does not downg
 
 ## Backup and rollback
 
-Code rollback within schema 35 requires a binary that understands schema 35 and the v1 contracts. Rollback to an older incompatible release requires stopping all writers and restoring the matching pre-upgrade SQLite/WAL/SHM backup plus the matching Memory state.
+Code rollback within schema 36 requires a binary that understands schema 36 and the v1 contracts. Rollback to an older incompatible release requires stopping all writers and restoring the matching pre-upgrade SQLite/WAL/SHM backup plus the matching Memory state.
 
-Never run a schema-34-only or otherwise incompatible binary against schema 35 and never overwrite a live schema 35 database with partial old files. Preserve the last successful readiness snapshot and consumer/learning watermarks before changing Gateway ownership.
+Never run a schema-35-only or otherwise incompatible binary against schema 36 and never overwrite a live schema 36 database with partial old files. Preserve the last successful readiness snapshot and consumer/learning watermarks before changing Gateway ownership.
 
 ## Web deployment
 

@@ -303,7 +303,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     supervisorTimeoutMs: positiveInteger(env.TAGENT_SUPERVISOR_TIMEOUT_MS, 15_000, "TAGENT_SUPERVISOR_TIMEOUT_MS"),
     runTimeoutMs: positiveInteger(env.TAGENT_RUN_TIMEOUT_MS, 120_000, "TAGENT_RUN_TIMEOUT_MS"),
     runHardTimeoutMs: positiveInteger(env.TAGENT_RUN_HARD_TIMEOUT_MS, 86_400_000, "TAGENT_RUN_HARD_TIMEOUT_MS"),
-    maxContinuations: nonNegativeInteger(env.TAGENT_MAX_CONTINUATIONS, 128, "TAGENT_MAX_CONTINUATIONS"),
+    maxContinuations: nonNegativeInteger(env.TAGENT_MAX_CONTINUATIONS, 4, "TAGENT_MAX_CONTINUATIONS"),
     maxContextTurns: positiveInteger(env.TAGENT_MAX_CONTEXT_TURNS, 20, "TAGENT_MAX_CONTEXT_TURNS"),
     historicalToolResultChars: positiveInteger(env.TAGENT_HISTORICAL_TOOL_RESULT_CHARS, 4_000, "TAGENT_HISTORICAL_TOOL_RESULT_CHARS"),
     historicalTaskRunReceiptChars: positiveInteger(env.TAGENT_HISTORICAL_TASK_RUN_RECEIPT_CHARS, 600, "TAGENT_HISTORICAL_TASK_RUN_RECEIPT_CHARS"),

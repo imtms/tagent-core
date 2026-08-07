@@ -5,5 +5,6 @@ export default defineConfig({
     root: ".",
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    setupFiles: ["./tests/support/clean-test-env.ts"],
   },
 });

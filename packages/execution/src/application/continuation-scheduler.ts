@@ -48,7 +48,7 @@ export class ContinuationScheduler {
       this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "continuation.stalled", { reason: "repeated_gate_state", signature: currentSignature }));
       return;
     }
-    const maxContinuations = this.state.runtimeDefaults.maxContinuations ?? 128;
+    const maxContinuations = this.state.runtimeDefaults.maxContinuations ?? 4;
     if (run.continuations.length >= maxContinuations) {
       const message = `Run remains blocked after ${maxContinuations} automatic continuation${maxContinuations === 1 ? "" : "s"}: ${run.blockedReason}`;
       this.state.persistence.sessions.appendMessage(run.sessionId, "assistant", message);

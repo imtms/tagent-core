@@ -11,7 +11,7 @@ describe("Core service configuration", () => {
       providerMaxRetries: 1,
       runTimeoutMs: 120_000,
       runHardTimeoutMs: 86_400_000,
-      maxContinuations: 128,
+      maxContinuations: 4,
       maxContextTurns: 20,
       historicalToolResultChars: 4_000,
       historicalTaskRunReceiptChars: 600,

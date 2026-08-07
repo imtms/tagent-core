@@ -140,7 +140,11 @@ function estimateTurnTokens(turn: Turn) {
 function projectHistoricalToolContent(message: AgentMessage, limit: number, taskRunReceiptLimit: number): AgentMessage {
   if (!("content" in message) || typeof message.content === "string") return message;
   let changed = false;
-  const content = message.content.map((part) => {
+  const content = message.content.flatMap((part) => {
+    if (part.type === "thinking") {
+      changed = true;
+      return [];
+    }
     if (part.type === "toolCall") {
       const argumentsJson = JSON.stringify(part.arguments);
       const argumentLimit = part.name === "task_run" ? Math.min(limit, taskRunReceiptLimit) : limit;

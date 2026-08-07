@@ -49,7 +49,15 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
     if (!service.getRun(taskRunId)) throw missing("task_run");
     const cursor = eventConsumers.getEventConsumer(taskRunId, query.consumerId);
     if (!cursor || cursor.generation !== query.generation) throw conflict("event_consumer.stale_generation", "Consumer generation is stale");
-    const replayAfter = Math.max(query.after ?? 0, cursor.ackedSeq);
+    if (query.after !== undefined && query.after > cursor.ackedSeq) {
+      throw conflict(
+        "event_consumer.cursor_mismatch",
+        `Requested replay position ${query.after} is ahead of durable acknowledgement ${cursor.ackedSeq}`,
+      );
+    }
+    // The durable acknowledgement is authoritative. An older local cursor may
+    // replay duplicates, but a client may never skip unacknowledged events.
+    const replayAfter = cursor.ackedSeq;
     reply.hijack();
     const response = reply.raw;
     response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no", "X-Request-Id": requestIdOf(request) });
@@ -70,7 +78,9 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
           return false;
         }
         const mapped = encodeAbi(TaskRunEventSchema, mapTaskRunEvent(event));
-        return response.write(`id: ${mapped.eventId}\ndata: ${JSON.stringify(mapped)}\n\n`);
+        const accepted = response.write(`id: ${mapped.eventId}\ndata: ${JSON.stringify(mapped)}\n\n`);
+        if (!accepted) closeStream();
+        return accepted;
       } catch {
         closeStream();
         return false;
@@ -100,7 +110,7 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
       return;
     }
     if (closed) return;
-    const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), 15_000);
+    const heartbeat = setInterval(() => { if (!response.write(": heartbeat\n\n")) closeStream(); }, 15_000);
     request.raw.on("close", () => {
       clearInterval(heartbeat);
       closeStream();

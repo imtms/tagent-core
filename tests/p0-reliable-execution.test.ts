@@ -12,6 +12,7 @@ function tools(store: Store, runId: string, workspace: string) {
     artifactSink: createWorkspaceArtifactSink(workspace),
     workspaceEdit: createWorkspaceEditPort(workspace),
     getRun: () => store.getRun(runId),
+    authorizeWorkspaceMutation: () => ({ allowed: true, reason: "ordinary TaskRun" }),
     advanceRunPhase: (phase) => store.advanceRunPhase(runId, phase),
     setRunPhase: (phase) => store.setRunPhase(runId, phase),
     claimOperation: (id, operationType, payload) => store.claimOperation(id, runId, store.getRun(runId)!.attempt, operationType, payload),
@@ -91,7 +92,7 @@ describe("P0 reliable execution primitives", () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "cap");
     const capabilities: ToolCapabilityApplicationPort = {
       runId: run.id, artifactSink: createWorkspaceArtifactSink(workspace, 64_000), workspaceEdit: createWorkspaceEditPort(workspace),
-      getRun: () => store.getRun(run.id), advanceRunPhase: (phase) => store.advanceRunPhase(run.id, phase), setRunPhase: (phase) => store.setRunPhase(run.id, phase),
+      getRun: () => store.getRun(run.id), authorizeWorkspaceMutation: () => ({ allowed: true, reason: "ordinary TaskRun" }), advanceRunPhase: (phase) => store.advanceRunPhase(run.id, phase), setRunPhase: (phase) => store.setRunPhase(run.id, phase),
       claimOperation: (id, operationType, payload) => store.claimOperation(id, run.id, store.getRun(run.id)!.attempt, operationType, payload), updateOperation: (id, update) => store.updateOperation(id, update), listOperations: () => store.listOperations(run.id),
       upsertPlanItem: (item) => store.upsertPlanItem(run.id, item), markChecksStale: () => store.markChecksStale(run.id), upsertCheck: (check) => store.upsertCheck(run.id, check), addArtifact: (artifact) => store.addArtifact(run.id, artifact), requestUserInput: (_id, prompt, fields) => store.requestUserInput(run.id, prompt, fields), publish: (type, data) => store.appendEvent(run.id, type, data),
     };
