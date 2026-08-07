@@ -5,7 +5,7 @@ import path from "node:path";
 import { Store } from "@tagent/persistence-sqlite/store";
 import type { RunEvent, RunId } from "@tagent/execution/domain";
 import type { ToolCapabilityApplicationPort } from "@tagent/execution/ports";
-import { createTools, listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "@tagent/workspace-local";
+import { createTools, createWorkspaceArtifactSink, createWorkspaceEditPort, listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "@tagent/workspace-local";
 
 async function waitForFile(filename: string) {
   for (let index = 0; index < 1_000; index += 1) {
@@ -22,6 +22,8 @@ function createTestTools(
 ) {
   const capabilities: ToolCapabilityApplicationPort = {
     runId,
+    artifactSink: createWorkspaceArtifactSink(workspace),
+    workspaceEdit: createWorkspaceEditPort(workspace),
     getRun: () => store.getRun(runId),
     advanceRunPhase: (phase) => store.advanceRunPhase(runId, phase),
     setRunPhase: (phase) => store.setRunPhase(runId, phase),
@@ -84,7 +86,7 @@ describe("workspace tools", () => {
     await expect(list.execute("list-link", { path: "dir-link" }, undefined)).rejects.toThrow(/Symbolic/);
     await expect(write.execute("write-file-link", { path: "file-link", content: "changed" }, undefined)).rejects.toThrow(/Symbolic/);
     await expect(write.execute("write-dir-link", { path: "dir-link/new.txt", content: "changed" }, undefined)).rejects.toThrow(/Symbolic/);
-    await expect(edit.execute("edit-link", { path: "file-link", oldText: "outside", newText: "inside" }, undefined)).rejects.toThrow(/Symbolic/);
+    await expect(edit.execute("edit-link", { path: "file-link", snapshotId: "sha256:x", contentHash: "x", oldText: "outside", newText: "inside" }, undefined)).rejects.toThrow(/Symbolic/);
     expect(await readFile(path.join(outside, "secret.txt"), "utf8")).toBe("outside-secret");
     store.close();
   });
@@ -150,8 +152,11 @@ describe("workspace tools", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "append");
-    const edit = createTestTools(store, run.id, workspace).find((tool) => tool.name === "edit")!;
-    const result = await edit.execute("append-call", { path: "notes.txt", oldText: "", newText: "three\n" }, undefined);
+    const created = createTestTools(store, run.id, workspace);
+    const edit = created.find((tool) => tool.name === "edit")!;
+    const read = created.find((tool) => tool.name === "read")!;
+    const snapshot = (await read.execute("append-read", { path: "notes.txt" }, undefined)).details as { snapshotId: string; contentHash: string };
+    const result = await edit.execute("append-call", { path: "notes.txt", ...snapshot, oldText: "", newText: "three\n" }, undefined);
     expect(await readFile(path.join(workspace, "notes.txt"), "utf8")).toBe("one\ntwo\nthree\n");
     expect(result.details).toMatchObject({ mode: "append", firstChangedLine: 3 });
     store.close();
@@ -164,7 +169,7 @@ describe("workspace tools", () => {
     const run = store.createRun(session.id, "large output");
     const bash = createTestTools(store, run.id, workspace).find((tool) => tool.name === "bash")!;
     const result = await bash.execute("large-output", { command: "yes x | head -c 400000", timeoutSeconds: 10 }, undefined);
-    expect(result.details).toMatchObject({ exitCode: 0, captureTruncated: true });
+    expect(result.details).toMatchObject({ exitCode: 0, captureTruncated: false, artifactId: expect.any(String), outputDiscardedBytes: 0 });
     expect((result.content[0] as { type: string; text: string }).text.length).toBeLessThanOrEqual(24_030);
     store.close();
   });
@@ -186,6 +191,32 @@ describe("workspace tools", () => {
     expect(await readFile(path.join(workspace, "result.txt"), "utf8")).toBe("tampered");
     expect(store.listOperations(run.id)[0]).toMatchObject({ status: "succeeded", effects: [{ kind: "checks", action: "stale", count: 1 }] });
     await expect(write.execute("stable-call", { path: "result.txt", content: "different" }, undefined)).rejects.toThrow("different payload");
+    store.close();
+  });
+
+  it("fences an identical Bash retry after the first failure", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-bash-guard-"));
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "bash retry guard");
+    const tools = createTestTools(store, run.id, workspace);
+    const bash = tools.find((tool) => tool.name === "bash")!;
+    const firstId = "bash-first";
+    store.recordToolAttempt(run.id, run.attempt, firstId, "bash", { command: "false", timeoutSeconds: 2 });
+    await expect(bash.execute(firstId, { command: "false", timeoutSeconds: 2 }, undefined)).rejects.toThrow("code 1");
+    store.completeToolAttempt(run.id, run.attempt, firstId, false, "failed");
+    const next = store.recordToolAttempt(run.id, run.attempt, "bash-second", "bash", { command: "false", timeoutSeconds: 2 });
+    expect(next.guard).toMatchObject({ blocked: true, reason: expect.stringContaining("already failed or timed out") });
+    expect(store.listOperations(run.id)).toHaveLength(1);
+    store.close();
+  });
+
+  it("reports Bash timeout distinctly and preserves retry guidance", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-bash-timeout-"));
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "bash timeout");
+    const bash = createTestTools(store, run.id, workspace).find((tool) => tool.name === "bash")!;
+    await expect(bash.execute("timeout", { command: "printf started; sleep 5", timeoutSeconds: 1 }, undefined)).rejects.toThrow(/timed out after 1s.*do not rerun/s);
+    expect(store.listEvents(run.id).some((event) => event.type === "tool.bash.timed_out" && event.data.timeoutSeconds === 1)).toBe(true);
     store.close();
   });
 
@@ -224,6 +255,24 @@ describe("workspace tools", () => {
     expect(events.at(-1)).toBe("run.updated:verify");
     store.close();
   });
+  it("batches independent task_run mutations into one compact receipt", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-batch-"));
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "batch");
+    const events: RunEvent[] = [];
+    const taskRun = createTestTools(store, run.id, workspace, (event) => events.push(event)).find((tool) => tool.name === "task_run")!;
+    const result = await taskRun.execute("batch-1", { action: "batch", mutations: [
+      { action: "plan", key: "implement", title: "Implement", status: "done", position: 1 },
+      { action: "check", key: "tests", title: "Tests", status: "passed", command: "npm test", evidence: "12 passed" },
+      { action: "artifact", id: "report", title: "Report", uri: "artifact://report" },
+      { action: "phase", phase: "review" },
+    ] }, undefined);
+    expect(store.getRun(run.id)).toMatchObject({ phase: "review", plan: [{ key: "implement", status: "done" }], checks: [{ key: "tests", status: "passed", stale: false }], artifacts: [{ id: "report" }] });
+    expect(events.filter((event) => event.type === "run.updated")).toHaveLength(1);
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({ ok: true, action: "batch", counts: { plan: 1, checks: 1, artifacts: 1 }, completionGate: { passed: true } });
+    store.close();
+  });
+
   it("exposes task_run as a top-level object schema and returns corrective action errors", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-"));
     const store = new Store(":memory:");

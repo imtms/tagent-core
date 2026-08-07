@@ -8,6 +8,7 @@ export interface ContextAssemblerOptions {
   maxOutputTokens: number;
   maxTurns: number;
   historicalToolResultChars?: number;
+  historicalTaskRunReceiptChars?: number;
 }
 
 export interface ContextAssembly {
@@ -90,11 +91,15 @@ export class ContextAssembler {
 
   private prepareHistoricalTurn(turn: Turn, isLatest: boolean): Turn {
     if (isLatest) return turn;
-    const limit = this.options.historicalToolResultChars ?? 8_000;
-    return {
-      compressed: turn.compressed,
-      entries: turn.entries.map((entry) => ({ ...entry, message: truncateToolContent(entry.message, limit) })),
-    };
+    const limit = this.options.historicalToolResultChars ?? 4_000;
+    const taskRunReceiptLimit = this.options.historicalTaskRunReceiptChars ?? 600;
+    let compressed = turn.compressed;
+    const entries = turn.entries.map((entry) => {
+      const projected = projectHistoricalToolContent(entry.message, limit, taskRunReceiptLimit);
+      compressed ||= projected !== entry.message;
+      return { ...entry, message: projected };
+    });
+    return { compressed, entries };
   }
 }
 
@@ -132,23 +137,60 @@ function estimateTurnTokens(turn: Turn) {
   return turn.entries.reduce((sum, entry) => sum + estimateMessageTokens(entry.message), 0);
 }
 
-function truncateToolContent(message: AgentMessage, limit: number): AgentMessage {
+function projectHistoricalToolContent(message: AgentMessage, limit: number, taskRunReceiptLimit: number): AgentMessage {
   if (!("content" in message) || typeof message.content === "string") return message;
   let changed = false;
   const content = message.content.map((part) => {
     if (part.type === "toolCall") {
       const argumentsJson = JSON.stringify(part.arguments);
-      if (argumentsJson.length <= limit) return part;
+      const argumentLimit = part.name === "task_run" ? Math.min(limit, taskRunReceiptLimit) : limit;
+      if (argumentsJson.length <= argumentLimit) return part;
       changed = true;
-      return { ...part, arguments: { truncated: `${argumentsJson.slice(0, limit)}\n[Historical tool arguments truncated: ${argumentsJson.length} chars]` } };
+      return { ...part, arguments: { historicalSummary: `${part.name} arguments omitted after ${argumentLimit} of ${argumentsJson.length} chars`, durableTranscript: true } };
     }
-    if (message.role === "toolResult" && part.type === "text" && part.text.length > limit) {
-      changed = true;
-      return { ...part, text: `${part.text.slice(0, limit)}\n[Historical tool result truncated: ${part.text.length} chars; full result remains in durable transcript]` };
+    if (message.role === "toolResult" && part.type === "text") {
+      if (message.toolName === "task_run") {
+        const projected = summarizeTaskRunReceipt(part.text, taskRunReceiptLimit);
+        if (projected !== part.text) changed = true;
+        return projected === part.text ? part : { ...part, text: projected };
+      }
+      if (part.text.length > limit) {
+        changed = true;
+        const marker = `\n[Historical tool result projected: ${part.text.length} chars; full result remains in durable transcript]\n`;
+        const head = Math.max(0, Math.floor((limit - marker.length) * .6));
+        const tail = Math.max(0, limit - marker.length - head);
+        return { ...part, text: `${part.text.slice(0, head)}${marker}${tail ? part.text.slice(-tail) : ""}` };
+      }
     }
     return part;
   });
   return changed ? { ...message, content } as AgentMessage : message;
+}
+
+function summarizeTaskRunReceipt(text: string, limit: number) {
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object" || parsed.ok !== true || typeof parsed.action !== "string") {
+      return text.length <= limit ? text : `${text.slice(0, limit)}\n[Historical task_run output truncated: ${text.length} chars]`;
+    }
+    const counts = parsed.counts && typeof parsed.counts === "object" ? parsed.counts : undefined;
+    const gate = parsed.completionGate && typeof parsed.completionGate === "object"
+      ? parsed.completionGate as { passed?: unknown; failures?: unknown[] }
+      : undefined;
+    const summary = {
+      ok: true,
+      action: parsed.action,
+      status: parsed.status,
+      phase: parsed.phase,
+      counts,
+      completionGate: gate ? { passed: Boolean(gate.passed), failureCount: Array.isArray(gate.failures) ? gate.failures.length : 0 } : undefined,
+      historicalReceipt: true,
+    };
+    const serialized = JSON.stringify(summary);
+    return serialized.length <= limit ? serialized : `${serialized.slice(0, limit)}\n[Historical task_run receipt projected]`;
+  } catch {
+    return text.length <= limit ? text : `${text.slice(0, limit)}\n[Historical task_run output truncated: ${text.length} chars]`;
+  }
 }
 
 function legacyMessageIdentity(message: AgentMessage, index: number) {

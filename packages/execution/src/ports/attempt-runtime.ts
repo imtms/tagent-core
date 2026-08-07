@@ -124,6 +124,8 @@ export interface AttemptRuntimeSpec {
   providerMaxRetries?: number;
   runTimeoutMs?: number;
   runHardTimeoutMs?: number;
+  historicalToolResultChars?: number;
+  historicalTaskRunReceiptChars?: number;
 }
 
 export type AttemptRuntimeFactory = (spec: AttemptRuntimeSpec) => AttemptRuntimePort;

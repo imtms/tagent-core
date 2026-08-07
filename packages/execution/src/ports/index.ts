@@ -1,3 +1,4 @@
+export type { ArtifactSinkPort, ArtifactSinkWriteInput, ArtifactSinkWriteResult } from "./artifact-sink-port.js";
 export type { CheckpointRepository } from "./checkpoint-repository.js";
 export type {
   CapabilityEffectBeginResult,
@@ -32,6 +33,7 @@ export type {
 } from "./attempt-repository.js";
 export type { ClaimedContinuation, ContinuationQueue, ContinuationRecoveryItem } from "./continuation-queue.js";
 export type { ControlInbox, EnqueueControlResult } from "./control-inbox.js";
+export type { ContextSourcePort, ProjectContextRule, ProjectContextSnapshot } from "./context-source-port.js";
 export type { EventConsumerAckStatus, EventConsumerRepository } from "./event-consumer-repository.js";
 export type {
   ExecutionApprovalPort,
@@ -61,3 +63,5 @@ export type {
   ToolCapabilityApplicationPort,
 } from "./tool-capability-application-port.js";
 export type { TranscriptEntry, TranscriptRepository, TranscriptViewItem } from "./transcript-repository.js";
+
+export type { WorkspaceEditPort, WorkspacePatchFile, WorkspacePatchHunk, WorkspacePatchRequest, WorkspacePatchResult, WorkspaceReadSnapshot } from "./workspace-edit-port.js";

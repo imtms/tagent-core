@@ -780,11 +780,10 @@ describe("Store", () => {
     expect(store.recordToolAttempt(run.id, 1, "call-6", "read", { path: "same" }).guard.blocked).toBe(true);
 
     const failureRun = store.createRun(session.id, "failure guard");
-    for (let index = 1; index <= 3; index += 1) {
-      store.recordToolAttempt(failureRun.id, 1, `fail-${index}`, "bash", { command: "false" });
-      store.completeToolAttempt(failureRun.id, 1, `fail-${index}`, false, "failed");
-    }
-    expect(store.recordToolAttempt(failureRun.id, 1, "fail-4", "bash", { command: "false" }).guard.blocked).toBe(true);
+    const firstFailure = store.recordToolAttempt(failureRun.id, 1, "fail-1", "bash", { command: "false" });
+    expect(firstFailure.guard.blocked).toBe(false);
+    store.completeToolAttempt(failureRun.id, 1, "fail-1", false, "failed");
+    expect(store.recordToolAttempt(failureRun.id, 1, "fail-2", "bash", { command: "false" }).guard).toMatchObject({ blocked: true, reason: expect.stringContaining("already failed or timed out") });
   });
 
   it("persists continuation lifecycle records", () => {

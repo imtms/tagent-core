@@ -26,6 +26,60 @@ function messageText(message: AgentMessage | undefined) {
     .join("");
 }
 
+function projectRuntimeHistory(messages: AgentMessage[], toolResultLimit: number, taskRunReceiptLimit: number): AgentMessage[] {
+  const latestUserIndex = messages.reduce((latest, message, index) => message.role === "user" ? index : latest, -1);
+  return messages.map((message, index) => {
+    if (index >= latestUserIndex || !("content" in message) || typeof message.content === "string") return message;
+    let changed = false;
+    const content = message.content.map((part) => {
+      if (part.type === "toolCall") {
+        const serialized = JSON.stringify(part.arguments);
+        const limit = part.name === "task_run" ? taskRunReceiptLimit : toolResultLimit;
+        if (serialized.length <= limit) return part;
+        changed = true;
+        return { ...part, arguments: { historicalSummary: `${part.name} arguments omitted (${serialized.length} chars)`, durableTranscript: true } };
+      }
+      if (message.role !== "toolResult" || part.type !== "text") return part;
+      if (message.toolName === "task_run") {
+        const projected = compactTaskRunReceipt(part.text, taskRunReceiptLimit);
+        if (projected !== part.text) changed = true;
+        return projected === part.text ? part : { ...part, text: projected };
+      }
+      if (part.text.length <= toolResultLimit) return part;
+      changed = true;
+      const artifactUri = message.details && typeof message.details === "object" && "artifactUri" in message.details && typeof message.details.artifactUri === "string"
+        ? message.details.artifactUri
+        : undefined;
+      const suffix = artifactUri
+        ? `\n[Historical result projected from ${part.text.length} chars; full output: ${artifactUri}]`
+        : `\n[Historical result projected from ${part.text.length} chars; full result remains in durable transcript]`;
+      const headBudget = Math.max(0, Math.floor((toolResultLimit - suffix.length) * .6));
+      const tailBudget = Math.max(0, toolResultLimit - suffix.length - headBudget);
+      return { ...part, text: `${part.text.slice(0, headBudget)}${suffix}${tailBudget ? part.text.slice(-tailBudget) : ""}` };
+    });
+    return changed ? { ...message, content } as AgentMessage : message;
+  });
+}
+
+function compactTaskRunReceipt(text: string, limit: number) {
+  try {
+    const value = JSON.parse(text) as Record<string, unknown>;
+    if (!value || value.ok !== true || typeof value.action !== "string") return text.length <= limit ? text : `${text.slice(0, limit)}\n[Historical task_run output projected]`;
+    const gate = value.completionGate && typeof value.completionGate === "object" ? value.completionGate as { passed?: unknown; failures?: unknown[] } : undefined;
+    return JSON.stringify({
+      ok: true,
+      action: value.action,
+      status: value.status,
+      phase: value.phase,
+      counts: value.counts,
+      completionGate: gate ? { passed: Boolean(gate.passed), failureCount: Array.isArray(gate.failures) ? gate.failures.length : 0 } : undefined,
+      historicalReceipt: true,
+    }).slice(0, limit);
+  } catch {
+    return text.length <= limit ? text : `${text.slice(0, limit)}\n[Historical task_run output projected]`;
+  }
+}
+
 export class PiRuntime implements AttemptRuntimePort {
   private session?: AgentSession;
   private initializing?: Promise<AgentSession>;
@@ -132,6 +186,15 @@ export class PiRuntime implements AttemptRuntimePort {
       settingsManager,
     });
     session.agent.state.messages = [...(this.options.initialMessages ?? [])] as AgentMessage[];
+    const piTransformContext = session.agent.transformContext;
+    session.agent.transformContext = async (messages, signal) => {
+      const transformed = piTransformContext ? await piTransformContext(messages, signal) : messages;
+      return projectRuntimeHistory(
+        transformed,
+        this.options.historicalToolResultChars ?? 4_000,
+        this.options.historicalTaskRunReceiptChars ?? 600,
+      );
+    };
     const piBeforeToolCall = session.agent.beforeToolCall;
     const piAfterToolCall = session.agent.afterToolCall;
     session.agent.beforeToolCall = async (context, signal) => {

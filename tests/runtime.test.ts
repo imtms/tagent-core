@@ -476,7 +476,7 @@ describe("AgentService runtime boundary", () => {
   });
 
   it("clears an inactive partial across restart and starts resume with a fresh checkpoint", async () => {
-    const directory = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp("/tmp/tagent-checkpoint-restart-"));
+    const directory = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp(`${process.env.TMPDIR ?? "/tmp"}/tagent-checkpoint-restart-`));
     const filename = `${directory}/tagent.db`;
     const firstStore = new Store(filename);
     const session = firstStore.createSession();
@@ -632,7 +632,7 @@ describe("AgentService runtime boundary", () => {
   });
 
   it("loads session history after reopening the persistent store", async () => {
-    const directory = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp("/tmp/tagent-session-history-"));
+    const directory = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp(`${process.env.TMPDIR ?? "/tmp"}/tagent-session-history-`));
     const filename = `${directory}/tagent.db`;
     const firstStore = new Store(filename);
     const session = firstStore.createSession();
@@ -872,7 +872,27 @@ describe("AgentService runtime boundary", () => {
     expect(calls).toBe(3);
     expect(store.getRun(run.id)?.status).toBe("blocked");
     expect(store.listContinuations(run.id)).toHaveLength(2);
-    expect(store.listEvents(run.id).some((event) => event.type === "continuation.stalled" && event.data.reason === "repeated_gate_failure")).toBe(true);
+    expect(store.listEvents(run.id).some((event) => event.type === "continuation.stalled" && event.data.reason === "repeated_gate_state")).toBe(true);
+    store.close();
+  });
+
+  it("allows continuation when the durable gate/evidence state changes even if wording stays similar", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let calls = 0;
+    let runId = "";
+    const service = new AgentService(agentPersistence(store), "/tmp", () => {
+      calls += 1;
+      return new CallbackRuntime(assistantMessage("continue"), () => {
+        if (calls === 2) store.upsertPlanItem(runId, { key: "progress", title: "Progress", status: "done", required: false, position: 2 });
+      });
+    }, { maxContinuations: 3, supervisorReviewer: reviewer(continuationAudit(), continuationAudit(), continuationAudit(), continuationAudit()) });
+    const run = await service.start(session.id, "changing durable state");
+    runId = run.id;
+    for (let index = 0; index < 120 && calls < 4; index += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls).toBe(4);
+    expect(store.listContinuations(run.id)).toHaveLength(3);
+    expect(store.listEvents(run.id).some((event) => event.type === "continuation.stalled" && event.data.reason === "repeated_gate_state")).toBe(true);
     store.close();
   });
 
@@ -892,10 +912,15 @@ describe("AgentService runtime boundary", () => {
 
   it("keeps token use observational and does not install Core token controls", async () => {
     const store = new Store(":memory:"); const session = store.createSession(); let captured: Parameters<RuntimeFactory>[0] | undefined;
-    const service = new AgentService(agentPersistence(store), "/tmp", (options) => { captured = options; return new CallbackRuntime(assistantMessage("observed usage only")); });
+    const config = loadConfig({ TAGENT_MAX_RUN_TOKENS: "1", TAGENT_DYNAMIC_BUDGET: "true", TAGENT_MAX_MODEL_CALLS: "1", TAGENT_MAX_TOOL_CALLS: "1" });
+    const service = new AgentService(agentPersistence(store), "/tmp", (options) => { captured = options; return new CallbackRuntime(assistantMessage("observed usage only")); }, {
+      model: { id: config.model.modelId, provider: config.model.provider, api: config.model.api, baseUrl: config.model.baseUrl, contextWindow: config.model.contextWindow, maxTokens: config.model.maxTokens },
+    });
     await service.start(session.id, "observe token usage"); await new Promise((resolve) => setTimeout(resolve, 20));
     expect(captured).not.toHaveProperty("maxRunTokens"); expect(captured).not.toHaveProperty("softRunTokens");
-    expect(store.listEvents(store.getLatestRun(session.id)!.id).some((event) => event.type.includes("token_budget"))).toBe(false); store.close();
+    expect(captured).not.toHaveProperty("dynamicBudget"); expect(captured).not.toHaveProperty("maxModelCalls"); expect(captured).not.toHaveProperty("maxToolCalls");
+    expect(captured?.model?.maxTokens).toBe(32_768);
+    expect(store.listEvents(store.getLatestRun(session.id)!.id).some((event) => /token_budget|budget_exhausted|call_budget/.test(event.type))).toBe(false); store.close();
   });
 
   it("launches each TaskRun with its persisted Workspace model and reasoning effort", async () => {

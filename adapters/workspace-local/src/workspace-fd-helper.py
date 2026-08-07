@@ -6,6 +6,7 @@ O_NOFOLLOW. No operation re-resolves an attacker-controlled absolute pathname.
 """
 import errno
 import json
+import hashlib
 import os
 import stat
 import sys
@@ -171,6 +172,103 @@ def write_file(root_fd: int, parts: list[str]) -> None:
         os.close(parent)
 
 
+
+
+def commit_batch(root_fd: int, payload: dict) -> None:
+    entries = payload.get("entries")
+    if not isinstance(entries, list) or not entries:
+        fail("Batch commit requires at least one entry", "WORKSPACE_BATCH_INVALID")
+    staged = []
+    backups = []
+    parents = {}
+    try:
+        # Resolve and validate every destination, including its expected hash, before
+        # any visible rename. This closes the read/preflight/commit stale window.
+        for entry in entries:
+            target = entry.get("path") if isinstance(entry, dict) else None
+            encoded = entry.get("contentBase64") if isinstance(entry, dict) else None
+            expected_hash = entry.get("expectedHash") if isinstance(entry, dict) else None
+            if not isinstance(target, str) or not isinstance(encoded, str) or not isinstance(expected_hash, str):
+                fail("Invalid batch entry", "WORKSPACE_BATCH_INVALID")
+            parts = components(target)
+            if not parts:
+                fail("A file path is required", "WORKSPACE_BATCH_INVALID")
+            parent_key = tuple(parts[:-1])
+            parent = parents.get(parent_key)
+            if parent is None:
+                parent = descend(root_fd, parts[:-1], create=False)
+                parents[parent_key] = parent
+            try:
+                fd = os.open(parts[-1], os.O_RDONLY | O_NOFOLLOW | O_CLOEXEC, dir_fd=parent)
+            except OSError as error:
+                if error.errno in (errno.ELOOP, errno.ENOTDIR):
+                    fail("Symbolic links are not allowed in workspace paths")
+                raise
+            try:
+                metadata = os.fstat(fd)
+                if not stat.S_ISREG(metadata.st_mode):
+                    fail("Workspace file target is not a regular file")
+                digest = hashlib.sha256()
+                while True:
+                    chunk = os.read(fd, 1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                actual_hash = digest.hexdigest()
+            finally:
+                os.close(fd)
+            if actual_hash != expected_hash:
+                fail(f"Workspace snapshot is stale for {target}", "WORKSPACE_EDIT_STALE")
+            try:
+                content = __import__("base64").b64decode(encoded, validate=True)
+            except Exception:
+                fail("Invalid batch entry content", "WORKSPACE_BATCH_INVALID")
+            temporary = f".tagent-batch-{uuid.uuid4().hex}.tmp"
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600, dir_fd=parent)
+            try:
+                view = memoryview(content)
+                while view:
+                    written = os.write(fd, view)
+                    view = view[written:]
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            staged.append((parent, temporary, parts[-1]))
+        test_pause("before_batch_commit")
+        try:
+            for parent, temporary, target in staged:
+                backup = f".tagent-backup-{uuid.uuid4().hex}.tmp"
+                os.rename(target, backup, src_dir_fd=parent, dst_dir_fd=parent)
+                backups.append((parent, backup, target))
+                os.rename(temporary, target, src_dir_fd=parent, dst_dir_fd=parent)
+            for parent in set(item[0] for item in staged):
+                os.fsync(parent)
+        except BaseException:
+            for parent, backup, target in reversed(backups):
+                try:
+                    os.rename(backup, target, src_dir_fd=parent, dst_dir_fd=parent)
+                except OSError:
+                    pass
+            raise
+        for parent, backup, _target in backups:
+            os.unlink(backup, dir_fd=parent)
+        backups.clear()
+        staged.clear()
+        sys.stdout.write(json.dumps({"ok": True, "written": len(entries)}))
+    finally:
+        for parent, temporary, _target in staged:
+            try:
+                os.unlink(temporary, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+        for parent, backup, _target in backups:
+            try:
+                os.unlink(backup, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+        for parent in parents.values():
+            os.close(parent)
+
 def main() -> None:
     if len(sys.argv) != 4:
         fail("Usage: helper OP ROOT TARGET", "WORKSPACE_IO_ERROR")
@@ -184,6 +282,12 @@ def main() -> None:
             list_directory(root_fd, parts)
         elif operation == "write":
             write_file(root_fd, parts)
+        elif operation == "commit-batch":
+            try:
+                payload = json.load(sys.stdin)
+            except Exception:
+                fail("Invalid batch JSON", "WORKSPACE_BATCH_INVALID")
+            commit_batch(root_fd, payload)
         else:
             fail("Unknown operation", "WORKSPACE_IO_ERROR")
     except FileNotFoundError:

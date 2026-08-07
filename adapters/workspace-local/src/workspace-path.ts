@@ -19,7 +19,7 @@ function validateTarget(target: string) {
 
 type HelperOptions = { input?: string | Buffer; env?: NodeJS.ProcessEnv };
 
-async function runHelper(operation: "read" | "write" | "list", root: string, target: string, options: HelperOptions = {}) {
+async function runHelper(operation: "read" | "write" | "list" | "commit-batch", root: string, target: string, options: HelperOptions = {}) {
   const normalized = validateTarget(target);
   return new Promise<Buffer>((resolve, reject) => {
     const child = spawn("python3", [helper, operation, root, normalized], { stdio: ["pipe", "pipe", "pipe"], env: options.env ?? process.env });
@@ -80,4 +80,14 @@ export async function writeWorkspaceFile(root: string, target: string, content: 
   const normalized = validateTarget(target);
   await runHelper("write", root, normalized, { input: content, env });
   return { root: path.resolve(root), parent: path.dirname(path.resolve(root, normalized)), path: path.resolve(root, normalized), relative: normalized };
+}
+
+
+/** Commits a fully preflighted set of existing regular files through descriptor-relative renames. */
+export async function commitWorkspaceFiles(root: string, entries: Array<{ path: string; content: string | Buffer; expectedHash: string }>, env?: NodeJS.ProcessEnv) {
+  if (!entries.length) throw new WorkspacePathError("Batch commit requires at least one entry", "WORKSPACE_BATCH_INVALID");
+  const paths = entries.map((entry) => validateTarget(entry.path));
+  if (new Set(paths).size !== paths.length) throw new WorkspacePathError("Batch commit contains duplicate paths", "WORKSPACE_BATCH_INVALID");
+  const payload = JSON.stringify({ entries: entries.map((entry, index) => ({ path: paths[index], expectedHash: entry.expectedHash, contentBase64: (Buffer.isBuffer(entry.content) ? entry.content : Buffer.from(entry.content, "utf8")).toString("base64") })) });
+  await runHelper("commit-batch", root, ".", { input: payload, env });
 }

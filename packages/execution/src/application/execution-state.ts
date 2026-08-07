@@ -20,6 +20,8 @@ export type ExecutionRuntimeDefaults = Pick<
   maxContinuations?: number;
   contextWindow?: number;
   maxContextTurns?: number;
+  historicalToolResultChars?: number;
+  historicalTaskRunReceiptChars?: number;
   controlInboxCapacity?: number;
   executionLeaseMs?: number;
   executionLeaseHeartbeatMs?: number;

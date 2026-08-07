@@ -82,7 +82,9 @@ describe("Local workspace adapter package", () => {
     const manifest = readJson<PackageManifest>(`${packageRoot}/package.json`);
     expect(manifest).toMatchObject({ name: "@tagent/workspace-local", version: "0.2.3", private: true });
     expect(root.devDependencies[manifest.name]).toBe(manifest.version);
-    expect(Object.keys(manifest.exports).sort()).toEqual([".", "./tools", "./workspace-path"]);
+    expect(Object.keys(manifest.exports).sort()).toEqual([
+      ".", "./artifact-file-sink", "./project-context", "./snapshot-edit", "./tools", "./workspace-path",
+    ]);
     expect(manifest.dependencies).toEqual({
       "@earendil-works/pi-agent-core": "0.83.0",
       "@tagent/execution": "0.2.3",

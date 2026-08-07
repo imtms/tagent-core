@@ -2033,6 +2033,7 @@ ${source.content}`;
       sameToolFailures += 1;
     }
     if (sameArgs >= 5) return { blocked: true, reason: `Tool ${toolName} repeated the same arguments ${sameArgs} times` };
+    if (toolName === "bash" && sameArgsFailures >= 1) return { blocked: true, reason: "Bash already failed or timed out with identical arguments. Inspect its durable output and change the command, timeout, or stage instead of repeating it." };
     if (sameArgsFailures >= 3) return { blocked: true, reason: `Tool ${toolName} failed with the same arguments ${sameArgsFailures} times` };
     if (sameToolFailures >= 6) return { blocked: true, reason: `Tool ${toolName} failed consecutively ${sameToolFailures} times` };
     return { blocked: false, reason: "" };

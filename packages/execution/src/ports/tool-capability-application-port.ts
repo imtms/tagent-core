@@ -1,4 +1,6 @@
 import type { RunEvent, RunId, TaskRun, UserInputField, UserInputRequest } from "../domain/index.js";
+import type { ArtifactSinkPort } from "./artifact-sink-port.js";
+import type { WorkspaceEditPort } from "./workspace-edit-port.js";
 
 export interface MemoryToolCapabilities {
   search(query: string, kinds?: string[], maxResults?: number): Promise<unknown>;
@@ -10,6 +12,8 @@ export interface MemoryToolCapabilities {
 /** Consumer-owned application capabilities exposed to built-in agent tools. */
 export interface ToolCapabilityApplicationPort {
   readonly runId: RunId;
+  readonly artifactSink?: ArtifactSinkPort;
+  readonly workspaceEdit?: WorkspaceEditPort;
   getRun(): TaskRun | undefined;
   advanceRunPhase(phase: "implement"): boolean;
   setRunPhase(phase: "discover" | "plan" | "implement" | "verify" | "review"): boolean;

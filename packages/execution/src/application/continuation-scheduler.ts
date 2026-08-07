@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { RunId, TaskRun } from "../domain/task-run.js";
 import type { ExecutionStateView } from "./execution-state.js";
 import type {
@@ -40,11 +41,11 @@ export class ContinuationScheduler {
   public queueContinuation(runId: RunId) {
     const run = this.state.persistence.taskRuns.getRun(runId);
     if (!run || run.status !== "blocked") return;
-    const latestReasons = run.continuations.slice(-2).map((item) => item.reason.replace(/\s+/g, " ").trim());
-    const currentReason = run.blockedReason.replace(/\s+/g, " ").trim();
-    if (latestReasons.length === 2 && latestReasons.every((reason) => reason === currentReason)) {
-      this.state.persistence.sessions.appendMessage(run.sessionId, "assistant", `Run remains blocked because two continuations produced the same unresolved gate failure without a changed diagnosis: ${run.blockedReason}`);
-      this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "continuation.stalled", { reason: "repeated_gate_failure", repeatedReason: currentReason }));
+    const currentSignature = continuationProgressSignature(run);
+    const latestSignatures = run.continuations.slice(-2).map((item) => continuationReasonSignature(item.reason));
+    if (latestSignatures.length === 2 && latestSignatures.every((signature) => signature === currentSignature)) {
+      this.state.persistence.sessions.appendMessage(run.sessionId, "assistant", `Run remains blocked because two continuations produced the same unresolved gate/evidence state without durable progress: ${run.blockedReason}`);
+      this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "continuation.stalled", { reason: "repeated_gate_state", signature: currentSignature }));
       return;
     }
     const maxContinuations = this.state.runtimeDefaults.maxContinuations ?? 128;
@@ -54,8 +55,8 @@ export class ContinuationScheduler {
       this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "continuation.exhausted", { reason: "max_continuations", limit: maxContinuations }));
       return;
     }
-    const continuation = this.state.persistence.continuations.queueContinuation(runId, run.blockedReason);
-    this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "continuation.queued", { continuationId: continuation.id, ordinal: continuation.ordinal, reason: continuation.reason }));
+    const continuation = this.state.persistence.continuations.queueContinuation(runId, `${run.blockedReason}\n[progress-signature:${currentSignature}]`);
+    this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "continuation.queued", { continuationId: continuation.id, ordinal: continuation.ordinal, reason: run.blockedReason, progressSignature: currentSignature }));
   }
 
   public startQueuedContinuation(runId: RunId) {
@@ -103,4 +104,27 @@ export class ContinuationScheduler {
     void this.dependencies.runtimeRegistry.abortRuntime(runtime, runId);
     return true;
   }
+}
+
+function continuationReasonSignature(reason: string) {
+  const embedded = /\[progress-signature:([0-9a-f]{64})\]\s*$/.exec(reason)?.[1];
+  if (embedded) return embedded;
+  return createHash("sha256").update(normalizeGateText(reason)).digest("hex");
+}
+
+function continuationProgressSignature(run: TaskRun) {
+  const gateFailures = (run.supervision.latestGates.find((gate) => gate.gateType === "completion")?.failures ?? run.completionGate.failures)
+    .map((failure) => ({ kind: failure.kind, key: failure.key, reason: normalizeGateText(failure.reason) }))
+    .sort((left, right) => `${left.kind}:${left.key}`.localeCompare(`${right.kind}:${right.key}`));
+  const state = {
+    gateFailures,
+    plan: run.plan.map(({ key, status, required }) => ({ key, status, required })).sort((left, right) => left.key.localeCompare(right.key)),
+    checks: run.checks.map(({ key, status, required, stale, evidence }) => ({ key, status, required, stale, evidenceHash: createHash("sha256").update(evidence.trim()).digest("hex") })).sort((left, right) => left.key.localeCompare(right.key)),
+    artifacts: run.artifacts.map(({ id, kind, uri }) => ({ id, kind, uri })).sort((left, right) => left.id.localeCompare(right.id)),
+  };
+  return createHash("sha256").update(JSON.stringify(state)).digest("hex");
+}
+
+function normalizeGateText(value: string) {
+  return value.toLowerCase().replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "<id>").replace(/\d{10,}/g, "<number>").replace(/\s+/g, " ").trim();
 }

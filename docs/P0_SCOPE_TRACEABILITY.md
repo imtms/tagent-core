@@ -1,0 +1,12 @@
+# oh-my-pi P0 scope traceability
+
+Authoritative source: `../oh-my-pi-learning-assessment.md`, section `推荐路线图 / P0：1–2 个版本，直接提升可靠性`.
+
+| Report P0 item | Implemented capability | Primary implementation | Verification |
+|---|---|---|---|
+| 1. Durable ArtifactSink / 大输出 spill | Bounded preview, durable workspace Artifact, SHA-256 and byte metadata, configured hard cap with explicit source-truncation/discarded-byte reporting | `packages/execution/src/ports/artifact-sink-port.ts`; `adapters/workspace-local/src/artifact-file-sink.ts`; `adapters/workspace-local/src/tools.ts` | `tests/p0-reliable-execution.test.ts`: complete 1 MB output spill and configured hard-cap behavior; `tests/tools.test.ts` output regression |
+| 2. Snapshot-aware patch v1 | `read` snapshot/content hash, snapshot-bound `edit`, multi-file `patch`, whole-patch preflight, commit-time hash recheck, rollback on normal commit failure, stale checks, Operation receipt replay | `packages/execution/src/ports/workspace-edit-port.ts`; `adapters/workspace-local/src/snapshot-edit.ts`; `adapters/workspace-local/src/workspace-fd-helper.py`; `adapters/workspace-local/src/tools.ts` | `tests/p0-reliable-execution.test.ts`: stale rejection, failed preflight with no partial write, successful multi-file patch, check staling, replay without repeated write |
+| 3. Core-owned project context v1 | Core allowlisted `AGENTS.md`/explicit rule discovery, containment/non-symlink/size validation, source hash/precedence/reason and aggregate hash in Context Manifest, untrusted policy boundary | `packages/execution/src/ports/context-source-port.ts`; `adapters/workspace-local/src/project-context.ts`; `packages/execution/src/application/run-context-service.ts`; `packages/execution/src/domain/task-run.ts` | `tests/p0-reliable-execution.test.ts`: discovery/hash/symlink rejection; context tests and build/type checks cover manifest integration |
+| 4. Execution metrics | Durable edit completion/rejection and tool spill events; changed-file count, Artifact/hash/total/stored/shown/discarded bytes and source-truncation metrics; context manifest selected/dropped stats remain available | `adapters/workspace-local/src/tools.ts`; `packages/execution/src/application/run-context-service.ts` | P0 tests inspect rejection and spill events; affected integration test suite passes |
+
+The report lists no additional P0 implementation item. Language intelligence, context summaries, policy packs, child TaskRuns, advisory reviewers and advanced adapters are explicitly P1/P2 and remain outside this TaskRun.

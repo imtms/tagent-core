@@ -1,12 +1,14 @@
 import type { AgentServicePersistencePort } from "../application/ports/index.js";
 import type { RunEvent, TaskRun } from "@tagent/execution/domain";
 import type {
+  ArtifactSinkPort,
   AttemptExecutionToken,
   FencedRuntimeMutationContext,
   RuntimeCapabilityCatalog,
   RuntimeEventSink,
   RuntimeMessage,
   ToolCapabilityApplicationPort,
+  WorkspaceEditPort,
 } from "@tagent/execution/ports";
 import type { AccessContext, MemoryFacade, MemoryKind } from "@tagent/memory";
 import { createTools } from "@tagent/workspace-local/tools";
@@ -23,6 +25,8 @@ export interface RuntimeHostOptions {
   memory?: MemoryFacade;
   memoryScopeId: string;
   memorySubjectId: string;
+  artifactSink?: ArtifactSinkPort;
+  workspaceEdit?: WorkspaceEditPort;
 }
 
 export interface RuntimeHost {
@@ -74,6 +78,8 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
   };
   const toolCapabilities: ToolCapabilityApplicationPort = {
     runId: token.runId,
+    artifactSink: options.artifactSink,
+    workspaceEdit: options.workspaceEdit,
     getRun: currentRun,
     advanceRunPhase: (phase) => persistence.runtimeMutations.advanceRunPhase(mutationContext, phase),
     setRunPhase: (phase) => persistence.runtimeMutations.setRunPhase(mutationContext, phase),
@@ -133,7 +139,7 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     isWaitingForInput: () => Boolean(waitingRun()),
     beforeToolCall(input) {
       if (!currentRun()) return { blocked: true, reason: "Attempt is no longer current" };
-      if (["write", "edit", "bash"].includes(input.toolName)) {
+      if (["write", "edit", "patch", "bash"].includes(input.toolName)) {
         persistence.runtimeMutations.advanceRunPhase(mutationContext, "implement");
       }
       const attempt = persistence.runtimeMutations.recordToolAttempt(

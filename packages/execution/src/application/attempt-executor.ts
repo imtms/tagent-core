@@ -1,8 +1,4 @@
-import type {
-  AttemptRuntimePort,
-  AttemptExecutionToken,
-  RuntimeMessage as AgentMessage,
-} from "../ports/attempt-runtime.js";
+import type { AttemptRuntimePort, AttemptExecutionToken, RuntimeMessage as AgentMessage } from "../ports/attempt-runtime.js";
 import type { TaskRun } from "../domain/task-run.js";
 import type { ExecutionStateView } from "./execution-state.js";
 import { failRuntimeTaskRun, publishTransitionOutcome } from "./task-run-transition-helpers.js";
@@ -189,6 +185,8 @@ export class AttemptExecutor {
         providerMaxRetries: this.state.runtimeDefaults.providerMaxRetries,
         runTimeoutMs: this.state.runtimeDefaults.runTimeoutMs,
         runHardTimeoutMs: this.state.runtimeDefaults.runHardTimeoutMs,
+        historicalToolResultChars: this.state.runtimeDefaults.historicalToolResultChars,
+        historicalTaskRunReceiptChars: this.state.runtimeDefaults.historicalTaskRunReceiptChars,
       });
     } catch (error) {
       this.state.persistence.attempts.releaseExecutionLease({

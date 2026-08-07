@@ -74,7 +74,7 @@ export interface UserInputField { key: string; label: string; description: strin
 export interface UserInputRequest { id: string; runId: RunId; attempt: number; prompt: string; fields: UserInputField[]; status: "pending" | "submitted" | "cancelled" | "superseded"; response: Record<string, string>; requestedAt: number; submittedAt: number | null }
 
 export type ContextManifestSource = "session" | "transcript";
-export type ContextManifestItemKind = "system_prompt" | "taskrun_contract" | "session_message" | "transcript_message" | "core_memory" | "memory_card" | "cold_topic" | "workflow_revision" | "communication_profile" | "user_prompt";
+export type ContextManifestItemKind = "system_prompt" | "taskrun_contract" | "session_message" | "transcript_message" | "core_memory" | "memory_card" | "cold_topic" | "workflow_revision" | "communication_profile" | "project_rule" | "user_prompt";
 export interface ContextManifestItem { kind: ContextManifestItemKind; sourceId: string; role?: string; selected: boolean; reason: string; estimatedTokens: number; metadata?: Record<string, unknown> }
 export interface ContextManifest { id: string; runId: RunId; attempt: number; source: ContextManifestSource; items: ContextManifestItem[]; stats: Record<string, number | string>; manifestHash: string; createdAt: number }
 

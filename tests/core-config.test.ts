@@ -13,6 +13,8 @@ describe("Core service configuration", () => {
       runHardTimeoutMs: 86_400_000,
       maxContinuations: 128,
       maxContextTurns: 20,
+      historicalToolResultChars: 4_000,
+      historicalTaskRunReceiptChars: 600,
       routerTimeoutMs: 15_000,
       supervisorTimeoutMs: 15_000,
     });
@@ -29,6 +31,24 @@ describe("Core service configuration", () => {
       reasoning: false,
       maxTokens: 1_024,
     });
+  });
+
+  it("keeps Run token limits and dynamic hard budgets disabled even when legacy env names are present", () => {
+    const config = loadConfig({
+      TAGENT_MAX_RUN_TOKENS: "1",
+      TAGENT_DYNAMIC_BUDGET: "true",
+      TAGENT_MAX_MODEL_CALLS: "1",
+      TAGENT_MAX_TOOL_CALLS: "1",
+    });
+    const publicConfig = publicRuntimeConfig(config);
+    expect(config.model.maxTokens).toBe(32_768); // Per-response model output cap, not a Run budget.
+    expect(config).not.toHaveProperty("maxRunTokens");
+    expect(config).not.toHaveProperty("dynamicBudget");
+    expect(config).not.toHaveProperty("maxModelCalls");
+    expect(config).not.toHaveProperty("maxToolCalls");
+    expect(publicConfig).not.toHaveProperty("maxRunTokens");
+    expect(publicConfig).not.toHaveProperty("dynamicBudget");
+    expect(JSON.stringify(publicConfig)).not.toMatch(/runToken|dynamicBudget|modelCall|toolCall/i);
   });
 
   it("supports an ordered main-model fallback chain", () => {

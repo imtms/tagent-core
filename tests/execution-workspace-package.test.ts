@@ -91,12 +91,15 @@ describe("Execution workspace package", () => {
       ...sourceFiles("packages/execution/src/domain"),
       ...sourceFiles("packages/execution/src/ports"),
     ];
-    expect(implementationFiles).toHaveLength(41);
+    expect(implementationFiles).toHaveLength(44);
     expect(implementationFiles).toEqual(expect.arrayContaining([
       "packages/execution/src/application/runtime-initialization-failure.ts",
       "packages/execution/src/application/runtime-model-selection.ts",
       "packages/execution/src/application/task-run-transition-helpers.ts",
       "packages/execution/src/ports/task-run-transition-port.ts",
+      "packages/execution/src/ports/artifact-sink-port.ts",
+      "packages/execution/src/ports/context-source-port.ts",
+      "packages/execution/src/ports/workspace-edit-port.ts",
     ]));
   });
 

@@ -17,6 +17,8 @@ export interface AppConfig {
   port: number;
   database: string;
   workspace: string;
+  projectRuleFiles: string[];
+  toolArtifactMaxBytes: number;
   runtime: "in-process";
   governanceApprovalAuthority: GovernanceApprovalAuthority;
   apiKey?: string;
@@ -28,6 +30,8 @@ export interface AppConfig {
   runHardTimeoutMs: number;
   maxContinuations: number;
   maxContextTurns: number;
+  historicalToolResultChars: number;
+  historicalTaskRunReceiptChars: number;
   controlInboxCapacity: number;
   serviceCredentials: ServiceCredential[];
   model: ModelConfig;
@@ -288,6 +292,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port: positiveInteger(env.PORT, 3100, "PORT"),
     database: env.TAGENT_DB ?? "./data/tagent.db",
     workspace: env.TAGENT_WORKSPACE ?? process.cwd(),
+    projectRuleFiles: (env.TAGENT_PROJECT_RULE_FILES ?? "AGENTS.md").split(",").map((value) => value.trim()).filter(Boolean),
+    toolArtifactMaxBytes: positiveInteger(env.TAGENT_TOOL_ARTIFACT_MAX_BYTES, 16 * 1024 * 1024, "TAGENT_TOOL_ARTIFACT_MAX_BYTES"),
     runtime,
     governanceApprovalAuthority: governanceApprovalAuthority(env.TAGENT_GOVERNANCE_APPROVAL_AUTHORITY),
     apiKey: env.OPENAI_API_KEY,
@@ -299,6 +305,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     runHardTimeoutMs: positiveInteger(env.TAGENT_RUN_HARD_TIMEOUT_MS, 86_400_000, "TAGENT_RUN_HARD_TIMEOUT_MS"),
     maxContinuations: nonNegativeInteger(env.TAGENT_MAX_CONTINUATIONS, 128, "TAGENT_MAX_CONTINUATIONS"),
     maxContextTurns: positiveInteger(env.TAGENT_MAX_CONTEXT_TURNS, 20, "TAGENT_MAX_CONTEXT_TURNS"),
+    historicalToolResultChars: positiveInteger(env.TAGENT_HISTORICAL_TOOL_RESULT_CHARS, 4_000, "TAGENT_HISTORICAL_TOOL_RESULT_CHARS"),
+    historicalTaskRunReceiptChars: positiveInteger(env.TAGENT_HISTORICAL_TASK_RUN_RECEIPT_CHARS, 600, "TAGENT_HISTORICAL_TASK_RUN_RECEIPT_CHARS"),
     controlInboxCapacity: positiveInteger(env.TAGENT_CONTROL_INBOX_CAPACITY, 32, "TAGENT_CONTROL_INBOX_CAPACITY"),
     serviceCredentials,
     memory: loadMemoryConfig(env),
@@ -367,6 +375,8 @@ export interface PublicRuntimeConfig {
   runHardTimeoutMs: number;
   maxContinuations: number;
   maxContextTurns: number;
+  historicalToolResultChars: number;
+  historicalTaskRunReceiptChars: number;
   controlInboxCapacity: number;
   schemaVersion?: number;
   memoryEnabled: boolean;
@@ -400,6 +410,8 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     runHardTimeoutMs: config.runHardTimeoutMs,
     maxContinuations: config.maxContinuations,
     maxContextTurns: config.maxContextTurns,
+    historicalToolResultChars: config.historicalToolResultChars,
+    historicalTaskRunReceiptChars: config.historicalTaskRunReceiptChars,
     controlInboxCapacity: config.controlInboxCapacity,
     schemaVersion,
     memoryEnabled: config.memory.enabled,

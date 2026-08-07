@@ -291,6 +291,8 @@ export async function bootstrapCore(
         maxContinuations: config.maxContinuations,
         contextWindow: config.model.contextWindow,
         maxContextTurns: config.maxContextTurns,
+        historicalToolResultChars: config.historicalToolResultChars,
+        historicalTaskRunReceiptChars: config.historicalTaskRunReceiptChars,
         controlInboxCapacity: config.controlInboxCapacity,
       },
       memoryRuntime?.service,
@@ -298,6 +300,8 @@ export async function bootstrapCore(
       learningControl,
       semanticJudge,
       { startupMode: "deferred" },
+      config.projectRuleFiles,
+      config.toolArtifactMaxBytes,
     );
     const workflowService = new WorkflowService(
       persistence.workflow,

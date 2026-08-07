@@ -102,6 +102,8 @@ export interface PreparedExecutionContext {
   };
   recalledMemory?: string;
   memoryContextItems?: ContextManifestItem[];
+  projectContextItems?: ContextManifestItem[];
+  projectContextHash?: string;
 }
 
 export type RunResumeOptions =

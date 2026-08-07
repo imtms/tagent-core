@@ -72,6 +72,7 @@ export interface GovernanceContextManifestView {
       | "cold_topic"
       | "workflow_revision"
       | "communication_profile"
+      | "project_rule"
       | "user_prompt";
     sourceId: string;
     role?: string;

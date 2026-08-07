@@ -19,6 +19,8 @@ export type AgentServiceConstructorArguments = [
   learningControl?: LearningFeatureControl,
   semanticJudge?: SemanticJudge,
   startupOptions?: ExecutionCoordinatorStartupOptions,
+  projectRuleFiles?: string[],
+  toolArtifactMaxBytes?: number,
 ];
 
 export type AdmissionApplicationPort = Pick<CoreApplicationCoordinator,
@@ -63,9 +65,9 @@ export type CoreApplicationPort = AdmissionApplicationPort
 export function createAgentServiceApplications(
   ...args: AgentServiceConstructorArguments
 ): CoreApplicationPort {
-  const [persistence, workspace, runtimeFactory, runtimeDefaults, memory, memoryScopeId, learningControl, semanticJudge, startupOptions] = args;
+  const [persistence, workspace, runtimeFactory, runtimeDefaults, memory, memoryScopeId, learningControl, semanticJudge, startupOptions, projectRuleFiles, toolArtifactMaxBytes] = args;
   return composeExecutionApplication({
     persistence, workspace, runtimeFactory, runtimeDefaults, memory,
-    memoryScopeId, learningControl, semanticJudge, startupOptions,
+    memoryScopeId, learningControl, semanticJudge, startupOptions, projectRuleFiles, toolArtifactMaxBytes,
   });
 }

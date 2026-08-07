@@ -20,6 +20,18 @@
     "./workspace-path": {
       "types": "./dist/workspace-path.d.ts",
       "import": "./dist/workspace-path.js"
+    },
+    "./artifact-file-sink": {
+      "types": "./dist/artifact-file-sink.d.ts",
+      "import": "./dist/artifact-file-sink.js"
+    },
+    "./project-context": {
+      "types": "./dist/project-context.d.ts",
+      "import": "./dist/project-context.js"
+    },
+    "./snapshot-edit": {
+      "types": "./dist/snapshot-edit.d.ts",
+      "import": "./dist/snapshot-edit.js"
     }
   },
   "scripts": {

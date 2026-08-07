@@ -41,7 +41,7 @@ describe("Pi 0.83 AgentSession integration", () => {
   it("runs offline with controlled resources and persists the SDK transcript", async () => {
     const { store, run, runtime } = await setup([fauxAssistantMessage("session ready")]);
     await runtime.prompt("hello");
-    expect(runtime.getActiveToolNames().sort()).toEqual(["bash", "edit", "ls", "read", "task_run", "write"]);
+    expect(runtime.getActiveToolNames().sort()).toEqual(["bash", "edit", "ls", "patch", "read", "task_run", "write"]);
     expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "session ready" }] });
     expect(store.listTranscript(run.id).some((message) => message.role === "assistant")).toBe(true);
     expect(store.listEvents(run.id).some((event) => event.type === "message.completed")).toBe(true);

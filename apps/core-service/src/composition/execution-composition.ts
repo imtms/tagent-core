@@ -46,6 +46,9 @@ import {
 } from "@tagent/execution/composition";
 import type { AttemptRuntimeFactory } from "@tagent/execution/ports";
 import { createRuntimeHost } from "./runtime-host-adapter.js";
+import { createProjectContextSource } from "@tagent/workspace-local/project-context";
+import { createWorkspaceArtifactSink } from "@tagent/workspace-local/artifact-file-sink";
+import { createWorkspaceEditPort } from "@tagent/workspace-local/snapshot-edit";
 import type { AdmissionDispatchPort } from "@tagent/admission/composition";
 import type { AgentServicePersistencePort } from "../application/ports/index.js";
 import type { MemoryFacade } from "@tagent/memory";
@@ -73,6 +76,8 @@ export interface ExecutionCompositionOptions {
   memoryScopeId?: string;
   learningControl?: LearningFeatureControl;
   semanticJudge?: SemanticJudge;
+  projectRuleFiles?: string[];
+  toolArtifactMaxBytes?: number;
   startupOptions?: ExecutionCoordinatorStartupOptions;
 }
 
@@ -153,6 +158,9 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
   });
   const workflowService = new WorkflowService(options.persistence.workflow, undefined, options.learningControl, options.semanticJudge);
   const learningService = new LearningService(options.persistence.learning, options.memory, options.memoryScopeId ?? "default", options.semanticJudge);
+  const projectContextSource = createProjectContextSource(options.workspace, options.projectRuleFiles);
+  const artifactSink = createWorkspaceArtifactSink(options.workspace, options.toolArtifactMaxBytes);
+  const workspaceEdit = createWorkspaceEditPort(options.workspace);
   const state = new ExecutionState({
     persistence: options.persistence,
     workspace: options.workspace,
@@ -198,6 +206,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     eventHub,
     recovery: recoveryRef.port,
     runtimeRegistry,
+    projectContextSource,
   });
   contextRef.bind(contextService);
   const attemptExecutor = new AttemptExecutor(state, {
@@ -221,6 +230,8 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
         workspace: state.workspace,
         memory: options.memory,
         memoryScopeId: options.memoryScopeId ?? "default",
+        artifactSink,
+        workspaceEdit,
         ...input,
       }),
     },
