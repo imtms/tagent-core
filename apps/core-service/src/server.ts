@@ -146,6 +146,7 @@ function assembleHttpPersistence(persistence: LegacyStoreAdapter): HttpPersisten
     transcript: persistence.transcript,
     evidence: persistence.evidence,
     eventConsumers: persistence.eventConsumers,
+    workspaceGoals: persistence.workspaceGoals,
   });
 }
 

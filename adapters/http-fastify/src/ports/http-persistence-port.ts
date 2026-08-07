@@ -10,6 +10,7 @@ import type {
   EvidenceRepository,
   OperationRepository,
   SupervisorDecisionJournal,
+  WorkspaceGoalRepository,
 } from "@tagent/governance/ports";
 
 export interface HttpPersistencePort {
@@ -32,4 +33,5 @@ export interface HttpPersistencePort {
   transcript: Pick<TranscriptRepository, "listTranscriptEntries" | "listTranscriptView">;
   evidence: Pick<EvidenceRepository, "getArtifact">;
   eventConsumers: EventConsumerRepository;
+  workspaceGoals: WorkspaceGoalRepository;
 }

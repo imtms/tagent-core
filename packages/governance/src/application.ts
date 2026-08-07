@@ -3,6 +3,7 @@ export {
   type CanaryGovernanceWorkerResult,
 } from "./application/canary-governance-worker.js";
 export { canaryOutcomeDigest } from "./domain/workflow-governance.js";
+export { WorkspaceGoalService, workspaceGoalContentHash, workspaceGoalNextAction } from "./application/workspace-goal-service.js";
 export {
   WorkflowGovernanceApplication,
   WorkflowGovernanceService,

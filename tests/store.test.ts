@@ -614,16 +614,16 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(34);
+    expect(store.getSchemaVersion()).toBe(35);
   });
 
-  it("migrates an older database to schema version 34", () => {
+  it("migrates an older database to schema version 35", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE core_writer_lease; DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(34);
+    expect(migrated.getSchemaVersion()).toBe(35);
     expect((migrated.db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
     expect((migrated.db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
     expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('approval_receipts','approval_requests','attempt_authority_receipts','attempt_authority_state','attempt_shadow_comparisons','attempt_transition_audit','attempts','candidate_results','context_manifests','control_inbox','core_writer_lease','event_consumers','execution_leases','gate_evaluations','operations','progress_snapshots','run_checkpoints','semantic_learning_jobs','session_supervisor_inbox','supervisor_decisions','taskrun_edges','tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["approval_receipts", "approval_requests", "attempt_authority_receipts", "attempt_authority_state", "attempt_shadow_comparisons", "attempt_transition_audit", "attempts", "candidate_results", "context_manifests", "control_inbox", "core_writer_lease", "event_consumers", "execution_leases", "gate_evaluations", "operations", "progress_snapshots", "run_checkpoints", "semantic_learning_jobs", "session_supervisor_inbox",  "supervisor_decisions", "taskrun_edges", "tool_attempts"]);

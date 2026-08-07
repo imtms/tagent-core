@@ -38,6 +38,7 @@ export function httpPersistence(store: Store): HttpPersistencePort {
     transcript: persistence.transcript,
     evidence: persistence.evidence,
     eventConsumers: persistence.eventConsumers,
+    workspaceGoals: persistence.workspaceGoals,
   };
 }
 

@@ -24,6 +24,7 @@ import type {
   SupervisorDecisionJournal,
   SupervisorPersistencePort,
   WorkflowGovernancePersistencePort,
+  WorkspaceGoalRepository,
 } from "@tagent/governance/ports";
 import type {
   LearningLedgerRepository,
@@ -51,6 +52,7 @@ import { SqliteLearningEffectRepository } from "./sqlite-learning-effect-reposit
 import { SqliteLearningProjectionAuthorityRepository } from "./sqlite-learning-projection-authority-repository.js";
 import { SqliteLearningProjectionDeliveryRepository } from "./sqlite-learning-projection-delivery-repository.js";
 import { SqliteLearningProjectionReconciliationRepository } from "./sqlite-learning-projection-reconciliation-repository.js";
+import { SqliteWorkspaceGoalRepository } from "./workspace-goal-repository.js";
 
 type Operation<Args extends unknown[], Result> = (...args: Args) => Result;
 type SynchronousOperation<Args extends unknown[], Result> = (...args: Args) => Result & SynchronousResult<Result>;
@@ -116,6 +118,7 @@ export class LegacyStoreAdapter {
   readonly attemptAuthority: AttemptAuthorityRepository;
   readonly runtimeMutations: FencedRuntimeMutationPort;
   readonly taskRunTransitions: TaskRunTransitionPort;
+  readonly workspaceGoals: WorkspaceGoalRepository;
 
   constructor(store: Store, mutationUnitOfWork: MutationUnitOfWork) {
     const mutate = <Args extends unknown[], Result>(operation: SynchronousOperation<Args, Result>) =>
@@ -131,6 +134,18 @@ export class LegacyStoreAdapter {
     const sqliteLearningProjectionAuthority = new SqliteLearningProjectionAuthorityRepository(store.db);
     const sqliteLearningProjectionDelivery = new SqliteLearningProjectionDeliveryRepository(store.db);
     const sqliteLearningProjectionReconciliation = new SqliteLearningProjectionReconciliationRepository(store.db);
+    const sqliteWorkspaceGoals = new SqliteWorkspaceGoalRepository(store.db);
+
+    this.workspaceGoals = Object.freeze({
+      createGoal: mutate(sqliteWorkspaceGoals.createGoal.bind(sqliteWorkspaceGoals)),
+      listGoals: query(sqliteWorkspaceGoals.listGoals.bind(sqliteWorkspaceGoals)),
+      getGoal: query(sqliteWorkspaceGoals.getGoal.bind(sqliteWorkspaceGoals)),
+      addDefinitionRevision: mutate(sqliteWorkspaceGoals.addDefinitionRevision.bind(sqliteWorkspaceGoals)),
+      addPlanRevision: mutate(sqliteWorkspaceGoals.addPlanRevision.bind(sqliteWorkspaceGoals)),
+      decideGoal: mutate(sqliteWorkspaceGoals.decideGoal.bind(sqliteWorkspaceGoals)),
+      linkRun: mutate(sqliteWorkspaceGoals.linkRun.bind(sqliteWorkspaceGoals)),
+      linkEvidence: mutate(sqliteWorkspaceGoals.linkEvidence.bind(sqliteWorkspaceGoals)),
+    });
 
     this.learningIntegration = Object.freeze({
       unitOfWork: mutationUnitOfWork,

@@ -146,6 +146,6 @@ describe("Attempt authority gate", () => {
 
     adapter.attemptAuthority.recordAuthorityReceipt({ id: "rollback", requestedAttemptId: attempt.id, decision: "rollback", actor: "release-governor", reason: "rollback authority only" });
     expect(adapter.attemptAuthority.rollbackAuthority({ receiptId: "rollback" })).toMatchObject({ mode: "shadow", status: "blocked", approvedAttemptId: null });
-    expect(store.getSchemaVersion()).toBe(34);
+    expect(store.getSchemaVersion()).toBe(35);
   });
 });

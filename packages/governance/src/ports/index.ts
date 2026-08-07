@@ -51,6 +51,7 @@ export type {
 } from "./governance-views.js";
 export type { OperationRecord, OperationRepository, OperationUpdate } from "./operation-repository.js";
 export type { ProgressRepository } from "./progress-repository.js";
+export type { WorkspaceGoalRepository } from "./workspace-goal-repository.js";
 export type {
   SupervisorContextManifestReader,
   SupervisorControlInboxReader,

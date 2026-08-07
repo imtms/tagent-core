@@ -7,7 +7,8 @@ import {
   TaskRunEventSchema,
   type ConsoleV1,
 } from "@tagent/abi";
-
+import { createGoalApi } from "./goal-api";
+export type { WorkspaceGoal, WorkspaceGoalSummary, WorkspaceGoalDefinition, WorkspaceGoalPlan, WorkspaceGoalPlanItem, WorkspaceGoalDecision } from "./goal-api";
 export type Session = ConsoleV1.ConsoleSession;
 export type SessionInputAnalysis = ConsoleV1.ConsoleSessionInputAnalysis;
 export type TaskRunContract = ConsoleV1.ConsoleTaskRunContract;
@@ -48,7 +49,6 @@ export type CoreMemorySnapshot = ConsoleV1.ConsoleCoreMemorySnapshot;
 export type MemoryExport = ConsoleV1.ConsoleMemoryExport;
 export type MemoryCard = ConsoleV1.ConsoleMemoryCard;
 export type RecallResult = ConsoleV1.ConsoleRecallResult;
-
 const coreClient = createCoreTransport();
 const configuredCoreOrigin = configuredOrigin(import.meta.env.VITE_TAGENT_CORE_ORIGIN);
 const oidcTokenStorageKey = "tagent.oidc.access_token";
@@ -179,6 +179,7 @@ export const api = {
   updateInbox: (sessionId: string, itemId: string, content: string) => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}`, { method: "PATCH", body: JSON.stringify({ content }) }, ConsoleDecode.inboxItem),
   reorderInbox: (sessionId: string, itemIds: string[]) => request(`/api/v1/console/sessions/${sessionId}/inbox/order`, { method: "PUT", body: JSON.stringify({ itemIds }) }, ConsoleDecode.inboxItems),
   startInbox: (sessionId: string, itemId: string) => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}/start`, { method: "POST" }, ConsoleDecode.startedRun),
+  ...createGoalApi(request),
   deleteInbox: (sessionId: string, itemId: string) => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}`, { method: "DELETE" }, ConsoleDecode.ok),
   decideInbox: (sessionId: string, itemId: string, decision: "pending" | "defer") => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}/decision`, { method: "POST", body: JSON.stringify({ decision }) }, ConsoleDecode.ok),
   mergeInbox: (sessionId: string, itemId: string, targetId: string) => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}/merge`, { method: "POST", body: JSON.stringify({ targetId }) }, ConsoleDecode.ok),
@@ -223,7 +224,6 @@ export const api = {
   runWorkflowDistiller: ()=>request("/api/v1/admin/workflow-distillation/run",{method:"POST",body:JSON.stringify({owner:"learning_center"})},ConsoleDecode.jsonObject),
   retryWorkflowDistillation: (id:string)=>request(`/api/v1/admin/workflow-distillation/${id}/retry`,{method:"POST",body:"{}"},ConsoleDecode.jsonObject),
 };
-
 function sseData(frame: string): string | undefined {
   const lines = frame.split(/\r?\n/);
   const values = lines
