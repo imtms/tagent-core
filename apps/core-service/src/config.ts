@@ -357,6 +357,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 }
 
 export interface PublicRuntimeConfig {
+  releaseVersion: string;
   runtime: AppConfig["runtime"];
   provider: string;
   api: ModelConfig["api"];
@@ -379,6 +380,7 @@ export interface PublicRuntimeConfig {
   historicalTaskRunReceiptChars: number;
   controlInboxCapacity: number;
   schemaVersion?: number;
+  governanceApprovalAuthority: GovernanceApprovalAuthority;
   memoryEnabled: boolean;
   memoryRuntimeEnabled?: boolean;
   memoryWorkspaceScopeId?: string;
@@ -392,6 +394,7 @@ export interface PublicRuntimeConfig {
 
 export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): PublicRuntimeConfig {
   return {
+    releaseVersion: "0.3.0",
     runtime: config.runtime,
     provider: config.model.provider,
     api: config.model.api,
@@ -414,6 +417,7 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     historicalTaskRunReceiptChars: config.historicalTaskRunReceiptChars,
     controlInboxCapacity: config.controlInboxCapacity,
     schemaVersion,
+    governanceApprovalAuthority: config.governanceApprovalAuthority,
     memoryEnabled: config.memory.enabled,
     memoryWorkspaceScopeId: config.memory.enabled ? config.memory.workspaceScopeId : undefined,
     memoryBackend: config.memory.enabled ? config.memory.backend : undefined,

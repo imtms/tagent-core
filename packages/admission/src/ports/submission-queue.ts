@@ -7,6 +7,22 @@ import type { RunId, TaskRun } from "@tagent/execution/domain";
 
 export type ClaimedSubmission = { item: SessionInboxItem; run: TaskRun };
 
+export interface SubmissionAuditInput {
+  principalId: string;
+  canonicalPayload: string;
+  provenance?: Record<string, unknown>;
+}
+
+export interface SubmissionAuditReceipt extends SubmissionAuditInput {
+  sessionId: SessionId;
+  idempotencyKey: string;
+  submissionId: string;
+  payloadHash: string;
+  provenance: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export type SubmissionStartResult =
   | { status: "not_queued" }
   | { status: "running"; runId: RunId }
@@ -25,9 +41,12 @@ export interface SubmissionQueue {
     content: string,
     analysis: SessionInputAnalysis,
     requestId?: string,
+    audit?: SubmissionAuditInput,
   ): SessionInboxItem;
   getSessionInboxItem(id: string): SessionInboxItem | undefined;
   getSessionSubmission(sessionId: SessionId, requestId: string): SessionInboxItem | undefined;
+  recordSubmissionAudit(item: SessionInboxItem, audit: SubmissionAuditInput): SubmissionAuditReceipt;
+  getSubmissionAudit(sessionId: SessionId, requestId: string): SubmissionAuditReceipt | undefined;
   listSessionInbox(sessionId: SessionId, includeTerminal?: boolean): SessionInboxItem[];
   routeSessionInboxItem(
     id: string,

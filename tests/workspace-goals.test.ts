@@ -65,10 +65,10 @@ function addApprovedRoadmap(goals: WorkspaceGoalService, goalId: string, value =
 }
 
 describe("Workspace Goal Roadmap execution", () => {
-  it("opens schema v39 additively and leaves TaskRuns independent when no Goal exists", () => {
+  it("opens schema v40 additively and leaves TaskRuns independent when no Goal exists", () => {
     const store = new Store(":memory:");
     try {
-      expect(store.getSchemaVersion()).toBe(39);
+      expect(store.getSchemaVersion()).toBe(40);
       expect(store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_goal_roadmap_item_progress'").get()).toBeTruthy();
       const workspace = store.createSession("No Goal workspace");
       const run = store.createRun(workspace.id, "ordinary task");

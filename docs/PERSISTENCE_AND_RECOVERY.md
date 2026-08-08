@@ -4,7 +4,7 @@
 
 `@tagent/persistence-sqlite` owns the control-plane SQLite schema, repositories, migrations, transaction boundary, writer authority, and restart recovery primitives. Domains depend on its ports through the Core composition root; they do not issue uncontrolled SQL.
 
-The current schema version is 39:
+The current schema version is 40:
 
 | Version | Authority introduced |
 | --- | --- |
@@ -18,14 +18,17 @@ The current schema version is 39:
 | 37 | operation audit payloads and current-Attempt trusted Bash bindings for Run checks |
 | 38 | automatic Goal guidance, Goal Roadmap admission/progress, Run link modes and repeatable lifecycle decisions |
 | 39 | Gateway Session/command/Goal operation receipts plus settled/final event-consumer ACK boundaries |
+| 40 | Submission principal/provenance audit receipts and canonical-payload recovery |
 
 Schema 37 added `operations.payload_json`, `run_checks.source_operation_id`, `run_checks.observed_at`, and the partial source-operation index. Legacy operations are not retroactively promoted to trusted evidence.
 
 Schema 38 adds `workspace_goal_run_links.link_mode`, `workspace_goal_inbox_links` and `workspace_goal_roadmap_item_progress`. It classifies historical Goal-linked Runs, backfills Roadmap progress and removes the legacy decision-identity constraint so valid pause/resume cycles can repeat. Re-entry validates the complete v37 trusted-evidence shape and the v38 Goal execution shape and fails closed on drift.
 
-Schema 39 adds `session_create_receipts`, `task_run_command_receipts`, `workspace_goal_operation_receipts`, `event_consumers.settled_acked_seq`, and `event_consumers.final_acked_seq`. Session identity is scoped by `(principal_id,idempotency_key)`; command identity by `(principal_id,task_run_id,command_id)`; Goal operation identity by `(goal_id,request_id)`. Every receipt stores the canonical payload hash. Re-entry validates all tables, columns and the command-status index.
+Schema 39 adds `session_create_receipts`, `task_run_command_receipts`, `workspace_goal_operation_receipts`, `event_consumers.settled_acked_seq`, and `event_consumers.final_acked_seq`. Session identity is scoped by `(principal_id,idempotency_key)`; command identity by `(principal_id,task_run_id,command_id)`; Goal operation identity by `(goal_id,request_id)`. Every receipt stores the canonical payload hash. Re-entry validates the complete receipt column order/type/nullability/default/primary-key shape, foreign keys, status checks, ACK columns, and every explicit index fail-closed.
 
-Migrations are forward-only for a running release. A binary that only understands schema 38 must never open a schema 39 database.
+Schema 40 adds `submission_audit_receipts`. Submission identity remains `(session_id,idempotency_key)` while the audit receipt preserves the first Core principal, canonical content-plus-origin payload/hash, channel-neutral provenance, and Submission identity. The inbox item and its audit receipt commit together for new submissions; replay returns the original audit chain and changed canonical provenance conflicts. Re-entry validates the full table, unique identity, foreign key and indexes.
+
+Migrations are forward-only for a running release. A binary that only understands schema 39 must never open a schema 40 database.
 
 ## Startup order
 
@@ -51,7 +54,9 @@ The SQLite writer lease supplies a monotonic fence. Mutation adapters assert tha
 
 ## Unit of Work
 
-Writes that span repositories use a synchronous Unit of Work. The callback must finish before the SQLite transaction returns; asynchronous callbacks are rejected. State transitions, receipts, events, projection checkpoints, and outbox entries therefore become visible atomically.
+Writes that span repositories can use a synchronous Unit of Work. The callback must finish before the SQLite transaction returns; asynchronous callbacks are rejected. State transitions, receipts, events, projection checkpoints, and outbox entries become visible atomically only when their application path composes them in that Unit of Work.
+
+The HTTP TaskRun command path persists the command claim before applying an effect and settles the terminal receipt afterward. Durable inbox admission and domain transitions own their own atomic state/event boundaries. A crash after an effect but before terminal receipt settlement therefore reopens the command receipt as `outcome_unknown`; Core never blindly repeats it. Gateway reconciles that explicit state against the typed read model. This conservative protocol is the stable public recovery contract for commands that can cross Runtime, provider, scheduler, or application-service boundaries.
 
 Do not perform provider calls, filesystem I/O, timers, or other asynchronous work inside the transaction. Persist intent/outbox state first, commit, then perform the effect under its owned lease and receipt protocol.
 
@@ -68,7 +73,7 @@ Recovery does not guess that an interrupted external effect succeeded or failed:
 
 `outcome_unknown` requires explicit reconciliation or operator action. Replaying the same external mutation automatically could duplicate side effects.
 
-Session creation is a fully local transaction: Session row and receipt commit together. `steer`/`follow_up` accept at the durable fenced control-inbox boundary and deliver asynchronously. Commands that can cross Runtime/provider boundaries persist their receipt first; if Core cannot prove completion after restart, GET returns the preserved `outcome_unknown` receipt rather than executing the command again. Goal Roadmap generation similarly claims its request before the single LLM call and never calls the model twice for the same request identity.
+Session creation is a fully local transaction: Session row and receipt commit together. `steer`/`follow_up` accept at the durable fenced control-inbox boundary and deliver asynchronously. Commands persist their receipt claim before invoking the effect; if Core cannot prove terminal settlement after restart, GET returns the preserved `outcome_unknown` receipt rather than executing the command again. This classification is a safe recovery fallback, not proof of atomic command completion. Goal Roadmap generation similarly claims its request before the single LLM call and never calls the model twice for the same request identity.
 
 ## Trusted verification receipts
 

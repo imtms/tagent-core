@@ -20,10 +20,10 @@ export interface HttpPersistencePort {
     SessionRepository,
     "createSession" | "createSessionIdempotent" | "listSessions" | "getSession" | "updateSession" | "renameSession" | "listMessages"
   >;
-  submissions: Pick<SubmissionQueue, "getSessionSubmission" | "listSessionInbox">;
+  submissions: Pick<SubmissionQueue, "getSessionSubmission" | "getSubmissionAudit" | "listSessionInbox">;
   taskRuns: Pick<
     TaskRunRepository,
-    "getRun" | "listRuns" | "getLatestRun" | "listTaskRunEdges"
+    "hasRun" | "getRun" | "listRuns" | "getLatestRun" | "listTaskRunEdges"
   >;
   taskRunCommands: TaskRunCommandReceiptRepository;
   supervisorDecisions: Pick<SupervisorDecisionJournal, "listSupervisorDecisions">;
@@ -34,7 +34,7 @@ export interface HttpPersistencePort {
     "claimOperation" | "updateOperation" | "getOperation" | "listOperations"
   >;
   transcript: Pick<TranscriptRepository, "listTranscriptEntries" | "listTranscriptView">;
-  evidence: Pick<EvidenceRepository, "getArtifact">;
+  evidence: Pick<EvidenceRepository, "getArtifact" | "listArtifacts">;
   eventConsumers: EventConsumerRepository;
   workspaceGoals: WorkspaceGoalRepository;
   workspaceGoalOperations: WorkspaceGoalOperationRepository;

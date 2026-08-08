@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   CommandResponseSchema,
+  ArtifactListResponseSchema,
   CoreCapabilitiesResponseSchema,
   decodeAbi,
   ErrorEnvelopeSchema,
@@ -97,7 +98,22 @@ describe("v1 API contracts", () => {
     const read = await app.inject({ method: "GET", url: `/api/v1/sessions/${session.id}` });
     expect(decodeAbi(SessionSchema, decodeAbi(SuccessEnvelopeSchema, read.json()).data)).toEqual(session);
     const capabilities = decodeAbi(CoreCapabilitiesResponseSchema, (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).data;
-    expect(capabilities).toMatchObject({ persistenceSchemaVersion: 39, interactions: { approvalResolution: true, userInputSubmission: true }, operator: { roadmapGenerationIdempotent: true } });
+    expect(capabilities).toMatchObject({ persistenceSchemaVersion: 40, interactions: { approvalResolution: true, userInputSubmission: true }, operator: { roadmapGenerationIdempotent: true } });
+  });
+
+  it("converges 100 concurrent Session create retries on one durable Session", async () => {
+    const { app, store } = await fixture();
+    const responses = await Promise.all(Array.from({ length: 100 }, (_, index) => app.inject({
+      method: "POST",
+      url: "/api/v1/sessions",
+      headers: { "idempotency-key": "gateway-session-concurrency", "x-request-id": `concurrent-session-${index}` },
+      payload: { title: "Concurrent Gateway workspace", origin: { surface: "api", gatewayActorId: "actor-concurrent", sourceId: "gateway-concurrency" } },
+    })));
+    expect(responses.every((response: { statusCode: number }) => response.statusCode === 200)).toBe(true);
+    const sessionIds = responses.map((response: { json(): unknown }) => decodeAbi(SessionSchema, decodeAbi(SuccessEnvelopeSchema, response.json()).data).id);
+    expect(new Set(sessionIds)).toHaveLength(1);
+    expect(store.listSessions()).toHaveLength(1);
+    expect(store.db.prepare("SELECT COUNT(*) FROM session_create_receipts").pluck().get()).toBe(1);
   });
   it("rejects idempotency-key reuse with different canonical content", async () => {
     const { app, store } = await fixture();
@@ -132,6 +148,32 @@ describe("v1 API contracts", () => {
     expect(conflict.json().error).not.toHaveProperty("category");
     expect(store.listSessionInbox(v1Session.id, true)).toHaveLength(1);
     expect(store.listRuns(v1Session.id)).toHaveLength(1);
+  });
+
+  it("persists channel-neutral Submission provenance and returns the original audit chain", async () => {
+    const { app, store } = await fixture();
+    const session = store.createSession();
+    const origin = { surface: "channel" as const, gatewayActorId: "actor-provenance", sourceId: "telegram-hash", externalRequestId: "external-001" };
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/v1/sessions/${session.id}/submissions`,
+      headers: { "idempotency-key": "submission-provenance" },
+      payload: { content: "trace this request", origin },
+    });
+    expect(decodeAbi(SubmissionResponseSchema, first.json()).data.receipt.audit).toEqual({ principalId: "local-admin", origin });
+    const replay = await app.inject({
+      method: "GET",
+      url: `/api/v1/sessions/${session.id}/submissions/submission-provenance`,
+    });
+    expect(decodeAbi(SubmissionResponseSchema, replay.json()).data.receipt.audit).toEqual({ principalId: "local-admin", origin });
+    const conflict = await app.inject({
+      method: "POST",
+      url: `/api/v1/sessions/${session.id}/submissions`,
+      headers: { "idempotency-key": "submission-provenance" },
+      payload: { content: "trace this request", origin: { ...origin, externalRequestId: "external-002" } },
+    });
+    expect(conflict.statusCode).toBe(409);
+    expect(store.db.prepare("SELECT COUNT(*) FROM submission_audit_receipts").pluck().get()).toBe(1);
   });
 
   it("maps v1 session, submission, and TaskRun fields to durable resources", async () => {
@@ -250,6 +292,19 @@ describe("v1 API contracts", () => {
     expect(second).toMatchObject({ items: [{ sequence: 3, text: "three" }], pageInfo: { nextCursor: null, hasMore: false, limit: 2 } });
   });
 
+  it("pages Artifact metadata with a bounded stable cursor", async () => {
+    const { app, store } = await fixture();
+    const run = store.createRun(store.createSession().id, "paged artifacts");
+    for (const index of [1, 2, 3]) store.addArtifact(run.id, { id: `artifact-${index}`, kind: "report", title: `Artifact ${index}`, content: "body", uri: "" });
+    expect(store.listArtifacts(run.id, 0, 2)).toHaveLength(2);
+    expect(store.listArtifacts(run.id, 0, 2).every((artifact) => !("content" in artifact))).toBe(true);
+    const first = decodeAbi(ArtifactListResponseSchema, (await app.inject({ method: "GET", url: `/api/v1/task-runs/${run.id}/artifacts?after=0&limit=2` })).json()).data;
+    expect(first).toMatchObject({ items: [{ id: "artifact-1" }, { id: "artifact-2" }], pageInfo: { nextCursor: 2, hasMore: true, limit: 2 } });
+    const second = decodeAbi(ArtifactListResponseSchema, (await app.inject({ method: "GET", url: `/api/v1/task-runs/${run.id}/artifacts?after=${first.pageInfo.nextCursor}&limit=2` })).json()).data;
+    expect(second).toMatchObject({ items: [{ id: "artifact-3" }], pageInfo: { nextCursor: null, hasMore: false, limit: 2 } });
+    expect((await app.inject({ method: "GET", url: `/api/v1/task-runs/${run.id}/artifacts?limit=201` })).statusCode).toBe(400);
+  });
+
   it("returns typed paginated TaskRun interactions", async () => {
     const { app, store } = await fixture();
     const run = store.createRun(store.createSession().id, "typed interaction");
@@ -343,12 +398,16 @@ describe("v1 API contracts", () => {
       expectedAttemptId: null,
       type: "task_run.steer",
       payload: { content: "new instruction" },
+      origin: { surface: "api", gatewayActorId: "command-actor", sourceId: "gateway-command" },
     } as const;
     const first = await app.inject({ method: "POST", url: `/api/v1/task-runs/${runId}/commands`, payload: steer });
     expect(decodeAbi(CommandResponseSchema, first.json()).data.receipt.status).toBe("accepted");
     const duplicate = await app.inject({ method: "POST", url: `/api/v1/task-runs/${runId}/commands`, payload: steer });
     const duplicateReceipt = decodeAbi(CommandResponseSchema, duplicate.json()).data.receipt;
-    expect(duplicateReceipt).toMatchObject({ status: "duplicate", state: "succeeded", outcome: "accepted", replayed: true, result: { accepted: true } });
+    expect(duplicateReceipt).toMatchObject({
+      status: "duplicate", state: "succeeded", outcome: "accepted", replayed: true, result: { accepted: true },
+      audit: { principalId: "local-admin", origin: steer.origin },
+    });
     const lookup = await app.inject({ method: "GET", url: `/api/v1/task-runs/${runId}/commands/${steer.commandId}` });
     expect(decodeAbi(CommandResponseSchema, lookup.json()).data.receipt).toEqual(duplicateReceipt);
 

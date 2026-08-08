@@ -44,3 +44,7 @@ export {
   assertGatewayContractsV39Schema,
   migrateGatewayContractsV39,
 } from "./migrations/v39-gateway-contracts.js";
+export {
+  assertGatewayOperatorV40Schema,
+  migrateGatewayOperatorV40,
+} from "./migrations/v40-gateway-operator.js";

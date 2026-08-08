@@ -8,11 +8,23 @@ const CONSUMER_LAG_WARNING_MIN = 1;
 const CONSUMER_LAG_CRITICAL = 10_000;
 const TERMINAL_UNACKED_WARNING_MIN = 1;
 const TERMINAL_UNACKED_CRITICAL_AGE_MS = 120_000;
+const RECEIPT_UNCERTAIN_CRITICAL_AGE_MS = 120_000;
 const SETTLED_STATUSES = ["completed", "failed", "cancelled", "blocked"];
 const FINAL_STATUSES = ["completed", "cancelled"];
-const EXPECTED_SCHEMA_VERSION = 39;
+const EXPECTED_SCHEMA_VERSION = 40;
 const REQUIRED_COMMANDS = ["task_run.steer", "task_run.follow_up", "task_run.cancel", "task_run.resume", "task_run.compact", "task_run.submit_user_input", "task_run.resolve_approval"];
 const REQUIRED_EVENTS = ["task_run.started", "task_run.waiting_input", "task_run.blocked", "task_run.resumed", "task_run.completed", "task_run.failed", "task_run.cancelled", "approval.requested", "approval.resolved", "user_input.submitted"];
+const REQUIRED_OPERATOR_ENDPOINTS = [
+  "channel.sessions.create", "channel.sessions.get", "channel.submissions.create", "channel.submissions.get",
+  "channel.task_runs.get", "channel.task_run_commands.create", "channel.task_run_commands.get",
+  "channel.task_run_interactions.list", "channel.task_run_transcript.list", "channel.task_run_artifacts.list",
+  "channel.task_run_artifacts.get",
+  "channel.event_consumers.claim", "channel.event_consumers.ack", "channel.task_run_events.stream",
+  "operator.workspace_goals.list", "operator.workspace_goals.get", "operator.workspace_goals.create",
+  "operator.workspace_goals.revise_definition", "operator.workspace_goals.revise_roadmap",
+  "operator.workspace_goals.generate_roadmap", "operator.workspace_goals.get_operation",
+  "operator.workspace_goals.decide", "operator.workspace_goals.start_task_run",
+];
 
 function tableExists(db, name) {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
@@ -78,6 +90,26 @@ function readWatermarks(db) {
     FROM learning_projection_checkpoint ORDER BY consumer,delivery_role`).all();
 }
 
+function readReceiptHealth(db, now) {
+  const read = (table) => {
+    if (!tableExists(db, table)) return null;
+    const row = db.prepare(`SELECT
+      SUM(CASE WHEN status='started' THEN 1 ELSE 0 END) AS started,
+      SUM(CASE WHEN status='outcome_unknown' THEN 1 ELSE 0 END) AS outcomeUnknown,
+      MIN(CASE WHEN status IN ('started','outcome_unknown') THEN updated_at END) AS oldestUpdatedAt
+      FROM ${table}`).get();
+    return {
+      started: row.started ?? 0,
+      outcomeUnknown: row.outcomeUnknown ?? 0,
+      oldestUncertainAgeMs: row.oldestUpdatedAt === null ? null : Math.max(0, now - row.oldestUpdatedAt),
+    };
+  };
+  return {
+    commands: read("task_run_command_receipts"),
+    workspaceGoals: read("workspace_goal_operation_receipts"),
+  };
+}
+
 async function readHealth(url) {
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(5_000) });
@@ -109,6 +141,7 @@ async function readCapabilities(url, token) {
     const data = body?.data;
     const commands = new Set(data?.commandTypes ?? []);
     const events = new Set(data?.eventTypes ?? []);
+    const operatorEndpoints = new Set(data?.operator?.endpointIds ?? []);
     const compatible = response.ok
       && data?.persistenceSchemaVersion === EXPECTED_SCHEMA_VERSION
       && REQUIRED_COMMANDS.every((item) => commands.has(item))
@@ -116,7 +149,16 @@ async function readCapabilities(url, token) {
       && data?.interactions?.approvalResolution === true
       && data?.interactions?.userInputSubmission === true
       && data?.operator?.workspaceGoals === true
-      && data?.operator?.roadmapGenerationIdempotent === true;
+      && data?.operator?.roadmapGenerationIdempotent === true
+      && REQUIRED_OPERATOR_ENDPOINTS.every((item) => operatorEndpoints.has(item))
+      && data?.approval?.ready === true
+      && ["legacy", "canonical"].includes(data?.approval?.authority)
+      && data?.receiptRecovery?.exactReplay === true
+      && data?.receiptRecovery?.commandLookup === true
+      && data?.receiptRecovery?.interruptedEffectState === "outcome_unknown"
+      && data?.receiptRecovery?.automaticUnknownReplay === false
+      && data?.retention?.automaticDeletion === false
+      && data?.retention?.cursorExpiry === false;
     return { reachable: true, status: response.status, compatible, data };
   } catch (error) {
     return { reachable: false, status: null, compatible: false, error: error instanceof Error ? error.message : String(error) };
@@ -135,6 +177,10 @@ function severityFor(snapshot) {
     || snapshot.consumerLag >= CONSUMER_LAG_CRITICAL
     || snapshot.terminalUnacked === null
     || (snapshot.terminalOldestUnackedAgeMs ?? 0) >= TERMINAL_UNACKED_CRITICAL_AGE_MS
+    || (snapshot.receipts?.commands?.outcomeUnknown ?? 0) > 0
+    || (snapshot.receipts?.workspaceGoals?.outcomeUnknown ?? 0) > 0
+    || (snapshot.receipts?.commands?.oldestUncertainAgeMs ?? 0) >= RECEIPT_UNCERTAIN_CRITICAL_AGE_MS
+    || (snapshot.receipts?.workspaceGoals?.oldestUncertainAgeMs ?? 0) >= RECEIPT_UNCERTAIN_CRITICAL_AGE_MS
     || !snapshot.authority) return "critical";
   return "warning";
 }
@@ -163,6 +209,7 @@ async function main() {
       ...consumer,
       authority: readAuthority(db),
       watermarks: readWatermarks(db),
+      receipts: readReceiptHealth(db, now),
     };
   } finally {
     db.close();
@@ -185,10 +232,26 @@ async function main() {
   if (databaseSnapshot.consumerLag === null || databaseSnapshot.consumerLag > 0) reasons.push("consumer_lag");
   if (databaseSnapshot.settledUnacked === null || databaseSnapshot.settledUnacked > 0) reasons.push("settled_unacked");
   if (databaseSnapshot.finalUnacked === null || databaseSnapshot.finalUnacked > 0) reasons.push("final_unacked");
+  if (databaseSnapshot.receipts.commands === null) reasons.push("command_receipts_unavailable");
+  else {
+    if (databaseSnapshot.receipts.commands.started > 0
+      && (databaseSnapshot.receipts.commands.oldestUncertainAgeMs ?? 0) >= RECEIPT_UNCERTAIN_CRITICAL_AGE_MS) {
+      reasons.push("command_receipts_stale_started");
+    }
+    if (databaseSnapshot.receipts.commands.outcomeUnknown > 0) reasons.push("command_receipts_outcome_unknown");
+  }
+  if (databaseSnapshot.receipts.workspaceGoals === null) reasons.push("goal_receipts_unavailable");
+  else {
+    if (databaseSnapshot.receipts.workspaceGoals.started > 0
+      && (databaseSnapshot.receipts.workspaceGoals.oldestUncertainAgeMs ?? 0) >= RECEIPT_UNCERTAIN_CRITICAL_AGE_MS) {
+      reasons.push("goal_receipts_stale_started");
+    }
+    if (databaseSnapshot.receipts.workspaceGoals.outcomeUnknown > 0) reasons.push("goal_receipts_outcome_unknown");
+  }
   if (!authorityReady) reasons.push("authority_not_active");
 
   const snapshot = {
-    probeVersion: 2,
+    probeVersion: 3,
     database: path.resolve(database),
     healthUrl,
     capabilitiesUrl,
@@ -203,6 +266,7 @@ async function main() {
       consumerLagCritical: CONSUMER_LAG_CRITICAL,
       terminalUnackedWarningMin: TERMINAL_UNACKED_WARNING_MIN,
       terminalUnackedCriticalAgeMs: TERMINAL_UNACKED_CRITICAL_AGE_MS,
+      receiptUncertainCriticalAgeMs: RECEIPT_UNCERTAIN_CRITICAL_AGE_MS,
     },
     ready: reasons.length === 0,
     reasons,

@@ -20,6 +20,7 @@ export interface ModelUsage {
 
 export interface TaskRunRepository {
   createRun(sessionId: ExecutionSessionRef, goal: string, requestId?: string, contract?: TaskRunContractSnapshot | null): TaskRun;
+  hasRun(id: RunId): boolean;
   getRun(id: RunId): TaskRun | undefined;
   getRunByRequestId(requestId: string): TaskRun | undefined;
   listRuns(sessionId: ExecutionSessionRef, limit?: number): TaskRun[];

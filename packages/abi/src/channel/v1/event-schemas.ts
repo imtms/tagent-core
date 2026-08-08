@@ -1,6 +1,14 @@
 import { Type, type Static, type TSchema } from "typebox";
 import { IdentifierSchema, IsoDateTimeSchema, JsonObjectSchema, RequestIdSchema } from "../../shared/primitives.js";
 
+export const PROJECTION_CRITICAL_TASK_RUN_EVENT_TYPES = [
+  "task_run.started", "task_run.waiting_input", "task_run.blocked", "task_run.resumed",
+  "task_run.completed", "task_run.failed", "task_run.cancelled", "task_run.interrupted",
+  "message.started", "message.delta", "message.completed", "tool.started", "tool.progress",
+  "tool.completed", "tool.failed", "provider.failure", "approval.requested", "approval.resolved",
+  "user_input.submitted", "diagnostic.internal",
+] as const;
+
 export const KnownTaskRunEventTypeSchema = Type.Union([
   Type.Literal("task_run.started"), Type.Literal("task_run.waiting_input"),
   Type.Literal("task_run.blocked"), Type.Literal("task_run.resumed"),

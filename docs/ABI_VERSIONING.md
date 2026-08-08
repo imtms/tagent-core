@@ -52,7 +52,7 @@ Fastify route handlers decode ingress and encode egress with `@tagent/abi`. `@ta
 6. Add differential coverage for removed or incompatible routes.
 7. Update [API_V1.md](API_V1.md), [CHANGELOG.md](../CHANGELOG.md), and upgrade guidance.
 
-Core, clients, and artifacts for a release must use the same validated ABI build.
+Core, clients, and artifacts for a release must use the same validated ABI build. Core publishes the owned schemas, canonical fixtures, typed client and provider/consumer contract tests. Gateway owns its fake-Core process/container and the current/previous Gateway-client CI matrix; those components encode Gateway transport and release policy and are not Core runtime deliverables.
 
 ## Gateway contracts v39 migration window
 
@@ -65,6 +65,27 @@ Schema v39 introduces the named `gateway-contracts-v39` migration window. It int
 - event-consumer cursors add settled/final ACK fields;
 - Workspace Goal writes require `requestId`.
 
-Because v1 decoders reject unknown fields, a pre-v39 client is not wire-compatible with these tightened responses. Deploy schema-v39 Core and the matching `@tagent/abi`/`@tagent/core-client` before enabling Gateway traffic; `GET /api/v1/capabilities` must report persistence schema 39 and the required catalogs. `status: "duplicate"` and `terminalAcknowledgedSequence` remain as deprecated compatibility aliases for one release window. New consumers must use `replayed` plus `state/outcome`, and `settledAcknowledgedSequence`/`finalAcknowledgedSequence`.
+Because v1 decoders reject unknown fields, a pre-v39 client is not wire-compatible with these tightened responses. `status: "duplicate"` and `terminalAcknowledgedSequence` remain as deprecated compatibility aliases for one release window. New consumers must use `replayed` plus `state/outcome`, and `settledAcknowledgedSequence`/`finalAcknowledgedSequence`.
+
+## Gateway operator v40 migration window
+
+Schema v40 completes the Gateway-facing audit and discovery contract:
+
+- Submission accepts channel-neutral `origin`, persists its first Core principal/canonical audit receipt, and returns `audit`;
+- Artifact metadata uses bounded `after`/`limit` pages with mandatory `pageInfo`;
+- capabilities publishes the exact Operator endpoint allowlist, active Approval authority, receipt-recovery protocol, no-pruning cursor policy, and read-size limits;
+- the Workspace Goal Operator subset has ABI-owned write bodies and typed Core Client methods;
+- every public event catalog member has a canonical producer-valid fixture.
+
+Deploy schema-40 Core and the matching `@tagent/abi`/`@tagent/core-client` before enabling the v40 profile. Gateway must negotiate `persistenceSchemaVersion=40`, `operator.profileVersion=1.0`, the required endpoint IDs and receipt/retention capabilities. The stable allowlist—not every `/api/v1/console/*` route—is the compatibility promise.
+
+| Core profile | Client profile | Support |
+| --- | --- | --- |
+| schema 40 / Operator 1.0 | matching v40 ABI and Core Client | Supported |
+| schema 40 / Operator 1.0 | pre-v40 strict decoder | Unsupported; mandatory audit/page/capability fields changed in the named window |
+| schema 39 / Gateway contracts v39 | matching v39 client | Historical migration window only |
+| any | undeclared Console/Admin proxy | Unsupported cross-team dependency |
+
+Gateway CI may support more client minors, but it cannot infer compatibility when capability negotiation or strict decoding fails.
 
 The next public API major should remove those aliases rather than extending the window indefinitely.

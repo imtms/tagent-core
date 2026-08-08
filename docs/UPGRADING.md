@@ -1,6 +1,6 @@
 # Upgrade and rollback
 
-This guide describes the current repository boundary: API v1, independently deployed Core and Web Console artifacts, one fenced SQLite writer, and control-plane schema 39. It replaces the version-specific 0.2 upgrade notes; release tags retain those historical instructions.
+This guide describes the current repository boundary: API v1, independently deployed Core and Web Console artifacts, one fenced SQLite writer, and control-plane schema 40. It replaces the version-specific 0.2 upgrade notes; release tags retain those historical instructions.
 
 ## Compatibility boundary
 
@@ -8,7 +8,7 @@ This guide describes the current repository boundary: API v1, independently depl
 - Core is API-only and does not serve the Web Console or an SPA fallback.
 - Durable submissions use the `Idempotency-Key` header and v1 receipt envelopes.
 - Production uses Node.js `24.18.1`, npm 12 or newer, and Linux x64/Node ABI 137 for the immutable Core artifact.
-- SQLite migrations are forward-only. A binary that understands at most schema 38 must not open schema 39.
+- SQLite migrations are forward-only. A binary that understands at most schema 39 must not open schema 40.
 - Core, Gateway and Web must honor generation-fenced event replay and durable persist-before-ACK behavior.
 
 ## Before upgrading
@@ -38,6 +38,7 @@ The production `Store` opener applies and revalidates the migration chain:
 | 37 | operation audit payloads and trusted current-Attempt Bash bindings for checks |
 | 38 | automatic Goal guidance, Roadmap admission/progress and repeatable lifecycle decisions |
 | 39 | durable Gateway Session/command/Goal operation receipts and settled/final event ACKs |
+| 40 | durable Submission principal/provenance audit receipts |
 
 Schema 37 added:
 
@@ -68,7 +69,9 @@ event_consumers.settled_acked_seq
 event_consumers.final_acked_seq
 ```
 
-The v39 migration backfills the settled ACK from the deprecated terminal ACK, validates required indexes, and is re-entrant. On every reopen, unfinished command and Goal operation receipts become `outcome_unknown`; Core never guesses or automatically repeats a possibly completed effect.
+The v39 migration backfills the settled ACK from the deprecated terminal ACK and is re-entrant. Re-entry validates full table columns, constraints, foreign keys and indexes rather than checking a partial inventory. On every reopen, unfinished command and Goal operation receipts become `outcome_unknown`; Core never guesses or automatically repeats a possibly completed effect.
+
+Schema 40 adds `submission_audit_receipts`. New Submission admission atomically preserves the Session/key identity, Core principal, canonical payload/hash and channel-neutral provenance with the inbox item. The migration and every reopen validate the full table, foreign key, unique identity and index shape.
 
 The schema 33 preflight may record ambiguous source rows in `migration_issues`. Any open issue blocks startup. Correct the underlying source data and rerun the migration; do not delete or bypass the ledger.
 
@@ -76,9 +79,9 @@ The schema 33 preflight may record ambiguous source rows in `migration_issues`. 
 
 1. Verify the candidate Core archive and checksum.
 2. Open a restored database with the release-local `Store` twice.
-3. Require both opens to report `schema_meta.version=39`, zero open migration issues, the trusted-evidence/Goal execution shapes and all v39 receipt tables/ACK columns.
+3. Require both opens to report `schema_meta.version=40`, zero open migration issues, the trusted-evidence/Goal execution shapes, all v39 receipt/ACK shapes, and the v40 Submission audit shape.
 4. Start exactly one Core writer and require `/api/v1/health` to report `data.ok=true` and `data.writer.ready=true`.
-5. Negotiate `GET /api/v1/capabilities`; require schema 39, the necessary commands/events, typed interactions, Operator Goal support and documented limits.
+5. Negotiate `GET /api/v1/capabilities`; require schema 40, the necessary commands/events, the versioned Operator allowlist, current Approval authority, receipt-recovery protocol, retention policy and documented limits.
 6. Start one Gateway consumer, claim a new generation, replay from the durable ACK, persist each event, then ACK it.
 7. Run `scripts/gateway-readiness-probe.mjs`; require exit 0, `ready=true`, zero lag and no settled/final unacknowledged events.
 8. Deploy the matching independent Web Console artifact.
@@ -89,7 +92,7 @@ Use [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for the e
 ## Verification
 
 - `/api/v1/health` is ready and removed `/api/health` returns 404;
-- schema version is 39 and a second open is idempotent;
+- schema version is 40 and a second open is idempotent;
 - `migration_issues` has zero open rows;
 - only one fresh writer fence exists;
 - a passed required check is rejected unless it references a successful Bash operation from the current Attempt;
@@ -102,9 +105,9 @@ Use [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for the e
 
 There is no in-place schema downgrade.
 
-For a binary rollback that still understands schema 39 and the named `gateway-contracts-v39` ABI window, stop traffic and the current writer, switch the immutable release pointer, start one replacement writer and rerun readiness checks.
+For a binary rollback that still understands schema 40 and the current ABI window, stop traffic and the current writer, switch the immutable release pointer, start one replacement writer and rerun readiness checks.
 
-For any rollback to a schema-38-only or older binary:
+For any rollback to a schema-39-only or older binary:
 
 1. stop Gateway traffic and all writers;
 2. preserve the failed-upgrade database and readiness evidence for diagnosis;
@@ -113,4 +116,4 @@ For any rollback to a schema-38-only or older binary:
 5. restore the matching artifact and configuration;
 6. start exactly one old writer and validate it before reopening compatible traffic.
 
-Do not overwrite a live schema 39 database with old files, and do not run an incompatible binary merely to inspect it.
+Do not overwrite a live schema 40 database with old files, and do not run an incompatible binary merely to inspect it.

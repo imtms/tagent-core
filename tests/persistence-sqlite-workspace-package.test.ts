@@ -205,16 +205,17 @@ describe("SQLite persistence adapter workspace package", () => {
     expect(upperLayerViolations).toEqual([]);
   });
 
-  it("preserves schema v39 and the current SQLite shape", () => {
+  it("preserves schema v40 and the current SQLite shape", () => {
     const store = new Store(":memory:");
     try {
-      expect(store.getSchemaVersion()).toBe(39);
+      expect(store.getSchemaVersion()).toBe(40);
       const tables = store.db.prepare(
         "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'",
       ).all() as Array<{ name: string }>;
-      expect(tables).toHaveLength(83);
+      expect(tables).toHaveLength(84);
       expect(tables.map((table) => table.name)).toEqual(expect.arrayContaining([
         "session_create_receipts",
+        "submission_audit_receipts",
         "task_run_command_receipts",
         "workspace_goal_inbox_links",
         "workspace_goal_operation_receipts",

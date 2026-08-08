@@ -33,7 +33,7 @@ The repository contains 13 workspaces in one acyclic dependency graph:
 | Domain | `@tagent/memory` | Optional Hot/Warm/Cold long-term Memory |
 | Domain | `@tagent/learning` | Optional governed Learning projections and workflows |
 | Adapter | `@tagent/http-fastify` | API-only Fastify adapter for `/api/v1` |
-| Adapter | `@tagent/persistence-sqlite` | Schema 38, repositories, migrations, writer fencing, and Unit of Work |
+| Adapter | `@tagent/persistence-sqlite` | Schema 40, repositories, migrations, writer fencing, and Unit of Work |
 | Adapter | `@tagent/runtime-pi` | In-process Pi runtime integration |
 | Adapter | `@tagent/workspace-local` | Workspace-contained tools and path enforcement |
 | Application | `@tagent/core-service` | Core composition root and lifecycle |
@@ -83,6 +83,7 @@ Submission idempotency uses the `Idempotency-Key` request header:
 ```bash
 curl -fsS -X POST http://127.0.0.1:3100/api/v1/sessions \
   -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: local-session-001' \
   -d '{"title":"Local session"}'
 ```
 
@@ -92,9 +93,9 @@ Core does not validate browser OIDC/JWT tokens. In production, a Gateway validat
 
 ## Persistence and recovery
 
-Core owns a schema 39 SQLite database. Startup acquires an OS instance lock, applies migrations, claims a writer lease and fence, installs connection-level mutation guards, performs guarded recovery, starts services and workers, then reports the writer ready.
+Core owns a schema 40 SQLite database. Startup acquires an OS instance lock, applies migrations, claims a writer lease and fence, installs connection-level mutation guards, performs guarded recovery, starts services and workers, then reports the writer ready.
 
-Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Back up the SQLite database together with its WAL/SHM files before an upgrade. Binaries that only understand schema 38 cannot open schema 39; rollback requires the matching pre-upgrade database backup. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md) and [docs/UPGRADING.md](docs/UPGRADING.md).
+Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Back up the SQLite database together with its WAL/SHM files before an upgrade. Binaries that only understand schema 39 cannot open schema 40; rollback requires the matching pre-upgrade database backup. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md) and [docs/UPGRADING.md](docs/UPGRADING.md).
 
 ## Completion evidence and model calls
 

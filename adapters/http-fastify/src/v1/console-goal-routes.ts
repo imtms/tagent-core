@@ -1,12 +1,17 @@
 import type { FastifyInstance } from "fastify";
 import { Type, type Static } from "typebox";
 import {
-  ConsoleWorkspaceGoalDefinitionSchema,
-  ConsoleWorkspaceGoalRoadmapSchema,
   ConsoleWorkspaceGoalSchema,
   ConsoleWorkspaceGoalSummarySchema,
+  ConsoleWorkspaceGoalRevisionSchema,
   ConsoleGenerateWorkspaceGoalRoadmapRequestSchema,
   ConsoleWorkspaceGoalOperationReceiptSchema,
+  ConsoleCreateWorkspaceGoalRequestSchema,
+  ConsoleReviseWorkspaceGoalDefinitionRequestSchema,
+  ConsoleReviseWorkspaceGoalRoadmapRequestSchema,
+  ConsoleDecideWorkspaceGoalRequestSchema,
+  ConsoleStartWorkspaceGoalTaskRunRequestSchema,
+  ConsoleStartWorkspaceGoalTaskRunResultSchema,
   canonicalJson,
   decodeAbi,
   encodeAbi,
@@ -19,27 +24,12 @@ import { authorizeConsole, consoleError } from "./console-route-support.js";
 const GoalIdParamsSchema = Type.Object({ goalId: Type.String({ minLength: 1, maxLength: 300 }) });
 const GoalOperationParamsSchema = Type.Object({ goalId: Type.String({ minLength: 1, maxLength: 300 }), requestId: Type.String({ minLength: 1, maxLength: 300 }) });
 const WorkspaceIdParamsSchema = Type.Object({ workspaceId: Type.String({ minLength: 1, maxLength: 300 }) });
-const OptionalActorIdSchema = Type.Optional(Type.String({ minLength: 1, maxLength: 300 }));
-const CreateGoalBodySchema = Type.Object({ definition: ConsoleWorkspaceGoalDefinitionSchema, requestId: Type.String({ minLength: 1, maxLength: 300 }), actorId: OptionalActorIdSchema });
-const ReviseGoalBodySchema = Type.Object({ definition: ConsoleWorkspaceGoalDefinitionSchema, requestId: Type.String({ minLength: 1, maxLength: 300 }), actorId: OptionalActorIdSchema });
-const RoadmapBodySchema = Type.Object({ content: ConsoleWorkspaceGoalRoadmapSchema, requestId: Type.String({ minLength: 1, maxLength: 300 }), sourceArtifactId: Type.Optional(Type.Union([Type.String(), Type.Null()])), actorId: OptionalActorIdSchema });
+const CreateGoalBodySchema = ConsoleCreateWorkspaceGoalRequestSchema;
+const ReviseGoalBodySchema = ConsoleReviseWorkspaceGoalDefinitionRequestSchema;
+const RoadmapBodySchema = ConsoleReviseWorkspaceGoalRoadmapRequestSchema;
 const GenerateRoadmapBodySchema = ConsoleGenerateWorkspaceGoalRoadmapRequestSchema;
-const StartRoadmapItemBodySchema = Type.Object({
-  roadmapItemId: Type.String({ minLength: 1, maxLength: 300 }),
-  requestId: Type.String({ minLength: 1, maxLength: 300 }),
-});
-const DecisionBodySchema = Type.Object({
-  requestId: Type.String({ minLength: 1, maxLength: 300 }),
-  targetRevisionId: Type.String({ minLength: 1, maxLength: 300 }),
-  targetHash: Type.String({ minLength: 1, maxLength: 128 }),
-  kind: Type.Union([
-    Type.Literal("approve_goal"), Type.Literal("approve_roadmap"), Type.Literal("request_change"),
-    Type.Literal("pause"), Type.Literal("resume"), Type.Literal("close"), Type.Literal("cancel"),
-  ]),
-  approvedItemIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 300 }), { maxItems: 200 })),
-  reason: Type.Optional(Type.String({ maxLength: 4000 })),
-  actorId: OptionalActorIdSchema,
-});
+const StartRoadmapItemBodySchema = ConsoleStartWorkspaceGoalTaskRunRequestSchema;
+const DecisionBodySchema = ConsoleDecideWorkspaceGoalRequestSchema;
 
 type GoalIdParams = Static<typeof GoalIdParamsSchema>;
 type GoalOperationParams = Static<typeof GoalOperationParamsSchema>;
@@ -79,7 +69,7 @@ export function registerConsoleGoalV1Routes(app: FastifyInstance, dependencies: 
       const claim = dependencies.persistence.workspaceGoalOperations.claimWorkspaceGoalOperation({ goalId, requestId: body.requestId, operationType: "definition.revise", canonicalPayload: canonicalJson({ definition: body.definition, actorId }) });
       if (!claim.claimed) return successEnvelope(request, replayGoalOperation(claim.receipt));
       try {
-        const result = goals.reviseDefinition(goalId, body.definition, actorId);
+        const result = encodeAbi(ConsoleWorkspaceGoalRevisionSchema, goals.reviseDefinition(goalId, body.definition, actorId));
         dependencies.persistence.workspaceGoalOperations.settleWorkspaceGoalOperation(goalId, body.requestId, "succeeded", result as unknown as Record<string, unknown>);
         return successEnvelope(request, result);
       } catch (error) {
@@ -153,11 +143,11 @@ export function registerConsoleGoalV1Routes(app: FastifyInstance, dependencies: 
         item: { id: string };
         run: { id: string } | null;
       };
-      return successEnvelope(request, {
+      return successEnvelope(request, encodeAbi(ConsoleStartWorkspaceGoalTaskRunResultSchema, {
         goal: encodeAbi(ConsoleWorkspaceGoalSchema, goals.get(goalId)!),
         inboxItemId: result.item.id,
         runId: result.run?.id ?? null,
-      });
+      }));
     } catch (error) { throw mapGoalError(error); }
   });
 

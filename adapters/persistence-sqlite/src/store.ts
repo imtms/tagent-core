@@ -46,6 +46,7 @@ import type {
   SessionSettingsUpdate,
   TaskObjective,
 } from "@tagent/admission/domain";
+import type { SubmissionAuditInput, SubmissionAuditReceipt } from "@tagent/admission/ports";
 import {
   ATTEMPT_SCHEMA_V30_SQL,
   migrateAttemptsV30,
@@ -83,12 +84,16 @@ import {
   assertGatewayContractsV39Schema,
   migrateGatewayContractsV39,
 } from "./migrations/v39-gateway-contracts.js";
+import {
+  assertGatewayOperatorV40Schema,
+  migrateGatewayOperatorV40,
+} from "./migrations/v40-gateway-operator.js";
 import { mapLegacyRunApprovalOperation } from "./sqlite/canonical-approval-mapper.js";
 import { appendProjectionPair, finalizeProjectionCheckpoint } from "./sqlite/canonical-integration-event.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 39;
+const SCHEMA_VERSION = 40;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
 export interface StoreOptions {
@@ -111,6 +116,7 @@ export class Store {
     this.defaultModelId = options.defaultModelId?.trim() || "gpt-5.6-sol";
     this.db = new Database(filename);
     try {
+      this.db.pragma("busy_timeout = 5000");
       this.db.pragma("journal_mode = WAL");
       this.db.pragma("foreign_keys = ON");
       this.migrate();
@@ -1097,10 +1103,16 @@ export class Store {
 
     const gatewayContractsMigration = this.db.transaction(() => {
       migrateGatewayContractsV39(this.db, previousVersion !== undefined && previousVersion >= 39 ? 39 : 38);
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+      this.db.prepare(`UPDATE schema_meta SET version=39,updated_at=? WHERE id=1`).run(now());
     });
     gatewayContractsMigration();
     assertGatewayContractsV39Schema(this.db);
+    const gatewayOperatorMigration = this.db.transaction(() => {
+      migrateGatewayOperatorV40(this.db, previousVersion !== undefined && previousVersion >= 40 ? 40 : 39);
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+    });
+    gatewayOperatorMigration();
+    assertGatewayOperatorV40Schema(this.db);
     // A process restart loses the in-memory executor for receipts that had only
     // reached "started". Surface uncertainty explicitly; never replay an effect
     // whose outcome may already have escaped Core.
@@ -1274,16 +1286,18 @@ export class Store {
     provenance?: Record<string, unknown>;
   }): { session: Session; replayed: boolean } {
     const payloadHash = createHash("sha256").update(input.canonicalPayload).digest("hex");
-    return this.db.transaction(() => {
-      const existing = this.db.prepare(`SELECT payload_hash as payloadHash,session_id as sessionId
-        FROM session_create_receipts WHERE principal_id=? AND idempotency_key=?`)
-        .get(input.principalId, input.idempotencyKey) as { payloadHash: string; sessionId: string } | undefined;
-      if (existing) {
-        if (existing.payloadHash !== payloadHash) throw new Error("Session idempotency conflict: key is bound to a different canonical payload");
-        const session = this.getSession(existing.sessionId);
-        if (!session) throw new Error("Session idempotency receipt references a missing Session");
-        return { session, replayed: true };
-      }
+    const readReceipt = () => this.db.prepare(`SELECT payload_hash as payloadHash,session_id as sessionId
+      FROM session_create_receipts WHERE principal_id=? AND idempotency_key=?`)
+      .get(input.principalId, input.idempotencyKey) as { payloadHash: string; sessionId: string } | undefined;
+    const replay = (existing: { payloadHash: string; sessionId: string }) => {
+      if (existing.payloadHash !== payloadHash) throw new Error("Session idempotency conflict: key is bound to a different canonical payload");
+      const session = this.getSession(existing.sessionId);
+      if (!session) throw new Error("Session idempotency receipt references a missing Session");
+      return { session, replayed: true };
+    };
+    const create = this.db.transaction(() => {
+      const existing = readReceipt();
+      if (existing) return replay(existing);
       const timestamp = now();
       const session: Session = {
         id: randomUUID(), title: input.title, modelId: this.defaultModelId, reasoningEffort: "high",
@@ -1298,7 +1312,20 @@ export class Store {
         JSON.stringify(input.provenance ?? {}), timestamp, timestamp,
       );
       return { session, replayed: false };
-    })();
+    });
+    try {
+      return create();
+    } catch (error) {
+      // A second SQLite connection may commit the same principal/key between
+      // this transaction's first read and insert. The unique key is the
+      // authority; reread it so a valid concurrent replay never leaks as 500.
+      const code = (error as { code?: unknown }).code;
+      if (typeof code === "string" && code.startsWith("SQLITE_CONSTRAINT")) {
+        const existing = readReceipt();
+        if (existing) return replay(existing);
+      }
+      throw error;
+    }
   }
 
   claimTaskRunCommand(input: {
@@ -1487,17 +1514,29 @@ export class Store {
     return { id: Number(result.lastInsertRowid), sessionId, role, content, createdAt };
   }
 
-  enqueueSessionInbox(sessionId: SessionId, content: string, analysis: SessionInputAnalysis, requestId: string = randomUUID()): SessionInboxItem {
+  enqueueSessionInbox(
+    sessionId: SessionId,
+    content: string,
+    analysis: SessionInputAnalysis,
+    requestId: string = randomUUID(),
+    audit?: SubmissionAuditInput,
+  ): SessionInboxItem {
     const transaction = this.db.transaction(() => {
       const existing = this.db.prepare("SELECT id FROM session_supervisor_inbox WHERE session_id = ? AND request_id = ?").get(sessionId, requestId) as { id: string } | undefined;
-      if (existing) return this.getSessionInboxItem(existing.id)!;
+      if (existing) {
+        const item = this.getSessionInboxItem(existing.id)!;
+        if (audit) this.recordSubmissionAudit(item, audit);
+        return item;
+      }
       const timestamp = now();
       const position = (this.db.prepare("SELECT COALESCE(MAX(position),0)+1 as position FROM session_supervisor_inbox WHERE session_id = ? AND status = 'queued'").get(sessionId) as { position: number }).position;
       const id = randomUUID();
       this.db.prepare(`INSERT INTO session_supervisor_inbox
         (id,session_id,request_id,content,status,decision,position,created_at,updated_at,summary,objectives_json,intent,target_run_id,priority,urgency,relation,acceptance_json,scope,non_goals_json,confidence,decision_reason,router_version)
         VALUES (?,?,?,?,'queued','pending',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, sessionId, requestId, content, position, timestamp, timestamp, analysis.summary, JSON.stringify(analysis.objectives ?? [{ id: "objective-1", summary: analysis.summary, timing: "current", kind: "other" }]), analysis.intent, analysis.targetRunId, analysis.priority, analysis.urgency, analysis.relation, JSON.stringify(analysis.acceptanceCriteria), analysis.scope, JSON.stringify(analysis.nonGoals), analysis.confidence, analysis.reason, analysis.routerVersion);
-      return this.getSessionInboxItem(id)!;
+      const item = this.getSessionInboxItem(id)!;
+      if (audit) this.recordSubmissionAudit(item, audit);
+      return item;
     });
     return transaction();
   }
@@ -1525,6 +1564,45 @@ export class Store {
 
   getSessionSubmission(sessionId: SessionId, requestId: string): SessionInboxItem | undefined {
     return this.hydrateSessionInbox(this.db.prepare(this.sessionInboxSelect("WHERE session_id = ? AND request_id = ?")).get(sessionId, requestId) as Record<string, unknown> | undefined);
+  }
+
+  recordSubmissionAudit(item: SessionInboxItem, audit: SubmissionAuditInput): SubmissionAuditReceipt {
+    const payloadHash = createHash("sha256").update(audit.canonicalPayload).digest("hex");
+    const existing = this.getSubmissionAudit(item.sessionId, item.requestId);
+    if (existing) {
+      if (existing.submissionId !== item.id || existing.payloadHash !== payloadHash) {
+        throw new Error("Submission idempotency conflict: key is bound to a different canonical payload");
+      }
+      return existing;
+    }
+    const timestamp = now();
+    try {
+      this.db.prepare(`INSERT INTO submission_audit_receipts
+        (session_id,idempotency_key,submission_id,principal_id,payload_hash,canonical_payload_json,provenance_json,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?)`).run(
+        item.sessionId, item.requestId, item.id, audit.principalId, payloadHash, audit.canonicalPayload,
+        JSON.stringify(audit.provenance ?? {}), timestamp, timestamp,
+      );
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      if (!(typeof code === "string" && code.startsWith("SQLITE_CONSTRAINT"))) throw error;
+    }
+    const recorded = this.getSubmissionAudit(item.sessionId, item.requestId);
+    if (!recorded || recorded.submissionId !== item.id || recorded.payloadHash !== payloadHash) {
+      throw new Error("Submission idempotency conflict: key is bound to a different canonical payload");
+    }
+    return recorded;
+  }
+
+  getSubmissionAudit(sessionId: SessionId, requestId: string): SubmissionAuditReceipt | undefined {
+    const row = this.db.prepare(`SELECT session_id as sessionId,idempotency_key as idempotencyKey,submission_id as submissionId,
+      principal_id as principalId,payload_hash as payloadHash,canonical_payload_json as canonicalPayload,
+      provenance_json as provenanceJson,created_at as createdAt,updated_at as updatedAt
+      FROM submission_audit_receipts WHERE session_id=? AND idempotency_key=?`).get(sessionId, requestId) as
+      (Omit<SubmissionAuditReceipt, "provenance"> & { provenanceJson: string }) | undefined;
+    if (!row) return undefined;
+    const { provenanceJson, ...receipt } = row;
+    return { ...receipt, provenance: JSON.parse(provenanceJson) as Record<string, unknown> };
   }
 
   listSessionInbox(sessionId: SessionId, includeTerminal = false): SessionInboxItem[] {
@@ -1739,6 +1817,10 @@ ${source.content}`;
       return this.getRun(id)!;
     });
     return transaction();
+  }
+
+  hasRun(id: RunId): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM runs WHERE id = ?").get(id));
   }
 
   getRun(id: RunId): TaskRun | undefined {
@@ -2425,6 +2507,12 @@ ${source.content}`;
   getArtifact(runId: RunId, artifactId: string): Artifact | undefined {
     return this.db.prepare(`SELECT id, run_id as runId, kind, title, content, uri, created_at as createdAt
       FROM artifacts WHERE run_id = ? AND id = ?`).get(runId, artifactId) as Artifact | undefined;
+  }
+
+  listArtifacts(runId: RunId, after: number, limit: number): Array<Omit<Artifact, "content">> {
+    return this.db.prepare(`SELECT id, run_id as runId, kind, title, uri, created_at as createdAt
+      FROM artifacts WHERE run_id = ? ORDER BY created_at,id LIMIT ? OFFSET ?`)
+      .all(runId, limit, after) as Array<Omit<Artifact, "content">>;
   }
 
   addArtifact(runId: RunId, artifact: Omit<Artifact, "runId" | "createdAt">): Artifact {

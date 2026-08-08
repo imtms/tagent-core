@@ -103,7 +103,7 @@ Every write requires a stable request ID. Definition/Roadmap revision and genera
 
 ## Persistence and upgrade
 
-SQLite schema 39 retains the Goal tables and schema-38 execution linkage, and adds Gateway operation receipts:
+SQLite schema 40 retains the Goal tables, schema-38 execution linkage and schema-39 Gateway operation receipts:
 
 ```text
 workspace_goal_run_links.link_mode
@@ -112,9 +112,9 @@ workspace_goal_roadmap_item_progress
 workspace_goal_operation_receipts
 ```
 
-The v38 → v39 migration adds Goal operation payload hashes, result/error receipts and restart recovery state. Some internal SQLite columns and values retain `plan` names for forward-compatible migration of existing databases; they are not public domain or API terminology.
+The v38 → v39 migration adds Goal operation payload hashes, result/error receipts and restart recovery state. Schema 40 adds Submission audit receipts without changing Goal semantics. Some internal SQLite columns and values retain `plan` names for forward-compatible migration of existing databases; they are not public domain or API terminology.
 
-Migrations are forward-only. Stop Core and back up SQLite together with WAL/SHM before upgrading. A schema-38-only binary must never open a schema-39 database; rollback across this boundary requires the matching pre-upgrade database backup. See [UPGRADING.md](UPGRADING.md).
+Migrations are forward-only. Stop Core and back up SQLite together with WAL/SHM before upgrading. A schema-39-only binary must never open a schema-40 database; rollback across this boundary requires the matching pre-upgrade database backup. See [UPGRADING.md](UPGRADING.md).
 
 ## Explicit non-goals
 

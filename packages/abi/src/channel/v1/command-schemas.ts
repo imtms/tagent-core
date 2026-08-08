@@ -1,8 +1,18 @@
 import { Type, type Static } from "typebox";
 import { ApiErrorSchema } from "../../shared/envelopes.js";
 import { IdentifierSchema, IsoDateTimeSchema, JsonObjectSchema, RequestIdSchema } from "../../shared/primitives.js";
-import { GatewayProvenanceSchema } from "./provenance-schemas.js";
+import { GatewayProvenanceSchema, GatewayRequestAuditSchema } from "./provenance-schemas.js";
 import { canonicalJson } from "../../shared/canonical-json.js";
+
+export const TASK_RUN_COMMAND_TYPES = [
+  "task_run.steer",
+  "task_run.follow_up",
+  "task_run.cancel",
+  "task_run.resume",
+  "task_run.compact",
+  "task_run.submit_user_input",
+  "task_run.resolve_approval",
+] as const;
 
 export const TaskRunCommandTypeSchema = Type.Union([
   Type.Literal("task_run.steer"),
@@ -103,6 +113,7 @@ export const CommandReceiptSchema = Type.Object({
   requestId: RequestIdSchema,
   result: Type.Union([JsonObjectSchema, Type.Null()]),
   error: Type.Union([ApiErrorSchema, Type.Null()]),
+  audit: GatewayRequestAuditSchema,
   createdAt: IsoDateTimeSchema,
   updatedAt: IsoDateTimeSchema,
 });

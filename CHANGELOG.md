@@ -4,11 +4,13 @@
 
 ### Gateway contract reliability
 
-- Advanced SQLite to schema 39 with principal-scoped Session creation receipts, dedicated TaskRun command receipts, Workspace Goal operation receipts, restart `outcome_unknown` fencing, and distinct settled/final event-consumer ACK watermarks.
+- Advanced SQLite through schema 40: schema 39 adds principal-scoped Session creation receipts, dedicated TaskRun command receipts, Workspace Goal operation receipts, restart `outcome_unknown` fencing and distinct settled/final event-consumer ACK watermarks; schema 40 adds durable Submission actor/provenance audit receipts.
 - Added idempotent Session creation/lookup, command receipt lookup with original result/error replay, typed Approval/User Input commands and pending interactions, capability discovery, bounded Transcript pagination, batched SSE replay, slow-consumer limits, and stable Artifact 413 errors.
 - Made `steer` and `follow_up` return at durable control-inbox admission instead of waiting for Runtime/provider delivery; public SSE now exposes per-type safe payloads and reduces internal events to redacted diagnostics.
 - Froze the Workspace Goal Operator subset: all writes carry request IDs, definition/Roadmap edits have durable receipts, and Roadmap generation invokes the LLM at most once per request identity.
-- Updated `@tagent/core-client`, ABI fixtures, migration/API contract tests, deployment/recovery/upgrade guidance and the release checklist for the named `gateway-contracts-v39` migration window.
+- Added channel-neutral Submission provenance, a versioned Operator endpoint allowlist, Approval-authority and receipt-recovery capability discovery, paginated Artifact metadata, complete public-event fixtures, 100-way Session concurrency coverage, and full schema-v39 drift validation.
+- Updated `@tagent/core-client`, ABI fixtures, provider/consumer and migration/API contract tests, readiness receipt-age diagnostics, deployment/recovery/upgrade guidance and the release checklist for schema 40.
+- Pinned the patched `nanoid` 3.3.17 transitive dependency so the full release dependency audit no longer fails on GHSA-2v37-7h3g-55p8.
 
 ### Trusted completion evidence
 

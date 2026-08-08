@@ -1,6 +1,11 @@
 export interface HttpWriterReadiness { isWriterReady(): boolean }
 
-export type HttpRuntimeConfig = object & { memoryWorkspaceScopeId?: string };
+export type HttpRuntimeConfig = object & {
+  memoryWorkspaceScopeId?: string;
+  releaseVersion?: string;
+  schemaVersion?: number;
+  governanceApprovalAuthority?: "legacy" | "canonical";
+};
 
 export interface HttpLearningFeatureState {
   memoryEnabled: boolean;

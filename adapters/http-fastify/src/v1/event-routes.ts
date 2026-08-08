@@ -16,7 +16,7 @@ import {
 import type { ChannelV1Dependencies } from "./dependencies.js";
 import { requestIdOf, successEnvelope, V1HttpError } from "./errors.js";
 import { mapEventConsumerCursor, mapTaskRunEvent } from "./mappers.js";
-import { authorizeChannel, conflict, missing } from "./route-support.js";
+import { authorizeChannel, conflict, decodeQuery, missing } from "./route-support.js";
 
 export function registerEventV1Routes(app: FastifyInstance, dependencies: ChannelV1Dependencies): void {
   const { persistence, service, serviceCredentials } = dependencies;
@@ -42,7 +42,7 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
   }, async (request, reply) => {
     const { taskRunId } = request.params as TaskRunParams;
     const rawQuery = request.query as { consumerId?: string; generation?: string; after?: string };
-    const query = decodeAbi(EventStreamQuerySchema, {
+    const query = decodeQuery(EventStreamQuerySchema, {
       consumerId: rawQuery.consumerId,
       generation: Number(rawQuery.generation),
       ...(rawQuery.after === undefined ? {} : { after: Number(rawQuery.after) }),

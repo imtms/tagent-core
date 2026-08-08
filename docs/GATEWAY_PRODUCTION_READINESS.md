@@ -2,6 +2,8 @@
 
 This runbook is the production gate for a Gateway that consumes the Core v1 channel. Deployment is blocked when any required gate fails.
 
+This runbook verifies the Core release and runtime side of the Gateway contract. A passing probe is necessary but cannot prove Gateway-local persist-before-ACK, identity, routing, outbox or external delivery. The exact responsibility decision and Core evidence are tracked in [GATEWAY_HANDOFF_STATUS.md](GATEWAY_HANDOFF_STATUS.md).
+
 The Gateway is an external channel and identity boundary. Core does not validate browser OIDC/JWT tokens; the Gateway must validate them, strip the browser credential, and use a minimal opaque Core service credential on the private upstream connection.
 
 All commands below run from the unpacked Core release directory. The release contains materialized `@tagent/core-service` and `@tagent/persistence-sqlite` packages plus `scripts/gateway-readiness-probe.mjs`; none of these commands depend on the source checkout.
@@ -37,7 +39,7 @@ The command must exit `0` and return one credential with all required scopes and
 
 ## Schema migration gate
 
-Migration v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 is performed by the production `Store` opener. Back up the database and its WAL/SHM files, then run this command twice:
+Migration v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 → v40 is performed by the production `Store` opener. Back up the database and its WAL/SHM files, then run this command twice:
 
 ```sh
 TAGENT_DB=/var/lib/tagent/core.sqlite \
@@ -49,7 +51,7 @@ const objects = store.db.prepare(`SELECT name FROM sqlite_master
   WHERE name IN ('attempts','approval_receipts','idx_operations_attempt_created',
     'idx_run_checks_source_operation','integration_outbox','learning_projection_authority_state',
     'workspace_goal_inbox_links','workspace_goal_roadmap_item_progress','session_create_receipts',
-    'task_run_command_receipts','workspace_goal_operation_receipts') ORDER BY name`)
+    'task_run_command_receipts','workspace_goal_operation_receipts','submission_audit_receipts') ORDER BY name`)
   .all().map((row) => row.name);
 const goalRunLinkColumns = store.db.prepare("PRAGMA table_info(workspace_goal_run_links)").all().map((row) => row.name);
 store.close();
@@ -60,7 +62,7 @@ NODE
 Both runs must exit `0` and return exactly:
 
 ```json
-{"schemaVersion":39,"objects":["approval_receipts","attempts","idx_operations_attempt_created","idx_run_checks_source_operation","integration_outbox","learning_projection_authority_state","session_create_receipts","task_run_command_receipts","workspace_goal_inbox_links","workspace_goal_operation_receipts","workspace_goal_roadmap_item_progress"],"hasGoalLinkMode":true}
+{"schemaVersion":40,"objects":["approval_receipts","attempts","idx_operations_attempt_created","idx_run_checks_source_operation","integration_outbox","learning_projection_authority_state","session_create_receipts","submission_audit_receipts","task_run_command_receipts","workspace_goal_inbox_links","workspace_goal_operation_receipts","workspace_goal_roadmap_item_progress"],"hasGoalLinkMode":true}
 ```
 
 The second open is the idempotence proof. A different version or object inventory blocks deployment.
@@ -95,8 +97,9 @@ Stable top-level JSON fields:
 | `writerReady` | `/api/v1/health` field `data.writer.ready` combined with the SQLite lease freshness check |
 | `writerOwnerId`, `writerFence`, `writerExpiresAt`, `writerReleasedAt`, `writerLeaseFresh` | `core_writer_lease` for `lock_name='core-writer'` |
 | `consumerLag` | Maximum per-run `runs.last_event_seq - event_consumers.acked_seq` for the configured consumer |
-| `settledUnacked`, `finalUnacked` | Recoverable settled and irreversible final Runs whose v39 ACK watermark has not reached `runs.last_event_seq` |
+| `settledUnacked`, `finalUnacked` | Recoverable settled and irreversible final Runs whose durable ACK watermark has not reached `runs.last_event_seq` |
 | `terminalUnacked`, `terminalOldestUnackedAgeMs` | Deprecated compatibility alias/age for the settled boundary |
+| `receipts.commands`, `receipts.workspaceGoals` | `started`/`outcomeUnknown` counts and oldest uncertain receipt age |
 | `authority`, `authorityReady` | `learning_projection_authority_state`; only `legacy_active` and `integration_active` are ready |
 | `watermarks` | `learning_projection_checkpoint` rows ordered by consumer and delivery role |
 | `health` | HTTP reachability, status, `data.ok`, and `data.writer.ready` from `GET /api/v1/health` |
@@ -120,10 +123,11 @@ These are embedded in the probe output under `thresholds`:
 | --- | --- | --- | --- |
 | `consumerLag` | `0` | `>= 1` | `>= 10000` |
 | `settledUnacked`, `finalUnacked` | `0` | `>= 1` | Oldest pending settled ACK age `>= 120000 ms` |
+| Receipt health | No `outcome_unknown`; `started` younger than `120000 ms` is observable in-flight work | Not applicable | Any `outcome_unknown` or `started` age `>= 120000 ms` |
 | `writerLeaseFresh` | `true` | Not applicable | `false` |
 | `migrationOpenIssues` | `0` | Not applicable | Missing table or any open issue |
 | `authorityReady` | `true` | Transition state `switching` or `rollback` | Missing authority state |
-| `schemaVersion` | `39` | Not applicable | Missing or not `39` |
+| `schemaVersion` | `40` | Not applicable | Missing or not `40` |
 | `capabilities.compatible` | `true` | Not applicable | Missing endpoint/catalog/profile or wrong schema |
 
 Consumer lag semantics are strict: any value greater than zero makes the Gateway not ready immediately. Warning and critical distinguish alert urgency; they never permit traffic.
@@ -163,6 +167,16 @@ WHERE id = 1;
 SELECT consumer, delivery_role, watermark, generation, updated_at
 FROM learning_projection_checkpoint
 ORDER BY consumer, delivery_role;
+
+SELECT status, COUNT(*) AS count, MIN(updated_at) AS oldest_updated_at
+FROM task_run_command_receipts
+WHERE status IN ('started','outcome_unknown')
+GROUP BY status;
+
+SELECT status, COUNT(*) AS count, MIN(updated_at) AS oldest_updated_at
+FROM workspace_goal_operation_receipts
+WHERE status IN ('started','outcome_unknown')
+GROUP BY status;
 ```
 
 ## Release gate matrix
@@ -171,15 +185,16 @@ ORDER BY consumer, delivery_role;
 | --- | --- | --- |
 | Manifest | The production verifier exits `0`. | Verifier exits non-zero. |
 | Configuration | The release-local production parser returns the required Gateway scopes. | Parser rejects the environment or a scope is missing. |
-| Migration | Both release-local `Store` opens return schema `39`, the exact object inventory and `hasGoalLinkMode=true`. | Open fails, output differs, or the second open is not idempotent. |
-| Capabilities | Probe negotiates required commands/events, typed interactions and the Operator Goal profile. | Endpoint is unavailable, under-scoped, wrong-versioned or missing a required capability. |
+| Migration | Both release-local `Store` opens return schema `40`, the exact object inventory and `hasGoalLinkMode=true`. | Open fails, output differs, or the second open is not idempotent. |
+| Capabilities | Probe negotiates the command/event catalogs, Operator allowlist, Approval authority, receipt protocol, retention and limits. | Endpoint is unavailable, under-scoped, wrong-versioned or missing a required item. |
 | Writer | Probe returns `writerReady=true`, a fresh lease, and one current fence. | Health or SQLite lease evidence is not ready. |
 | Persist-before-ACK | The exact `(task_run_id, consumer_id, generation, sequence, event_id)` receipt is durable before its ACK. | ACK has no exact receipt, relies only on a sequence, or precedes the receipt commit. |
 | Replay | A persisted-but-unacked event is promoted to the reclaimed generation, deduped, ACKed, and then quiescent. | Replay is lost, duplicated, stale, or skips the durable ACK. |
 | Lag and ACK | Probe returns `consumerLag=0`, `settledUnacked=0`, and `finalUnacked=0`. | Any field is non-zero. |
+| Receipt recovery | No `outcome_unknown` receipt exists and every `started` receipt is younger than 120 seconds. | Unknown outcomes need reconciliation or an in-flight receipt is stale. |
 | Learning authority | Probe returns `authorityReady=true` and durable watermarks. | Authority is missing or in a transition state. |
 
-Any FAIL result blocks deployment. Liveness alone does not override readiness.
+Any FAIL result blocks deployment. Liveness alone does not override readiness. A PASS proves only the declared Core runtime gates; Gateway still proves its own durable inbound/outbox/ACK behavior, fake-Core scenarios and supported-client release matrix.
 
 ## Deploy order
 
@@ -197,7 +212,7 @@ Use **Core before Gateway** order:
 
 ## Rollback point
 
-The rollback point is the last verified prior compatible Gateway source plus the recorded Core consumer and Learning watermarks. Schema v39 is forward-only during application rollback.
+The rollback point is the last verified prior compatible Gateway source plus the recorded Core consumer and Learning watermarks. Schema v40 is forward-only during application rollback.
 
 Rollback steps:
 
@@ -207,7 +222,7 @@ Rollback steps:
 4. Activate the prior compatible Gateway source through the production learning authority rollback API.
 5. Reclaim the Core event consumer, receiving a new generation.
 6. Resume after the durable ACK watermark; replay persisted-but-unacked events and persist the new-generation exact receipt before ACK.
-7. Keep schema version `39`. Do not restore an older database over it.
+7. Keep schema version `40`. Do not restore an older database over it.
 8. Run the release-local readiness probe again and reopen traffic only after exit `0`.
 
-If the prior deployment cannot coexist with schema v39 or honor the named `gateway-contracts-v39` receipt/ACK contract, keep traffic stopped and deploy a forward-compatible build. Do not perform a destructive schema downgrade.
+If the prior deployment cannot coexist with schema v40 or honor the current receipt/ACK contract, keep traffic stopped and deploy a forward-compatible build. Do not perform a destructive schema downgrade.

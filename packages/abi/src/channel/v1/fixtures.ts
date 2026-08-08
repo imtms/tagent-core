@@ -1,7 +1,8 @@
 import type { ErrorEnvelope } from "../../shared/envelopes.js";
 import type { CommandResponse, TaskRunCommand } from "./command-schemas.js";
 import type { CoreCapabilitiesResponse } from "./capability-schemas.js";
-import { createTaskRunEventId, type TaskRunEvent } from "./event-schemas.js";
+import { createTaskRunEventId, type ProjectionCriticalTaskRunEvent, type TaskRunEvent } from "./event-schemas.js";
+import { OPERATOR_PROFILE_ENDPOINT_IDS } from "./capability-schemas.js";
 import type {
   SubmissionApplicationInput,
   SubmissionCreateHeaders,
@@ -31,6 +32,7 @@ export const submissionIdempotencyFixtures = {
         status: "started",
         taskRunId: "task-run-fixture-001",
         error: null,
+        audit: null,
         createdAt: fixtureTime,
         updatedAt: fixtureTime,
       },
@@ -80,6 +82,7 @@ export const commandResponseFixture = {
       requestId: "request-command-001",
       result: { accepted: true },
       error: null,
+      audit: { principalId: "gateway-fixture", origin: null },
       createdAt: fixtureTime,
       updatedAt: fixtureTime,
     },
@@ -89,13 +92,19 @@ export const commandResponseFixture = {
 
 export const coreCapabilitiesFixture = {
   data: {
-    releaseVersion: "0.3.0", apiVersions: ["channel.v1", "operator.console.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 39,
+    releaseVersion: "0.3.0", apiVersions: ["channel.v1", "operator.console.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 40,
     commandTypes: taskRunCommandFixtures.map((command) => command.type),
     eventTypes: ["task_run.started", "task_run.completed", "diagnostic.internal"],
     interactions: { approvalResolution: true, userInputSubmission: true },
-    operator: { workspaceGoals: true, roadmapGenerationIdempotent: true },
-    retention: { automaticDeletion: false },
-    limits: { transcriptPageMax: 500, eventReplayBatch: 256, eventLiveBuffer: 1_000, artifactPreviewBytes: 5_242_880, artifactDownloadBytes: 52_428_800 },
+    operator: { profileVersion: "1.0", endpointIds: [...OPERATOR_PROFILE_ENDPOINT_IDS], workspaceGoals: true, roadmapGenerationIdempotent: true },
+    approval: { authority: "legacy", ready: true, canonicalCutoverReady: false },
+    receiptRecovery: { protocolVersion: "1.0", exactReplay: true, commandLookup: true, interruptedEffectState: "outcome_unknown", automaticUnknownReplay: false },
+    retention: { automaticDeletion: false, cursorExpiry: false },
+    limits: {
+      transcriptPageMax: 500, eventReplayBatch: 256, eventLiveBuffer: 1_000,
+      artifactPreviewBytes: 5_242_880, artifactDownloadBytes: 52_428_800,
+      artifactListPageMax: 200, interactionPageMax: 200,
+    },
   },
   requestId: "request-capabilities-001",
 } as const satisfies CoreCapabilitiesResponse;
@@ -110,8 +119,43 @@ export const taskRunEventFixture = {
   occurredAt: fixtureTime,
   correlationId: null,
   causationId: null,
-  payload: { result: "completed" },
+  payload: {},
 } as const satisfies TaskRunEvent;
+
+const projectionEventBase = {
+  specVersion: "1.0",
+  eventId: createTaskRunEventId("task-run-fixture-catalog", 1),
+  aggregateType: "task_run",
+  aggregateId: "task-run-fixture-catalog",
+  sequence: 1,
+  occurredAt: fixtureTime,
+  correlationId: null,
+  causationId: null,
+} as const;
+
+/** One canonical producer fixture for every projection-critical public event. */
+export const projectionCriticalTaskRunEventFixtures = [
+  { ...projectionEventBase, type: "task_run.started", payload: { goal: "Ship the Gateway contract", attempt: 1 } },
+  { ...projectionEventBase, type: "task_run.waiting_input", payload: { requestId: "input-001", prompt: "Choose a target", fields: [{ key: "target", label: "Target", description: "Deployment target", inputType: "text", required: true, placeholder: "staging" }] } },
+  { ...projectionEventBase, type: "task_run.blocked", payload: { reason: "Evidence is incomplete", action: "verify" } },
+  { ...projectionEventBase, type: "task_run.resumed", payload: { attempt: 2, mode: "durable-snapshot-replay" } },
+  { ...projectionEventBase, type: "task_run.completed", payload: {} },
+  { ...projectionEventBase, type: "task_run.failed", payload: { reason: "Provider failed", retryable: true } },
+  { ...projectionEventBase, type: "task_run.cancelled", payload: { reason: "Cancelled by user" } },
+  { ...projectionEventBase, type: "task_run.interrupted", payload: { reason: "Core restarted" } },
+  { ...projectionEventBase, type: "message.started", payload: { ordinal: 1 } },
+  { ...projectionEventBase, type: "message.delta", payload: { delta: "partial", ordinal: 1 } },
+  { ...projectionEventBase, type: "message.completed", payload: { content: "complete", ordinal: 1 } },
+  { ...projectionEventBase, type: "tool.started", payload: { toolCallId: "tool-001", toolName: "bash" } },
+  { ...projectionEventBase, type: "tool.progress", payload: { toolCallId: "tool-001", toolName: "bash" } },
+  { ...projectionEventBase, type: "tool.completed", payload: { toolCallId: "tool-001", toolName: "bash", isError: false } },
+  { ...projectionEventBase, type: "tool.failed", payload: { toolCallId: "tool-001", toolName: "bash", reason: "exit 1" } },
+  { ...projectionEventBase, type: "provider.failure", payload: { kind: "timeout", retryable: true, stopReason: "timeout" } },
+  { ...projectionEventBase, type: "approval.requested", payload: { approvalRequestId: "approval-001", reason: "Resume requires approval" } },
+  { ...projectionEventBase, type: "approval.resolved", payload: { approvalRequestId: "approval-001", decision: "approved", resolution: "Reviewed" } },
+  { ...projectionEventBase, type: "user_input.submitted", payload: { userInputRequestId: "input-001", fieldKeys: ["target"] } },
+  { ...projectionEventBase, type: "diagnostic.internal", payload: { sourceType: "context.loaded" } },
+] as const satisfies readonly ProjectionCriticalTaskRunEvent[];
 
 export const unknownTaskRunEventFixture = {
   ...taskRunEventFixture,

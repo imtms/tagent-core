@@ -26,6 +26,8 @@ import {
   TaskRunArtifactParamsSchema,
   TaskRunCommandSchema,
   TaskRunEventSchema,
+  ProjectionCriticalTaskRunEventSchema,
+  PROJECTION_CRITICAL_TASK_RUN_EVENT_TYPES,
   TaskRunParamsSchema,
   WorkerCallbackSchema,
   canonicalizeSubmissionRequest,
@@ -36,6 +38,7 @@ import {
   decodeAbi,
   mapSubmissionToExecutionRequest,
   normalizeSubmissionRequest,
+  projectionCriticalTaskRunEventFixtures,
   submissionIdempotencyFixtures,
   taskRunCommandFixtures,
   taskRunEventFixture,
@@ -258,6 +261,13 @@ describe("channel v1 commands and event consumption", () => {
     });
     expect(() => decodeAbi(TaskRunEventSchema, { ...taskRunEventFixture, occurredAt: "not-a-date" })).toThrow();
     expect(() => decodeAbi(TaskRunEventSchema, { ...taskRunEventFixture, correlationId: undefined })).toThrow();
+  });
+
+  it("publishes one producer-valid canonical fixture for every public event type", () => {
+    const decoded = projectionCriticalTaskRunEventFixtures.map((fixture) =>
+      decodeAbi(ProjectionCriticalTaskRunEventSchema, fixture));
+    expect(decoded.map((event) => event.type)).toEqual(PROJECTION_CRITICAL_TASK_RUN_EVENT_TYPES);
+    expect(new Set(decoded.map((event) => event.type))).toHaveLength(PROJECTION_CRITICAL_TASK_RUN_EVENT_TYPES.length);
   });
 
   it("validates fenced event-consumer cursors and acknowledgements", () => {

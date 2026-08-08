@@ -4,7 +4,7 @@ import type {
   SessionInboxItem,
   SessionInputAnalysis,
 } from "../domain/index.js";
-import type { SessionRepository, SubmissionQueue } from "../ports/index.js";
+import type { SessionRepository, SubmissionAuditInput, SubmissionQueue } from "../ports/index.js";
 import type { ContextManifestItem, TaskRun } from "@tagent/execution/domain";
 import type {
   AttemptRepository,
@@ -65,11 +65,17 @@ export class AdmissionCoordinator {
     };
   }
 
-  async enqueueSessionInput(sessionId: SessionId, content: string, requestId: string = randomUUID()) {
+  async enqueueSessionInput(
+    sessionId: SessionId,
+    content: string,
+    requestId: string = randomUUID(),
+    audit?: SubmissionAuditInput,
+  ) {
     if (this.state.closing) throw new Error("Service is shutting down");
     const existing = this.state.persistence.submissions.getSessionSubmission(sessionId, requestId);
     if (existing) {
       if (existing.content !== content) throw new Error("Session Inbox request idempotency conflict");
+      if (audit) this.state.persistence.submissions.recordSubmissionAudit(existing, audit);
       return { item: existing, run: existing.runId ? this.state.persistence.taskRuns.getRun(existing.runId) ?? null : null };
     }
     const activeRun = this.state.persistence.taskRuns.getActiveRun(sessionId);
@@ -77,7 +83,7 @@ export class AdmissionCoordinator {
     const routerUsage = this.dependencies.router.takeUsage(analysis);
     if (activeRun) for (const observed of routerUsage) this.state.persistence.taskRuns.recordModelUsage(activeRun.id, "router", observed.model, observed.usage);
     const duplicate = !activeRun ? this.state.persistence.submissions.findMergeCandidate(sessionId, analysis) : undefined;
-    const item = this.state.persistence.submissions.enqueueSessionInbox(sessionId, content, analysis, requestId);
+    const item = this.state.persistence.submissions.enqueueSessionInbox(sessionId, content, analysis, requestId, audit);
     if (analysis.intent === "defer") {
       this.state.persistence.submissions.decideSessionInboxItem(item.id, sessionId, "defer");
       return { item: this.state.persistence.submissions.getSessionInboxItem(item.id)!, run: null };

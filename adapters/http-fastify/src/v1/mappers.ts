@@ -2,6 +2,7 @@ import type {
   ArtifactContent,
   CommandReceipt,
   EventConsumerCursor,
+  GatewayProvenance,
   Session,
   SubmissionReceipt,
   TaskRun as V1TaskRun,
@@ -12,6 +13,7 @@ import type {
 } from "@tagent/abi";
 import { createTaskRunEventId } from "@tagent/abi";
 import type { Session as DomainSession, SessionInboxItem } from "@tagent/admission/domain";
+import type { SubmissionAuditReceipt } from "@tagent/admission/ports";
 import type {
   EventConsumerCursor as DomainEventConsumerCursor,
   RunEvent,
@@ -39,7 +41,7 @@ export function mapSession(session: DomainSession): Session {
   };
 }
 
-export function mapSubmissionReceipt(item: SessionInboxItem): SubmissionReceipt {
+export function mapSubmissionReceipt(item: SessionInboxItem, audit?: SubmissionAuditReceipt): SubmissionReceipt {
   const status = item.status === "queued" ? "queued"
     : item.status === "started" ? "started"
     : item.status === "failed" || item.status === "deleted" ? "failed"
@@ -51,12 +53,18 @@ export function mapSubmissionReceipt(item: SessionInboxItem): SubmissionReceipt 
     status,
     taskRunId: item.runId,
     error: item.error || null,
+    audit: audit ? {
+      principalId: audit.principalId,
+      origin: Object.keys(audit.provenance).length ? audit.provenance as GatewayProvenance : null,
+    } : null,
     createdAt: iso(item.createdAt),
     updatedAt: iso(item.updatedAt),
   };
 }
 
-function mapArtifact(artifact: TaskRun["artifacts"][number]): TaskRunArtifact {
+export function mapArtifact(
+  artifact: Pick<TaskRun["artifacts"][number], "id" | "runId" | "kind" | "title" | "uri" | "createdAt">,
+): TaskRunArtifact {
   return {
     id: artifact.id,
     taskRunId: artifact.runId,
@@ -200,8 +208,9 @@ export function mapTaskRunEvent(event: RunEvent): TaskRunEvent {
     sequence: event.seq,
     type: projected.type,
     occurredAt: iso(event.createdAt),
-    correlationId: publicIdentifier(event.data.requestId ?? event.data.commandId ?? event.data.submissionId),
-    causationId: publicIdentifier(event.data.decisionId ?? event.data.approvalId ?? event.data.controlId),
+    correlationId: publicIdentifier(event.data.requestId ?? event.data.commandId ?? event.data.submissionId
+      ?? event.data.inboxItemId ?? event.data.sourceInboxItemId ?? event.data.approvalId),
+    causationId: publicIdentifier(event.data.causationId ?? event.data.decisionId ?? event.data.controlId),
     payload: projected.payload,
   };
 }
@@ -249,6 +258,10 @@ export function mapCommandReceipt(receipt: DomainTaskRunCommandReceipt, replayed
     requestId: receipt.requestId,
     result: receipt.result,
     error,
+    audit: {
+      principalId: receipt.principalId,
+      origin: Object.keys(receipt.provenance).length ? receipt.provenance as GatewayProvenance : null,
+    },
     createdAt: iso(receipt.createdAt),
     updatedAt: iso(receipt.updatedAt),
   };

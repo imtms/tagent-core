@@ -1,21 +1,42 @@
 import type { FastifyInstance } from "fastify";
-import { CoreCapabilitiesResponseSchema, encodeAbi } from "@tagent/abi";
+import {
+  CoreCapabilitiesResponseSchema,
+  encodeAbi,
+  OPERATOR_PROFILE_ENDPOINT_IDS,
+  PROJECTION_CRITICAL_TASK_RUN_EVENT_TYPES,
+  TASK_RUN_COMMAND_TYPES,
+} from "@tagent/abi";
 import type { ChannelV1Dependencies } from "./dependencies.js";
 import { successEnvelope } from "./errors.js";
 import { authorizeChannel } from "./route-support.js";
 
 export function registerCapabilityV1Routes(app: FastifyInstance, dependencies: ChannelV1Dependencies): void {
+  const runtime = dependencies.runtimeConfig;
+  const approvalAuthority = runtime?.governanceApprovalAuthority ?? "legacy";
   app.get("/api/v1/capabilities", { onRequest: authorizeChannel(dependencies.serviceCredentials, "sessions:read") }, async (request) =>
     encodeAbi(CoreCapabilitiesResponseSchema, successEnvelope(request, {
-      releaseVersion: "0.3.0",
+      releaseVersion: runtime?.releaseVersion?.trim() || "0.3.0",
       apiVersions: ["channel.v1", "operator.console.v1"],
       eventSpecVersion: "1.0",
-      persistenceSchemaVersion: 39,
-      commandTypes: ["task_run.steer", "task_run.follow_up", "task_run.cancel", "task_run.resume", "task_run.compact", "task_run.submit_user_input", "task_run.resolve_approval"],
-      eventTypes: ["task_run.started", "task_run.waiting_input", "task_run.blocked", "task_run.resumed", "task_run.completed", "task_run.failed", "task_run.cancelled", "task_run.interrupted", "message.started", "message.delta", "message.completed", "tool.started", "tool.progress", "tool.completed", "tool.failed", "provider.failure", "approval.requested", "approval.resolved", "user_input.submitted", "diagnostic.internal"],
+      persistenceSchemaVersion: runtime?.schemaVersion ?? 40,
+      commandTypes: [...TASK_RUN_COMMAND_TYPES],
+      eventTypes: [...PROJECTION_CRITICAL_TASK_RUN_EVENT_TYPES],
       interactions: { approvalResolution: true, userInputSubmission: true },
-      operator: { workspaceGoals: true, roadmapGenerationIdempotent: true },
-      retention: { automaticDeletion: false },
-      limits: { transcriptPageMax: 500, eventReplayBatch: 256, eventLiveBuffer: 1_000, artifactPreviewBytes: 5 * 1024 * 1024, artifactDownloadBytes: 50 * 1024 * 1024 },
+      operator: { profileVersion: "1.0", endpointIds: [...OPERATOR_PROFILE_ENDPOINT_IDS], workspaceGoals: true, roadmapGenerationIdempotent: true },
+      approval: {
+        authority: approvalAuthority,
+        ready: approvalAuthority === "legacy",
+        canonicalCutoverReady: false,
+      },
+      receiptRecovery: {
+        protocolVersion: "1.0", exactReplay: true, commandLookup: true,
+        interruptedEffectState: "outcome_unknown", automaticUnknownReplay: false,
+      },
+      retention: { automaticDeletion: false, cursorExpiry: false },
+      limits: {
+        transcriptPageMax: 500, eventReplayBatch: 256, eventLiveBuffer: 1_000,
+        artifactPreviewBytes: 5 * 1024 * 1024, artifactDownloadBytes: 50 * 1024 * 1024,
+        artifactListPageMax: 200, interactionPageMax: 200,
+      },
     })));
 }

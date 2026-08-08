@@ -72,6 +72,52 @@ export const ConsoleGenerateWorkspaceGoalRoadmapRequestSchema = Type.Object({
   actorId: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })),
 }, { additionalProperties: false });
 
+const ConsoleGoalRequestIdSchema = Type.String({ minLength: 1, maxLength: 300 });
+const ConsoleGoalActorIdSchema = Type.Optional(Type.String({ minLength: 1, maxLength: 300 }));
+
+export const ConsoleCreateWorkspaceGoalRequestSchema = Type.Object({
+  definition: ConsoleWorkspaceGoalDefinitionSchema,
+  requestId: ConsoleGoalRequestIdSchema,
+  actorId: ConsoleGoalActorIdSchema,
+}, { additionalProperties: false });
+
+export const ConsoleReviseWorkspaceGoalDefinitionRequestSchema = Type.Object({
+  definition: ConsoleWorkspaceGoalDefinitionSchema,
+  requestId: ConsoleGoalRequestIdSchema,
+  actorId: ConsoleGoalActorIdSchema,
+}, { additionalProperties: false });
+
+export const ConsoleReviseWorkspaceGoalRoadmapRequestSchema = Type.Object({
+  content: ConsoleWorkspaceGoalRoadmapSchema,
+  requestId: ConsoleGoalRequestIdSchema,
+  sourceArtifactId: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 300 }), Type.Null()])),
+  actorId: ConsoleGoalActorIdSchema,
+}, { additionalProperties: false });
+
+export const ConsoleDecideWorkspaceGoalRequestSchema = Type.Object({
+  requestId: ConsoleGoalRequestIdSchema,
+  targetRevisionId: Type.String({ minLength: 1, maxLength: 300 }),
+  targetHash: Type.String({ minLength: 1, maxLength: 128 }),
+  kind: Type.Union([
+    Type.Literal("approve_goal"), Type.Literal("approve_roadmap"), Type.Literal("request_change"),
+    Type.Literal("pause"), Type.Literal("resume"), Type.Literal("close"), Type.Literal("cancel"),
+  ]),
+  approvedItemIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 300 }), { maxItems: 200 })),
+  reason: Type.Optional(Type.String({ maxLength: 4000 })),
+  actorId: ConsoleGoalActorIdSchema,
+}, { additionalProperties: false });
+
+export const ConsoleStartWorkspaceGoalTaskRunRequestSchema = Type.Object({
+  roadmapItemId: Type.String({ minLength: 1, maxLength: 300 }),
+  requestId: ConsoleGoalRequestIdSchema,
+}, { additionalProperties: false });
+
+export const ConsoleStartWorkspaceGoalTaskRunResultSchema = Type.Object({
+  goal: ConsoleWorkspaceGoalSchema,
+  inboxItemId: Type.String({ minLength: 1 }),
+  runId: Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
+}, { additionalProperties: false });
+
 export const ConsoleWorkspaceGoalOperationReceiptSchema = Type.Object({
   goalId: Type.String({ minLength: 1 }), requestId: Type.String({ minLength: 1 }), operationType: Type.String({ minLength: 1 }),
   payloadHash: Type.String({ minLength: 1 }), payload: JsonObjectSchema,
@@ -85,6 +131,13 @@ export type ConsoleWorkspaceGoalSummary = Static<typeof ConsoleWorkspaceGoalSumm
 export type ConsoleWorkspaceGoalDefinition = Static<typeof ConsoleWorkspaceGoalDefinitionSchema>;
 export type ConsoleWorkspaceGoalRoadmap = Static<typeof ConsoleWorkspaceGoalRoadmapSchema>;
 export type ConsoleWorkspaceGoalRoadmapItem = Static<typeof ConsoleWorkspaceGoalRoadmapItemSchema>;
+export type ConsoleWorkspaceGoalRevision = Static<typeof ConsoleWorkspaceGoalRevisionSchema>;
 export type ConsoleWorkspaceGoalDecision = Static<typeof ConsoleWorkspaceGoalDecisionSchema>;
 export type ConsoleGenerateWorkspaceGoalRoadmapRequest = Static<typeof ConsoleGenerateWorkspaceGoalRoadmapRequestSchema>;
+export type ConsoleCreateWorkspaceGoalRequest = Static<typeof ConsoleCreateWorkspaceGoalRequestSchema>;
+export type ConsoleReviseWorkspaceGoalDefinitionRequest = Static<typeof ConsoleReviseWorkspaceGoalDefinitionRequestSchema>;
+export type ConsoleReviseWorkspaceGoalRoadmapRequest = Static<typeof ConsoleReviseWorkspaceGoalRoadmapRequestSchema>;
+export type ConsoleDecideWorkspaceGoalRequest = Static<typeof ConsoleDecideWorkspaceGoalRequestSchema>;
+export type ConsoleStartWorkspaceGoalTaskRunRequest = Static<typeof ConsoleStartWorkspaceGoalTaskRunRequestSchema>;
+export type ConsoleStartWorkspaceGoalTaskRunResult = Static<typeof ConsoleStartWorkspaceGoalTaskRunResultSchema>;
 export type ConsoleWorkspaceGoalOperationReceipt = Static<typeof ConsoleWorkspaceGoalOperationReceiptSchema>;

@@ -62,8 +62,21 @@ export const ArtifactContentSchema = Type.Object({
 });
 export type ArtifactContent = Static<typeof ArtifactContentSchema>;
 
+export const ArtifactListQuerySchema = Type.Object({
+  after: Type.Optional(Type.Integer({ minimum: 0 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+}, { additionalProperties: false });
+export type ArtifactListQuery = Static<typeof ArtifactListQuerySchema>;
+
 export const ArtifactListResponseSchema = Type.Object({
-  data: Type.Object({ items: Type.Array(TaskRunArtifactSchema) }),
+  data: Type.Object({
+    items: Type.Array(TaskRunArtifactSchema),
+    pageInfo: Type.Object({
+      nextCursor: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
+      hasMore: Type.Boolean(),
+      limit: Type.Integer({ minimum: 1, maximum: 200 }),
+    }, { additionalProperties: false }),
+  }, { additionalProperties: false }),
   requestId: RequestIdSchema,
 }, { additionalProperties: false });
 export type ArtifactListResponse = Static<typeof ArtifactListResponseSchema>;

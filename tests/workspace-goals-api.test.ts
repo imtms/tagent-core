@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "@tagent/http-fastify";
 import { Store } from "@tagent/persistence-sqlite";
 import { httpPersistence } from "./support/test-persistence.js";
+import { createCoreClient } from "@tagent/core-client";
+import type { AddressInfo } from "node:net";
 
 const apps: Array<ReturnType<typeof createApp>> = [];
 afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close())); });
@@ -72,5 +74,47 @@ describe("Workspace Goal console API", () => {
     expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/run-links`, payload: {} })).statusCode).toBe(404);
     expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/evidence`, payload: {} })).statusCode).toBe(404);
     expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/decisions`, payload: { requestId: "invalid-plan", targetRevisionId: withRoadmap.roadmap.id, targetHash: withRoadmap.roadmap.contentHash, kind: "approve_plan", approvedItemIds: ["web"] } })).statusCode).toBe(400);
+  });
+
+  it("exposes every stable Goal write through the typed Core Client", async () => {
+    const store = new Store(":memory:");
+    const workspace = store.createSession("Goal client");
+    const startWorkspaceGoalRoadmapItem = vi.fn(() => ({ item: { id: "client-inbox" }, run: { id: "client-run" } }));
+    const app = createApp({
+      persistence: httpPersistence(store),
+      service: { closeRuntimes: async () => undefined, startWorkspaceGoalRoadmapItem } as never,
+      logger: false,
+      closeResources: async () => store.close(),
+    });
+    apps.push(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address() as AddressInfo;
+    const client = createCoreClient({ baseUrl: `http://127.0.0.1:${address.port}` });
+    const definition = {
+      title: "Typed Goal", outcome: "Gateway uses owned schemas", scope: ["Core ABI"], nonGoals: [],
+      criteria: [{ key: "typed", title: "Client is typed", required: true }], completionPolicy: "user_confirm" as const,
+    };
+    const created = await client.createWorkspaceGoal(workspace.id, { definition, requestId: "client-create", actorId: "gateway" });
+    const revised = await client.reviseWorkspaceGoalDefinition(created.id, {
+      definition: { ...definition, outcome: "Gateway uses complete owned schemas" }, requestId: "client-revise", actorId: "gateway",
+    });
+    const approved = await client.decideWorkspaceGoal(created.id, {
+      requestId: "client-approve-goal", targetRevisionId: revised.id, targetHash: revised.contentHash, kind: "approve_goal", actorId: "gateway",
+    });
+    expect(approved.status).toBe("active");
+    const withRoadmap = await client.reviseWorkspaceGoalRoadmap(created.id, {
+      requestId: "client-roadmap", actorId: "gateway", content: {
+        summary: "One bounded item",
+        items: [{ id: "typed_client", title: "Verify client", outcome: "Client passes", verification: "Run client tests", criterionKeys: ["typed"] }],
+      },
+    });
+    const roadmap = withRoadmap.roadmap!;
+    await client.decideWorkspaceGoal(created.id, {
+      requestId: "client-approve-roadmap", targetRevisionId: roadmap.id, targetHash: roadmap.contentHash,
+      kind: "approve_roadmap", approvedItemIds: ["typed_client"], actorId: "gateway",
+    });
+    await expect(client.startWorkspaceGoalTaskRun(created.id, { roadmapItemId: "typed_client", requestId: "client-start" }))
+      .resolves.toMatchObject({ inboxItemId: "client-inbox", runId: "client-run", goal: { id: created.id } });
+    expect(startWorkspaceGoalRoadmapItem).toHaveBeenCalledWith(created.id, "typed_client", "client-start");
   });
 });

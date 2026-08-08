@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   ArtifactContentResponseSchema,
   canonicalizeTaskRunCommand,
+  ArtifactListQuerySchema,
   ArtifactListResponseSchema,
   CommandResponseSchema,
   decodeAbi,
@@ -24,8 +25,8 @@ import {
 import type { ChannelV1Dependencies } from "./dependencies.js";
 import { requestIdOf, successEnvelope, V1HttpError } from "./errors.js";
 import { principalOf } from "./auth.js";
-import { mapArtifactContent, mapCommandReceipt, mapTaskRun, mapTranscriptItem } from "./mappers.js";
-import { authorizeChannel, conflict, missing } from "./route-support.js";
+import { mapArtifact, mapArtifactContent, mapCommandReceipt, mapTaskRun, mapTranscriptItem } from "./mappers.js";
+import { authorizeChannel, conflict, decodeQuery, missing } from "./route-support.js";
 
 function commandAdmissionError(status: "inactive" | "closing" | "full"): V1HttpError {
   if (status === "full") return new V1HttpError(429, "task_run.command_capacity_exceeded", "TaskRun control inbox is full", "rate_limited", true);
@@ -70,7 +71,7 @@ async function executeCommand(dependencies: ChannelV1Dependencies, taskRunId: st
 
 export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: ChannelV1Dependencies): void {
   const { persistence, service, serviceCredentials, workspaceRoot, artifacts } = dependencies;
-  const { taskRunCommands, transcript } = persistence;
+  const { evidence, taskRunCommands, taskRuns, transcript } = persistence;
 
   app.get("/api/v1/task-runs/:taskRunId", {
     onRequest: authorizeChannel(serviceCredentials, "runs:read"),
@@ -158,9 +159,9 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
     schema: { params: TaskRunParamsSchema },
   }, async (request) => {
     const { taskRunId } = request.params as TaskRunParams;
-    if (!service.getRun(taskRunId)) throw missing("task_run");
+    if (!taskRuns.hasRun(taskRunId)) throw missing("task_run");
     const raw = request.query as { after?: number | string; limit?: number | string };
-    const query = decodeAbi(TranscriptQuerySchema, {
+    const query = decodeQuery(TranscriptQuerySchema, {
       ...(raw.after === undefined ? {} : { after: Number(raw.after) }),
       ...(raw.limit === undefined ? {} : { limit: Number(raw.limit) }),
     });
@@ -186,7 +187,7 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
     const run = service.getRun(taskRunId);
     if (!run) throw missing("task_run");
     const raw = request.query as { after?: number | string; limit?: number | string };
-    const query = decodeAbi(TaskRunInteractionsQuerySchema, {
+    const query = decodeQuery(TaskRunInteractionsQuerySchema, {
       ...(raw.after === undefined ? {} : { after: Number(raw.after) }),
       ...(raw.limit === undefined ? {} : { limit: Number(raw.limit) }),
     });
@@ -219,11 +220,21 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
     schema: { params: TaskRunParamsSchema },
   }, async (request) => {
     const { taskRunId } = request.params as TaskRunParams;
-    const run = service.getRun(taskRunId);
-    if (!run) throw missing("task_run");
+    if (!taskRuns.hasRun(taskRunId)) throw missing("task_run");
+    const raw = request.query as { after?: number | string; limit?: number | string };
+    const query = decodeQuery(ArtifactListQuerySchema, {
+      ...(raw.after === undefined ? {} : { after: Number(raw.after) }),
+      ...(raw.limit === undefined ? {} : { limit: Number(raw.limit) }),
+    });
+    const after = query.after ?? 0;
+    const limit = query.limit ?? 100;
+    const artifactsPage = evidence.listArtifacts(taskRunId, after, limit + 1);
+    const items = artifactsPage.slice(0, limit).map(mapArtifact);
+    const next = after + items.length;
+    const hasMore = artifactsPage.length > limit;
     return encodeAbi(
       ArtifactListResponseSchema,
-      successEnvelope(request, { items: mapTaskRun(run).artifacts }),
+      successEnvelope(request, { items, pageInfo: { nextCursor: hasMore ? next : null, hasMore, limit } }),
     );
   });
 
@@ -232,9 +243,8 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
     schema: { params: TaskRunArtifactParamsSchema },
   }, async (request) => {
     const { taskRunId, artifactId } = request.params as TaskRunArtifactParams;
-    const run = service.getRun(taskRunId);
-    if (!run) throw missing("task_run");
-    const artifact = run.artifacts.find((candidate) => candidate.id === artifactId);
+    if (!taskRuns.hasRun(taskRunId)) throw missing("task_run");
+    const artifact = evidence.getArtifact(taskRunId, artifactId);
     if (!artifact) throw missing("artifact");
     try {
       const source = await artifacts.loadSource(artifact.content, artifact.uri, workspaceRoot);

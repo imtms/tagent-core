@@ -180,6 +180,7 @@ class FakeCore {
           status: "started",
           taskRunId,
           error: null,
+          audit: null,
           createdAt: timestamp,
           updatedAt: timestamp,
         };
@@ -847,7 +848,7 @@ describe("Gateway production readiness", () => {
     }
   });
 
-  it("opens a real v30 SQLite fixture through Store v39 and rolls authority back with replay", () => {
+  it("opens a real v30 SQLite fixture through Store v40 and rolls authority back with replay", () => {
     const directory = temporaryDirectory("tagent-gateway-migration-");
     const databasePath = path.join(directory, "core.sqlite");
     createV30DatabaseFixture(databasePath);
@@ -855,7 +856,7 @@ describe("Gateway production readiness", () => {
     const firstOpen = new Store(databasePath);
     const firstInventory = schemaInventory(firstOpen);
     expect(firstOpen.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-      .toEqual({ version: 39 });
+      .toEqual({ version: 40 });
     expect(firstInventory.map((entry) => [entry.type, entry.name])).toEqual([
       ["table", "approval_receipts"],
       ["table", "attempts"],
@@ -871,7 +872,7 @@ describe("Gateway production readiness", () => {
     try {
       expect(schemaInventory(store)).toEqual(firstInventory);
       expect(store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-        .toEqual({ version: 39 });
+        .toEqual({ version: 40 });
 
       const writer = CoreWriterLease.claim(store.db, {
         ownerId: "gateway-authority-test",
@@ -984,7 +985,7 @@ describe("Gateway production readiness", () => {
         legacyLastAcked: 2,
       });
       expect(store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-        .toEqual({ version: 39 });
+        .toEqual({ version: 40 });
       writer.release();
     } finally {
       store.close();
@@ -1118,7 +1119,7 @@ describe("Gateway production readiness", () => {
     );
     expect(secondSchemaOpen.status, secondSchemaOpen.stderr).toBe(0);
     const schemaEvidence = {
-      schemaVersion: 39,
+      schemaVersion: 40,
       objects: [
         "approval_receipts",
         "attempts",
@@ -1178,8 +1179,8 @@ describe("Gateway production readiness", () => {
         reasons: ready.reasons,
         thresholds: ready.thresholds,
       }).toEqual({
-        probeVersion: 2,
-        schemaVersion: 39,
+        probeVersion: 3,
+        schemaVersion: 40,
         migrationOpenIssues: 0,
         writerReady: true,
         writerFence: readinessLease.authority.fence,
@@ -1197,6 +1198,7 @@ describe("Gateway production readiness", () => {
           consumerLagCritical: 10_000,
           terminalUnackedWarningMin: 1,
           terminalUnackedCriticalAgeMs: 120_000,
+          receiptUncertainCriticalAgeMs: 120_000,
         },
       });
       expect(ready.authority).toEqual({
@@ -1210,6 +1212,62 @@ describe("Gateway production readiness", () => {
         rollbackCheckpoint: 0,
       });
       expect(ready.watermarks).toEqual([]);
+
+      const receiptSession = readinessStore.createSession("readiness receipt health");
+      const receiptRun = readinessStore.createRun(receiptSession.id, "observe in-flight receipts");
+      const receiptCursor = readinessStore.claimEventConsumer(receiptRun.id, "gateway-production");
+      expect(readinessStore.ackEventConsumer(
+        receiptRun.id,
+        "gateway-production",
+        receiptCursor.generation,
+        receiptRun.lastEventSeq,
+      )).toBe("accepted");
+      readinessStore.claimTaskRunCommand({
+        principalId: "gateway-production",
+        taskRunId: receiptRun.id,
+        commandId: "young-started-command",
+        commandType: "task_run.cancel",
+        canonicalPayload: JSON.stringify({ type: "task_run.cancel" }),
+        targetAttemptId: null,
+        requestId: "young-started-request",
+      });
+      const youngStartedProbe = await runChild(
+        process.execPath,
+        ["scripts/gateway-readiness-probe.mjs"],
+        { cwd: releaseDirectory, env: probeEnvironment },
+      );
+      expect(youngStartedProbe.status, youngStartedProbe.stderr).toBe(0);
+      expect(JSON.parse(youngStartedProbe.stdout)).toMatchObject({
+        ready: true,
+        reasons: [],
+        receipts: { commands: { started: 1, outcomeUnknown: 0 } },
+      });
+
+      readinessStore.db.prepare(`UPDATE task_run_command_receipts SET updated_at=?
+        WHERE principal_id=? AND task_run_id=? AND command_id=?`).run(
+        Date.now() - 120_001,
+        "gateway-production",
+        receiptRun.id,
+        "young-started-command",
+      );
+      const staleStartedProbe = await runChild(
+        process.execPath,
+        ["scripts/gateway-readiness-probe.mjs"],
+        { cwd: releaseDirectory, env: probeEnvironment },
+      );
+      expect(staleStartedProbe.status).toBe(1);
+      expect(JSON.parse(staleStartedProbe.stdout)).toMatchObject({
+        ready: false,
+        severity: "critical",
+        reasons: ["command_receipts_stale_started"],
+      });
+      readinessStore.settleTaskRunCommand(
+        "gateway-production",
+        receiptRun.id,
+        "young-started-command",
+        "succeeded",
+        { accepted: true },
+      );
 
       expect(readinessLease.release()).toBe(true);
       const rejectedProbe = await runChild(
@@ -1229,7 +1287,7 @@ describe("Gateway production readiness", () => {
         severity: rejected.severity,
         reasons: rejected.reasons,
       }).toEqual({
-        schemaVersion: 39,
+        schemaVersion: 40,
         writerReady: false,
         writerLeaseFresh: false,
         consumerLag: 0,

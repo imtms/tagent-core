@@ -1,5 +1,6 @@
 import type {
   ArtifactContent,
+  ArtifactListResponse,
   CommandReceipt,
   CoreCapabilities,
   EventConsumerAckRequest,
@@ -25,11 +26,19 @@ import type { CoreClientOptions, CoreSseOptions, CoreSseSubscription } from "./t
 
 export type {
   ArtifactContent,
+  ArtifactListResponse,
   CommandReceipt,
   CoreCapabilities,
+  ConsoleCreateWorkspaceGoalRequest,
+  ConsoleDecideWorkspaceGoalRequest,
   ConsoleGenerateWorkspaceGoalRoadmapRequest,
+  ConsoleReviseWorkspaceGoalDefinitionRequest,
+  ConsoleReviseWorkspaceGoalRoadmapRequest,
+  ConsoleStartWorkspaceGoalTaskRunRequest,
+  ConsoleStartWorkspaceGoalTaskRunResult,
   ConsoleWorkspaceGoal,
   ConsoleWorkspaceGoalOperationReceipt,
+  ConsoleWorkspaceGoalRevision,
   ConsoleWorkspaceGoalSummary,
   EventConsumerCursor,
   Session,
@@ -83,11 +92,9 @@ export class CoreClient extends ConsoleGoalClient {
     const abi = await loadCoreAbi();
     return this.request("/api/v1/capabilities", { decode: (payload) => abi.decodeAbi(abi.CoreCapabilitiesResponseSchema, payload).data });
   }
-
   async createSession(input: SessionCreateRequest = {}): Promise<Session> {
     return this.createSessionIdempotent(crypto.randomUUID(), input);
   }
-
   async createSessionIdempotent(idempotencyKey: string, input: SessionCreateRequest = {}): Promise<Session> {
     const abi = await loadCoreAbi();
     const path = "/api/v1/sessions";
@@ -99,7 +106,6 @@ export class CoreClient extends ConsoleGoalClient {
       method: "POST",
     });
   }
-
   async getSession(sessionId: string): Promise<Session> {
     const abi = await loadCoreAbi();
     const path = `/api/v1/sessions/${encodePathSegment(sessionId)}`;
@@ -107,7 +113,6 @@ export class CoreClient extends ConsoleGoalClient {
       decode: (payload) => decodeSuccessData(abi, payload, (data) => abi.decodeAbi(abi.SessionSchema, data)),
     });
   }
-
   async submit(sessionId: string, idempotencyKey: string, input: SubmissionCreateRequest): Promise<SubmissionReceipt> {
     const abi = await loadCoreAbi();
     const path = `/api/v1/sessions/${encodePathSegment(sessionId)}/submissions`;
@@ -194,10 +199,26 @@ export class CoreClient extends ConsoleGoalClient {
   }
 
   async listArtifacts(taskRunId: string): Promise<TaskRunArtifact[]> {
+    const items: TaskRunArtifact[] = [];
+    let after: number | undefined;
+    do {
+      const page = await this.getArtifactsPage(taskRunId, { after, limit: 200 });
+      items.push(...page.data.items);
+      after = page.data.pageInfo.nextCursor ?? undefined;
+      if (!page.data.pageInfo.hasMore) break;
+    } while (after !== undefined);
+    return items;
+  }
+
+  async getArtifactsPage(taskRunId: string, options: { after?: number; limit?: number } = {}): Promise<ArtifactListResponse> {
     const abi = await loadCoreAbi();
-    const path = `/api/v1/task-runs/${encodePathSegment(taskRunId)}/artifacts`;
+    const query = new URLSearchParams();
+    if (options.after !== undefined) query.set("after", String(options.after));
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    const basePath = `/api/v1/task-runs/${encodePathSegment(taskRunId)}/artifacts`;
+    const path = query.size ? `${basePath}?${query}` : basePath;
     return this.request(path, {
-      decode: (payload) => abi.decodeAbi(abi.ArtifactListResponseSchema, payload).data.items,
+      decode: (payload) => abi.decodeAbi(abi.ArtifactListResponseSchema, payload),
     });
   }
 

@@ -285,6 +285,8 @@ export class LegacyStoreAdapter {
       enqueueSessionInbox: mutate(store.enqueueSessionInbox.bind(store)),
       getSessionInboxItem: query(store.getSessionInboxItem.bind(store)),
       getSessionSubmission: query(store.getSessionSubmission.bind(store)),
+      recordSubmissionAudit: mutate(store.recordSubmissionAudit.bind(store)),
+      getSubmissionAudit: query(store.getSubmissionAudit.bind(store)),
       listSessionInbox: query(store.listSessionInbox.bind(store)),
       routeSessionInboxItem: mutate(store.routeSessionInboxItem.bind(store)),
       findMergeCandidate: query(store.findMergeCandidate.bind(store)),
@@ -304,6 +306,7 @@ export class LegacyStoreAdapter {
 
     this.taskRuns = Object.freeze({
       createRun: mutate(store.createRun.bind(store)),
+      hasRun: query(store.hasRun.bind(store)),
       getRun: query(store.getRun.bind(store)),
       getRunByRequestId: query(store.getRunByRequestId.bind(store)),
       listRuns: query(store.listRuns.bind(store)),
@@ -382,6 +385,7 @@ export class LegacyStoreAdapter {
       markChecksStale: mutate(store.markChecksStale.bind(store)),
       upsertCheck: mutate(store.upsertCheck.bind(store)),
       getArtifact: query(store.getArtifact.bind(store)),
+      listArtifacts: query(store.listArtifacts.bind(store)),
       addArtifact: mutate(store.addArtifact.bind(store)),
     });
 

@@ -7,3 +7,9 @@ export const GatewayProvenanceSchema = Type.Object({
   externalRequestId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
 }, { additionalProperties: false });
 export type GatewayProvenance = Static<typeof GatewayProvenanceSchema>;
+
+export const GatewayRequestAuditSchema = Type.Object({
+  principalId: Type.String({ minLength: 1, maxLength: 256 }),
+  origin: Type.Union([GatewayProvenanceSchema, Type.Null()]),
+}, { additionalProperties: false });
+export type GatewayRequestAudit = Static<typeof GatewayRequestAuditSchema>;

@@ -78,16 +78,25 @@ export function registerSubmissionV1Routes(app: FastifyInstance, dependencies: C
     const idempotencyKey = headers["idempotency-key"];
     const canonicalPayload = canonicalizeSubmissionRequest(body);
     const existing = submissions.getSessionSubmission(sessionId, idempotencyKey);
-    if (existing && canonicalizeSubmissionRequest({ content: existing.content }) !== canonicalPayload) {
+    const existingCanonicalPayload = existing
+      ? submissions.getSubmissionAudit(sessionId, idempotencyKey)?.canonicalPayload ?? canonicalizeSubmissionRequest({ content: existing.content })
+      : undefined;
+    if (existing && existingCanonicalPayload !== canonicalPayload) {
       throw conflict("submission.idempotency_conflict", "Idempotency-Key was already used with a different payload", { idempotencyKey });
     }
-    const result = await service.enqueueSessionInput(sessionId, body.content, idempotencyKey);
-    if (canonicalizeSubmissionRequest({ content: result.item.content }) !== canonicalPayload) {
+    const result = await service.enqueueSessionInput(sessionId, body.content, idempotencyKey, {
+      principalId: principalOf(request).subjectId,
+      canonicalPayload,
+      provenance: body.origin,
+    });
+    const recordedCanonicalPayload = submissions.getSubmissionAudit(sessionId, idempotencyKey)?.canonicalPayload
+      ?? canonicalizeSubmissionRequest({ content: result.item.content });
+    if (recordedCanonicalPayload !== canonicalPayload) {
       throw conflict("submission.idempotency_conflict", "Idempotency-Key was already used with a different payload", { idempotencyKey });
     }
     return encodeAbi(
       SubmissionResponseSchema,
-      successEnvelope(request, { receipt: mapSubmissionReceipt(result.item) }),
+      successEnvelope(request, { receipt: mapSubmissionReceipt(result.item, submissions.getSubmissionAudit(sessionId, idempotencyKey)) }),
     );
   });
 
@@ -101,7 +110,7 @@ export function registerSubmissionV1Routes(app: FastifyInstance, dependencies: C
     if (!item) throw missing("submission");
     return encodeAbi(
       SubmissionResponseSchema,
-      successEnvelope(request, { receipt: mapSubmissionReceipt(item) }),
+      successEnvelope(request, { receipt: mapSubmissionReceipt(item, submissions.getSubmissionAudit(sessionId, idempotencyKey)) }),
     );
   });
 }

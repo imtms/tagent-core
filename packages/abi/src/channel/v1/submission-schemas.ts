@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import { IdempotencyKeySchema } from "../../shared/idempotency.js";
 import { IdentifierSchema, IsoDateTimeSchema, RequestIdSchema } from "../../shared/primitives.js";
+import { GatewayProvenanceSchema, GatewayRequestAuditSchema } from "./provenance-schemas.js";
 
 export {
   IDEMPOTENCY_KEY_HEADER,
@@ -20,6 +21,7 @@ export const SubmissionCreateRequestSchema = Type.Object({
     minLength: 1,
     description: "Advisory compatibility hint; excluded from v1 idempotency and execution semantics.",
   })),
+  origin: Type.Optional(GatewayProvenanceSchema),
 }, { additionalProperties: false });
 export type SubmissionCreateRequest = Static<typeof SubmissionCreateRequestSchema>;
 
@@ -27,6 +29,7 @@ export const SubmissionApplicationInputSchema = Type.Object({
   idempotencyKey: IdempotencyKeySchema,
   content: Type.String({ minLength: 1 }),
   modelId: Type.Optional(Type.String({ minLength: 1 })),
+  origin: Type.Optional(GatewayProvenanceSchema),
 }, { additionalProperties: false });
 export type SubmissionApplicationInput = Static<typeof SubmissionApplicationInputSchema>;
 
@@ -52,6 +55,7 @@ export const SubmissionReceiptSchema = Type.Object({
   status: SubmissionStatusSchema,
   taskRunId: Type.Union([IdentifierSchema, Type.Null()]),
   error: Type.Union([Type.String(), Type.Null()]),
+  audit: Type.Union([GatewayRequestAuditSchema, Type.Null()]),
   createdAt: IsoDateTimeSchema,
   updatedAt: IsoDateTimeSchema,
 });
@@ -84,10 +88,11 @@ export function normalizeSubmissionRequest(request: SubmissionCreateRequest): Su
   return {
     content: request.content.trim(),
     ...(request.modelId === undefined ? {} : { modelId: request.modelId }),
+    ...(request.origin === undefined ? {} : { origin: request.origin }),
   };
 }
 
 export function canonicalizeSubmissionRequest(request: SubmissionCreateRequest): string {
   const normalized = normalizeSubmissionRequest(request);
-  return JSON.stringify({ content: normalized.content });
+  return JSON.stringify({ content: normalized.content, ...(normalized.origin === undefined ? {} : { origin: normalized.origin }) });
 }
