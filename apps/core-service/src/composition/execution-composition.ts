@@ -150,7 +150,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
   };
   const routerModel = runtimeDefaults.routerModel
     ?? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions"> | undefined;
-  const routerTimeoutMs = runtimeDefaults.routerTimeoutMs ?? 15_000;
+  const routerTimeoutMs = runtimeDefaults.routerTimeoutMs ?? 5_000;
   const sessionRouter = new SessionInputRouter({
     model: routerModel && runtimeDefaults.apiKey
       ? createSessionInputModelPort(routerModel, runtimeDefaults.apiKey, routerTimeoutMs)

@@ -16,6 +16,7 @@ import type {
   GovernanceCompletionRunView,
   GovernanceProgressRunView,
   GovernanceRunEventView,
+  OperationRecord,
 } from "@tagent/governance/ports";
 import type {
   ControlInboxItem,
@@ -68,12 +69,16 @@ import {
   assertWorkspaceGoalReliabilityV36Schema,
   migrateWorkspaceGoalReliabilityV36,
 } from "./migrations/v36-workspace-goal-reliability.js";
+import {
+  assertTrustedEvidenceV37Schema,
+  migrateTrustedEvidenceV37,
+} from "./migrations/v37-trusted-evidence.js";
 import { mapLegacyRunApprovalOperation } from "./sqlite/canonical-approval-mapper.js";
 import { appendProjectionPair, finalizeProjectionCheckpoint } from "./sqlite/canonical-integration-event.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 36;
+const SCHEMA_VERSION = 37;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
 export interface StoreOptions {
@@ -434,6 +439,7 @@ export class Store {
         attempt_id TEXT,
         operation_type TEXT NOT NULL,
         payload_hash TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL,
         stage TEXT NOT NULL,
         effects_json TEXT NOT NULL DEFAULT '[]',
@@ -477,8 +483,12 @@ export class Store {
         command TEXT NOT NULL DEFAULT '',
         evidence TEXT NOT NULL DEFAULT '',
         stale INTEGER NOT NULL DEFAULT 0,
+        source_operation_id TEXT,
+        observed_at INTEGER,
         PRIMARY KEY (run_id, check_key)
       );
+      CREATE INDEX IF NOT EXISTS idx_run_checks_source_operation
+        ON run_checks(run_id, source_operation_id) WHERE source_operation_id IS NOT NULL;
       CREATE TABLE IF NOT EXISTS artifacts (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL REFERENCES runs(id),
@@ -1057,11 +1067,18 @@ export class Store {
     assertWorkspaceGoalsV35Schema(this.db);
 
     const workspaceGoalReliabilityMigration = this.db.transaction(() => {
-      migrateWorkspaceGoalReliabilityV36(this.db, previousVersion === 36 ? 36 : 35);
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+      migrateWorkspaceGoalReliabilityV36(this.db, previousVersion !== undefined && previousVersion >= 36 ? 36 : 35);
+      this.db.prepare(`UPDATE schema_meta SET version=36,updated_at=? WHERE id=1`).run(now());
     });
     workspaceGoalReliabilityMigration();
     assertWorkspaceGoalReliabilityV36Schema(this.db);
+
+    const trustedEvidenceMigration = this.db.transaction(() => {
+      migrateTrustedEvidenceV37(this.db, previousVersion !== undefined && previousVersion >= 37 ? 37 : 36);
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+    });
+    trustedEvidenceMigration();
+    assertTrustedEvidenceV37Schema(this.db);
   }
 
   private attemptId(runId: string, ordinal: number) {
@@ -1561,7 +1578,9 @@ ${source.content}`;
     `).get(id) as RunRow | undefined;
     if (!row) return undefined;
     const planRows = this.db.prepare(`SELECT item_key as key, title, status, required, position FROM plan_items WHERE run_id = ? ORDER BY position`).all(id) as Array<Omit<PlanItem, "required"> & { required: number }>;
-    const checkRows = this.db.prepare(`SELECT check_key as key, title, status, required, command, evidence, stale FROM run_checks WHERE run_id = ? ORDER BY check_key`).all(id) as Array<Omit<RunCheck, "required" | "stale"> & { required: number; stale: number }>;
+    const checkRows = this.db.prepare(`SELECT check_key as key, title, status, required, command, evidence, stale,
+      source_operation_id as sourceOperationId, observed_at as observedAt
+      FROM run_checks WHERE run_id = ? ORDER BY check_key`).all(id) as Array<Omit<RunCheck, "required" | "stale"> & { required: number; stale: number }>;
     const plan = planRows.map((item) => ({ ...item, required: Boolean(item.required) }));
     const checks = checkRows.map((item) => ({ ...item, required: Boolean(item.required), stale: Boolean(item.stale) }));
     const artifacts = this.db.prepare(`SELECT id, run_id as runId, kind, title, content, uri, created_at as createdAt FROM artifacts WHERE run_id = ? ORDER BY created_at`).all(id) as Artifact[];
@@ -1597,6 +1616,17 @@ ${source.content}`;
   listRuns(sessionId: SessionId, limit = 50): TaskRun[] {
     const rows = this.db.prepare("SELECT id FROM runs WHERE session_id = ? ORDER BY updated_at DESC LIMIT ?").all(sessionId, limit) as Array<{ id: string }>;
     return rows.map((row) => this.getRun(row.id)!);
+  }
+
+  listRunSummaries(sessionId: SessionId, limit = 50): Array<Pick<TaskRun, "id" | "goal" | "status" | "phase" | "contract" | "updatedAt">> {
+    const rows = this.db.prepare(`SELECT id,goal,status,phase,contract_json as contractJson,updated_at as updatedAt
+      FROM runs WHERE session_id=? ORDER BY updated_at DESC LIMIT ?`).all(sessionId, limit) as Array<{
+        id: string; goal: string; status: RunStatus; phase: RunPhase; contractJson: string; updatedAt: number;
+      }>;
+    return rows.map(({ contractJson, ...row }) => ({
+      ...row,
+      contract: contractJson ? JSON.parse(contractJson) as TaskRunContractSnapshot : null,
+    }));
   }
 
   getLatestRun(sessionId: SessionId): TaskRun | undefined {
@@ -1892,9 +1922,18 @@ ${source.content}`;
     return transaction();
   }
 
-  listTranscriptEntries(runId: RunId) {
-    const rows = this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? ORDER BY seq").all(runId) as Array<{ seq: number; attempt: number; role: string; messageJson: string; createdAt: number }>;
-    return rows.map(({ messageJson, ...row }) => ({ ...row, message: JSON.parse(messageJson) as AgentMessage }));
+  listTranscriptEntries(runId: RunId, options: { limit?: number; attempt?: number } = {}) {
+    const limit = options.limit === undefined ? undefined : Math.max(1, Math.floor(options.limit));
+    const rows = options.attempt === undefined
+      ? limit === undefined
+        ? this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? ORDER BY seq").all(runId)
+        : this.db.prepare(`SELECT * FROM (SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt
+          FROM run_transcript WHERE run_id = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq`).all(runId, limit)
+      : limit === undefined
+        ? this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? AND attempt = ? ORDER BY seq").all(runId, options.attempt)
+        : this.db.prepare(`SELECT * FROM (SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt
+          FROM run_transcript WHERE run_id = ? AND attempt = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq`).all(runId, options.attempt, limit);
+    return (rows as Array<{ seq: number; attempt: number; role: string; messageJson: string; createdAt: number }>).map(({ messageJson, ...row }) => ({ ...row, message: JSON.parse(messageJson) as AgentMessage }));
   }
 
   listTranscript(runId: RunId): AgentMessage[] {
@@ -1980,9 +2019,9 @@ ${source.content}`;
     const timestamp = now();
     const transaction = this.db.transaction(() => {
       const inserted = this.db.prepare(`INSERT OR IGNORE INTO operations
-        (id, run_id, attempt, attempt_id, operation_type, payload_hash, status, stage, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'running', 'executing', ?, ?)`).run(
-        id, runId, attempt, this.attemptId(runId, attempt), operationType, payloadHash, timestamp, timestamp,
+        (id, run_id, attempt, attempt_id, operation_type, payload_hash, payload_json, status, stage, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'running', 'executing', ?, ?)`).run(
+        id, runId, attempt, this.attemptId(runId, attempt), operationType, payloadHash, JSON.stringify(payload), timestamp, timestamp,
       );
       const receipt = this.getOperation(id)!;
       if (receipt.operationType !== operationType || receipt.payloadHash !== payloadHash || receipt.runId !== runId) throw new Error("Operation ID already exists with a different payload or scope");
@@ -2007,18 +2046,43 @@ ${source.content}`;
 
   getOperation(id: string) {
     const row = this.db.prepare(`SELECT id, run_id as runId, attempt, operation_type as operationType, payload_hash as payloadHash,
-      status, stage, effects_json as effectsJson, result_json as resultJson, error, created_at as createdAt,
+      payload_json as payloadJson, status, stage, effects_json as effectsJson, result_json as resultJson, error, created_at as createdAt,
       updated_at as updatedAt, completed_at as completedAt FROM operations WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
-    if (!row) return undefined;
-    const { effectsJson, resultJson, ...receipt } = row;
-    return { ...receipt, effects: JSON.parse(String(effectsJson || "[]")), result: resultJson ? JSON.parse(String(resultJson)) : undefined } as {
-      id: string; runId: string; attempt: number; operationType: string; payloadHash: string; status: string; stage: string; effects: unknown[]; result?: unknown; error: string; createdAt: number; updatedAt: number; completedAt: number | null;
-    };
+    return row ? this.hydrateOperation(row) : undefined;
   }
 
-  listOperations(runId: RunId) {
-    const rows = this.db.prepare("SELECT id FROM operations WHERE run_id = ? ORDER BY created_at, id").all(runId) as Array<{ id: string }>;
-    return rows.map((row) => this.getOperation(row.id)!);
+  listOperations(runId: RunId, options: { limit?: number; ids?: string[] } = {}) {
+    const select = `SELECT id, run_id as runId, attempt, operation_type as operationType,
+      payload_hash as payloadHash, payload_json as payloadJson, status, stage, effects_json as effectsJson,
+      result_json as resultJson, error, created_at as createdAt, updated_at as updatedAt, completed_at as completedAt
+      FROM operations WHERE run_id = ?`;
+    const ids = [...new Set(options.ids?.map((id) => id.trim()).filter(Boolean) ?? [])];
+    const limit = options.limit === undefined ? undefined : Math.max(1, Math.floor(options.limit));
+    const filters: string[] = [];
+    const params: Array<string | number> = [runId];
+    if (ids.length) {
+      // Keep the query at a constant bind count. A long-lived Run can legitimately
+      // accumulate more evidence references than SQLite's host-parameter ceiling.
+      filters.push("id IN (SELECT value FROM json_each(?))");
+      params.push(JSON.stringify(ids));
+    }
+    if (limit !== undefined) {
+      filters.push("id IN (SELECT id FROM operations WHERE run_id=? ORDER BY created_at DESC,id DESC LIMIT ?)");
+      params.push(runId, limit);
+    }
+    const where = filters.length ? ` AND (${filters.join(" OR ")})` : "";
+    const rows = this.db.prepare(`${select}${where} ORDER BY created_at,id`).all(...params) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.hydrateOperation(row));
+  }
+
+  private hydrateOperation(row: Record<string, unknown>) {
+    const { payloadJson, effectsJson, resultJson, ...receipt } = row;
+    return {
+      ...receipt,
+      payload: payloadJson ? JSON.parse(String(payloadJson)) as unknown : undefined,
+      effects: JSON.parse(String(effectsJson || "[]")) as unknown[],
+      result: resultJson ? JSON.parse(String(resultJson)) as unknown : undefined,
+    } as import("@tagent/governance/ports").OperationRecord;
   }
 
   recordToolAttempt(runId: RunId, attempt: number, toolCallId: string, toolName: string, args: unknown) {
@@ -2091,11 +2155,58 @@ ${source.content}`;
   }
 
   upsertCheck(runId: RunId, check: RunCheck) {
+    const bound = this.bindTrustedCheckEvidence(runId, check);
     this.db.prepare(`
-      INSERT INTO run_checks (run_id, check_key, title, status, required, command, evidence, stale) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(run_id, check_key) DO UPDATE SET title=excluded.title, status=excluded.status, required=excluded.required, command=excluded.command, evidence=excluded.evidence, stale=excluded.stale
-    `).run(runId, check.key, check.title, check.status, Number(check.required), check.command, check.evidence, Number(check.stale));
-    this.advanceRunPhase(runId, check.status === "pending" ? "implement" : "verify");
+      INSERT INTO run_checks (run_id, check_key, title, status, required, command, evidence, stale, source_operation_id, observed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(run_id, check_key) DO UPDATE SET title=excluded.title, status=excluded.status,
+        required=excluded.required, command=excluded.command, evidence=excluded.evidence, stale=excluded.stale,
+        source_operation_id=excluded.source_operation_id, observed_at=excluded.observed_at
+    `).run(runId, bound.key, bound.title, bound.status, Number(bound.required), bound.command, bound.evidence,
+      Number(bound.stale), bound.sourceOperationId ?? null, bound.observedAt ?? null);
+    this.advanceRunPhase(runId, bound.status === "pending" ? "implement" : "verify");
+  }
+
+  private bindTrustedCheckEvidence(runId: RunId, check: RunCheck): RunCheck {
+    const sourceOperationId = check.sourceOperationId?.trim() || null;
+    if (check.status !== "passed" || !sourceOperationId) {
+      return { ...check, sourceOperationId: null, observedAt: null };
+    }
+    const run = this.db.prepare("SELECT attempt FROM runs WHERE id=?").get(runId) as { attempt: number } | undefined;
+    const operation = this.getOperation(sourceOperationId);
+    if (!run || !operation || operation.runId !== runId || operation.attempt !== run.attempt) {
+      throw new Error("Passed check evidence must reference a successful operation from the current Run Attempt");
+    }
+    if (operation.operationType !== "tool.bash" || operation.status !== "succeeded" || !operation.completedAt || operation.result === undefined) {
+      throw new Error("Passed check evidence must reference a completed successful Bash operation");
+    }
+    const payload = operation.payload && typeof operation.payload === "object" && !Array.isArray(operation.payload)
+      ? operation.payload as Record<string, unknown>
+      : undefined;
+    const command = typeof payload?.command === "string" ? payload.command.trim() : "";
+    const result = operation.result && typeof operation.result === "object" && !Array.isArray(operation.result)
+      ? operation.result as Record<string, unknown>
+      : undefined;
+    const details = result?.details && typeof result.details === "object" && !Array.isArray(result.details)
+      ? result.details as Record<string, unknown>
+      : undefined;
+    if (!command || details?.exitCode !== 0) {
+      throw new Error("Passed check evidence receipt is missing the actual command or zero exit code");
+    }
+    const output = Array.isArray(result?.content)
+      ? result.content.flatMap((part) => part && typeof part === "object" && "text" in part && typeof part.text === "string" ? [part.text] : []).join("\n")
+      : "";
+    const projectedOutput = output.length <= 3_000 ? output : `${output.slice(0, 2_000)}\n... output projected by Core ...\n${output.slice(-800)}`;
+    const evidence = JSON.stringify({
+      sourceOperationId,
+      command,
+      exitCode: 0,
+      observedAt: operation.completedAt,
+      output: projectedOutput,
+      artifactId: typeof details?.artifactId === "string" ? details.artifactId : null,
+      sha256: typeof details?.sha256 === "string" ? details.sha256 : this.canonicalHash(operation.result),
+    });
+    return { ...check, command, evidence, stale: false, sourceOperationId, observedAt: operation.completedAt };
   }
 
   getArtifact(runId: RunId, artifactId: string): Artifact | undefined {
@@ -2686,6 +2797,31 @@ ${source.content}`;
     if (!run.gateRequired) return { passed: true, failures: [] };
     const failures: CompletionGate["failures"] = [];
     const requiredPlan = run.plan.filter((item) => item.required);
+    const requiredChecks = run.checks.filter((item) => item.required);
+    let operations: Map<string, OperationRecord> | undefined;
+    const operationById = (id: string) => {
+      operations ??= new Map(this.listOperations(run.id, {
+        ids: requiredChecks.flatMap((check) => check.sourceOperationId ? [check.sourceOperationId] : []),
+      }).map((operation) => [operation.id, operation]));
+      return operations.get(id);
+    };
+    const trustedCheck = (check: RunCheck) => {
+      if (check.status !== "passed" || check.stale || !check.sourceOperationId || !check.observedAt || !check.evidence.trim()) return false;
+      const operation = operationById(check.sourceOperationId);
+      if (!operation || operation.runId !== run.id || operation.attempt !== run.attempt
+        || operation.operationType !== "tool.bash" || operation.status !== "succeeded"
+        || operation.completedAt !== check.observedAt || operation.result === undefined) return false;
+      const payload = operation.payload && typeof operation.payload === "object" && !Array.isArray(operation.payload)
+        ? operation.payload as Record<string, unknown>
+        : undefined;
+      const result = operation.result && typeof operation.result === "object" && !Array.isArray(operation.result)
+        ? operation.result as Record<string, unknown>
+        : undefined;
+      const details = result?.details && typeof result.details === "object" && !Array.isArray(result.details)
+        ? result.details as Record<string, unknown>
+        : undefined;
+      return typeof payload?.command === "string" && payload.command.trim() === check.command.trim() && details?.exitCode === 0;
+    };
     const lightweightDiscussion = run.contract?.intent === "discussion"
       && run.contract.objectives.length === 1
       && run.contract.objectives[0]?.timing === "current"
@@ -2694,9 +2830,15 @@ ${source.content}`;
       && run.contract.nonGoals.length === 0;
     if (requiredPlan.length === 0 && !lightweightDiscussion) failures.push({ kind: "plan", key: "plan", reason: "No required plan items" });
     for (const item of requiredPlan) if (item.status !== "done") failures.push({ kind: "plan_item", key: item.key, reason: `Required plan item is ${item.status}` });
-    for (const check of run.checks.filter((item) => item.required)) {
+    for (const check of requiredChecks) {
       if (check.status !== "passed") failures.push({ kind: "check", key: check.key, reason: `Required check is ${check.status}` });
       else if (check.stale) failures.push({ kind: "check", key: check.key, reason: "Evidence is stale" });
+      else if (!trustedCheck(check)) failures.push({ kind: "check", key: check.key, reason: "Evidence is not bound to a successful Bash receipt from the current Attempt" });
+    }
+    const requiresTrustedVerification = run.contract?.objectives.some((objective) =>
+      objective.timing === "current" && ["change", "verify", "release"].includes(objective.kind)) ?? false;
+    if (requiresTrustedVerification && !requiredChecks.some(trustedCheck)) {
+      failures.push({ kind: "check", key: "trusted_evidence", reason: "Change, verify, and release work requires at least one trusted required check" });
     }
     return { passed: failures.length === 0, failures };
   }

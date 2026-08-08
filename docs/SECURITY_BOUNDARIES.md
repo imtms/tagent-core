@@ -2,7 +2,7 @@
 
 ## Trust model
 
-TAgent Core 0.2.0 supports one trusted Core process, one trusted tool workspace, and one SQLite writer. It is not a public multi-tenant sandbox. Run it under a dedicated OS identity and keep it behind a private network boundary.
+TAgent Core supports one trusted Core process, one trusted tool workspace, and one SQLite writer. It is not a public multi-tenant sandbox. Run it under a dedicated OS identity and keep it behind a private network boundary.
 
 ## Authentication modes
 
@@ -39,6 +39,7 @@ The following are server-owned and cannot be asserted by a caller:
 - OS instance lock, writer lease, fence, and connection mutation guard;
 - canonical TaskRun/Attempt transition authority;
 - approval and capability authorization receipts;
+- current-Attempt Bash bindings and Core-derived check evidence;
 - event-consumer generation and acknowledged sequence;
 - internal evaluation receipt verification;
 - Learning projection authority and migration issue state.

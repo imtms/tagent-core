@@ -60,6 +60,8 @@ export const TaskRunCheckSchema = Type.Object({
   command: Type.String(),
   evidence: Type.String(),
   stale: Type.Boolean(),
+  sourceOperationId: Type.Union([IdentifierSchema, Type.Null()]),
+  observedAt: Type.Union([IsoDateTimeSchema, Type.Null()]),
 });
 export type TaskRunCheck = Static<typeof TaskRunCheckSchema>;
 

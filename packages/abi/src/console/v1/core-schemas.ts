@@ -129,6 +129,8 @@ export type ConsolePlanItem = Static<typeof ConsolePlanItemSchema>;
 export const ConsoleTaskRunCheckSchema = Type.Object({
   key: Type.String(), title: Type.String(), status: Type.String(), required: Type.Boolean(),
   command: Type.String(), evidence: Type.String(), stale: Type.Boolean(),
+  sourceOperationId: Type.Union([Type.String(), Type.Null()]),
+  observedAt: ConsoleNullableTimestampSchema,
 });
 export type ConsoleTaskRunCheck = Static<typeof ConsoleTaskRunCheckSchema>;
 /** @deprecated Use TaskRunCheck from channel/v1. */

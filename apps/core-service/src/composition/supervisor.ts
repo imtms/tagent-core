@@ -34,10 +34,11 @@ export class TaskRunSupervisor {
   }
 
   reviewCheckpoint(runId: string, event: GovernanceRunEventView) {
+    if (!["run.updated", "tool.completed", "tool.guard.blocked"].includes(event.type)) return undefined;
     const run = this.store.getRun(runId);
     if (!run || run.status !== "running") return undefined;
     const snapshot = this.store.updateProgressSnapshot(run, event);
-    if (!event.type.startsWith("tool.") && event.type !== "tool.guard.blocked") return undefined;
+    if (event.type === "run.updated") return undefined;
     const repeatedFailure = snapshot.consecutiveFailures >= this.policy.repeatedFailureThreshold;
     const repeatedOperation = snapshot.repeatedOperations >= this.policy.repeatedFailureThreshold;
     if (!repeatedFailure && !repeatedOperation) return undefined;
@@ -58,19 +59,31 @@ export class TaskRunSupervisor {
     if (pendingControl.length) {
       return { gates: [], decision: this.createDecision(run, checkpointSeq, "settled", "wait_for_runtime", "pending_control_delivery", `${pendingControl.length} durable control message(s) are still pending delivery.`, 1, response) };
     }
-    const operations = this.store.listOperations(run.id);
-    const progress = this.store.getProgressSnapshot(run.id);
-    const contextManifest = this.store.getLatestContextManifest(run.id);
     // Do not spend a model round-trip proving facts already authoritatively known by the local gate.
     // Semantic review still runs whenever deterministic prerequisites pass.
     const prerequisiteAudit = this.reviewDeterministicPrerequisites(run);
+    const operations = prerequisiteAudit ? [] : this.store.listOperations(run.id, {
+      limit: 16,
+      ids: run.checks.flatMap((check) => check.sourceOperationId ? [check.sourceOperationId] : []),
+    });
     const lightweightAudit = prerequisiteAudit ? undefined : this.reviewLightweightCompletion(run, response, operations, options);
     const deterministicAudit = prerequisiteAudit ?? lightweightAudit;
-    const audit = deterministicAudit ?? await this.reviewer.reviewSettled({ run, response, modelOutputTruncated: options.modelOutputTruncated, operations, progress, contextManifest });
+    const progress = deterministicAudit ? undefined : this.store.getProgressSnapshot(run.id);
+    const contextManifest = deterministicAudit ? undefined : this.store.getLatestContextManifest(run.id);
+    const reviewedAudit = deterministicAudit ?? await this.reviewer.reviewSettled({ run, response, modelOutputTruncated: options.modelOutputTruncated, operations, progress, contextManifest });
+    const audit = this.enforceAuditAlgebra(reviewedAudit);
     const evaluator = deterministicAudit ? "system" as const : audit.evaluator ?? this.reviewer.evaluator;
     const evaluatorModel = prerequisiteAudit ? "deterministic-prerequisite-gate" : lightweightAudit ? "deterministic-lightweight-delivery-v1" : audit.evaluatorModel ?? this.reviewer.model;
     const createdAt = Date.now();
-    const manifest = { attempt: run.attempt, checkpointSeq, contract: run.contract, plan: run.plan, checks: run.checks, artifacts: run.artifacts.map(({ id, kind, uri }) => ({ id, kind, uri })), operations: operations.map(({ id, operationType, status, stage }) => ({ id, operationType, status, stage })), response, progress };
+    const manifest = {
+      attempt: run.attempt, checkpointSeq, contract: run.contract, plan: run.plan, checks: run.checks,
+      artifacts: run.artifacts.map(({ id, kind, content, uri }) => ({ id, kind, uri, contentHash: createHash("sha256").update(content).digest("hex") })),
+      operations: operations.map(({ id, attempt, operationType, payloadHash, status, stage, result, completedAt }) => ({
+        id, attempt, operationType, payloadHash, status, stage, completedAt,
+        resultHash: createHash("sha256").update(JSON.stringify(result ?? null)).digest("hex"),
+      })),
+      response, progress,
+    };
     const inputManifestHash = createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
     const gates = (["progress", "evidence", "contract", "completion", "continuation"] as const).map((gateType): GateEvaluation => {
       const reviewed = audit.gates[gateType];
@@ -164,9 +177,93 @@ export class TaskRunSupervisor {
     };
   }
 
+  private enforceAuditAlgebra(source: SupervisorAudit): SupervisorAudit {
+    const gates = Object.fromEntries(Object.entries(source.gates).map(([type, gate]) => [type, {
+      ...gate,
+      failures: [...gate.failures],
+      criterionCoverage: gate.criterionCoverage?.map((coverage) => ({ ...coverage, evidenceRefs: [...coverage.evidenceRefs] })),
+    }])) as SupervisorAudit["gates"];
+    const contractCoverageFailures: GateFailure[] = (gates.contract.criterionCoverage ?? []).flatMap((coverage, index) =>
+      coverage.status === "covered" ? [] : [{
+        kind: "contract",
+        key: `acceptance_criterion_${index + 1}`,
+        reason: `Acceptance criterion is ${coverage.status}: ${coverage.reason}`,
+        disposition: coverage.status === "blocked" ? "external_dependency" as const : "auto_fixable" as const,
+      }]);
+    gates.contract.failures = this.uniqueFailures([...gates.contract.failures, ...contractCoverageFailures]);
+    gates.contract.passed = gates.contract.passed && gates.contract.failures.length === 0
+      && (gates.contract.criterionCoverage?.every((coverage) => coverage.status === "covered") ?? true);
+    gates.completion.failures = this.uniqueFailures([
+      ...gates.completion.failures,
+      ...gates.progress.failures,
+      ...gates.evidence.failures,
+      ...gates.contract.failures,
+    ]);
+    gates.completion.passed = gates.completion.passed && gates.progress.passed && gates.evidence.passed
+      && gates.contract.passed && gates.completion.failures.length === 0;
+    const action = this.actionForFailures(gates.completion.failures);
+    return {
+      ...source,
+      gates,
+      action,
+      reasonCode: action === source.action ? source.reasonCode : `authoritative_${action}`,
+      rationale: action === source.action ? source.rationale : `${source.rationale} Core corrected an inconsistent proposed action using authoritative gate failures.`,
+    };
+  }
+
+  private uniqueFailures(failures: GateFailure[]) {
+    const seen = new Set<string>();
+    return failures.filter((failure) => {
+      const key = `${failure.kind}\u0000${failure.key}\u0000${failure.reason}\u0000${failure.disposition}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  private actionForFailures(failures: GateFailure[]): SupervisorAction {
+    if (!failures.length) return "complete_taskrun";
+    if (failures.some((failure) => failure.disposition === "needs_approval")) return "pause_for_approval";
+    if (failures.some((failure) => ["needs_user_input", "external_dependency", "non_recoverable"].includes(failure.disposition))) return "block_taskrun";
+    const evidenceRepairOnly = failures.some((failure) => failure.kind === "evidence" || failure.kind === "check")
+      && failures.every((failure) => failure.disposition === "auto_fixable" && (
+        failure.kind === "evidence"
+        || failure.kind === "check"
+        || failure.kind === "contract" && failure.key === "semantic_review_deferred"
+      ));
+    if (evidenceRepairOnly) return "request_evidence";
+    return "start_continuation";
+  }
+
   async reviewAttemptFailure(run: GovernanceTaskRunView, checkpointSeq: number, error: string) {
-    const audit = await this.reviewer.reviewAttemptFailure({ run, error });
-    return this.createDecision(run, checkpointSeq, "attempt_terminal", audit.action, audit.reasonCode, audit.rationale, audit.confidence);
+    const deterministic = this.classifyAttemptFailure(error);
+    if (deterministic) {
+      return this.createDecision(run, checkpointSeq, "attempt_terminal", deterministic.action,
+        deterministic.reasonCode, deterministic.rationale, 1, "", "system", "deterministic-runtime-failure-v1");
+    }
+    try {
+      const audit = await this.reviewer.reviewAttemptFailure({ run, error });
+      return this.createDecision(run, checkpointSeq, "attempt_terminal", audit.action, audit.reasonCode, audit.rationale, audit.confidence);
+    } catch (failure) {
+      return this.createDecision(run, checkpointSeq, "attempt_terminal", "block_taskrun",
+        "runtime_failure_review_unavailable",
+        `Runtime failed and the bounded semantic failure classifier was unavailable. The Run was safely terminalized without another Agent attempt. ${failure instanceof Error ? failure.message : String(failure)}`,
+        1, "", "system", "deterministic-failure-fallback-v1");
+    }
+  }
+
+  private classifyAttemptFailure(error: string): { action: "pause_for_approval" | "block_taskrun" | "start_continuation"; reasonCode: string; rationale: string } | undefined {
+    const source = error.toLowerCase();
+    if (/(?:approval required|requires? (?:explicit )?approval|needs? approval|等待.*审批|需要.*批准)/i.test(error)) {
+      return { action: "pause_for_approval", reasonCode: "runtime_approval_required", rationale: `Runtime reported an explicit approval boundary: ${error}` };
+    }
+    if (/(?:\b401\b|\b403\b|unauthorized|forbidden|invalid api key|authentication|model is not allowed|missing (?:api key|configuration)|configuration error|unknown model)/i.test(source)) {
+      return { action: "block_taskrun", reasonCode: "runtime_configuration_invalid", rationale: `Runtime authentication or configuration must be corrected externally: ${error}` };
+    }
+    if (/(?:\b408\b|\b429\b|\b50[0234]\b|rate.?limit|too many requests|timed?\s*out|timeout|econnreset|econnrefused|enotfound|socket hang up|network error|fetch failed|service unavailable|temporarily unavailable|context.?length)/i.test(source)) {
+      return { action: "start_continuation", reasonCode: "runtime_transient_failure", rationale: `Runtime reported a known transient provider or transport failure: ${error}` };
+    }
+    return undefined;
   }
 
   recordReviewFailure(run: GovernanceTaskRunView, checkpointSeq: number, error: string) {

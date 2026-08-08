@@ -291,6 +291,34 @@ describe("memory semantic quality", () => {
       globalThis.fetch = original;
     }
   });
+  it("bounds online embedding latency and disables retries for recall", async () => {
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = ((_url: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        const abort = () => reject(signal?.reason ?? new Error("aborted"));
+        if (signal?.aborted) abort();
+        else signal?.addEventListener("abort", abort, { once: true });
+      });
+    }) as typeof fetch;
+    try {
+      const adapter = new OpenAIEmbeddingAdapter({
+        baseUrl: "https://embed.test/v1",
+        apiKey: "secret",
+        model: "semantic",
+        maxRetries: 5,
+        timeoutMs: 30_000,
+      });
+      const startedAt = Date.now();
+      await expect(adapter.embed(["cue"], { timeoutMs: 20, maxRetries: 0 })).rejects.toBeDefined();
+      expect(Date.now() - startedAt).toBeLessThan(500);
+      expect(calls).toBe(1);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
   it.skipIf(!process.env.TAGENT_TEST_LLM_BASE_URL)(
     "resolves the reported Chinese food preference coreference with a live LLM",
     async () => {

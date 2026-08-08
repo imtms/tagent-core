@@ -89,7 +89,7 @@ workspace_goal_run_links
 workspace_goal_evidence_links
 ```
 
-The migration from schema 34 is additive. Existing TaskRuns are not backfilled into Goals. Stop Core and back up SQLite with WAL/SHM before upgrading; binaries that only understand schema 34 must not open the migrated database.
+The schema 34 → 35 → 36 Goal migrations are additive. Existing TaskRuns are not backfilled into Goals. Stop Core and back up SQLite with WAL/SHM before upgrading; use [UPGRADING.md](UPGRADING.md) for the current schema 37 deployment and rollback boundary.
 
 ## Explicit non-goals
 

@@ -6,6 +6,18 @@ import { Store } from "@tagent/persistence-sqlite/store";
 import type { ToolCapabilityApplicationPort } from "@tagent/execution/ports";
 import { createTools, createWorkspaceArtifactSink, createWorkspaceEditPort, WorkspaceProjectContextSource } from "@tagent/workspace-local";
 
+function applyTaskRunBatch(store: Store, runId: string, mutations: Parameters<ToolCapabilityApplicationPort["applyTaskRunBatch"]>[0]) {
+  store.db.transaction(() => {
+    for (const mutation of mutations) {
+      if (mutation.action === "phase") store.setRunPhase(runId, mutation.phase);
+      else if (mutation.action === "plan") store.upsertPlanItem(runId, mutation.item);
+      else if (mutation.action === "check") store.upsertCheck(runId, mutation.check);
+      else if (mutation.action === "mark_checks_stale") store.markChecksStale(runId);
+      else store.addArtifact(runId, mutation.artifact);
+    }
+  })();
+}
+
 function tools(store: Store, runId: string, workspace: string) {
   const capabilities: ToolCapabilityApplicationPort = {
     runId,
@@ -17,10 +29,11 @@ function tools(store: Store, runId: string, workspace: string) {
     setRunPhase: (phase) => store.setRunPhase(runId, phase),
     claimOperation: (id, operationType, payload) => store.claimOperation(id, runId, store.getRun(runId)!.attempt, operationType, payload),
     updateOperation: (id, update) => store.updateOperation(id, update),
-    listOperations: () => store.listOperations(runId),
+    listOperations: (options) => store.listOperations(runId, options),
     upsertPlanItem: (item) => store.upsertPlanItem(runId, item),
     markChecksStale: () => store.markChecksStale(runId),
     upsertCheck: (check) => store.upsertCheck(runId, check),
+    applyTaskRunBatch: (mutations) => applyTaskRunBatch(store, runId, mutations),
     addArtifact: (artifact) => store.addArtifact(runId, artifact),
     requestUserInput: (_toolCallId, prompt, fields) => store.requestUserInput(runId, prompt, fields),
     publish: (type, data) => store.appendEvent(runId, type, data),
@@ -93,8 +106,8 @@ describe("P0 reliable execution primitives", () => {
     const capabilities: ToolCapabilityApplicationPort = {
       runId: run.id, artifactSink: createWorkspaceArtifactSink(workspace, 64_000), workspaceEdit: createWorkspaceEditPort(workspace),
       getRun: () => store.getRun(run.id), authorizeWorkspaceMutation: () => ({ allowed: true, reason: "ordinary TaskRun" }), advanceRunPhase: (phase) => store.advanceRunPhase(run.id, phase), setRunPhase: (phase) => store.setRunPhase(run.id, phase),
-      claimOperation: (id, operationType, payload) => store.claimOperation(id, run.id, store.getRun(run.id)!.attempt, operationType, payload), updateOperation: (id, update) => store.updateOperation(id, update), listOperations: () => store.listOperations(run.id),
-      upsertPlanItem: (item) => store.upsertPlanItem(run.id, item), markChecksStale: () => store.markChecksStale(run.id), upsertCheck: (check) => store.upsertCheck(run.id, check), addArtifact: (artifact) => store.addArtifact(run.id, artifact), requestUserInput: (_id, prompt, fields) => store.requestUserInput(run.id, prompt, fields), publish: (type, data) => store.appendEvent(run.id, type, data),
+      claimOperation: (id, operationType, payload) => store.claimOperation(id, run.id, store.getRun(run.id)!.attempt, operationType, payload), updateOperation: (id, update) => store.updateOperation(id, update), listOperations: (options) => store.listOperations(run.id, options),
+      upsertPlanItem: (item) => store.upsertPlanItem(run.id, item), markChecksStale: () => store.markChecksStale(run.id), upsertCheck: (check) => store.upsertCheck(run.id, check), applyTaskRunBatch: (mutations) => applyTaskRunBatch(store, run.id, mutations), addArtifact: (artifact) => store.addArtifact(run.id, artifact), requestUserInput: (_id, prompt, fields) => store.requestUserInput(run.id, prompt, fields), publish: (type, data) => store.appendEvent(run.id, type, data),
     };
     const bash = createTools(capabilities, workspace).find((tool) => tool.name === "bash")!;
     const result = await bash.execute("capped", { command: "python3 -c 'print(\"z\" * 100000, end=\"\")'", timeoutSeconds: 10 }, undefined);

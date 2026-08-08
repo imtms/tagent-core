@@ -124,7 +124,11 @@ export function mapTaskRun(run: TaskRun): V1TaskRun {
       completedAt: iso(item.completedAt),
     })),
     plan: run.plan,
-    checks: run.checks,
+    checks: run.checks.map((check) => ({
+      ...check,
+      sourceOperationId: check.sourceOperationId ?? null,
+      observedAt: iso(check.observedAt ?? null),
+    })),
     artifacts: run.artifacts.map(mapArtifact),
     completionGate: run.completionGate,
     supervision: run.supervision,

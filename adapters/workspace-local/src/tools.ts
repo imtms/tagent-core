@@ -5,7 +5,7 @@ import path from "node:path";
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RunId } from "@tagent/execution/domain";
-import type { ToolCapabilityApplicationPort } from "@tagent/execution/ports";
+import type { TaskRunStateMutation, ToolCapabilityApplicationPort } from "@tagent/execution/ports";
 import { listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "./workspace-path.js";
 
 const MAX_OUTPUT = 24_000;
@@ -31,7 +31,7 @@ const MemoryForgetSchema=Type.Object({ids:Type.Optional(Type.Array(Type.String()
 const TaskRunBatchMutationSchema = Type.Union([
   Type.Object({ action: Type.Literal("phase"), phase: Type.Union([Type.Literal("discover"), Type.Literal("plan"), Type.Literal("implement"), Type.Literal("verify"), Type.Literal("review")]) }),
   Type.Object({ action: Type.Literal("plan"), key: Type.String(), title: Type.String(), status: Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("done"), Type.Literal("blocked"), Type.Literal("skipped")]), required: Type.Optional(Type.Boolean()), position: Type.Optional(Type.Integer()) }),
-  Type.Object({ action: Type.Literal("check"), key: Type.String(), title: Type.String(), status: Type.Union([Type.Literal("pending"), Type.Literal("running"), Type.Literal("passed"), Type.Literal("failed"), Type.Literal("blocked"), Type.Literal("skipped")]), required: Type.Optional(Type.Boolean()), command: Type.Optional(Type.String()), evidence: Type.Optional(Type.String()), stale: Type.Optional(Type.Boolean()) }),
+  Type.Object({ action: Type.Literal("check"), key: Type.String(), title: Type.String(), status: Type.Union([Type.Literal("pending"), Type.Literal("running"), Type.Literal("passed"), Type.Literal("failed"), Type.Literal("blocked"), Type.Literal("skipped")]), required: Type.Optional(Type.Boolean()), command: Type.Optional(Type.String()), evidence: Type.Optional(Type.String()), stale: Type.Optional(Type.Boolean()), sourceOperationId: Type.Optional(Type.String()) }),
   Type.Object({ action: Type.Literal("mark_checks_stale") }),
   Type.Object({ action: Type.Literal("artifact"), id: Type.String(), title: Type.String(), kind: Type.Optional(Type.String()), content: Type.Optional(Type.String()), uri: Type.Optional(Type.String()) }),
 ]);
@@ -40,7 +40,7 @@ const TaskRunSchema = Type.Object({
   phase: Type.Optional(Type.Union([Type.Literal("discover"), Type.Literal("plan"), Type.Literal("implement"), Type.Literal("verify"), Type.Literal("review")])),
   key: Type.Optional(Type.String()), title: Type.Optional(Type.String()),
   status: Type.Optional(Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("done"), Type.Literal("blocked"), Type.Literal("skipped"), Type.Literal("running"), Type.Literal("passed"), Type.Literal("failed")])),
-  required: Type.Optional(Type.Boolean()), position: Type.Optional(Type.Integer()), command: Type.Optional(Type.String()), evidence: Type.Optional(Type.String()), stale: Type.Optional(Type.Boolean()),
+  required: Type.Optional(Type.Boolean()), position: Type.Optional(Type.Integer()), command: Type.Optional(Type.String()), evidence: Type.Optional(Type.String()), stale: Type.Optional(Type.Boolean()), sourceOperationId: Type.Optional(Type.String()),
   id: Type.Optional(Type.String()), kind: Type.Optional(Type.String()), content: Type.Optional(Type.String()), uri: Type.Optional(Type.String()),
   prompt: Type.Optional(Type.String()), fields: Type.Optional(Type.Array(Type.Object({ key: Type.String(), label: Type.String(), description: Type.Optional(Type.String()), inputType: Type.Optional(Type.Union([Type.Literal("text"), Type.Literal("textarea")])), required: Type.Optional(Type.Boolean()), placeholder: Type.Optional(Type.String()) }), { minItems: 1, maxItems: 12 })),
   mutations: Type.Optional(Type.Array(TaskRunBatchMutationSchema, { minItems: 1, maxItems: 50 })),
@@ -51,12 +51,16 @@ function textResult(text: string, details: Record<string, unknown> = {}): AgentT
 }
 
 function previewText(text: string) {
-  const bytes = Buffer.byteLength(text);
-  if (bytes <= MAX_OUTPUT) return text;
+  const source = Buffer.from(text);
+  if (source.length <= MAX_OUTPUT) return text;
   const marker = "\n... output omitted; full content is available in the referenced Artifact ...\n";
   const budget = MAX_OUTPUT - Buffer.byteLength(marker);
-  const head = Buffer.from(text).subarray(0, Math.floor(budget * .55)).toString("utf8");
-  const tail = Buffer.from(text).subarray(-Math.ceil(budget * .45)).toString("utf8");
+  let headEnd = Math.floor(budget * .55);
+  while (headEnd > 0 && (source[headEnd] & 0xc0) === 0x80) headEnd -= 1;
+  let tailStart = source.length - Math.ceil(budget * .45);
+  while (tailStart < source.length && (source[tailStart] & 0xc0) === 0x80) tailStart += 1;
+  const head = source.subarray(0, headEnd).toString("utf8");
+  const tail = source.subarray(tailStart).toString("utf8");
   return head + marker + tail;
 }
 
@@ -87,15 +91,18 @@ async function durableTextResult(
   return { content: [{ type: "text", text: shown }], details: { ...details, artifactId: stored.artifactId, artifactUri: stored.uri, sha256: stored.sha256, totalBytes, storedBytes: stored.storedBytes, shownBytes: Buffer.byteLength(shown), truncatedAtSource: stored.truncatedAtSource, outputDiscardedBytes: Math.max(0, totalBytes - stored.storedBytes) } };
 }
 
-function appendDurableCapture(current: string, chunk: string) {
-  if (Buffer.byteLength(current) >= MAX_DURABLE_OUTPUT) return { text: current, droppedBytes: Buffer.byteLength(chunk) };
-  const remaining = MAX_DURABLE_OUTPUT - Buffer.byteLength(current);
-  const buffer = Buffer.from(chunk);
-  return { text: current + buffer.subarray(0, remaining).toString("utf8"), droppedBytes: Math.max(0, buffer.length - remaining) };
-}
-
 function operationId(runId: RunId, attempt: number, toolCallId: string) {
   return `${runId}:${attempt}:${toolCallId}`;
+}
+
+/** Verification and read-only commands observe state; they do not invalidate prior receipts. */
+export function bashInvalidatesChecks(command: string) {
+  const source = command.trim();
+  if (!source) return false;
+  if (/(?:^|\s)(?:>|>>|tee\b|sed\s+-i\b)|\b(?:git\s+(?:add|commit|push|pull|merge|rebase|checkout|switch|restore|reset|clean)|npm\s+(?:install|uninstall|publish)|pnpm\s+(?:add|remove|install)|yarn\s+(?:add|remove|install)|rm|mv|cp|mkdir|touch|chmod|chown)\b/i.test(source)) return true;
+  const stages = source.split(/(?:&&|;|\|\||\n)/).map((stage) => stage.trim()).filter(Boolean);
+  const observation = /^(?:(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+)\s+)*(?:git\s+(?:status|diff|log|show|rev-parse|branch\s+--show-current)\b|npm\s+(?:test\b|run\s+(?:test|lint|check|typecheck)\b)|pnpm\s+(?:test\b|run\s+(?:test|lint|check|typecheck)\b)|yarn\s+(?:test\b|run\s+(?:test|lint|check|typecheck)\b)|npx\s+(?:vitest|eslint|tsc\s+--noEmit)\b|(?:vitest|pytest|eslint)\b|python(?:3)?\s+-m\s+pytest\b|go\s+test\b|cargo\s+(?:test|check|clippy)\b|tsc\s+--noEmit\b|rg\b|grep\b|ls\b|find\b|cat\b|head\b|tail\b|wc\b|pwd\b|sed\s+-n\b)/i;
+  return stages.some((stage) => !observation.test(stage));
 }
 
 async function executeMutation(
@@ -104,6 +111,7 @@ async function executeMutation(
   operationType: string,
   payload: unknown,
   effect: () => Promise<AgentToolResult<Record<string, unknown>>>,
+  options: { invalidatesChecks?: boolean } = {},
 ) {
   const { runId } = capabilities;
   const run = capabilities.getRun();
@@ -117,9 +125,24 @@ async function executeMutation(
   try {
     capabilities.advanceRunPhase("implement");
     const result = await effect();
-    const staleChecks = capabilities.markChecksStale();
-    capabilities.updateOperation(id, { status: "succeeded", stage: "completed", effects: [{ kind: "checks", action: "stale", count: staleChecks }], result });
-    return result;
+    const observedAt = Date.now();
+    const resultDigest = createHash("sha256").update(JSON.stringify(result)).digest("hex");
+    const receiptMarker = `\n[trusted operation receipt: ${id}]`;
+    const evidencedResult: AgentToolResult<Record<string, unknown>> = {
+      ...result,
+      content: result.content.map((part, index) => index === 0 && part.type === "text"
+        ? { ...part, text: previewText(`${part.text}${receiptMarker}`) }
+        : part),
+      details: { ...result.details, operationId: id, observedAt, resultDigest },
+    };
+    const staleChecks = options.invalidatesChecks === false ? 0 : capabilities.markChecksStale();
+    capabilities.updateOperation(id, {
+      status: "succeeded",
+      stage: "completed",
+      effects: [{ kind: "checks", action: staleChecks ? "stale" : "preserved", count: staleChecks }],
+      result: evidencedResult,
+    });
+    return evidencedResult;
   } catch (error) {
     capabilities.updateOperation(id, { status: "failed", stage: "execution_failed", error: error instanceof Error ? error.message : String(error) });
     throw error;
@@ -219,19 +242,24 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
         if (chainedStages >= BASH_CHAIN_WARNING_THRESHOLD) capabilities.publish("tool.bash.composite", { toolCallId: id, chainedStages, recommendation: "Split build, test, deploy, restart, and polling into separately evidenced commands so a late timeout does not repeat earlier stages." });
         return await new Promise<AgentToolResult<Record<string, unknown>>>((resolve, reject) => {
           const child = spawn("bash", ["-lc", params.command], { cwd: workspace, env: process.env, detached: process.platform !== "win32" });
-        let stdout = "";
-        let stderr = "";
+        const stdoutChunks: Buffer[] = [];
+        const stderrChunks: Buffer[] = [];
         const captureRelative = `.tagent/tmp/${safeArtifactId(`${runId}-${id}`)}.log`;
         const capturePath = path.join(workspace, captureRelative);
         let captureFile: Awaited<ReturnType<typeof open>> | undefined;
         let stdoutBytes = 0;
         let stderrBytes = 0;
+        let capturedOutputBytes = 0;
         let sourceDroppedBytes = 0;
-        let progressBuffer = "";
+        let progressChunks: string[] = [];
         let progressTimer: ReturnType<typeof setTimeout> | undefined;
         let killTimer: ReturnType<typeof setTimeout> | undefined;
         let timedOut = false;
-        const flushProgress = () => { if (progressBuffer) onUpdate?.(textResult(progressBuffer, { stream: "combined" })); progressBuffer = ""; progressTimer = undefined; };
+        const flushProgress = () => {
+          if (progressChunks.length) onUpdate?.(textResult(progressChunks.join(""), { stream: "combined" }));
+          progressChunks = [];
+          progressTimer = undefined;
+        };
         const terminate = () => {
           if (child.pid && process.platform !== "win32") { try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); } }
           else child.kill("SIGTERM");
@@ -249,12 +277,19 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
         const capture = (stream: "stdout" | "stderr", chunk: Buffer) => {
           const text = chunk.toString("utf8");
           const capturedBytesBefore = Math.min(stdoutBytes + stderrBytes, capabilities.artifactSink?.maxBytes ?? MAX_DURABLE_OUTPUT);
-          if (stream === "stdout") { stdoutBytes += chunk.length; const captured = appendDurableCapture(stdout, text); stdout = captured.text; sourceDroppedBytes += captured.droppedBytes; }
-          else { stderrBytes += chunk.length; const captured = appendDurableCapture(stderr, text); stderr = captured.text; sourceDroppedBytes += captured.droppedBytes; }
+          if (stream === "stdout") stdoutBytes += chunk.length;
+          else stderrBytes += chunk.length;
+          const remainingCapture = Math.max(0, MAX_DURABLE_OUTPUT - capturedOutputBytes);
+          const capturedChunk = chunk.subarray(0, remainingCapture);
+          if (capturedChunk.length) {
+            (stream === "stdout" ? stdoutChunks : stderrChunks).push(Buffer.from(capturedChunk));
+            capturedOutputBytes += capturedChunk.length;
+          }
+          sourceDroppedBytes += Math.max(0, chunk.length - capturedChunk.length);
           const remainingArtifactBytes = Math.max(0, (capabilities.artifactSink?.maxBytes ?? MAX_DURABLE_OUTPUT) - capturedBytesBefore);
           const artifactChunk = chunk.subarray(0, remainingArtifactBytes);
           captureWrites = captureWrites.then(async () => { await captureReady; if (artifactChunk.length) await captureFile!.write(artifactChunk); });
-          progressBuffer += text;
+          progressChunks.push(text);
           if (!progressTimer) progressTimer = setTimeout(flushProgress, 250);
         };
         child.stdout.on("data", (chunk: Buffer) => capture("stdout", chunk));
@@ -270,6 +305,8 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
           await captureWrites;
           await captureFile!.sync();
           await captureFile!.close();
+          const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+          const stderr = Buffer.concat(stderrChunks).toString("utf8");
           const combined = [stdout, stderr && `STDERR:\n${stderr}`].filter(Boolean).join("\n");
           const totalBytes = stdoutBytes + stderrBytes;
           let result: AgentToolResult<Record<string, unknown>>;
@@ -277,7 +314,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
             const stored = await persistToolOutputArtifact(capabilities, id, await readWorkspaceFile(workspace, captureRelative).then((value) => value.buffer), `Command output: ${params.command.slice(0, 80)}`, totalBytes, totalBytes > (capabilities.artifactSink?.maxBytes ?? MAX_DURABLE_OUTPUT));
             const shown = previewText(combined || "Command completed with no output");
             capabilities.publish("tool.output.spilled", { toolCallId: id, artifactId: stored.artifactId, totalBytes, shownBytes: Buffer.byteLength(shown), storedBytes: stored.storedBytes, sha256: stored.sha256, truncatedAtSource: stored.truncatedAtSource, outputDiscardedBytes: Math.max(0, totalBytes - stored.storedBytes) });
-            result = { content: [{ type: "text", text: shown }], details: { exitCode: code, stdoutBytes, stderrBytes, capturedBytes: Buffer.byteLength(stdout) + Buffer.byteLength(stderr), captureTruncated: stored.truncatedAtSource, artifactId: stored.artifactId, artifactUri: stored.uri, sha256: stored.sha256, totalBytes, storedBytes: stored.storedBytes, shownBytes: Buffer.byteLength(shown), truncatedAtSource: stored.truncatedAtSource, outputDiscardedBytes: Math.max(0, totalBytes - stored.storedBytes) } };
+            result = { content: [{ type: "text", text: shown }], details: { exitCode: code, stdoutBytes, stderrBytes, capturedBytes: capturedOutputBytes, captureTruncated: stored.truncatedAtSource, artifactId: stored.artifactId, artifactUri: stored.uri, sha256: stored.sha256, totalBytes, storedBytes: stored.storedBytes, shownBytes: Buffer.byteLength(shown), truncatedAtSource: stored.truncatedAtSource, outputDiscardedBytes: Math.max(0, totalBytes - stored.storedBytes) } };
           } else {
             result = await durableTextResult(capabilities, id, combined || "Command completed with no output", { exitCode: code, stdoutBytes, stderrBytes, capturedBytes: totalBytes, captureTruncated: false }, `Command output: ${params.command.slice(0, 80)}`, totalBytes, false);
           }
@@ -294,38 +331,76 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
           resolve(result);
         })().catch(reject); });
         });
-      });
+      }, { invalidatesChecks: bashInvalidatesChecks(params.command) });
     },
   };
 
   const taskRunTool: AgentTool<typeof TaskRunSchema, Record<string, unknown>> = {
-    name: "task_run", label: "Update task", description: "Inspect or update the current durable TaskRun. Use action=batch to combine independent plan/check/phase/artifact mutations into one model round-trip. Mutations return a compact receipt; use action=get only when the full state is needed.", parameters: TaskRunSchema, executionMode: "sequential",
+    name: "task_run", label: "Update task", description: "Inspect or update the current durable TaskRun. Passed required checks are bound to an actual successful Bash receipt; self-reported evidence is not trusted. Use action=batch to combine independent mutations in one model round-trip.", parameters: TaskRunSchema, executionMode: "sequential",
     async execute(_id, params: Static<typeof TaskRunSchema>) {
+      let recentOperations: ReturnType<ToolCapabilityApplicationPort["listOperations"]> | undefined;
+      const evidenceCandidates = () => recentOperations ??= capabilities.listOperations({ limit: 64 });
       const validateMutation = (mutation: Static<typeof TaskRunBatchMutationSchema>) => {
         if (mutation.action === "plan" || mutation.action === "check") {
           if (!mutation.key.trim() || !mutation.title.trim()) throw new Error(`task_run action="${mutation.action}" requires non-empty "key" and "title".`);
         }
         if (mutation.action === "artifact" && (!mutation.id.trim() || !mutation.title.trim())) throw new Error('task_run action="artifact" requires non-empty "id" and "title".');
       };
-      const applyMutation = (mutation: Static<typeof TaskRunBatchMutationSchema>) => {
+      const normalizeCheck = (mutation: Extract<Static<typeof TaskRunBatchMutationSchema>, { action: "check" }>) => {
+        const required = mutation.required ?? true;
+        let sourceOperationId = mutation.sourceOperationId?.trim() || null;
+        if (mutation.status === "passed" && required && !sourceOperationId) {
+          const run = capabilities.getRun();
+          const command = mutation.command?.trim() ?? "";
+          const candidates = evidenceCandidates().filter((operation) => {
+            if (operation.runId !== runId || operation.attempt !== run?.attempt || operation.operationType !== "tool.bash" || operation.status !== "succeeded") return false;
+            if (!command) return true;
+            const payload = operation.payload && typeof operation.payload === "object" && !Array.isArray(operation.payload)
+              ? operation.payload as Record<string, unknown>
+              : undefined;
+            return typeof payload?.command === "string" && payload.command.trim() === command;
+          });
+          sourceOperationId = candidates.at(-1)?.id ?? null;
+          if (!sourceOperationId) {
+            throw new Error("A passed required check must reference a successful Bash operation from this Attempt. Run the verification command first, then provide its command or sourceOperationId.");
+          }
+        }
+        return {
+          key: mutation.key.trim(), title: mutation.title.trim(), status: mutation.status, required,
+          command: mutation.command ?? "", evidence: mutation.evidence ?? "", stale: mutation.stale ?? false,
+          sourceOperationId, observedAt: null,
+        };
+      };
+      const normalizeMutation = (mutation: Static<typeof TaskRunBatchMutationSchema>): TaskRunStateMutation => {
         const requireMutationText = (name: "key" | "title" | "id") => { const value = name in mutation ? mutation[name as keyof typeof mutation] : undefined; if (typeof value !== "string" || !value.trim()) throw new Error(`task_run action="${mutation.action}" requires "${name}".`); return value; };
-        if (mutation.action === "phase") capabilities.setRunPhase(mutation.phase);
-        if (mutation.action === "plan") capabilities.upsertPlanItem({ key: requireMutationText("key"), title: requireMutationText("title"), status: mutation.status, required: mutation.required ?? true, position: mutation.position ?? 0 });
-        if (mutation.action === "check") capabilities.upsertCheck({ key: requireMutationText("key"), title: requireMutationText("title"), status: mutation.status, required: mutation.required ?? true, command: mutation.command ?? "", evidence: mutation.evidence ?? "", stale: mutation.stale ?? false });
-        if (mutation.action === "mark_checks_stale") capabilities.markChecksStale();
-        if (mutation.action === "artifact") capabilities.addArtifact({ id: requireMutationText("id"), title: requireMutationText("title"), kind: mutation.kind ?? "artifact", content: mutation.content ?? "", uri: mutation.uri ?? "" });
+        if (mutation.action === "phase") return { action: "phase", phase: mutation.phase };
+        if (mutation.action === "plan") return { action: "plan", item: { key: requireMutationText("key"), title: requireMutationText("title"), status: mutation.status, required: mutation.required ?? true, position: mutation.position ?? 0 } };
+        if (mutation.action === "check") return { action: "check", check: normalizeCheck(mutation) };
+        if (mutation.action === "mark_checks_stale") return { action: "mark_checks_stale" };
+        return { action: "artifact", artifact: { id: requireMutationText("id"), title: requireMutationText("title"), kind: mutation.kind ?? "artifact", content: mutation.content ?? "", uri: mutation.uri ?? "" } };
       };
       const requireText = (name: "key" | "title" | "id" | "prompt") => { const value = params[name]; if (typeof value !== "string" || !value.trim()) throw new Error(`task_run action="${params.action}" requires "${name}".`); return value; };
       if (params.action === "batch") {
         if (!params.mutations?.length) throw new Error('task_run action="batch" requires "mutations".');
         for (const mutation of params.mutations) validateMutation(mutation);
-        for (const mutation of params.mutations) applyMutation(mutation);
+        capabilities.applyTaskRunBatch(params.mutations.map(normalizeMutation));
       }
       if (params.action === "phase") { if (!params.phase) throw new Error('task_run action="phase" requires "phase".'); capabilities.setRunPhase(params.phase); }
       if (params.action === "plan") { const status = params.status; if (!status || !["pending","in_progress","done","blocked","skipped"].includes(status)) throw new Error('task_run action="plan" requires a plan status.'); capabilities.upsertPlanItem({ key: requireText("key"), title: requireText("title"), status: status as "pending"|"in_progress"|"done"|"blocked"|"skipped", required: params.required ?? true, position: params.position ?? 0 }); }
-      if (params.action === "check") { const status = params.status; if (!status || !["pending","running","passed","failed","blocked","skipped"].includes(status)) throw new Error('task_run action="check" requires a check status.'); capabilities.upsertCheck({ key: requireText("key"), title: requireText("title"), status: status as "pending"|"running"|"passed"|"failed"|"blocked"|"skipped", required: params.required ?? true, command: params.command ?? "", evidence: params.evidence ?? "", stale: params.stale ?? false }); }
+      if (params.action === "check") {
+        const status = params.status;
+        if (!status || !["pending","running","passed","failed","blocked","skipped"].includes(status)) throw new Error('task_run action="check" requires a check status.');
+        capabilities.upsertCheck(normalizeCheck({ action: "check", key: requireText("key"), title: requireText("title"), status: status as "pending"|"running"|"passed"|"failed"|"blocked"|"skipped", required: params.required, command: params.command, evidence: params.evidence, stale: params.stale, sourceOperationId: params.sourceOperationId }));
+      }
       if (params.action === "mark_checks_stale") capabilities.markChecksStale();
-      if (params.action === "operations") return textResult(JSON.stringify(capabilities.listOperations(), null, 2));
+      if (params.action === "operations") {
+        const operations = capabilities.listOperations({ limit: 24 });
+        const serialized = JSON.stringify(operations, null, 2);
+        return textResult(previewText(serialized), {
+          returnedOperations: operations.length,
+          responseTruncated: Buffer.byteLength(serialized) > MAX_OUTPUT,
+        });
+      }
       if (params.action === "artifact") capabilities.addArtifact({ id: requireText("id"), title: requireText("title"), kind: params.kind ?? "artifact", content: params.content ?? "", uri: params.uri ?? "" });
       if (params.action === "request_user_input") {
         const keys = new Set<string>();

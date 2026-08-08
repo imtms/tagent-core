@@ -73,7 +73,7 @@ export function runtimeRunContext(run: TaskRun) {
       relation: run.contract.relation,
     } : null,
     plan: run.plan.slice(0, 50).map(({ key, title, status, required, position }) => ({ key, title: truncateUtf8(title, 500), status, required, position })),
-    checks: run.checks.slice(0, 50).map(({ key, title, status, required, command, evidence, stale }) => ({ key, title: truncateUtf8(title, 500), status, required, command: truncateUtf8(command, 500), evidence: truncateUtf8(evidence, 1_000), stale })),
+    checks: run.checks.slice(0, 50).map(({ key, title, status, required, command, evidence, stale, sourceOperationId, observedAt }) => ({ key, title: truncateUtf8(title, 500), status, required, command: truncateUtf8(command, 500), evidence: truncateUtf8(evidence, 1_000), stale, sourceOperationId: sourceOperationId ?? null, observedAt: observedAt ?? null })),
     artifacts: run.artifacts.slice(0, 30).map(({ id, title, kind, uri }) => ({ id, title: truncateUtf8(title, 500), kind, uri: truncateUtf8(uri, 1_000) })),
     completionGate: run.completionGate,
   };

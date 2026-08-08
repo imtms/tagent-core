@@ -15,8 +15,8 @@ describe("Core service configuration", () => {
       maxContextTurns: 20,
       historicalToolResultChars: 4_000,
       historicalTaskRunReceiptChars: 600,
-      routerTimeoutMs: 15_000,
-      supervisorTimeoutMs: 15_000,
+      routerTimeoutMs: 5_000,
+      supervisorTimeoutMs: 5_000,
     });
     expect(config.memory).toEqual({ enabled: false });
     expect(config.model).toMatchObject({

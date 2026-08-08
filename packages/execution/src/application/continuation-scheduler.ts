@@ -114,13 +114,13 @@ function continuationReasonSignature(reason: string) {
 
 function continuationProgressSignature(run: TaskRun) {
   const gateFailures = (run.supervision.latestGates.find((gate) => gate.gateType === "completion")?.failures ?? run.completionGate.failures)
-    .map((failure) => ({ kind: failure.kind, key: failure.key, reason: normalizeGateText(failure.reason) }))
+    .map((failure) => ({ kind: failure.kind, key: failure.key, disposition: "disposition" in failure ? failure.disposition : "local" }))
     .sort((left, right) => `${left.kind}:${left.key}`.localeCompare(`${right.kind}:${right.key}`));
   const state = {
     gateFailures,
     plan: run.plan.map(({ key, status, required }) => ({ key, status, required })).sort((left, right) => left.key.localeCompare(right.key)),
-    checks: run.checks.map(({ key, status, required, stale, evidence }) => ({ key, status, required, stale, evidenceHash: createHash("sha256").update(evidence.trim()).digest("hex") })).sort((left, right) => left.key.localeCompare(right.key)),
-    artifacts: run.artifacts.map(({ id, kind, uri }) => ({ id, kind, uri })).sort((left, right) => left.id.localeCompare(right.id)),
+    checks: run.checks.map(({ key, status, required, stale, sourceOperationId, observedAt }) => ({ key, status, required, stale, sourceOperationId: sourceOperationId ?? null, observedAt: observedAt ?? null })).sort((left, right) => left.key.localeCompare(right.key)),
+    artifacts: run.artifacts.map(({ id, kind, uri, content }) => ({ id, kind, uri, contentHash: createHash("sha256").update(content).digest("hex") })).sort((left, right) => left.id.localeCompare(right.id)),
   };
   return createHash("sha256").update(JSON.stringify(state)).digest("hex");
 }

@@ -66,7 +66,7 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     return run?.attempt === token.ordinal && run.status === "waiting_input" ? run : undefined;
   };
   const publish = (type: string, data: Record<string, unknown>): RunEvent | undefined => {
-    if (!currentRun()) return undefined;
+    if (!currentAttempt()) return undefined;
     const event = persistence.runtimeMutations.appendEvent(mutationContext, type, data);
     options.onEvent(event);
     return event;
@@ -86,10 +86,11 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     setRunPhase: (phase) => persistence.runtimeMutations.setRunPhase(mutationContext, phase),
     claimOperation: (id, operationType, payload) => persistence.runtimeMutations.claimOperation(mutationContext, id, operationType, payload),
     updateOperation: (id, update) => persistence.runtimeMutations.updateOperation(mutationContext, id, update),
-    listOperations: () => persistence.runtime.listOperations(token.runId),
+    listOperations: (query) => persistence.runtime.listOperations(token.runId, query),
     upsertPlanItem: (item) => persistence.runtimeMutations.upsertPlanItem(mutationContext, item),
     markChecksStale: () => persistence.runtimeMutations.markChecksStale(mutationContext),
     upsertCheck: (check) => persistence.runtimeMutations.upsertCheck(mutationContext, check),
+    applyTaskRunBatch: (mutations) => persistence.runtimeMutations.applyTaskRunBatch(mutationContext, mutations),
     addArtifact: (artifact) => persistence.runtimeMutations.addArtifact(mutationContext, artifact),
     requestUserInput: (toolCallId, prompt, fields) => {
       const { request, event, toolAttemptCompleted } = persistence.runtimeMutations.requestUserInput(
@@ -133,16 +134,15 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
   const eventSink: RuntimeEventSink = {
     activity: options.onActivity,
     publish,
-    appendTranscript: (message: RuntimeMessage) => currentRun()
+    appendTranscript: (message: RuntimeMessage) => currentAttempt()
       ? persistence.runtimeMutations.appendTranscript(mutationContext, message)
       : undefined,
-    isRunning: () => currentRun()?.status === "running",
+    isRunning: () => Boolean(currentAttempt()),
     isWaitingForInput: () => Boolean(waitingRun()),
     beforeToolCall(input) {
-        const run = currentRun();
-      if (!run) return { blocked: true, reason: "Attempt is no longer current" };
+      if (!currentAttempt()) return { blocked: true, reason: "Attempt is no longer current" };
       if (["write", "edit", "patch", "bash"].includes(input.toolName)) {
-        const goalGuard = persistence.workspaceGoals.authorizeRunMutation(run.id);
+        const goalGuard = persistence.workspaceGoals.authorizeRunMutation(token.runId);
         if (!goalGuard.allowed) return { blocked: true, reason: `Workspace Goal mutation guard: ${goalGuard.reason}` };
         persistence.runtimeMutations.advanceRunPhase(mutationContext, "implement");
       }

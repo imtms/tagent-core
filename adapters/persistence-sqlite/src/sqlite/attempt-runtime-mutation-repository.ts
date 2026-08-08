@@ -162,6 +162,17 @@ export class SqliteFencedRuntimeMutationRepository implements FencedRuntimeMutat
   upsertCheck: FencedRuntimeMutationPort["upsertCheck"] = (context, check) =>
     this.withFence(context, ({ runId }) => this.store.upsertCheck(runId, check));
 
+  applyTaskRunBatch: FencedRuntimeMutationPort["applyTaskRunBatch"] = (context, mutations) =>
+    this.withFence(context, ({ runId }) => {
+      for (const mutation of mutations) {
+        if (mutation.action === "phase") this.store.setRunPhase(runId, mutation.phase);
+        else if (mutation.action === "plan") this.store.upsertPlanItem(runId, mutation.item);
+        else if (mutation.action === "check") this.store.upsertCheck(runId, mutation.check);
+        else if (mutation.action === "mark_checks_stale") this.store.markChecksStale(runId);
+        else this.store.addArtifact(runId, mutation.artifact);
+      }
+    });
+
   addArtifact: FencedRuntimeMutationPort["addArtifact"] = (context, artifact) =>
     this.withFence(context, ({ runId }) => this.store.addArtifact(runId, artifact));
 

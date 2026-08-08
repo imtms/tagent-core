@@ -23,6 +23,7 @@ export interface TaskRunRepository {
   getRun(id: RunId): TaskRun | undefined;
   getRunByRequestId(requestId: string): TaskRun | undefined;
   listRuns(sessionId: ExecutionSessionRef, limit?: number): TaskRun[];
+  listRunSummaries?(sessionId: ExecutionSessionRef, limit?: number): Array<Pick<TaskRun, "id" | "goal" | "status" | "phase" | "contract" | "updatedAt">>;
   getLatestRun(sessionId: ExecutionSessionRef): TaskRun | undefined;
   getActiveRun(sessionId: ExecutionSessionRef): TaskRun | undefined;
   getPendingUserInputRequest(runId: RunId): UserInputRequest | undefined;

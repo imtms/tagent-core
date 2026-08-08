@@ -49,7 +49,8 @@ describe("Web workbench state model", () => {
     const source = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
     expect(source).toContain("const [activeRun, setActiveRun]");
     expect(source).toContain("const [selectedRun, setSelectedRun]");
-    expect(source).toContain("subscribe(runId, consumerId, cursor.generation");
+    expect(source).toContain("subscribe(runId, consumerId, cursor.generation, cursor.ackedSeq");
+    expect(source).toContain("if (event.seq <= checkpointAfter) { scheduleAck(event.seq); return; }");
     expect(source).toContain("setSelectedRun(selected)");
     expect(source).not.toContain("const [run, setRun]");
   });

@@ -4,7 +4,7 @@
 
 `@tagent/persistence-sqlite` owns the control-plane SQLite schema, repositories, migrations, transaction boundary, writer authority, and restart recovery primitives. Domains depend on its ports through the Core composition root; they do not issue uncontrolled SQL.
 
-The current schema version is 36:
+The current schema version is 37:
 
 | Version | Authority introduced |
 | --- | --- |
@@ -15,8 +15,11 @@ The current schema version is 36:
 | 34 | Workspace model/reasoning preferences and immutable TaskRun execution-profile snapshots |
 | 35 | lightweight Workspace Goals, immutable definition/plan revisions, decisions, Run links and evidence links |
 | 36 | Goal decision/evidence idempotency, dynamic evidence freshness and mutation authorization support |
+| 37 | operation audit payloads and current-Attempt trusted Bash bindings for Run checks |
 
-Migrations are forward-only for a running release. A binary that only understands schema 35 must never open a schema 36 database.
+Schema 37 adds `operations.payload_json`, `run_checks.source_operation_id`, `run_checks.observed_at`, and the partial source-operation index. Re-entry validates their type, nullability, default and index shape and fails closed on drift. Legacy operations are not retroactively promoted to trusted evidence.
+
+Migrations are forward-only for a running release. A binary that only understands schema 36 must never open a schema 37 database.
 
 ## Startup order
 
@@ -57,6 +60,12 @@ Recovery does not guess that an interrupted external effect succeeded or failed:
 - pending Supervisor continuations, Session Inbox work, Learning deliveries, and checkpoints are reconciled through their durable state.
 
 `outcome_unknown` requires explicit reconciliation or operator action. Replaying the same external mutation automatically could duplicate side effects.
+
+## Trusted verification receipts
+
+Core persists the canonical input hash for every operation and a JSON audit payload for new operations. A passed check may bind only to a completed, succeeded `tool.bash` operation from the same Run and current Attempt whose actual command is present and whose result reports exit code zero. Core copies the operation completion time into the check and derives evidence from the receipt; caller-provided evidence text and timestamps cannot establish trust.
+
+Read-only and verification Bash commands preserve current checks. Commands classified as workspace mutations make prior checks stale. Completion revalidates the source operation, Attempt, command, status, exit code and completion time instead of trusting the denormalized check row.
 
 ## Schema 33 migration issues
 

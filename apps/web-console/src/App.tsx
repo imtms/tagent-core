@@ -503,11 +503,13 @@ export function App() {
       ackGeneration = cursor.generation;
       if (closed) return;
       setError("");
-      const after = Math.max(checkpointAfter, cursor.ackedSeq);
-      unsubscribe = subscribe(runId, consumerId, cursor.generation, after, async (event) => {
-      setEvents((current) => [...current.slice(-39), event]);
-      if (event.type === "message.started") { replaceStreamingOnNextDeltaRef.current = true; setLiveThinking(""); }
-      if (event.type === "message.thinking.delta") setLiveThinking((current) => current + String(event.data.delta ?? ""));
+      // The durable server cursor is authoritative. Events already represented by the
+      // hydrated checkpoint are replayed and acknowledged, but need not be applied twice.
+      unsubscribe = subscribe(runId, consumerId, cursor.generation, cursor.ackedSeq, async (event) => {
+        if (event.seq <= checkpointAfter) { scheduleAck(event.seq); return; }
+        setEvents((current) => [...current.slice(-39), event]);
+        if (event.type === "message.started") { replaceStreamingOnNextDeltaRef.current = true; setLiveThinking(""); }
+        if (event.type === "message.thinking.delta") setLiveThinking((current) => current + String(event.data.delta ?? ""));
       if (event.type === "message.delta") setStreaming((current) => {
         const delta = String(event.data.delta ?? "");
         if (replaceStreamingOnNextDeltaRef.current) {

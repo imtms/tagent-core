@@ -122,6 +122,13 @@ export interface FencedRuntimeMutationContext {
   timestamp?: number;
 }
 
+export type TaskRunStateMutation =
+  | { action: "phase"; phase: "discover" | "plan" | "implement" | "verify" | "review" }
+  | { action: "plan"; item: Omit<PlanItem, "runId"> }
+  | { action: "check"; check: RunCheck }
+  | { action: "mark_checks_stale" }
+  | { action: "artifact"; artifact: Omit<Artifact, "runId" | "createdAt"> };
+
 /** Runtime-originated writes that validate the execution fence in the same SQLite transaction as the mutation. */
 export interface FencedRuntimeMutationPort {
   appendEvent(context: FencedRuntimeMutationContext, type: string, data: Record<string, unknown>): RunEvent;
@@ -176,6 +183,7 @@ export interface FencedRuntimeMutationPort {
   upsertPlanItem(context: FencedRuntimeMutationContext, item: Omit<PlanItem, "runId">): void;
   markChecksStale(context: FencedRuntimeMutationContext): number;
   upsertCheck(context: FencedRuntimeMutationContext, check: RunCheck): void;
+  applyTaskRunBatch(context: FencedRuntimeMutationContext, mutations: TaskRunStateMutation[]): void;
   addArtifact(
     context: FencedRuntimeMutationContext,
     artifact: Omit<Artifact, "runId" | "createdAt">,

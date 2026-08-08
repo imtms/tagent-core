@@ -94,7 +94,7 @@ async function readHealth(url) {
 
 function severityFor(snapshot) {
   if (snapshot.ready) return "ready";
-  if (snapshot.schemaVersion !== 36
+  if (snapshot.schemaVersion !== 37
     || snapshot.migrationOpenIssues === null
     || snapshot.migrationOpenIssues > 0
     || !snapshot.health.reachable
@@ -138,7 +138,7 @@ async function main() {
   const authorityReady = databaseSnapshot.authority !== null
     && ["legacy_active", "integration_active"].includes(databaseSnapshot.authority.status);
   const reasons = [];
-  if (databaseSnapshot.schemaVersion !== 36) reasons.push("schema_version");
+  if (databaseSnapshot.schemaVersion !== 37) reasons.push("schema_version");
   if (databaseSnapshot.migrationOpenIssues === null || databaseSnapshot.migrationOpenIssues > 0) {
     reasons.push("migration_open_issues");
   }

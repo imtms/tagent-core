@@ -10,13 +10,14 @@ Before semantic review, Core checks authoritative prerequisites:
 
 - the TaskRun has a contract and required plan state where applicable;
 - every required plan item is complete;
-- every required check has a passing receipt;
-- verification evidence is newer than the last relevant workspace mutation;
-- required approvals and operation receipts exist;
-- the delivery is non-empty and not provider-truncated;
+- every required check is passed, non-stale and bound to a completed, successful `tool.bash` receipt from the current Attempt;
+- the bound receipt contains the actual command, reports exit code zero, and has the same completion time recorded by the check;
+- change, verification and release objectives have at least one trusted required check;
 - no durable steer/follow-up remains pending delivery.
 
 A semantic reviewer cannot convert a failed deterministic prerequisite into success.
+
+Agent-provided `evidence`, timestamps and success labels are untrusted input. Core derives the stored evidence from the operation result, including a bounded output projection, digest, completion time and Artifact reference when present.
 
 ## Settled review
 
@@ -26,9 +27,26 @@ For substantial work, the Supervisor produces a schema-validated audit of progre
 covered | unsupported | contradicted | blocked
 ```
 
-Evidence references may point only to durable checks, artifacts, operations, or Memory records/revisions supplied to the review. Candidate prose is not independent proof of its own claims.
+The review receives bounded actual operation payloads, results and effects, including Bash command, exit code, output, digest, Artifact and completion time. A `succeeded` status alone is not semantic proof: the LLM must compare the receipt content with the criterion and candidate claim. Evidence references may point only to trusted checks, supplied operations, substantive artifacts, or selected Memory records/revisions. Candidate prose is not independent proof of its own claims, and invented references fail local validation.
 
 A narrow low-risk single-answer discussion may use deterministic lightweight completion when it has no side effects, required checks, artifacts, truncation, or risky release/security semantics.
+
+## LLM call policy
+
+| Situation | Supervisor LLM calls |
+| --- | --- |
+| Required plan/check prerequisite already fails | 0 |
+| Narrow low-risk single-answer discussion | 0 |
+| Substantial settlement with valid deterministic prerequisites | 1 |
+| Malformed or schema-invalid review output | no repair call; limited JSON syntax repair or fail closed locally |
+| Retryable failure on the same upstream | no retry |
+| Retryable failure with a separately hosted fallback | at most one fallback call |
+| Known timeout, rate-limit, authentication or configuration runtime error | 0; classify locally |
+| Opaque terminal runtime error | at most 1 classification call |
+
+If the semantic review transport remains unavailable, Core blocks the TaskRun with preserved candidate/evidence state. It does not rerun completed Agent work merely to retry the reviewer.
+
+Long candidates and operation receipts use bounded head/tail projections. Projection metadata is not evidence that the durable candidate was truncated; projection-only failure claims are removed locally without another LLM call.
 
 ## Actions
 
@@ -46,7 +64,7 @@ If a candidate is rejected, Core emits/persists rejection state, keeps the candi
 
 ## Attempt-terminal review
 
-Runtime failures are classified separately from settled candidate quality. Transient provider/network failures may continue; approval or permission failures pause; missing parameters and non-transient failures block. Bounded retry policy prevents an unavailable Supervisor from causing an unbounded Agent loop.
+Runtime failures are classified separately from settled candidate quality. Known transient provider/network failures may continue without an LLM call; approval or permission failures pause; authentication/configuration failures block. An opaque failure may use one semantic classification call. Bounded retry policy prevents an unavailable Supervisor from causing an unbounded Agent loop.
 
 ## Approval boundary
 

@@ -30,7 +30,7 @@ export interface TranscriptRepository {
   getLastTranscriptSeq(runId: RunId): number;
   getTranscriptCount(runId: RunId): number;
   appendTranscript(runId: RunId, attempt: number, message: RuntimeMessage): number;
-  listTranscriptEntries(runId: RunId): TranscriptEntry[];
+  listTranscriptEntries(runId: RunId, options?: { limit?: number; attempt?: number }): TranscriptEntry[];
   listTranscript(runId: RunId): RuntimeMessage[];
   repairTranscript(
     runId: RunId,

@@ -24,3 +24,7 @@ export {
   assertWorkspaceExecutionProfileV34Schema,
   migrateWorkspaceExecutionProfileV34,
 } from "./migrations/v34-workspace-execution-profile.js";
+export {
+  assertTrustedEvidenceV37Schema,
+  migrateTrustedEvidenceV37,
+} from "./migrations/v37-trusted-evidence.js";

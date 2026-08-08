@@ -4,6 +4,8 @@ export interface OperationRecord {
   attempt: number;
   operationType: string;
   payloadHash: string;
+  /** Canonical operation input retained so evidence can be audited semantically. */
+  payload?: unknown;
   status: string;
   stage: string;
   effects: unknown[];
@@ -33,7 +35,7 @@ export interface OperationRepository {
   ): OperationRecord & { claimed: boolean };
   updateOperation(id: string, update: OperationUpdate): OperationRecord;
   getOperation(id: string): OperationRecord | undefined;
-  listOperations(runId: string): OperationRecord[];
+  listOperations(runId: string, options?: { limit?: number; ids?: string[] }): OperationRecord[];
   recordToolAttempt(
     runId: string,
     attempt: number,

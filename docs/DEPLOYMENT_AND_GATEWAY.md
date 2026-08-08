@@ -52,7 +52,7 @@ TAGENT_CORS_ALLOWED_ORIGINS=https://console.example.com
 
 Do not put provider keys or Core credentials in the Web artifact.
 
-0.2.0 keeps legacy approval handlers authoritative while schema 31 canonical projections and receipts are validated. Requesting `canonical` fails closed because the release does not declare canonical request/decide/consume handlers ready.
+The current release keeps legacy approval handlers authoritative while schema 31 canonical projections and receipts are validated. Requesting `canonical` fails closed because the release does not declare canonical request/decide/consume/execute handlers ready.
 
 ## Deployment order
 
@@ -63,7 +63,7 @@ Use Core-before-Gateway order:
 3. back up SQLite with WAL/SHM, optional PostgreSQL/Cold state, current artifact, config, and watermarks;
 4. verify the Core archive and checksum;
 5. switch to the new Core artifact and start it;
-6. allow migration to schema 36 and resolve no issue by bypassing `migration_issues`;
+6. allow migration to schema 37; if `migration_issues` contains an open row, correct the source data rather than bypassing the ledger;
 7. require `GET /api/v1/health` to report `data.ok=true` and `data.writer.ready=true`;
 8. start one Gateway consumer, claim a new event-consumer generation, replay, persist, then ACK;
 9. run the readiness probe and require zero lag and no terminal unacknowledged events;
@@ -85,9 +85,9 @@ The script's service rollback changes the binary pointer only. It does not downg
 
 ## Backup and rollback
 
-Code rollback within schema 36 requires a binary that understands schema 36 and the v1 contracts. Rollback to an older incompatible release requires stopping all writers and restoring the matching pre-upgrade SQLite/WAL/SHM backup plus the matching Memory state.
+Code rollback within schema 37 requires a binary that understands schema 37 and the v1 contracts. Rollback to an older incompatible release requires stopping all writers and restoring the matching pre-upgrade SQLite/WAL/SHM backup plus the matching Memory state.
 
-Never run a schema-35-only or otherwise incompatible binary against schema 36 and never overwrite a live schema 36 database with partial old files. Preserve the last successful readiness snapshot and consumer/learning watermarks before changing Gateway ownership.
+Never run a schema-36-only or otherwise incompatible binary against schema 37 and never overwrite a live schema 37 database with partial old files. Preserve the last successful readiness snapshot and consumer/learning watermarks before changing Gateway ownership.
 
 ## Web deployment
 

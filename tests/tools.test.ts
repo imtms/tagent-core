@@ -31,10 +31,19 @@ function createTestTools(
     claimOperation: (id, operationType, payload) =>
       store.claimOperation(id, runId, store.getRun(runId)!.attempt, operationType, payload),
     updateOperation: (id, update) => store.updateOperation(id, update),
-    listOperations: () => store.listOperations(runId),
+    listOperations: (options) => store.listOperations(runId, options),
     upsertPlanItem: (item) => store.upsertPlanItem(runId, item),
     markChecksStale: () => store.markChecksStale(runId),
     upsertCheck: (check) => store.upsertCheck(runId, check),
+    applyTaskRunBatch: (mutations) => store.db.transaction(() => {
+      for (const mutation of mutations) {
+        if (mutation.action === "phase") store.setRunPhase(runId, mutation.phase);
+        else if (mutation.action === "plan") store.upsertPlanItem(runId, mutation.item);
+        else if (mutation.action === "check") store.upsertCheck(runId, mutation.check);
+        else if (mutation.action === "mark_checks_stale") store.markChecksStale(runId);
+        else store.addArtifact(runId, mutation.artifact);
+      }
+    })(),
     addArtifact: (artifact) => store.addArtifact(runId, artifact),
     requestUserInput: (_toolCallId, prompt, fields) => store.requestUserInput(runId, prompt, fields),
     publish: (type, data) => {
@@ -171,7 +180,9 @@ describe("workspace tools", () => {
     const bash = createTestTools(store, run.id, workspace).find((tool) => tool.name === "bash")!;
     const result = await bash.execute("large-output", { command: "yes x | head -c 400000", timeoutSeconds: 10 }, undefined);
     expect(result.details).toMatchObject({ exitCode: 0, captureTruncated: false, artifactId: expect.any(String), outputDiscardedBytes: 0 });
-    expect((result.content[0] as { type: string; text: string }).text.length).toBeLessThanOrEqual(24_030);
+    const output = (result.content[0] as { type: string; text: string }).text;
+    expect(Buffer.byteLength(output)).toBeLessThanOrEqual(24_000);
+    expect(output).toContain("trusted operation receipt");
     store.close();
   });
 
@@ -240,6 +251,7 @@ describe("workspace tools", () => {
     const tools = createTestTools(store, run.id, workspace, (event) => events.push(`${event.type}:${event.data.phase}`));
     const taskRun = tools.find((tool) => tool.name === "task_run")!;
     const write = tools.find((tool) => tool.name === "write")!;
+    const bash = tools.find((tool) => tool.name === "bash")!;
     await taskRun.execute("get", { action: "get" }, undefined);
     expect(events).toEqual([]);
     const mutationResult = await taskRun.execute("plan", { action: "plan", key: "work", title: "Work", status: "pending" }, undefined);
@@ -251,7 +263,8 @@ describe("workspace tools", () => {
     expect(events).toEqual(["run.updated:plan"]);
     await write.execute("write", { path: "result.txt", content: "done" }, undefined);
     expect(store.getRun(run.id)?.phase).toBe("implement");
-    await taskRun.execute("check", { action: "check", key: "test", title: "Test", status: "passed", evidence: "ok" }, undefined);
+    await bash.execute("verify", { command: "printf verified", timeoutSeconds: 5 }, undefined);
+    await taskRun.execute("check", { action: "check", key: "test", title: "Test", status: "passed", command: "printf verified" }, undefined);
     expect(store.getRun(run.id)?.phase).toBe("verify");
     expect(events.at(-1)).toBe("run.updated:verify");
     store.close();
@@ -261,16 +274,52 @@ describe("workspace tools", () => {
     const store = new Store(":memory:");
     const run = store.createRun(store.createSession().id, "batch");
     const events: RunEvent[] = [];
-    const taskRun = createTestTools(store, run.id, workspace, (event) => events.push(event)).find((tool) => tool.name === "task_run")!;
+    const tools = createTestTools(store, run.id, workspace, (event) => events.push(event));
+    const taskRun = tools.find((tool) => tool.name === "task_run")!;
+    const bash = tools.find((tool) => tool.name === "bash")!;
+    await bash.execute("batch-verify", { command: "printf '12 passed'", timeoutSeconds: 5 }, undefined);
     const result = await taskRun.execute("batch-1", { action: "batch", mutations: [
       { action: "plan", key: "implement", title: "Implement", status: "done", position: 1 },
-      { action: "check", key: "tests", title: "Tests", status: "passed", command: "npm test", evidence: "12 passed" },
+      { action: "check", key: "tests", title: "Tests", status: "passed", command: "printf '12 passed'" },
       { action: "artifact", id: "report", title: "Report", uri: "artifact://report" },
       { action: "phase", phase: "review" },
     ] }, undefined);
     expect(store.getRun(run.id)).toMatchObject({ phase: "review", plan: [{ key: "implement", status: "done" }], checks: [{ key: "tests", status: "passed", stale: false }], artifacts: [{ id: "report" }] });
     expect(events.filter((event) => event.type === "run.updated")).toHaveLength(1);
     expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({ ok: true, action: "batch", counts: { plan: 1, checks: 1, artifacts: 1 }, completionGate: { passed: true } });
+    store.close();
+  });
+
+  it("preserves trusted checks for observation Bash commands and stales them for mutations", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-check-staleness-"));
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "check staleness");
+    const tools = createTestTools(store, run.id, workspace);
+    const bash = tools.find((tool) => tool.name === "bash")!;
+    const taskRun = tools.find((tool) => tool.name === "task_run")!;
+    await bash.execute("baseline", { command: "ls", timeoutSeconds: 5 }, undefined);
+    await taskRun.execute("baseline-check", { action: "check", key: "baseline", title: "Baseline", status: "passed", command: "ls" }, undefined);
+    expect(store.getRun(run.id)?.checks[0].stale).toBe(false);
+
+    await bash.execute("observe", { command: "ls", timeoutSeconds: 5 }, undefined);
+    expect(store.getRun(run.id)?.checks[0].stale).toBe(false);
+    await bash.execute("mutate", { command: "touch changed.txt", timeoutSeconds: 5 }, undefined);
+    expect(store.getRun(run.id)?.checks[0].stale).toBe(true);
+    store.close();
+  });
+
+  it("rolls back every task_run batch mutation when one mutation fails", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-batch-rollback-"));
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "atomic batch");
+    store.addArtifact(run.id, { id: "duplicate", title: "Existing", kind: "artifact", content: "", uri: "" });
+    const taskRun = createTestTools(store, run.id, workspace).find((tool) => tool.name === "task_run")!;
+    await expect(taskRun.execute("batch-fail", { action: "batch", mutations: [
+      { action: "plan", key: "must-rollback", title: "Must rollback", status: "done" },
+      { action: "artifact", id: "duplicate", title: "Duplicate" },
+    ] }, undefined)).rejects.toThrow();
+    expect(store.getRun(run.id)?.plan).toEqual([]);
+    expect(store.getRun(run.id)?.artifacts.map((artifact) => artifact.id)).toEqual(["duplicate"]);
     store.close();
   });
 

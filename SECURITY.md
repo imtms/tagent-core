@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are applied to the latest `0.2.x` release on `main`.
+Security fixes are applied to the latest supported `0.3.x` release and the current `main` line.
 
 ## Deployment boundary
 
@@ -37,7 +37,7 @@ The Web Console has no built-in OIDC login or refresh UI. Its hosting shell may 
 
 ## Governance and durable state
 
-Writer fencing, synchronous Unit of Work, connection-level mutation guards, event-consumer generations, resource scopes, approval authority, and internal evaluation receipts are server-side boundaries. Callers cannot assert them through headers or payloads.
+Writer fencing, synchronous Unit of Work, connection-level mutation guards, event-consumer generations, resource scopes, approval authority, trusted Bash/check bindings, and internal evaluation receipts are server-side boundaries. Callers cannot assert them through headers or payloads.
 
 Memory and Learning policy reduce accidental persistence and unsafe promotion, but do not replace storage encryption, access control, backup protection, or human review. Active Learning actions remain approval-gated.
 

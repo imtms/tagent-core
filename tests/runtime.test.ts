@@ -10,6 +10,7 @@ import type {
 } from "@tagent/execution/ports";
 import type { MemoryFacade } from "@tagent/memory";
 import { agentPersistence } from "./support/test-persistence.js";
+import { upsertTrustedCheck } from "./support/trusted-evidence.js";
 
 function assistantMessage(text: string): AgentMessage {
   return { role: "assistant", content: [{ type: "text", text }], api: "openai-completions", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: Date.now() };
@@ -450,7 +451,7 @@ describe("AgentService runtime boundary", () => {
     const service = new AgentService(agentPersistence(store), "/tmp", runtimeFactory);
     const run = await service.start(session.id, "find and fix the missing final response");
     store.upsertPlanItem(run.id, { key: "done", title: "Done", status: "done", required: true, position: 1 });
-    store.upsertCheck(run.id, { key: "verify", title: "Verify", status: "passed", required: true, command: "npm test", evidence: "regression test passed", stale: false });
+    upsertTrustedCheck(store, run.id, { key: "verify", title: "Verify", command: "npm test", output: "regression test passed" });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(store.getRun(run.id)?.status).toBe("completed");
     expect(store.listMessages(session.id).at(-1)).toMatchObject({ role: "assistant", content: complete });
@@ -816,7 +817,7 @@ describe("AgentService runtime boundary", () => {
       const runtime = new CallbackRuntime(assistantMessage(calls === 1 ? "blocked" : "done"), () => {
         if (calls === 2) {
           store.upsertPlanItem(runId, { key: "work", title: "Finish work", status: "done", required: true, position: 1 });
-          store.upsertCheck(runId, { key: "verify", title: "Verify work", status: "passed", required: true, command: "test", evidence: "1 test passed", stale: false });
+          upsertTrustedCheck(store, runId, { key: "verify", title: "Verify work", command: "test", output: "1 test passed" });
         }
       });
       runtimes.push(runtime);
@@ -847,7 +848,7 @@ describe("AgentService runtime boundary", () => {
           store.appendTranscript(options.token.runId, 1, assistantMessage("latest failed candidate"));
         } else {
           store.upsertPlanItem(options.token.runId, { key: "work", title: "Work", status: "done", required: true, position: 1 });
-          store.upsertCheck(options.token.runId, { key: "verify", title: "Verify", status: "passed", required: true, command: "test", evidence: "passed", stale: false });
+          upsertTrustedCheck(store, options.token.runId, { key: "verify", title: "Verify", command: "test", output: "passed" });
         }
       });
     }, { maxContinuations: 1, supervisorReviewer: reviewer(continuationAudit(), passingTestAudit()) });
@@ -1118,6 +1119,29 @@ describe("AgentService runtime boundary", () => {
     expect(store.getRun(run.id)?.continuations).toHaveLength(0);
     expect(store.listSupervisorDecisions(run.id)).toEqual([expect.objectContaining({ reasonCode: "supervisor_review_failed", action: "block_taskrun", evaluator: "llm" })]);
     expect(store.listMessages(session.id).at(-1)?.content).toMatch(/no automatic continuation/i);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("terminalizes the Run when semantic runtime-failure classification itself throws", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let runtime!: ControlledRuntime;
+    let classificationCalls = 0;
+    const failedReviewer: SupervisorReviewer = {
+      evaluator: "llm",
+      model: "broken-failure-supervisor",
+      async reviewSettled() { return passingTestAudit(); },
+      async reviewAttemptFailure() { classificationCalls += 1; throw new Error("failure classifier unavailable"); },
+    };
+    const service = new AgentService(agentPersistence(store), "/tmp", () => runtime = new ControlledRuntime([]), { maxContinuations: 8, supervisorReviewer: failedReviewer });
+    const run = await service.start(session.id, "opaque runtime failure");
+    runtime.reject(new Error("opaque provider explosion"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(classificationCalls).toBe(1);
+    expect(store.getRun(run.id)).toMatchObject({ status: "blocked", attempt: 1 });
+    expect(store.getRun(run.id)?.continuations).toHaveLength(0);
+    expect(store.listSupervisorDecisions(run.id).at(-1)).toMatchObject({ action: "block_taskrun", reasonCode: "runtime_failure_review_unavailable", evaluator: "system" });
     await service.closeRuntimes();
     store.close();
   });

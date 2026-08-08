@@ -125,7 +125,8 @@ describe("Pi runtime adapter workspace package", () => {
 
   it("depends only on Execution and the required Pi SDK packages", () => {
     const packageRoot = path.join(repoRoot, "adapters/runtime-pi/src");
-    const allowedExternal = (specifier: string) => specifier === "@tagent/execution/ports"
+    const allowedExternal = (specifier: string) => specifier.startsWith("node:")
+      || specifier === "@tagent/execution/ports"
       || specifier === "@earendil-works/pi-agent-core"
       || specifier === "@earendil-works/pi-coding-agent"
       || specifier === "@earendil-works/pi-ai"

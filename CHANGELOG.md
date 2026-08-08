@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Trusted completion evidence
+
+- Advanced SQLite to schema 37 with operation audit payloads and check bindings to source operation ID and observation time; schema re-entry validates the trusted-evidence columns and partial index fail-closed.
+- Required passed checks now accept only a completed successful Bash operation from the current Run Attempt with the actual command and zero exit code. Core derives the evidence, digest, Artifact reference and timestamp instead of trusting Agent-authored evidence text.
+- Change, verification and release objectives require at least one trusted required check. The semantic Supervisor receives bounded actual operation payloads, results and effects and maps only supplied evidence references to acceptance criteria.
+
+### Runtime and model-call efficiency
+
+- Reduced normal substantial settlement to one Supervisor LLM call, removed the obsolete second-call schema-repair path, skipped semantic review for authoritative prerequisite failures and narrow low-risk answers, and limited transport fallback to a separately hosted upstream.
+- Added local classification for common timeout, rate-limit, authentication and configuration failures, preventing avoidable Supervisor calls and repeated Agent execution when review transport is unavailable.
+- Bounded online Memory recall, embedding, Session/transcript/operation queries and admission summaries; reused model runtimes; reduced full TaskRun hydration on runtime-event paths; and changed Bash output capture to linear Buffer accumulation.
+- Made `task_run` batches atomic, bounded operation inspection and evidence lookup, and allowed large evidence-reference sets without exceeding SQLite host-parameter limits.
+
+### Recovery and documentation
+
+- Added last-resort Attempt terminalization, durable-ACK-first SSE replay, receipt-aware continuation progress signatures and check staleness that distinguishes observation from workspace mutation commands.
+- Replaced the contradictory 0.2-specific upgrade guide and synchronized the maintained architecture, deployment, Gateway, persistence, runtime, Supervisor and release documentation with schema 37 and the current evidence/call policy.
+
 ## [0.3.0] - 2026-08-07
 
 ### Lightweight Workspace Goals
@@ -141,7 +159,7 @@
 - Upgrade Core first and allow forward migration to schema 33. If v33 preflight leaves open `migration_issues`, startup stops; do not bypass the ledger.
 - Update Gateway and client routes to `/api/v1`, then deploy the Web Console separately with its Core origin and OIDC Gateway integration.
 - Rollback to 0.1.x requires restoring the matching pre-upgrade database backup. Never run a 0.1.x binary against schema 33.
-- Follow [docs/UPGRADING_TO_0.2.md](docs/UPGRADING_TO_0.2.md) and complete the release checklist before publishing. This changelog does not assert that a particular CI or artifact run has passed.
+- Follow the maintained [upgrade and rollback guide](docs/UPGRADING.md) and complete the release checklist before publishing. This changelog does not assert that a particular CI or artifact run has passed.
 
 ## [0.1.13] - 2026-08-04
 

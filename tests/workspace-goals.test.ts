@@ -21,10 +21,10 @@ function definition() {
 }
 
 describe("lightweight Workspace Goals", () => {
-  it("migrates schema v34 to v36 additively and leaves ordinary TaskRuns independent", () => {
+  it("migrates schema v34 to v37 additively and leaves ordinary TaskRuns independent", () => {
     const store = new Store(":memory:");
     try {
-      expect(store.getSchemaVersion()).toBe(36);
+      expect(store.getSchemaVersion()).toBe(37);
       const workspace = store.createSession("Goal workspace");
       const run = store.createRun(workspace.id, "ordinary task");
       expect(store.getRun(run.id)).toMatchObject({ goal: "ordinary task", contract: null });

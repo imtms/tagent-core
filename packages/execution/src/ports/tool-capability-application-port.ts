@@ -1,6 +1,8 @@
 import type { RunEvent, RunId, TaskRun, UserInputField, UserInputRequest } from "../domain/index.js";
 import type { ArtifactSinkPort } from "./artifact-sink-port.js";
 import type { WorkspaceEditPort } from "./workspace-edit-port.js";
+import type { TaskRunStateMutation } from "./attempt-repository.js";
+import type { OperationRecord } from "@tagent/governance/ports";
 
 export interface MemoryToolCapabilities {
   search(query: string, kinds?: string[], maxResults?: number): Promise<unknown>;
@@ -30,7 +32,7 @@ export interface ToolCapabilityApplicationPort {
     result?: unknown;
     error?: string;
   }): unknown;
-  listOperations(): unknown[];
+  listOperations(options?: { limit?: number; ids?: string[] }): OperationRecord[];
   upsertPlanItem(item: {
     key: string;
     title: string;
@@ -47,7 +49,10 @@ export interface ToolCapabilityApplicationPort {
     command: string;
     evidence: string;
     stale: boolean;
+    sourceOperationId?: string | null;
+    observedAt?: number | null;
   }): unknown;
+  applyTaskRunBatch(mutations: TaskRunStateMutation[]): void;
   addArtifact(artifact: { id: string; title: string; kind: string; content: string; uri: string }): unknown;
   requestUserInput(toolCallId: string, prompt: string, fields: UserInputField[]): UserInputRequest;
   publish(type: string, data: Record<string, unknown>): RunEvent | undefined;

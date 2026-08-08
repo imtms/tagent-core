@@ -20,6 +20,8 @@ export interface GovernanceProgressRunView {
 }
 
 export interface GovernanceCompletionRunView {
+  id: string;
+  attempt: number;
   gateRequired: boolean;
   contract: {
     intent: string;

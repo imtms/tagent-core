@@ -198,8 +198,9 @@ describe("Local workspace adapter package", () => {
     const source = readFileSync(path.join(repoRoot, `${sourceRoot}/tools.ts`), "utf8");
     expect(source).toContain("`${runId}:${attempt}:${toolCallId}`");
     expect(source).toContain('capabilities.advanceRunPhase("implement")');
-    expect(source).toContain("const staleChecks = capabilities.markChecksStale()");
-    expect(source).toContain('status: "succeeded", stage: "completed"');
+    expect(source).toContain("options.invalidatesChecks === false ? 0 : capabilities.markChecksStale()");
+    expect(source).toContain('status: "succeeded"');
+    expect(source).toContain('stage: "completed"');
     expect(source).toContain('status: "failed", stage: "execution_failed"');
     expect(source).toContain('name: "task_run"');
     expect(source).toContain('Type.Literal("request_user_input")');

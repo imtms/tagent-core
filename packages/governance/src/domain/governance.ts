@@ -109,6 +109,10 @@ export interface RunCheck {
   command: string;
   evidence: string;
   stale: boolean;
+  /** System-issued operation receipt that produced this check result. */
+  sourceOperationId?: string | null;
+  /** Completion time copied from the source receipt, never supplied by the Agent. */
+  observedAt?: number | null;
 }
 
 export interface Artifact {

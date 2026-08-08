@@ -1,4 +1,4 @@
-import type { EmbeddingPort } from "../ports.js";
+import type { EmbeddingPort, EmbeddingRequestOptions } from "../ports.js";
 
 export interface OpenAIEmbeddingOptions {
   baseUrl: string;
@@ -20,7 +20,7 @@ export class OpenAIEmbeddingAdapter implements EmbeddingPort {
     this.baseUrl=options.baseUrl.replace(/\/$/,"");
     this.generation=`openai:${options.model}:${options.dimensions??"native"}`;
   }
-  async embed(texts:string[]):Promise<number[][]>{
+  async embed(texts:string[],requestOptions:EmbeddingRequestOptions={}):Promise<number[][]>{
     if(!texts.length)return[];
     const output:number[][]=[];
     const size=Math.max(1,this.options.batchSize??64);
@@ -28,7 +28,7 @@ export class OpenAIEmbeddingAdapter implements EmbeddingPort {
       const chunk=texts.slice(offset,offset+size);
       const body:Record<string,unknown>={model:this.options.model,input:chunk,...this.options.extraBody};
       if(this.options.dimensions)body.dimensions=this.options.dimensions;
-      const response=await this.request(body);
+      const response=await this.request(body,requestOptions);
       const data=(response as {data?:Array<{index?:number;embedding?:unknown}>}).data;
       if(!Array.isArray(data)||data.length!==chunk.length)throw new Error("Embedding response count mismatch");
       const ordered=[...data].sort((a,b)=>(a.index??0)-(b.index??0));
@@ -36,11 +36,14 @@ export class OpenAIEmbeddingAdapter implements EmbeddingPort {
     }
     return output;
   }
-  private async request(body:Record<string,unknown>):Promise<unknown>{
-    const retries=Math.max(0,this.options.maxRetries??2);
+  private async request(body:Record<string,unknown>,requestOptions:EmbeddingRequestOptions):Promise<unknown>{
+    const retries=Math.max(0,requestOptions.maxRetries??this.options.maxRetries??2);
     let last:unknown;
     for(let attempt=0;attempt<=retries;attempt++){
-      const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),this.options.timeoutMs??30_000);
+      const controller=new AbortController();
+      const abort=()=>controller.abort(requestOptions.signal?.reason);
+      if(requestOptions.signal?.aborted)abort();else requestOptions.signal?.addEventListener("abort",abort,{once:true});
+      const timer=setTimeout(()=>controller.abort(),requestOptions.timeoutMs??this.options.timeoutMs??30_000);
       try{
         const response=await fetch(`${this.baseUrl}/embeddings`,{method:"POST",headers:{"content-type":"application/json",authorization:`Bearer ${this.options.apiKey}`,...this.options.extraHeaders},body:JSON.stringify(body),signal:controller.signal});
         const text=await response.text();
@@ -48,7 +51,7 @@ export class OpenAIEmbeddingAdapter implements EmbeddingPort {
         const error=new Error(`Embedding API ${response.status}: ${text.slice(0,500)}`);
         if(response.status!==429&&response.status<500)throw error;
         last=error;
-      }catch(error){last=error;if(attempt===retries)throw error;}finally{clearTimeout(timer);}
+      }catch(error){last=error;if(attempt===retries||requestOptions.signal?.aborted)throw error;}finally{clearTimeout(timer);requestOptions.signal?.removeEventListener("abort",abort);}
       await new Promise((resolve)=>setTimeout(resolve,Math.min(4_000,500*2**attempt)));
     }
     throw last;

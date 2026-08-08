@@ -58,7 +58,8 @@ export class AdmissionCoordinator {
   public sessionRouterContext(sessionId: SessionId) {
     return {
       recentMessages: this.state.persistence.sessions.listRecentMessages(sessionId, 12),
-      recentRuns: this.state.persistence.taskRuns.listRuns(sessionId, 5),
+      recentRuns: this.state.persistence.taskRuns.listRunSummaries?.(sessionId, 5)
+        ?? this.state.persistence.taskRuns.listRuns(sessionId, 5),
     };
   }
 

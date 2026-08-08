@@ -40,7 +40,9 @@ The Context Manifest records each source path, SHA-256, precedence, selection re
 
 ## Fewer model/tool round trips
 
-`task_run action=batch` applies up to 50 plan, check, phase, Artifact and check-staleness mutations in one call and emits one compact `run.updated` receipt.
+`task_run action=batch` applies up to 50 plan, check, phase, Artifact and check-staleness mutations in one fenced SQLite transaction and emits one compact `run.updated` receipt. If any mutation fails, the whole batch rolls back.
+
+A passed required check must identify a successful Bash receipt from the current Attempt. When the check supplies only the exact command, the tool searches one bounded recent receipt window and reuses that result for every check in the batch. `task_run action=operations` returns only the latest 24 receipts with a bounded response.
 
 Historical provider context is projected on every Pi request:
 
@@ -64,6 +66,20 @@ node scripts/performance-efficiency-benchmark.mjs
 
 Its representative 10-turn fixture reduces serialized historical context by about 61%, estimated historical tokens by about 62%, and representative TaskRun setup/settlement mutation round trips from 12 to 2. It measures deterministic projection opportunity, not provider wall-clock latency.
 
+## Bounded hot paths
+
+Long-lived Sessions and TaskRuns no longer load their complete history for normal execution:
+
+- Session history, Attempt transcript and admission Run summaries use bounded SQL windows rather than loading and slicing full objects;
+- Supervisor settlement loads at most the recent operation window plus required check source receipts in one query;
+- large evidence-ID sets use one JSON-set bind instead of exceeding SQLite's host-parameter limit;
+- common runtime events validate the lightweight current Attempt instead of hydrating a complete TaskRun;
+- equivalent Pi model/provider configurations reuse one initialized model runtime;
+- Bash stdout/stderr capture accumulates Buffer chunks and concatenates once, avoiding quadratic string growth;
+- online Memory recall has a 3-second overall deadline; online embedding uses a 2.2-second timeout with no retry on the Attempt startup path.
+
+Router and Supervisor transports default to 5 seconds. Deterministic routing, prerequisite gates, lightweight discussion completion and known runtime-error classification avoid their respective LLM call entirely when the result is authoritative locally.
+
 ## Bash timeout and repeat protection
 
 Bash timeout is classified separately from generic signal termination and emits `tool.bash.timed_out` with command hash, output byte counts and Artifact references. Composite commands emit `tool.bash.composite` guidance so build, test, deploy, restart and polling can be executed and evidenced separately.
@@ -72,7 +88,7 @@ After a Bash command fails or times out, an identical canonical command is fence
 
 ## Continuation stall detection
 
-Continuation progress signatures normalize gate failures and include durable plan/check/Artifact state. Two consecutive continuations with the same gate/evidence state stop with `continuation.stalled`, even when timestamps, UUIDs or wording differ. New durable evidence permits another bounded continuation.
+Continuation progress signatures use stable failure kind/key/disposition plus durable plan state, trusted check receipt/time bindings, and Artifact content hashes. Two consecutive continuations with the same gate/evidence state stop with `continuation.stalled`, even when timestamps, UUIDs or wording differ. New durable evidence permits another bounded continuation.
 
 ## Preserved governance and budget behavior
 

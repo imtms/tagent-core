@@ -137,7 +137,7 @@ Event consumers are durable and generation-fenced:
 4. acknowledge the highest durably persisted sequence;
 5. reclaim after a stale-generation conflict.
 
-The stream replays from the greater of `after` and the durable acknowledged sequence, then continues live. It sends JSON `TaskRunEvent` values in `data:` frames and a comment heartbeat every 15 seconds. A newer claim invalidates an older generation.
+The durable acknowledged sequence is authoritative. The stream always replays from that sequence and then continues live; an optional `after` value may be equal to or behind the durable ACK but may never skip ahead of it. A client checkpoint may suppress re-applying an already hydrated event, but the client must still persist and ACK the replayed sequence. The stream sends JSON `TaskRunEvent` values in `data:` frames and a comment heartbeat every 15 seconds. A newer claim invalidates an older generation.
 
 ## CORS
 

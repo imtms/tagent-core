@@ -220,6 +220,7 @@ export class LegacyStoreAdapter {
       upsertPlanItem: mutate(sqliteRuntimeMutations.upsertPlanItem.bind(sqliteRuntimeMutations)),
       markChecksStale: mutate(sqliteRuntimeMutations.markChecksStale.bind(sqliteRuntimeMutations)),
       upsertCheck: mutate(sqliteRuntimeMutations.upsertCheck.bind(sqliteRuntimeMutations)),
+      applyTaskRunBatch: mutate(sqliteRuntimeMutations.applyTaskRunBatch.bind(sqliteRuntimeMutations)),
       addArtifact: mutate(sqliteRuntimeMutations.addArtifact.bind(sqliteRuntimeMutations)),
     });
 
@@ -286,6 +287,7 @@ export class LegacyStoreAdapter {
       getRun: query(store.getRun.bind(store)),
       getRunByRequestId: query(store.getRunByRequestId.bind(store)),
       listRuns: query(store.listRuns.bind(store)),
+      listRunSummaries: query(store.listRunSummaries.bind(store)),
       getLatestRun: query(store.getLatestRun.bind(store)),
       getActiveRun: query(store.getActiveRun.bind(store)),
       getPendingUserInputRequest: query(store.getPendingUserInputRequest.bind(store)),

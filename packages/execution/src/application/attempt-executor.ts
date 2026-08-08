@@ -3,6 +3,7 @@ import type { TaskRun } from "../domain/task-run.js";
 import type { ExecutionStateView } from "./execution-state.js";
 import { failRuntimeTaskRun, publishTransitionOutcome } from "./task-run-transition-helpers.js";
 import { settleRuntimeInitializationFailure } from "./runtime-initialization-failure.js";
+import { settleAttemptExecutionFailure } from "./attempt-execution-failure.js";
 import { selectRuntimeModel } from "./runtime-model-selection.js";
 import type {
   AttemptSettlementPort,
@@ -26,7 +27,6 @@ type AttemptExecutorState = ExecutionStateView<
   | "attempts" | "continuations" | "events" | "runtime" | "runtimeMutations"
   | "sessions" | "taskRuns" | "taskRunTransitions" | "transcript"
 >;
-
 export class AttemptExecutor {
   constructor(
     private readonly state: AttemptExecutorState,
@@ -262,7 +262,9 @@ export class AttemptExecutor {
         this.state.persistence.continuations.updateContinuation(continuationId, status === "completed" ? "completed" : status === "blocked" ? "blocked" : status === "cancelled" ? "cancelled" : "failed", status === "failed" ? this.state.persistence.taskRuns.getRun(run.id)?.blockedReason ?? "" : "", this.state.continuationOwner);
       }
       if (blocked) this.dependencies.continuation.queueContinuation(run.id);
-    }).finally(() => {
+    }).catch((error: unknown) => settleAttemptExecutionFailure({
+      closing: this.state.closing, run, token, continuationId, continuationOwner: this.state.continuationOwner, error, persistence: this.state.persistence, settlement: this.dependencies.settlement, eventHub: this.dependencies.eventHub,
+    })).finally(() => {
       if (idleTimer) clearTimeout(idleTimer);
       if (hardTimer) clearTimeout(hardTimer);
       if (leaseTimer) clearInterval(leaseTimer);

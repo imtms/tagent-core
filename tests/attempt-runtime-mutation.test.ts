@@ -139,6 +139,9 @@ describe("Fenced RuntimeMutationPort", () => {
         key: "check-1", title: "Check", status: "pending", required: true,
         command: "", evidence: "", stale: false,
       }),
+      () => adapter.runtimeMutations.applyTaskRunBatch(stale, [{
+        action: "plan", item: { key: "batch-plan", title: "Batch", status: "done", required: true, position: 1 },
+      }]),
       () => adapter.runtimeMutations.addArtifact(stale, {
         id: "artifact-1", kind: "text", title: "Artifact", content: "content", uri: "",
       }),
@@ -149,6 +152,17 @@ describe("Fenced RuntimeMutationPort", () => {
     }
 
     expect(adapter.runtimeMutations.appendEvent(context, "runtime.event", {})).toMatchObject({ seq: 1 });
+  });
+
+  it("applies a task_run batch atomically behind one execution-fence validation", () => {
+    const { store, adapter, run, context } = fixture();
+    store.addArtifact(run.id, { id: "duplicate", title: "Existing", kind: "artifact", content: "", uri: "" });
+    expect(() => adapter.runtimeMutations.applyTaskRunBatch(context, [
+      { action: "plan", item: { key: "rollback", title: "Rollback", status: "done", required: true, position: 1 } },
+      { action: "phase", phase: "review" },
+      { action: "artifact", artifact: { id: "duplicate", title: "Duplicate", kind: "artifact", content: "", uri: "" } },
+    ])).toThrow();
+    expect(store.getRun(run.id)).toMatchObject({ phase: "discover", plan: [], artifacts: [expect.objectContaining({ id: "duplicate", title: "Existing" })] });
   });
 
   it("atomically settles request_user_input, its event, and the active tool attempt", () => {

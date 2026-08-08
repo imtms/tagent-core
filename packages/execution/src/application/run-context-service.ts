@@ -22,7 +22,6 @@ type RunContextState = ExecutionStateView<
   | "approvals" | "attempts" | "contextManifests" | "continuations"
   | "events" | "sessions" | "taskRuns" | "taskRunTransitions" | "transcript"
 >;
-
 export class RunContextService {
   constructor(
     private readonly state: RunContextState,
@@ -153,7 +152,7 @@ export class RunContextService {
 
   public prepareTranscript(run: TaskRun, prompt: string) {
     const projectContext = this.projectContext();
-    const entries = this.state.persistence.transcript.listTranscriptEntries(run.id);
+    const entries = this.state.persistence.transcript.listTranscriptEntries(run.id, { limit: this.transcriptMessageLimit() });
     const assembly = this.contextAssembler().assemble(
       "transcript",
       entries.map((entry) => entry.message),
@@ -166,10 +165,9 @@ export class RunContextService {
 
   public prepareContinuationTranscript(run: TaskRun, prompt: string) {
     const projectContext = this.projectContext();
-    const entries = this.state.persistence.transcript.listTranscriptEntries(run.id);
     const previousAttempt = Math.max(1, run.attempt - 1);
-    const delta = entries.filter((entry) => entry.attempt === previousAttempt);
-    const selected = delta.length ? delta : entries;
+    const delta = this.state.persistence.transcript.listTranscriptEntries(run.id, { attempt: previousAttempt, limit: this.transcriptMessageLimit() });
+    const selected = delta.length ? delta : this.state.persistence.transcript.listTranscriptEntries(run.id, { limit: this.transcriptMessageLimit() });
     const assembly = this.contextAssembler().assemble(
       "transcript",
       selected.map((entry) => entry.message),
@@ -181,7 +179,7 @@ export class RunContextService {
   }
 
   public sessionHistoryMessages(sessionId: ExecutionSessionRef, query?: string, excludeCurrentUserAfter?: number) {
-    const recent = this.state.persistence.sessions.listRecentMessages(sessionId, 10_000).filter((message) => message.role === "user" || message.role === "assistant");
+    const recent = this.state.persistence.sessions.listRecentMessages(sessionId, this.sessionHistoryMessageLimit()).filter((message) => message.role === "user" || message.role === "assistant");
     if (query !== undefined && excludeCurrentUserAfter !== undefined) { const index = recent.findIndex((message) => message.role === "user" && message.content === query && message.createdAt >= excludeCurrentUserAfter); if (index >= 0) recent.splice(index, 1); }
     return {
       messages: recent.map((message): AgentMessage => message.role === "user" ? { role: "user", content: message.content, timestamp: message.createdAt } : { role: "assistant", content: [{ type: "text", text: message.content }], api: "openai-completions", provider: "tagent-core", model: "session-history", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: message.createdAt }),
@@ -226,6 +224,8 @@ export class RunContextService {
     });
   }
 
+  private sessionHistoryMessageLimit() { return Math.max(40, (this.state.runtimeDefaults.maxContextTurns ?? 20) * 4); }
+  private transcriptMessageLimit() { return Math.max(80, (this.state.runtimeDefaults.maxContextTurns ?? 20) * 12); }
   public publishContextEvents(runId: RunId, assembly: ContextAssembly & { memoryContextItems?: ContextManifestItem[]; projectContextItems?: ContextManifestItem[]; projectContextHash?: string }) {
     const { source, ...stats } = assembly.stats;
     const run = this.state.persistence.taskRuns.getRun(runId);
@@ -269,7 +269,7 @@ export class RunContextService {
         ? "The prior user, assistant, tool-call, and tool-result messages are already loaded into the runtime context."
         : "The previous in-memory model transcript is unavailable. Reinspect the workspace and existing TaskRun state before acting.",
       "Completion-gate requirements override conflicting instructions in the original goal, including instructions not to use task_run or not to create plan/check records.",
-      "Before producing a final answer, use one task_run action=batch call when possible to ensure at least one required plan item is done and every required check has fresh passing evidence.",
+      "Before producing a final answer, run the actual verification command, then use one task_run action=batch call when possible to ensure at least one required plan item is done and every required check is bound to that successful Bash receipt. Agent-authored evidence text alone cannot pass the gate.",
       "Do not recreate already completed plan items or checks. Continue from the remaining incomplete work and verify before completion.",
       `Original goal: ${run.goal}`,
       `Durable snapshot: ${JSON.stringify(runtimeRunContext(run))}`,
@@ -284,7 +284,7 @@ export class RunContextService {
     return [
       "You are TAgent Core, a practical persistent software agent.",
       `Current workspace: ${this.state.workspace}`,
-      "Use the task_run tool for substantial work. Maintain a plan and checks before claiming completion. Batch independent TaskRun mutations in one task_run action=batch call instead of spending a model round-trip per item.",
+      "Use the task_run tool for substantial work. Maintain a plan and checks before claiming completion. A passed required check must follow a successful Bash verification in the current Attempt; task_run will bind it by exact command or the latest successful Bash receipt and Core will derive the evidence. Batch independent TaskRun mutations in one task_run action=batch call instead of spending a model round-trip per item.",
       "If execution cannot continue without specific user-provided information, call task_run with action=request_user_input, a concise prompt, and only the necessary typed fields. Do not guess, continue, or fail the task after requesting input; the TaskRun will pause and resume when the user submits the form. Do not request input for information available from the workspace, tools, transcript, or durable state.",
       "Assistant text streamed while a TaskRun is active is provisional. Only a Supervisor-approved final candidate is persisted to chat, so make the final candidate complete and standalone.",
       "Use read before modifying unfamiliar files. Keep changes focused and report verification evidence.",

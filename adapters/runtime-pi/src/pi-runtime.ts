@@ -1,4 +1,5 @@
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import { createHash } from "node:crypto";
 import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import {
   createAgentSession,
@@ -15,6 +16,52 @@ export interface PiRuntimeOptions extends Omit<AttemptRuntimeSpec, "fallbackMode
   model?: Model<Api>;
   fallbackModels?: Model<Api>[];
   modelRuntime?: ModelRuntime;
+}
+
+const sharedModelRuntimes = new Map<string, Promise<ModelRuntime>>();
+
+function runtimeCacheKey(options: PiRuntimeOptions) {
+  const models = [options.model, ...(options.fallbackModels ?? [])].filter((model): model is Model<Api> => Boolean(model));
+  return createHash("sha256").update(JSON.stringify({
+    apiKeyHash: createHash("sha256").update(options.apiKey ?? "").digest("hex"),
+    models: models.map((model) => ({ provider: model.provider, api: model.api, baseUrl: model.baseUrl, id: model.id })),
+  })).digest("hex");
+}
+
+async function configureModelRuntime(modelRuntime: ModelRuntime, options: PiRuntimeOptions) {
+  if (options.model && !modelRuntime.getProvider(options.model.provider)) {
+    const configuredModels = [options.model, ...(options.fallbackModels ?? [])].filter((model) => model.provider === options.model!.provider);
+    modelRuntime.registerProvider(options.model.provider, {
+      name: options.model.provider,
+      api: options.model.api,
+      baseUrl: options.model.baseUrl,
+      models: configuredModels.map((model) => ({
+        id: model.id, name: model.name, api: model.api, baseUrl: model.baseUrl,
+        reasoning: model.reasoning, thinkingLevelMap: model.thinkingLevelMap,
+        input: [...model.input], cost: model.cost, contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens, headers: model.headers, compat: model.compat,
+      })),
+    });
+    await modelRuntime.refresh({ allowNetwork: false });
+  }
+  if (options.apiKey) {
+    const providers = new Set([options.model, ...(options.fallbackModels ?? [])]
+      .map((model) => model?.provider).filter((value): value is string => Boolean(value)));
+    for (const provider of providers) await modelRuntime.setRuntimeApiKey(provider, options.apiKey, { allowNetwork: false });
+  }
+  return modelRuntime;
+}
+
+async function resolveModelRuntime(options: PiRuntimeOptions) {
+  if (options.modelRuntime) return configureModelRuntime(options.modelRuntime, options);
+  const key = runtimeCacheKey(options);
+  const existing = sharedModelRuntimes.get(key);
+  if (existing) return existing;
+  const created = ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
+    .then((runtime) => configureModelRuntime(runtime, options));
+  sharedModelRuntimes.set(key, created);
+  void created.catch(() => { if (sharedModelRuntimes.get(key) === created) sharedModelRuntimes.delete(key); });
+  return created;
 }
 
 function messageText(message: AgentMessage | undefined) {
@@ -141,31 +188,7 @@ export class PiRuntime implements AttemptRuntimePort {
         provider: { timeoutMs: 2_147_483_647, maxRetries: 0, maxRetryDelayMs: 15_000 },
       },
     }, { projectTrusted: false });
-    const modelRuntime = this.options.modelRuntime ?? await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
-    if (this.options.model && !modelRuntime.getProvider(this.options.model.provider)) {
-      const configuredModels = [this.options.model, ...(this.options.fallbackModels ?? [])].filter((model) => model.provider === this.options.model!.provider);
-      modelRuntime.registerProvider(this.options.model.provider, {
-        name: this.options.model.provider,
-        api: this.options.model.api,
-        baseUrl: this.options.model.baseUrl,
-        models: configuredModels.map((model) => ({
-          id: model.id,
-          name: model.name,
-          api: model.api,
-          baseUrl: model.baseUrl,
-          reasoning: model.reasoning,
-          thinkingLevelMap: model.thinkingLevelMap,
-          input: [...model.input],
-          cost: model.cost,
-          contextWindow: model.contextWindow,
-          maxTokens: model.maxTokens,
-          headers: model.headers,
-          compat: model.compat,
-        })),
-      });
-      await modelRuntime.refresh({ allowNetwork: false });
-    }
-    if (this.options.apiKey) for (const provider of new Set([this.options.model, ...(this.options.fallbackModels ?? [])].map((model) => model?.provider).filter((value): value is string => Boolean(value)))) await modelRuntime.setRuntimeApiKey(provider, this.options.apiKey, { allowNetwork: false });
+    const modelRuntime = await resolveModelRuntime(this.options);
     const resourceLoader = new DefaultResourceLoader({
       cwd: this.options.workspace,
       agentDir: this.options.workspace,

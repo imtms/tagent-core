@@ -4,7 +4,7 @@ import type { RunId, TaskRun } from "@tagent/execution/domain";
 export interface AdmissionRouterPort {
   analyze(content: string, activeRun?: TaskRun, context?: {
     recentMessages?: Array<{ id: number; role: "user" | "assistant" | "tool"; content: string }>;
-    recentRuns?: TaskRun[];
+    recentRuns?: Array<Pick<TaskRun, "id" | "goal" | "status" | "phase" | "contract" | "updatedAt">>;
   }): Promise<SessionInputAnalysis>;
   takeUsage(analysis: SessionInputAnalysis): Array<{
     model: string;

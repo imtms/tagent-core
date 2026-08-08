@@ -1,8 +1,9 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Store } from "@tagent/persistence-sqlite";
+import { recordSuccessfulBash, upsertTrustedCheck } from "./support/trusted-evidence.js";
 
 const stores: Store[] = [];
 const analysis = (summary: string, priority = 500) => ({ summary, objectives: [{ id: `objective:${summary}`, summary, timing: "current" as const, kind: "other" as const }], intent: "new_task" as const, targetRunId: null, priority, urgency: "normal" as const, relation: "independent" as const, acceptanceCriteria: [`Complete ${summary}`], scope: summary, nonGoals: [], confidence: 1, reason: "test", routerVersion: "test" });
@@ -606,26 +607,58 @@ describe("Store", () => {
     expect(store.completeWithGate(run.id, "done").gate.passed).toBe(false);
     store.resumeRun(run.id);
     store.upsertPlanItem(run.id, { key: "build", title: "Build", status: "done", required: true, position: 1 });
-    store.upsertCheck(run.id, { key: "test", title: "Tests", status: "passed", required: true, command: "npm test", evidence: "ok", stale: false });
+    upsertTrustedCheck(store, run.id, { key: "test", title: "Tests", command: "npm test", output: "all tests passed" });
     const result = store.completeWithGate(run.id, "done");
     expect(result.gate.passed).toBe(true);
     expect(result.run.status).toBe("completed");
   });
 
-  it("records the current schema version", () => {
+  it("rejects self-reported, tampered, failed, and wrong-Attempt check evidence", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(36);
+    const run = store.createRun(store.createSession().id, "trusted verification");
+    store.upsertPlanItem(run.id, { key: "work", title: "Work", status: "done", required: true, position: 1 });
+    store.upsertCheck(run.id, { key: "tests", title: "Tests", status: "passed", required: true, command: "npm test", evidence: "999 passed", stale: false });
+    expect(store.getRun(run.id)?.completionGate).toMatchObject({ passed: false, failures: [expect.objectContaining({ key: "tests" })] });
+
+    upsertTrustedCheck(store, run.id, { key: "tests", title: "Tests", command: "npm test", output: "999 passed" });
+    expect(store.getRun(run.id)?.completionGate.passed).toBe(true);
+    store.db.prepare("UPDATE run_checks SET command='different command' WHERE run_id=? AND check_key='tests'").run(run.id);
+    expect(store.getRun(run.id)?.completionGate).toMatchObject({ passed: false, failures: [expect.objectContaining({ key: "tests" })] });
+
+    const failedId = "failed-bash";
+    store.claimOperation(failedId, run.id, run.attempt, "tool.bash", { command: "npm test" });
+    store.updateOperation(failedId, { status: "failed", result: { details: { exitCode: 1 } }, error: "tests failed" });
+    expect(() => store.upsertCheck(run.id, { key: "failed", title: "Failed", status: "passed", required: true, command: "npm test", evidence: "", stale: false, sourceOperationId: failedId })).toThrow("successful Bash operation");
+
+    const oldAttempt = recordSuccessfulBash(store, run.id, "npm run check", "passed", "old-attempt-bash");
+    store.db.prepare("UPDATE runs SET attempt=attempt+1 WHERE id=?").run(run.id);
+    expect(() => store.upsertCheck(run.id, { key: "old", title: "Old", status: "passed", required: true, command: "npm run check", evidence: "", stale: false, sourceOperationId: oldAttempt.id })).toThrow("current Run Attempt");
   });
 
-  it("migrates an older database to schema version 36", () => {
+  it("does not load operation receipts while evaluating a Run with no passed checks", () => {
+    const store = createStore();
+    const run = store.createRun(store.createSession().id, "cheap gate");
+    const operations = vi.spyOn(store, "listOperations");
+    store.getRun(run.id);
+    expect(operations).not.toHaveBeenCalled();
+  });
+
+  it("records the current schema version", () => {
+    const store = createStore();
+    expect(store.getSchemaVersion()).toBe(37);
+  });
+
+  it("migrates an older database to schema version 37", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE core_writer_lease; DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(36);
+    expect(migrated.getSchemaVersion()).toBe(37);
     expect((migrated.db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
     expect((migrated.db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
+    expect((migrated.db.prepare("PRAGMA table_info(operations)").all() as Array<{ name: string }>).map((column) => column.name)).toContain("payload_json");
+    expect((migrated.db.prepare("PRAGMA table_info(run_checks)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["source_operation_id", "observed_at"]));
     expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('approval_receipts','approval_requests','attempt_authority_receipts','attempt_authority_state','attempt_shadow_comparisons','attempt_transition_audit','attempts','candidate_results','context_manifests','control_inbox','core_writer_lease','event_consumers','execution_leases','gate_evaluations','operations','progress_snapshots','run_checkpoints','semantic_learning_jobs','session_supervisor_inbox','supervisor_decisions','taskrun_edges','tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["approval_receipts", "approval_requests", "attempt_authority_receipts", "attempt_authority_state", "attempt_shadow_comparisons", "attempt_transition_audit", "attempts", "candidate_results", "context_manifests", "control_inbox", "core_writer_lease", "event_consumers", "execution_leases", "gate_evaluations", "operations", "progress_snapshots", "run_checkpoints", "semantic_learning_jobs", "session_supervisor_inbox",  "supervisor_decisions", "taskrun_edges", "tool_attempts"]);
     expect((migrated.db.prepare("PRAGMA table_info(core_writer_lease)").all() as Array<{ name: string; type: string; notnull: number; pk: number }>).map(({ name, type, notnull, pk }) => ({ name, type, notNull: notnull, primaryKey: pk }))).toEqual([
       { name: "lock_name", type: "TEXT", notNull: 0, primaryKey: 1 },
@@ -656,6 +689,14 @@ describe("Store", () => {
     store.db.exec("ALTER TABLE sessions RENAME COLUMN model_id TO incompatible_model_id");
     store.close();
     expect(() => new Store(filename)).toThrow("Workspace execution profile v34 schema has incompatible sessions.model_id");
+  });
+
+  it("fails closed when schema-v37 trusted-evidence storage drifts", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-v37-drift-")), "core.db");
+    const store = new Store(filename);
+    store.db.exec("ALTER TABLE operations RENAME COLUMN payload_json TO incompatible_payload_json");
+    store.close();
+    expect(() => new Store(filename)).toThrow("Trusted evidence v37 schema has incompatible operations.payload_json");
   });
 
   it("migrates legacy SpawnProposal rows into related Session Inbox items before dropping the table", () => {
@@ -725,6 +766,8 @@ describe("Store", () => {
     store.updateOperation("op-1", { status: "succeeded", stage: "completed", result: { ok: true } });
     const replay = store.claimOperation("op-1", run.id, 1, "tool.write", { nested: { a: 2, z: 1 }, path: "a" });
     expect(replay).toMatchObject({ claimed: false, status: "succeeded", result: { ok: true } });
+    const oversizedReferenceSet = ["op-1", ...Array.from({ length: 1_100 }, (_, index) => `missing-${index}`)];
+    expect(store.listOperations(run.id, { ids: oversizedReferenceSet }).map((operation) => operation.id)).toEqual(["op-1"]);
     expect(() => store.updateOperation("op-1", { status: "failed", error: "late" })).toThrow("cannot transition");
     expect(() => store.claimOperation("op-1", run.id, 1, "tool.write", { path: "b" })).toThrow("different payload");
   });

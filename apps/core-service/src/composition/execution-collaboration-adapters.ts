@@ -31,6 +31,21 @@ export interface ExecutionCollaborationAdapters {
   userMessageObserver: UserMessageObserverPort;
 }
 
+const ONLINE_RECALL_DEADLINE_MS = 3_000;
+const ONLINE_EMBEDDING_TIMEOUT_MS = 2_200;
+
+async function withinDeadline<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`online memory recall exceeded ${timeoutMs}ms`)), timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export function createExecutionCollaborationAdapters(
   options: ExecutionCollaborationAdapterOptions,
 ): ExecutionCollaborationAdapters {
@@ -99,12 +114,22 @@ export function createExecutionCollaborationAdapters(
       },
       async enrich(run, query) {
         const memoryAccess = access(run);
-        const [recall, coreSnapshot] = options.memory
-          ? await Promise.all([
-              options.memory.recall({ access: memoryAccess, cue: query }),
+        let recall: Awaited<ReturnType<MemoryFacade["recall"]>> | undefined;
+        let coreSnapshot: Awaited<ReturnType<NonNullable<MemoryFacade["getCoreSnapshot"]>>> | undefined;
+        if (options.memory) {
+          try {
+            [recall, coreSnapshot] = await withinDeadline(Promise.all([
+              options.memory.recall({ access: memoryAccess, cue: query, embeddingTimeoutMs: ONLINE_EMBEDDING_TIMEOUT_MS }),
               options.memory.getCoreSnapshot?.(memoryAccess),
-            ])
-          : [undefined, undefined];
+            ]), ONLINE_RECALL_DEADLINE_MS);
+          } catch (error) {
+            options.publish(run.id, "memory.recall.degraded", {
+              reason: "online_deadline",
+              timeoutMs: ONLINE_RECALL_DEADLINE_MS,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
         const { workflows, profile } = learningContext(run, query);
         const coreSection = coreSnapshot?.markdown
           ? `<core_memory revision="${coreSnapshot.revision}">\n${coreSnapshot.markdown}\n</core_memory>`
