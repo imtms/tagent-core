@@ -140,7 +140,7 @@ describe("Fastify HTTP adapter workspace package", () => {
       "@tagent/execution": "0.3.0",
       "@tagent/governance": "0.3.0",
       fastify: "^5.10.0",
-      typebox: "1.0.64",
+      typebox: "^1.1.24",
     });
     for (const target of Object.values(manifest.exports)) {
       expect(target.types).toMatch(/^\.\/dist\/.+\.d\.ts$/);

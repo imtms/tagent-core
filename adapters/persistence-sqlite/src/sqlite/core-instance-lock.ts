@@ -136,7 +136,9 @@ export async function defaultFilesystemSemanticsProbe(directory: string): Promis
     ]);
     if (remoteTypes.has(type)) return "remote";
     const localTypes = process.platform === "darwin"
-      ? new Set([0x00000019, 0x00004244]) // APFS, HFS
+      // APFS reports 0x1a on current Darwin kernels; retain 0x19 for
+      // compatibility with older releases and 0x4244 for HFS volumes.
+      ? new Set([0x0000001a, 0x00000019, 0x00004244])
       : new Set([
         0x0000ef53, // ext2/3/4
         0x58465342, // XFS

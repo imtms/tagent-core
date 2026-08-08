@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acquireCoreInstanceLock,
+  defaultFilesystemSemanticsProbe,
   type CoreInstanceLock,
   type CoreInstanceLockOptions,
   type ProcessIdentityProbe,
@@ -55,6 +56,13 @@ afterEach(async () => {
 });
 
 describe("Core instance lock", () => {
+  it("recognizes the test host temporary filesystem as local", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "tagent-filesystem-probe-"));
+    temporaryDirectories.push(directory);
+
+    await expect(defaultFilesystemSemanticsProbe(directory)).resolves.toBe("local");
+  });
+
   it("accepts a local filesystem and returns a held lock at the database lock path", async () => {
     const { databasePath, options } = await fixture();
     const filesystemProbe = vi.fn(async () => "local" as const);
