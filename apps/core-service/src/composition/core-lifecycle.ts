@@ -1,3 +1,5 @@
+import { monitorEventLoopDelay } from "node:perf_hooks";
+
 const CORE_HEARTBEAT_INTERVAL_MS = 5_000;
 const CORE_HEARTBEAT_MAX_AGE_MS = 10_000;
 
@@ -29,6 +31,42 @@ export interface CoreLifecycleSnapshot {
   lastFailure: string | null;
 }
 
+export type CoreHeartbeatStage = "instance_lock" | "writer_lease" | "connection_guard";
+
+export interface CoreHeartbeatStageDurations {
+  instanceLockMs: number | null;
+  writerLeaseMs: number | null;
+  connectionGuardMs: number | null;
+}
+
+export interface CoreHeartbeatDiagnostics {
+  maximumAgeMs: number;
+  heartbeatAgeMs: number;
+  activeStage: CoreHeartbeatStage | null;
+  activeStageElapsedMs: number | null;
+  stageDurationsMs: CoreHeartbeatStageDurations;
+  eventLoopDelayMaxMs: number;
+  eventLoopDelayP99Ms: number;
+}
+
+export class CoreHeartbeatDeadlineError extends Error {
+  constructor(
+    maximumAgeMs: number,
+    readonly diagnostics: Readonly<CoreHeartbeatDiagnostics>,
+  ) {
+    super(`Core writer heartbeat exceeded ${maximumAgeMs}ms maximum age`);
+    this.name = "CoreHeartbeatDeadlineError";
+  }
+}
+
+export interface CoreEventLoopDelayMonitor {
+  enable(): void;
+  disable(): void;
+  reset(): void;
+  maxMs(): number;
+  percentileMs(percentile: number): number;
+}
+
 export interface CoreLifecycleResources {
   instanceLock: {
     assertHeld(): Promise<void>;
@@ -54,10 +92,32 @@ export interface CoreLifecycleOptions {
   maxHeartbeatAgeMs?: number;
   clock?: () => number;
   timers?: CoreLifecycleTimers;
+  eventLoopDelayMonitor?: CoreEventLoopDelayMonitor;
 }
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function duration(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round(Math.max(0, value) * 1_000) / 1_000;
+}
+
+function emptyStageDurations(): CoreHeartbeatStageDurations {
+  return { instanceLockMs: null, writerLeaseMs: null, connectionGuardMs: null };
+}
+
+function createEventLoopDelayMonitor(): CoreEventLoopDelayMonitor {
+  const histogram = monitorEventLoopDelay({ resolution: 20 });
+  const nanosecondsToMilliseconds = (value: number) => duration(value / 1_000_000);
+  return {
+    enable: () => { histogram.enable(); },
+    disable: () => { histogram.disable(); },
+    reset: () => { histogram.reset(); },
+    maxMs: () => nanosecondsToMilliseconds(histogram.max),
+    percentileMs: (percentile) => nanosecondsToMilliseconds(histogram.percentile(percentile)),
+  };
 }
 
 export class CoreLifecycle implements WriterReadiness {
@@ -71,11 +131,18 @@ export class CoreLifecycle implements WriterReadiness {
   private closeTask: Promise<void> | null = null;
   private heartbeatStarted = false;
   private lastSuccessfulHeartbeatAt: number | null = null;
+  private heartbeatAttemptStartedAt: number | null = null;
+  private activeHeartbeatStage: CoreHeartbeatStage | null = null;
+  private activeHeartbeatStageStartedAt: number | null = null;
+  private currentStageDurations: CoreHeartbeatStageDurations = emptyStageDurations();
+  private lastStageDurations: CoreHeartbeatStageDurations = emptyStageDurations();
+  private eventLoopDelayMonitorStarted = false;
 
   private readonly heartbeatIntervalMs: number;
   private readonly maxHeartbeatAgeMs: number;
   private readonly clock: () => number;
   private readonly timers: CoreLifecycleTimers;
+  private readonly eventLoopDelayMonitor: CoreEventLoopDelayMonitor;
 
   constructor(
     private readonly resources: CoreLifecycleResources,
@@ -85,6 +152,7 @@ export class CoreLifecycle implements WriterReadiness {
     this.maxHeartbeatAgeMs = options.maxHeartbeatAgeMs ?? CORE_HEARTBEAT_MAX_AGE_MS;
     this.clock = options.clock ?? (() => performance.now());
     this.timers = options.timers ?? defaultTimers;
+    this.eventLoopDelayMonitor = options.eventLoopDelayMonitor ?? createEventLoopDelayMonitor();
     if (!Number.isSafeInteger(this.heartbeatIntervalMs) || this.heartbeatIntervalMs <= 0) {
       throw new TypeError("Core lifecycle heartbeatIntervalMs must be a positive safe integer");
     }
@@ -111,10 +179,34 @@ export class CoreLifecycle implements WriterReadiness {
     };
   }
 
+  heartbeatDiagnostics(): CoreHeartbeatDiagnostics {
+    const now = this.clock();
+    const reference = this.lastSuccessfulHeartbeatAt ?? this.heartbeatAttemptStartedAt ?? now;
+    const activeStageElapsedMs = this.activeHeartbeatStageStartedAt === null
+      ? null
+      : duration(now - this.activeHeartbeatStageStartedAt);
+    const stageDurations = this.heartbeatAttemptStartedAt === null
+      ? this.lastStageDurations
+      : this.currentStageDurations;
+    return {
+      maximumAgeMs: this.maxHeartbeatAgeMs,
+      heartbeatAgeMs: duration(now - reference),
+      activeStage: this.activeHeartbeatStage,
+      activeStageElapsedMs,
+      stageDurationsMs: { ...stageDurations },
+      eventLoopDelayMaxMs: this.eventLoopDelayMonitor.maxMs(),
+      eventLoopDelayP99Ms: this.eventLoopDelayMonitor.percentileMs(99),
+    };
+  }
+
   start(): Promise<void> {
     if (this.startTask) return this.startTask;
     if (this.phase !== "starting" || this.closeTask) {
       return Promise.reject(new Error(`Core lifecycle cannot start while ${this.phase}`));
+    }
+    if (!this.eventLoopDelayMonitorStarted) {
+      this.eventLoopDelayMonitor.enable();
+      this.eventLoopDelayMonitorStarted = true;
     }
     this.startTask = this.heartbeatNow().then(() => {
       if (this.closeTask) return;
@@ -146,15 +238,27 @@ export class CoreLifecycle implements WriterReadiness {
 
   async heartbeatNow(): Promise<void> {
     if (this.phase === "closed") throw new Error("Core lifecycle is closed");
+    this.heartbeatAttemptStartedAt = this.clock();
+    this.currentStageDurations = emptyStageDurations();
     try {
-      await this.resources.instanceLock.assertHeld();
-      this.resources.writerLease.heartbeat();
-      this.resources.writerGuard.assertConnectionGuardCurrent();
-      if (this.phase === "starting" || this.phase === "ready") this.recordSuccessfulHeartbeat();
+      await this.runAsyncHeartbeatStage("instance_lock", () => this.resources.instanceLock.assertHeld());
+      this.runSyncHeartbeatStage("writer_lease", () => this.resources.writerLease.heartbeat());
+      this.runSyncHeartbeatStage("connection_guard", () => this.resources.writerGuard.assertConnectionGuardCurrent());
+      const completedAt = this.clock();
+      const heartbeatReferenceAt = this.lastSuccessfulHeartbeatAt ?? this.heartbeatAttemptStartedAt;
+      if (heartbeatReferenceAt !== null
+        && completedAt - heartbeatReferenceAt >= this.maxHeartbeatAgeMs) {
+        throw this.heartbeatDeadlineError();
+      }
+      if (this.phase === "starting" || this.phase === "ready") this.recordSuccessfulHeartbeat(completedAt);
     } catch (error) {
       if (this.closeTask || this.phase === "closing") throw error;
       this.fail(error);
       throw error;
+    } finally {
+      this.activeHeartbeatStage = null;
+      this.activeHeartbeatStageStartedAt = null;
+      this.heartbeatAttemptStartedAt = null;
     }
   }
 
@@ -162,6 +266,10 @@ export class CoreLifecycle implements WriterReadiness {
     if (failure !== undefined) this.noteFailure(failure);
     if (this.closeTask) return this.closeTask;
     this.writerReady = false;
+    if (this.eventLoopDelayMonitorStarted) {
+      this.eventLoopDelayMonitor.disable();
+      this.eventLoopDelayMonitorStarted = false;
+    }
     this.clearHeartbeatDeadline();
     if (this.phase !== "closed") this.phase = "closing";
     this.closeTask = this.performClose();
@@ -196,14 +304,70 @@ export class CoreLifecycle implements WriterReadiness {
     return age >= 0 && age < this.maxHeartbeatAgeMs;
   }
 
-  private heartbeatDeadlineError(): Error {
-    return new Error(`Core writer heartbeat exceeded ${this.maxHeartbeatAgeMs}ms maximum age`);
+  private heartbeatDeadlineError(): CoreHeartbeatDeadlineError {
+    return new CoreHeartbeatDeadlineError(this.maxHeartbeatAgeMs, this.heartbeatDiagnostics());
   }
 
-  private recordSuccessfulHeartbeat(): void {
+  private recordSuccessfulHeartbeat(completedAt = this.clock()): void {
     if (this.closeTask || this.lastFailure !== null) return;
-    this.lastSuccessfulHeartbeatAt = this.clock();
+    this.lastSuccessfulHeartbeatAt = completedAt;
+    this.lastStageDurations = { ...this.currentStageDurations };
+    this.eventLoopDelayMonitor.reset();
     this.armHeartbeatDeadline();
+  }
+
+  private async runAsyncHeartbeatStage(stage: CoreHeartbeatStage, operation: () => Promise<void>): Promise<void> {
+    const startedAt = this.beginHeartbeatStage(stage);
+    const task = Promise.resolve().then(operation);
+    try {
+      await this.awaitHeartbeatDeadline(task);
+    } finally {
+      this.finishHeartbeatStage(stage, startedAt);
+    }
+  }
+
+  private runSyncHeartbeatStage(stage: CoreHeartbeatStage, operation: () => unknown): void {
+    const startedAt = this.beginHeartbeatStage(stage);
+    try {
+      operation();
+    } finally {
+      this.finishHeartbeatStage(stage, startedAt);
+    }
+  }
+
+  private beginHeartbeatStage(stage: CoreHeartbeatStage): number {
+    const startedAt = this.clock();
+    this.activeHeartbeatStage = stage;
+    this.activeHeartbeatStageStartedAt = startedAt;
+    return startedAt;
+  }
+
+  private finishHeartbeatStage(stage: CoreHeartbeatStage, startedAt: number): void {
+    const elapsed = duration(this.clock() - startedAt);
+    if (stage === "instance_lock") this.currentStageDurations.instanceLockMs = elapsed;
+    else if (stage === "writer_lease") this.currentStageDurations.writerLeaseMs = elapsed;
+    else this.currentStageDurations.connectionGuardMs = elapsed;
+    if (this.activeHeartbeatStage === stage) {
+      this.activeHeartbeatStage = null;
+      this.activeHeartbeatStageStartedAt = null;
+    }
+  }
+
+  private async awaitHeartbeatDeadline<T>(task: Promise<T>): Promise<T> {
+    const now = this.clock();
+    const reference = this.lastSuccessfulHeartbeatAt ?? this.heartbeatAttemptStartedAt ?? now;
+    const remaining = this.maxHeartbeatAgeMs - (now - reference);
+    if (remaining <= 0) throw this.heartbeatDeadlineError();
+    let timer: CoreLifecycleTimerHandle | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = this.timers.setTimeout(() => reject(this.heartbeatDeadlineError()), remaining);
+      this.unrefTimer(timer);
+    });
+    try {
+      return await Promise.race([task, deadline]);
+    } finally {
+      if (timer) this.timers.clearTimeout(timer);
+    }
   }
 
   private armHeartbeatDeadline(): void {

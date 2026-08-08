@@ -8,7 +8,9 @@ import { createApp } from "@tagent/http-fastify";
 import { loadConfig, type AppConfig } from "@tagent/core-service/config";
 import { AgentService } from "@tagent/core-service/application";
 import {
+  CoreHeartbeatDeadlineError,
   CoreLifecycle,
+  type CoreEventLoopDelayMonitor,
   type CoreLifecycleResources,
 } from "@tagent/core-service/composition";
 import { DistillationWorker } from "@tagent/learning";
@@ -213,6 +215,7 @@ describe("Core lifecycle", () => {
     const releaseProbe = deferred<void>();
     const events: string[] = [];
     const counts = new Map<string, number>();
+    let observedFailure: unknown;
     const step = (name: string) => {
       events.push(name);
       counts.set(name, (counts.get(name) ?? 0) + 1);
@@ -246,12 +249,20 @@ describe("Core lifecycle", () => {
         step("server.close.request");
         await lifecycle.close();
       },
-      onFailure: () => { step("failure.report"); },
+      onFailure: (failure) => { observedFailure = failure; step("failure.report"); },
+    };
+    const eventLoopDelayMonitor: CoreEventLoopDelayMonitor = {
+      enable: vi.fn(),
+      disable: vi.fn(),
+      reset: vi.fn(),
+      maxMs: () => 2_500,
+      percentileMs: () => 1_250,
     };
     lifecycle = new CoreLifecycle(resources, {
       heartbeatIntervalMs: 5_000,
       maxHeartbeatAgeMs: 10_000,
       clock: () => Date.now(),
+      eventLoopDelayMonitor,
     });
     const app = createApp({
       persistence: httpPersistence(store),
@@ -269,10 +280,24 @@ describe("Core lifecycle", () => {
       await vi.advanceTimersByTimeAsync(5_000);
 
       expect(lifecycle.isWriterReady()).toBe(false);
+      expect(["closing", "closed"]).toContain(lifecycle.snapshot().phase);
       expect(lifecycle.snapshot()).toMatchObject({
-        phase: "closing",
         writerReady: false,
         lastFailure: "Core writer heartbeat exceeded 10000ms maximum age",
+      });
+      expect(observedFailure).toBeInstanceOf(CoreHeartbeatDeadlineError);
+      expect((observedFailure as CoreHeartbeatDeadlineError).diagnostics).toEqual({
+        maximumAgeMs: 10_000,
+        heartbeatAgeMs: 10_000,
+        activeStage: "instance_lock",
+        activeStageElapsedMs: 5_000,
+        stageDurationsMs: {
+          instanceLockMs: null,
+          writerLeaseMs: null,
+          connectionGuardMs: null,
+        },
+        eventLoopDelayMaxMs: 2_500,
+        eventLoopDelayP99Ms: 1_250,
       });
       expect(counts.get("server.close.request")).toBe(1);
       const rejected = await app.inject({ method: "POST", url: "/api/v1/sessions", payload: { title: "too late" } });
@@ -281,8 +306,9 @@ describe("Core lifecycle", () => {
       expect(health.statusCode).toBe(503);
       expect(health.json().data.writer).toEqual({ ready: false });
 
-      releaseProbe.resolve(undefined);
       await lifecycle.close();
+      expect(lifecycle.snapshot().phase).toBe("closed");
+      releaseProbe.resolve(undefined);
       await app.close();
       expect(lifecycle.snapshot().writerReady).toBe(false);
       expect(events.filter((event) => [
@@ -308,6 +334,95 @@ describe("Core lifecycle", () => {
       await Promise.resolve();
       vi.useRealTimers();
     }
+  });
+
+  it("rejects a heartbeat that completes after a synchronous stage already exceeded the deadline", async () => {
+    let now = 0;
+    let leaseHeartbeats = 0;
+    let observedFailure: unknown;
+    let lifecycle: CoreLifecycle;
+    const eventLoopDelayMonitor: CoreEventLoopDelayMonitor = {
+      enable: vi.fn(),
+      disable: vi.fn(),
+      reset: vi.fn(),
+      maxMs: () => 10_250,
+      percentileMs: () => 9_900,
+    };
+    const resources: CoreLifecycleResources = {
+      instanceLock: { assertHeld: async () => undefined, release: async () => undefined },
+      writerLease: {
+        heartbeat: () => {
+          leaseHeartbeats += 1;
+          if (leaseHeartbeats === 2) now = 10_001;
+        },
+        release: () => true,
+      },
+      writerGuard: { assertConnectionGuardCurrent: () => undefined, removeConnectionGuard: () => undefined },
+      closeStore: () => undefined,
+      requestServerClose: async (failure) => lifecycle.close(failure),
+      onFailure: (failure) => { observedFailure = failure; },
+    };
+    lifecycle = new CoreLifecycle(resources, {
+      heartbeatIntervalMs: 5_000,
+      maxHeartbeatAgeMs: 10_000,
+      clock: () => now,
+      eventLoopDelayMonitor,
+    });
+
+    await lifecycle.start();
+    lifecycle.markReady();
+    await expect(lifecycle.heartbeatNow()).rejects.toThrow("Core writer heartbeat exceeded 10000ms maximum age");
+    await lifecycle.close();
+
+    expect(observedFailure).toBeInstanceOf(CoreHeartbeatDeadlineError);
+    expect((observedFailure as CoreHeartbeatDeadlineError).diagnostics).toMatchObject({
+      heartbeatAgeMs: 10_001,
+      activeStage: null,
+      stageDurationsMs: { instanceLockMs: 0, writerLeaseMs: 10_001, connectionGuardMs: 0 },
+      eventLoopDelayMaxMs: 10_250,
+      eventLoopDelayP99Ms: 9_900,
+    });
+    expect(lifecycle.snapshot()).toMatchObject({ phase: "closed", writerReady: false });
+  });
+
+  it("applies the same deadline to synchronous stages during the initial heartbeat", async () => {
+    let now = 0;
+    let observedFailure: unknown;
+    const eventLoopDelayMonitor: CoreEventLoopDelayMonitor = {
+      enable: vi.fn(),
+      disable: vi.fn(),
+      reset: vi.fn(),
+      maxMs: () => 10_500,
+      percentileMs: () => 10_100,
+    };
+    const resources: CoreLifecycleResources = {
+      instanceLock: { assertHeld: async () => undefined, release: async () => undefined },
+      writerLease: {
+        heartbeat: () => { now = 10_001; },
+        release: () => true,
+      },
+      writerGuard: { assertConnectionGuardCurrent: () => undefined, removeConnectionGuard: () => undefined },
+      closeStore: () => undefined,
+      onFailure: (failure) => { observedFailure = failure; },
+    };
+    const lifecycle = new CoreLifecycle(resources, {
+      heartbeatIntervalMs: 5_000,
+      maxHeartbeatAgeMs: 10_000,
+      clock: () => now,
+      eventLoopDelayMonitor,
+    });
+
+    await expect(lifecycle.start()).rejects.toThrow("Core writer heartbeat exceeded 10000ms maximum age");
+    await lifecycle.close();
+
+    expect(observedFailure).toBeInstanceOf(CoreHeartbeatDeadlineError);
+    expect((observedFailure as CoreHeartbeatDeadlineError).diagnostics).toMatchObject({
+      heartbeatAgeMs: 10_001,
+      stageDurationsMs: { instanceLockMs: 0, writerLeaseMs: 10_001, connectionGuardMs: 0 },
+      eventLoopDelayMaxMs: 10_500,
+      eventLoopDelayP99Ms: 10_100,
+    });
+    expect(lifecycle.snapshot()).toMatchObject({ phase: "closed", writerReady: false });
   });
 
   it("returns mutation 503 after authority loss and does not double-close through app onClose", async () => {

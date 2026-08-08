@@ -100,8 +100,9 @@ export async function createMemoryRuntime(config:MemoryRuntimeConfig,source:Memo
   const historicalMessages=source.listDurableUserMessages();
   for(const message of historicalMessages)if(isExplicitProfileCue(message.content))await service.enqueueCapture({access,sourceRefs:[{sourceType:"message",sourceId:String(message.id),revision:"user"}],content:`user: ${message.content}`,idempotencyKey:`user-message:${message.id}`,captureSource:{kind:"user_message",role:"user",explicitIntent:true}});
   const reindex=embeddings?new DurableReindexWorker(adapter,adapter,adapter,embeddings,adapter,access,config.embeddingBatchSize):undefined;if(reindex){await reindex.enqueue();}
-  const worker=new LocalMemoryWorker(capture,lifecycle,consolidator,reconciler,access,config.workerIntervalMs,config.maintenanceIntervalMs,()=>{service.noteWorkerHeartbeat();void adapter.heartbeat("local-memory",access.scopes[0],"memory",Date.now());},()=>service.noteConsolidation(),reindex,core,adapter,blobs);
-  return{service,adapter,worker,lifecycle,consolidator,reconciler,start(){worker.start();},async close(){await worker.stop();if (postgresAdapter) await postgresAdapter.close();}};
+  const worker=new LocalMemoryWorker(capture,lifecycle,consolidator,reconciler,access,config.workerIntervalMs,config.maintenanceIntervalMs,async()=>{service.noteWorkerHeartbeat();await adapter.heartbeat("local-memory",access.scopes[0],"memory",Date.now());},()=>service.noteConsolidation(),reindex,core,adapter,blobs);
+  let closeTask:Promise<void>|undefined;
+  return{service,adapter,worker,lifecycle,consolidator,reconciler,start(){if(!closeTask)worker.start();},close(){if(!closeTask)closeTask=(async()=>{await worker.stop();if(postgresAdapter)await postgresAdapter.close();})();return closeTask;}};
 }
 
 function isExplicitProfileCue(content:string){return /记住|remember|我叫|我的名字|我的姓名|叫我|称呼我|my name is|call me|(?:我|用户).{0,20}(?:喜欢|偏好|希望|不喜欢|习惯|prefer)/i.test(content)&&!/[?？]/.test(content);}

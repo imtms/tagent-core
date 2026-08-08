@@ -1,7 +1,12 @@
 export {
+  CoreHeartbeatDeadlineError,
   CoreLifecycle,
 } from "./composition/core-lifecycle.js";
 export type {
+  CoreEventLoopDelayMonitor,
+  CoreHeartbeatDiagnostics,
+  CoreHeartbeatStage,
+  CoreHeartbeatStageDurations,
   CoreLifecycleOptions,
   CoreLifecyclePhase,
   CoreLifecycleResources,

@@ -70,6 +70,8 @@ Records support correction, supersession, stale/delete thresholds, feedback, rev
 
 Reindex is durable and generation-based. A new embedding generation is staged, checkpointed, validated, and activated only after completion; readers continue using the active generation during the build.
 
+The local Memory worker serializes capture ticks and maintenance ticks independently. Overlapping intervals do not replace the active Promise. On shutdown it enters `stopping`, clears both timers, rejects new ticks, and waits for all active capture, maintenance, heartbeat, metric, and reindex work to settle before entering `closed`. Runtime closure then closes the PostgreSQL pool, and concurrent or repeated close calls share the same Promise. This ordering prevents background queries after `pool.end()`.
+
 ## Admin surface
 
 Memory administration uses `/api/v1/admin/memory/*`, including recall, capture, jobs/status, export, forget, restore, reindex, governance, feedback, and Core Memory snapshot operations. Use the `@tagent/abi/admin/v1` schemas rather than copying payload shapes from old routes.
@@ -86,6 +88,8 @@ Before enabling Memory in production:
 4. run the PostgreSQL integration test and retrieval/reindex rehearsal;
 5. verify resource-scope isolation and the Memory-off path;
 6. monitor capture failures, empty/filtered results, reindex generation, recall latency, and worker readiness.
+
+For shutdown verification, stop Core under a controlled Memory workload and confirm that PostgreSQL connections return to baseline without `Cannot use a pool after calling end on the pool`, `Memory capture tick failed`, or unhandled-rejection logs. A slow shutdown should be investigated as an in-flight worker operation rather than bypassing the drain barrier.
 
 Back up Memory consistently with the SQLite control plane before an upgrade. A SQLite rollback without matching Memory/Cold state may restore obsolete authority or references.
 

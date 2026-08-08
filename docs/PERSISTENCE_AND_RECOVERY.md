@@ -46,6 +46,10 @@ Core becomes ready only after this sequence succeeds:
 
 `GET /api/v1/health` returns 503 when the writer exists but is not ready. A lost instance lock, stale heartbeat, rejected lease, or changed connection guard clears readiness and initiates shutdown.
 
+The writer heartbeat keeps the 5-second interval and 10-second maximum-age safety boundary. The asynchronous instance-lock check is bounded by the remaining heartbeat lifetime, so a permanently pending check cannot hold shutdown open indefinitely. A synchronous writer-lease or connection-guard stage that returns only after the maximum age is treated as a missed heartbeat and cannot refresh readiness.
+
+Heartbeat deadline failures include sanitized diagnostics for the active stage, completed stage durations, heartbeat age, and the event-loop delay maximum and p99 for the current heartbeat window. These diagnostics intentionally exclude database URLs, SQL, filesystem paths, request payloads, and credentials. Use them to distinguish a pending instance-lock check from SQLite contention or an event-loop stall; the fail-closed boundary must not be disabled or increased without production latency evidence.
+
 ## Single-writer authority
 
 The OS lock prevents two local Core processes from targeting the same database. Stale-lock recovery verifies host and process identity and fails closed when ownership cannot be proven.
@@ -87,7 +91,7 @@ The v33 preflight records ambiguous or unsafe source rows in `migration_issues`.
 
 ## Shutdown order
 
-Core stops new readiness first, then stops background workers, closes active runtimes, stops heartbeat work, removes the connection guard, releases the writer lease, closes the Store, and releases the OS instance lock. Shutdown attempts every step and reports aggregate failures.
+Core stops new readiness first, then stops background workers, closes active runtimes, stops and drains heartbeat work, removes the connection guard, releases the writer lease, closes the Store, and releases the OS instance lock. Shutdown attempts every step and reports aggregate failures. Repeated lifecycle closure shares the same close operation, so one authority failure cannot release resources more than once.
 
 ## Backup and restore
 

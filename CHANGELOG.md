@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Runtime reliability
+
+- Fixed overlapping Memory capture and maintenance intervals replacing the Promise that shutdown was waiting for. The worker now has an explicit stopping barrier, drains capture, maintenance, heartbeat, metric, and reindex work, and closes the PostgreSQL pool only after the worker has settled.
+- Made Memory runtime and PostgreSQL pool closure idempotent, including concurrent callers, and explicitly handles asynchronous Memory heartbeat failures.
+- Added bounded instance-lock heartbeat checks plus sanitized per-stage and event-loop-delay diagnostics. Synchronous heartbeat stages that cross the existing 10-second authority boundary now fail closed instead of refreshing writer readiness.
+
 ## [0.4.0] - 2026-08-08
 
 ### Gateway contract reliability

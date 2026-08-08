@@ -6,7 +6,7 @@ import { createModel, loadConfig, publicRuntimeConfig, type AppConfig } from "./
 import { httpArtifactContent } from "./composition/artifact-content.js";
 import { AgentService } from "./application/agent-service.js";
 import type { CoreApplicationPort } from "./application/agent-service-factory.js";
-import { CoreLifecycle } from "./composition/core-lifecycle.js";
+import { CoreHeartbeatDeadlineError, CoreLifecycle } from "./composition/core-lifecycle.js";
 import type { AgentServicePersistencePort } from "./application/ports/index.js";
 import { LearningProjectionRuntime } from "./composition/learning-projection-runtime.js";
 import { CanaryGovernanceRuntime } from "./composition/canary-governance-runtime.js";
@@ -242,7 +242,11 @@ export async function bootstrapCore(
         else await lifecycle?.close(failure);
       },
       onFailure: (failure) => {
-        console.error("TAgent Core writer lifecycle failed", failure);
+        if (failure instanceof CoreHeartbeatDeadlineError) {
+          console.error("TAgent Core writer lifecycle failed", failure, { heartbeat: failure.diagnostics });
+        } else {
+          console.error("TAgent Core writer lifecycle failed", failure);
+        }
         process.exitCode = 1;
       },
     });
