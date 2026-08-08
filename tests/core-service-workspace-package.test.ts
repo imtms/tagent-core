@@ -11,15 +11,15 @@ const sourceRoot = `${packageRoot}/src`;
 const expectedExports = [".", "./application", "./composition", "./config"];
 const expectedDependencies = {
   "@earendil-works/pi-ai": "0.83.0",
-  "@tagent/admission": "0.3.0",
-  "@tagent/execution": "0.3.0",
-  "@tagent/governance": "0.3.0",
-  "@tagent/http-fastify": "0.3.0",
-  "@tagent/learning": "0.3.0",
-  "@tagent/memory": "0.3.0",
-  "@tagent/persistence-sqlite": "0.3.0",
-  "@tagent/runtime-pi": "0.3.0",
-  "@tagent/workspace-local": "0.3.0",
+  "@tagent/admission": "0.4.0",
+  "@tagent/execution": "0.4.0",
+  "@tagent/governance": "0.4.0",
+  "@tagent/http-fastify": "0.4.0",
+  "@tagent/learning": "0.4.0",
+  "@tagent/memory": "0.4.0",
+  "@tagent/persistence-sqlite": "0.4.0",
+  "@tagent/runtime-pi": "0.4.0",
+  "@tagent/workspace-local": "0.4.0",
 };
 
 interface PackageManifest {
@@ -119,11 +119,11 @@ describe("Core service application workspace package", () => {
   it("publishes the private process App through four explicit compiled ABI entries", () => {
     const root = readJson<{ workspaces: string[]; dependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const manifest = readJson<PackageManifest>(`${packageRoot}/package.json`);
-    expect(manifest).toMatchObject({ name: "@tagent/core-service", version: "0.3.0", private: true });
+    expect(manifest).toMatchObject({ name: "@tagent/core-service", version: "0.4.0", private: true });
     expect(root.workspaces).toContain("apps/*");
     expect(root.dependencies[manifest.name]).toBe(manifest.version);
     expect(root.dependencies).toEqual({
-      "@tagent/core-service": "0.3.0",
+      "@tagent/core-service": "0.4.0",
       "better-sqlite3": "12.4.1",
     });
     expect(Object.keys(manifest.exports).sort()).toEqual(expectedExports);
@@ -273,7 +273,7 @@ describe("Core service application workspace package", () => {
     expect(build).toContain("npm query .workspace --json");
     expect(build).toContain('cp -a "$source/package.json" "$source/dist" "$target/"');
     expect(build).not.toMatch(/for workspace in .*core-service/);
-    expect(fixture).toContain('"@tagent/core-service": "0.3.0"');
+    expect(fixture).toContain('"@tagent/core-service": "0.4.0"');
     expect(fixture).toContain('"@tagent", "core-service", "dist"');
     expect(fixture).toContain("node_modules/@tagent/core-service/dist/index.js");
   });

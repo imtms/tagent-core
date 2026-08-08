@@ -8,7 +8,7 @@ This document records the Core team's responsibility decision and evidence-based
 | --- | --- |
 | Review date | 2026-08-08 |
 | Main line at review start | `2e8b52359ad43937208bc96542380b4932e45169` |
-| Core package version | `0.3.0` |
+| Core package version | `0.4.0` |
 | SQLite schema | `40` |
 | Gateway handoff source baseline | schema `37` |
 

@@ -1,6 +1,6 @@
 {
   "name": "@tagent/workspace-local",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "sideEffects": false,
@@ -40,7 +40,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.83.0",
-    "@tagent/execution": "0.3.0",
+    "@tagent/execution": "0.4.0",
     "typebox": "^1.1.24"
   },
   "engines": {

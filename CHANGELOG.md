@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-08
+
 ### Gateway contract reliability
 
 - Advanced SQLite through schema 40: schema 39 adds principal-scoped Session creation receipts, dedicated TaskRun command receipts, Workspace Goal operation receipts, restart `outcome_unknown` fencing and distinct settled/final event-consumer ACK watermarks; schema 40 adds durable Submission actor/provenance audit receipts.
