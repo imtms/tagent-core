@@ -11,6 +11,7 @@
 - Added channel-neutral Submission provenance, a versioned Operator endpoint allowlist, Approval-authority and receipt-recovery capability discovery, paginated Artifact metadata, complete public-event fixtures, 100-way Session concurrency coverage, and full schema-v39 drift validation.
 - Updated `@tagent/core-client`, ABI fixtures, provider/consumer and migration/API contract tests, readiness receipt-age diagnostics, deployment/recovery/upgrade guidance and the release checklist for schema 40.
 - Pinned the patched `nanoid` 3.3.17 transitive dependency so the full release dependency audit no longer fails on GHSA-2v37-7h3g-55p8.
+- Aligned the HTTP adapter with the repository TypeBox version so clean installs compile shared ABI schemas without duplicate nominal `Static` types.
 
 ### Trusted completion evidence
 
