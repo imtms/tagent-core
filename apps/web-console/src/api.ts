@@ -8,7 +8,7 @@ import {
   type ConsoleV1,
 } from "@tagent/abi";
 import { createGoalApi } from "./goal-api";
-export type { WorkspaceGoal, WorkspaceGoalSummary, WorkspaceGoalDefinition, WorkspaceGoalPlan, WorkspaceGoalPlanItem, WorkspaceGoalDecision } from "./goal-api";
+export type { WorkspaceGoal, WorkspaceGoalSummary, WorkspaceGoalDefinition, WorkspaceGoalRoadmap, WorkspaceGoalRoadmapItem, WorkspaceGoalDecision, WorkspaceGoalTaskRunStart } from "./goal-api";
 export type Session = ConsoleV1.ConsoleSession;
 export type SessionInputAnalysis = ConsoleV1.ConsoleSessionInputAnalysis;
 export type TaskRunContract = ConsoleV1.ConsoleTaskRunContract;
@@ -163,7 +163,7 @@ export const api = {
   learningSettings: () => request("/api/v1/admin/console/learning/settings", undefined, ConsoleDecode.learningFeatureState),
   updateLearningSettings: (input:Partial<Pick<LearningFeatureState,"memoryEnabled"|"learningEnabled"|"autoExecutionEnabled">>)=>request("/api/v1/admin/console/learning/settings",{method:"PATCH",body:JSON.stringify({...input,reason:"web_ui"})},ConsoleDecode.learningFeatureState),
   sessions: () => request("/api/v1/console/sessions", undefined, ConsoleDecode.sessions),
-  createSession: (title = "New workspace") => request("/api/v1/console/sessions", { method: "POST", body: JSON.stringify({ title }) }, ConsoleDecode.session),
+  createSession: (title = "New workspace", requestId = createRequestId()) => request("/api/v1/console/sessions", { method: "POST", body: JSON.stringify({ title, requestId }) }, ConsoleDecode.session),
   renameSession: (sessionId: string, title: string) => request(`/api/v1/console/sessions/${sessionId}`, { method: "PATCH", body: JSON.stringify({ title }) }, ConsoleDecode.session),
   updateSession: (sessionId: string, settings: Partial<Pick<Session, "title" | "modelId" | "reasoningEffort">>) => request(`/api/v1/console/sessions/${sessionId}`, { method: "PATCH", body: JSON.stringify(settings) }, ConsoleDecode.session),
   messages: (sessionId: string, limit = 80, beforeId?: number) => request(`/api/v1/console/sessions/${sessionId}/messages?limit=${limit}${beforeId ? `&beforeId=${beforeId}` : ""}`, undefined, ConsoleDecode.messages),

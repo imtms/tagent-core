@@ -32,6 +32,8 @@ export class CoreApplicationCoordinator {
   requestParallelSessionInputApproval(...args: Parameters<CoreApplicationServices["admission"]["requestParallelSessionInputApproval"]>) { return this.services.admission.requestParallelSessionInputApproval(...args); }
   retryInboxLaunch(...args: Parameters<CoreApplicationServices["admission"]["retryInboxLaunch"]>) { return this.services.admission.retryInboxLaunch(...args); }
   start(...args: Parameters<CoreApplicationServices["admission"]["start"]>) { return this.services.admission.start(...args); }
+  generateWorkspaceGoalRoadmap(...args: Parameters<CoreApplicationServices["workspaceGoals"]["generateWorkspaceGoalRoadmap"]>) { return this.services.workspaceGoals.generateWorkspaceGoalRoadmap(...args); }
+  startWorkspaceGoalRoadmapItem(...args: Parameters<CoreApplicationServices["workspaceGoals"]["startWorkspaceGoalRoadmapItem"]>) { return this.services.workspaceGoals.startWorkspaceGoalRoadmapItem(...args); }
   teachWorkflow(...args: Parameters<CoreApplicationServices["learning"]["teachWorkflow"]>) { return this.services.learning.teachWorkflow(...args); }
   listWorkflows(...args: Parameters<CoreApplicationServices["learning"]["listWorkflows"]>) { return this.services.learning.listWorkflows(...args); }
   getWorkflow(...args: Parameters<CoreApplicationServices["learning"]["getWorkflow"]>) { return this.services.learning.getWorkflow(...args); }

@@ -13,6 +13,7 @@ import type {
   TaskRunTransitionPort,
 } from "@tagent/execution/ports";
 import type { ApprovalRepository } from "@tagent/governance/ports";
+import type { WorkspaceGoalRepository } from "@tagent/governance/ports";
 import type {
   AttemptLauncherPort,
   AttemptSettlementPort,
@@ -34,6 +35,7 @@ interface AdmissionState {
     submissions: SubmissionQueue;
     taskRuns: TaskRunRepository;
     taskRunTransitions: TaskRunTransitionPort;
+    workspaceGoals: Pick<WorkspaceGoalRepository, "linkInbox" | "attachRun" | "recordRunOutcome">;
   };
   readonly recalledMemory: Map<string, string>;
   readonly runtimes: ReadonlyMap<string, unknown>;
@@ -66,7 +68,10 @@ export class AdmissionCoordinator {
   async enqueueSessionInput(sessionId: SessionId, content: string, requestId: string = randomUUID()) {
     if (this.state.closing) throw new Error("Service is shutting down");
     const existing = this.state.persistence.submissions.getSessionSubmission(sessionId, requestId);
-    if (existing) return { item: existing, run: existing.runId ? this.state.persistence.taskRuns.getRun(existing.runId) ?? null : null };
+    if (existing) {
+      if (existing.content !== content) throw new Error("Session Inbox request idempotency conflict");
+      return { item: existing, run: existing.runId ? this.state.persistence.taskRuns.getRun(existing.runId) ?? null : null };
+    }
     const activeRun = this.state.persistence.taskRuns.getActiveRun(sessionId);
     const analysis = await this.dependencies.router.analyze(content, activeRun, this.sessionRouterContext(sessionId));
     const routerUsage = this.dependencies.router.takeUsage(analysis);
@@ -113,6 +118,74 @@ export class AdmissionCoordinator {
     const run = this.dispatchSessionInbox(sessionId);
     if (run) for (const observed of routerUsage) this.state.persistence.taskRuns.recordModelUsage(run.id, "router", observed.model, observed.usage);
     return { item: this.state.persistence.submissions.getSessionInboxItem(item.id)!, run: run ?? null };
+  }
+
+  public enqueueGoalRoadmapItem(input: {
+    workspaceId: SessionId;
+    goalId: string;
+    goalRevision: number;
+    goalOutcome: string;
+    roadmapRevisionId: string;
+    roadmapItem: { id: string; title: string; outcome: string; verification: string; criterionKeys: string[] };
+    requestId?: string;
+  }) {
+    if (this.state.closing) throw new Error("Service is shutting down");
+    const requestId = input.requestId?.trim() || `goal:${input.goalId}:roadmap:${input.roadmapRevisionId}:${input.roadmapItem.id}:${randomUUID()}`;
+    const content = [
+      `Advance Workspace Goal: ${input.goalOutcome}`,
+      `Execute Goal Roadmap item: ${input.roadmapItem.title}`,
+      `Expected outcome: ${input.roadmapItem.outcome}`,
+      `Verification: ${input.roadmapItem.verification}`,
+    ].join("\n");
+    const expectedObjectiveId = `roadmap-${input.roadmapItem.id}`;
+    const expectedReason = `Explicitly launched from Workspace Goal ${input.goalId} Roadmap item ${input.roadmapItem.id}.`;
+    const linkInput = {
+      goalId: input.goalId,
+      goalRevision: input.goalRevision,
+      roadmapRevisionId: input.roadmapRevisionId,
+      roadmapItemIds: [input.roadmapItem.id],
+      criterionKeys: input.roadmapItem.criterionKeys,
+    };
+    const existing = this.state.persistence.submissions.getSessionSubmission(input.workspaceId, requestId);
+    if (existing) {
+      if (existing.content !== content || existing.analysis.routerVersion !== "workspace-goal-roadmap-v1"
+        || existing.analysis.objectives[0]?.id !== expectedObjectiveId || existing.analysis.reason !== expectedReason) {
+        throw new Error("Workspace Goal Roadmap TaskRun idempotency conflict");
+      }
+      if (!existing.runId && existing.status === "queued") {
+        this.state.persistence.workspaceGoals.linkInbox({ ...linkInput, inboxItemId: existing.id });
+        const run = this.dispatchSessionInbox(input.workspaceId) ?? null;
+        return { item: this.state.persistence.submissions.getSessionInboxItem(existing.id)!, run };
+      }
+      return { item: existing, run: existing.runId ? this.state.persistence.taskRuns.getRun(existing.runId) ?? null : null };
+    }
+    const analysis: SessionInputAnalysis = {
+      summary: input.roadmapItem.title,
+      objectives: [{ id: expectedObjectiveId, summary: input.roadmapItem.outcome, timing: "current", kind: "change" }],
+      intent: "new_task",
+      targetRunId: null,
+      priority: 700,
+      urgency: "normal",
+      relation: "independent",
+      acceptanceCriteria: [input.roadmapItem.outcome, input.roadmapItem.verification],
+      scope: input.roadmapItem.outcome,
+      nonGoals: [],
+      confidence: 1,
+      reason: expectedReason,
+      routerVersion: "workspace-goal-roadmap-v1",
+    };
+    const item = this.state.persistence.submissions.enqueueSessionInbox(input.workspaceId, content, analysis, requestId);
+    try {
+      this.state.persistence.workspaceGoals.linkInbox({
+        inboxItemId: item.id,
+        ...linkInput,
+      });
+    } catch (error) {
+      this.state.persistence.submissions.discardSessionInboxItem(item.id, input.workspaceId);
+      throw error;
+    }
+    const run = this.dispatchSessionInbox(input.workspaceId) ?? null;
+    return { item: this.state.persistence.submissions.getSessionInboxItem(item.id)!, run };
   }
 
   public enqueueRelatedSessionTask(parent: TaskRun, sourceItem: SessionInboxItem, summary: string, relation: "parallel" | "follow_up" | "derived", analysis: SessionInputAnalysis) {
@@ -215,6 +288,12 @@ export class AdmissionCoordinator {
   }
 
   public launchClaimedSessionInbox(item: SessionInboxItem, run: TaskRun, retry = false) {
+    try {
+      this.state.persistence.workspaceGoals.attachRun(run.id, item.id);
+      run = this.state.persistence.taskRuns.getRun(run.id) ?? run;
+    } catch (error) {
+      return this.failClaimedSessionLaunch(item, run, error);
+    }
     // Persist the accepted user turn before any asynchronous recall/provider setup.
     // This makes the POST admission response a durable UI visibility boundary and
     // keeps slow memory recall from hiding the message until a refresh or Run end.
@@ -272,6 +351,7 @@ export class AdmissionCoordinator {
     }).transitions[0];
     if (!transition?.event) throw new Error(`TaskRun ${run.id} launch failure returned no terminal event`);
     this.dependencies.eventHub.publish(transition.event);
+    this.state.persistence.workspaceGoals.recordRunOutcome(run.id);
     this.dependencies.settlement.projectWorkflowExperience(run.id);
     setImmediate(() => { if (!this.state.closing) this.dispatchSessionInbox(run.sessionId); });
     return undefined;
@@ -305,9 +385,14 @@ export class AdmissionCoordinator {
   async start(sessionId: SessionId, query: string, requestId: string = randomUUID()) {
     if (this.state.closing) throw new Error("Service is shutting down");
     const existing = this.state.persistence.taskRuns.getRunByRequestId(requestId);
-    if (existing) return existing;
+    if (existing) {
+      if (existing.sessionId !== sessionId || existing.goal !== query) throw new Error("TaskRun request idempotency conflict");
+      return existing;
+    }
 
-    const run = this.state.persistence.taskRuns.createRun(sessionId, query, requestId);
+    let run = this.state.persistence.taskRuns.createRun(sessionId, query, requestId);
+    this.state.persistence.workspaceGoals.attachRun(run.id, null);
+    run = this.state.persistence.taskRuns.getRun(run.id) ?? run;
     const sessionHistory = await this.dependencies.contextService.prepareSessionHistory(run, query);
     const userMessage = this.state.persistence.sessions.appendMessage(sessionId, "user", query);
     this.dependencies.continuation.captureUserMessage(run, userMessage.id, query);

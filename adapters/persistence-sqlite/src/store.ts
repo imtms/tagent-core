@@ -73,12 +73,16 @@ import {
   assertTrustedEvidenceV37Schema,
   migrateTrustedEvidenceV37,
 } from "./migrations/v37-trusted-evidence.js";
+import {
+  assertWorkspaceGoalExecutionV38Schema,
+  migrateWorkspaceGoalExecutionV38,
+} from "./migrations/v38-workspace-goal-execution.js";
 import { mapLegacyRunApprovalOperation } from "./sqlite/canonical-approval-mapper.js";
 import { appendProjectionPair, finalizeProjectionCheckpoint } from "./sqlite/canonical-integration-event.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 37;
+const SCHEMA_VERSION = 38;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
 export interface StoreOptions {
@@ -487,8 +491,6 @@ export class Store {
         observed_at INTEGER,
         PRIMARY KEY (run_id, check_key)
       );
-      CREATE INDEX IF NOT EXISTS idx_run_checks_source_operation
-        ON run_checks(run_id, source_operation_id) WHERE source_operation_id IS NOT NULL;
       CREATE TABLE IF NOT EXISTS artifacts (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL REFERENCES runs(id),
@@ -1075,10 +1077,17 @@ export class Store {
 
     const trustedEvidenceMigration = this.db.transaction(() => {
       migrateTrustedEvidenceV37(this.db, previousVersion !== undefined && previousVersion >= 37 ? 37 : 36);
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+      this.db.prepare(`UPDATE schema_meta SET version=37,updated_at=? WHERE id=1`).run(now());
     });
     trustedEvidenceMigration();
     assertTrustedEvidenceV37Schema(this.db);
+
+    const workspaceGoalExecutionMigration = this.db.transaction(() => {
+      migrateWorkspaceGoalExecutionV38(this.db, previousVersion !== undefined && previousVersion >= 38 ? 38 : 37);
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+    });
+    workspaceGoalExecutionMigration();
+    assertWorkspaceGoalExecutionV38Schema(this.db);
   }
 
   private attemptId(runId: string, ordinal: number) {
@@ -1402,6 +1411,11 @@ export class Store {
     const timestamp = now();
     return this.db.prepare(`UPDATE session_supervisor_inbox SET status='deleted',decision='delete',updated_at=?
       WHERE id=? AND session_id=? AND status='queued'`).run(timestamp, id, sessionId).changes === 1;
+  }
+
+  discardSessionInboxItem(id: string, sessionId: SessionId) {
+    return this.db.prepare("DELETE FROM session_supervisor_inbox WHERE id=? AND session_id=? AND status='queued' AND run_id IS NULL")
+      .run(id, sessionId).changes === 1;
   }
 
   decideSessionInboxItem(id: string, sessionId: SessionId, decision: "pending" | "defer") {

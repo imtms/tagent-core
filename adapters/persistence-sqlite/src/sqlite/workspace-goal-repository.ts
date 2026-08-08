@@ -5,6 +5,7 @@ import {
   workspaceGoalNextAction,
   type CreateWorkspaceGoalInput,
   type LinkWorkspaceGoalEvidenceInput,
+  type LinkWorkspaceGoalInboxInput,
   type LinkWorkspaceGoalRunInput,
   type WorkspaceGoal,
   type WorkspaceGoalDecision,
@@ -12,20 +13,37 @@ import {
   type WorkspaceGoalDefinition,
   type WorkspaceGoalEvidenceLink,
   type WorkspaceGoalEvidenceStatus,
-  type WorkspaceGoalPlan,
   type WorkspaceGoalRepository,
   type WorkspaceGoalRevision,
+  type WorkspaceGoalRoadmap,
+  type WorkspaceGoalRoadmapItemProgress,
   type WorkspaceGoalRunLink,
+  type WorkspaceGoalRunLinkMode,
   type WorkspaceGoalStatus,
   type WorkspaceGoalSummary,
 } from "@tagent/governance";
+import type { CriterionCoverage } from "@tagent/governance/domain";
+import type { RunStatus, TaskRunContractSnapshot, TaskRunWorkspaceGoalSnapshot } from "@tagent/execution/domain";
 
 const now = () => Date.now();
 const TERMINAL_STATUSES = new Set<WorkspaceGoalStatus>(["completed", "cancelled"]);
 
-interface GoalRow { id: string; workspaceId: string; status: WorkspaceGoalStatus; activeDefinitionRevisionId: string | null; activePlanRevisionId: string | null; currentRunId: string | null; createdAt: number; updatedAt: number; completedAt: number | null }
-interface RevisionRow { id: string; goalId: string; kind: "definition" | "plan"; revision: number; contentJson: string; contentHash: string; sourceArtifactId: string | null; createdBy: string; createdAt: number }
-interface DecisionRow { id: string; requestId: string | null; payloadHash: string; goalId: string; targetRevisionId: string; targetHash: string; kind: WorkspaceGoalDecision["kind"]; approvedItemIdsJson: string; reason: string; actorId: string; createdAt: number }
+type DbRevisionKind = "definition" | "plan";
+type DbDecisionKind = "approve_goal" | "approve_plan" | "request_change" | "pause" | "resume" | "close" | "cancel";
+
+interface GoalRow { id: string; workspaceId: string; status: WorkspaceGoalStatus; activeDefinitionRevisionId: string | null; activeRoadmapRevisionId: string | null; currentRunId: string | null; createdAt: number; updatedAt: number; completedAt: number | null }
+interface RevisionRow { id: string; goalId: string; kind: DbRevisionKind; revision: number; contentJson: string; contentHash: string; sourceArtifactId: string | null; createdBy: string; createdAt: number }
+interface DecisionRow { id: string; requestId: string | null; payloadHash: string; goalId: string; targetRevisionId: string; targetHash: string; kind: DbDecisionKind; approvedItemIdsJson: string; reason: string; actorId: string; createdAt: number }
+interface RunLinkRow { goalId: string; runId: string; goalRevision: number; roadmapRevisionId: string | null; roadmapItemIdsJson: string; criterionKeysJson: string; mode: WorkspaceGoalRunLinkMode; createdAt: number }
+
+interface LinkSpec {
+  goal: WorkspaceGoal;
+  goalRevision: number;
+  roadmapRevisionId: string | null;
+  roadmapItemIds: string[];
+  criterionKeys: string[];
+  mode: WorkspaceGoalRunLinkMode;
+}
 
 export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
   constructor(private readonly db: Database.Database) {}
@@ -46,7 +64,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
       if (!this.db.prepare("SELECT 1 FROM sessions WHERE id=?").get(input.workspaceId)) throw new Error("workspace not found");
       this.db.prepare(`INSERT INTO workspace_goals
         (id,workspace_id,status,active_definition_revision_id,active_plan_revision_id,current_run_id,created_at,updated_at,completed_at)
-        VALUES (?,?, 'draft',NULL,NULL,NULL,?,?,NULL)`).run(goalId, input.workspaceId, createdAt, createdAt);
+        VALUES (?,?,'draft',NULL,NULL,NULL,?,?,NULL)`).run(goalId, input.workspaceId, createdAt, createdAt);
       insertRevision(this.db, revision);
       if (input.idempotencyKey) this.db.prepare("INSERT INTO workspace_goal_requests (idempotency_key,goal_id,payload_hash,created_at) VALUES (?,?,?,?)").run(input.idempotencyKey, goalId, payloadHash, createdAt);
     })();
@@ -55,7 +73,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
 
   listGoals(workspaceId: string): WorkspaceGoalSummary[] {
     return (this.db.prepare(`SELECT id,workspace_id as workspaceId,status,active_definition_revision_id as activeDefinitionRevisionId,
-      active_plan_revision_id as activePlanRevisionId,current_run_id as currentRunId,created_at as createdAt,updated_at as updatedAt,
+      active_plan_revision_id as activeRoadmapRevisionId,current_run_id as currentRunId,created_at as createdAt,updated_at as updatedAt,
       completed_at as completedAt FROM workspace_goals WHERE workspace_id=? ORDER BY updated_at DESC`).all(workspaceId) as GoalRow[])
       .map((row) => this.summary(row));
   }
@@ -64,32 +82,50 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
     const row = this.goalRow(goalId);
     if (!row) return null;
     const definition = row.activeDefinitionRevisionId ? this.revision(row.activeDefinitionRevisionId) : this.latestRevision(goalId, "definition");
-    const plan = row.activePlanRevisionId ? this.revision(row.activePlanRevisionId) : this.latestRevision(goalId, "plan");
+    const roadmap = row.activeRoadmapRevisionId ? this.revision(row.activeRoadmapRevisionId) : this.latestRevision(goalId, "roadmap");
     const decisions = this.decisions(goalId);
     const runLinks = this.runLinks(goalId);
-    const evidenceLinks = this.evidenceLinks(goalId).map((link) => this.projectEvidence(link));
-    const currentRunId = this.projectCurrentRunId(row.currentRunId);
+    const allEvidenceLinks = this.evidenceLinks(goalId).map((link) => this.projectEvidence(link));
+    const currentRun = this.projectCurrentRun(goalId, row.currentRunId);
     const criteria = definition ? definitionContent(definition).criteria : [];
     const requiredKeys = criteria.filter((item) => item.required).map((item) => item.key);
-    const validKeys = new Set(evidenceLinks.filter((item) => item.status === "valid").map((item) => item.criterionKey));
-    const contradictedKeys = new Set(evidenceLinks.filter((item) => item.status === "contradicted").map((item) => item.criterionKey));
-    const hasApprovedDefinition = decisions.some((item) => item.kind === "approve_goal" && item.targetRevisionId === definition?.id && item.targetHash === definition.contentHash);
-    const hasApprovedPlan = decisions.some((item) => item.kind === "approve_plan" && item.targetRevisionId === plan?.id && item.targetHash === plan.contentHash && item.approvedItemIds.length > 0);
+    const currentEvidence = definition ? allEvidenceLinks.filter((link) => link.goalRevision === definition.revision) : [];
+    const validKeys = new Set(currentEvidence.filter((item) => item.status === "valid").map((item) => item.criterionKey));
+    const contradictedKeys = new Set(currentEvidence.filter((item) => item.status === "contradicted").map((item) => item.criterionKey));
+    const hasApprovedDefinition = row.activeDefinitionRevisionId === definition?.id
+      && decisions.some((item) => item.kind === "approve_goal" && item.targetRevisionId === definition.id && item.targetHash === definition.contentHash);
+    const roadmapApproval = row.activeRoadmapRevisionId === roadmap?.id
+      ? [...decisions].reverse().find((item) => item.kind === "approve_roadmap" && item.targetRevisionId === roadmap.id && item.targetHash === roadmap.contentHash && item.approvedItemIds.length > 0)
+      : undefined;
+    const roadmapProgress = roadmap ? this.roadmapProgress(goalId, roadmap, roadmapApproval?.approvedItemIds ?? []) : [];
     const verifiedCriteria = requiredKeys.filter((key) => validKeys.has(key) && !contradictedKeys.has(key)).length;
     let status = row.status;
-    if (status === "ready_to_close" && verifiedCriteria < requiredKeys.length) status = "active";
+    if (status === "ready_to_close" && (verifiedCriteria < requiredKeys.length || !hasApprovedDefinition || !roadmapApproval)) status = "active";
     return {
       ...row,
       status,
-      currentRunId,
+      currentRunId: currentRun.id,
       definition,
-      plan,
+      roadmap,
       decisions,
       runLinks,
-      evidenceLinks,
+      roadmapProgress,
+      evidenceLinks: allEvidenceLinks,
       requiredCriteria: requiredKeys.length,
       verifiedCriteria,
-      nextAction: workspaceGoalNextAction({ status, hasDefinition: Boolean(definition), hasApprovedDefinition, hasPlan: Boolean(plan), hasApprovedPlan, currentRunId, requiredCriteria: requiredKeys.length, verifiedCriteria }),
+      nextAction: workspaceGoalNextAction({
+        status,
+        hasDefinition: Boolean(definition),
+        hasApprovedDefinition,
+        hasRoadmap: Boolean(roadmap),
+        hasApprovedRoadmap: Boolean(roadmapApproval),
+        currentRunId: currentRun.id,
+        currentRunStatus: currentRun.status,
+        requiredCriteria: requiredKeys.length,
+        verifiedCriteria,
+        roadmapProgress,
+        approvedItemIds: roadmapApproval?.approvedItemIds ?? [],
+      }),
     };
   }
 
@@ -97,43 +133,62 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
     return this.addRevision(goalId, "definition", definition, null, createdBy);
   }
 
-  addPlanRevision(goalId: string, content: WorkspaceGoalPlan, sourceArtifactId: string | null, createdBy: string): WorkspaceGoalRevision {
-    return this.addRevision(goalId, "plan", content, sourceArtifactId, createdBy);
+  addRoadmapRevision(goalId: string, content: WorkspaceGoalRoadmap, sourceArtifactId: string | null, createdBy: string): WorkspaceGoalRevision {
+    return this.addRevision(goalId, "roadmap", content, sourceArtifactId, createdBy);
   }
 
   decideGoal(input: WorkspaceGoalDecisionInput): WorkspaceGoalDecision {
     const goal = this.requireGoal(input.goalId);
-    this.assertDecisionAllowed(goal.status, input.kind);
-    const revision = this.revision(input.targetRevisionId);
-    if (!revision || revision.goalId !== input.goalId || revision.contentHash !== input.targetHash) throw new Error("workspace Goal revision is stale");
-    if (input.kind === "approve_goal" && revision.kind !== "definition") throw new Error("approve_goal requires a definition revision");
-    if (input.kind === "approve_plan" && revision.kind !== "plan") throw new Error("approve_plan requires a plan revision");
     const approvedItemIds = [...new Set(input.approvedItemIds ?? [])].sort();
-    if (input.kind === "approve_plan") {
-      const knownItemIds = new Set(planContent(revision).items.map((item) => item.id));
-      if (!approvedItemIds.length) throw new Error("approve_plan requires at least one approved item");
-      if (approvedItemIds.some((itemId) => !knownItemIds.has(itemId))) throw new Error("approve_plan contains an unknown plan item");
-    }
-    const requestId = input.requestId?.trim() || `legacy:${input.kind}:${input.targetRevisionId}:${input.actorId}`;
+    const requestId = input.requestId?.trim() || randomUUID();
     const reason = input.reason ?? "";
     const payloadHash = workspaceGoalContentHash({ goalId: input.goalId, targetRevisionId: input.targetRevisionId, targetHash: input.targetHash, kind: input.kind, approvedItemIds, reason, actorId: input.actorId });
-    const existing = this.db.prepare(`SELECT id,request_id as requestId,payload_hash as payloadHash,goal_id as goalId,target_revision_id as targetRevisionId,target_hash as targetHash,kind,
-      approved_item_ids_json as approvedItemIdsJson,reason,actor_id as actorId,created_at as createdAt FROM workspace_goal_decisions
-      WHERE goal_id=? AND request_id=?`).get(input.goalId, requestId) as DecisionRow | undefined;
+    const existing = this.decisionByRequest(input.goalId, requestId);
     if (existing) {
       if (existing.payloadHash !== payloadHash) throw new Error("workspace Goal decision idempotency conflict");
       return decisionFromRow(existing);
+    }
+    this.assertDecisionAllowed(goal.status, input.kind);
+    if (goal.currentRunId && ["approve_goal", "approve_roadmap", "request_change", "pause", "cancel"].includes(input.kind)) {
+      throw new Error("workspace Goal cannot change approval, pause, or end while a guided TaskRun is active");
+    }
+    const revision = this.revision(input.targetRevisionId);
+    if (!revision || revision.goalId !== input.goalId || revision.contentHash !== input.targetHash) throw new Error("workspace Goal revision is stale");
+    if (input.kind === "approve_goal" && revision.kind !== "definition") throw new Error("approve_goal requires a definition revision");
+    if (input.kind === "approve_roadmap" && revision.kind !== "roadmap") throw new Error("approve_roadmap requires a Roadmap revision");
+    if (input.kind === "request_change" && revision.kind === "definition" && goal.activeDefinitionRevisionId !== revision.id) {
+      throw new Error("request_change must target the active Goal definition revision");
+    }
+    if (input.kind === "request_change" && revision.kind === "roadmap" && goal.activeRoadmapRevisionId !== revision.id) {
+      throw new Error("request_change must target the active Roadmap revision");
+    }
+    if (["approve_goal", "resume"].includes(input.kind)) this.assertNoOtherGuidingGoal(goal);
+    if (input.kind === "approve_roadmap") {
+      if (!goal.definition || goal.activeDefinitionRevisionId !== goal.definition.id) throw new Error("approve_roadmap requires an approved Goal definition");
+      if (goal.decisions.some((decision) => decision.kind === "approve_roadmap" && decision.targetRevisionId === revision.id && decision.targetHash === revision.contentHash)) {
+        throw new Error("Goal Roadmap revision is already approved; create a new revision to change its approved items");
+      }
+      const roadmap = roadmapContent(revision);
+      const knownItemIds = new Set(roadmap.items.map((item) => item.id));
+      const knownCriteria = new Set(definitionContent(goal.definition).criteria.map((criterion) => criterion.key));
+      if (!approvedItemIds.length) throw new Error("approve_roadmap requires at least one approved item");
+      if (approvedItemIds.some((itemId) => !knownItemIds.has(itemId))) throw new Error("approve_roadmap contains an unknown Roadmap item");
+      if (roadmap.items.some((item) => approvedItemIds.includes(item.id) && !item.criterionKeys.length)) {
+        throw new Error("every approved Roadmap item must advance at least one Goal criterion; create a new revision for this legacy item");
+      }
+      if (roadmap.items.some((item) => item.criterionKeys.some((key) => !knownCriteria.has(key)))) throw new Error("approve_roadmap references a criterion outside the active Goal definition");
     }
     const createdAt = now();
     const decision: WorkspaceGoalDecision = { id: randomUUID(), requestId, payloadHash, goalId: input.goalId, targetRevisionId: input.targetRevisionId, targetHash: input.targetHash, kind: input.kind, approvedItemIds, reason, actorId: input.actorId, createdAt };
     this.db.transaction(() => {
       let status = goal.status;
       let definitionId = goal.activeDefinitionRevisionId;
-      let planId = goal.activePlanRevisionId;
+      let roadmapId = goal.activeRoadmapRevisionId;
       let completedAt = goal.completedAt;
-      if (input.kind === "approve_goal") { status = "active"; definitionId = revision.id; planId = null; }
-      if (input.kind === "approve_plan") { status = "active"; planId = revision.id; }
-      if (input.kind === "request_change") status = "draft";
+      if (input.kind === "approve_goal") { status = "active"; definitionId = revision.id; roadmapId = null; }
+      if (input.kind === "approve_roadmap") { status = goal.status === "paused" ? "paused" : "active"; roadmapId = revision.id; }
+      if (input.kind === "request_change" && revision.kind === "definition") { status = "draft"; definitionId = null; roadmapId = null; }
+      if (input.kind === "request_change" && revision.kind === "roadmap") { status = status === "paused" ? "paused" : "active"; roadmapId = null; }
       if (input.kind === "pause") status = "paused";
       if (input.kind === "resume") status = "active";
       if (input.kind === "cancel") { status = "cancelled"; completedAt = createdAt; }
@@ -144,66 +199,131 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
       }
       this.db.prepare(`INSERT INTO workspace_goal_decisions
         (id,request_id,payload_hash,goal_id,target_revision_id,target_hash,kind,approved_item_ids_json,reason,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
-        .run(decision.id, decision.requestId, decision.payloadHash, decision.goalId, decision.targetRevisionId, decision.targetHash, decision.kind, JSON.stringify(decision.approvedItemIds), decision.reason, decision.actorId, createdAt);
+        .run(decision.id, decision.requestId, decision.payloadHash, decision.goalId, decision.targetRevisionId, decision.targetHash, toDbDecisionKind(decision.kind), JSON.stringify(decision.approvedItemIds), decision.reason, decision.actorId, createdAt);
       this.db.prepare(`UPDATE workspace_goals SET status=?,active_definition_revision_id=?,active_plan_revision_id=?,updated_at=?,completed_at=? WHERE id=?`)
-        .run(status, definitionId, planId, createdAt, completedAt, input.goalId);
+        .run(status, definitionId, roadmapId, createdAt, completedAt, input.goalId);
+      if (input.kind === "approve_roadmap") {
+        for (const itemId of approvedItemIds) this.db.prepare(`INSERT INTO workspace_goal_roadmap_item_progress
+          (goal_id,roadmap_revision_id,item_id,status,run_id,updated_at,completed_at) VALUES (?,?,?,'pending',NULL,?,NULL)
+          ON CONFLICT(goal_id,roadmap_revision_id,item_id) DO NOTHING`).run(input.goalId, revision.id, itemId, createdAt);
+      }
     })();
+    if (["approve_roadmap", "resume"].includes(input.kind)) this.refreshReadyStatus(input.goalId, createdAt);
     return decision;
   }
 
-  linkRun(input: LinkWorkspaceGoalRunInput): WorkspaceGoal {
-    const goal = this.requireGoal(input.goalId);
-    const run = this.db.prepare("SELECT session_id as workspaceId FROM runs WHERE id=?").get(input.runId) as { workspaceId: string } | undefined;
-    if (!run) throw new Error("TaskRun not found");
-    if (run.workspaceId !== goal.workspaceId) throw new Error("TaskRun belongs to a different workspace");
-    const priorMutation = this.db.prepare(`SELECT 1 FROM operations WHERE run_id=? AND operation_type IN ('tool.write','tool.edit','tool.patch','tool.bash') LIMIT 1`).get(input.runId);
-    if (priorMutation) throw new Error("TaskRun cannot be linked to a workspace Goal after mutation has started");
-    if (goal.status !== "active") throw new Error("workspace Goal must be active before linking a TaskRun");
-    if (input.goalRevision !== goal.definition?.revision) throw new Error("workspace Goal definition revision is stale");
-    if (input.criterionKeys?.some((key) => !definitionContent(goal.definition!).criteria.some((criterion) => criterion.key === key))) throw new Error("criterion not found");
-    if (input.planRevisionId) {
-      const plan = this.revision(input.planRevisionId);
-      if (!plan || plan.goalId !== input.goalId || plan.kind !== "plan") throw new Error("plan revision not found");
-      if (goal.activePlanRevisionId !== plan.id) throw new Error("plan revision is not active");
-      const approval = goal.decisions.find((item) => item.kind === "approve_plan" && item.targetRevisionId === plan.id && item.targetHash === plan.contentHash);
-      if (!approval) throw new Error("plan revision is not approved");
-      if (input.approvedItemIds?.some((itemId) => !approval.approvedItemIds.includes(itemId))) throw new Error("TaskRun exceeds the approved plan slice");
+  linkInbox(input: LinkWorkspaceGoalInboxInput): void {
+    const inbox = this.db.prepare("SELECT session_id as workspaceId,status FROM session_supervisor_inbox WHERE id=?").get(input.inboxItemId) as { workspaceId: string; status: string } | undefined;
+    if (!inbox) throw new Error("Session Inbox item not found");
+    if (inbox.status !== "queued") throw new Error("Session Inbox item is not queued");
+    const spec = this.resolveLinkSpec({ ...input, runId: "pending", mode: "roadmap" });
+    if (spec.goal.workspaceId !== inbox.workspaceId) throw new Error("Session Inbox item belongs to a different workspace");
+    const existing = this.db.prepare("SELECT goal_id as goalId,goal_revision as goalRevision,roadmap_revision_id as roadmapRevisionId,roadmap_item_ids_json as roadmapItemIdsJson,criterion_keys_json as criterionKeysJson FROM workspace_goal_inbox_links WHERE inbox_item_id=?").get(input.inboxItemId) as { goalId: string; goalRevision: number; roadmapRevisionId: string; roadmapItemIdsJson: string; criterionKeysJson: string } | undefined;
+    const expected = workspaceGoalContentHash({ goalId: input.goalId, goalRevision: input.goalRevision, roadmapRevisionId: input.roadmapRevisionId, roadmapItemIds: spec.roadmapItemIds, criterionKeys: spec.criterionKeys });
+    if (existing) {
+      const actual = workspaceGoalContentHash({ goalId: existing.goalId, goalRevision: existing.goalRevision, roadmapRevisionId: existing.roadmapRevisionId, roadmapItemIds: JSON.parse(existing.roadmapItemIdsJson), criterionKeys: JSON.parse(existing.criterionKeysJson) });
+      if (actual !== expected) throw new Error("Session Inbox Goal link conflict");
+      return;
+    }
+    const itemProgress = this.db.prepare(`SELECT status,run_id as runId FROM workspace_goal_roadmap_item_progress
+      WHERE goal_id=? AND roadmap_revision_id=? AND item_id IN (SELECT value FROM json_each(?))
+      ORDER BY CASE status WHEN 'completed' THEN 0 WHEN 'running' THEN 1 WHEN 'blocked' THEN 2 ELSE 3 END LIMIT 1`)
+      .get(input.goalId, input.roadmapRevisionId, JSON.stringify(spec.roadmapItemIds)) as { status: string; runId: string | null } | undefined;
+    if (itemProgress?.status === "completed") throw new Error("Goal Roadmap item is already completed");
+    if (itemProgress?.status === "running") throw new Error("Goal Roadmap item already has a running TaskRun");
+    if (itemProgress?.status === "blocked" && itemProgress.runId) {
+      const priorRun = this.db.prepare("SELECT status FROM runs WHERE id=?").get(itemProgress.runId) as { status: string } | undefined;
+      if (priorRun && ["running", "waiting_input", "blocked", "interrupted"].includes(priorRun.status)) {
+        throw new Error("Goal Roadmap item has a blocked TaskRun that must be resolved first");
+      }
+    }
+    const queuedLinks = this.db.prepare(`SELECT l.roadmap_item_ids_json as roadmapItemIdsJson
+      FROM workspace_goal_inbox_links l JOIN session_supervisor_inbox i ON i.id=l.inbox_item_id
+      WHERE l.goal_id=? AND l.roadmap_revision_id=? AND i.status IN ('queued','claimed')`).all(input.goalId, input.roadmapRevisionId) as Array<{ roadmapItemIdsJson: string }>;
+    const requestedItems = new Set(spec.roadmapItemIds);
+    if (queuedLinks.some((row) => (JSON.parse(row.roadmapItemIdsJson) as string[]).some((itemId) => requestedItems.has(itemId)))) {
+      throw new Error("Goal Roadmap item already has a queued TaskRun");
     }
     const createdAt = now();
-    this.db.transaction(() => {
-      this.db.prepare(`INSERT INTO workspace_goal_run_links
-        (goal_id,run_id,goal_revision,plan_revision_id,approved_item_ids_json,criterion_keys_json,created_at)
-        VALUES (?,?,?,?,?,?,?)`).run(input.goalId, input.runId, input.goalRevision, input.planRevisionId ?? null, JSON.stringify(input.approvedItemIds ?? []), JSON.stringify(input.criterionKeys ?? []), createdAt);
-      this.db.prepare("UPDATE workspace_goals SET current_run_id=?,updated_at=? WHERE id=?").run(input.runId, createdAt, goal.id);
-    })();
-    return this.requireGoal(input.goalId);
+    this.db.prepare(`INSERT INTO workspace_goal_inbox_links
+      (inbox_item_id,goal_id,goal_revision,roadmap_revision_id,roadmap_item_ids_json,criterion_keys_json,created_at) VALUES (?,?,?,?,?,?,?)`)
+      .run(input.inboxItemId, input.goalId, input.goalRevision, input.roadmapRevisionId, JSON.stringify(spec.roadmapItemIds), JSON.stringify(spec.criterionKeys), createdAt);
+  }
+
+  attachRun(runId: string, inboxItemId: string | null): WorkspaceGoal | null {
+    const existing = this.runLinkForRun(runId);
+    if (existing) return this.requireGoal(existing.goalId);
+    const run = this.runRow(runId);
+    if (!run) throw new Error("TaskRun not found");
+    const pending = inboxItemId ? this.pendingInboxLink(inboxItemId) : undefined;
+    let spec: LinkSpec | null;
+    if (pending) {
+      spec = this.resolveLinkSpec({
+        goalId: pending.goalId,
+        runId,
+        goalRevision: pending.goalRevision,
+        roadmapRevisionId: pending.roadmapRevisionId,
+        roadmapItemIds: JSON.parse(pending.roadmapItemIdsJson) as string[],
+        criterionKeys: JSON.parse(pending.criterionKeysJson) as string[],
+        mode: "roadmap",
+      });
+    } else {
+      const contract = run.contractJson ? JSON.parse(run.contractJson) as TaskRunContractSnapshot : null;
+      if (contract?.routerVersion === "workspace-goal-roadmap-v1") {
+        throw new Error("Goal Roadmap TaskRun is missing its durable Inbox authorization");
+      }
+      const guiding = this.guidingGoal(run.workspaceId);
+      if (!guiding) return null;
+      spec = this.resolveLinkSpec({
+        goalId: guiding.id,
+        runId,
+        goalRevision: guiding.definition!.revision,
+        roadmapRevisionId: null,
+        roadmapItemIds: [],
+        criterionKeys: [],
+        mode: "workspace",
+      }, guiding);
+    }
+    return this.persistRunLinkAndSnapshot(run, spec);
+  }
+
+  linkRun(input: LinkWorkspaceGoalRunInput): WorkspaceGoal {
+    const run = this.runRow(input.runId);
+    if (!run) throw new Error("TaskRun not found");
+    const priorMutation = this.db.prepare(`SELECT 1 FROM operations WHERE run_id=? AND operation_type IN ('tool.write','tool.edit','tool.patch','tool.bash') LIMIT 1`).get(input.runId);
+    if (priorMutation) throw new Error("TaskRun cannot be linked to a workspace Goal after mutation has started");
+    if (this.runLinkForRun(input.runId)) throw new Error("TaskRun is already linked to a workspace Goal");
+    const spec = this.resolveLinkSpec({ ...input, mode: input.mode ?? "workspace" });
+    if (run.workspaceId !== spec.goal.workspaceId) throw new Error("TaskRun belongs to a different workspace");
+    return this.persistRunLinkAndSnapshot(run, spec);
   }
 
   authorizeRunMutation(runId: string): { allowed: boolean; reason: string } {
-    const links = this.db.prepare(`SELECT goal_id as goalId,goal_revision as goalRevision,plan_revision_id as planRevisionId,approved_item_ids_json as approvedItemIdsJson FROM workspace_goal_run_links WHERE run_id=?`).all(runId) as Array<{ goalId: string; goalRevision: number; planRevisionId: string | null; approvedItemIdsJson: string }>;
-    if (!links.length) return { allowed: true, reason: "ordinary TaskRun is not Goal-governed" };
-    if (links.length !== 1) return { allowed: false, reason: "Goal-governed TaskRun has an ambiguous Goal link" };
-    const link = links[0];
+    const link = this.runLinkForRun(runId);
+    if (!link) return { allowed: true, reason: "ordinary TaskRun is not Goal-governed" };
     const goal = this.getGoal(link.goalId);
     if (!goal || goal.status !== "active") return { allowed: false, reason: "Workspace Goal is not active" };
     if (!goal.definition || goal.definition.revision !== link.goalRevision || goal.activeDefinitionRevisionId !== goal.definition.id) return { allowed: false, reason: "Workspace Goal definition approval is stale" };
-    if (!link.planRevisionId || goal.activePlanRevisionId !== link.planRevisionId || goal.plan?.id !== link.planRevisionId) return { allowed: false, reason: "Workspace Goal Plan is not active" };
-    const approvedItemIds = JSON.parse(link.approvedItemIdsJson) as string[];
-    const approval = goal.decisions.find((item) => item.kind === "approve_plan" && item.targetRevisionId === link.planRevisionId && item.targetHash === goal.plan?.contentHash);
-    if (!approval || !approvedItemIds.length || approvedItemIds.some((itemId) => !approval.approvedItemIds.includes(itemId))) return { allowed: false, reason: "TaskRun exceeds the approved Goal Plan slice" };
-    return { allowed: true, reason: "Goal Plan slice is approved" };
+    if (link.mode === "workspace") return { allowed: true, reason: "User-started TaskRun follows the active Workspace Goal direction" };
+    if (!link.roadmapRevisionId || goal.activeRoadmapRevisionId !== link.roadmapRevisionId || goal.roadmap?.id !== link.roadmapRevisionId) return { allowed: false, reason: "Workspace Goal Roadmap is not active" };
+    const itemIds = link.mode === "roadmap" ? JSON.parse(link.roadmapItemIdsJson) as string[] : [];
+    const approval = this.latestRoadmapApproval(goal, link.roadmapRevisionId);
+    if (!approval || !itemIds.length || itemIds.some((itemId) => !approval.approvedItemIds.includes(itemId))) return { allowed: false, reason: "TaskRun exceeds the approved Goal Roadmap slice" };
+    return { allowed: true, reason: "Goal Roadmap slice is approved" };
   }
 
   linkEvidence(input: LinkWorkspaceGoalEvidenceInput): WorkspaceGoalEvidenceLink {
     const goal = this.requireGoal(input.goalId);
     if (TERMINAL_STATUSES.has(goal.status)) throw new Error("terminal workspace Goal cannot accept evidence");
-    const run = this.db.prepare("SELECT session_id as workspaceId FROM runs WHERE id=?").get(input.runId) as { workspaceId: string } | undefined;
+    const run = this.runRow(input.runId);
     if (!run) throw new Error("TaskRun not found");
     if (run.workspaceId !== goal.workspaceId) throw new Error("TaskRun belongs to a different workspace");
     const definition = goal.definition;
     if (!definition || input.goalRevision !== definition.revision) throw new Error("workspace Goal definition revision is stale");
     if (!definitionContent(definition).criteria.some((criterion) => criterion.key === input.criterionKey)) throw new Error("criterion not found");
-    if (!goal.runLinks.some((link) => link.runId === input.runId)) throw new Error("TaskRun is not linked to this workspace Goal");
+    const runLink = goal.runLinks.find((link) => link.runId === input.runId);
+    if (!runLink) throw new Error("TaskRun is not linked to this workspace Goal");
+    if (!runLink.criterionKeys.includes(input.criterionKey)) throw new Error("TaskRun is not authorized to provide evidence for this Goal criterion");
     if (!input.checkKey && !input.artifactId && !input.operationId) throw new Error("evidence must reference a check, artifact or operation");
     const status = input.status ?? "valid";
     const sourceDigest = this.computeEvidenceDigest(input, status);
@@ -228,77 +348,282 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
         .run(id, input.goalId, input.goalRevision, input.criterionKey, input.runId, input.checkKey ?? null, input.artifactId ?? null, input.operationId ?? null, sourceDigest, status, timestamp, timestamp);
       if (requestId) this.db.prepare("INSERT INTO workspace_goal_evidence_requests (goal_id,request_id,payload_hash,evidence_link_id,created_at) VALUES (?,?,?,?,?)")
         .run(input.goalId, requestId, requestHash, id, timestamp);
-      const refreshed = this.requireGoal(input.goalId);
-      const ready = refreshed.requiredCriteria > 0 && refreshed.verifiedCriteria >= refreshed.requiredCriteria;
-      if (ready) this.db.prepare("UPDATE workspace_goals SET status='ready_to_close',current_run_id=NULL,updated_at=? WHERE id=?").run(timestamp, input.goalId);
-      else if (refreshed.status === "ready_to_close") this.db.prepare("UPDATE workspace_goals SET status='active',updated_at=? WHERE id=?").run(timestamp, input.goalId);
     })();
+    this.refreshReadyStatus(input.goalId, timestamp);
     return this.evidenceLinks(input.goalId).find((item) => item.id === id)!;
   }
 
-  private addRevision(goalId: string, kind: "definition" | "plan", content: WorkspaceGoalDefinition | WorkspaceGoalPlan, sourceArtifactId: string | null, createdBy: string): WorkspaceGoalRevision {
+  recordRunOutcome(runId: string): WorkspaceGoal | null {
+    const link = this.runLinkForRun(runId);
+    if (!link) return null;
+    const run = this.runRow(runId);
+    if (!run) return null;
+    const timestamp = now();
+    const itemIds = link.mode === "roadmap" ? JSON.parse(link.roadmapItemIdsJson) as string[] : [];
+    const progressStatus = run.status === "completed" ? "completed" : ["running", "waiting_input"].includes(run.status) ? "running" : "blocked";
+    this.db.transaction(() => {
+      if (link.roadmapRevisionId) for (const itemId of itemIds) this.db.prepare(`INSERT INTO workspace_goal_roadmap_item_progress
+        (goal_id,roadmap_revision_id,item_id,status,run_id,updated_at,completed_at) VALUES (?,?,?,?,?,?,?)
+        ON CONFLICT(goal_id,roadmap_revision_id,item_id) DO UPDATE SET status=excluded.status,run_id=excluded.run_id,updated_at=excluded.updated_at,completed_at=excluded.completed_at`)
+        .run(link.goalId, link.roadmapRevisionId, itemId, progressStatus, runId, timestamp, progressStatus === "completed" ? timestamp : null);
+      const retainCurrent = ["running", "waiting_input", "blocked", "interrupted"].includes(run.status);
+      this.db.prepare("UPDATE workspace_goals SET current_run_id=?,updated_at=? WHERE id=? AND current_run_id=?")
+        .run(retainCurrent ? runId : null, timestamp, link.goalId, runId);
+      const nextCurrent = this.findActiveGuidedRun(link.goalId, retainCurrent ? runId : null);
+      this.db.prepare("UPDATE workspace_goals SET current_run_id=? WHERE id=?").run(nextCurrent.id, link.goalId);
+    })();
+    if (!["running", "waiting_input"].includes(run.status)) this.harvestSupervisorEvidence(link, run.contractJson);
+    this.refreshReadyStatus(link.goalId, timestamp);
+    return this.requireGoal(link.goalId);
+  }
+
+  private harvestSupervisorEvidence(link: RunLinkRow, contractJson: string): void {
+    const contract = contractJson ? JSON.parse(contractJson) as TaskRunContractSnapshot : null;
+    const snapshot = contract?.workspaceGoal;
+    if (!snapshot || snapshot.goalId !== link.goalId || !snapshot.criterionPrompts.length) return;
+    const row = this.db.prepare(`SELECT attempt,checkpoint_seq as checkpointSeq,criterion_coverage_json as coverageJson FROM gate_evaluations
+      WHERE run_id=? AND gate_type='contract' AND evaluator='llm' ORDER BY attempt DESC,checkpoint_seq DESC,created_at DESC LIMIT 1`).get(link.runId) as { attempt: number; checkpointSeq: number; coverageJson: string } | undefined;
+    if (!row) return;
+    const coverage = JSON.parse(row.coverageJson) as CriterionCoverage[];
+    for (const target of snapshot.criterionPrompts) {
+      const verdict = coverage.find((item) => item.criterion === target.prompt && ["covered", "contradicted"].includes(item.status));
+      if (!verdict) continue;
+      for (const ref of verdict.evidenceRefs) {
+        const [kind, id] = splitEvidenceRef(ref);
+        if (!id || !["check", "artifact", "operation"].includes(kind)) continue;
+        try {
+          this.linkEvidence({
+            goalId: link.goalId,
+            requestId: `supervisor:${link.runId}:attempt:${row.attempt}:checkpoint:${row.checkpointSeq}:${target.key}:${kind}:${id}`,
+            goalRevision: link.goalRevision,
+            criterionKey: target.key,
+            runId: link.runId,
+            checkKey: kind === "check" ? id : null,
+            artifactId: kind === "artifact" ? id : null,
+            operationId: kind === "operation" ? id : null,
+            status: verdict.status === "covered" ? "valid" : "contradicted",
+          });
+        } catch { /* Supervisor references are proposals; invalid or stale Core receipts are ignored. */ }
+      }
+    }
+  }
+
+  private persistRunLinkAndSnapshot(run: ReturnType<SqliteWorkspaceGoalRepository["runRow"]> & {}, spec: LinkSpec): WorkspaceGoal {
+    if (run.workspaceId !== spec.goal.workspaceId) throw new Error("TaskRun belongs to a different workspace");
+    const createdAt = now();
+    const snapshot = this.executionSnapshot(spec, createdAt);
+    const contract = mergeGoalSnapshot(run, snapshot);
+    this.db.transaction(() => {
+      this.db.prepare(`INSERT INTO workspace_goal_run_links
+        (goal_id,run_id,goal_revision,plan_revision_id,approved_item_ids_json,criterion_keys_json,created_at,link_mode)
+        VALUES (?,?,?,?,?,?,?,?)`).run(spec.goal.id, run.id, spec.goalRevision, spec.roadmapRevisionId, JSON.stringify(spec.roadmapItemIds), JSON.stringify(spec.criterionKeys), createdAt, spec.mode);
+      this.db.prepare("UPDATE runs SET contract_json=?,updated_at=? WHERE id=?").run(JSON.stringify(contract), createdAt, run.id);
+      this.db.prepare(`UPDATE workspace_goals SET current_run_id=?,status=CASE WHEN status='ready_to_close' THEN 'active' ELSE status END,updated_at=? WHERE id=?`).run(run.id, createdAt, spec.goal.id);
+      if (spec.roadmapRevisionId && spec.mode === "roadmap") for (const itemId of spec.roadmapItemIds) this.db.prepare(`INSERT INTO workspace_goal_roadmap_item_progress
+        (goal_id,roadmap_revision_id,item_id,status,run_id,updated_at,completed_at) VALUES (?,?,?,'running',?,?,NULL)
+        ON CONFLICT(goal_id,roadmap_revision_id,item_id) DO UPDATE SET status='running',run_id=excluded.run_id,updated_at=excluded.updated_at,completed_at=NULL`)
+        .run(spec.goal.id, spec.roadmapRevisionId, itemId, run.id, createdAt);
+    })();
+    return this.requireGoal(spec.goal.id);
+  }
+
+  private executionSnapshot(spec: LinkSpec, attachedAt: number): TaskRunWorkspaceGoalSnapshot {
+    const definition = spec.goal.definition!;
+    const definitionValue = definitionContent(definition);
+    const roadmap = spec.roadmapRevisionId && spec.goal.roadmap?.id === spec.roadmapRevisionId ? spec.goal.roadmap : null;
+    const roadmapValue = roadmap ? roadmapContent(roadmap) : null;
+    const approval = roadmap ? this.latestRoadmapApproval(spec.goal, roadmap.id) : undefined;
+    const targetCriterionKeys = spec.mode === "roadmap" ? spec.criterionKeys : [];
+    const criterionPrompts = targetCriterionKeys.map((key) => {
+      const criterion = definitionValue.criteria.find((item) => item.key === key)!;
+      return { key, prompt: `[Workspace Goal criterion ${key}] ${criterion.title}` };
+    });
+    return {
+      goalId: spec.goal.id,
+      mode: spec.mode,
+      definitionRevisionId: definition.id,
+      definitionRevision: definition.revision,
+      definitionHash: definition.contentHash,
+      title: definitionValue.title,
+      outcome: definitionValue.outcome,
+      scope: [...definitionValue.scope],
+      nonGoals: [...definitionValue.nonGoals],
+      criteria: definitionValue.criteria.map((criterion) => ({ ...criterion })),
+      roadmapRevisionId: roadmap?.id ?? null,
+      roadmapRevision: roadmap?.revision ?? null,
+      roadmapHash: roadmap?.contentHash ?? null,
+      approvedRoadmapItemIds: [...(approval?.approvedItemIds ?? [])],
+      targetRoadmapItemIds: spec.mode === "roadmap" ? [...spec.roadmapItemIds] : [],
+      roadmapItems: roadmapValue?.items.filter((item) => spec.roadmapItemIds.includes(item.id)).map((item) => ({ ...item, criterionKeys: [...item.criterionKeys] })) ?? [],
+      targetCriterionKeys,
+      criterionPrompts,
+      attachedAt,
+    };
+  }
+
+  private resolveLinkSpec(input: LinkWorkspaceGoalRunInput, loadedGoal?: WorkspaceGoal): LinkSpec {
+    const goal = loadedGoal?.id === input.goalId ? loadedGoal : this.requireGoal(input.goalId);
+    if (!["active", "ready_to_close"].includes(goal.status)) throw new Error("workspace Goal must be active before linking a TaskRun");
+    if (!goal.definition || input.goalRevision !== goal.definition.revision || goal.activeDefinitionRevisionId !== goal.definition.id) throw new Error("workspace Goal definition revision is stale");
+    const mode = input.mode ?? "workspace";
+    const roadmapItemIds = [...new Set(input.roadmapItemIds ?? [])];
+    const criterionKeys = [...new Set(input.criterionKeys ?? [])];
+    const knownCriteria = new Set(definitionContent(goal.definition).criteria.map((criterion) => criterion.key));
+    if (criterionKeys.some((key) => !knownCriteria.has(key))) throw new Error("criterion not found");
+    if (input.roadmapRevisionId) {
+      const roadmap = this.revision(input.roadmapRevisionId);
+      if (!roadmap || roadmap.goalId !== input.goalId || roadmap.kind !== "roadmap") throw new Error("Roadmap revision not found");
+      if (goal.activeRoadmapRevisionId !== roadmap.id) throw new Error("Roadmap revision is not active");
+      const approval = this.latestRoadmapApproval(goal, roadmap.id);
+      if (!approval) throw new Error("Roadmap revision is not approved");
+      if (roadmapItemIds.some((itemId) => !approval.approvedItemIds.includes(itemId))) throw new Error("TaskRun exceeds the approved Roadmap slice");
+      if (mode === "roadmap" && !roadmapItemIds.length) throw new Error("Goal Roadmap TaskRun requires at least one Roadmap item");
+      const selected = roadmapContent(roadmap).items.filter((item) => roadmapItemIds.includes(item.id));
+      if (selected.length !== roadmapItemIds.length) throw new Error("Roadmap item not found");
+      const selectedCriteria = new Set(selected.flatMap((item) => item.criterionKeys));
+      if (mode === "roadmap" && criterionKeys.some((key) => !selectedCriteria.has(key))) throw new Error("TaskRun criterion is outside the selected Roadmap item");
+    } else if (roadmapItemIds.length) {
+      throw new Error("Roadmap items require an active Roadmap revision");
+    }
+    return { goal, goalRevision: input.goalRevision, roadmapRevisionId: input.roadmapRevisionId ?? null, roadmapItemIds, criterionKeys, mode };
+  }
+
+  private addRevision(goalId: string, kind: WorkspaceGoalRevision["kind"], content: WorkspaceGoalDefinition | WorkspaceGoalRoadmap, sourceArtifactId: string | null, createdBy: string): WorkspaceGoalRevision {
     const goal = this.requireGoal(goalId);
     if (TERMINAL_STATUSES.has(goal.status)) throw new Error("terminal workspace Goal cannot be revised");
-    const revisionNumber = Number((this.db.prepare("SELECT COALESCE(MAX(revision),0)+1 as revision FROM workspace_goal_revisions WHERE goal_id=? AND kind=?").get(goalId, kind) as { revision: number }).revision);
+    if (goal.currentRunId) throw new Error("workspace Goal cannot be revised while a guided TaskRun is active");
+    const dbKind = toDbRevisionKind(kind);
+    const revisionNumber = Number((this.db.prepare("SELECT COALESCE(MAX(revision),0)+1 as revision FROM workspace_goal_revisions WHERE goal_id=? AND kind=?").get(goalId, dbKind) as { revision: number }).revision);
     const revision = revisionRecord(goalId, kind, revisionNumber, content, sourceArtifactId, createdBy, now());
     this.db.transaction(() => {
       insertRevision(this.db, revision);
-      const status = kind === "definition" ? "draft" : goal.status;
+      const status = kind === "definition" ? "draft" : goal.status === "ready_to_close" ? "active" : goal.status;
       this.db.prepare(`UPDATE workspace_goals SET status=?,
         active_definition_revision_id=CASE WHEN ?='definition' THEN NULL ELSE active_definition_revision_id END,
-        active_plan_revision_id=CASE WHEN ?='plan' OR ?='definition' THEN NULL ELSE active_plan_revision_id END,
-        updated_at=? WHERE id=?`)
-        .run(status, kind, kind, kind, revision.createdAt, goalId);
+        active_plan_revision_id=CASE WHEN ?='roadmap' OR ?='definition' THEN NULL ELSE active_plan_revision_id END,
+        updated_at=? WHERE id=?`).run(status, kind, kind, kind, revision.createdAt, goalId);
     })();
     return revision;
   }
 
   private assertDecisionAllowed(status: WorkspaceGoalStatus, kind: WorkspaceGoalDecision["kind"]): void {
     if (TERMINAL_STATUSES.has(status)) throw new Error("terminal workspace Goal cannot accept decisions");
+    if (kind === "approve_goal" && status !== "draft") throw new Error("only a draft workspace Goal definition can be approved");
     if (kind === "resume" && status !== "paused") throw new Error("only a paused workspace Goal can be resumed");
     if (kind === "pause" && !["active", "ready_to_close"].includes(status)) throw new Error("only an active workspace Goal can be paused");
     if (kind === "close" && status !== "ready_to_close") throw new Error("workspace Goal is not ready to close");
-    if (kind === "approve_plan" && status === "draft") throw new Error("workspace Goal definition must be approved before plan approval");
+    if (kind === "approve_roadmap" && status === "draft") throw new Error("workspace Goal definition must be approved before Roadmap approval");
+  }
+
+  private assertNoOtherGuidingGoal(goal: WorkspaceGoal): void {
+    const other = this.db.prepare(`SELECT id FROM workspace_goals WHERE workspace_id=? AND id<>? AND status IN ('active','ready_to_close') LIMIT 1`).get(goal.workspaceId, goal.id) as { id: string } | undefined;
+    if (other) throw new Error("another active workspace Goal already guides this Workspace; pause it before activating this Goal");
+  }
+
+  private guidingGoal(workspaceId: string): WorkspaceGoal | null {
+    const rows = this.db.prepare(`SELECT id FROM workspace_goals WHERE workspace_id=? AND status IN ('active','ready_to_close') AND active_definition_revision_id IS NOT NULL ORDER BY updated_at DESC`).all(workspaceId) as Array<{ id: string }>;
+    if (!rows.length) return null;
+    if (rows.length > 1) throw new Error("Workspace has multiple active Goals; pause all but one before starting a TaskRun");
+    return this.requireGoal(rows[0].id);
   }
 
   private computeEvidenceDigest(input: LinkWorkspaceGoalEvidenceInput, requestedStatus: WorkspaceGoalEvidenceStatus): string {
     const facts: Record<string, unknown> = { runId: input.runId };
+    const requiresTrustedReceipt = requestedStatus === "valid" || requestedStatus === "contradicted";
+    const runState = this.db.prepare("SELECT attempt FROM runs WHERE id=?").get(input.runId) as { attempt: number } | undefined;
+    if (!runState) throw new Error("TaskRun not found");
     if (input.checkKey) {
-      const check = this.db.prepare("SELECT status,stale,evidence,command,title FROM run_checks WHERE run_id=? AND check_key=?").get(input.runId, input.checkKey) as { status: string; stale: number; evidence: string; command: string; title: string } | undefined;
+      const check = this.db.prepare(`SELECT status,stale,evidence,command,title,source_operation_id as sourceOperationId,observed_at as observedAt
+        FROM run_checks WHERE run_id=? AND check_key=?`).get(input.runId, input.checkKey) as { status: string; stale: number; evidence: string; command: string; title: string; sourceOperationId: string | null; observedAt: number | null } | undefined;
       if (!check) throw new Error("check evidence not found");
-      if (requestedStatus === "valid" && (check.status !== "passed" || check.stale !== 0 || !check.evidence.trim())) throw new Error("check evidence is not valid");
-      facts.check = { key: input.checkKey, ...check };
+      const operation = check.sourceOperationId ? this.db.prepare(`SELECT attempt,operation_type as operationType,payload_json as payloadJson,status,result_json as resultJson,completed_at as completedAt
+        FROM operations WHERE run_id=? AND id=?`).get(input.runId, check.sourceOperationId) as { attempt: number; operationType: string; payloadJson: string; status: string; resultJson: string; completedAt: number | null } | undefined : undefined;
+      const payload = operation?.payloadJson ? JSON.parse(operation.payloadJson) as Record<string, unknown> : undefined;
+      const result = operation?.resultJson ? JSON.parse(operation.resultJson) as Record<string, unknown> : undefined;
+      const details = result?.details && typeof result.details === "object" && !Array.isArray(result.details) ? result.details as Record<string, unknown> : undefined;
+      const trustedOperation = operation && operation.attempt === runState.attempt && operation.operationType === "tool.bash" && operation.status === "succeeded"
+        && operation.completedAt === check.observedAt;
+      const trusted = check.status === "passed" && check.stale === 0 && Boolean(check.evidence.trim()) && Boolean(trustedOperation)
+        && typeof payload?.command === "string" && payload.command.trim() === check.command.trim() && details?.exitCode === 0;
+      if (requiresTrustedReceipt && !trusted) throw new Error("check evidence is not bound to a successful current-Attempt Bash receipt");
+      facts.check = { key: input.checkKey, ...check, operation };
     }
     if (input.artifactId) {
       const artifact = this.db.prepare("SELECT kind,title,content,uri,created_at as createdAt FROM artifacts WHERE run_id=? AND id=?").get(input.runId, input.artifactId) as { kind: string; title: string; content: string; uri: string; createdAt: number } | undefined;
       if (!artifact) throw new Error("artifact evidence not found");
-      const contentHash = artifact.content ? sha256(Buffer.from(artifact.content)) : artifact.uri ? `content-addressed-uri:${artifact.uri}` : "missing";
-      facts.artifact = { id: input.artifactId, ...artifact, content: undefined, contentHash };
-      if (requestedStatus === "valid" && contentHash === "missing") throw new Error("artifact evidence is not readable");
+      const operationRows = this.db.prepare(`SELECT id,result_json as resultJson,completed_at as completedAt FROM operations
+        WHERE run_id=? AND attempt=? AND status='succeeded' AND completed_at IS NOT NULL`).all(input.runId, runState.attempt) as Array<{ id: string; resultJson: string; completedAt: number }>;
+      const receipt = operationRows.map((operation) => {
+        const result = operation.resultJson ? JSON.parse(operation.resultJson) as Record<string, unknown> : undefined;
+        const details = result?.details && typeof result.details === "object" && !Array.isArray(result.details) ? result.details as Record<string, unknown> : undefined;
+        return { ...operation, details };
+      }).find((operation) => operation.details?.artifactId === input.artifactId
+        && operation.details?.artifactUri === artifact.uri && typeof operation.details?.sha256 === "string");
+      const inline = artifact.content.trim().length > 0;
+      const receiptBacked = Boolean(receipt && /^\.tagent\/artifacts\//.test(artifact.uri));
+      if (requiresTrustedReceipt && !inline && !receiptBacked) throw new Error("artifact evidence is not backed by readable inline content or a successful current-Attempt artifact receipt");
+      const contentHash = inline ? sha256(Buffer.from(artifact.content)) : receiptBacked ? `sha256:${String(receipt!.details!.sha256)}` : "missing";
+      facts.artifact = { id: input.artifactId, ...artifact, content: undefined, contentHash, receipt: receipt ? { operationId: receipt.id, completedAt: receipt.completedAt } : null };
     }
     if (input.operationId) {
-      const operation = this.db.prepare("SELECT operation_type as operationType,payload_hash as payloadHash,status,stage,effects_json as effectsJson,result_json as resultJson,error,completed_at as completedAt FROM operations WHERE run_id=? AND id=?").get(input.runId, input.operationId) as Record<string, unknown> | undefined;
+      const operation = this.db.prepare("SELECT attempt,operation_type as operationType,payload_hash as payloadHash,status,stage,effects_json as effectsJson,result_json as resultJson,error,completed_at as completedAt FROM operations WHERE run_id=? AND id=?").get(input.runId, input.operationId) as Record<string, unknown> | undefined;
       if (!operation) throw new Error("operation evidence not found");
-      if (requestedStatus === "valid" && operation.status !== "succeeded") throw new Error("operation evidence is not valid");
+      if (requiresTrustedReceipt && (operation.status !== "succeeded" || operation.attempt !== runState.attempt || operation.completedAt === null || !operation.resultJson)) {
+        throw new Error("operation evidence is not a successful current-Attempt receipt");
+      }
       facts.operation = { id: input.operationId, ...operation };
     }
     return `sha256:${workspaceGoalContentHash(facts)}`;
   }
 
   private projectEvidence(link: WorkspaceGoalEvidenceLink): WorkspaceGoalEvidenceLink {
-    if (link.status === "contradicted") return link;
+    if (link.status === "stale") return link;
     try {
-      const currentDigest = this.computeEvidenceDigest(link, "valid");
-      return { ...link, status: currentDigest === link.sourceDigest ? "valid" : "stale" };
+      const currentDigest = this.computeEvidenceDigest(link, link.status);
+      return { ...link, status: currentDigest === link.sourceDigest ? link.status : "stale" };
     } catch {
       return { ...link, status: "stale" };
     }
   }
 
-  private projectCurrentRunId(runId: string | null): string | null {
-    if (!runId) return null;
-    const run = this.db.prepare("SELECT status FROM runs WHERE id=?").get(runId) as { status: string } | undefined;
-    return run && ["running", "waiting_input", "interrupted"].includes(run.status) ? runId : null;
+  private refreshReadyStatus(goalId: string, timestamp: number): void {
+    const refreshed = this.requireGoal(goalId);
+    const activeRoadmapApproved = Boolean(refreshed.roadmap && refreshed.activeRoadmapRevisionId === refreshed.roadmap.id
+      && this.latestRoadmapApproval(refreshed, refreshed.roadmap.id));
+    const ready = !refreshed.currentRunId && refreshed.requiredCriteria > 0 && refreshed.verifiedCriteria >= refreshed.requiredCriteria
+      && refreshed.activeDefinitionRevisionId === refreshed.definition?.id && activeRoadmapApproved;
+    const raw = this.goalRow(goalId)!;
+    if (ready && raw.status === "active") this.db.prepare("UPDATE workspace_goals SET status='ready_to_close',current_run_id=NULL,updated_at=? WHERE id=?").run(timestamp, goalId);
+    else if (!ready && raw.status === "ready_to_close") this.db.prepare("UPDATE workspace_goals SET status='active',updated_at=? WHERE id=?").run(timestamp, goalId);
+  }
+
+  private roadmapProgress(goalId: string, roadmap: WorkspaceGoalRevision, approvedItemIds: string[]): WorkspaceGoalRoadmapItemProgress[] {
+    const rows = this.db.prepare(`SELECT p.goal_id as goalId,p.roadmap_revision_id as roadmapRevisionId,p.item_id as itemId,p.status,p.run_id as runId,
+      p.updated_at as updatedAt,p.completed_at as completedAt,r.status as runStatus
+      FROM workspace_goal_roadmap_item_progress p LEFT JOIN runs r ON r.id=p.run_id
+      WHERE p.goal_id=? AND p.roadmap_revision_id=?`).all(goalId, roadmap.id) as Array<WorkspaceGoalRoadmapItemProgress & { runStatus: RunStatus | null }>;
+    const byItem = new Map(rows.map(({ runStatus, ...row }) => [row.itemId, { ...row, status: projectedRoadmapStatus(row.status, runStatus) }]));
+    const approved = new Set(approvedItemIds);
+    return roadmapContent(roadmap).items.map((item) => {
+      if (!approved.has(item.id)) return {
+        goalId,
+        roadmapRevisionId: roadmap.id,
+        itemId: item.id,
+        status: "unapproved" as const,
+        runId: null,
+        updatedAt: roadmap.createdAt,
+        completedAt: null,
+      };
+      return byItem.get(item.id) ?? {
+        goalId,
+        roadmapRevisionId: roadmap.id,
+        itemId: item.id,
+        status: "pending" as const,
+        runId: null,
+        updatedAt: roadmap.createdAt,
+        completedAt: null,
+      };
+    });
   }
 
   private summary(row: GoalRow): WorkspaceGoalSummary {
@@ -313,18 +638,87 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
     return goal;
   }
 
-  private goalRow(goalId: string): GoalRow | null { return (this.db.prepare(`SELECT id,workspace_id as workspaceId,status,active_definition_revision_id as activeDefinitionRevisionId,active_plan_revision_id as activePlanRevisionId,current_run_id as currentRunId,created_at as createdAt,updated_at as updatedAt,completed_at as completedAt FROM workspace_goals WHERE id=?`).get(goalId) as GoalRow | undefined) ?? null; }
+  private latestRoadmapApproval(goal: WorkspaceGoal, roadmapRevisionId: string) {
+    return [...goal.decisions].reverse().find((item) => item.kind === "approve_roadmap" && item.targetRevisionId === roadmapRevisionId && item.targetHash === goal.roadmap?.contentHash && item.approvedItemIds.length > 0);
+  }
+
+  private projectCurrentRun(goalId: string, preferredRunId: string | null): { id: string | null; status: string | null } {
+    return this.findActiveGuidedRun(goalId, preferredRunId);
+  }
+
+  private findActiveGuidedRun(goalId: string, preferredRunId: string | null): { id: string | null; status: string | null } {
+    const run = this.db.prepare(`SELECT r.id,r.status FROM workspace_goal_run_links l
+      JOIN runs r ON r.id=l.run_id
+      WHERE l.goal_id=? AND r.status IN ('running','waiting_input','interrupted','blocked')
+      ORDER BY CASE WHEN r.id=? THEN 0 ELSE 1 END,l.created_at DESC,r.id DESC LIMIT 1`)
+      .get(goalId, preferredRunId) as { id: string; status: string } | undefined;
+    return run ?? { id: null, status: null };
+  }
+
+  private runRow(runId: string) {
+    return this.db.prepare("SELECT id,session_id as workspaceId,status,goal,contract_json as contractJson FROM runs WHERE id=?").get(runId) as { id: string; workspaceId: string; status: string; goal: string; contractJson: string } | undefined;
+  }
+
+  private runLinkForRun(runId: string): RunLinkRow | undefined {
+    return this.db.prepare(`SELECT goal_id as goalId,run_id as runId,goal_revision as goalRevision,plan_revision_id as roadmapRevisionId,
+      approved_item_ids_json as roadmapItemIdsJson,criterion_keys_json as criterionKeysJson,link_mode as mode,created_at as createdAt
+      FROM workspace_goal_run_links WHERE run_id=?`).get(runId) as RunLinkRow | undefined;
+  }
+
+  private pendingInboxLink(inboxItemId: string) {
+    return this.db.prepare(`SELECT goal_id as goalId,goal_revision as goalRevision,roadmap_revision_id as roadmapRevisionId,
+      roadmap_item_ids_json as roadmapItemIdsJson,criterion_keys_json as criterionKeysJson FROM workspace_goal_inbox_links WHERE inbox_item_id=?`).get(inboxItemId) as { goalId: string; goalRevision: number; roadmapRevisionId: string; roadmapItemIdsJson: string; criterionKeysJson: string } | undefined;
+  }
+
+  private goalRow(goalId: string): GoalRow | null { return (this.db.prepare(`SELECT id,workspace_id as workspaceId,status,active_definition_revision_id as activeDefinitionRevisionId,active_plan_revision_id as activeRoadmapRevisionId,current_run_id as currentRunId,created_at as createdAt,updated_at as updatedAt,completed_at as completedAt FROM workspace_goals WHERE id=?`).get(goalId) as GoalRow | undefined) ?? null; }
   private revision(id: string): WorkspaceGoalRevision | null { const row = this.db.prepare(`SELECT id,goal_id as goalId,kind,revision,content_json as contentJson,content_hash as contentHash,source_artifact_id as sourceArtifactId,created_by as createdBy,created_at as createdAt FROM workspace_goal_revisions WHERE id=?`).get(id) as RevisionRow | undefined; return row ? revisionFromRow(row) : null; }
-  private latestRevision(goalId: string, kind: "definition" | "plan"): WorkspaceGoalRevision | null { const row = this.db.prepare(`SELECT id,goal_id as goalId,kind,revision,content_json as contentJson,content_hash as contentHash,source_artifact_id as sourceArtifactId,created_by as createdBy,created_at as createdAt FROM workspace_goal_revisions WHERE goal_id=? AND kind=? ORDER BY revision DESC LIMIT 1`).get(goalId, kind) as RevisionRow | undefined; return row ? revisionFromRow(row) : null; }
-  private decisions(goalId: string): WorkspaceGoalDecision[] { return (this.db.prepare(`SELECT id,COALESCE(request_id,'') as requestId,payload_hash as payloadHash,goal_id as goalId,target_revision_id as targetRevisionId,target_hash as targetHash,kind,approved_item_ids_json as approvedItemIdsJson,reason,actor_id as actorId,created_at as createdAt FROM workspace_goal_decisions WHERE goal_id=? ORDER BY created_at ASC`).all(goalId) as DecisionRow[]).map(decisionFromRow); }
-  private runLinks(goalId: string): WorkspaceGoalRunLink[] { return (this.db.prepare(`SELECT goal_id as goalId,run_id as runId,goal_revision as goalRevision,plan_revision_id as planRevisionId,approved_item_ids_json as approvedItemIdsJson,criterion_keys_json as criterionKeysJson,created_at as createdAt FROM workspace_goal_run_links WHERE goal_id=? ORDER BY created_at ASC`).all(goalId) as Array<Omit<WorkspaceGoalRunLink, "approvedItemIds" | "criterionKeys"> & { approvedItemIdsJson: string; criterionKeysJson: string }>).map((row) => ({ ...row, approvedItemIds: JSON.parse(row.approvedItemIdsJson) as string[], criterionKeys: JSON.parse(row.criterionKeysJson) as string[] })); }
+  private latestRevision(goalId: string, kind: WorkspaceGoalRevision["kind"]): WorkspaceGoalRevision | null { const row = this.db.prepare(`SELECT id,goal_id as goalId,kind,revision,content_json as contentJson,content_hash as contentHash,source_artifact_id as sourceArtifactId,created_by as createdBy,created_at as createdAt FROM workspace_goal_revisions WHERE goal_id=? AND kind=? ORDER BY revision DESC LIMIT 1`).get(goalId, toDbRevisionKind(kind)) as RevisionRow | undefined; return row ? revisionFromRow(row) : null; }
+  private decisionByRequest(goalId: string, requestId: string) { return this.db.prepare(`SELECT id,request_id as requestId,payload_hash as payloadHash,goal_id as goalId,target_revision_id as targetRevisionId,target_hash as targetHash,kind,approved_item_ids_json as approvedItemIdsJson,reason,actor_id as actorId,created_at as createdAt FROM workspace_goal_decisions WHERE goal_id=? AND request_id=?`).get(goalId, requestId) as DecisionRow | undefined; }
+  private decisions(goalId: string): WorkspaceGoalDecision[] { return (this.db.prepare(`SELECT id,COALESCE(request_id,'') as requestId,payload_hash as payloadHash,goal_id as goalId,target_revision_id as targetRevisionId,target_hash as targetHash,kind,approved_item_ids_json as approvedItemIdsJson,reason,actor_id as actorId,created_at as createdAt FROM workspace_goal_decisions WHERE goal_id=? ORDER BY created_at ASC,id ASC`).all(goalId) as DecisionRow[]).map(decisionFromRow); }
+  private runLinks(goalId: string): WorkspaceGoalRunLink[] { return (this.db.prepare(`SELECT goal_id as goalId,run_id as runId,goal_revision as goalRevision,plan_revision_id as roadmapRevisionId,approved_item_ids_json as roadmapItemIdsJson,criterion_keys_json as criterionKeysJson,link_mode as mode,created_at as createdAt FROM workspace_goal_run_links WHERE goal_id=? ORDER BY created_at ASC`).all(goalId) as RunLinkRow[]).map(runLinkFromRow); }
   private evidenceLinks(goalId: string): WorkspaceGoalEvidenceLink[] { return this.db.prepare(`SELECT id,goal_id as goalId,goal_revision as goalRevision,criterion_key as criterionKey,run_id as runId,check_key as checkKey,artifact_id as artifactId,operation_id as operationId,source_digest as sourceDigest,status,created_at as createdAt,updated_at as updatedAt FROM workspace_goal_evidence_links WHERE goal_id=? ORDER BY created_at ASC`).all(goalId) as WorkspaceGoalEvidenceLink[]; }
 }
 
+function mergeGoalSnapshot(run: { goal: string; contractJson: string }, snapshot: TaskRunWorkspaceGoalSnapshot): TaskRunContractSnapshot {
+  const existing = run.contractJson ? JSON.parse(run.contractJson) as TaskRunContractSnapshot : null;
+  const criterionPrompts = snapshot.criterionPrompts.map((item) => item.prompt);
+  return {
+    sourceInput: existing?.sourceInput ?? run.goal,
+    summary: existing?.summary ?? run.goal,
+    objectives: existing?.objectives ?? [{ id: "objective-1", summary: run.goal, timing: "current", kind: "other" }],
+    acceptanceCriteria: [...new Set([...(existing?.acceptanceCriteria ?? []), ...criterionPrompts])],
+    scope: existing?.scope ?? run.goal,
+    nonGoals: [...new Set([...(existing?.nonGoals ?? []), ...snapshot.nonGoals])],
+    sourceInboxIds: existing?.sourceInboxIds ?? [],
+    parentRunId: existing?.parentRunId ?? null,
+    relation: existing?.relation ?? "independent",
+    intent: existing?.intent ?? "new_task",
+    decisionReason: existing?.decisionReason ?? "TaskRun was attached to the active Workspace Goal before execution.",
+    routerVersion: existing?.routerVersion ?? "workspace-goal-v1",
+    workspaceGoal: snapshot,
+  };
+}
+
 function sha256(content: Buffer): string { return createHash("sha256").update(content).digest("hex"); }
-function revisionRecord(goalId: string, kind: "definition" | "plan", revision: number, content: WorkspaceGoalDefinition | WorkspaceGoalPlan, sourceArtifactId: string | null, createdBy: string, createdAt: number): WorkspaceGoalRevision { return { id: randomUUID(), goalId, kind, revision, content, contentHash: workspaceGoalContentHash(content), sourceArtifactId, createdBy, createdAt }; }
-function insertRevision(db: Database.Database, revision: WorkspaceGoalRevision): void { db.prepare(`INSERT INTO workspace_goal_revisions (id,goal_id,kind,revision,content_json,content_hash,source_artifact_id,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)`).run(revision.id, revision.goalId, revision.kind, revision.revision, JSON.stringify(revision.content), revision.contentHash, revision.sourceArtifactId, revision.createdBy, revision.createdAt); }
-function revisionFromRow(row: RevisionRow): WorkspaceGoalRevision { return { ...row, content: JSON.parse(row.contentJson) as WorkspaceGoalDefinition | WorkspaceGoalPlan }; }
+function revisionRecord(goalId: string, kind: WorkspaceGoalRevision["kind"], revision: number, content: WorkspaceGoalDefinition | WorkspaceGoalRoadmap, sourceArtifactId: string | null, createdBy: string, createdAt: number): WorkspaceGoalRevision { return { id: randomUUID(), goalId, kind, revision, content, contentHash: workspaceGoalContentHash(content), sourceArtifactId, createdBy, createdAt }; }
+function insertRevision(db: Database.Database, revision: WorkspaceGoalRevision): void { db.prepare(`INSERT INTO workspace_goal_revisions (id,goal_id,kind,revision,content_json,content_hash,source_artifact_id,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)`).run(revision.id, revision.goalId, toDbRevisionKind(revision.kind), revision.revision, JSON.stringify(revision.content), revision.contentHash, revision.sourceArtifactId, revision.createdBy, revision.createdAt); }
+function revisionFromRow(row: RevisionRow): WorkspaceGoalRevision {
+  const content = JSON.parse(row.contentJson) as WorkspaceGoalDefinition | WorkspaceGoalRoadmap;
+  if (workspaceGoalContentHash(content) !== row.contentHash) throw new Error(`workspace Goal revision ${row.id} content hash mismatch`);
+  const { contentJson: _contentJson, kind, ...revision } = row;
+  return { ...revision, kind: kind === "plan" ? "roadmap" : "definition", content: kind === "plan" ? normalizeRoadmap(content as WorkspaceGoalRoadmap) : content };
+}
 function definitionContent(revision: WorkspaceGoalRevision): WorkspaceGoalDefinition { return revision.content as WorkspaceGoalDefinition; }
-function planContent(revision: WorkspaceGoalRevision): WorkspaceGoalPlan { return revision.content as WorkspaceGoalPlan; }
-function decisionFromRow(row: DecisionRow): WorkspaceGoalDecision { const { approvedItemIdsJson, requestId, ...decision } = row; return { ...decision, requestId: requestId ?? "", approvedItemIds: JSON.parse(approvedItemIdsJson) as string[] }; }
+function roadmapContent(revision: WorkspaceGoalRevision): WorkspaceGoalRoadmap { return normalizeRoadmap(revision.content as WorkspaceGoalRoadmap); }
+function normalizeRoadmap(roadmap: WorkspaceGoalRoadmap): WorkspaceGoalRoadmap { return { ...roadmap, items: roadmap.items.map((item) => ({ ...item, criterionKeys: Array.isArray(item.criterionKeys) ? item.criterionKeys : [] })) }; }
+function decisionFromRow(row: DecisionRow): WorkspaceGoalDecision { const { approvedItemIdsJson, requestId, kind, ...decision } = row; return { ...decision, kind: kind === "approve_plan" ? "approve_roadmap" : kind, requestId: requestId ?? "", approvedItemIds: JSON.parse(approvedItemIdsJson) as string[] }; }
+function runLinkFromRow(row: RunLinkRow): WorkspaceGoalRunLink { return { goalId: row.goalId, runId: row.runId, goalRevision: row.goalRevision, roadmapRevisionId: row.roadmapRevisionId, roadmapItemIds: JSON.parse(row.roadmapItemIdsJson) as string[], criterionKeys: JSON.parse(row.criterionKeysJson) as string[], mode: row.mode, createdAt: row.createdAt }; }
+function toDbRevisionKind(kind: WorkspaceGoalRevision["kind"]): DbRevisionKind { return kind === "roadmap" ? "plan" : "definition"; }
+function toDbDecisionKind(kind: WorkspaceGoalDecision["kind"]): DbDecisionKind { return kind === "approve_roadmap" ? "approve_plan" : kind; }
+function splitEvidenceRef(ref: string): [string, string] { const index = ref.indexOf(":"); return index < 1 ? ["", ""] : [ref.slice(0, index), ref.slice(index + 1)]; }
+function projectedRoadmapStatus(persisted: WorkspaceGoalRoadmapItemProgress["status"], runStatus: RunStatus | null): WorkspaceGoalRoadmapItemProgress["status"] {
+  if (runStatus === "completed") return "completed";
+  if (runStatus === "running" || runStatus === "waiting_input") return "running";
+  if (runStatus && ["blocked", "interrupted", "cancelled", "failed"].includes(runStatus)) return "blocked";
+  return persisted;
+}

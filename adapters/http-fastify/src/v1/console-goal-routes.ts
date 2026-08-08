@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { Type, type Static } from "typebox";
 import {
   ConsoleWorkspaceGoalDefinitionSchema,
-  ConsoleWorkspaceGoalPlanSchema,
+  ConsoleWorkspaceGoalRoadmapSchema,
   ConsoleWorkspaceGoalSchema,
   ConsoleWorkspaceGoalSummarySchema,
   decodeAbi,
@@ -18,37 +18,24 @@ const WorkspaceIdParamsSchema = Type.Object({ workspaceId: Type.String({ minLeng
 const OptionalRequestIdSchema = Type.Optional(Type.String({ minLength: 1, maxLength: 300 }));
 const OptionalActorIdSchema = Type.Optional(Type.String({ minLength: 1, maxLength: 300 }));
 const CreateGoalBodySchema = Type.Object({ definition: ConsoleWorkspaceGoalDefinitionSchema, requestId: OptionalRequestIdSchema, actorId: OptionalActorIdSchema });
-const ReviseGoalBodySchema = Type.Object({ definition: ConsoleWorkspaceGoalDefinitionSchema, requestId: OptionalRequestIdSchema, actorId: OptionalActorIdSchema });
-const PlanBodySchema = Type.Object({ content: ConsoleWorkspaceGoalPlanSchema, sourceArtifactId: Type.Optional(Type.Union([Type.String(), Type.Null()])), requestId: OptionalRequestIdSchema, actorId: OptionalActorIdSchema });
+const ReviseGoalBodySchema = Type.Object({ definition: ConsoleWorkspaceGoalDefinitionSchema, actorId: OptionalActorIdSchema });
+const RoadmapBodySchema = Type.Object({ content: ConsoleWorkspaceGoalRoadmapSchema, sourceArtifactId: Type.Optional(Type.Union([Type.String(), Type.Null()])), actorId: OptionalActorIdSchema });
+const GenerateRoadmapBodySchema = Type.Object({ actorId: OptionalActorIdSchema });
+const StartRoadmapItemBodySchema = Type.Object({
+  roadmapItemId: Type.String({ minLength: 1, maxLength: 300 }),
+  requestId: OptionalRequestIdSchema,
+});
 const DecisionBodySchema = Type.Object({
   requestId: OptionalRequestIdSchema,
   targetRevisionId: Type.String({ minLength: 1, maxLength: 300 }),
   targetHash: Type.String({ minLength: 1, maxLength: 128 }),
   kind: Type.Union([
-    Type.Literal("approve_goal"), Type.Literal("approve_plan"), Type.Literal("request_change"),
+    Type.Literal("approve_goal"), Type.Literal("approve_roadmap"), Type.Literal("request_change"),
     Type.Literal("pause"), Type.Literal("resume"), Type.Literal("close"), Type.Literal("cancel"),
   ]),
   approvedItemIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 300 }), { maxItems: 200 })),
   reason: Type.Optional(Type.String({ maxLength: 4000 })),
   actorId: OptionalActorIdSchema,
-});
-const RunLinkBodySchema = Type.Object({
-  runId: Type.String({ minLength: 1, maxLength: 300 }),
-  goalRevision: Type.Integer({ minimum: 1 }),
-  planRevisionId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-  approvedItemIds: Type.Optional(Type.Array(Type.String(), { maxItems: 200 })),
-  criterionKeys: Type.Optional(Type.Array(Type.String(), { maxItems: 200 })),
-});
-const EvidenceBodySchema = Type.Object({
-  requestId: OptionalRequestIdSchema,
-  goalRevision: Type.Integer({ minimum: 1 }),
-  criterionKey: Type.String({ minLength: 1, maxLength: 200 }),
-  runId: Type.String({ minLength: 1, maxLength: 300 }),
-  checkKey: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-  artifactId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-  operationId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-  sourceDigest: Type.Optional(Type.String({ maxLength: 256 })),
-  status: Type.Optional(Type.Union([Type.Literal("valid"), Type.Literal("stale"), Type.Literal("contradicted")])),
 });
 
 type GoalIdParams = Static<typeof GoalIdParamsSchema>;
@@ -88,11 +75,37 @@ export function registerConsoleGoalV1Routes(app: FastifyInstance, dependencies: 
     } catch (error) { throw mapGoalError(error); }
   });
 
-  app.post("/api/v1/console/workspace-goals/:goalId/plans", { onRequest: write, schema: { params: GoalIdParamsSchema, body: PlanBodySchema } }, async (request) => {
+  app.post("/api/v1/console/workspace-goals/:goalId/roadmaps", { onRequest: write, schema: { params: GoalIdParamsSchema, body: RoadmapBodySchema } }, async (request) => {
     const { goalId } = request.params as GoalIdParams;
-    const body = decodeAbi(PlanBodySchema, request.body);
+    const body = decodeAbi(RoadmapBodySchema, request.body);
     try {
-      return successEnvelope(request, goals.addPlan(goalId, body.content, body.sourceArtifactId?.trim() || null, body.actorId?.trim() || "web_console"));
+      goals.addRoadmap(goalId, body.content, body.sourceArtifactId?.trim() || null, body.actorId?.trim() || "web_console");
+      return successEnvelope(request, encodeAbi(ConsoleWorkspaceGoalSchema, goals.get(goalId)!));
+    } catch (error) { throw mapGoalError(error); }
+  });
+
+  app.post("/api/v1/console/workspace-goals/:goalId/roadmap/generate", { onRequest: write, schema: { params: GoalIdParamsSchema, body: GenerateRoadmapBodySchema } }, async (request) => {
+    const { goalId } = request.params as GoalIdParams;
+    const body = decodeAbi(GenerateRoadmapBodySchema, request.body ?? {});
+    try {
+      await dependencies.service.generateWorkspaceGoalRoadmap(goalId, body.actorId?.trim() || "web_console");
+      return successEnvelope(request, encodeAbi(ConsoleWorkspaceGoalSchema, goals.get(goalId)!));
+    } catch (error) { throw mapGoalError(error); }
+  });
+
+  app.post("/api/v1/console/workspace-goals/:goalId/task-runs", { onRequest: write, schema: { params: GoalIdParamsSchema, body: StartRoadmapItemBodySchema } }, async (request) => {
+    const { goalId } = request.params as GoalIdParams;
+    const body = decodeAbi(StartRoadmapItemBodySchema, request.body);
+    try {
+      const result = dependencies.service.startWorkspaceGoalRoadmapItem(goalId, body.roadmapItemId, body.requestId?.trim() || undefined) as {
+        item: { id: string };
+        run: { id: string } | null;
+      };
+      return successEnvelope(request, {
+        goal: encodeAbi(ConsoleWorkspaceGoalSchema, goals.get(goalId)!),
+        inboxItemId: result.item.id,
+        runId: result.run?.id ?? null,
+      });
     } catch (error) { throw mapGoalError(error); }
   });
 
@@ -105,22 +118,6 @@ export function registerConsoleGoalV1Routes(app: FastifyInstance, dependencies: 
     } catch (error) { throw mapGoalError(error); }
   });
 
-  app.post("/api/v1/console/workspace-goals/:goalId/run-links", { onRequest: write, schema: { params: GoalIdParamsSchema, body: RunLinkBodySchema } }, async (request) => {
-    const { goalId } = request.params as GoalIdParams;
-    const body = decodeAbi(RunLinkBodySchema, request.body);
-    try {
-      return successEnvelope(request, encodeAbi(ConsoleWorkspaceGoalSchema, goals.linkRun({ goalId, ...body })));
-    } catch (error) { throw mapGoalError(error); }
-  });
-
-  app.post("/api/v1/console/workspace-goals/:goalId/evidence", { onRequest: write, schema: { params: GoalIdParamsSchema, body: EvidenceBodySchema } }, async (request) => {
-    const { goalId } = request.params as GoalIdParams;
-    const body = decodeAbi(EvidenceBodySchema, request.body);
-    try {
-      goals.linkEvidence({ goalId, ...body });
-      return successEnvelope(request, encodeAbi(ConsoleWorkspaceGoalSchema, goals.get(goalId)!));
-    } catch (error) { throw mapGoalError(error); }
-  });
 }
 
 function mapGoalError(error: unknown) {

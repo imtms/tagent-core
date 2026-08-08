@@ -1,7 +1,9 @@
 export type WorkspaceGoalStatus = "draft" | "active" | "paused" | "ready_to_close" | "completed" | "cancelled";
-export type WorkspaceGoalRevisionKind = "definition" | "plan";
-export type WorkspaceGoalDecisionKind = "approve_goal" | "approve_plan" | "request_change" | "pause" | "resume" | "close" | "cancel";
+export type WorkspaceGoalRevisionKind = "definition" | "roadmap";
+export type WorkspaceGoalDecisionKind = "approve_goal" | "approve_roadmap" | "request_change" | "pause" | "resume" | "close" | "cancel";
 export type WorkspaceGoalEvidenceStatus = "valid" | "stale" | "contradicted";
+export type WorkspaceGoalRunLinkMode = "workspace" | "roadmap";
+export type WorkspaceGoalRoadmapItemStatus = "unapproved" | "pending" | "running" | "completed" | "blocked" | "skipped";
 
 export interface WorkspaceGoalCriterionDefinition {
   key: string;
@@ -18,16 +20,18 @@ export interface WorkspaceGoalDefinition {
   completionPolicy: "user_confirm";
 }
 
-export interface WorkspaceGoalPlanItem {
+export interface WorkspaceGoalRoadmapItem {
   id: string;
   title: string;
   outcome: string;
   verification: string;
+  /** Goal criteria this bounded TaskRun is expected to advance. */
+  criterionKeys: string[];
 }
 
-export interface WorkspaceGoalPlan {
+export interface WorkspaceGoalRoadmap {
   summary: string;
-  items: WorkspaceGoalPlanItem[];
+  items: WorkspaceGoalRoadmapItem[];
 }
 
 export interface WorkspaceGoalRevision {
@@ -35,7 +39,7 @@ export interface WorkspaceGoalRevision {
   goalId: string;
   kind: WorkspaceGoalRevisionKind;
   revision: number;
-  content: WorkspaceGoalDefinition | WorkspaceGoalPlan;
+  content: WorkspaceGoalDefinition | WorkspaceGoalRoadmap;
   contentHash: string;
   sourceArtifactId: string | null;
   createdBy: string;
@@ -60,10 +64,21 @@ export interface WorkspaceGoalRunLink {
   goalId: string;
   runId: string;
   goalRevision: number;
-  planRevisionId: string | null;
-  approvedItemIds: string[];
+  roadmapRevisionId: string | null;
+  roadmapItemIds: string[];
   criterionKeys: string[];
+  mode: WorkspaceGoalRunLinkMode;
   createdAt: number;
+}
+
+export interface WorkspaceGoalRoadmapItemProgress {
+  goalId: string;
+  roadmapRevisionId: string;
+  itemId: string;
+  status: WorkspaceGoalRoadmapItemStatus;
+  runId: string | null;
+  updatedAt: number;
+  completedAt: number | null;
 }
 
 export interface WorkspaceGoalEvidenceLink {
@@ -83,10 +98,11 @@ export interface WorkspaceGoalEvidenceLink {
 
 export interface WorkspaceGoalNextAction {
   actor: "user" | "system" | "none";
-  kind: "review_goal" | "create_plan" | "review_plan" | "run_task" | "view_running_task" | "resolve_problem" | "resume" | "view_result";
+  kind: "review_goal" | "generate_roadmap" | "review_roadmap" | "run_roadmap_item" | "view_running_task" | "resolve_problem" | "resume" | "view_result";
   title: string;
   explanation: string;
   primaryActionLabel: string;
+  roadmapItemId: string | null;
 }
 
 export interface WorkspaceGoal {
@@ -94,15 +110,16 @@ export interface WorkspaceGoal {
   workspaceId: string;
   status: WorkspaceGoalStatus;
   activeDefinitionRevisionId: string | null;
-  activePlanRevisionId: string | null;
+  activeRoadmapRevisionId: string | null;
   currentRunId: string | null;
   createdAt: number;
   updatedAt: number;
   completedAt: number | null;
   definition: WorkspaceGoalRevision | null;
-  plan: WorkspaceGoalRevision | null;
+  roadmap: WorkspaceGoalRevision | null;
   decisions: WorkspaceGoalDecision[];
   runLinks: WorkspaceGoalRunLink[];
+  roadmapProgress: WorkspaceGoalRoadmapItemProgress[];
   evidenceLinks: WorkspaceGoalEvidenceLink[];
   requiredCriteria: number;
   verifiedCriteria: number;
@@ -145,9 +162,19 @@ export interface LinkWorkspaceGoalRunInput {
   goalId: string;
   runId: string;
   goalRevision: number;
-  planRevisionId?: string | null;
-  approvedItemIds?: string[];
+  roadmapRevisionId?: string | null;
+  roadmapItemIds?: string[];
   criterionKeys?: string[];
+  mode?: WorkspaceGoalRunLinkMode;
+}
+
+export interface LinkWorkspaceGoalInboxInput {
+  goalId: string;
+  inboxItemId: string;
+  goalRevision: number;
+  roadmapRevisionId: string;
+  roadmapItemIds: string[];
+  criterionKeys: string[];
 }
 
 export interface LinkWorkspaceGoalEvidenceInput {
@@ -159,6 +186,5 @@ export interface LinkWorkspaceGoalEvidenceInput {
   checkKey?: string | null;
   artifactId?: string | null;
   operationId?: string | null;
-  sourceDigest?: string;
   status?: WorkspaceGoalEvidenceStatus;
 }

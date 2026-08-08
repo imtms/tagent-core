@@ -9,6 +9,7 @@ const CONSUMER_LAG_CRITICAL = 10_000;
 const TERMINAL_UNACKED_WARNING_MIN = 1;
 const TERMINAL_UNACKED_CRITICAL_AGE_MS = 120_000;
 const TERMINAL_STATUSES = ["completed", "failed", "cancelled", "interrupted"];
+const EXPECTED_SCHEMA_VERSION = 38;
 
 function tableExists(db, name) {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
@@ -94,7 +95,7 @@ async function readHealth(url) {
 
 function severityFor(snapshot) {
   if (snapshot.ready) return "ready";
-  if (snapshot.schemaVersion !== 37
+  if (snapshot.schemaVersion !== EXPECTED_SCHEMA_VERSION
     || snapshot.migrationOpenIssues === null
     || snapshot.migrationOpenIssues > 0
     || !snapshot.health.reachable
@@ -138,7 +139,7 @@ async function main() {
   const authorityReady = databaseSnapshot.authority !== null
     && ["legacy_active", "integration_active"].includes(databaseSnapshot.authority.status);
   const reasons = [];
-  if (databaseSnapshot.schemaVersion !== 37) reasons.push("schema_version");
+  if (databaseSnapshot.schemaVersion !== EXPECTED_SCHEMA_VERSION) reasons.push("schema_version");
   if (databaseSnapshot.migrationOpenIssues === null || databaseSnapshot.migrationOpenIssues > 0) {
     reasons.push("migration_open_issues");
   }

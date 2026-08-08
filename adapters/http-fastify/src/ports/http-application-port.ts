@@ -92,6 +92,11 @@ type HttpAdmissionApplicationPort = Pick<AdmissionCoordinator,
   | "startSessionInputNow" | "requestParallelSessionInputApproval" | "retryInboxLaunch"
 >;
 
+interface HttpWorkspaceGoalApplicationPort {
+  generateWorkspaceGoalRoadmap(goalId: string, actorId?: string): unknown;
+  startWorkspaceGoalRoadmapItem(goalId: string, roadmapItemId: string, requestId?: string): unknown;
+}
+
 type HttpExecutionApplicationPort = Pick<ExecutionCoordinator,
   | "closeRuntimes" | "followUp" | "steer" | "compact" | "cancel" | "resume"
   | "rejectRunApproval" | "submitUserInput" | "subscribe" | "replay" | "getRun"
@@ -103,4 +108,5 @@ type HttpExecutionApplicationPort = Pick<ExecutionCoordinator,
 export type HttpApplicationPort = HttpAdmissionApplicationPort
   & HttpExecutionApplicationPort
   & HttpLearningApplicationPort
-  & HttpWorkflowGovernanceApplicationPort;
+  & HttpWorkflowGovernanceApplicationPort
+  & HttpWorkspaceGoalApplicationPort;

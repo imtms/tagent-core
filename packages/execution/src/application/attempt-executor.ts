@@ -289,8 +289,8 @@ export class AttemptExecutor {
       setImmediate(() => {
         try {
           if (this.state.closing) return;
-          this.dependencies.continuation.startQueuedContinuation(run.id);
           this.dependencies.postAttempt.attemptFinalized(run);
+          this.dependencies.continuation.startQueuedContinuation(run.id);
         } catch { /* Persistence resources may already be closed during shutdown. */ }
       });
     });

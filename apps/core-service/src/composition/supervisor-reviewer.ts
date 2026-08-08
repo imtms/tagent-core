@@ -1,5 +1,5 @@
 import type { Model } from "@earendil-works/pi-ai/compat";
-import type { ContextManifest } from "@tagent/execution/domain";
+import type { ContextManifest, TaskRunWorkspaceGoalSnapshot } from "@tagent/execution/domain";
 import type {
   CriterionCoverage,
   GateFailure,
@@ -124,13 +124,15 @@ function trustedEvidence(input: SupervisorSettledReviewInput): TrustedEvidenceSe
       || payload.command.trim() !== check.command.trim()) continue;
     trustedCheckRefs.add(`check:${check.key}`);
   }
-  const operationArtifactIds = new Set(currentOperations.flatMap((operation) => {
+  const operationArtifacts = new Map(currentOperations.flatMap((operation) => {
     const details = record(record(operation.result)?.details);
-    return typeof details?.artifactId === "string" && typeof details.sha256 === "string" ? [details.artifactId] : [];
+    return typeof details?.artifactId === "string" && typeof details.artifactUri === "string" && typeof details.sha256 === "string"
+      ? [[details.artifactId, details.artifactUri] as const]
+      : [];
   }));
   const artifactRefs = input.run.artifacts.filter((artifact) =>
     artifact.content.trim().length > 0
-    || operationArtifactIds.has(artifact.id) && /^\.tagent\/artifacts\//.test(artifact.uri)).map((artifact) => `artifact:${artifact.id}`);
+    || operationArtifacts.get(artifact.id) === artifact.uri && /^\.tagent\/artifacts\//.test(artifact.uri)).map((artifact) => `artifact:${artifact.id}`);
   return {
     currentOperations,
     trustedCheckRefs,
@@ -246,6 +248,26 @@ export class OpenAiSupervisorReviewer implements SupervisorReviewer {
       ...memoryEvidence.map((item) => item.ref),
     ]);
     const candidateProjection = projectUtf8HeadTail(input.response, 8_000, 3_000);
+    const workspaceGoal = input.run.contract?.workspaceGoal as TaskRunWorkspaceGoalSnapshot | null | undefined;
+    const supervisorGoalContext = workspaceGoal ? {
+      goalId: workspaceGoal.goalId,
+      mode: workspaceGoal.mode,
+      definitionRevision: workspaceGoal.definitionRevision,
+      definitionHash: workspaceGoal.definitionHash,
+      title: truncateUtf8(workspaceGoal.title, 500),
+      outcome: truncateUtf8(workspaceGoal.outcome, 2_000),
+      scope: workspaceGoal.scope.slice(0, 20).map((item) => truncateUtf8(item, 500)),
+      nonGoals: workspaceGoal.nonGoals.slice(0, 20).map((item) => truncateUtf8(item, 500)),
+      roadmapRevision: workspaceGoal.roadmapRevision,
+      targetRoadmapItemIds: workspaceGoal.targetRoadmapItemIds.slice(0, 20),
+      roadmapItems: workspaceGoal.roadmapItems.slice(0, 20).map((item) => ({
+        id: item.id,
+        title: truncateUtf8(item.title, 500),
+        outcome: truncateUtf8(item.outcome, 1_000),
+        verification: truncateUtf8(item.verification, 1_000),
+        criterionKeys: item.criterionKeys.slice(0, 100),
+      })),
+    } : null;
     const payload = {
       goal: truncateUtf8(input.run.goal, 2_000),
       contract: input.run.contract ? {
@@ -255,6 +277,7 @@ export class OpenAiSupervisorReviewer implements SupervisorReviewer {
         nonGoals: input.run.contract.nonGoals.slice(0, 20).map((item) => truncateUtf8(item, 500)),
         intent: input.run.contract.intent,
         relation: input.run.contract.relation,
+        workspaceGoal: supervisorGoalContext,
       } : null,
       requiredPlan: input.run.plan.filter((item) => item.required).map(({ key, title, status, required, position }) => ({ key, title: truncateUtf8(title, 500), status, required, position })),
       requiredChecks: input.run.checks.filter((item) => item.required).map(({ key, title, status, required, command, evidence, stale, sourceOperationId, observedAt }) => ({

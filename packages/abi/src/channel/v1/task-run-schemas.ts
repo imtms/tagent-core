@@ -13,6 +13,43 @@ export const TaskObjectiveSchema = Type.Object({
 });
 export type TaskObjective = Static<typeof TaskObjectiveSchema>;
 
+export const TaskRunWorkspaceGoalCriterionSchema = Type.Object({
+  key: Type.String({ minLength: 1 }),
+  title: Type.String({ minLength: 1 }),
+  required: Type.Boolean(),
+});
+
+export const TaskRunWorkspaceGoalRoadmapItemSchema = Type.Object({
+  id: IdentifierSchema,
+  title: Type.String({ minLength: 1 }),
+  outcome: Type.String({ minLength: 1 }),
+  verification: Type.String({ minLength: 1 }),
+  criterionKeys: Type.Array(Type.String({ minLength: 1 })),
+});
+
+export const TaskRunWorkspaceGoalSchema = Type.Object({
+  goalId: IdentifierSchema,
+  mode: Type.Union([Type.Literal("workspace"), Type.Literal("roadmap")]),
+  definitionRevisionId: IdentifierSchema,
+  definitionRevision: Type.Integer({ minimum: 1 }),
+  definitionHash: Type.String({ minLength: 1 }),
+  title: Type.String({ minLength: 1 }),
+  outcome: Type.String({ minLength: 1 }),
+  scope: Type.Array(Type.String()),
+  nonGoals: Type.Array(Type.String()),
+  criteria: Type.Array(TaskRunWorkspaceGoalCriterionSchema),
+  roadmapRevisionId: Type.Union([IdentifierSchema, Type.Null()]),
+  roadmapRevision: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
+  roadmapHash: Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
+  approvedRoadmapItemIds: Type.Array(IdentifierSchema),
+  targetRoadmapItemIds: Type.Array(IdentifierSchema),
+  roadmapItems: Type.Array(TaskRunWorkspaceGoalRoadmapItemSchema),
+  targetCriterionKeys: Type.Array(Type.String({ minLength: 1 })),
+  criterionPrompts: Type.Array(Type.Object({ key: Type.String({ minLength: 1 }), prompt: Type.String({ minLength: 1 }) })),
+  attachedAt: IsoDateTimeSchema,
+});
+export type TaskRunWorkspaceGoal = Static<typeof TaskRunWorkspaceGoalSchema>;
+
 export const TaskRunContractSchema = Type.Object({
   sourceInput: Type.String(),
   summary: Type.String(),
@@ -34,6 +71,7 @@ export const TaskRunContractSchema = Type.Object({
   ]),
   decisionReason: Type.String(),
   routerVersion: Type.String(),
+  workspaceGoal: Type.Optional(Type.Union([TaskRunWorkspaceGoalSchema, Type.Null()])),
 });
 export type TaskRunContract = Static<typeof TaskRunContractSchema>;
 

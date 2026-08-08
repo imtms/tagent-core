@@ -88,6 +88,10 @@ export function mapTaskRun(run: TaskRun): V1TaskRun {
       intent: run.contract.intent,
       decisionReason: run.contract.decisionReason,
       routerVersion: run.contract.routerVersion,
+      workspaceGoal: run.contract.workspaceGoal ? {
+        ...run.contract.workspaceGoal,
+        attachedAt: iso(run.contract.workspaceGoal.attachedAt),
+      } : null,
     } : null,
     blockedReason: run.blockedReason,
     lastEventSequence: run.lastEventSeq,

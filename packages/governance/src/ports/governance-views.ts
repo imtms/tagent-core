@@ -28,6 +28,7 @@ export interface GovernanceCompletionRunView {
     objectives: Array<{ id: string; summary: string; timing: string; kind: string }>;
     acceptanceCriteria: string[];
     nonGoals: string[];
+    workspaceGoal?: object | null;
   } | null;
   plan: PlanItem[];
   checks: RunCheck[];
@@ -45,6 +46,7 @@ export interface GovernanceTaskRunView extends GovernanceCompletionRunView, Gove
     objectives: Array<{ id: string; summary: string; timing: string; kind: string }>;
     acceptanceCriteria: string[];
     nonGoals: string[];
+    workspaceGoal?: object | null;
   } | null;
   artifacts: Artifact[];
   completionGate: CompletionGate;
@@ -67,6 +69,7 @@ export interface GovernanceContextManifestView {
     kind:
       | "system_prompt"
       | "taskrun_contract"
+      | "workspace_goal"
       | "session_message"
       | "transcript_message"
       | "core_memory"

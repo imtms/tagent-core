@@ -10,6 +10,43 @@ export interface TaskRunObjectiveSnapshot {
   kind: TaskRunObjectiveKind;
 }
 
+export interface TaskRunWorkspaceGoalCriterionSnapshot {
+  key: string;
+  title: string;
+  required: boolean;
+}
+
+export interface TaskRunWorkspaceGoalRoadmapItemSnapshot {
+  id: string;
+  title: string;
+  outcome: string;
+  verification: string;
+  criterionKeys: string[];
+}
+
+/** Immutable Goal direction attached before the first Attempt starts. */
+export interface TaskRunWorkspaceGoalSnapshot {
+  goalId: string;
+  mode: "workspace" | "roadmap";
+  definitionRevisionId: string;
+  definitionRevision: number;
+  definitionHash: string;
+  title: string;
+  outcome: string;
+  scope: string[];
+  nonGoals: string[];
+  criteria: TaskRunWorkspaceGoalCriterionSnapshot[];
+  roadmapRevisionId: string | null;
+  roadmapRevision: number | null;
+  roadmapHash: string | null;
+  approvedRoadmapItemIds: string[];
+  targetRoadmapItemIds: string[];
+  roadmapItems: TaskRunWorkspaceGoalRoadmapItemSnapshot[];
+  targetCriterionKeys: string[];
+  criterionPrompts: Array<{ key: string; prompt: string }>;
+  attachedAt: number;
+}
+
 /** Immutable Admission decision copied into the durable Execution aggregate. */
 export interface TaskRunContractSnapshot {
   sourceInput: string;
@@ -24,6 +61,7 @@ export interface TaskRunContractSnapshot {
   intent: TaskRunIntent;
   decisionReason: string;
   routerVersion: string;
+  workspaceGoal?: TaskRunWorkspaceGoalSnapshot | null;
 }
 
 /** Admission-facing command contract. Execution owns this persisted launch representation. */

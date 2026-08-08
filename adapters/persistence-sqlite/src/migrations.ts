@@ -25,6 +25,18 @@ export {
   migrateWorkspaceExecutionProfileV34,
 } from "./migrations/v34-workspace-execution-profile.js";
 export {
+  assertWorkspaceGoalsV35Schema,
+  migrateWorkspaceGoalsV35,
+} from "./migrations/v35-workspace-goals.js";
+export {
+  assertWorkspaceGoalReliabilityV36Schema,
+  migrateWorkspaceGoalReliabilityV36,
+} from "./migrations/v36-workspace-goal-reliability.js";
+export {
   assertTrustedEvidenceV37Schema,
   migrateTrustedEvidenceV37,
 } from "./migrations/v37-trusted-evidence.js";
+export {
+  assertWorkspaceGoalExecutionV38Schema,
+  migrateWorkspaceGoalExecutionV38,
+} from "./migrations/v38-workspace-goal-execution.js";

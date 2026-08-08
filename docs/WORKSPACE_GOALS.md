@@ -1,63 +1,82 @@
 # Workspace Goals
 
-Workspace Goals add a lightweight, durable long-term outcome layer above the existing TaskRun runtime. TaskRun remains the only execution unit: Goal operations do not create a second agent loop, background controller, automatic successor, or automatic completion path.
+Workspace Goals are the durable, Workspace-level direction above TaskRun. A Goal describes the long-term outcome, scope, non-goals and completion criteria; an approved Goal Roadmap breaks that direction into bounded TaskRun-sized items. TaskRun remains the only execution unit: Goals do not add another agent loop, background controller or automatic completion path.
 
-## User model
+## Execution model
 
-A Goal answers four questions:
+```text
+Goal definition
+  -> user approval
+  -> one initial Roadmap draft (LLM or manual)
+  -> user edits and approves a Roadmap revision/slice
+  -> approved Roadmap items launch bounded TaskRuns
+  -> existing Supervisor review maps actual receipts to Goal criteria
+  -> all required criteria have valid evidence
+  -> explicit user confirmation closes the Goal
+```
 
-1. What long-term outcome should this Workspace reach?
-2. What is explicitly in or out of scope?
-3. Which bounded plan items are approved now?
-4. Which existing TaskRun evidence supports closure?
+At most one Goal in a Workspace may be `active` or `ready_to_close`. This makes the direction attached to a new TaskRun unambiguous.
 
-The Web Console exposes Goals from the Workspace toolbar. Users can create a draft, revise and approve its definition, author a plan, approve a non-empty subset of plan items, inspect linked TaskRuns and evidence, pause/resume/cancel, and explicitly close a Goal after every required criterion has valid evidence.
+There are two Goal-guidance modes:
+
+| TaskRun source | Attached Goal context | Responsibility |
+| --- | --- | --- |
+| User starts ordinary work in the Workspace | Immutable snapshot of the active Goal definition: title, outcome, scope, non-goals and criteria | Use the Goal as direction. The Run keeps its own contract and is not required to complete the Roadmap or every Goal criterion. |
+| User starts an approved Roadmap item | Goal definition plus only the selected Roadmap item and its mapped criterion keys | Execute that bounded item. Mapped Goal criteria are added to the TaskRun acceptance criteria and may receive evidence from this Run. |
+
+An ordinary manually started Workspace TaskRun is automatically attached before its first Attempt starts. There is no manual run-link endpoint and no best-effort attachment after execution has begun. If the Goal was `ready_to_close`, starting more guided work returns it to `active` until evidence is re-evaluated.
+
+Roadmap launches persist their Goal authorization on the Supervisor Inbox item before dispatch. An idempotent replay repairs an interrupted pre-dispatch link; recovery refuses to launch an internal Roadmap submission whose durable authorization is missing, so it cannot fall back to ordinary Workspace guidance.
+
+## Goal Roadmap
+
+After the definition is approved, the Console can request an initial Roadmap draft from the configured lightweight model. Generation has deliberately bounded cost:
+
+- concurrent requests for the same Goal share one in-flight provider call;
+- the provider receives Goal data as untrusted user content and must return JSON;
+- Core accepts only 2–8 bounded items with stable `snake_case` IDs;
+- every item must map to at least one known Goal criterion and all required criteria must be covered;
+- there is no schema-repair LLM call and no same-provider retry/fallback;
+- if the Goal changes while the provider is running, the late result is discarded;
+- after a draft has been stored, generation cannot be called again. Further changes create user-edited immutable revisions.
+
+Users may also create the initial Roadmap manually. A Roadmap revision contains a summary and items with a concrete outcome, verification instruction and criterion mapping. The user can edit the draft and approve a non-empty subset of its items. Only that exact approved revision and slice can launch Roadmap TaskRuns.
+
+Revising the Goal definition invalidates both definition and Roadmap approval. Revising only the Roadmap invalidates Roadmap approval. Old decisions remain in the audit history but never authorize a newer revision. Goal and Roadmap revisions are content-hashed and immutable once stored.
 
 ## Lifecycle
 
 ```text
 draft
-  -> approve definition -> active
-  -> add/revise plan -> review plan
-  -> approve selected plan items
-  -> manually run and link bounded TaskRuns
-  -> link existing Check / Artifact / Operation evidence
+  -> approve Goal definition -> active
+  -> create/generate, edit and approve Goal Roadmap
+  -> launch approved Roadmap items as TaskRuns
+  -> collect criterion evidence at TaskRun terminal checkpoints
   -> ready_to_close
   -> explicit user close -> completed
 
 active <-> paused
-any non-terminal state -> cancelled
+active or ready_to_close -> cancelled
 ```
 
-Definition and plan revisions are immutable and content-hashed. A new revision invalidates the corresponding prior approval. Plan approval is partial: only the selected item IDs are approved, and a TaskRun link cannot claim items outside that slice.
+An active guided TaskRun prevents Goal pause, revision and cancellation so its immutable execution contract cannot diverge from the Goal state. A paused Goal does not guide newly started Workspace TaskRuns. `completed` and `cancelled` are terminal.
 
-## Evidence rules
+Roadmap progress is durable and projected as `unapproved`, `pending`, `running`, `completed`, `blocked` or `skipped`. The same item cannot be launched again while it already has queued, running or completed work; a recoverable blocked item can be retried explicitly.
 
-Criterion progress reuses current durable execution facts rather than creating a parallel verifier runtime:
+## Gate and evidence model
 
-- evidence must come from an existing TaskRun already linked to the Goal;
-- Goal, TaskRun and Workspace identities must match;
-- Check evidence must be passed, non-stale and contain evidence text;
-- Artifact evidence must reference an existing Artifact on that Run;
-- Operation evidence must reference a succeeded Operation;
-- evidence is bound to the active Goal definition revision and criterion key;
-- `stale` and `contradicted` evidence do not support closure.
+Goal verification reuses the TaskRun's existing semantic Supervisor review. It does not add a second Goal-verifier LLM call:
 
-A Goal becomes `ready_to_close` only when every required criterion has valid evidence. Completion policy is `user_confirm`, so Core never closes the Goal automatically.
+1. A Roadmap TaskRun adds only its mapped Goal criterion prompts to the normal TaskRun acceptance criteria.
+2. At a terminal checkpoint, the existing Supervisor call returns criterion-level `covered`, `unsupported`, `contradicted` or `blocked` coverage and cites only supplied evidence references.
+3. Core reads only evaluations with `evaluator='llm'` and maps `covered` or `contradicted` results back to the corresponding Goal criteria.
+4. Core independently resolves every cited Check, Artifact or Operation against the linked Run. Invalid, stale or fabricated references are ignored.
 
-## Deterministic next action
+Checks are trusted only when bound to a successful current-Attempt Bash receipt with the same command and exit code zero. Operations must be successful current-Attempt receipts. Artifacts must contain readable durable content or be backed by a successful current-Attempt artifact receipt. Evidence stores a Core-computed digest; later receipt, content, check or Attempt changes dynamically make it stale.
 
-Goal reads calculate one `nextAction` without an LLM or background worker:
+Blocked TaskRuns can still contribute genuine partial or contradictory evidence. `stale` and `contradicted` evidence never count toward closure. A Goal reaches `ready_to_close` only when every required criterion has valid evidence, no guided Run remains active and the current Roadmap revision has an active approval. Completion policy is always `user_confirm`, so Core never closes a Goal automatically.
 
-- review the Goal definition;
-- create or review the plan;
-- view the current TaskRun;
-- manually run the next approved item;
-- resolve stale/contradicted evidence;
-- resume a paused Goal;
-- review evidence and close.
-
-Goal list/detail reads and next-action calculation do not invoke the provider. Ordinary TaskRuns do not query the Goal repository.
+There is no Goal polling loop. TaskRun finalization and launch-failure transitions update Roadmap progress and harvest evidence. Reads deterministically recalculate evidence freshness, progress, status and one `nextAction` without calling an LLM.
 
 ## Console API
 
@@ -68,44 +87,37 @@ GET  /api/v1/console/workspaces/:workspaceId/goals
 POST /api/v1/console/workspaces/:workspaceId/goals
 GET  /api/v1/console/workspace-goals/:goalId
 POST /api/v1/console/workspace-goals/:goalId/definition-revisions
-POST /api/v1/console/workspace-goals/:goalId/plans
+POST /api/v1/console/workspace-goals/:goalId/roadmaps
+POST /api/v1/console/workspace-goals/:goalId/roadmap/generate
 POST /api/v1/console/workspace-goals/:goalId/decisions
-POST /api/v1/console/workspace-goals/:goalId/run-links
-POST /api/v1/console/workspace-goals/:goalId/evidence
+POST /api/v1/console/workspace-goals/:goalId/task-runs
 ```
 
-They are Console projections, not a Gateway/channel contract. They require the existing `sessions:read` or `sessions:write` scopes and use the standard v1 success/error envelopes.
+These are Console projections, not Gateway/channel contracts. They require the existing `sessions:read` or `sessions:write` scope and use the standard v1 envelopes. Historical `/plans`, `/run-links` and `/evidence` routes are intentionally absent and return 404; callers cannot bypass automatic attachment or Supervisor/Core evidence validation.
+
+Decision and TaskRun request IDs are strictly idempotent. Reusing a key with the same canonical payload returns the existing result; reusing it for different content is a conflict.
 
 ## Persistence and upgrade
 
-SQLite schema 36 adds:
+SQLite schema 38 retains the Goal tables introduced in schemas 35 and 36 and adds execution linkage:
 
 ```text
-workspace_goals
-workspace_goal_requests
-workspace_goal_revisions
-workspace_goal_decisions
-workspace_goal_run_links
-workspace_goal_evidence_links
+workspace_goal_run_links.link_mode
+workspace_goal_inbox_links
+workspace_goal_roadmap_item_progress
 ```
 
-The schema 34 → 35 → 36 Goal migrations are additive. Existing TaskRuns are not backfilled into Goals. Stop Core and back up SQLite with WAL/SHM before upgrading; use [UPGRADING.md](UPGRADING.md) for the current schema 37 deployment and rollback boundary.
+The v37 → v38 migration classifies historical Roadmap-linked Runs, backfills their progress and removes the obsolete one-decision-per-kind restriction while preserving request-ID idempotency. Some internal SQLite columns and values retain `plan` names for forward-compatible migration of existing databases; they are not public domain or API terminology.
+
+Migrations are forward-only. Stop Core and back up SQLite together with WAL/SHM before upgrading. A schema-37-only binary must never open a schema-38 database; rollback across this boundary requires the matching pre-upgrade database backup. See [UPGRADING.md](UPGRADING.md).
 
 ## Explicit non-goals
 
-This release does not add:
+Workspace Goals do not add:
 
 - Planning, Implementation, Verification, Repair, Reviewer, Observer or Reflector agent roles;
-- automatic Goal-to-TaskRun conversion or successor execution;
+- an automatic Goal-to-TaskRun successor loop;
 - a background Goal controller or polling worker;
-- an independent Goal recovery engine;
-- generic RBAC or a new capability platform;
-- automatic Goal completion.
-
-## Reliability boundaries added in schema 36
-
-- Goal decisions use a caller request ID plus a canonical payload hash. Repeating the same request is idempotent; reusing it with a different approved slice is rejected.
-- Completed and cancelled Goals are terminal and cannot be resumed, paused, re-approved, revised, or given new evidence.
-- Evidence digests are computed by Core from the referenced Check, Artifact, or Operation. Goal reads re-evaluate freshness, so stale Checks or changed receipts remove completion credit and return `ready_to_close` Goals to `active`.
-- A TaskRun cannot be attached to a Goal after a mutating operation has started. Once attached, write/edit/patch/bash are checked both before the runtime tool call and again inside the local Workspace tool adapter against the active approved Plan slice.
-- Ordinary TaskRuns without a Goal link retain their existing behavior and do not pay for Goal lookups beyond one indexed guard query at mutation time.
+- a separate Goal Supervisor or evidence-model call;
+- automatic Goal completion;
+- generic RBAC or a new capability platform.

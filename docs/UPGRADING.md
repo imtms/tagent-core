@@ -1,6 +1,6 @@
 # Upgrade and rollback
 
-This guide describes the current repository boundary: API v1, independently deployed Core and Web Console artifacts, one fenced SQLite writer, and control-plane schema 37. It replaces the version-specific 0.2 upgrade notes; release tags retain those historical instructions.
+This guide describes the current repository boundary: API v1, independently deployed Core and Web Console artifacts, one fenced SQLite writer, and control-plane schema 38. It replaces the version-specific 0.2 upgrade notes; release tags retain those historical instructions.
 
 ## Compatibility boundary
 
@@ -8,7 +8,7 @@ This guide describes the current repository boundary: API v1, independently depl
 - Core is API-only and does not serve the Web Console or an SPA fallback.
 - Durable submissions use the `Idempotency-Key` header and v1 receipt envelopes.
 - Production uses Node.js `24.18.1`, npm 12 or newer, and Linux x64/Node ABI 137 for the immutable Core artifact.
-- SQLite migrations are forward-only. A binary that understands at most schema 36 must not open schema 37.
+- SQLite migrations are forward-only. A binary that understands at most schema 37 must not open schema 38.
 - Core, Gateway and Web must honor generation-fenced event replay and durable persist-before-ACK behavior.
 
 ## Before upgrading
@@ -33,11 +33,12 @@ The production `Store` opener applies and revalidates the migration chain:
 | 32 | capability authorization constraints and immutable identity |
 | 33 | Learning integration journal, fenced delivery, reconciliation and migration issue ledger |
 | 34 | Workspace execution preferences and immutable TaskRun model/reasoning snapshots |
-| 35 | lightweight Workspace Goals and immutable definition/plan revisions |
+| 35 | lightweight Workspace Goals and immutable definition/Roadmap revisions |
 | 36 | Goal decision/evidence idempotency, freshness and mutation authorization |
 | 37 | operation audit payloads and trusted current-Attempt Bash bindings for checks |
+| 38 | automatic Goal guidance, Roadmap admission/progress and repeatable lifecycle decisions |
 
-Schema 37 adds:
+Schema 37 added:
 
 ```text
 operations.payload_json
@@ -46,7 +47,15 @@ run_checks.observed_at
 idx_run_checks_source_operation
 ```
 
-Reopening a schema 37 database validates column and index shape and fails closed on drift. Existing operations and self-reported check text are not backfilled as trusted evidence; new verification must produce a successful current-Attempt Bash receipt.
+Schema 38 adds:
+
+```text
+workspace_goal_run_links.link_mode
+workspace_goal_inbox_links
+workspace_goal_roadmap_item_progress
+```
+
+The v38 migration classifies historical Goal-linked Runs, backfills Roadmap item progress and rebuilds the Goal decision table without the obsolete one-decision-per-kind identity constraint. Request-ID uniqueness remains authoritative. Reopening a schema 38 database validates both the v37 trusted-evidence shape and the v38 Goal execution shape and fails closed on drift. Existing operations and self-reported check text are not backfilled as trusted evidence.
 
 The schema 33 preflight may record ambiguous source rows in `migration_issues`. Any open issue blocks startup. Correct the underlying source data and rerun the migration; do not delete or bypass the ledger.
 
@@ -54,7 +63,7 @@ The schema 33 preflight may record ambiguous source rows in `migration_issues`. 
 
 1. Verify the candidate Core archive and checksum.
 2. Open a restored database with the release-local `Store` twice.
-3. Require both opens to report `schema_meta.version=37`, zero open migration issues and the trusted-evidence index.
+3. Require both opens to report `schema_meta.version=38`, zero open migration issues, the trusted-evidence index and the Goal execution tables/column.
 4. Start exactly one Core writer and require `/api/v1/health` to report `data.ok=true` and `data.writer.ready=true`.
 5. Start one Gateway consumer, claim a new generation, replay from the durable ACK, persist each event, then ACK it.
 6. Run `scripts/gateway-readiness-probe.mjs`; require exit 0, `ready=true`, zero lag and no terminal unacknowledged events.
@@ -66,7 +75,7 @@ Use [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for the e
 ## Verification
 
 - `/api/v1/health` is ready and removed `/api/health` returns 404;
-- schema version is 37 and a second open is idempotent;
+- schema version is 38 and a second open is idempotent;
 - `migration_issues` has zero open rows;
 - only one fresh writer fence exists;
 - a passed required check is rejected unless it references a successful Bash operation from the current Attempt;
@@ -79,9 +88,9 @@ Use [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for the e
 
 There is no in-place schema downgrade.
 
-For a binary rollback that still understands schema 37, stop traffic and the current writer, switch the immutable release pointer, start one replacement writer and rerun readiness checks.
+For a binary rollback that still understands schema 38, stop traffic and the current writer, switch the immutable release pointer, start one replacement writer and rerun readiness checks.
 
-For any rollback to a schema-36-only or older binary:
+For any rollback to a schema-37-only or older binary:
 
 1. stop Gateway traffic and all writers;
 2. preserve the failed-upgrade database and readiness evidence for diagnosis;
@@ -90,4 +99,4 @@ For any rollback to a schema-36-only or older binary:
 5. restore the matching artifact and configuration;
 6. start exactly one old writer and validate it before reopening compatible traffic.
 
-Do not overwrite a live schema 37 database with old files, and do not run an incompatible binary merely to inspect it.
+Do not overwrite a live schema 38 database with old files, and do not run an incompatible binary merely to inspect it.

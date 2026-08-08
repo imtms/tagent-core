@@ -37,7 +37,7 @@ The command must exit `0` and return one credential with both scopes and the exa
 
 ## Schema migration gate
 
-Migration v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 is performed by the production `Store` opener. Back up the database and its WAL/SHM files, then run this command twice:
+Migration v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 is performed by the production `Store` opener. Back up the database and its WAL/SHM files, then run this command twice:
 
 ```sh
 TAGENT_DB=/var/lib/tagent/core.sqlite \
@@ -47,17 +47,19 @@ const store = new Store(process.env.TAGENT_DB);
 const schemaVersion = store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get().version;
 const objects = store.db.prepare(`SELECT name FROM sqlite_master
   WHERE name IN ('attempts','approval_receipts','idx_operations_attempt_created',
-    'idx_run_checks_source_operation','integration_outbox','learning_projection_authority_state') ORDER BY name`)
+    'idx_run_checks_source_operation','integration_outbox','learning_projection_authority_state',
+    'workspace_goal_inbox_links','workspace_goal_roadmap_item_progress') ORDER BY name`)
   .all().map((row) => row.name);
+const goalRunLinkColumns = store.db.prepare("PRAGMA table_info(workspace_goal_run_links)").all().map((row) => row.name);
 store.close();
-process.stdout.write(JSON.stringify({ schemaVersion, objects }));
+process.stdout.write(JSON.stringify({ schemaVersion, objects, hasGoalLinkMode: goalRunLinkColumns.includes('link_mode') }));
 NODE
 ```
 
 Both runs must exit `0` and return exactly:
 
 ```json
-{"schemaVersion":37,"objects":["approval_receipts","attempts","idx_operations_attempt_created","idx_run_checks_source_operation","integration_outbox","learning_projection_authority_state"]}
+{"schemaVersion":38,"objects":["approval_receipts","attempts","idx_operations_attempt_created","idx_run_checks_source_operation","integration_outbox","learning_projection_authority_state","workspace_goal_inbox_links","workspace_goal_roadmap_item_progress"],"hasGoalLinkMode":true}
 ```
 
 The second open is the idempotence proof. A different version or object inventory blocks deployment.
@@ -116,7 +118,7 @@ These are embedded in the probe output under `thresholds`:
 | `writerLeaseFresh` | `true` | Not applicable | `false` |
 | `migrationOpenIssues` | `0` | Not applicable | Missing table or any open issue |
 | `authorityReady` | `true` | Transition state `switching` or `rollback` | Missing authority state |
-| `schemaVersion` | `37` | Not applicable | Missing or not `37` |
+| `schemaVersion` | `38` | Not applicable | Missing or not `38` |
 
 Consumer lag semantics are strict: any value greater than zero makes the Gateway not ready immediately. Warning and critical distinguish alert urgency; they never permit traffic.
 
@@ -162,7 +164,7 @@ ORDER BY consumer, delivery_role;
 | --- | --- | --- |
 | Manifest | The production verifier exits `0`. | Verifier exits non-zero. |
 | Configuration | The release-local production parser returns the required Gateway scopes. | Parser rejects the environment or a scope is missing. |
-| Migration | Both release-local `Store` opens return schema `37` and the exact object inventory. | Open fails, output differs, or the second open is not idempotent. |
+| Migration | Both release-local `Store` opens return schema `38`, the exact object inventory and `hasGoalLinkMode=true`. | Open fails, output differs, or the second open is not idempotent. |
 | Writer | Probe returns `writerReady=true`, a fresh lease, and one current fence. | Health or SQLite lease evidence is not ready. |
 | Persist-before-ACK | The exact `(task_run_id, consumer_id, generation, sequence, event_id)` receipt is durable before its ACK. | ACK has no exact receipt, relies only on a sequence, or precedes the receipt commit. |
 | Replay | A persisted-but-unacked terminal event is promoted to the reclaimed generation, deduped, ACKed, and then quiescent. | Replay is lost, duplicated, stale, or continues after terminal ACK. |
@@ -187,7 +189,7 @@ Use **Core before Gateway** order:
 
 ## Rollback point
 
-The rollback point is the last verified prior compatible Gateway source plus the recorded Core consumer and Learning watermarks. Schema v37 is forward-only during application rollback.
+The rollback point is the last verified prior compatible Gateway source plus the recorded Core consumer and Learning watermarks. Schema v38 is forward-only during application rollback.
 
 Rollback steps:
 
@@ -197,7 +199,7 @@ Rollback steps:
 4. Activate the prior compatible Gateway source through the production learning authority rollback API.
 5. Reclaim the Core event consumer, receiving a new generation.
 6. Resume after the durable ACK watermark; replay persisted-but-unacked events and persist the new-generation exact receipt before ACK.
-7. Keep schema version `37`. Do not restore an older database over it.
+7. Keep schema version `38`. Do not restore an older database over it.
 8. Run the release-local readiness probe again and reopen traffic only after exit `0`.
 
-If the prior deployment cannot coexist with schema v37 or honor the v1 receipt/ACK contract, keep traffic stopped and deploy a forward-compatible build. Do not perform a destructive schema downgrade.
+If the prior deployment cannot coexist with schema v38 or honor the v1 receipt/ACK contract, keep traffic stopped and deploy a forward-compatible build. Do not perform a destructive schema downgrade.

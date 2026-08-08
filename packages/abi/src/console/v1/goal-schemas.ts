@@ -8,36 +8,41 @@ export const ConsoleWorkspaceGoalStatusSchema = Type.Union([
 export const ConsoleWorkspaceGoalNextActionSchema = Type.Object({
   actor: Type.Union([Type.Literal("user"), Type.Literal("system"), Type.Literal("none")]),
   kind: Type.Union([
-    Type.Literal("review_goal"), Type.Literal("create_plan"), Type.Literal("review_plan"),
-    Type.Literal("run_task"), Type.Literal("view_running_task"), Type.Literal("resolve_problem"),
+    Type.Literal("review_goal"), Type.Literal("generate_roadmap"), Type.Literal("review_roadmap"),
+    Type.Literal("run_roadmap_item"), Type.Literal("view_running_task"), Type.Literal("resolve_problem"),
     Type.Literal("resume"), Type.Literal("view_result"),
   ]),
-  title: Type.String(), explanation: Type.String(), primaryActionLabel: Type.String(),
+  title: Type.String(), explanation: Type.String(), primaryActionLabel: Type.String(), roadmapItemId: Type.Union([Type.String(), Type.Null()]),
 });
 export const ConsoleWorkspaceGoalCriterionSchema = Type.Object({ key: Type.String(), title: Type.String(), required: Type.Boolean() });
 export const ConsoleWorkspaceGoalDefinitionSchema = Type.Object({
   title: Type.String(), outcome: Type.String(), scope: Type.Array(Type.String()), nonGoals: Type.Array(Type.String()),
   criteria: Type.Array(ConsoleWorkspaceGoalCriterionSchema), completionPolicy: Type.Literal("user_confirm"),
 });
-export const ConsoleWorkspaceGoalPlanItemSchema = Type.Object({
-  id: Type.String(), title: Type.String(), outcome: Type.String(), verification: Type.String(),
+export const ConsoleWorkspaceGoalRoadmapItemSchema = Type.Object({
+  id: Type.String(), title: Type.String(), outcome: Type.String(), verification: Type.String(), criterionKeys: Type.Array(Type.String()),
 });
-export const ConsoleWorkspaceGoalPlanSchema = Type.Object({
-  summary: Type.String(), items: Type.Array(ConsoleWorkspaceGoalPlanItemSchema),
+export const ConsoleWorkspaceGoalRoadmapSchema = Type.Object({
+  summary: Type.String(), items: Type.Array(ConsoleWorkspaceGoalRoadmapItemSchema),
 });
 export const ConsoleWorkspaceGoalRevisionSchema = Type.Object({
-  id: Type.String(), goalId: Type.String(), kind: Type.Union([Type.Literal("definition"), Type.Literal("plan")]),
-  revision: Type.Number(), content: Type.Union([ConsoleWorkspaceGoalDefinitionSchema, ConsoleWorkspaceGoalPlanSchema]),
+  id: Type.String(), goalId: Type.String(), kind: Type.Union([Type.Literal("definition"), Type.Literal("roadmap")]),
+  revision: Type.Number(), content: Type.Union([ConsoleWorkspaceGoalDefinitionSchema, ConsoleWorkspaceGoalRoadmapSchema]),
   contentHash: Type.String(), sourceArtifactId: Type.Union([Type.String(), Type.Null()]), createdBy: Type.String(), createdAt: TimestampMillisecondsSchema,
 });
 export const ConsoleWorkspaceGoalDecisionSchema = Type.Object({
   id: Type.String(), requestId: Type.String(), payloadHash: Type.String(), goalId: Type.String(), targetRevisionId: Type.String(), targetHash: Type.String(),
-  kind: Type.Union([Type.Literal("approve_goal"), Type.Literal("approve_plan"), Type.Literal("request_change"), Type.Literal("pause"), Type.Literal("resume"), Type.Literal("close"), Type.Literal("cancel")]),
+  kind: Type.Union([Type.Literal("approve_goal"), Type.Literal("approve_roadmap"), Type.Literal("request_change"), Type.Literal("pause"), Type.Literal("resume"), Type.Literal("close"), Type.Literal("cancel")]),
   approvedItemIds: Type.Array(Type.String()), reason: Type.String(), actorId: Type.String(), createdAt: TimestampMillisecondsSchema,
 });
 export const ConsoleWorkspaceGoalRunLinkSchema = Type.Object({
-  goalId: Type.String(), runId: Type.String(), goalRevision: Type.Number(), planRevisionId: Type.Union([Type.String(), Type.Null()]),
-  approvedItemIds: Type.Array(Type.String()), criterionKeys: Type.Array(Type.String()), createdAt: TimestampMillisecondsSchema,
+  goalId: Type.String(), runId: Type.String(), goalRevision: Type.Number(), roadmapRevisionId: Type.Union([Type.String(), Type.Null()]),
+  roadmapItemIds: Type.Array(Type.String()), criterionKeys: Type.Array(Type.String()), mode: Type.Union([Type.Literal("workspace"), Type.Literal("roadmap")]), createdAt: TimestampMillisecondsSchema,
+});
+export const ConsoleWorkspaceGoalRoadmapProgressSchema = Type.Object({
+  goalId: Type.String(), roadmapRevisionId: Type.String(), itemId: Type.String(),
+  status: Type.Union([Type.Literal("unapproved"), Type.Literal("pending"), Type.Literal("running"), Type.Literal("completed"), Type.Literal("blocked"), Type.Literal("skipped")]),
+  runId: Type.Union([Type.String(), Type.Null()]), updatedAt: TimestampMillisecondsSchema, completedAt: Type.Union([TimestampMillisecondsSchema, Type.Null()]),
 });
 export const ConsoleWorkspaceGoalEvidenceLinkSchema = Type.Object({
   id: Type.String(), goalId: Type.String(), goalRevision: Type.Number(), criterionKey: Type.String(), runId: Type.String(),
@@ -52,11 +57,11 @@ export const ConsoleWorkspaceGoalSummarySchema = Type.Object({
 });
 export const ConsoleWorkspaceGoalSchema = Type.Object({
   id: Type.String(), workspaceId: Type.String(), status: ConsoleWorkspaceGoalStatusSchema,
-  activeDefinitionRevisionId: Type.Union([Type.String(), Type.Null()]), activePlanRevisionId: Type.Union([Type.String(), Type.Null()]),
+  activeDefinitionRevisionId: Type.Union([Type.String(), Type.Null()]), activeRoadmapRevisionId: Type.Union([Type.String(), Type.Null()]),
   currentRunId: Type.Union([Type.String(), Type.Null()]), createdAt: TimestampMillisecondsSchema, updatedAt: TimestampMillisecondsSchema,
   completedAt: Type.Union([TimestampMillisecondsSchema, Type.Null()]), definition: Type.Union([ConsoleWorkspaceGoalRevisionSchema, Type.Null()]),
-  plan: Type.Union([ConsoleWorkspaceGoalRevisionSchema, Type.Null()]), decisions: Type.Array(ConsoleWorkspaceGoalDecisionSchema),
-  runLinks: Type.Array(ConsoleWorkspaceGoalRunLinkSchema), evidenceLinks: Type.Array(ConsoleWorkspaceGoalEvidenceLinkSchema),
+  roadmap: Type.Union([ConsoleWorkspaceGoalRevisionSchema, Type.Null()]), decisions: Type.Array(ConsoleWorkspaceGoalDecisionSchema),
+  runLinks: Type.Array(ConsoleWorkspaceGoalRunLinkSchema), roadmapProgress: Type.Array(ConsoleWorkspaceGoalRoadmapProgressSchema), evidenceLinks: Type.Array(ConsoleWorkspaceGoalEvidenceLinkSchema),
   requiredCriteria: Type.Number(), verifiedCriteria: Type.Number(), nextAction: ConsoleWorkspaceGoalNextActionSchema,
 });
 
@@ -65,6 +70,6 @@ export const ConsoleWorkspaceGoalSummariesSchema = Type.Array(ConsoleWorkspaceGo
 export type ConsoleWorkspaceGoal = Static<typeof ConsoleWorkspaceGoalSchema>;
 export type ConsoleWorkspaceGoalSummary = Static<typeof ConsoleWorkspaceGoalSummarySchema>;
 export type ConsoleWorkspaceGoalDefinition = Static<typeof ConsoleWorkspaceGoalDefinitionSchema>;
-export type ConsoleWorkspaceGoalPlan = Static<typeof ConsoleWorkspaceGoalPlanSchema>;
-export type ConsoleWorkspaceGoalPlanItem = Static<typeof ConsoleWorkspaceGoalPlanItemSchema>;
+export type ConsoleWorkspaceGoalRoadmap = Static<typeof ConsoleWorkspaceGoalRoadmapSchema>;
+export type ConsoleWorkspaceGoalRoadmapItem = Static<typeof ConsoleWorkspaceGoalRoadmapItemSchema>;
 export type ConsoleWorkspaceGoalDecision = Static<typeof ConsoleWorkspaceGoalDecisionSchema>;

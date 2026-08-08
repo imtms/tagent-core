@@ -28,6 +28,7 @@ export type AdmissionApplicationPort = Pick<CoreApplicationCoordinator,
   | "deleteSessionInput" | "decideSessionInput" | "mergeSessionInputs"
   | "startSessionInputNow" | "requestParallelSessionInputApproval"
   | "retryInboxLaunch" | "recoverSessionInbox" | "start"
+  | "generateWorkspaceGoalRoadmap" | "startWorkspaceGoalRoadmapItem"
 >;
 
 export type ExecutionApplicationPort = Pick<CoreApplicationCoordinator,

@@ -45,6 +45,24 @@ export const ConsoleSessionInputAnalysisSchema = Type.Object({
 });
 export type ConsoleSessionInputAnalysis = Static<typeof ConsoleSessionInputAnalysisSchema>;
 
+export const ConsoleTaskRunWorkspaceGoalSchema = Type.Object({
+  goalId: Type.String(),
+  mode: Type.Union([Type.Literal("workspace"), Type.Literal("roadmap")]),
+  definitionRevisionId: Type.String(), definitionRevision: Type.Number(), definitionHash: Type.String(),
+  title: Type.String(), outcome: Type.String(), scope: Type.Array(Type.String()), nonGoals: Type.Array(Type.String()),
+  criteria: Type.Array(Type.Object({ key: Type.String(), title: Type.String(), required: Type.Boolean() })),
+  roadmapRevisionId: Type.Union([Type.String(), Type.Null()]), roadmapRevision: Type.Union([Type.Number(), Type.Null()]),
+  roadmapHash: Type.Union([Type.String(), Type.Null()]), approvedRoadmapItemIds: Type.Array(Type.String()),
+  targetRoadmapItemIds: Type.Array(Type.String()),
+  roadmapItems: Type.Array(Type.Object({
+    id: Type.String(), title: Type.String(), outcome: Type.String(), verification: Type.String(), criterionKeys: Type.Array(Type.String()),
+  })),
+  targetCriterionKeys: Type.Array(Type.String()),
+  criterionPrompts: Type.Array(Type.Object({ key: Type.String(), prompt: Type.String() })),
+  attachedAt: TimestampMillisecondsSchema,
+});
+export type ConsoleTaskRunWorkspaceGoal = Static<typeof ConsoleTaskRunWorkspaceGoalSchema>;
+
 export const ConsoleTaskRunContractSchema = Type.Object({
   sourceInput: Type.String(),
   summary: Type.String(),
@@ -57,6 +75,7 @@ export const ConsoleTaskRunContractSchema = Type.Object({
   intent: ConsoleSessionInputAnalysisSchema.properties.intent,
   decisionReason: Type.String(),
   routerVersion: Type.String(),
+  workspaceGoal: Type.Optional(Type.Union([ConsoleTaskRunWorkspaceGoalSchema, Type.Null()])),
 });
 export type ConsoleTaskRunContract = Static<typeof ConsoleTaskRunContractSchema>;
 
@@ -96,7 +115,12 @@ export const ConsoleMessageSchema = Type.Object({
 export type ConsoleMessage = Static<typeof ConsoleMessageSchema>;
 
 export const ConsoleContextManifestItemSchema = Type.Object({
-  kind: Type.String(),
+  kind: Type.Union([
+    Type.Literal("system_prompt"), Type.Literal("taskrun_contract"), Type.Literal("workspace_goal"),
+    Type.Literal("session_message"), Type.Literal("transcript_message"), Type.Literal("core_memory"),
+    Type.Literal("memory_card"), Type.Literal("cold_topic"), Type.Literal("workflow_revision"),
+    Type.Literal("communication_profile"), Type.Literal("project_rule"), Type.Literal("user_prompt"),
+  ]),
   sourceId: Type.String(),
   role: Type.Optional(Type.String()),
   selected: Type.Boolean(),

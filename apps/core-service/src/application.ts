@@ -14,5 +14,7 @@ export { CoreApplicationCoordinator } from "./application/core-application-coord
 export type { CoreApplicationServices } from "./application/core-application-services.js";
 export { CoreWorkflowGovernanceApplication } from "./application/workflow-governance-application.js";
 export type { LearningSettingsUpdate } from "./application/workflow-governance-application.js";
+export { CoreWorkspaceGoalApplication } from "./application/workspace-goal-application.js";
+export type { WorkspaceGoalRoadmapGenerator } from "./application/workspace-goal-application.js";
 export type { AgentServicePersistencePort } from "./application/ports/index.js";
 export type { ChatEvent } from "./application/chat-event.js";

@@ -2,11 +2,13 @@ import { createHash } from "node:crypto";
 import type {
   CreateWorkspaceGoalInput,
   LinkWorkspaceGoalEvidenceInput,
+  LinkWorkspaceGoalInboxInput,
   LinkWorkspaceGoalRunInput,
   WorkspaceGoal,
   WorkspaceGoalDecisionInput,
   WorkspaceGoalNextAction,
-  WorkspaceGoalPlan,
+  WorkspaceGoalRoadmap,
+  WorkspaceGoalRoadmapItemProgress,
   WorkspaceGoalStatus,
 } from "../domain/workspace-goal.js";
 import type { WorkspaceGoalRepository } from "../ports/workspace-goal-repository.js";
@@ -36,8 +38,13 @@ export class WorkspaceGoalService {
     return this.goals.addDefinitionRevision(required(goalId, "goalId", 300), validateDefinition(definition), required(createdBy, "createdBy", 300));
   }
 
-  addPlan(goalId: string, content: WorkspaceGoalPlan, sourceArtifactId: string | null, createdBy: string) {
-    return this.goals.addPlanRevision(required(goalId, "goalId", 300), validatePlan(content), sourceArtifactId?.trim() || null, required(createdBy, "createdBy", 300));
+  addRoadmap(goalId: string, content: WorkspaceGoalRoadmap, sourceArtifactId: string | null, createdBy: string) {
+    const normalizedGoalId = required(goalId, "goalId", 300);
+    const goal = this.goals.getGoal(normalizedGoalId);
+    if (!goal?.definition || goal.activeDefinitionRevisionId !== goal.definition.id) {
+      throw new Error("an approved Goal definition is required before a Roadmap");
+    }
+    return this.goals.addRoadmapRevision(normalizedGoalId, validateRoadmap(content, goal.definition.content as CreateWorkspaceGoalInput["definition"]), sourceArtifactId?.trim() || null, required(createdBy, "createdBy", 300));
   }
 
   decide(input: WorkspaceGoalDecisionInput) {
@@ -59,10 +66,30 @@ export class WorkspaceGoalService {
       goalId: required(input.goalId, "goalId", 300),
       runId: required(input.runId, "runId", 300),
       goalRevision: positiveInteger(input.goalRevision, "goalRevision"),
-      planRevisionId: input.planRevisionId?.trim() || null,
-      approvedItemIds: uniqueStrings(input.approvedItemIds ?? [], "approvedItemIds", 200),
+      roadmapRevisionId: input.roadmapRevisionId?.trim() || null,
+      roadmapItemIds: uniqueStrings(input.roadmapItemIds ?? [], "roadmapItemIds", 200),
       criterionKeys: uniqueStrings(input.criterionKeys ?? [], "criterionKeys", 200),
+      mode: input.mode ?? "workspace",
     });
+  }
+
+  linkInbox(input: LinkWorkspaceGoalInboxInput) {
+    return this.goals.linkInbox({
+      goalId: required(input.goalId, "goalId", 300),
+      inboxItemId: required(input.inboxItemId, "inboxItemId", 300),
+      goalRevision: positiveInteger(input.goalRevision, "goalRevision"),
+      roadmapRevisionId: required(input.roadmapRevisionId, "roadmapRevisionId", 300),
+      roadmapItemIds: uniqueStrings(input.roadmapItemIds, "roadmapItemIds", 200),
+      criterionKeys: uniqueStrings(input.criterionKeys, "criterionKeys", 200),
+    });
+  }
+
+  attachRun(runId: string, inboxItemId?: string) {
+    return this.goals.attachRun(required(runId, "runId", 300), inboxItemId?.trim() || null);
+  }
+
+  recordRunOutcome(runId: string) {
+    return this.goals.recordRunOutcome(required(runId, "runId", 300));
   }
 
   linkEvidence(input: LinkWorkspaceGoalEvidenceInput) {
@@ -76,7 +103,6 @@ export class WorkspaceGoalService {
       checkKey: input.checkKey?.trim() || null,
       artifactId: input.artifactId?.trim() || null,
       operationId: input.operationId?.trim() || null,
-      sourceDigest: input.sourceDigest?.trim() || undefined,
       status: input.status ?? "valid",
     });
   }
@@ -86,28 +112,35 @@ export function workspaceGoalNextAction(input: {
   status: WorkspaceGoalStatus;
   hasDefinition: boolean;
   hasApprovedDefinition: boolean;
-  hasPlan: boolean;
-  hasApprovedPlan: boolean;
+  hasRoadmap: boolean;
+  hasApprovedRoadmap: boolean;
   currentRunId: string | null;
   requiredCriteria: number;
   verifiedCriteria: number;
+  roadmapProgress: WorkspaceGoalRoadmapItemProgress[];
+  approvedItemIds: string[];
+  currentRunStatus: string | null;
 }): WorkspaceGoalNextAction {
   if (["completed", "cancelled"].includes(input.status)) return action("none", "view_result", "Goal ended", "Review the result and evidence.", "View result");
   if (input.status === "paused") return action("user", "resume", "Goal is paused", "Resume when you are ready to continue.", "Resume Goal");
-  if (!input.hasDefinition || !input.hasApprovedDefinition) return action("user", "review_goal", "Review this Goal", "Confirm the long-term outcome before planning any source changes.", "Review Goal");
-  if (!input.hasPlan) return action("user", "create_plan", "Create a plan", "Use a read-only TaskRun to prepare a bounded plan.", "Create plan");
-  if (!input.hasApprovedPlan) return action("user", "review_plan", "Review the current plan", "Choose exactly which plan items may be run.", "Review plan");
-  if (input.currentRunId) return action("system", "view_running_task", "A TaskRun is in progress", "The Goal is currently advancing through one bounded TaskRun.", "View task");
+  if (!input.hasDefinition || !input.hasApprovedDefinition) return action("user", "review_goal", "Review this Goal", "Confirm the long-term outcome before starting Workspace changes.", "Approve Goal");
+  if (!input.hasRoadmap) return action("system", "generate_roadmap", "Generate a Goal Roadmap", "Use one bounded LLM call to draft TaskRun-sized outcomes, then edit and approve them.", "Generate Roadmap");
+  if (!input.hasApprovedRoadmap) return action("user", "review_roadmap", "Review the Goal Roadmap", "Edit the draft and approve only the items that may drive TaskRuns.", "Approve selected");
+  if (input.currentRunId && ["blocked", "interrupted"].includes(input.currentRunStatus ?? "")) return action("user", "resolve_problem", "A Goal TaskRun needs attention", "Open the blocked TaskRun, resolve its blocker, and resume it.", "Open task");
+  if (input.currentRunId) return action("system", "view_running_task", "A Goal TaskRun is active", "The current TaskRun is executing with an immutable Goal direction snapshot.", "View task");
   if (input.requiredCriteria > 0 && input.verifiedCriteria >= input.requiredCriteria) return action("user", "view_result", "Verified criteria are ready", "Review the evidence and confirm closure.", "Confirm closure");
-  return action("user", "run_task", "Run the next approved item", "Start one bounded TaskRun from the approved plan slice.", "Run next item");
+  const progress = new Map(input.roadmapProgress.map((item) => [item.itemId, item]));
+  const nextItemId = input.approvedItemIds.find((itemId) => !["completed", "skipped"].includes(progress.get(itemId)?.status ?? "pending")) ?? null;
+  if (nextItemId) return action("user", "run_roadmap_item", "Run the next Roadmap item", "Start one bounded TaskRun with the Goal and Roadmap item embedded in its execution contract.", "Start TaskRun", nextItemId);
+  return action("user", "review_roadmap", "Extend the Goal Roadmap", "Approved Roadmap work is exhausted while required Goal criteria remain open.", "Revise Roadmap");
 }
 
 export function workspaceGoalContentHash(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }
 
-function action(actor: WorkspaceGoalNextAction["actor"], kind: WorkspaceGoalNextAction["kind"], title: string, explanation: string, primaryActionLabel: string): WorkspaceGoalNextAction {
-  return { actor, kind, title, explanation, primaryActionLabel };
+function action(actor: WorkspaceGoalNextAction["actor"], kind: WorkspaceGoalNextAction["kind"], title: string, explanation: string, primaryActionLabel: string, roadmapItemId: string | null = null): WorkspaceGoalNextAction {
+  return { actor, kind, title, explanation, primaryActionLabel, roadmapItemId };
 }
 
 function validateDefinition(input: CreateWorkspaceGoalInput["definition"]): CreateWorkspaceGoalInput["definition"] {
@@ -119,6 +152,7 @@ function validateDefinition(input: CreateWorkspaceGoalInput["definition"]): Crea
   })) ?? [];
   if (!criteria.length) throw new Error("at least one criterion is required");
   if (criteria.length > 100 || new Set(criteria.map((item) => item.key)).size !== criteria.length) throw new Error("criterion keys must be unique and cannot exceed 100 items");
+  if (!criteria.some((item) => item.required)) throw new Error("at least one required criterion is required for evidence-based Goal completion");
   return {
     title: required(input.title, "title", 200),
     outcome: required(input.outcome, "outcome", 4_000),
@@ -129,16 +163,25 @@ function validateDefinition(input: CreateWorkspaceGoalInput["definition"]): Crea
   };
 }
 
-function validatePlan(input: WorkspaceGoalPlan): WorkspaceGoalPlan {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("plan is required");
-  if (!Array.isArray(input.items) || !input.items.length || input.items.length > 50) throw new Error("plan items must contain between 1 and 50 items");
+export function validateWorkspaceGoalRoadmap(input: WorkspaceGoalRoadmap, definition: CreateWorkspaceGoalInput["definition"]): WorkspaceGoalRoadmap {
+  return validateRoadmap(input, definition);
+}
+
+function validateRoadmap(input: WorkspaceGoalRoadmap, definition: CreateWorkspaceGoalInput["definition"]): WorkspaceGoalRoadmap {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Roadmap is required");
+  if (!Array.isArray(input.items) || !input.items.length || input.items.length > 50) throw new Error("Roadmap items must contain between 1 and 50 items");
+  const criterionKeys = new Set(definition.criteria.map((criterion) => criterion.key));
   const items = input.items.map((item, index) => ({
     id: required(item?.id, `items[${index}].id`, 200),
     title: required(item?.title, `items[${index}].title`, 500),
     outcome: required(item?.outcome, `items[${index}].outcome`, 2_000),
     verification: required(item?.verification, `items[${index}].verification`, 2_000),
+    criterionKeys: uniqueStrings(item?.criterionKeys ?? [], `items[${index}].criterionKeys`, 100, 200),
   }));
-  if (new Set(items.map((item) => item.id)).size !== items.length) throw new Error("plan item ids must be unique");
+  if (new Set(items.map((item) => item.id)).size !== items.length) throw new Error("Roadmap item ids must be unique");
+  if (items.some((item) => !/^[a-z][a-z0-9_]{0,63}$/.test(item.id))) throw new Error("Roadmap item ids must be short snake_case identifiers");
+  if (items.some((item) => !item.criterionKeys.length)) throw new Error("every Roadmap item must advance at least one Goal criterion");
+  if (items.some((item) => item.criterionKeys.some((key) => !criterionKeys.has(key)))) throw new Error("Roadmap item references an unknown Goal criterion");
   return { summary: required(input.summary, "summary", 4_000), items };
 }
 

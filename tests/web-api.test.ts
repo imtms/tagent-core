@@ -69,6 +69,17 @@ describe("Web API request headers", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/console/sessions/session", expect.objectContaining({ method: "PATCH", body: JSON.stringify({ title: "After" }) }));
   });
 
+  it("uses a caller-stable request ID when creating the initial workspace", async () => {
+    const session = { id: "session", title: "First workspace", modelId: "gpt-5.6-sol", reasoningEffort: "high", createdAt: 1, updatedAt: 1, latestRunStatus: null, latestRunPhase: null };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(success(session)), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.createSession("First workspace", "initial-workspace-request");
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/console/sessions", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ title: "First workspace", requestId: "initial-workspace-request" }),
+    }));
+  });
+
   it("updates and reorders queued prompts through the Session API", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(success(consoleInboxItem())), { status: 200, headers: { "Content-Type": "application/json" } }))

@@ -645,16 +645,16 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(37);
+    expect(store.getSchemaVersion()).toBe(38);
   });
 
-  it("migrates an older database to schema version 37", () => {
+  it("migrates an older database to schema version 38", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE core_writer_lease; DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(37);
+    expect(migrated.getSchemaVersion()).toBe(38);
     expect((migrated.db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
     expect((migrated.db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
     expect((migrated.db.prepare("PRAGMA table_info(operations)").all() as Array<{ name: string }>).map((column) => column.name)).toContain("payload_json");
@@ -680,6 +680,27 @@ describe("Store", () => {
       "CHECK (released_at IS NULL OR released_at >= acquired_at)",
     ]) expect(writerLeaseSql).toContain(constraint);
     expect(migrated.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='spawn_proposals'").get()).toBeUndefined();
+    migrated.close();
+  });
+
+  it("adds v37 trusted-evidence columns before creating their index", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-v36-order-")), "core.db");
+    const initial = new Store(filename);
+    initial.db.exec(`
+      DROP INDEX idx_run_checks_source_operation;
+      ALTER TABLE operations DROP COLUMN payload_json;
+      ALTER TABLE run_checks DROP COLUMN source_operation_id;
+      ALTER TABLE run_checks DROP COLUMN observed_at;
+      UPDATE schema_meta SET version=36 WHERE id=1;
+    `);
+    initial.close();
+
+    const migrated = new Store(filename);
+    expect(migrated.getSchemaVersion()).toBe(38);
+    expect((migrated.db.prepare("PRAGMA table_info(run_checks)").all() as Array<{ name: string }>).map((column) => column.name))
+      .toEqual(expect.arrayContaining(["source_operation_id", "observed_at"]));
+    expect(migrated.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_run_checks_source_operation'").get())
+      .toEqual({ name: "idx_run_checks_source_operation" });
     migrated.close();
   });
 

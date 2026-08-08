@@ -13,7 +13,7 @@ This directory contains the maintained contracts for the current TAgent Core mai
 
 - [Modular monolith](MODULAR_MONOLITH.md) — workspace map, dependency direction, composition roots, and Core/Web separation.
 - [Naming conventions](NAMING_CONVENTIONS.md) — canonical domain and wire terminology.
-- [Workspace Goals](WORKSPACE_GOALS.md) — lightweight long-term outcome, plan approval, TaskRun/evidence links, and explicit closure.
+- [Workspace Goals](WORKSPACE_GOALS.md) — Workspace direction, user-approved Goal Roadmaps, guided TaskRuns, verified evidence, and explicit closure.
 
 ## ABI and HTTP
 
@@ -22,7 +22,7 @@ This directory contains the maintained contracts for the current TAgent Core mai
 
 ## Persistence and execution
 
-- [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md) — SQLite ownership, schema 37, trusted receipts, writer fencing, Unit of Work, lifecycle, and restart recovery.
+- [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md) — SQLite ownership, schema 38, trusted receipts, writer fencing, Unit of Work, lifecycle, and restart recovery.
 - [Runtime](RUNTIME.md) — in-process Pi boundary, `TaskRun`/`Attempt` execution, timeouts, and tool authority.
 - [Execution reliability and efficiency](EXECUTION_EFFICIENCY.md) — snapshot edits, Artifact spill, project context, batching, context projection, Bash repeat protection, and continuation stalls.
 - [Supervisor](SUPERVISOR.md) — trusted Bash evidence, bounded LLM review, approvals, candidate delivery, and continuations.

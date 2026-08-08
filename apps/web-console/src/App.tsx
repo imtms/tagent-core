@@ -12,6 +12,7 @@ const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour:
 const workspaceEmojis = ["💬", "🧠", "🛠️", "🚀", "📚", "🔬", "🎨", "📦", "🧭", "⚙️"] as const;
 const reasoningEfforts = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 type Theme = "light" | "dark";
+const initialWorkspaceRequestId = createRequestId();
 
 function storedBoolean(key: string): boolean {
   try { return globalThis.localStorage?.getItem(key) === "true"; } catch { return false; }
@@ -368,7 +369,7 @@ export function App() {
 
   const loadSessions = useCallback(async () => {
     let items = await api.sessions();
-    if (!items.length) items = [await api.createSession("First workspace")];
+    if (!items.length) items = [await api.createSession("First workspace", initialWorkspaceRequestId)];
     setSessions(items);
     setSessionId((current) => current || items[0].id);
   }, []);

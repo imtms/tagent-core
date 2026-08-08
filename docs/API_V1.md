@@ -43,13 +43,13 @@ GET  /api/v1/console/workspaces/:workspaceId/goals
 POST /api/v1/console/workspaces/:workspaceId/goals
 GET  /api/v1/console/workspace-goals/:goalId
 POST /api/v1/console/workspace-goals/:goalId/definition-revisions
-POST /api/v1/console/workspace-goals/:goalId/plans
+POST /api/v1/console/workspace-goals/:goalId/roadmaps
+POST /api/v1/console/workspace-goals/:goalId/roadmap/generate
 POST /api/v1/console/workspace-goals/:goalId/decisions
-POST /api/v1/console/workspace-goals/:goalId/run-links
-POST /api/v1/console/workspace-goals/:goalId/evidence
+POST /api/v1/console/workspace-goals/:goalId/task-runs
 ```
 
-These routes use `sessions:read` or `sessions:write`, the standard v1 envelopes and the Console Goal ABI schemas. They do not start TaskRuns or provide an automatic Goal controller. See [WORKSPACE_GOALS.md](WORKSPACE_GOALS.md).
+These routes use `sessions:read` or `sessions:write`, the standard v1 envelopes and the Console Goal ABI schemas. Roadmap generation makes one bounded initial LLM call; after user editing and approval, `task-runs` starts an approved Roadmap item through normal admission. Ordinary user-started TaskRuns in the Workspace automatically receive the unique active Goal definition as immutable direction. `/plans`, `/run-links` and `/evidence` are removed and return 404, so callers cannot bypass automatic linking or receipt validation. There is no automatic Goal controller or completion path. See [WORKSPACE_GOALS.md](WORKSPACE_GOALS.md).
 
 ### Memory provenance
 

@@ -46,6 +46,8 @@ export interface SubmissionQueue {
   ): SessionInboxItem | undefined;
   reorderSessionInbox(sessionId: SessionId, itemIds: string[]): SessionInboxItem[] | undefined;
   deleteSessionInboxItem(id: string, sessionId: SessionId): boolean;
+  /** Compensates a failed pre-launch admission before the Inbox item becomes observable work. */
+  discardSessionInboxItem(id: string, sessionId: SessionId): boolean;
   decideSessionInboxItem(id: string, sessionId: SessionId, decision: "pending" | "defer"): boolean;
   mergeSessionInboxItems(sourceId: string, targetId: string, sessionId: SessionId): boolean;
   claimNextSessionInbox(sessionId: SessionId): ClaimedSubmission | undefined;

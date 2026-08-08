@@ -29,6 +29,7 @@ const delegatedMethods = [
   "enqueueSessionInput", "updateSessionInput", "reorderSessionInputs", "deleteSessionInput",
   "decideSessionInput", "mergeSessionInputs", "startSessionInputNow",
   "requestParallelSessionInputApproval", "retryInboxLaunch", "recoverSessionInbox", "start",
+  "generateWorkspaceGoalRoadmap", "startWorkspaceGoalRoadmapItem",
   "teachWorkflow", "listWorkflows", "getWorkflow", "requestWorkflowActivation", "activateWorkflow",
   "suspendWorkflow", "rollbackWorkflow", "forgetWorkflow", "restoreWorkflow", "setWorkflowBindingMode",
   "recordWorkflowApplication", "getLearningCenter", "decideWorkflowProposal",

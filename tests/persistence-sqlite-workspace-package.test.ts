@@ -205,16 +205,21 @@ describe("SQLite persistence adapter workspace package", () => {
     expect(upperLayerViolations).toEqual([]);
   });
 
-  it("preserves schema v37 and the current SQLite shape", () => {
+  it("preserves schema v38 and the current SQLite shape", () => {
     const store = new Store(":memory:");
     try {
-      expect(store.getSchemaVersion()).toBe(37);
+      expect(store.getSchemaVersion()).toBe(38);
       const tables = store.db.prepare(
         "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'",
       ).all() as Array<{ name: string }>;
-      expect(tables).toHaveLength(78);
+      expect(tables).toHaveLength(80);
+      expect(tables.map((table) => table.name)).toEqual(expect.arrayContaining([
+        "workspace_goal_inbox_links",
+        "workspace_goal_roadmap_item_progress",
+      ]));
       expect((store.db.prepare("PRAGMA table_info(operations)").all() as Array<{ name: string }>).map((column) => column.name)).toContain("payload_json");
       expect((store.db.prepare("PRAGMA table_info(run_checks)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["source_operation_id", "observed_at"]));
+      expect((store.db.prepare("PRAGMA table_info(workspace_goal_run_links)").all() as Array<{ name: string }>).map((column) => column.name)).toContain("link_mode");
     } finally {
       store.close();
     }

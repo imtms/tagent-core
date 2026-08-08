@@ -1,13 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
   CheckCircle2,
   ChevronRight,
   Circle,
-  FileCheck2,
+  ExternalLink,
+  Map as MapIcon,
   Pencil,
+  Play,
   Plus,
+  Sparkles,
   Target,
   Trash2,
   X,
@@ -16,8 +19,8 @@ import {
   api,
   type WorkspaceGoal,
   type WorkspaceGoalDefinition,
-  type WorkspaceGoalPlan,
-  type WorkspaceGoalPlanItem,
+  type WorkspaceGoalRoadmap,
+  type WorkspaceGoalRoadmapItem,
   type WorkspaceGoalSummary,
 } from "./api";
 
@@ -26,17 +29,30 @@ const blankDefinition = (): WorkspaceGoalDefinition => ({
   outcome: "",
   scope: [],
   nonGoals: [],
-  criteria: [{ key: "criterion-1", title: "", required: true }],
+  criteria: [{ key: "criterion_1", title: "", required: true }],
   completionPolicy: "user_confirm",
 });
 
-const blankPlan = (): WorkspaceGoalPlan => ({
-  summary: "",
-  items: [{ id: "item-1", title: "", outcome: "", verification: "" }],
-});
+function blankRoadmap(definition?: WorkspaceGoalDefinition): WorkspaceGoalRoadmap {
+  return {
+    summary: "",
+    items: [newRoadmapItem([], definition)],
+  };
+}
 
-type GoalDecisionKind = "approve_goal" | "approve_plan" | "request_change" | "pause" | "resume" | "close" | "cancel";
-type EditorMode = "create" | "definition" | "plan" | null;
+function newRoadmapItem(existing: string[], definition?: WorkspaceGoalDefinition): WorkspaceGoalRoadmapItem {
+  return {
+    id: nextKey(existing, "item"),
+    title: "",
+    outcome: "",
+    verification: "",
+    criterionKeys: definition?.criteria[0] ? [definition.criteria[0].key] : [],
+  };
+}
+
+type GoalDecisionKind = "approve_goal" | "approve_roadmap" | "request_change" | "pause" | "resume" | "close" | "cancel";
+type GoalRevision = NonNullable<WorkspaceGoal["definition"]>;
+type EditorMode = "create" | "definition" | "roadmap" | null;
 
 export function GoalsPanel({
   workspaceId,
@@ -51,20 +67,21 @@ export function GoalsPanel({
   const [selected, setSelected] = useState<WorkspaceGoal | null>(null);
   const [editor, setEditor] = useState<EditorMode>(null);
   const [definition, setDefinition] = useState<WorkspaceGoalDefinition>(blankDefinition);
-  const [plan, setPlan] = useState<WorkspaceGoalPlan>(blankPlan);
+  const [roadmap, setRoadmap] = useState<WorkspaceGoalRoadmap>(() => blankRoadmap());
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(true);
+  const dialogRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
   const refresh = async (selectId?: string) => {
     const nextItems = await api.workspaceGoals(workspaceId);
     setItems(nextItems);
     const targetId = selectId ?? selected?.id ?? nextItems[0]?.id;
-    if (targetId && nextItems.some((item) => item.id === targetId)) {
-      setSelected(await api.workspaceGoal(targetId));
-    } else {
-      setSelected(null);
-    }
+    if (targetId && nextItems.some((item) => item.id === targetId)) setSelected(await api.workspaceGoal(targetId));
+    else setSelected(null);
   };
 
   useEffect(() => {
@@ -88,6 +105,39 @@ export function GoalsPanel({
     return () => { active = false; };
   }, [workspaceId]);
 
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusable = () => [...(dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),summary,[href],[tabindex]:not([tabindex="-1"])',
+    ) ?? [])].filter((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden");
+    const frame = requestAnimationFrame(() => focusable()[0]?.focus());
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const elements = focusable();
+      if (!elements.length) return event.preventDefault();
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !dialogRef.current?.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !dialogRef.current?.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", handleKey);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
+
   const openGoal = async (goalId: string) => {
     setBusy(true);
     setError("");
@@ -104,7 +154,7 @@ export function GoalsPanel({
 
   const decide = async (
     kind: GoalDecisionKind,
-    target = selected?.definition,
+    target: GoalRevision | null = selected?.definition ?? null,
     approvedItemIds: string[] = [],
     reason = "",
   ) => {
@@ -125,6 +175,41 @@ export function GoalsPanel({
     }
   };
 
+  const generateRoadmap = async () => {
+    if (!selected || busy) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const next = await api.generateWorkspaceGoalRoadmap(selected.id);
+      setSelected(next);
+      await refresh(next.id);
+      setNotice("Roadmap draft generated. Review and edit it before approval.");
+    } catch (cause) {
+      setError(message(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startRoadmapItem = async (roadmapItemId: string) => {
+    if (!selected || busy) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api.startWorkspaceGoalRoadmapItem(selected.id, roadmapItemId);
+      setSelected(result.goal);
+      await refresh(selected.id);
+      if (result.runId) onOpenRun?.(result.runId);
+      else setNotice("Roadmap item queued. It will start after the active TaskRun finishes.");
+    } catch (cause) {
+      setError(message(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const beginDefinitionEdit = () => {
     const current = selected?.definition?.content as WorkspaceGoalDefinition | undefined;
     setDefinition(current ? clone(current) : blankDefinition());
@@ -133,23 +218,24 @@ export function GoalsPanel({
     setNotice("");
   };
 
-  const beginPlanEdit = () => {
-    const current = selected?.plan?.content as WorkspaceGoalPlan | undefined;
-    setPlan(current ? clone(current) : blankPlan());
-    setEditor("plan");
+  const beginRoadmapEdit = () => {
+    const currentDefinition = selected?.definition?.content as WorkspaceGoalDefinition | undefined;
+    const current = selected?.roadmap?.content as WorkspaceGoalRoadmap | undefined;
+    setRoadmap(current ? clone(current) : blankRoadmap(currentDefinition));
+    setEditor("roadmap");
     setError("");
     setNotice("");
   };
 
   return <div className="memory-overlay goal-overlay" role="dialog" aria-modal="true" aria-labelledby="workspace-goals-title">
     <button className="memory-backdrop" onClick={onClose} aria-label="Close Goals" />
-    <section className="memory-center goal-center">
+    <section className="memory-center goal-center" ref={dialogRef}>
       <header className="memory-header goal-header">
         <div className="memory-heading-icon"><Target size={21} /></div>
         <div>
-          <span className="eyebrow">Workspace outcomes</span>
+          <span className="eyebrow">Workspace direction</span>
           <h2 id="workspace-goals-title">Goals</h2>
-          <p>Define the outcome, approve a bounded plan, and track verified progress.</p>
+          <p>Approve the outcome and Roadmap, then run one bounded item at a time.</p>
         </div>
         <div className="memory-header-actions">
           <span className="memory-live"><span />{items.length} total</span>
@@ -169,10 +255,10 @@ export function GoalsPanel({
           <GoalNavigation items={items} selectedId={selected?.id} busy={busy} onOpen={openGoal} />
         </aside>
 
-        <main className="goal-main">
-          {error && <div className="memory-alert error goal-alert">{error}</div>}
-          {notice && <div className="memory-alert success goal-alert">{notice}</div>}
-          {editor === "create" || editor === "definition" ? <GoalDefinitionForm
+        <main className="goal-main" aria-busy={busy}>
+          {error && <div className="memory-alert error goal-alert" role="alert">{error}</div>}
+          {notice && <div className="memory-alert success goal-alert" role="status">{notice}</div>}
+          {busy && !selected && editor === null ? <GoalLoading /> : editor === "create" || editor === "definition" ? <GoalDefinitionForm
             definition={definition}
             setDefinition={setDefinition}
             busy={busy}
@@ -186,12 +272,12 @@ export function GoalsPanel({
                 if (selected) {
                   await api.reviseWorkspaceGoal(selected.id, definition);
                   await refresh(selected.id);
-                  setNotice("Definition updated. Review the new revision before planning.");
+                  setNotice("Definition updated. Approve the new revision before generating a Roadmap.");
                 } else {
                   const goal = await api.createWorkspaceGoal(workspaceId, definition);
                   setSelected(goal);
                   await refresh(goal.id);
-                  setNotice("Goal draft created. No TaskRun was started.");
+                  setNotice("Goal draft created.");
                 }
                 setEditor(null);
               } catch (cause) {
@@ -200,9 +286,10 @@ export function GoalsPanel({
                 setBusy(false);
               }
             }}
-          /> : editor === "plan" && selected ? <GoalPlanForm
-            plan={plan}
-            setPlan={setPlan}
+          /> : editor === "roadmap" && selected ? <GoalRoadmapForm
+            roadmap={roadmap}
+            setRoadmap={setRoadmap}
+            definition={selected.definition?.content as WorkspaceGoalDefinition}
             busy={busy}
             onCancel={() => setEditor(null)}
             onSave={async () => {
@@ -210,10 +297,11 @@ export function GoalsPanel({
               setError("");
               setNotice("");
               try {
-                await api.addWorkspaceGoalPlan(selected.id, plan);
+                const next = await api.addWorkspaceGoalRoadmap(selected.id, roadmap);
+                setSelected(next);
                 await refresh(selected.id);
                 setEditor(null);
-                setNotice("Plan saved. Select the items you want to approve.");
+                setNotice("Roadmap saved. Select the items to approve.");
               } catch (cause) {
                 setError(message(cause));
               } finally {
@@ -224,8 +312,10 @@ export function GoalsPanel({
             goal={selected}
             busy={busy}
             decide={decide}
+            onGenerateRoadmap={generateRoadmap}
+            onStartRoadmapItem={startRoadmapItem}
             onEditDefinition={beginDefinitionEdit}
-            onEditPlan={beginPlanEdit}
+            onEditRoadmap={beginRoadmapEdit}
             onOpenRun={onOpenRun}
           /> : <GoalEmpty busy={busy} onCreate={beginDefinitionEdit} />}
         </main>
@@ -234,12 +324,7 @@ export function GoalsPanel({
   </div>;
 }
 
-function GoalNavigation({
-  items,
-  selectedId,
-  busy,
-  onOpen,
-}: {
+function GoalNavigation({ items, selectedId, busy, onOpen }: {
   items: WorkspaceGoalSummary[];
   selectedId?: string;
   busy: boolean;
@@ -251,20 +336,13 @@ function GoalNavigation({
     { label: "Ended", items: items.filter((item) => item.status === "completed" || item.status === "cancelled") },
   ].filter((group) => group.items.length > 0);
 
-  if (!items.length) return <div className="goal-sidebar-empty"><Target size={18} /><p>No Goals yet.</p><small>Create one when work needs a durable outcome across TaskRuns.</small></div>;
-
+  if (!items.length) return <div className="goal-sidebar-empty"><Target size={18} /><p>No Goals yet.</p><small>Create one for work that spans several TaskRuns.</small></div>;
   return <nav className="goal-nav" aria-label="Workspace Goals">
     {groups.map((group) => <section key={group.label}>
       <h3>{group.label}<span>{group.items.length}</span></h3>
       {group.items.map((goal) => {
         const progress = goal.requiredCriteria ? Math.round(goal.verifiedCriteria / goal.requiredCriteria * 100) : 0;
-        return <button
-          type="button"
-          className={selectedId === goal.id ? "selected" : ""}
-          key={goal.id}
-          onClick={() => void onOpen(goal.id)}
-          disabled={busy}
-        >
+        return <button type="button" className={selectedId === goal.id ? "selected" : ""} key={goal.id} onClick={() => void onOpen(goal.id)} disabled={busy}>
           <span className={`goal-nav-dot ${statusTone(goal.status)}`} />
           <span className="goal-nav-copy">
             <strong>{goal.title}</strong>
@@ -280,21 +358,20 @@ function GoalNavigation({
 function GoalEmpty({ busy, onCreate }: { busy: boolean; onCreate: () => void }) {
   return <div className="goal-empty">
     <div><Target size={24} /></div>
-    <span className="eyebrow">Long-term work</span>
-    <h2>Create a clear Workspace outcome</h2>
-    <p>Goals keep direction and evidence together while TaskRun remains the only execution unit.</p>
+    <span className="eyebrow">Long-term direction</span>
+    <h2>Create a Workspace Goal</h2>
+    <p>The Goal guides every TaskRun in this Workspace; Roadmap items provide approved, TaskRun-sized steps.</p>
     <button className="memory-primary" disabled={busy} onClick={onCreate}><Plus size={15} />Create Goal</button>
   </div>;
 }
 
-function GoalDefinitionForm({
-  definition,
-  setDefinition,
-  busy,
-  editing,
-  onSave,
-  onCancel,
-}: {
+function GoalLoading() {
+  return <div className="goal-loading" role="status" aria-label="Loading Workspace Goals">
+    <span /><span /><span />
+  </div>;
+}
+
+function GoalDefinitionForm({ definition, setDefinition, busy, editing, onSave, onCancel }: {
   definition: WorkspaceGoalDefinition;
   setDefinition: (value: WorkspaceGoalDefinition) => void;
   busy: boolean;
@@ -302,36 +379,26 @@ function GoalDefinitionForm({
   onSave: () => Promise<void>;
   onCancel: () => void;
 }) {
-  const updateCriterion = (index: number, patch: Partial<WorkspaceGoalDefinition["criteria"][number]>) => {
-    setDefinition({
-      ...definition,
-      criteria: definition.criteria.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item),
-    });
-  };
+  const updateCriterion = (index: number, patch: Partial<WorkspaceGoalDefinition["criteria"][number]>) => setDefinition({
+    ...definition,
+    criteria: definition.criteria.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item),
+  });
   const addCriterion = () => setDefinition({
     ...definition,
     criteria: [...definition.criteria, { key: nextKey(definition.criteria.map((item) => item.key), "criterion"), title: "", required: true }],
   });
-  const valid = Boolean(
-    definition.title.trim()
-    && definition.outcome.trim()
-    && definition.criteria.length
+  const valid = Boolean(definition.title.trim() && definition.outcome.trim() && definition.criteria.length
     && definition.criteria.every((item) => item.key.trim() && item.title.trim())
-    && new Set(definition.criteria.map((item) => item.key.trim())).size === definition.criteria.length,
-  );
+    && definition.criteria.some((item) => item.required)
+    && new Set(definition.criteria.map((item) => item.key.trim())).size === definition.criteria.length);
 
   return <div className="goal-form">
-    <FormHeading
-      eyebrow={editing ? "Definition revision" : "New Goal"}
-      title={editing ? "Update the outcome" : "What should this Workspace achieve?"}
-      description={editing ? "Saving creates a new revision and makes the previous approval stale." : "Start with the outcome and how you will know it is complete."}
-    />
+    <FormHeading eyebrow={editing ? "Definition revision" : "New Goal"} title={editing ? "Update the outcome" : "What should this Workspace achieve?"} description={editing ? "A new definition must be approved before it can guide TaskRuns." : "Describe the outcome and the evidence required to close it."} />
     <label className="goal-field"><span>Title</span><input autoFocus maxLength={200} value={definition.title} onChange={(event) => setDefinition({ ...definition, title: event.target.value })} placeholder="A short, outcome-focused name" /></label>
     <label className="goal-field"><span>Outcome</span><textarea rows={4} maxLength={4000} value={definition.outcome} onChange={(event) => setDefinition({ ...definition, outcome: event.target.value })} placeholder="Describe the Workspace state you want to reach" /></label>
-
     <fieldset className="goal-editor-section">
       <legend>Completion criteria</legend>
-      <p>Keep only the checks that matter for deciding whether the Goal is done.</p>
+      <p>Supervisor evidence from Goal Roadmap TaskRuns will be checked against these criteria.</p>
       <div className="goal-criteria-editor">
         {definition.criteria.map((criterion, index) => <div className="goal-criterion-editor" key={`${criterion.key}:${index}`}>
           <span>{index + 1}</span>
@@ -340,9 +407,9 @@ function GoalDefinitionForm({
           <button className="goal-icon-action" type="button" aria-label={`Remove criterion ${index + 1}`} disabled={definition.criteria.length === 1} onClick={() => setDefinition({ ...definition, criteria: definition.criteria.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 size={14} /></button>
         </div>)}
       </div>
+      {!definition.criteria.some((item) => item.required) && <p className="goal-field-error">Keep at least one required criterion so evidence can close the Goal.</p>}
       <button className="goal-secondary-action" type="button" onClick={addCriterion}><Plus size={14} />Add criterion</button>
     </fieldset>
-
     <details className="goal-disclosure" open={Boolean(definition.scope.length || definition.nonGoals.length)}>
       <summary><span><ChevronRight size={14} />Scope and boundaries</span><small>Optional</small></summary>
       <div className="goal-form-columns">
@@ -350,52 +417,45 @@ function GoalDefinitionForm({
         <label className="goal-field"><span>Not included <small>one item per line</small></span><textarea rows={4} value={definition.nonGoals.join("\n")} onChange={(event) => setDefinition({ ...definition, nonGoals: lines(event.target.value) })} /></label>
       </div>
     </details>
-
     <div className="goal-form-actions"><button onClick={onCancel} disabled={busy}>Cancel</button><button className="memory-primary" disabled={busy || !valid} onClick={() => void onSave()}>{busy ? "Saving…" : editing ? "Save revision" : "Create draft"}</button></div>
   </div>;
 }
 
-function GoalPlanForm({
-  plan,
-  setPlan,
-  busy,
-  onSave,
-  onCancel,
-}: {
-  plan: WorkspaceGoalPlan;
-  setPlan: (value: WorkspaceGoalPlan) => void;
+function GoalRoadmapForm({ roadmap, setRoadmap, definition, busy, onSave, onCancel }: {
+  roadmap: WorkspaceGoalRoadmap;
+  setRoadmap: (value: WorkspaceGoalRoadmap) => void;
+  definition: WorkspaceGoalDefinition;
   busy: boolean;
   onSave: () => Promise<void>;
   onCancel: () => void;
 }) {
-  const update = (index: number, patch: Partial<WorkspaceGoalPlanItem>) => setPlan({
-    ...plan,
-    items: plan.items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item),
+  const update = (index: number, patch: Partial<WorkspaceGoalRoadmapItem>) => setRoadmap({
+    ...roadmap,
+    items: roadmap.items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item),
   });
-  const add = () => setPlan({
-    ...plan,
-    items: [...plan.items, { id: nextKey(plan.items.map((item) => item.id), "item"), title: "", outcome: "", verification: "" }],
+  const add = () => setRoadmap({
+    ...roadmap,
+    items: [...roadmap.items, newRoadmapItem(roadmap.items.map((item) => item.id), definition)],
   });
-  const valid = Boolean(
-    plan.summary.trim()
-    && plan.items.length
-    && plan.items.every((item) => item.id.trim() && item.title.trim() && item.outcome.trim() && item.verification.trim())
-    && new Set(plan.items.map((item) => item.id.trim())).size === plan.items.length,
-  );
+  const valid = Boolean(roadmap.summary.trim() && roadmap.items.length
+    && roadmap.items.every((item) => item.id.trim() && item.title.trim() && item.outcome.trim() && item.verification.trim() && item.criterionKeys.length)
+    && new Set(roadmap.items.map((item) => item.id.trim())).size === roadmap.items.length);
 
   return <div className="goal-form">
-    <FormHeading eyebrow="Plan revision" title="Plan the next bounded steps" description="Saving does not start work. You will choose which items to approve next." />
-    <label className="goal-field"><span>Plan summary</span><textarea autoFocus rows={3} value={plan.summary} onChange={(event) => setPlan({ ...plan, summary: event.target.value })} placeholder="Describe the approach in a few sentences" /></label>
-    <div className="goal-plan-editor">
-      {plan.items.map((item, index) => <section key={`${item.id}:${index}`}>
-        <header><div><span>Step {index + 1}</span><strong>{item.title.trim() || "Untitled step"}</strong></div><button className="goal-icon-action" type="button" aria-label={`Remove plan step ${index + 1}`} disabled={plan.items.length === 1} onClick={() => setPlan({ ...plan, items: plan.items.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 size={14} /></button></header>
-        <label className="goal-field"><span>Title</span><input value={item.title} onChange={(event) => update(index, { title: event.target.value })} placeholder="One TaskRun-sized step" /></label>
-        <label className="goal-field"><span>Expected result</span><textarea rows={2} value={item.outcome} onChange={(event) => update(index, { outcome: event.target.value })} /></label>
+    <FormHeading eyebrow="Goal Roadmap" title="Review the TaskRun-sized steps" description="Edit the LLM draft, map each item to Goal criteria, then save it for approval." />
+    <label className="goal-field"><span>Roadmap summary</span><textarea autoFocus rows={3} value={roadmap.summary} onChange={(event) => setRoadmap({ ...roadmap, summary: event.target.value })} /></label>
+    <div className="goal-roadmap-editor">
+      {roadmap.items.map((item, index) => <section key={`${item.id}:${index}`}>
+        <header><div><span>Item {index + 1}</span><strong>{item.title.trim() || "Untitled item"}</strong></div><button className="goal-icon-action" type="button" aria-label={`Remove Roadmap item ${index + 1}`} disabled={roadmap.items.length === 1} onClick={() => setRoadmap({ ...roadmap, items: roadmap.items.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 size={14} /></button></header>
+        <label className="goal-field"><span>Title</span><input value={item.title} onChange={(event) => update(index, { title: event.target.value })} placeholder="One TaskRun-sized item" /></label>
+        <label className="goal-field"><span>Expected outcome</span><textarea rows={2} value={item.outcome} onChange={(event) => update(index, { outcome: event.target.value })} /></label>
         <label className="goal-field"><span>Verification</span><textarea rows={2} value={item.verification} onChange={(event) => update(index, { verification: event.target.value })} /></label>
+        <fieldset className="goal-criterion-links"><legend>Advances Goal criteria</legend><div>{definition.criteria.map((criterion) => <label key={criterion.key}><input type="checkbox" checked={item.criterionKeys.includes(criterion.key)} onChange={(event) => update(index, { criterionKeys: event.target.checked ? [...item.criterionKeys, criterion.key] : item.criterionKeys.filter((key) => key !== criterion.key) })} /><span>{criterion.title}</span></label>)}</div></fieldset>
+        {!item.criterionKeys.length && <p className="goal-field-error">Select at least one Goal criterion.</p>}
       </section>)}
     </div>
-    <button className="goal-secondary-action" type="button" onClick={add}><Plus size={14} />Add step</button>
-    <div className="goal-form-actions"><button onClick={onCancel} disabled={busy}>Cancel</button><button className="memory-primary" disabled={busy || !valid} onClick={() => void onSave()}>{busy ? "Saving…" : "Save plan"}</button></div>
+    <button className="goal-secondary-action" type="button" onClick={add}><Plus size={14} />Add item</button>
+    <div className="goal-form-actions"><button onClick={onCancel} disabled={busy}>Cancel</button><button className="memory-primary" disabled={busy || !valid} onClick={() => void onSave()}>{busy ? "Saving…" : "Save Roadmap"}</button></div>
   </div>;
 }
 
@@ -403,70 +463,68 @@ function FormHeading({ eyebrow, title, description }: { eyebrow: string; title: 
   return <header className="goal-form-heading"><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></header>;
 }
 
-function GoalView({
-  goal,
-  busy,
-  decide,
-  onEditDefinition,
-  onEditPlan,
-  onOpenRun,
-}: {
+function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmapItem, onEditDefinition, onEditRoadmap, onOpenRun }: {
   goal: WorkspaceGoal;
   busy: boolean;
-  decide: (kind: GoalDecisionKind, target?: WorkspaceGoal["definition"], approvedItemIds?: string[], reason?: string) => Promise<void>;
+  decide: (kind: GoalDecisionKind, target?: GoalRevision | null, approvedItemIds?: string[], reason?: string) => Promise<void>;
+  onGenerateRoadmap: () => Promise<void>;
+  onStartRoadmapItem: (itemId: string) => Promise<void>;
   onEditDefinition: () => void;
-  onEditPlan: () => void;
+  onEditRoadmap: () => void;
   onOpenRun?: (runId: string) => void;
 }) {
   const definition = goal.definition?.content as WorkspaceGoalDefinition | undefined;
-  const plan = goal.plan?.content as WorkspaceGoalPlan | undefined;
-  const approvedDecision = goal.plan ? [...goal.decisions].reverse().find((item) => item.kind === "approve_plan" && item.targetRevisionId === goal.plan?.id && item.targetHash === goal.plan.contentHash) : undefined;
-  const [selectedPlanItems, setSelectedPlanItems] = useState<string[]>(approvedDecision?.approvedItemIds ?? plan?.items.map((item) => item.id) ?? []);
-  useEffect(() => {
-    setSelectedPlanItems(approvedDecision?.approvedItemIds ?? plan?.items.map((item) => item.id) ?? []);
-  }, [goal.id, goal.plan?.id, goal.plan?.contentHash, approvedDecision?.id]);
-  const evidenceByCriterion = useMemo(
-    () => new Map((definition?.criteria ?? []).map((criterion) => [criterion.key, goal.evidenceLinks.filter((link) => link.criterionKey === criterion.key)])),
-    [definition, goal.evidenceLinks],
-  );
-  const canEdit = !["completed", "cancelled"].includes(goal.status);
-  const progress = goal.requiredCriteria ? Math.round(goal.verifiedCriteria / goal.requiredCriteria * 100) : 0;
+  const roadmap = goal.roadmap?.content as WorkspaceGoalRoadmap | undefined;
+  const matchingApproval = goal.roadmap ? [...goal.decisions].reverse().find((item) => item.kind === "approve_roadmap" && item.targetRevisionId === goal.roadmap?.id && item.targetHash === goal.roadmap.contentHash) : undefined;
+  const approval = goal.activeRoadmapRevisionId === goal.roadmap?.id ? matchingApproval : undefined;
+  const requiresRoadmapRevision = Boolean(matchingApproval && !approval);
+  const [selectedItems, setSelectedItems] = useState<string[]>(approval?.approvedItemIds ?? roadmap?.items.map((item) => item.id) ?? []);
+  useEffect(() => setSelectedItems(approval?.approvedItemIds ?? roadmap?.items.map((item) => item.id) ?? []), [goal.id, goal.roadmap?.id, goal.roadmap?.contentHash, approval?.id]);
+  const evidenceByCriterion = useMemo(() => new Map((definition?.criteria ?? []).map((criterion) => [criterion.key, goal.evidenceLinks.filter((link) => link.goalRevision === goal.definition?.revision && link.criterionKey === criterion.key)])), [definition, goal.definition?.revision, goal.evidenceLinks]);
+  const progressByItem = useMemo(() => new Map(goal.roadmapProgress.map((item) => [item.itemId, item])), [goal.roadmapProgress]);
+  const canEdit = !["completed", "cancelled"].includes(goal.status) && !goal.currentRunId;
+  const verifiedPercent = goal.requiredCriteria ? Math.round(goal.verifiedCriteria / goal.requiredCriteria * 100) : 0;
 
-  const nextActionHandler = () => {
+  const nextAction = () => {
     if (goal.nextAction.kind === "review_goal") return void decide("approve_goal");
-    if (goal.nextAction.kind === "create_plan") return onEditPlan();
-    if (goal.nextAction.kind === "review_plan" && goal.plan) return void decide("approve_plan", goal.plan, selectedPlanItems);
+    if (goal.nextAction.kind === "generate_roadmap") return void onGenerateRoadmap();
+    if (goal.nextAction.kind === "review_roadmap" && goal.roadmap) {
+      if (requiresRoadmapRevision) return onEditRoadmap();
+      return void decide("approve_roadmap", goal.roadmap, selectedItems);
+    }
+    if (goal.nextAction.kind === "run_roadmap_item" && goal.nextAction.roadmapItemId) return void onStartRoadmapItem(goal.nextAction.roadmapItemId);
+    if (["view_running_task", "resolve_problem"].includes(goal.nextAction.kind) && goal.currentRunId) return onOpenRun?.(goal.currentRunId);
     if (goal.nextAction.kind === "resume") return void decide("resume");
-    if (goal.nextAction.kind === "view_result") return goal.status === "ready_to_close" ? void decide("close") : undefined;
-    if (goal.nextAction.kind === "view_running_task" && goal.currentRunId) return onOpenRun?.(goal.currentRunId);
+    if (goal.nextAction.kind === "view_result" && goal.status === "ready_to_close" && window.confirm("Close this Goal with the verified evidence? This cannot be undone.")) return void decide("close");
     return undefined;
   };
-  const actionable = ["review_goal", "create_plan", "review_plan", "resume", "view_result", "view_running_task"].includes(goal.nextAction.kind);
+  const actionable = goal.nextAction.kind !== "view_result" || goal.status === "ready_to_close";
+  const actionDisabled = busy || goal.nextAction.kind === "review_roadmap" && selectedItems.length === 0 || goal.nextAction.actor === "none";
 
   return <article className="goal-view">
     <header className="goal-hero">
-      <div className="goal-hero-meta"><StatusBadge status={goal.status} />{canEdit && <button className="goal-secondary-action" onClick={onEditDefinition} disabled={busy}><Pencil size={13} />Edit</button>}</div>
+      <div className="goal-hero-meta"><StatusBadge status={goal.status} />{canEdit && <button className="goal-secondary-action" onClick={onEditDefinition} disabled={busy}><Pencil size={13} />Edit Goal</button>}</div>
       <h2>{definition?.title ?? "Untitled Goal"}</h2>
       <p>{definition?.outcome}</p>
     </header>
 
     <section className="goal-next-card">
-      <div className="goal-next-icon"><Target size={18} /></div>
-      <div><span className="eyebrow">Next step</span><strong>{goal.nextAction.title}</strong><p>{goal.nextAction.explanation}</p>{goal.nextAction.kind === "run_task" && <small>Start the next TaskRun from Chat or Runs. Automatic successors stay off.</small>}</div>
-      {actionable && <button className="memory-primary" disabled={busy || goal.nextAction.kind === "review_plan" && selectedPlanItems.length === 0} onClick={nextActionHandler}>{goal.nextAction.primaryActionLabel}</button>}
+      <div className="goal-next-icon">{goal.nextAction.kind === "generate_roadmap" ? <Sparkles size={18} /> : goal.nextAction.kind === "run_roadmap_item" ? <Play size={18} /> : <Target size={18} />}</div>
+      <div><span className="eyebrow">Next action</span><strong>{goal.nextAction.title}</strong><p>{goal.nextAction.explanation}</p></div>
+      {actionable && <button className="memory-primary" disabled={actionDisabled} onClick={nextAction}>{busy ? "Working…" : goal.nextAction.primaryActionLabel}</button>}
     </section>
 
     <section className="goal-progress-card">
-      <div className="goal-section-heading"><div><span className="eyebrow">Verified progress</span><h3>Completion criteria</h3></div><strong>{goal.verifiedCriteria}/{goal.requiredCriteria}</strong></div>
-      <div className="goal-progress-track" aria-label={`${progress}% of required criteria verified`}><i style={{ width: `${progress}%` }} /></div>
+      <div className="goal-section-heading"><div><span className="eyebrow">Verified evidence</span><h3>Completion criteria</h3></div><strong>{goal.verifiedCriteria}/{goal.requiredCriteria}</strong></div>
+      <div className="goal-progress-track" aria-label={`${verifiedPercent}% of required criteria verified`}><i style={{ width: `${verifiedPercent}%` }} /></div>
       <div className="goal-criteria-list">
         {definition?.criteria.map((criterion) => {
           const evidence = evidenceByCriterion.get(criterion.key) ?? [];
           const validCount = evidence.filter((link) => link.status === "valid").length;
           const contradicted = evidence.some((link) => link.status === "contradicted");
-          return <div className={validCount ? "verified" : contradicted ? "warning" : "pending"} key={criterion.key}>
-            {validCount ? <CheckCircle2 size={16} /> : contradicted ? <AlertTriangle size={16} /> : <Circle size={16} />}
-            <span><strong>{criterion.title}</strong><small>{validCount ? `${validCount} valid evidence link${validCount === 1 ? "" : "s"}` : contradicted ? "Evidence needs attention" : criterion.required ? "Required · not verified" : "Optional"}</small></span>
+          return <div className={validCount && !contradicted ? "verified" : contradicted ? "warning" : "pending"} key={criterion.key}>
+            {validCount && !contradicted ? <CheckCircle2 size={16} /> : contradicted ? <AlertTriangle size={16} /> : <Circle size={16} />}
+            <span><strong>{criterion.title}</strong><small>{validCount && !contradicted ? `${validCount} verified source${validCount === 1 ? "" : "s"}` : contradicted ? "Evidence contradicted" : criterion.required ? "Required · pending" : "Optional"}</small></span>
           </div>;
         })}
       </div>
@@ -474,40 +532,41 @@ function GoalView({
 
     <section className="goal-section-card">
       <div className="goal-section-heading">
-        <div><span className="eyebrow">Current plan</span><h3>{goal.plan ? `Plan v${goal.plan.revision}` : "No plan yet"}</h3>{plan?.summary && <p>{plan.summary}</p>}</div>
-        {canEdit && goal.status !== "draft" && <button className="goal-secondary-action" onClick={onEditPlan} disabled={busy}>{goal.plan ? <Pencil size={13} /> : <Plus size={13} />}{goal.plan ? "Revise" : "Create plan"}</button>}
+        <div><span className="eyebrow">Goal Roadmap</span><h3>{goal.roadmap ? `Roadmap v${goal.roadmap.revision}` : "No Roadmap yet"}</h3>{roadmap?.summary && <p>{roadmap.summary}</p>}</div>
+        {canEdit && goal.status !== "draft" && <button className="goal-secondary-action" onClick={onEditRoadmap} disabled={busy}>{goal.roadmap ? <Pencil size={13} /> : <Plus size={13} />}{goal.roadmap ? "Edit" : "Create manually"}</button>}
       </div>
-      {plan && goal.plan ? <div className="goal-plan-list">
-        {plan.items.map((item, index) => {
-          const approved = approvedDecision?.approvedItemIds.includes(item.id) ?? false;
-          const selectable = !approvedDecision;
-          return <label className={approved ? "approved" : ""} key={item.id}>
-            {selectable ? <input type="checkbox" checked={selectedPlanItems.includes(item.id)} disabled={busy} onChange={(event) => setSelectedPlanItems((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /> : approved ? <Check size={15} /> : <Circle size={15} />}
-            <span className="goal-plan-index">{index + 1}</span>
-            <span><strong>{item.title}</strong><small>{item.outcome}</small><details><summary>Verification</summary><p>{item.verification}</p></details></span>
-            {approved && <em>Approved</em>}
-          </label>;
+      {roadmap && goal.roadmap ? <div className="goal-roadmap-list">
+        {roadmap.items.map((item, index) => {
+          const approved = approval?.approvedItemIds.includes(item.id) ?? false;
+          const itemProgress = progressByItem.get(item.id);
+          const itemStatus = itemProgress?.status ?? (approved ? "pending" : "unapproved");
+          const selectable = !approval && !requiresRoadmapRevision;
+          return <div className={`goal-roadmap-item ${itemStatus}`} key={item.id}>
+            <div className="goal-roadmap-leading">
+              {selectable ? <input aria-label={`Approve ${item.title}`} type="checkbox" checked={selectedItems.includes(item.id)} disabled={busy} onChange={(event) => setSelectedItems((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /> : itemStatus === "completed" ? <CheckCircle2 size={16} /> : itemStatus === "blocked" ? <AlertTriangle size={16} /> : approved ? <Check size={16} /> : <Circle size={16} />}
+              <span className="goal-roadmap-index">{index + 1}</span>
+            </div>
+            <div className="goal-roadmap-copy"><strong>{item.title}</strong><p>{item.outcome}</p><div>{item.criterionKeys.map((key) => <span key={key}>{definition?.criteria.find((criterion) => criterion.key === key)?.title ?? key}</span>)}</div><details><summary>Verification</summary><p>{item.verification}</p></details></div>
+            <div className="goal-roadmap-action"><em>{roadmapStatusLabel(itemStatus)}</em>{approved && (itemStatus === "pending" || itemStatus === "blocked" && !goal.currentRunId) && <button className="goal-secondary-action" disabled={busy || Boolean(goal.currentRunId)} onClick={() => void onStartRoadmapItem(item.id)}><Play size={12} />{itemStatus === "blocked" ? "Retry" : "Start"}</button>}{itemProgress?.runId && ["running", "blocked"].includes(itemStatus) && <button className="goal-secondary-action" onClick={() => onOpenRun?.(itemProgress.runId!)}><ExternalLink size={12} />Open</button>}</div>
+          </div>;
         })}
-        {!approvedDecision && <p className="goal-plan-help">Choose the steps covered by this approval. The primary action above approves the selected slice.</p>}
-      </div> : <div className="goal-section-empty"><FileCheck2 size={19} /><p>Create a short plan after approving the Goal definition.</p></div>}
+        {!approval && <p className="goal-roadmap-help">{requiresRoadmapRevision ? "Changes were requested. Edit and save a new Roadmap revision before approval." : "Select the items that may drive TaskRuns, then approve the Roadmap above."}</p>}
+      </div> : <div className="goal-section-empty"><MapIcon size={19} /><p>Approve the Goal, then generate its initial Roadmap.</p></div>}
     </section>
 
     <details className="goal-disclosure goal-details">
       <summary><span><ChevronRight size={14} />Scope and boundaries</span><small>{(definition?.scope.length ?? 0) + (definition?.nonGoals.length ?? 0)} items</small></summary>
-      <div className="goal-scope-grid">
-        <InfoList title="Included" items={definition?.scope ?? []} empty="No explicit scope items." />
-        <InfoList title="Not included" items={definition?.nonGoals ?? []} empty="No exclusions recorded." />
-      </div>
+      <div className="goal-scope-grid"><InfoList title="Included" items={definition?.scope ?? []} empty="No explicit scope items." /><InfoList title="Not included" items={definition?.nonGoals ?? []} empty="No exclusions recorded." /></div>
     </details>
 
     <details className="goal-disclosure goal-details">
       <summary><span><ChevronRight size={14} />Linked TaskRuns</span><small>{goal.runLinks.length}</small></summary>
-      {goal.runLinks.length ? <div className="goal-run-links">{goal.runLinks.map((link) => <button key={link.runId} onClick={() => onOpenRun?.(link.runId)}><code>{link.runId.slice(0, 12)}</code><span>{link.criterionKeys.length ? `${link.criterionKeys.length} criterion target${link.criterionKeys.length === 1 ? "" : "s"}` : "No criterion targets"}</span></button>)}</div> : <p className="muted">No TaskRun is linked yet.</p>}
+      {goal.runLinks.length ? <div className="goal-run-links">{[...goal.runLinks].reverse().map((link) => <button key={link.runId} onClick={() => onOpenRun?.(link.runId)}><code>{link.runId.slice(0, 12)}</code><span>{link.mode === "roadmap" ? `${link.roadmapItemIds.length} Roadmap item` : "Workspace Goal guidance"}</span></button>)}</div> : <p className="muted">No TaskRun is linked yet.</p>}
     </details>
 
     {!['completed', 'cancelled'].includes(goal.status) && <details className="goal-disclosure goal-details goal-management">
       <summary><span><ChevronRight size={14} />Goal controls</span><small>Pause or cancel</small></summary>
-      <div>{goal.status === "active" && <button disabled={busy} onClick={() => void decide("pause")}>Pause Goal</button>}{goal.status === "paused" && <button className="memory-primary" disabled={busy} onClick={() => void decide("resume")}>Resume Goal</button>}<button className="danger-quiet" disabled={busy} onClick={() => void decide("cancel")}>Cancel Goal</button></div>
+      <div>{goal.status === "active" && <button disabled={busy || Boolean(goal.currentRunId)} onClick={() => void decide("pause")}>Pause Goal</button>}{goal.status === "paused" && <button className="memory-primary" disabled={busy} onClick={() => void decide("resume")}>Resume Goal</button>}<button className="danger-quiet" disabled={busy || Boolean(goal.currentRunId)} onClick={() => { if (window.confirm("Cancel this Goal? This cannot be undone.")) void decide("cancel"); }}>Cancel Goal</button></div>
     </details>}
   </article>;
 }
@@ -520,33 +579,13 @@ function InfoList({ title, items, empty }: { title: string; items: string[]; emp
   return <section><h4>{title}</h4>{items.length ? <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul> : <p className="muted">{empty}</p>}</section>;
 }
 
-function lines(value: string): string[] {
-  return value.split("\n").map((item) => item.trim()).filter(Boolean);
-}
-
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
-function message(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
-}
-
-function nextKey(existing: string[], prefix: string): string {
-  let index = existing.length + 1;
-  while (existing.includes(`${prefix}-${index}`)) index += 1;
-  return `${prefix}-${index}`;
-}
+function lines(value: string): string[] { return value.split("\n").map((item) => item.trim()).filter(Boolean); }
+function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
+function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }
+function nextKey(existing: string[], prefix: string): string { let index = existing.length + 1; while (existing.includes(`${prefix}_${index}`)) index += 1; return `${prefix}_${index}`; }
 
 function statusLabel(status: WorkspaceGoal["status"]): string {
-  return ({
-    draft: "Needs review",
-    active: "In progress",
-    paused: "Waiting",
-    ready_to_close: "Ready to close",
-    completed: "Completed",
-    cancelled: "Cancelled",
-  } as const)[status];
+  return ({ draft: "Needs review", active: "In progress", paused: "Paused", ready_to_close: "Ready to close", completed: "Completed", cancelled: "Cancelled" } as const)[status];
 }
 
 function statusTone(status: WorkspaceGoal["status"]): "attention" | "active" | "waiting" | "success" | "muted" {
@@ -557,10 +596,14 @@ function statusTone(status: WorkspaceGoal["status"]): "attention" | "active" | "
   return "muted";
 }
 
+function roadmapStatusLabel(status: WorkspaceGoal["roadmapProgress"][number]["status"]): string {
+  return ({ unapproved: "Not approved", pending: "Ready", running: "Running", completed: "Done", blocked: "Needs attention", skipped: "Skipped" } as const)[status];
+}
+
 function decisionNotice(kind: GoalDecisionKind): string {
   return ({
-    approve_goal: "Goal approved. No TaskRun was started.",
-    approve_plan: "Selected plan steps approved. Execution remains manual.",
+    approve_goal: "Goal approved. Generate the initial Roadmap when ready.",
+    approve_roadmap: "Roadmap approved. Its selected items can now start TaskRuns.",
     request_change: "Changes requested.",
     pause: "Goal paused.",
     resume: "Goal resumed.",

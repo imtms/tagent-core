@@ -58,6 +58,8 @@ import type { SupervisorReviewer } from "./supervisor-reviewer.js";
 import { createExecutionCollaborationAdapters } from "./execution-collaboration-adapters.js";
 import { CoreApplicationCoordinator } from "../application/core-application-coordinator.js";
 import { CoreWorkflowGovernanceApplication } from "../application/workflow-governance-application.js";
+import { CoreWorkspaceGoalApplication, type WorkspaceGoalRoadmapGenerator } from "../application/workspace-goal-application.js";
+import { OpenAiWorkspaceGoalRoadmapGenerator } from "./workspace-goal-roadmap-generator.js";
 
 export type CoreRuntimeDefaults = ExecutionRuntimeDefaults & {
   routerModel?: Model<"openai-completions">;
@@ -65,6 +67,7 @@ export type CoreRuntimeDefaults = ExecutionRuntimeDefaults & {
   supervisorModel?: Model<"openai-completions">;
   supervisorTimeoutMs?: number;
   supervisorReviewer?: SupervisorReviewer;
+  workspaceGoalRoadmapGenerator?: WorkspaceGoalRoadmapGenerator;
 };
 
 export interface ExecutionCompositionOptions {
@@ -219,14 +222,18 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
         options.persistence.submissions.recordSessionInboxLaunchFailure(inboxItemId, runId, message);
       },
       attemptFinalized: (run) => {
+        const current = options.persistence.taskRuns.getRun(run.id);
+        if (current) options.persistence.workspaceGoals.recordRunOutcome(current.id);
         continuationRef.port.startQueuedContinuation(run.id);
+        const continued = options.persistence.taskRuns.getRun(run.id);
+        if (continued?.status === "running") options.persistence.workspaceGoals.recordRunOutcome(continued.id);
         admissionRef.port.dispatchSessionInbox(run.sessionId);
       },
     },
     recovery: recoveryRef.port,
     runtimeHost: {
       create: (input) => createRuntimeHost({
-        persistence: state.persistence,
+        persistence: options.persistence,
         workspace: state.workspace,
         memory: options.memory,
         memoryScopeId: options.memoryScopeId ?? "default",
@@ -266,6 +273,9 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     supervisor,
   });
   admissionRef.bind(admission);
+  const roadmapGenerator = runtimeDefaults.workspaceGoalRoadmapGenerator
+    ?? (routerModel && runtimeDefaults.apiKey ? new OpenAiWorkspaceGoalRoadmapGenerator({ model: routerModel, apiKey: runtimeDefaults.apiKey, timeoutMs: routerTimeoutMs }) : undefined);
+  const workspaceGoals = new CoreWorkspaceGoalApplication(options.persistence.workspaceGoals, admission, roadmapGenerator);
   const learning = new LearningApplication(workflowService, learningService);
   const workflowGovernance = new WorkflowGovernanceApplication(
     options.persistence.workflowGovernance,
@@ -297,6 +307,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     execution,
     governance,
     learning,
+    workspaceGoals,
   }));
   if ((options.startupOptions?.startupMode ?? "automatic") === "automatic") {
     coordinator.initialize();
