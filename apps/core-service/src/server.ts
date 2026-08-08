@@ -140,6 +140,7 @@ function assembleHttpPersistence(persistence: LegacyStoreAdapter): HttpPersisten
     sessions: persistence.sessions,
     submissions: persistence.submissions,
     taskRuns: persistence.taskRuns,
+    taskRunCommands: persistence.taskRunCommands,
     supervisorDecisions: persistence.supervisorDecisions,
     contextManifests: persistence.contextManifests,
     controlInbox: persistence.controlInbox,
@@ -148,6 +149,7 @@ function assembleHttpPersistence(persistence: LegacyStoreAdapter): HttpPersisten
     evidence: persistence.evidence,
     eventConsumers: persistence.eventConsumers,
     workspaceGoals: persistence.workspaceGoals,
+    workspaceGoalOperations: persistence.workspaceGoalOperations,
   });
 }
 

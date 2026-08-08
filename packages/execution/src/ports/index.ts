@@ -48,6 +48,7 @@ export type { OperationRecord, OperationRepository, OperationUpdate } from "@tag
 export type { RunEventJournal } from "./run-event-journal.js";
 export type { RuntimePersistencePort } from "./runtime-persistence-port.js";
 export type { ModelUsage, TaskRunRepository } from "./task-run-repository.js";
+export type { TaskRunCommandReceiptRepository } from "./task-run-command-repository.js";
 export type {
   MessageRejectedPrecedingEvent,
   RuntimeTransitionCommand,

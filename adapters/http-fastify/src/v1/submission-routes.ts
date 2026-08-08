@@ -1,10 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import {
   canonicalizeSubmissionRequest,
+  canonicalizeSessionCreateRequest,
   decodeAbi,
   encodeAbi,
   normalizeSubmissionRequest,
   SessionCreateRequestSchema,
+  SessionCreateHeadersSchema,
   SessionSchema,
   SessionParamsSchema,
   SubmissionCreateHeadersSchema,
@@ -15,6 +17,7 @@ import {
   type SubmissionLookupParams,
 } from "@tagent/abi";
 import type { ChannelV1Dependencies } from "./dependencies.js";
+import { principalOf } from "./auth.js";
 import { successEnvelope, V1HttpError } from "./errors.js";
 import { mapSession, mapSubmissionReceipt } from "./mappers.js";
 import { authorizeChannel, conflict, missing } from "./route-support.js";
@@ -29,10 +32,34 @@ export function registerSubmissionV1Routes(app: FastifyInstance, dependencies: C
 
   app.post("/api/v1/sessions", {
     onRequest: authorizeChannel(serviceCredentials, "sessions:write"),
-    schema: { body: SessionCreateRequestSchema },
+    schema: { headers: SessionCreateHeadersSchema, body: SessionCreateRequestSchema },
   }, async (request) => {
     const body = decodeAbi(SessionCreateRequestSchema, request.body);
-    const session = sessions.createSession(body.title?.trim() || "New workspace");
+    const headers = decodeAbi(SessionCreateHeadersSchema, request.headers);
+    try {
+      const result = sessions.createSessionIdempotent({
+        title: body.title?.trim() || "New workspace",
+        principalId: principalOf(request).subjectId,
+        idempotencyKey: headers["idempotency-key"],
+        canonicalPayload: canonicalizeSessionCreateRequest(body),
+        provenance: body.origin,
+      });
+      return successEnvelope(request, encodeAbi(SessionSchema, mapSession(result.session)));
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("idempotency conflict")) {
+        throw conflict("session.idempotency_conflict", error.message, { idempotencyKey: headers["idempotency-key"] });
+      }
+      throw error;
+    }
+  });
+
+  app.get("/api/v1/sessions/:sessionId", {
+    onRequest: authorizeChannel(serviceCredentials, "sessions:read"),
+    schema: { params: SessionParamsSchema },
+  }, async (request) => {
+    const { sessionId } = request.params as SessionParams;
+    const session = sessions.getSession(sessionId);
+    if (!session) throw missing("session");
     return successEnvelope(request, encodeAbi(SessionSchema, mapSession(session)));
   });
 

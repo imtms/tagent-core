@@ -81,6 +81,7 @@ export interface ApprovalRequest {
   id: string;
   runId: string;
   decisionId: string;
+  attempt?: number;
   actionType: "resume_taskrun" | "start_parallel_taskrun";
   targetType: "taskrun" | "session_inbox_item";
   targetId: string;

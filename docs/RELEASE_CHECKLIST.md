@@ -49,11 +49,12 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 ## Migration and recovery gate
 
 - [ ] A representative 0.1.x database plus WAL/SHM was backed up and restored in isolation.
-- [ ] The candidate migrated v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 and reopened idempotently.
-- [ ] `schema_meta.version` is 38, trusted-evidence and Goal-execution columns/tables/indexes pass drift validation, and `migration_issues` has zero open rows.
+- [ ] The candidate migrated v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 and reopened idempotently.
+- [ ] `schema_meta.version` is 39; trusted-evidence, Goal-execution, Gateway receipt tables, ACK columns and indexes pass drift validation; `migration_issues` has zero open rows.
 - [ ] A second Core process is rejected by the OS lock/writer authority.
 - [ ] Writer lease/fence loss clears health readiness and closes Core.
 - [ ] Restart recovery produces `outcome_unknown` for effects/deliveries whose outcome cannot be proven and `restart_before_effect` cancellation only before effect start.
+- [ ] An interrupted TaskRun command or Goal operation becomes `outcome_unknown`; a Session and its create receipt remain atomic across restart.
 - [ ] A required passed check rejects self-reported, failed, stale, wrong-Run and wrong-Attempt evidence, and accepts only the matching successful Bash receipt.
 - [ ] Substantial settlement sends actual bounded receipts to one semantic Supervisor call; deterministic failures skip it and malformed output does not trigger a schema-repair call.
 - [ ] Restoring the pre-upgrade backup with the old artifact was tested as the 0.1.x rollback path.
@@ -61,11 +62,16 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 ## API, Web, and Gateway gate
 
 - [ ] `GET /api/v1/health` reports writer readiness; `/api/health` returns 404.
+- [ ] `GET /api/v1/capabilities` matches the release/schema, required commands/events, typed interactions, Operator profile, retention and limits.
 - [ ] Credential mode fails closed for missing, invalid, and under-scoped opaque tokens.
 - [ ] Resource scopes are enforced from server configuration.
 - [ ] Exact CORS origins pass and wildcard/invalid origins fail startup or request policy as designed.
 - [ ] The Gateway validates OIDC claims and translates to a minimal Core credential; Core is private.
-- [ ] Event-consumer replay persists before ACK, reclaims a new generation, reaches zero lag, and terminal events are acknowledged.
+- [ ] Session create, Submission, command and Goal operation identities replay the original result and conflict on changed canonical payload.
+- [ ] Command receipt lookup precedes Attempt fencing; structured failures survive replay; unprovable effects are not repeated.
+- [ ] Event-consumer replay persists before ACK, reclaims a new generation, reaches zero lag, and settled/final events are acknowledged with the correct boundary.
+- [ ] Transcript pages enforce default/max limits; SSE batch/buffer bounds and HTTP 413 Artifact limits match capabilities.
+- [ ] Current Core + current Gateway client and the declared previous supported client matrix pass the contract fixtures or the named v39 migration window explicitly blocks traffic.
 - [ ] `scripts/gateway-readiness-probe.mjs` exits 0 with `ready=true` and no reasons.
 - [ ] Web is served from its independent artifact and targets the Gateway/Core origin; Core serves no static Web content.
 

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Gateway contract reliability
+
+- Advanced SQLite to schema 39 with principal-scoped Session creation receipts, dedicated TaskRun command receipts, Workspace Goal operation receipts, restart `outcome_unknown` fencing, and distinct settled/final event-consumer ACK watermarks.
+- Added idempotent Session creation/lookup, command receipt lookup with original result/error replay, typed Approval/User Input commands and pending interactions, capability discovery, bounded Transcript pagination, batched SSE replay, slow-consumer limits, and stable Artifact 413 errors.
+- Made `steer` and `follow_up` return at durable control-inbox admission instead of waiting for Runtime/provider delivery; public SSE now exposes per-type safe payloads and reduces internal events to redacted diagnostics.
+- Froze the Workspace Goal Operator subset: all writes carry request IDs, definition/Roadmap edits have durable receipts, and Roadmap generation invokes the LLM at most once per request identity.
+- Updated `@tagent/core-client`, ABI fixtures, migration/API contract tests, deployment/recovery/upgrade guidance and the release checklist for the named `gateway-contracts-v39` migration window.
+
 ### Trusted completion evidence
 
 - Advanced SQLite to schema 37 with operation audit payloads and check bindings to source operation ID and observation time; schema re-entry validates the trusted-evidence columns and partial index fail-closed.

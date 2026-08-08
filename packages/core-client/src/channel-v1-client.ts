@@ -1,6 +1,11 @@
 import type {
   ArtifactContent,
   CommandReceipt,
+  CoreCapabilities,
+  ConsoleGenerateWorkspaceGoalRoadmapRequest,
+  ConsoleWorkspaceGoal,
+  ConsoleWorkspaceGoalOperationReceipt,
+  ConsoleWorkspaceGoalSummary,
   EventConsumerAckRequest,
   EventConsumerCursor,
   EventStreamQuery,
@@ -12,7 +17,9 @@ import type {
   TaskRunArtifact,
   TaskRunCommand,
   TaskRunEvent,
+  TaskRunInteractionsResponse,
   TranscriptItem,
+  TranscriptResponse,
 } from "@tagent/abi";
 import { loadCoreAbi, type CoreAbi } from "./abi-loader.js";
 import { CoreClientError, protocolError } from "./errors.js";
@@ -22,6 +29,11 @@ import { CoreTransport, type CoreClientOptions, type CoreSseOptions, type CoreSs
 export type {
   ArtifactContent,
   CommandReceipt,
+  CoreCapabilities,
+  ConsoleGenerateWorkspaceGoalRoadmapRequest,
+  ConsoleWorkspaceGoal,
+  ConsoleWorkspaceGoalOperationReceipt,
+  ConsoleWorkspaceGoalSummary,
   EventConsumerCursor,
   Session,
   SessionCreateRequest,
@@ -31,7 +43,9 @@ export type {
   TaskRunArtifact,
   TaskRunCommand,
   TaskRunEvent,
+  TaskRunInteractionsResponse,
   TranscriptItem,
+  TranscriptResponse,
 } from "@tagent/abi";
 
 export interface TaskRunEventSseOptions extends Omit<CoreSseOptions<TaskRunEvent>, "decode"> {
@@ -68,14 +82,56 @@ function validateEventStreamQueryInput(url: string, query: EventStreamQuery): Ev
 }
 
 export class CoreClient extends CoreTransport {
+  async getCapabilities(): Promise<CoreCapabilities> {
+    const abi = await loadCoreAbi();
+    return this.request("/api/v1/capabilities", { decode: (payload) => abi.decodeAbi(abi.CoreCapabilitiesResponseSchema, payload).data });
+  }
+
+  async listWorkspaceGoals(workspaceId: string): Promise<ConsoleWorkspaceGoalSummary[]> {
+    const abi = await loadCoreAbi();
+    const path = `/api/v1/console/workspaces/${encodePathSegment(workspaceId)}/goals`;
+    return this.request(path, { decode: (payload) => decodeSuccessData(abi, payload, (data) => abi.decodeAbi(abi.ConsoleWorkspaceGoalSummariesSchema, data)) });
+  }
+
+  async getWorkspaceGoal(goalId: string): Promise<ConsoleWorkspaceGoal> {
+    const abi = await loadCoreAbi();
+    const path = `/api/v1/console/workspace-goals/${encodePathSegment(goalId)}`;
+    return this.request(path, { decode: (payload) => decodeSuccessData(abi, payload, (data) => abi.decodeAbi(abi.ConsoleWorkspaceGoalSchema, data)) });
+  }
+
+  async generateWorkspaceGoalRoadmap(goalId: string, input: ConsoleGenerateWorkspaceGoalRoadmapRequest): Promise<ConsoleWorkspaceGoal> {
+    const abi = await loadCoreAbi();
+    const path = `/api/v1/console/workspace-goals/${encodePathSegment(goalId)}/roadmap/generate`;
+    const body = validateRequest("POST", this.resolve(path), input, (value) => abi.decodeAbi(abi.ConsoleGenerateWorkspaceGoalRoadmapRequestSchema, value));
+    return this.request(path, { decode: (payload) => decodeSuccessData(abi, payload, (data) => abi.decodeAbi(abi.ConsoleWorkspaceGoalSchema, data)), idempotent: true, json: body, method: "POST", requestId: body.requestId });
+  }
+
+  async getWorkspaceGoalOperation(goalId: string, requestId: string): Promise<ConsoleWorkspaceGoalOperationReceipt> {
+    const abi = await loadCoreAbi();
+    const path = `/api/v1/console/workspace-goals/${encodePathSegment(goalId)}/operations/${encodePathSegment(requestId)}`;
+    return this.request(path, { decode: (payload) => decodeSuccessData(abi, payload, (data) => abi.decodeAbi(abi.ConsoleWorkspaceGoalOperationReceiptSchema, data)) });
+  }
   async createSession(input: SessionCreateRequest = {}): Promise<Session> {
+    return this.createSessionIdempotent(crypto.randomUUID(), input);
+  }
+
+  async createSessionIdempotent(idempotencyKey: string, input: SessionCreateRequest = {}): Promise<Session> {
     const abi = await loadCoreAbi();
     const path = "/api/v1/sessions";
     const body = validateRequest("POST", this.resolve(path), input, (value) => abi.decodeAbi(abi.SessionCreateRequestSchema, value));
     return this.request(path, {
       decode: (payload) => decodeSuccessData(abi, payload, (data) => abi.decodeAbi(abi.SessionSchema, data)),
+      idempotencyKey,
       json: body,
       method: "POST",
+    });
+  }
+
+  async getSession(sessionId: string): Promise<Session> {
+    const abi = await loadCoreAbi();
+    const path = `/api/v1/sessions/${encodePathSegment(sessionId)}`;
+    return this.request(path, {
+      decode: (payload) => decodeSuccessData(abi, payload, (data) => abi.decodeAbi(abi.SessionSchema, data)),
     });
   }
 
@@ -124,11 +180,43 @@ export class CoreClient extends CoreTransport {
     });
   }
 
-  async getTranscript(taskRunId: string): Promise<TranscriptItem[]> {
+  async getTaskRunCommand(taskRunId: string, commandId: string): Promise<CommandReceipt> {
     const abi = await loadCoreAbi();
-    const path = `/api/v1/task-runs/${encodePathSegment(taskRunId)}/transcript`;
+    const path = `/api/v1/task-runs/${encodePathSegment(taskRunId)}/commands/${encodePathSegment(commandId)}`;
+    return this.request(path, { decode: (payload) => abi.decodeAbi(abi.CommandResponseSchema, payload).data.receipt });
+  }
+
+  async getTranscript(taskRunId: string): Promise<TranscriptItem[]> {
+    const items: TranscriptItem[] = [];
+    let after: number | undefined;
+    do {
+      const page = await this.getTranscriptPage(taskRunId, { after, limit: 500 });
+      items.push(...page.data.items);
+      after = page.data.pageInfo.nextCursor ?? undefined;
+      if (!page.data.pageInfo.hasMore) break;
+    } while (after !== undefined);
+    return items;
+  }
+
+  async getTaskRunInteractions(taskRunId: string, options: { after?: number; limit?: number } = {}): Promise<TaskRunInteractionsResponse> {
+    const abi = await loadCoreAbi();
+    const query = new URLSearchParams();
+    if (options.after !== undefined) query.set("after", String(options.after));
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    const basePath = `/api/v1/task-runs/${encodePathSegment(taskRunId)}/interactions`;
+    const path = query.size ? `${basePath}?${query}` : basePath;
+    return this.request(path, { decode: (payload) => abi.decodeAbi(abi.TaskRunInteractionsResponseSchema, payload) });
+  }
+
+  async getTranscriptPage(taskRunId: string, options: { after?: number; limit?: number } = {}): Promise<TranscriptResponse> {
+    const abi = await loadCoreAbi();
+    const query = new URLSearchParams();
+    if (options.after !== undefined) query.set("after", String(options.after));
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    const basePath = `/api/v1/task-runs/${encodePathSegment(taskRunId)}/transcript`;
+    const path = query.size ? `${basePath}?${query}` : basePath;
     return this.request(path, {
-      decode: (payload) => abi.decodeAbi(abi.TranscriptResponseSchema, payload).data.items,
+      decode: (payload) => abi.decodeAbi(abi.TranscriptResponseSchema, payload),
     });
   }
 

@@ -17,6 +17,7 @@ import type {
   GovernanceProgressRunView,
   GovernanceRunEventView,
   OperationRecord,
+  WorkspaceGoalOperationReceipt,
 } from "@tagent/governance/ports";
 import type {
   ControlInboxItem,
@@ -29,6 +30,7 @@ import type {
   RunPhase,
   RunStatus,
   TaskRun,
+  TaskRunCommandReceipt,
   TaskRunContractSnapshot,
   TaskRunEdge,
   UserInputField,
@@ -77,12 +79,16 @@ import {
   assertWorkspaceGoalExecutionV38Schema,
   migrateWorkspaceGoalExecutionV38,
 } from "./migrations/v38-workspace-goal-execution.js";
+import {
+  assertGatewayContractsV39Schema,
+  migrateGatewayContractsV39,
+} from "./migrations/v39-gateway-contracts.js";
 import { mapLegacyRunApprovalOperation } from "./sqlite/canonical-approval-mapper.js";
 import { appendProjectionPair, finalizeProjectionCheckpoint } from "./sqlite/canonical-integration-event.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 38;
+const SCHEMA_VERSION = 39;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
 export interface StoreOptions {
@@ -1084,10 +1090,22 @@ export class Store {
 
     const workspaceGoalExecutionMigration = this.db.transaction(() => {
       migrateWorkspaceGoalExecutionV38(this.db, previousVersion !== undefined && previousVersion >= 38 ? 38 : 37);
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+      this.db.prepare(`UPDATE schema_meta SET version=38,updated_at=? WHERE id=1`).run(now());
     });
     workspaceGoalExecutionMigration();
     assertWorkspaceGoalExecutionV38Schema(this.db);
+
+    const gatewayContractsMigration = this.db.transaction(() => {
+      migrateGatewayContractsV39(this.db, previousVersion !== undefined && previousVersion >= 39 ? 39 : 38);
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+    });
+    gatewayContractsMigration();
+    assertGatewayContractsV39Schema(this.db);
+    // A process restart loses the in-memory executor for receipts that had only
+    // reached "started". Surface uncertainty explicitly; never replay an effect
+    // whose outcome may already have escaped Core.
+    this.db.prepare("UPDATE task_run_command_receipts SET status='outcome_unknown',updated_at=? WHERE status='started'").run(now());
+    this.db.prepare("UPDATE workspace_goal_operation_receipts SET status='outcome_unknown',updated_at=? WHERE status='started'").run(now());
   }
 
   private attemptId(runId: string, ordinal: number) {
@@ -1246,6 +1264,163 @@ export class Store {
       return session;
     });
     return transaction();
+  }
+
+  createSessionIdempotent(input: {
+    title: string;
+    principalId: string;
+    idempotencyKey: string;
+    canonicalPayload: string;
+    provenance?: Record<string, unknown>;
+  }): { session: Session; replayed: boolean } {
+    const payloadHash = createHash("sha256").update(input.canonicalPayload).digest("hex");
+    return this.db.transaction(() => {
+      const existing = this.db.prepare(`SELECT payload_hash as payloadHash,session_id as sessionId
+        FROM session_create_receipts WHERE principal_id=? AND idempotency_key=?`)
+        .get(input.principalId, input.idempotencyKey) as { payloadHash: string; sessionId: string } | undefined;
+      if (existing) {
+        if (existing.payloadHash !== payloadHash) throw new Error("Session idempotency conflict: key is bound to a different canonical payload");
+        const session = this.getSession(existing.sessionId);
+        if (!session) throw new Error("Session idempotency receipt references a missing Session");
+        return { session, replayed: true };
+      }
+      const timestamp = now();
+      const session: Session = {
+        id: randomUUID(), title: input.title, modelId: this.defaultModelId, reasoningEffort: "high",
+        createdAt: timestamp, updatedAt: timestamp, latestRunStatus: null, latestRunPhase: null,
+      };
+      this.db.prepare("INSERT INTO sessions (id,title,model_id,reasoning_effort,created_at,updated_at) VALUES (?,?,?,?,?,?)")
+        .run(session.id, session.title, session.modelId, session.reasoningEffort, timestamp, timestamp);
+      this.db.prepare(`INSERT INTO session_create_receipts
+        (principal_id,idempotency_key,payload_hash,canonical_payload_json,session_id,provenance_json,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?)`).run(
+        input.principalId, input.idempotencyKey, payloadHash, input.canonicalPayload, session.id,
+        JSON.stringify(input.provenance ?? {}), timestamp, timestamp,
+      );
+      return { session, replayed: false };
+    })();
+  }
+
+  claimTaskRunCommand(input: {
+    principalId: string;
+    taskRunId: string;
+    commandId: string;
+    commandType: string;
+    canonicalPayload: string;
+    targetAttemptId: string | null;
+    provenance?: Record<string, unknown>;
+    requestId: string;
+  }): { receipt: TaskRunCommandReceipt; claimed: boolean } {
+    const payloadHash = createHash("sha256").update(input.canonicalPayload).digest("hex");
+    return this.db.transaction(() => {
+      const existing = this.getTaskRunCommand(input.principalId, input.taskRunId, input.commandId);
+      if (existing) {
+        if (existing.payloadHash !== payloadHash) throw new Error("Command idempotency conflict: commandId is bound to a different canonical payload");
+        return { receipt: existing, claimed: false };
+      }
+      const timestamp = now();
+      this.db.prepare(`INSERT INTO task_run_command_receipts
+        (principal_id,task_run_id,command_id,command_type,payload_hash,payload_json,target_attempt_id,status,
+         result_json,error_json,provenance_json,request_id,created_at,updated_at,completed_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)`).run(
+        input.principalId, input.taskRunId, input.commandId, input.commandType, payloadHash, input.canonicalPayload,
+        input.targetAttemptId, "started", "", "", JSON.stringify(input.provenance ?? {}), input.requestId, timestamp, timestamp,
+      );
+      return { receipt: this.getTaskRunCommand(input.principalId, input.taskRunId, input.commandId)!, claimed: true };
+    })();
+  }
+
+  getTaskRunCommand(principalId: string, taskRunId: string, commandId: string): TaskRunCommandReceipt | undefined {
+    const row = this.db.prepare(`SELECT principal_id as principalId,task_run_id as taskRunId,command_id as commandId,
+      command_type as commandType,payload_hash as payloadHash,payload_json as payloadJson,target_attempt_id as targetAttemptId,
+      status as state,result_json as resultJson,error_json as errorJson,provenance_json as provenanceJson,request_id as requestId,
+      created_at as createdAt,updated_at as updatedAt,completed_at as completedAt
+      FROM task_run_command_receipts WHERE principal_id=? AND task_run_id=? AND command_id=?`)
+      .get(principalId, taskRunId, commandId) as (Omit<TaskRunCommandReceipt, "payload" | "result" | "error" | "provenance"> & {
+        payloadJson: string; resultJson: string; errorJson: string; provenanceJson: string;
+      }) | undefined;
+    if (!row) return undefined;
+    const { payloadJson, resultJson, errorJson, provenanceJson, ...receipt } = row;
+    return {
+      ...receipt,
+      payload: JSON.parse(payloadJson) as Record<string, unknown>,
+      result: resultJson ? JSON.parse(resultJson) as Record<string, unknown> : null,
+      error: errorJson ? JSON.parse(errorJson) as Record<string, unknown> : null,
+      provenance: JSON.parse(provenanceJson) as Record<string, unknown>,
+    };
+  }
+
+  settleTaskRunCommand(
+    principalId: string,
+    taskRunId: string,
+    commandId: string,
+    state: "succeeded" | "failed" | "outcome_unknown",
+    result: Record<string, unknown> = {},
+    error: Record<string, unknown> = {},
+  ): TaskRunCommandReceipt {
+    const timestamp = now();
+    const update = this.db.prepare(`UPDATE task_run_command_receipts SET status=?,result_json=?,error_json=?,updated_at=?,completed_at=?
+      WHERE principal_id=? AND task_run_id=? AND command_id=? AND status='started'`).run(
+      state, Object.keys(result).length ? JSON.stringify(result) : "", Object.keys(error).length ? JSON.stringify(error) : "",
+      timestamp, timestamp, principalId, taskRunId, commandId,
+    );
+    const receipt = this.getTaskRunCommand(principalId, taskRunId, commandId);
+    if (!receipt) throw new Error("TaskRun command receipt not found");
+    if (update.changes === 0 && receipt.state === "started") throw new Error("TaskRun command receipt could not be settled");
+    return receipt;
+  }
+
+  claimWorkspaceGoalOperation(input: {
+    goalId: string; requestId: string; operationType: string; canonicalPayload: string;
+  }): { receipt: WorkspaceGoalOperationReceipt; claimed: boolean } {
+    const payloadHash = createHash("sha256").update(input.canonicalPayload).digest("hex");
+    return this.db.transaction(() => {
+      const existing = this.getWorkspaceGoalOperation(input.goalId, input.requestId);
+      if (existing) {
+        if (existing.payloadHash !== payloadHash || existing.operationType !== input.operationType) {
+          throw new Error("workspace Goal operation idempotency conflict");
+        }
+        return { receipt: existing, claimed: false };
+      }
+      const timestamp = now();
+      this.db.prepare(`INSERT INTO workspace_goal_operation_receipts
+        (goal_id,request_id,operation_type,payload_hash,payload_json,status,result_json,error_json,created_at,updated_at,completed_at)
+        VALUES (?,?,?,?,?,'started','','',?,?,NULL)`).run(
+        input.goalId, input.requestId, input.operationType, payloadHash, input.canonicalPayload, timestamp, timestamp,
+      );
+      return { receipt: this.getWorkspaceGoalOperation(input.goalId, input.requestId)!, claimed: true };
+    })();
+  }
+
+  getWorkspaceGoalOperation(goalId: string, requestId: string): WorkspaceGoalOperationReceipt | undefined {
+    const row = this.db.prepare(`SELECT goal_id as goalId,request_id as requestId,operation_type as operationType,payload_hash as payloadHash,
+      payload_json as payloadJson,status as state,result_json as resultJson,error_json as errorJson,
+      created_at as createdAt,updated_at as updatedAt,completed_at as completedAt
+      FROM workspace_goal_operation_receipts WHERE goal_id=? AND request_id=?`).get(goalId, requestId) as
+      (Omit<WorkspaceGoalOperationReceipt, "payload" | "result" | "error"> & { payloadJson: string; resultJson: string; errorJson: string }) | undefined;
+    if (!row) return undefined;
+    const { payloadJson, resultJson, errorJson, ...receipt } = row;
+    return {
+      ...receipt,
+      payload: JSON.parse(payloadJson) as Record<string, unknown>,
+      result: resultJson ? JSON.parse(resultJson) as Record<string, unknown> : null,
+      error: errorJson ? JSON.parse(errorJson) as Record<string, unknown> : null,
+    };
+  }
+
+  settleWorkspaceGoalOperation(
+    goalId: string, requestId: string, state: "succeeded" | "failed" | "outcome_unknown",
+    result: Record<string, unknown> = {}, error: Record<string, unknown> = {},
+  ): WorkspaceGoalOperationReceipt {
+    const timestamp = now();
+    this.db.prepare(`UPDATE workspace_goal_operation_receipts SET status=?,result_json=?,error_json=?,updated_at=?,completed_at=?
+      WHERE goal_id=? AND request_id=? AND status='started'`).run(
+      state, Object.keys(result).length ? JSON.stringify(result) : "", Object.keys(error).length ? JSON.stringify(error) : "",
+      timestamp, timestamp, goalId, requestId,
+    );
+    const receipt = this.getWorkspaceGoalOperation(goalId, requestId);
+    if (!receipt) throw new Error("workspace Goal operation receipt not found");
+    return receipt;
   }
 
   listSessions(): Session[] {
@@ -1936,9 +2111,17 @@ ${source.content}`;
     return transaction();
   }
 
-  listTranscriptEntries(runId: RunId, options: { limit?: number; attempt?: number } = {}) {
+  listTranscriptEntries(runId: RunId, options: { limit?: number; attempt?: number; after?: number } = {}) {
     const limit = options.limit === undefined ? undefined : Math.max(1, Math.floor(options.limit));
-    const rows = options.attempt === undefined
+    const rows = options.after !== undefined
+      ? options.attempt === undefined
+        ? limit === undefined
+          ? this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? AND seq > ? ORDER BY seq").all(runId, options.after)
+          : this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? AND seq > ? ORDER BY seq LIMIT ?").all(runId, options.after, limit)
+        : limit === undefined
+          ? this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? AND attempt = ? AND seq > ? ORDER BY seq").all(runId, options.attempt, options.after)
+          : this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? AND attempt = ? AND seq > ? ORDER BY seq LIMIT ?").all(runId, options.attempt, options.after, limit)
+      : options.attempt === undefined
       ? limit === undefined
         ? this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? ORDER BY seq").all(runId)
         : this.db.prepare(`SELECT * FROM (SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt
@@ -1981,18 +2164,34 @@ ${source.content}`;
     return transaction();
   }
 
-  listTranscriptView(runId: RunId) {
+  listTranscriptView(runId: RunId, options: { limit?: number; attempt?: number; after?: number } = {}) {
     type TranscriptViewItem =
       | { seq: number; index?: number; attempt: number; kind: "user" | "assistant"; text: string; createdAt: number }
       | { seq: number; index: number; attempt: number; kind: "thinking"; text: string; redacted: boolean; createdAt: number }
       | { seq: number; index: number; attempt: number; kind: "tool"; toolCallId: string; toolName: string; arguments: unknown; result: string; isError: boolean; status: "pending" | "completed" | "failed"; createdAt: number };
     const toolResults = new Map<string, { content: string; isError: boolean; toolName: string }>();
-    const entries = this.listTranscriptEntries(runId);
+    const entries = this.listTranscriptEntries(runId, options);
+    const toolCallIds = new Set<string>();
     for (const entry of entries) {
       const message = entry.message;
+      if (message.role === "assistant") {
+        for (const part of message.content) if (part.type === "toolCall") toolCallIds.add(part.id);
+      }
       if (message.role !== "toolResult") continue;
       const content = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
       toolResults.set(message.toolCallId, { content, isError: message.isError, toolName: message.toolName });
+    }
+    const missingToolCallIds = [...toolCallIds].filter((id) => !toolResults.has(id));
+    if (missingToolCallIds.length) {
+      const rows = this.db.prepare(`SELECT message_json as messageJson FROM run_transcript
+        WHERE run_id=? AND role='toolResult'
+          AND json_extract(message_json,'$.toolCallId') IN (SELECT value FROM json_each(?))`)
+        .all(runId, JSON.stringify(missingToolCallIds)) as Array<{ messageJson: string }>;
+      for (const row of rows) {
+        const message = JSON.parse(row.messageJson) as Extract<AgentMessage, { role: "toolResult" }>;
+        const content = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+        toolResults.set(message.toolCallId, { content, isError: message.isError, toolName: message.toolName });
+      }
     }
     const view: TranscriptViewItem[] = [];
     for (const entry of entries) {
@@ -2266,6 +2465,7 @@ ${source.content}`;
   getEventConsumer(runId: RunId, consumerId: string): EventConsumerCursor | undefined {
     return this.db.prepare(`SELECT run_id as runId, consumer_id as consumerId, generation,
       acked_seq as ackedSeq, terminal_acked_seq as terminalAckedSeq,
+      settled_acked_seq as settledAckedSeq, final_acked_seq as finalAckedSeq,
       claimed_at as claimedAt, updated_at as updatedAt FROM event_consumers
       WHERE run_id = ? AND consumer_id = ?`).get(runId, consumerId) as EventConsumerCursor | undefined;
   }
@@ -2277,10 +2477,18 @@ ${source.content}`;
       const cursor = this.getEventConsumer(runId, consumerId);
       if (!cursor || cursor.generation !== generation) return "stale" as const;
       if (!Number.isSafeInteger(seq) || seq < cursor.ackedSeq || seq > run.lastEventSeq) return "invalid" as const;
-      const terminal = this.db.prepare(`SELECT seq FROM run_events WHERE run_id = ? AND seq <= ?
+      const settled = this.db.prepare(`SELECT seq FROM run_events WHERE run_id = ? AND seq <= ?
         AND type IN ('run.completed','run.blocked','run.failed','run.cancelled') ORDER BY seq DESC LIMIT 1`).get(runId, seq) as { seq: number } | undefined;
-      this.db.prepare(`UPDATE event_consumers SET acked_seq = ?, terminal_acked_seq = COALESCE(?, terminal_acked_seq), updated_at = ?
-        WHERE run_id = ? AND consumer_id = ? AND generation = ?`).run(seq, terminal?.seq ?? null, now(), runId, consumerId, generation);
+      const final = this.db.prepare(`SELECT seq FROM run_events WHERE run_id = ? AND seq <= ?
+        AND type IN ('run.completed','run.cancelled') ORDER BY seq DESC LIMIT 1`).get(runId, seq) as { seq: number } | undefined;
+      this.db.prepare(`UPDATE event_consumers SET acked_seq = ?,
+        terminal_acked_seq = COALESCE(?, terminal_acked_seq),
+        settled_acked_seq = COALESCE(?, settled_acked_seq),
+        final_acked_seq = COALESCE(?, final_acked_seq), updated_at = ?
+        WHERE run_id = ? AND consumer_id = ? AND generation = ?`).run(
+        seq, settled?.seq ?? null, settled?.seq ?? null, final?.seq ?? null,
+        now(), runId, consumerId, generation,
+      );
       return "accepted" as const;
     });
     return transaction();
@@ -2477,13 +2685,18 @@ ${source.content}`;
   }
 
   getApprovalRequest(id: string) {
-    return this.hydrateApprovalRequest(this.db.prepare(`SELECT id,run_id as runId,decision_id as decisionId,action_type as actionType,target_type as targetType,target_id as targetId,reason,metadata_json as metadataJson,status,requested_at as requestedAt,
-      resolved_at as resolvedAt,resolved_by as resolvedBy,resolution FROM approval_requests WHERE id = ?`).get(id) as Omit<ApprovalRequest,"metadata"> & {metadataJson:string}|undefined);
+    return this.hydrateApprovalRequest(this.db.prepare(`SELECT ar.id,ar.run_id as runId,ar.decision_id as decisionId,sd.attempt,
+      ar.action_type as actionType,ar.target_type as targetType,ar.target_id as targetId,ar.reason,ar.metadata_json as metadataJson,
+      ar.status,ar.requested_at as requestedAt,ar.resolved_at as resolvedAt,ar.resolved_by as resolvedBy,ar.resolution
+      FROM approval_requests ar LEFT JOIN supervisor_decisions sd ON sd.id=ar.decision_id WHERE ar.id = ?`).get(id) as Omit<ApprovalRequest,"metadata"> & {metadataJson:string}|undefined);
   }
 
   listApprovalRequests(runId: RunId) {
-    const rows=this.db.prepare(`SELECT id,run_id as runId,decision_id as decisionId,action_type as actionType,target_type as targetType,target_id as targetId,reason,metadata_json as metadataJson,status,requested_at as requestedAt,
-      resolved_at as resolvedAt,resolved_by as resolvedBy,resolution FROM approval_requests WHERE run_id = ? ORDER BY requested_at,id`).all(runId) as Array<Omit<ApprovalRequest,"metadata"> & {metadataJson:string}>;
+    const rows=this.db.prepare(`SELECT ar.id,ar.run_id as runId,ar.decision_id as decisionId,sd.attempt,
+      ar.action_type as actionType,ar.target_type as targetType,ar.target_id as targetId,ar.reason,ar.metadata_json as metadataJson,
+      ar.status,ar.requested_at as requestedAt,ar.resolved_at as resolvedAt,ar.resolved_by as resolvedBy,ar.resolution
+      FROM approval_requests ar LEFT JOIN supervisor_decisions sd ON sd.id=ar.decision_id
+      WHERE ar.run_id = ? ORDER BY ar.requested_at,ar.id`).all(runId) as Array<Omit<ApprovalRequest,"metadata"> & {metadataJson:string}>;
     return rows.map((row)=>this.hydrateApprovalRequest(row)!);
   }
 
@@ -2528,8 +2741,10 @@ ${source.content}`;
 
   listTaskRunEdges(runId: RunId): TaskRunEdge[] { return this.db.prepare(`SELECT from_run_id as fromRunId,to_run_id as toRunId,relation,reason,created_at as createdAt FROM taskrun_edges WHERE from_run_id=? OR to_run_id=? ORDER BY created_at`).all(runId,runId) as TaskRunEdge[]; }
 
-  listEvents(runId: RunId, after = 0): RunEvent[] {
-    const rows = this.db.prepare(`SELECT run_id as runId, seq, type, data, created_at as createdAt FROM run_events WHERE run_id = ? AND seq > ? ORDER BY seq`).all(runId, after) as Array<Omit<RunEvent, "data"> & { data: string }>;
+  listEvents(runId: RunId, after = 0, limit?: number): RunEvent[] {
+    const rows = (limit === undefined
+      ? this.db.prepare(`SELECT run_id as runId, seq, type, data, created_at as createdAt FROM run_events WHERE run_id = ? AND seq > ? ORDER BY seq`).all(runId, after)
+      : this.db.prepare(`SELECT run_id as runId, seq, type, data, created_at as createdAt FROM run_events WHERE run_id = ? AND seq > ? ORDER BY seq LIMIT ?`).all(runId, after, Math.max(1, Math.floor(limit)))) as Array<Omit<RunEvent, "data"> & { data: string }>;
     return rows.map((row) => ({ ...row, data: JSON.parse(row.data) as Record<string, unknown> }));
   }
 

@@ -1,5 +1,5 @@
 import { Type, type Static } from "typebox";
-import { TimestampMillisecondsSchema } from "../../shared/primitives.js";
+import { JsonObjectSchema, TimestampMillisecondsSchema } from "../../shared/primitives.js";
 
 export const ConsoleWorkspaceGoalStatusSchema = Type.Union([
   Type.Literal("draft"), Type.Literal("active"), Type.Literal("paused"),
@@ -67,9 +67,24 @@ export const ConsoleWorkspaceGoalSchema = Type.Object({
 
 export const ConsoleWorkspaceGoalSummariesSchema = Type.Array(ConsoleWorkspaceGoalSummarySchema);
 
+export const ConsoleGenerateWorkspaceGoalRoadmapRequestSchema = Type.Object({
+  requestId: Type.String({ minLength: 1, maxLength: 300 }),
+  actorId: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })),
+}, { additionalProperties: false });
+
+export const ConsoleWorkspaceGoalOperationReceiptSchema = Type.Object({
+  goalId: Type.String({ minLength: 1 }), requestId: Type.String({ minLength: 1 }), operationType: Type.String({ minLength: 1 }),
+  payloadHash: Type.String({ minLength: 1 }), payload: JsonObjectSchema,
+  state: Type.Union([Type.Literal("started"), Type.Literal("succeeded"), Type.Literal("failed"), Type.Literal("outcome_unknown")]),
+  result: Type.Union([JsonObjectSchema, Type.Null()]), error: Type.Union([JsonObjectSchema, Type.Null()]),
+  createdAt: TimestampMillisecondsSchema, updatedAt: TimestampMillisecondsSchema, completedAt: Type.Union([TimestampMillisecondsSchema, Type.Null()]),
+}, { additionalProperties: false });
+
 export type ConsoleWorkspaceGoal = Static<typeof ConsoleWorkspaceGoalSchema>;
 export type ConsoleWorkspaceGoalSummary = Static<typeof ConsoleWorkspaceGoalSummarySchema>;
 export type ConsoleWorkspaceGoalDefinition = Static<typeof ConsoleWorkspaceGoalDefinitionSchema>;
 export type ConsoleWorkspaceGoalRoadmap = Static<typeof ConsoleWorkspaceGoalRoadmapSchema>;
 export type ConsoleWorkspaceGoalRoadmapItem = Static<typeof ConsoleWorkspaceGoalRoadmapItemSchema>;
 export type ConsoleWorkspaceGoalDecision = Static<typeof ConsoleWorkspaceGoalDecisionSchema>;
+export type ConsoleGenerateWorkspaceGoalRoadmapRequest = Static<typeof ConsoleGenerateWorkspaceGoalRoadmapRequestSchema>;
+export type ConsoleWorkspaceGoalOperationReceipt = Static<typeof ConsoleWorkspaceGoalOperationReceiptSchema>;

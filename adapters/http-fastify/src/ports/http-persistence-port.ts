@@ -3,6 +3,7 @@ import type {
   ControlInbox,
   EventConsumerRepository,
   TaskRunRepository,
+  TaskRunCommandReceiptRepository,
   TranscriptRepository,
 } from "@tagent/execution/ports";
 import type {
@@ -11,18 +12,20 @@ import type {
   OperationRepository,
   SupervisorDecisionJournal,
   WorkspaceGoalRepository,
+  WorkspaceGoalOperationRepository,
 } from "@tagent/governance/ports";
 
 export interface HttpPersistencePort {
   sessions: Pick<
     SessionRepository,
-    "createSession" | "listSessions" | "getSession" | "updateSession" | "renameSession" | "listMessages"
+    "createSession" | "createSessionIdempotent" | "listSessions" | "getSession" | "updateSession" | "renameSession" | "listMessages"
   >;
   submissions: Pick<SubmissionQueue, "getSessionSubmission" | "listSessionInbox">;
   taskRuns: Pick<
     TaskRunRepository,
     "getRun" | "listRuns" | "getLatestRun" | "listTaskRunEdges"
   >;
+  taskRunCommands: TaskRunCommandReceiptRepository;
   supervisorDecisions: Pick<SupervisorDecisionJournal, "listSupervisorDecisions">;
   contextManifests: Pick<ContextManifestRepository, "listContextManifests">;
   controlInbox: Pick<ControlInbox, "listControlInbox">;
@@ -34,4 +37,5 @@ export interface HttpPersistencePort {
   evidence: Pick<EvidenceRepository, "getArtifact">;
   eventConsumers: EventConsumerRepository;
   workspaceGoals: WorkspaceGoalRepository;
+  workspaceGoalOperations: WorkspaceGoalOperationRepository;
 }

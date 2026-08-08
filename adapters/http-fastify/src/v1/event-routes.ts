@@ -7,6 +7,7 @@ import {
   EventConsumerParamsSchema,
   EventStreamQuerySchema,
   encodeAbi,
+  ProjectionCriticalTaskRunEventSchema,
   TaskRunEventSchema,
   TaskRunParamsSchema,
   type EventConsumerParams,
@@ -58,6 +59,7 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
     // The durable acknowledgement is authoritative. An older local cursor may
     // replay duplicates, but a client may never skip unacknowledged events.
     const replayAfter = cursor.ackedSeq;
+    const replayHighWatermark = service.getRun(taskRunId)!.lastEventSeq;
     reply.hijack();
     const response = reply.raw;
     response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no", "X-Request-Id": requestIdOf(request) });
@@ -77,7 +79,8 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
           closeStream();
           return false;
         }
-        const mapped = encodeAbi(TaskRunEventSchema, mapTaskRunEvent(event));
+        const projected = encodeAbi(ProjectionCriticalTaskRunEventSchema, mapTaskRunEvent(event) as never);
+        const mapped = encodeAbi(TaskRunEventSchema, projected as never);
         const accepted = response.write(`id: ${mapped.eventId}\ndata: ${JSON.stringify(mapped)}\n\n`);
         if (!accepted) closeStream();
         return accepted;
@@ -88,7 +91,10 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
     };
     try {
       const subscribed = service.subscribe(taskRunId, (event) => {
-        if (replaying) buffered.push(event);
+        if (replaying) {
+          if (buffered.length >= 1_000) return closeStream();
+          buffered.push(event);
+        }
         else send(event);
       });
       unsubscribe = subscribed;
@@ -97,9 +103,14 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
         return;
       }
       let deliveredSequence = replayAfter;
-      for (const event of service.replay(taskRunId, replayAfter)) {
-        if (!send(event)) return;
-        deliveredSequence = event.seq;
+      while (deliveredSequence < replayHighWatermark) {
+        const batch = service.replay(taskRunId, deliveredSequence, 256)
+          .filter((event) => event.seq <= replayHighWatermark);
+        if (!batch.length) break;
+        for (const event of batch) {
+          if (!send(event)) return;
+          deliveredSequence = event.seq;
+        }
       }
       replaying = false;
       for (const event of buffered) {

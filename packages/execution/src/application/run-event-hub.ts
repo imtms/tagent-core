@@ -86,8 +86,8 @@ export class RunEventHub {
     };
   }
 
-  replay(runId: RunId, after = 0) {
-    return this.state.persistence.events.listEvents(runId, after);
+  replay(runId: RunId, after = 0, limit?: number) {
+    return this.state.persistence.events.listEvents(runId, after, limit);
   }
 
   public publish(event: RunEvent) {

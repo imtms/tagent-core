@@ -4,7 +4,7 @@
 
 `@tagent/persistence-sqlite` owns the control-plane SQLite schema, repositories, migrations, transaction boundary, writer authority, and restart recovery primitives. Domains depend on its ports through the Core composition root; they do not issue uncontrolled SQL.
 
-The current schema version is 38:
+The current schema version is 39:
 
 | Version | Authority introduced |
 | --- | --- |
@@ -17,12 +17,15 @@ The current schema version is 38:
 | 36 | Goal decision/evidence idempotency, dynamic evidence freshness and mutation authorization support |
 | 37 | operation audit payloads and current-Attempt trusted Bash bindings for Run checks |
 | 38 | automatic Goal guidance, Goal Roadmap admission/progress, Run link modes and repeatable lifecycle decisions |
+| 39 | Gateway Session/command/Goal operation receipts plus settled/final event-consumer ACK boundaries |
 
 Schema 37 added `operations.payload_json`, `run_checks.source_operation_id`, `run_checks.observed_at`, and the partial source-operation index. Legacy operations are not retroactively promoted to trusted evidence.
 
 Schema 38 adds `workspace_goal_run_links.link_mode`, `workspace_goal_inbox_links` and `workspace_goal_roadmap_item_progress`. It classifies historical Goal-linked Runs, backfills Roadmap progress and removes the legacy decision-identity constraint so valid pause/resume cycles can repeat. Re-entry validates the complete v37 trusted-evidence shape and the v38 Goal execution shape and fails closed on drift.
 
-Migrations are forward-only for a running release. A binary that only understands schema 37 must never open a schema 38 database.
+Schema 39 adds `session_create_receipts`, `task_run_command_receipts`, `workspace_goal_operation_receipts`, `event_consumers.settled_acked_seq`, and `event_consumers.final_acked_seq`. Session identity is scoped by `(principal_id,idempotency_key)`; command identity by `(principal_id,task_run_id,command_id)`; Goal operation identity by `(goal_id,request_id)`. Every receipt stores the canonical payload hash. Re-entry validates all tables, columns and the command-status index.
+
+Migrations are forward-only for a running release. A binary that only understands schema 38 must never open a schema 39 database.
 
 ## Startup order
 
@@ -59,10 +62,13 @@ Recovery does not guess that an interrupted external effect succeeded or failed:
 - effect started without a durable terminal receipt becomes `outcome_unknown`;
 - authorized work whose effect had not started becomes `cancelled` with `restart_before_effect`;
 - a Pi control delivery that was in delivery becomes `outcome_unknown`;
+- a TaskRun command or Workspace Goal operation left at `started` becomes `outcome_unknown` before HTTP readiness;
 - interrupted `Attempt`s release stale execution leases, reject unresolved candidate state, and preserve an auditable recovery event;
 - pending Supervisor continuations, Session Inbox work, Learning deliveries, and checkpoints are reconciled through their durable state.
 
 `outcome_unknown` requires explicit reconciliation or operator action. Replaying the same external mutation automatically could duplicate side effects.
+
+Session creation is a fully local transaction: Session row and receipt commit together. `steer`/`follow_up` accept at the durable fenced control-inbox boundary and deliver asynchronously. Commands that can cross Runtime/provider boundaries persist their receipt first; if Core cannot prove completion after restart, GET returns the preserved `outcome_unknown` receipt rather than executing the command again. Goal Roadmap generation similarly claims its request before the single LLM call and never calls the model twice for the same request identity.
 
 ## Trusted verification receipts
 

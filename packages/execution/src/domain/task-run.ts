@@ -50,6 +50,8 @@ export interface EventConsumerCursor {
   generation: number;
   ackedSeq: number;
   terminalAckedSeq: number | null;
+  settledAckedSeq: number | null;
+  finalAckedSeq: number | null;
   claimedAt: number;
   updatedAt: number;
 }
@@ -65,6 +67,25 @@ export interface ControlInboxItem {
   error: string;
   createdAt: number;
   claimedAt: number | null;
+  completedAt: number | null;
+}
+
+export type TaskRunCommandReceiptState = "started" | "succeeded" | "failed" | "outcome_unknown";
+export interface TaskRunCommandReceipt {
+  principalId: string;
+  taskRunId: RunId;
+  commandId: string;
+  commandType: string;
+  payloadHash: string;
+  payload: Record<string, unknown>;
+  targetAttemptId: string | null;
+  state: TaskRunCommandReceiptState;
+  result: Record<string, unknown> | null;
+  error: Record<string, unknown> | null;
+  provenance: Record<string, unknown>;
+  requestId: string;
+  createdAt: number;
+  updatedAt: number;
   completedAt: number | null;
 }
 

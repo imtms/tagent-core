@@ -1,6 +1,6 @@
 # Upgrade and rollback
 
-This guide describes the current repository boundary: API v1, independently deployed Core and Web Console artifacts, one fenced SQLite writer, and control-plane schema 38. It replaces the version-specific 0.2 upgrade notes; release tags retain those historical instructions.
+This guide describes the current repository boundary: API v1, independently deployed Core and Web Console artifacts, one fenced SQLite writer, and control-plane schema 39. It replaces the version-specific 0.2 upgrade notes; release tags retain those historical instructions.
 
 ## Compatibility boundary
 
@@ -8,7 +8,7 @@ This guide describes the current repository boundary: API v1, independently depl
 - Core is API-only and does not serve the Web Console or an SPA fallback.
 - Durable submissions use the `Idempotency-Key` header and v1 receipt envelopes.
 - Production uses Node.js `24.18.1`, npm 12 or newer, and Linux x64/Node ABI 137 for the immutable Core artifact.
-- SQLite migrations are forward-only. A binary that understands at most schema 37 must not open schema 38.
+- SQLite migrations are forward-only. A binary that understands at most schema 38 must not open schema 39.
 - Core, Gateway and Web must honor generation-fenced event replay and durable persist-before-ACK behavior.
 
 ## Before upgrading
@@ -37,6 +37,7 @@ The production `Store` opener applies and revalidates the migration chain:
 | 36 | Goal decision/evidence idempotency, freshness and mutation authorization |
 | 37 | operation audit payloads and trusted current-Attempt Bash bindings for checks |
 | 38 | automatic Goal guidance, Roadmap admission/progress and repeatable lifecycle decisions |
+| 39 | durable Gateway Session/command/Goal operation receipts and settled/final event ACKs |
 
 Schema 37 added:
 
@@ -57,30 +58,43 @@ workspace_goal_roadmap_item_progress
 
 The v38 migration classifies historical Goal-linked Runs, backfills Roadmap item progress and rebuilds the Goal decision table without the obsolete one-decision-per-kind identity constraint. Request-ID uniqueness remains authoritative. Reopening a schema 38 database validates both the v37 trusted-evidence shape and the v38 Goal execution shape and fails closed on drift. Existing operations and self-reported check text are not backfilled as trusted evidence.
 
+Schema 39 adds:
+
+```text
+session_create_receipts
+task_run_command_receipts
+workspace_goal_operation_receipts
+event_consumers.settled_acked_seq
+event_consumers.final_acked_seq
+```
+
+The v39 migration backfills the settled ACK from the deprecated terminal ACK, validates required indexes, and is re-entrant. On every reopen, unfinished command and Goal operation receipts become `outcome_unknown`; Core never guesses or automatically repeats a possibly completed effect.
+
 The schema 33 preflight may record ambiguous source rows in `migration_issues`. Any open issue blocks startup. Correct the underlying source data and rerun the migration; do not delete or bypass the ledger.
 
 ## Deployment order
 
 1. Verify the candidate Core archive and checksum.
 2. Open a restored database with the release-local `Store` twice.
-3. Require both opens to report `schema_meta.version=38`, zero open migration issues, the trusted-evidence index and the Goal execution tables/column.
+3. Require both opens to report `schema_meta.version=39`, zero open migration issues, the trusted-evidence/Goal execution shapes and all v39 receipt tables/ACK columns.
 4. Start exactly one Core writer and require `/api/v1/health` to report `data.ok=true` and `data.writer.ready=true`.
-5. Start one Gateway consumer, claim a new generation, replay from the durable ACK, persist each event, then ACK it.
-6. Run `scripts/gateway-readiness-probe.mjs`; require exit 0, `ready=true`, zero lag and no terminal unacknowledged events.
-7. Deploy the matching independent Web Console artifact.
-8. Reopen traffic and monitor writer authority, consumer lag, Learning watermarks, Supervisor transport failures and runtime continuations.
+5. Negotiate `GET /api/v1/capabilities`; require schema 39, the necessary commands/events, typed interactions, Operator Goal support and documented limits.
+6. Start one Gateway consumer, claim a new generation, replay from the durable ACK, persist each event, then ACK it.
+7. Run `scripts/gateway-readiness-probe.mjs`; require exit 0, `ready=true`, zero lag and no settled/final unacknowledged events.
+8. Deploy the matching independent Web Console artifact.
+9. Reopen traffic and monitor writer authority, `outcome_unknown` receipts, consumer lag, Learning watermarks, Supervisor transport failures and runtime continuations.
 
 Use [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for the executable production gates.
 
 ## Verification
 
 - `/api/v1/health` is ready and removed `/api/health` returns 404;
-- schema version is 38 and a second open is idempotent;
+- schema version is 39 and a second open is idempotent;
 - `migration_issues` has zero open rows;
 - only one fresh writer fence exists;
 - a passed required check is rejected unless it references a successful Bash operation from the current Attempt;
 - change, verification and release completion reaches the semantic Supervisor only after trusted deterministic evidence passes;
-- Gateway consumer lag and terminal unacknowledged counts are zero;
+- Gateway consumer lag and settled/final unacknowledged counts are zero;
 - configured Memory/Learning modes and authority state match policy;
 - Core serves no Web assets and the Web Console targets the intended Gateway/API origin.
 
@@ -88,9 +102,9 @@ Use [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for the e
 
 There is no in-place schema downgrade.
 
-For a binary rollback that still understands schema 38, stop traffic and the current writer, switch the immutable release pointer, start one replacement writer and rerun readiness checks.
+For a binary rollback that still understands schema 39 and the named `gateway-contracts-v39` ABI window, stop traffic and the current writer, switch the immutable release pointer, start one replacement writer and rerun readiness checks.
 
-For any rollback to a schema-37-only or older binary:
+For any rollback to a schema-38-only or older binary:
 
 1. stop Gateway traffic and all writers;
 2. preserve the failed-upgrade database and readiness evidence for diagnosis;
@@ -99,4 +113,4 @@ For any rollback to a schema-37-only or older binary:
 5. restore the matching artifact and configuration;
 6. start exactly one old writer and validate it before reopening compatible traffic.
 
-Do not overwrite a live schema 38 database with old files, and do not run an incompatible binary merely to inspect it.
+Do not overwrite a live schema 39 database with old files, and do not run an incompatible binary merely to inspect it.

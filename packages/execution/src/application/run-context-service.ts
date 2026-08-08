@@ -42,7 +42,8 @@ export class RunContextService {
   }
 
   getCurrentAttemptId(runId: RunId) {
-    return this.state.persistence.attempts.getActiveAttempt(runId)?.id ?? null;
+    const run = this.state.persistence.taskRuns.getRun(runId);
+    return run ? this.state.persistence.attempts.getAttemptForRun(runId, run.attempt)?.id ?? null : null;
   }
 
   requiresAsyncPreparation() {

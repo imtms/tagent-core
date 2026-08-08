@@ -53,6 +53,11 @@ export type { OperationRecord, OperationRepository, OperationUpdate } from "./op
 export type { ProgressRepository } from "./progress-repository.js";
 export type { WorkspaceGoalRepository } from "./workspace-goal-repository.js";
 export type {
+  WorkspaceGoalOperationReceipt,
+  WorkspaceGoalOperationRepository,
+  WorkspaceGoalOperationState,
+} from "./workspace-goal-operation-repository.js";
+export type {
   SupervisorContextManifestReader,
   SupervisorControlInboxReader,
   SupervisorPersistencePort,

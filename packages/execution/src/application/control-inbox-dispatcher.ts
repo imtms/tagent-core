@@ -26,8 +26,9 @@ export class ControlInboxDispatcher {
     const item = admission.item;
     this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, admission.status === "duplicate" ? "control.duplicate" : "control.accepted", { controlId: item.id, requestId, attempt: item.attempt, kind }));
     if (admission.status === "accepted") {
-      await this.scheduleControlDelivery(runId, item.attempt);
-      if (this.state.persistence.controlInbox.getControlItem(item.id)?.status === "queued") await this.scheduleControlDelivery(runId, item.attempt);
+      // The durable inbox is the command acceptance boundary. Runtime delivery is
+      // intentionally detached so a slow provider cannot hold the Gateway POST.
+      void this.scheduleControlDelivery(runId, item.attempt);
     }
     const persisted = this.state.persistence.controlInbox.getControlItem(item.id)!;
     const status = persisted.status === "delivered" ? "accepted" as const

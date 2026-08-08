@@ -63,12 +63,13 @@ Use Core-before-Gateway order:
 3. back up SQLite with WAL/SHM, optional PostgreSQL/Cold state, current artifact, config, and watermarks;
 4. verify the Core archive and checksum;
 5. switch to the new Core artifact and start it;
-6. allow migration to schema 38; if `migration_issues` contains an open row, correct the source data rather than bypassing the ledger;
+6. allow migration to schema 39; if `migration_issues` contains an open row, correct the source data rather than bypassing the ledger;
 7. require `GET /api/v1/health` to report `data.ok=true` and `data.writer.ready=true`;
-8. start one Gateway consumer, claim a new event-consumer generation, replay, persist, then ACK;
-9. run the readiness probe and require zero lag and no terminal unacknowledged events;
-10. deploy the matching Web artifact with its Gateway origin;
-11. reopen traffic and monitor writer fence, consumer lag, Learning authority, and provider errors.
+8. require `GET /api/v1/capabilities` to report schema 39, the required command/event catalogs, typed interactions and Operator profile before Gateway accepts traffic;
+9. start one Gateway consumer, claim a new event-consumer generation, replay, persist, then ACK;
+10. run the readiness probe and require zero lag and no settled/final unacknowledged events;
+11. deploy the matching Web artifact with its Gateway origin;
+12. reopen traffic and monitor writer fence, command/Goal `outcome_unknown`, consumer lag, Learning authority, and provider errors.
 
 Use [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for exact gates.
 
@@ -83,11 +84,17 @@ sudo TAGENT_HEALTH_URL=http://127.0.0.1:3100/api/v1/health \
 
 The script's service rollback changes the binary pointer only. It does not downgrade a migrated database.
 
+## Gateway command boundary
+
+Gateway must persist its own external intent before calling Core, use stable Session/Submission/command/Goal request identities, and query Core receipts after ambiguous network failures. Core never accepts browser identity as authority and never receives Telegram/Feishu SDK objects or platform secrets. Gateway must persist each SSE event before ACK and treat `blocked` as settled but recoverable, not final.
+
+Core bounds SSE replay at 256 rows per database read and the replay/live handoff at 1,000 events. A closed slow-consumer stream is reconnected from its durable ACK. Current v39 retention does not automatically delete TaskRun events or expire cursors.
+
 ## Backup and rollback
 
-Code rollback within schema 38 requires a binary that understands schema 38 and the v1 contracts. Rollback to an older incompatible release requires stopping all writers and restoring the matching pre-upgrade SQLite/WAL/SHM backup plus the matching Memory state.
+Code rollback within schema 39 requires a binary that understands schema 39 and the `gateway-contracts-v39` ABI window. Rollback to an older incompatible release requires stopping all writers and restoring the matching pre-upgrade SQLite/WAL/SHM backup plus the matching Memory state.
 
-Never run a schema-37-only or otherwise incompatible binary against schema 38 and never overwrite a live schema 38 database with partial old files. Preserve the last successful readiness snapshot and consumer/learning watermarks before changing Gateway ownership.
+Never run a schema-38-only or otherwise incompatible binary against schema 39 and never overwrite a live schema 39 database with partial old files. Preserve the last successful capability negotiation, readiness snapshot, command/Goal receipts and consumer/learning watermarks before changing Gateway ownership.
 
 ## Web deployment
 

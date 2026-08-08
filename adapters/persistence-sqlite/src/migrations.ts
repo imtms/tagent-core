@@ -40,3 +40,7 @@ export {
   assertWorkspaceGoalExecutionV38Schema,
   migrateWorkspaceGoalExecutionV38,
 } from "./migrations/v38-workspace-goal-execution.js";
+export {
+  assertGatewayContractsV39Schema,
+  migrateGatewayContractsV39,
+} from "./migrations/v39-gateway-contracts.js";

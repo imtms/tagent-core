@@ -18,6 +18,12 @@ export const TaskRunParamsSchema = Type.Object({
 }, { additionalProperties: false });
 export type TaskRunParams = Static<typeof TaskRunParamsSchema>;
 
+export const TaskRunCommandParamsSchema = Type.Object({
+  taskRunId: IdentifierSchema,
+  commandId: IdentifierSchema,
+}, { additionalProperties: false });
+export type TaskRunCommandParams = Static<typeof TaskRunCommandParamsSchema>;
+
 export const TaskRunArtifactParamsSchema = Type.Object({
   taskRunId: IdentifierSchema,
   artifactId: IdentifierSchema,

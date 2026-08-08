@@ -2,6 +2,13 @@ import type { Message, Session, SessionId, SessionSettingsUpdate } from "../doma
 
 export interface SessionRepository {
   createSession(title?: string, requestId?: string): Session;
+  createSessionIdempotent(input: {
+    title: string;
+    principalId: string;
+    idempotencyKey: string;
+    canonicalPayload: string;
+    provenance?: Record<string, unknown>;
+  }): { session: Session; replayed: boolean };
   listSessions(): Session[];
   getSession(id: SessionId): Session | undefined;
   updateSession(id: SessionId, settings: SessionSettingsUpdate): Session | undefined;

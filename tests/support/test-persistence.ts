@@ -31,6 +31,7 @@ export function httpPersistence(store: Store): HttpPersistencePort {
     sessions: persistence.sessions,
     submissions: persistence.submissions,
     taskRuns: persistence.taskRuns,
+    taskRunCommands: persistence.taskRunCommands,
     supervisorDecisions: persistence.supervisorDecisions,
     contextManifests: persistence.contextManifests,
     controlInbox: persistence.controlInbox,
@@ -39,6 +40,7 @@ export function httpPersistence(store: Store): HttpPersistencePort {
     evidence: persistence.evidence,
     eventConsumers: persistence.eventConsumers,
     workspaceGoals: persistence.workspaceGoals,
+    workspaceGoalOperations: persistence.workspaceGoalOperations,
   };
 }
 

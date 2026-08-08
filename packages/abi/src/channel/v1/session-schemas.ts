@@ -1,5 +1,8 @@
 import { Type, type Static } from "typebox";
 import { IdentifierSchema, IsoDateTimeSchema } from "../../shared/primitives.js";
+import { IdempotencyKeySchema } from "../../shared/idempotency.js";
+import { GatewayProvenanceSchema } from "./provenance-schemas.js";
+import { canonicalJson } from "../../shared/canonical-json.js";
 
 export const TaskRunStatusSchema = Type.Union([
   Type.Literal("running"),
@@ -26,8 +29,25 @@ export type TaskRunPhase = Static<typeof TaskRunPhaseSchema>;
 
 export const SessionCreateRequestSchema = Type.Object({
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  origin: Type.Optional(GatewayProvenanceSchema),
 }, { additionalProperties: false });
 export type SessionCreateRequest = Static<typeof SessionCreateRequestSchema>;
+
+export const SessionCreateHeadersSchema = Type.Object({
+  "idempotency-key": IdempotencyKeySchema,
+}, { additionalProperties: true });
+export type SessionCreateHeaders = Static<typeof SessionCreateHeadersSchema>;
+
+export function normalizeSessionCreateRequest(request: SessionCreateRequest): SessionCreateRequest {
+  return {
+    title: request.title?.trim() || "New workspace",
+    ...(request.origin === undefined ? {} : { origin: request.origin }),
+  };
+}
+
+export function canonicalizeSessionCreateRequest(request: SessionCreateRequest): string {
+  return canonicalJson(normalizeSessionCreateRequest(request));
+}
 
 export const SessionSchema = Type.Object({
   id: IdentifierSchema,

@@ -7,7 +7,7 @@ export function authorizeChannel(credentials: ServiceCredential[], scope: Servic
   return async (request: FastifyRequest): Promise<void> => authorizeV1(request, credentials, scope, "channel");
 }
 
-export function missing(resource: "session" | "submission" | "task_run" | "artifact"): V1HttpError {
+export function missing(resource: "session" | "submission" | "task_run" | "command" | "artifact"): V1HttpError {
   return new V1HttpError(404, `${resource}.not_found`, `${resource.replace("_", " ")} not found`, "not_found");
 }
 

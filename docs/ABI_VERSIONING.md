@@ -53,3 +53,18 @@ Fastify route handlers decode ingress and encode egress with `@tagent/abi`. `@ta
 7. Update [API_V1.md](API_V1.md), [CHANGELOG.md](../CHANGELOG.md), and upgrade guidance.
 
 Core, clients, and artifacts for a release must use the same validated ABI build.
+
+## Gateway contracts v39 migration window
+
+Schema v39 introduces the named `gateway-contracts-v39` migration window. It intentionally tightens the pre-production Channel/Operator contract before Gateway ownership is enabled:
+
+- `POST /api/v1/sessions` now requires `Idempotency-Key`;
+- TaskRun adds `currentAttempt` and typed `pendingInteractions`;
+- command receipts add `state`, `outcome`, `replayed`, and original `result`;
+- Transcript responses add mandatory `pageInfo` and are server-paginated;
+- event-consumer cursors add settled/final ACK fields;
+- Workspace Goal writes require `requestId`.
+
+Because v1 decoders reject unknown fields, a pre-v39 client is not wire-compatible with these tightened responses. Deploy schema-v39 Core and the matching `@tagent/abi`/`@tagent/core-client` before enabling Gateway traffic; `GET /api/v1/capabilities` must report persistence schema 39 and the required catalogs. `status: "duplicate"` and `terminalAcknowledgedSequence` remain as deprecated compatibility aliases for one release window. New consumers must use `replayed` plus `state/outcome`, and `settledAcknowledgedSequence`/`finalAcknowledgedSequence`.
+
+The next public API major should remove those aliases rather than extending the window indefinitely.

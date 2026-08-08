@@ -164,6 +164,18 @@ describe("core-client transport", () => {
 });
 
 describe("channel v1 helpers", () => {
+  it("sends explicit Session idempotency and decodes capabilities", async () => {
+    const session = { id: "session-1", title: "Gateway", modelId: "gpt-5.6-sol", reasoningEffort: "high", createdAt: "2026-08-04T12:34:56.789Z", updatedAt: "2026-08-04T12:34:56.789Z", latestTaskRunStatus: null, latestTaskRunPhase: null };
+    const capabilities = { releaseVersion: "0.3.0", apiVersions: ["channel.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 39, commandTypes: ["task_run.steer"], eventTypes: ["task_run.started"], interactions: { approvalResolution: true, userInputSubmission: true }, operator: { workspaceGoals: true, roadmapGenerationIdempotent: true }, retention: { automaticDeletion: false }, limits: { transcriptPageMax: 500, eventReplayBatch: 256, eventLiveBuffer: 1000, artifactPreviewBytes: 5242880, artifactDownloadBytes: 52428800 } };
+    const fetchMock = vi.fn<CoreFetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: session, requestId: "create-session" }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: capabilities, requestId: "capabilities" }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const client = createCoreClient({ fetch: fetchMock });
+    await expect(client.createSessionIdempotent("session-create-key", { title: "Gateway" })).resolves.toEqual(session);
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get("Idempotency-Key")).toBe("session-create-key");
+    await expect(client.getCapabilities()).resolves.toEqual(capabilities);
+  });
+
   it("validates submission fixtures and maps the idempotency contract", async () => {
     const fetchMock = vi.fn<CoreFetch>(async () => new Response(JSON.stringify(submissionIdempotencyFixtures.originalResponse), {
       status: 200,
@@ -202,6 +214,8 @@ describe("channel v1 helpers", () => {
       consumerId: "gateway/main",
       generation: 2,
       acknowledgedSequence: 7,
+      settledAcknowledgedSequence: null,
+      finalAcknowledgedSequence: null,
       terminalAcknowledgedSequence: null,
       claimedAt: "2026-08-04T12:34:56.789Z",
       updatedAt: "2026-08-04T12:34:56.789Z",

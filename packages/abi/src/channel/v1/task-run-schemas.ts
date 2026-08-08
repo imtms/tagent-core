@@ -148,6 +148,61 @@ export const TaskRunArtifactSchema = Type.Object({
 });
 export type TaskRunArtifact = Static<typeof TaskRunArtifactSchema>;
 
+export const TaskRunApprovalRequestSchema = Type.Object({
+  id: IdentifierSchema,
+  taskRunId: IdentifierSchema,
+  attempt: Type.Integer({ minimum: 1 }),
+  actionType: Type.Union([Type.Literal("resume_taskrun"), Type.Literal("start_parallel_taskrun")]),
+  targetType: Type.Union([Type.Literal("taskrun"), Type.Literal("session_inbox_item")]),
+  targetId: IdentifierSchema,
+  reason: Type.String(),
+  status: Type.Union([Type.Literal("pending"), Type.Literal("approved"), Type.Literal("rejected"), Type.Literal("superseded")]),
+  requestedAt: IsoDateTimeSchema,
+  resolvedAt: Type.Union([IsoDateTimeSchema, Type.Null()]),
+  resolvedBy: Type.String(),
+  resolution: Type.String(),
+}, { additionalProperties: false });
+export type TaskRunApprovalRequest = Static<typeof TaskRunApprovalRequestSchema>;
+
+export const TaskRunUserInputRequestSchema = Type.Object({
+  id: IdentifierSchema,
+  taskRunId: IdentifierSchema,
+  attempt: Type.Integer({ minimum: 1 }),
+  prompt: Type.String(),
+  fields: Type.Array(Type.Object({
+    key: Type.String({ minLength: 1 }),
+    label: Type.String({ minLength: 1 }),
+    description: Type.String(),
+    inputType: Type.Union([Type.Literal("text"), Type.Literal("textarea")]),
+    required: Type.Boolean(),
+    placeholder: Type.String(),
+  }, { additionalProperties: false })),
+  status: Type.Union([Type.Literal("pending"), Type.Literal("submitted"), Type.Literal("cancelled"), Type.Literal("superseded")]),
+  response: Type.Record(Type.String(), Type.String()),
+  requestedAt: IsoDateTimeSchema,
+  submittedAt: Type.Union([IsoDateTimeSchema, Type.Null()]),
+}, { additionalProperties: false });
+export type TaskRunUserInputRequest = Static<typeof TaskRunUserInputRequestSchema>;
+
+export const TaskRunInteractionSchema = Type.Union([
+  Type.Object({ kind: Type.Literal("approval"), interaction: TaskRunApprovalRequestSchema }, { additionalProperties: false }),
+  Type.Object({ kind: Type.Literal("user_input"), interaction: TaskRunUserInputRequestSchema }, { additionalProperties: false }),
+]);
+export type TaskRunInteraction = Static<typeof TaskRunInteractionSchema>;
+
+export const TaskRunInteractionsQuerySchema = Type.Object({
+  after: Type.Optional(Type.Integer({ minimum: 0 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+}, { additionalProperties: false });
+export const TaskRunInteractionsResponseSchema = Type.Object({
+  data: Type.Object({
+    items: Type.Array(TaskRunInteractionSchema),
+    pageInfo: Type.Object({ nextCursor: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]), hasMore: Type.Boolean(), limit: Type.Integer({ minimum: 1, maximum: 200 }) }, { additionalProperties: false }),
+  }, { additionalProperties: false }),
+  requestId: Type.String({ minLength: 1 }),
+}, { additionalProperties: false });
+export type TaskRunInteractionsResponse = Static<typeof TaskRunInteractionsResponseSchema>;
+
 export const TaskRunSchema = Type.Object({
   id: IdentifierSchema,
   sessionId: IdentifierSchema,
@@ -164,6 +219,12 @@ export const TaskRunSchema = Type.Object({
   blockedReason: Type.String(),
   lastEventSequence: Type.Integer({ minimum: 0 }),
   attempt: Type.Integer({ minimum: 1 }),
+  currentAttempt: Type.Object({
+    id: IdentifierSchema,
+    ordinal: Type.Integer({ minimum: 1 }),
+    status: TaskRunStatusSchema,
+    active: Type.Boolean(),
+  }, { additionalProperties: false }),
   createdAt: IsoDateTimeSchema,
   updatedAt: IsoDateTimeSchema,
   completedAt: Type.Union([IsoDateTimeSchema, Type.Null()]),
@@ -191,6 +252,10 @@ export const TaskRunSchema = Type.Object({
     })),
   }),
   supervision: JsonObjectSchema,
+  pendingInteractions: Type.Object({
+    approvals: Type.Array(TaskRunApprovalRequestSchema),
+    userInputs: Type.Array(TaskRunUserInputRequestSchema),
+  }, { additionalProperties: false }),
   launchRetryable: Type.Boolean(),
   resumable: Type.Boolean(),
 });

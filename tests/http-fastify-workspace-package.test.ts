@@ -96,6 +96,10 @@ function testApp(overrides: Partial<Parameters<typeof createApp>[0]> = {}) {
           latestRunStatus: null,
           latestRunPhase: null,
         }),
+        createSessionIdempotent: ({ title }: { title: string }) => ({
+          session: { id: "session-http-package", title, modelId: "gpt-5.6-sol", reasoningEffort: "high" as const, createdAt: 0, updatedAt: 0, latestRunStatus: null, latestRunPhase: null },
+          replayed: false,
+        }),
         getSession: (id: string) => ({ id, title: "Workspace", modelId: "gpt-5.6-sol", reasoningEffort: "high" as const, createdAt: 0, updatedAt: 0, latestRunStatus: null, latestRunPhase: null }),
         updateSession: (id: string, settings: { title?: string; modelId?: string; reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" }) => ({ id, title: settings.title ?? "Workspace", modelId: settings.modelId ?? "gpt-5.6-sol", reasoningEffort: settings.reasoningEffort ?? "high", createdAt: 0, updatedAt: 1, latestRunStatus: null, latestRunPhase: null }),
       },
@@ -216,6 +220,7 @@ describe("Fastify HTTP adapter workspace package", () => {
     const session = await app.inject({
       method: "POST",
       url: "/api/v1/sessions",
+      headers: { "idempotency-key": "http-package-session" },
       payload: { title: "HTTP package boundary" },
     });
     expect(session.statusCode).toBe(200);

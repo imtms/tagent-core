@@ -121,5 +121,6 @@ function artifactError(error: unknown): V1HttpError {
   if (cause.code === "ENOENT") return consoleError(404, "artifact.not_found", "artifact not found");
   if (cause.code === "EACCES" || cause.code === "EISDIR") return consoleError(422, "artifact.unreadable", cause.message);
   if (cause.code === "ARTIFACT_PATH_REJECTED") return consoleError(400, "artifact.path_rejected", cause.message);
+  if (cause.code === "ARTIFACT_TOO_LARGE") return consoleError(413, "artifact.too_large", cause.message);
   return consoleError(500, "artifact.unavailable", "artifact could not be read");
 }

@@ -8,6 +8,7 @@ import {
   AdminConfigStatusSchema,
   AdminConfigStatusResponseSchema,
   CommandResponseSchema,
+  CoreCapabilitiesResponseSchema,
   ConsoleCaptureJobSchema,
   ConsoleMemorySourceRefSchema,
   ErrorEnvelopeSchema,
@@ -29,6 +30,7 @@ import {
   WorkerCallbackSchema,
   canonicalizeSubmissionRequest,
   commandResponseFixture,
+  coreCapabilitiesFixture,
   createSubmissionApplicationInput,
   createTaskRunEventId,
   decodeAbi,
@@ -242,6 +244,7 @@ describe("channel v1 commands and event consumption", () => {
       payload: { content: "wrong payload" },
     })).toThrow();
     expect(decodeAbi(CommandResponseSchema, commandResponseFixture)).toEqual(commandResponseFixture);
+    expect(decodeAbi(CoreCapabilitiesResponseSchema, coreCapabilitiesFixture)).toEqual(coreCapabilitiesFixture);
   });
 
   it("locks the deterministic event envelope and accepts future event types and fields", () => {
@@ -263,6 +266,8 @@ describe("channel v1 commands and event consumption", () => {
       consumerId: "gateway-fixture",
       generation: 2,
       acknowledgedSequence: 41,
+      settledAcknowledgedSequence: null,
+      finalAcknowledgedSequence: null,
       terminalAcknowledgedSequence: null,
       claimedAt: "2026-08-04T12:34:56.789Z",
       updatedAt: "2026-08-04T12:34:56.789Z",

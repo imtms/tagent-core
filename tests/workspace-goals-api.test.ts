@@ -7,6 +7,26 @@ const apps: Array<ReturnType<typeof createApp>> = [];
 afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close())); });
 
 describe("Workspace Goal console API", () => {
+  it("calls the Roadmap generator at most once per requestId and exposes its receipt", async () => {
+    const store = new Store(":memory:");
+    const workspace = store.createSession("Generated Roadmap");
+    const persistence = httpPersistence(store);
+    const definition = { title: "Generate", outcome: "One draft", scope: [], nonGoals: [], criteria: [{ key: "one", title: "One", required: true }], completionPolicy: "user_confirm" as const };
+    const goal = persistence.workspaceGoals.createGoal({ workspaceId: workspace.id, definition, createdBy: "test" });
+    const generateWorkspaceGoalRoadmap = vi.fn(async () => {
+      persistence.workspaceGoals.addRoadmapRevision(goal.id, { summary: "Generated once", items: [{ id: "one", title: "One", outcome: "Done", verification: "Check", criterionKeys: ["one"] }] }, null, "test");
+    });
+    const app = createApp({ persistence, service: { closeRuntimes: async () => undefined, generateWorkspaceGoalRoadmap } as never, logger: false, closeResources: async () => store.close() });
+    apps.push(app);
+    const payload = { requestId: "generate-once", actorId: "gateway" };
+    expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/roadmap/generate`, payload })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/roadmap/generate`, payload })).statusCode).toBe(200);
+    expect(generateWorkspaceGoalRoadmap).toHaveBeenCalledTimes(1);
+    const receipt = await app.inject({ method: "GET", url: `/api/v1/console/workspace-goals/${goal.id}/operations/generate-once` });
+    expect(receipt.json().data).toMatchObject({ operationType: "roadmap.generate", state: "succeeded", result: { generated: true } });
+    expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/roadmap/generate`, payload: { requestId: "generate-once", actorId: "changed" } })).statusCode).toBe(409);
+  });
+
   it("uses only Roadmap terminology and exposes direct Roadmap TaskRun start", async () => {
     const store = new Store(":memory:");
     const workspace = store.createSession("Goal workspace");
@@ -28,18 +48,18 @@ describe("Workspace Goal console API", () => {
     expect(goal).toMatchObject({ status: "draft", currentRunId: null, nextAction: { kind: "review_goal" }, roadmap: null });
     expect(store.listRuns(workspace.id)).toEqual([]);
 
-    const approved = await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/decisions`, payload: { targetRevisionId: goal.definition.id, targetHash: goal.definition.contentHash, kind: "approve_goal" } });
+    const approved = await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/decisions`, payload: { requestId: "approve-goal", targetRevisionId: goal.definition.id, targetHash: goal.definition.contentHash, kind: "approve_goal" } });
     expect(approved.statusCode).toBe(200);
     expect(approved.json().data).toMatchObject({ status: "active", nextAction: { kind: "generate_roadmap" } });
 
-    const added = await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/roadmaps`, payload: { content: { summary: "Bounded Roadmap", items: [
+    const added = await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/roadmaps`, payload: { requestId: "add-roadmap", content: { summary: "Bounded Roadmap", items: [
       { id: "web", title: "Expose Web UI", outcome: "Goal is manageable", verification: "Web build", criterionKeys: ["durable"] },
     ] } } });
     expect(added.statusCode).toBe(200);
     const withRoadmap = added.json().data;
     expect(withRoadmap).toMatchObject({ nextAction: { kind: "review_roadmap" }, roadmap: { kind: "roadmap", content: { items: [expect.objectContaining({ id: "web", criterionKeys: ["durable"] })] } } });
 
-    const roadmapApproved = await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/decisions`, payload: { targetRevisionId: withRoadmap.roadmap.id, targetHash: withRoadmap.roadmap.contentHash, kind: "approve_roadmap", approvedItemIds: ["web"] } });
+    const roadmapApproved = await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/decisions`, payload: { requestId: "approve-roadmap", targetRevisionId: withRoadmap.roadmap.id, targetHash: withRoadmap.roadmap.contentHash, kind: "approve_roadmap", approvedItemIds: ["web"] } });
     expect(roadmapApproved.statusCode).toBe(200);
     expect(roadmapApproved.json().data).toMatchObject({ nextAction: { kind: "run_roadmap_item", roadmapItemId: "web" }, decisions: expect.arrayContaining([expect.objectContaining({ kind: "approve_roadmap", approvedItemIds: ["web"] })]) });
 
@@ -51,6 +71,6 @@ describe("Workspace Goal console API", () => {
     expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/plans`, payload: {} })).statusCode).toBe(404);
     expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/run-links`, payload: {} })).statusCode).toBe(404);
     expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/evidence`, payload: {} })).statusCode).toBe(404);
-    expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/decisions`, payload: { targetRevisionId: withRoadmap.roadmap.id, targetHash: withRoadmap.roadmap.contentHash, kind: "approve_plan", approvedItemIds: ["web"] } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/decisions`, payload: { requestId: "invalid-plan", targetRevisionId: withRoadmap.roadmap.id, targetHash: withRoadmap.roadmap.contentHash, kind: "approve_plan", approvedItemIds: ["web"] } })).statusCode).toBe(400);
   });
 });

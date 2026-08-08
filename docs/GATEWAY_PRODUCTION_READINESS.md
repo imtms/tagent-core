@@ -16,15 +16,15 @@ Verify the release manifest, commit marker, runtime ABI, native SQLite binding, 
 node scripts/release-manifest.mjs verify "$PWD"
 ```
 
-Validate the Gateway service credential through the production config parser. The token must contain at least 24 characters and include `events:consume` and `runs:read`:
+Validate the Gateway service credential through the production config parser. The token must contain at least 24 characters and include `sessions:read`, `sessions:write`, `runs:read`, `runs:control`, and `events:consume` for the full profile:
 
 ```sh
-TAGENT_SERVICE_CREDENTIALS='[{"token":"REPLACE_WITH_24_PLUS_CHAR_TOKEN","scopes":["events:consume","runs:read"],"principal":{"subjectId":"gateway-production","resourceScopes":[{"type":"workspace","id":"production"}]}}]' \
+TAGENT_SERVICE_CREDENTIALS='[{"token":"REPLACE_WITH_24_PLUS_CHAR_TOKEN","scopes":["sessions:read","sessions:write","runs:read","runs:control","events:consume"],"principal":{"subjectId":"gateway-production","resourceScopes":[{"type":"workspace","id":"production"}]}}]' \
 node --input-type=module <<'NODE'
 import { loadConfig } from "@tagent/core-service/config";
 const config = loadConfig(process.env);
 const gateway = config.serviceCredentials.find((item) => item.scopes.includes("events:consume"));
-if (!gateway || !gateway.scopes.includes("runs:read")
+if (!gateway || !["sessions:read","sessions:write","runs:read","runs:control"].every((scope) => gateway.scopes.includes(scope))
   || gateway.principal?.subjectId !== "gateway-production"
   || gateway.principal.resourceScopes.length !== 1
   || gateway.principal.resourceScopes[0]?.type !== "workspace"
@@ -33,11 +33,11 @@ process.stdout.write(JSON.stringify({ credentialCount: config.serviceCredentials
 NODE
 ```
 
-The command must exit `0` and return one credential with both scopes and the exact bounded principal translation. A parser error, missing scope, or altered principal blocks deployment.
+The command must exit `0` and return one credential with all required scopes and the exact bounded principal translation. A parser error, missing scope, or altered principal blocks deployment.
 
 ## Schema migration gate
 
-Migration v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 is performed by the production `Store` opener. Back up the database and its WAL/SHM files, then run this command twice:
+Migration v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 is performed by the production `Store` opener. Back up the database and its WAL/SHM files, then run this command twice:
 
 ```sh
 TAGENT_DB=/var/lib/tagent/core.sqlite \
@@ -48,7 +48,8 @@ const schemaVersion = store.db.prepare("SELECT version FROM schema_meta WHERE id
 const objects = store.db.prepare(`SELECT name FROM sqlite_master
   WHERE name IN ('attempts','approval_receipts','idx_operations_attempt_created',
     'idx_run_checks_source_operation','integration_outbox','learning_projection_authority_state',
-    'workspace_goal_inbox_links','workspace_goal_roadmap_item_progress') ORDER BY name`)
+    'workspace_goal_inbox_links','workspace_goal_roadmap_item_progress','session_create_receipts',
+    'task_run_command_receipts','workspace_goal_operation_receipts') ORDER BY name`)
   .all().map((row) => row.name);
 const goalRunLinkColumns = store.db.prepare("PRAGMA table_info(workspace_goal_run_links)").all().map((row) => row.name);
 store.close();
@@ -59,18 +60,20 @@ NODE
 Both runs must exit `0` and return exactly:
 
 ```json
-{"schemaVersion":38,"objects":["approval_receipts","attempts","idx_operations_attempt_created","idx_run_checks_source_operation","integration_outbox","learning_projection_authority_state","workspace_goal_inbox_links","workspace_goal_roadmap_item_progress"],"hasGoalLinkMode":true}
+{"schemaVersion":39,"objects":["approval_receipts","attempts","idx_operations_attempt_created","idx_run_checks_source_operation","integration_outbox","learning_projection_authority_state","session_create_receipts","task_run_command_receipts","workspace_goal_inbox_links","workspace_goal_operation_receipts","workspace_goal_roadmap_item_progress"],"hasGoalLinkMode":true}
 ```
 
 The second open is the idempotence proof. A different version or object inventory blocks deployment.
 
 ## Production readiness probe
 
-The probe is read-only. It opens `TAGENT_DB` with SQLite read-only mode, calls the real Core health endpoint, and emits one JSON object:
+The probe is read-only. It opens `TAGENT_DB` with SQLite read-only mode, calls the real Core health and capabilities endpoints, and emits one JSON object:
 
 ```sh
 TAGENT_DB=/var/lib/tagent/core.sqlite \
 TAGENT_HEALTH_URL=http://127.0.0.1:3100/api/v1/health \
+TAGENT_CAPABILITIES_URL=http://127.0.0.1:3100/api/v1/capabilities \
+TAGENT_GATEWAY_CORE_TOKEN=REPLACE_WITH_24_PLUS_CHAR_TOKEN \
 TAGENT_GATEWAY_CONSUMER_ID=gateway-production \
 node scripts/gateway-readiness-probe.mjs
 ```
@@ -92,10 +95,12 @@ Stable top-level JSON fields:
 | `writerReady` | `/api/v1/health` field `data.writer.ready` combined with the SQLite lease freshness check |
 | `writerOwnerId`, `writerFence`, `writerExpiresAt`, `writerReleasedAt`, `writerLeaseFresh` | `core_writer_lease` for `lock_name='core-writer'` |
 | `consumerLag` | Maximum per-run `runs.last_event_seq - event_consumers.acked_seq` for the configured consumer |
-| `terminalUnacked`, `terminalOldestUnackedAgeMs` | Terminal runs whose `event_consumers.terminal_acked_seq` has not reached `runs.last_event_seq` |
+| `settledUnacked`, `finalUnacked` | Recoverable settled and irreversible final Runs whose v39 ACK watermark has not reached `runs.last_event_seq` |
+| `terminalUnacked`, `terminalOldestUnackedAgeMs` | Deprecated compatibility alias/age for the settled boundary |
 | `authority`, `authorityReady` | `learning_projection_authority_state`; only `legacy_active` and `integration_active` are ready |
 | `watermarks` | `learning_projection_checkpoint` rows ordered by consumer and delivery role |
 | `health` | HTTP reachability, status, `data.ok`, and `data.writer.ready` from `GET /api/v1/health` |
+| `capabilities` | Compatibility decision and negotiated catalog from `GET /api/v1/capabilities` |
 | `ready`, `severity`, `reasons` | Final gate decision |
 
 The Core health response used by the probe must include at least this subset;
@@ -114,11 +119,12 @@ These are embedded in the probe output under `thresholds`:
 | Field | Ready | Warning and not ready | Critical and not ready |
 | --- | --- | --- | --- |
 | `consumerLag` | `0` | `>= 1` | `>= 10000` |
-| `terminalUnacked` | `0` | `>= 1` | Oldest pending terminal ACK age `>= 120000 ms` |
+| `settledUnacked`, `finalUnacked` | `0` | `>= 1` | Oldest pending settled ACK age `>= 120000 ms` |
 | `writerLeaseFresh` | `true` | Not applicable | `false` |
 | `migrationOpenIssues` | `0` | Not applicable | Missing table or any open issue |
 | `authorityReady` | `true` | Transition state `switching` or `rollback` | Missing authority state |
-| `schemaVersion` | `38` | Not applicable | Missing or not `38` |
+| `schemaVersion` | `39` | Not applicable | Missing or not `39` |
+| `capabilities.compatible` | `true` | Not applicable | Missing endpoint/catalog/profile or wrong schema |
 
 Consumer lag semantics are strict: any value greater than zero makes the Gateway not ready immediately. Warning and critical distinguish alert urgency; they never permit traffic.
 
@@ -142,7 +148,8 @@ SELECT
   r.last_event_seq,
   COALESCE(ec.acked_seq, 0) AS acked_seq,
   r.last_event_seq - COALESCE(ec.acked_seq, 0) AS consumer_lag,
-  ec.terminal_acked_seq
+  ec.settled_acked_seq,
+  ec.final_acked_seq
 FROM runs AS r
 LEFT JOIN event_consumers AS ec
   ON ec.run_id = r.id AND ec.consumer_id = 'gateway-production'
@@ -164,11 +171,12 @@ ORDER BY consumer, delivery_role;
 | --- | --- | --- |
 | Manifest | The production verifier exits `0`. | Verifier exits non-zero. |
 | Configuration | The release-local production parser returns the required Gateway scopes. | Parser rejects the environment or a scope is missing. |
-| Migration | Both release-local `Store` opens return schema `38`, the exact object inventory and `hasGoalLinkMode=true`. | Open fails, output differs, or the second open is not idempotent. |
+| Migration | Both release-local `Store` opens return schema `39`, the exact object inventory and `hasGoalLinkMode=true`. | Open fails, output differs, or the second open is not idempotent. |
+| Capabilities | Probe negotiates required commands/events, typed interactions and the Operator Goal profile. | Endpoint is unavailable, under-scoped, wrong-versioned or missing a required capability. |
 | Writer | Probe returns `writerReady=true`, a fresh lease, and one current fence. | Health or SQLite lease evidence is not ready. |
 | Persist-before-ACK | The exact `(task_run_id, consumer_id, generation, sequence, event_id)` receipt is durable before its ACK. | ACK has no exact receipt, relies only on a sequence, or precedes the receipt commit. |
-| Replay | A persisted-but-unacked terminal event is promoted to the reclaimed generation, deduped, ACKed, and then quiescent. | Replay is lost, duplicated, stale, or continues after terminal ACK. |
-| Lag and terminal ACK | Probe returns `consumerLag=0` and `terminalUnacked=0`. | Either field is non-zero. |
+| Replay | A persisted-but-unacked event is promoted to the reclaimed generation, deduped, ACKed, and then quiescent. | Replay is lost, duplicated, stale, or skips the durable ACK. |
+| Lag and ACK | Probe returns `consumerLag=0`, `settledUnacked=0`, and `finalUnacked=0`. | Any field is non-zero. |
 | Learning authority | Probe returns `authorityReady=true` and durable watermarks. | Authority is missing or in a transition state. |
 
 Any FAIL result blocks deployment. Liveness alone does not override readiness.
@@ -189,17 +197,17 @@ Use **Core before Gateway** order:
 
 ## Rollback point
 
-The rollback point is the last verified prior compatible Gateway source plus the recorded Core consumer and Learning watermarks. Schema v38 is forward-only during application rollback.
+The rollback point is the last verified prior compatible Gateway source plus the recorded Core consumer and Learning watermarks. Schema v39 is forward-only during application rollback.
 
 Rollback steps:
 
 1. Close Gateway traffic admission and stop new submissions.
-2. Save the last successful probe JSON, especially `writerFence`, `consumerLag`, `terminalUnacked`, `authority`, and `watermarks`.
+2. Save the last successful probe JSON, especially `writerFence`, capability negotiation, `consumerLag`, settled/final ACKs, command/Goal receipts, `authority`, and `watermarks`.
 3. Stop the new Gateway writer or wait for its lease to expire; require the replacement owner to obtain a higher fence.
 4. Activate the prior compatible Gateway source through the production learning authority rollback API.
 5. Reclaim the Core event consumer, receiving a new generation.
 6. Resume after the durable ACK watermark; replay persisted-but-unacked events and persist the new-generation exact receipt before ACK.
-7. Keep schema version `38`. Do not restore an older database over it.
+7. Keep schema version `39`. Do not restore an older database over it.
 8. Run the release-local readiness probe again and reopen traffic only after exit `0`.
 
-If the prior deployment cannot coexist with schema v38 or honor the v1 receipt/ACK contract, keep traffic stopped and deploy a forward-compatible build. Do not perform a destructive schema downgrade.
+If the prior deployment cannot coexist with schema v39 or honor the named `gateway-contracts-v39` receipt/ACK contract, keep traffic stopped and deploy a forward-compatible build. Do not perform a destructive schema downgrade.

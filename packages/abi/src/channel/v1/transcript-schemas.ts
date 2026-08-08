@@ -34,8 +34,21 @@ export const TranscriptItemSchema = Type.Union([
 ]);
 export type TranscriptItem = Static<typeof TranscriptItemSchema>;
 
+export const TranscriptQuerySchema = Type.Object({
+  after: Type.Optional(Type.Integer({ minimum: 0 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+}, { additionalProperties: false });
+export type TranscriptQuery = Static<typeof TranscriptQuerySchema>;
+
 export const TranscriptResponseSchema = Type.Object({
-  data: Type.Object({ items: Type.Array(TranscriptItemSchema) }),
+  data: Type.Object({
+    items: Type.Array(TranscriptItemSchema),
+    pageInfo: Type.Object({
+      nextCursor: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
+      hasMore: Type.Boolean(),
+      limit: Type.Integer({ minimum: 1, maximum: 500 }),
+    }, { additionalProperties: false }),
+  }, { additionalProperties: false }),
   requestId: RequestIdSchema,
 }, { additionalProperties: false });
 export type TranscriptResponse = Static<typeof TranscriptResponseSchema>;

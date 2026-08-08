@@ -8,8 +8,11 @@ const CONSUMER_LAG_WARNING_MIN = 1;
 const CONSUMER_LAG_CRITICAL = 10_000;
 const TERMINAL_UNACKED_WARNING_MIN = 1;
 const TERMINAL_UNACKED_CRITICAL_AGE_MS = 120_000;
-const TERMINAL_STATUSES = ["completed", "failed", "cancelled", "interrupted"];
-const EXPECTED_SCHEMA_VERSION = 38;
+const SETTLED_STATUSES = ["completed", "failed", "cancelled", "blocked"];
+const FINAL_STATUSES = ["completed", "cancelled"];
+const EXPECTED_SCHEMA_VERSION = 39;
+const REQUIRED_COMMANDS = ["task_run.steer", "task_run.follow_up", "task_run.cancel", "task_run.resume", "task_run.compact", "task_run.submit_user_input", "task_run.resolve_approval"];
+const REQUIRED_EVENTS = ["task_run.started", "task_run.waiting_input", "task_run.blocked", "task_run.resumed", "task_run.completed", "task_run.failed", "task_run.cancelled", "approval.requested", "approval.resolved", "user_input.submitted"];
 
 function tableExists(db, name) {
   return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
@@ -42,18 +45,21 @@ function readConsumer(db, consumerId, now) {
   const lag = db.prepare(`SELECT COALESCE(MAX(MAX(r.last_event_seq-COALESCE(ec.acked_seq,0),0)),0) AS value
     FROM runs r LEFT JOIN event_consumers ec
       ON ec.run_id=r.id AND ec.consumer_id=?`).get(consumerId).value;
-  const terminal = db.prepare(`SELECT COUNT(*) AS count,MIN(r.updated_at) AS oldestUpdatedAt
+  const unacked = (statuses, column) => db.prepare(`SELECT COUNT(*) AS count,MIN(r.updated_at) AS oldestUpdatedAt
     FROM runs r LEFT JOIN event_consumers ec
       ON ec.run_id=r.id AND ec.consumer_id=?
-    WHERE r.status IN (${TERMINAL_STATUSES.map(() => "?").join(",")})
-      AND (ec.terminal_acked_seq IS NULL OR ec.terminal_acked_seq<r.last_event_seq)`)
-    .get(consumerId, ...TERMINAL_STATUSES);
+    WHERE r.status IN (${statuses.map(() => "?").join(",")})
+      AND (ec.${column} IS NULL OR ec.${column}<r.last_event_seq)`).get(consumerId, ...statuses);
+  const settled = unacked(SETTLED_STATUSES, "settled_acked_seq");
+  const final = unacked(FINAL_STATUSES, "final_acked_seq");
   return {
     consumerLag: lag,
-    terminalUnacked: terminal.count,
-    terminalOldestUnackedAgeMs: terminal.oldestUpdatedAt === null
+    settledUnacked: settled.count,
+    finalUnacked: final.count,
+    terminalUnacked: settled.count,
+    terminalOldestUnackedAgeMs: settled.oldestUpdatedAt === null
       ? null
-      : Math.max(0, now - terminal.oldestUpdatedAt),
+      : Math.max(0, now - settled.oldestUpdatedAt),
   };
 }
 
@@ -93,12 +99,37 @@ async function readHealth(url) {
   }
 }
 
+async function readCapabilities(url, token) {
+  try {
+    const response = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal: AbortSignal.timeout(5_000),
+    });
+    const body = await response.json();
+    const data = body?.data;
+    const commands = new Set(data?.commandTypes ?? []);
+    const events = new Set(data?.eventTypes ?? []);
+    const compatible = response.ok
+      && data?.persistenceSchemaVersion === EXPECTED_SCHEMA_VERSION
+      && REQUIRED_COMMANDS.every((item) => commands.has(item))
+      && REQUIRED_EVENTS.every((item) => events.has(item))
+      && data?.interactions?.approvalResolution === true
+      && data?.interactions?.userInputSubmission === true
+      && data?.operator?.workspaceGoals === true
+      && data?.operator?.roadmapGenerationIdempotent === true;
+    return { reachable: true, status: response.status, compatible, data };
+  } catch (error) {
+    return { reachable: false, status: null, compatible: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 function severityFor(snapshot) {
   if (snapshot.ready) return "ready";
   if (snapshot.schemaVersion !== EXPECTED_SCHEMA_VERSION
     || snapshot.migrationOpenIssues === null
     || snapshot.migrationOpenIssues > 0
     || !snapshot.health.reachable
+    || !snapshot.capabilities.compatible
     || !snapshot.writerLeaseFresh
     || snapshot.consumerLag === null
     || snapshot.consumerLag >= CONSUMER_LAG_CRITICAL
@@ -113,6 +144,8 @@ async function main() {
   if (!database) throw new Error("TAGENT_DB is required");
   const consumerId = process.env.TAGENT_GATEWAY_CONSUMER_ID?.trim() || "gateway-production";
   const healthUrl = process.env.TAGENT_HEALTH_URL?.trim() || "http://127.0.0.1:3100/api/v1/health";
+  const capabilitiesUrl = process.env.TAGENT_CAPABILITIES_URL?.trim() || healthUrl.replace(/\/health(?:\?.*)?$/, "/capabilities");
+  const coreToken = process.env.TAGENT_GATEWAY_CORE_TOKEN?.trim() || "";
   const now = Date.now();
   const db = new Database(path.resolve(database), { readonly: true, fileMustExist: true });
   let databaseSnapshot;
@@ -136,6 +169,7 @@ async function main() {
   }
 
   const health = await readHealth(healthUrl);
+  const capabilities = await readCapabilities(capabilitiesUrl, coreToken);
   const authorityReady = databaseSnapshot.authority !== null
     && ["legacy_active", "integration_active"].includes(databaseSnapshot.authority.status);
   const reasons = [];
@@ -145,22 +179,25 @@ async function main() {
   }
   if (!health.reachable) reasons.push("health_unreachable");
   else if (!health.ok || !health.writerReady) reasons.push("health_writer_not_ready");
+  if (!capabilities.reachable) reasons.push("capabilities_unreachable");
+  else if (!capabilities.compatible) reasons.push("capabilities_incompatible");
   if (!databaseSnapshot.writerLeaseFresh) reasons.push("writer_lease_not_fresh");
   if (databaseSnapshot.consumerLag === null || databaseSnapshot.consumerLag > 0) reasons.push("consumer_lag");
-  if (databaseSnapshot.terminalUnacked === null || databaseSnapshot.terminalUnacked > 0) {
-    reasons.push("terminal_unacked");
-  }
+  if (databaseSnapshot.settledUnacked === null || databaseSnapshot.settledUnacked > 0) reasons.push("settled_unacked");
+  if (databaseSnapshot.finalUnacked === null || databaseSnapshot.finalUnacked > 0) reasons.push("final_unacked");
   if (!authorityReady) reasons.push("authority_not_active");
 
   const snapshot = {
-    probeVersion: 1,
+    probeVersion: 2,
     database: path.resolve(database),
     healthUrl,
+    capabilitiesUrl,
     consumerId,
     ...databaseSnapshot,
     writerReady: health.writerReady && databaseSnapshot.writerLeaseFresh,
     authorityReady,
     health,
+    capabilities,
     thresholds: {
       consumerLagWarningMin: CONSUMER_LAG_WARNING_MIN,
       consumerLagCritical: CONSUMER_LAG_CRITICAL,

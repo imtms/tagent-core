@@ -1,5 +1,6 @@
 import type { ErrorEnvelope } from "../../shared/envelopes.js";
 import type { CommandResponse, TaskRunCommand } from "./command-schemas.js";
+import type { CoreCapabilitiesResponse } from "./capability-schemas.js";
 import { createTaskRunEventId, type TaskRunEvent } from "./event-schemas.js";
 import type {
   SubmissionApplicationInput,
@@ -62,6 +63,8 @@ export const taskRunCommandFixtures = [
   { commandId: "command-cancel", type: "task_run.cancel", expectedAttemptId: "attempt-001", payload: { reason: "Superseded" } },
   { commandId: "command-resume", type: "task_run.resume", expectedAttemptId: "attempt-002", payload: {} },
   { commandId: "command-compact", type: "task_run.compact", expectedAttemptId: "attempt-002", payload: { reason: "Context pressure" } },
+  { commandId: "command-input", type: "task_run.submit_user_input", expectedAttemptId: "attempt-002", payload: { requestId: "input-001", response: { answer: "yes" } } },
+  { commandId: "command-approval", type: "task_run.resolve_approval", expectedAttemptId: "attempt-002", payload: { approvalRequestId: "approval-001", decision: "approved", resolution: "Reviewed" } },
 ] as const satisfies readonly TaskRunCommand[];
 
 export const commandResponseFixture = {
@@ -71,7 +74,11 @@ export const commandResponseFixture = {
       taskRunId: "task-run-fixture-001",
       type: "task_run.steer",
       status: "accepted",
+      state: "succeeded",
+      outcome: "accepted",
+      replayed: false,
       requestId: "request-command-001",
+      result: { accepted: true },
       error: null,
       createdAt: fixtureTime,
       updatedAt: fixtureTime,
@@ -79,6 +86,19 @@ export const commandResponseFixture = {
   },
   requestId: "request-command-001",
 } as const satisfies CommandResponse;
+
+export const coreCapabilitiesFixture = {
+  data: {
+    releaseVersion: "0.3.0", apiVersions: ["channel.v1", "operator.console.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 39,
+    commandTypes: taskRunCommandFixtures.map((command) => command.type),
+    eventTypes: ["task_run.started", "task_run.completed", "diagnostic.internal"],
+    interactions: { approvalResolution: true, userInputSubmission: true },
+    operator: { workspaceGoals: true, roadmapGenerationIdempotent: true },
+    retention: { automaticDeletion: false },
+    limits: { transcriptPageMax: 500, eventReplayBatch: 256, eventLiveBuffer: 1_000, artifactPreviewBytes: 5_242_880, artifactDownloadBytes: 52_428_800 },
+  },
+  requestId: "request-capabilities-001",
+} as const satisfies CoreCapabilitiesResponse;
 
 export const taskRunEventFixture = {
   specVersion: "1.0",

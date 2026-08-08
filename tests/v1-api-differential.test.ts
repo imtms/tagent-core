@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   CommandResponseSchema,
+  CoreCapabilitiesResponseSchema,
   decodeAbi,
   ErrorEnvelopeSchema,
   EventConsumerAckResponseSchema,
@@ -14,6 +15,8 @@ import {
   SuccessEnvelopeSchema,
   TaskRunEventSchema,
   TaskRunSchema,
+  TaskRunInteractionsResponseSchema,
+  TranscriptResponseSchema,
 } from "@tagent/abi";
 import { createApp } from "@tagent/http-fastify";
 import { AgentService } from "@tagent/core-service/application";
@@ -79,6 +82,23 @@ async function readSseEvent(response: Response) {
 }
 
 describe("v1 API contracts", () => {
+  it("creates Sessions idempotently, exposes GET, and publishes capabilities", async () => {
+    const { app, store } = await fixture();
+    const headers = { "idempotency-key": "gateway-session-create", "x-request-id": "session-create-original" };
+    const first = await app.inject({ method: "POST", url: "/api/v1/sessions", headers, payload: { title: "Gateway workspace", origin: { surface: "channel", gatewayActorId: "actor-1", sourceId: "channel-1" } } });
+    expect(first.statusCode).toBe(200);
+    const session = decodeAbi(SessionSchema, decodeAbi(SuccessEnvelopeSchema, first.json()).data);
+    const replay = await app.inject({ method: "POST", url: "/api/v1/sessions", headers: { ...headers, "x-request-id": "session-create-replay" }, payload: { title: "Gateway workspace", origin: { surface: "channel", gatewayActorId: "actor-1", sourceId: "channel-1" } } });
+    expect(decodeAbi(SessionSchema, decodeAbi(SuccessEnvelopeSchema, replay.json()).data)).toEqual(session);
+    expect(store.listSessions()).toHaveLength(1);
+    const conflict = await app.inject({ method: "POST", url: "/api/v1/sessions", headers, payload: { title: "Changed" } });
+    expect(conflict.statusCode).toBe(409);
+    expect(decodeAbi(ErrorEnvelopeSchema, conflict.json()).error.code).toBe("session.idempotency_conflict");
+    const read = await app.inject({ method: "GET", url: `/api/v1/sessions/${session.id}` });
+    expect(decodeAbi(SessionSchema, decodeAbi(SuccessEnvelopeSchema, read.json()).data)).toEqual(session);
+    const capabilities = decodeAbi(CoreCapabilitiesResponseSchema, (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).data;
+    expect(capabilities).toMatchObject({ persistenceSchemaVersion: 39, interactions: { approvalResolution: true, userInputSubmission: true }, operator: { roadmapGenerationIdempotent: true } });
+  });
   it("rejects idempotency-key reuse with different canonical content", async () => {
     const { app, store } = await fixture();
     const v1Session = store.createSession();
@@ -116,7 +136,7 @@ describe("v1 API contracts", () => {
 
   it("maps v1 session, submission, and TaskRun fields to durable resources", async () => {
     const { app, store } = await fixture();
-    const created = await app.inject({ method: "POST", url: "/api/v1/sessions", headers: { "x-request-id": "create-v1-session" }, payload: { title: "Mapped session" } });
+    const created = await app.inject({ method: "POST", url: "/api/v1/sessions", headers: { "x-request-id": "create-v1-session", "idempotency-key": "create-v1-session" }, payload: { title: "Mapped session" } });
     const sessionEnvelope = decodeAbi(SuccessEnvelopeSchema, created.json());
     const session = decodeAbi(SessionSchema, sessionEnvelope.data);
     expect(sessionEnvelope.requestId).toBe("create-v1-session");
@@ -190,7 +210,7 @@ describe("v1 API contracts", () => {
         type: "task_run.completed",
         correlationId: null,
         causationId: null,
-        payload: { response: "done" },
+        payload: {},
       });
     } finally {
       controller.abort();
@@ -216,6 +236,29 @@ describe("v1 API contracts", () => {
     });
     expect(v1.statusCode).toBe(422);
     expect(decodeAbi(ErrorEnvelopeSchema, v1.json()).error).toMatchObject({ code: "submission.non_actionable", details: { reason: "non_actionable_prompt" } });
+  });
+
+  it("pages the public transcript by durable sequence", async () => {
+    const { app, store } = await fixture();
+    const run = store.createRun(store.createSession().id, "paged transcript");
+    for (const [index, content] of ["one", "two", "three"].entries()) {
+      store.appendTranscript(run.id, 1, { role: "user", content, timestamp: index + 1 });
+    }
+    const first = decodeAbi(TranscriptResponseSchema, (await app.inject({ method: "GET", url: `/api/v1/task-runs/${run.id}/transcript?after=0&limit=2` })).json()).data;
+    expect(first).toMatchObject({ items: [{ sequence: 1, text: "one" }, { sequence: 2, text: "two" }], pageInfo: { nextCursor: 2, hasMore: true, limit: 2 } });
+    const second = decodeAbi(TranscriptResponseSchema, (await app.inject({ method: "GET", url: `/api/v1/task-runs/${run.id}/transcript?after=${first.pageInfo.nextCursor}&limit=2` })).json()).data;
+    expect(second).toMatchObject({ items: [{ sequence: 3, text: "three" }], pageInfo: { nextCursor: null, hasMore: false, limit: 2 } });
+  });
+
+  it("returns typed paginated TaskRun interactions", async () => {
+    const { app, store } = await fixture();
+    const run = store.createRun(store.createSession().id, "typed interaction");
+    const input = store.requestUserInput(run.id, "Target?", [{ key: "target", label: "Target", description: "Environment", inputType: "text", required: true, placeholder: "staging" }]);
+    const response = await app.inject({ method: "GET", url: `/api/v1/task-runs/${run.id}/interactions?after=0&limit=1` });
+    expect(decodeAbi(TaskRunInteractionsResponseSchema, response.json()).data).toMatchObject({
+      items: [{ kind: "user_input", interaction: { id: input.id, taskRunId: run.id, attempt: 1, prompt: "Target?", status: "pending", response: {} } }],
+      pageInfo: { nextCursor: null, hasMore: false, limit: 1 },
+    });
   });
 
   it("returns a retryable 429 envelope when the control inbox is full", async () => {
@@ -278,7 +321,7 @@ describe("v1 API contracts", () => {
         SELECT RAISE(ABORT, 'sensitive storage failure');
       END
     `);
-    const response = await app.inject({ method: "POST", url: "/api/v1/sessions", headers: { "x-request-id": "unexpected-v1-error" }, payload: { title: "fails" } });
+    const response = await app.inject({ method: "POST", url: "/api/v1/sessions", headers: { "x-request-id": "unexpected-v1-error", "idempotency-key": "unexpected-v1-error" }, payload: { title: "fails" } });
     expect(response.statusCode).toBe(500);
     const envelope = decodeAbi(ErrorEnvelopeSchema, response.json());
     expect(envelope.error).toMatchObject({ code: "internal.error", message: "Internal server error", requestId: "unexpected-v1-error", retryable: true });
@@ -304,7 +347,10 @@ describe("v1 API contracts", () => {
     const first = await app.inject({ method: "POST", url: `/api/v1/task-runs/${runId}/commands`, payload: steer });
     expect(decodeAbi(CommandResponseSchema, first.json()).data.receipt.status).toBe("accepted");
     const duplicate = await app.inject({ method: "POST", url: `/api/v1/task-runs/${runId}/commands`, payload: steer });
-    expect(decodeAbi(CommandResponseSchema, duplicate.json()).data.receipt.status).toBe("duplicate");
+    const duplicateReceipt = decodeAbi(CommandResponseSchema, duplicate.json()).data.receipt;
+    expect(duplicateReceipt).toMatchObject({ status: "duplicate", state: "succeeded", outcome: "accepted", replayed: true, result: { accepted: true } });
+    const lookup = await app.inject({ method: "GET", url: `/api/v1/task-runs/${runId}/commands/${steer.commandId}` });
+    expect(decodeAbi(CommandResponseSchema, lookup.json()).data.receipt).toEqual(duplicateReceipt);
 
     const resume = await app.inject({
       method: "POST",
@@ -477,7 +523,7 @@ describe("v1 API contracts", () => {
       const liveUnsubscribe = vi.fn();
       vi.spyOn(service, "replay").mockReturnValue([]);
       vi.spyOn(service, "subscribe").mockImplementation((_taskRunId, listener) => {
-        listener({ ...liveEvent, data: [] } as never);
+        listener({ ...liveEvent, createdAt: Number.NaN } as never);
         return liveUnsubscribe;
       });
       const liveResponse = await fetch(`${address}/api/v1/task-runs/${liveRun.id}/events?consumerId=live-client&generation=${liveClaim.generation}&after=0`);

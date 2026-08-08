@@ -293,6 +293,8 @@ class FakeCore {
       consumerId,
       generation: state.generation,
       acknowledgedSequence: state.acknowledgedSequence,
+      settledAcknowledgedSequence: state.terminalAcknowledgedSequence,
+      finalAcknowledgedSequence: state.terminalAcknowledgedSequence,
       terminalAcknowledgedSequence: state.terminalAcknowledgedSequence,
       claimedAt: timestamp,
       updatedAt: timestamp,
@@ -845,7 +847,7 @@ describe("Gateway production readiness", () => {
     }
   });
 
-  it("opens a real v30 SQLite fixture through Store v38 and rolls authority back with replay", () => {
+  it("opens a real v30 SQLite fixture through Store v39 and rolls authority back with replay", () => {
     const directory = temporaryDirectory("tagent-gateway-migration-");
     const databasePath = path.join(directory, "core.sqlite");
     createV30DatabaseFixture(databasePath);
@@ -853,7 +855,7 @@ describe("Gateway production readiness", () => {
     const firstOpen = new Store(databasePath);
     const firstInventory = schemaInventory(firstOpen);
     expect(firstOpen.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-      .toEqual({ version: 38 });
+      .toEqual({ version: 39 });
     expect(firstInventory.map((entry) => [entry.type, entry.name])).toEqual([
       ["table", "approval_receipts"],
       ["table", "attempts"],
@@ -869,7 +871,7 @@ describe("Gateway production readiness", () => {
     try {
       expect(schemaInventory(store)).toEqual(firstInventory);
       expect(store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-        .toEqual({ version: 38 });
+        .toEqual({ version: 39 });
 
       const writer = CoreWriterLease.claim(store.db, {
         ownerId: "gateway-authority-test",
@@ -982,7 +984,7 @@ describe("Gateway production readiness", () => {
         legacyLastAcked: 2,
       });
       expect(store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-        .toEqual({ version: 38 });
+        .toEqual({ version: 39 });
       writer.release();
     } finally {
       store.close();
@@ -1116,7 +1118,7 @@ describe("Gateway production readiness", () => {
     );
     expect(secondSchemaOpen.status, secondSchemaOpen.stderr).toBe(0);
     const schemaEvidence = {
-      schemaVersion: 38,
+      schemaVersion: 39,
       objects: [
         "approval_receipts",
         "attempts",
@@ -1168,20 +1170,24 @@ describe("Gateway production readiness", () => {
         writerLeaseFresh: ready.writerLeaseFresh,
         consumerLag: ready.consumerLag,
         terminalUnacked: ready.terminalUnacked,
+        settledUnacked: ready.settledUnacked,
+        finalUnacked: ready.finalUnacked,
         authorityReady: ready.authorityReady,
         ready: ready.ready,
         severity: ready.severity,
         reasons: ready.reasons,
         thresholds: ready.thresholds,
       }).toEqual({
-        probeVersion: 1,
-        schemaVersion: 38,
+        probeVersion: 2,
+        schemaVersion: 39,
         migrationOpenIssues: 0,
         writerReady: true,
         writerFence: readinessLease.authority.fence,
         writerLeaseFresh: true,
         consumerLag: 0,
         terminalUnacked: 0,
+        settledUnacked: 0,
+        finalUnacked: 0,
         authorityReady: true,
         ready: true,
         severity: "ready",
@@ -1223,7 +1229,7 @@ describe("Gateway production readiness", () => {
         severity: rejected.severity,
         reasons: rejected.reasons,
       }).toEqual({
-        schemaVersion: 38,
+        schemaVersion: 39,
         writerReady: false,
         writerLeaseFresh: false,
         consumerLag: 0,

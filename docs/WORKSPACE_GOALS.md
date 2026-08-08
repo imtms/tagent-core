@@ -32,6 +32,9 @@ Roadmap launches persist their Goal authorization on the Supervisor Inbox item b
 
 After the definition is approved, the Console can request an initial Roadmap draft from the configured lightweight model. Generation has deliberately bounded cost:
 
+- every request requires a stable `requestId` and Core durably claims it before the provider call;
+- replay of the same request returns its original receipt/result and never calls the model again;
+- a process interruption with no provable result becomes `outcome_unknown` and requires Goal inspection, not automatic regeneration;
 - concurrent requests for the same Goal share one in-flight provider call;
 - the provider receives Goal data as untrusted user content and must return JSON;
 - Core accepts only 2–8 bounded items with stable `snake_case` IDs;
@@ -89,27 +92,29 @@ GET  /api/v1/console/workspace-goals/:goalId
 POST /api/v1/console/workspace-goals/:goalId/definition-revisions
 POST /api/v1/console/workspace-goals/:goalId/roadmaps
 POST /api/v1/console/workspace-goals/:goalId/roadmap/generate
+GET  /api/v1/console/workspace-goals/:goalId/operations/:requestId
 POST /api/v1/console/workspace-goals/:goalId/decisions
 POST /api/v1/console/workspace-goals/:goalId/task-runs
 ```
 
-These are Console projections, not Gateway/channel contracts. They require the existing `sessions:read` or `sessions:write` scope and use the standard v1 envelopes. Historical `/plans`, `/run-links` and `/evidence` routes are intentionally absent and return 404; callers cannot bypass automatic attachment or Supervisor/Core evidence validation.
+These routes are the Workspace Goal subset of the stable Operator profile, not Channel message endpoints. They require `sessions:read` or `sessions:write` and use standard v1 envelopes. Historical `/plans`, `/run-links` and `/evidence` routes are intentionally absent and return 404; callers cannot bypass automatic attachment or Supervisor/Core evidence validation.
 
-Decision and TaskRun request IDs are strictly idempotent. Reusing a key with the same canonical payload returns the existing result; reusing it for different content is a conflict.
+Every write requires a stable request ID. Definition/Roadmap revision and generation operations use `workspace_goal_operation_receipts`; Goal creation, decisions and TaskRun admission retain their existing durable identities. Reusing an identity with the same canonical payload returns the original result; different content is `workspace_goal.idempotency_conflict`. The operation GET exposes recovery state without another LLM call.
 
 ## Persistence and upgrade
 
-SQLite schema 38 retains the Goal tables introduced in schemas 35 and 36 and adds execution linkage:
+SQLite schema 39 retains the Goal tables and schema-38 execution linkage, and adds Gateway operation receipts:
 
 ```text
 workspace_goal_run_links.link_mode
 workspace_goal_inbox_links
 workspace_goal_roadmap_item_progress
+workspace_goal_operation_receipts
 ```
 
-The v37 → v38 migration classifies historical Roadmap-linked Runs, backfills their progress and removes the obsolete one-decision-per-kind restriction while preserving request-ID idempotency. Some internal SQLite columns and values retain `plan` names for forward-compatible migration of existing databases; they are not public domain or API terminology.
+The v38 → v39 migration adds Goal operation payload hashes, result/error receipts and restart recovery state. Some internal SQLite columns and values retain `plan` names for forward-compatible migration of existing databases; they are not public domain or API terminology.
 
-Migrations are forward-only. Stop Core and back up SQLite together with WAL/SHM before upgrading. A schema-37-only binary must never open a schema-38 database; rollback across this boundary requires the matching pre-upgrade database backup. See [UPGRADING.md](UPGRADING.md).
+Migrations are forward-only. Stop Core and back up SQLite together with WAL/SHM before upgrading. A schema-38-only binary must never open a schema-39 database; rollback across this boundary requires the matching pre-upgrade database backup. See [UPGRADING.md](UPGRADING.md).
 
 ## Explicit non-goals
 

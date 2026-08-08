@@ -11,6 +11,7 @@ import type {
   RunEventJournal,
   RuntimePersistencePort,
   TaskRunRepository,
+  TaskRunCommandReceiptRepository,
   ToolPersistencePort,
   TranscriptRepository,
 } from "@tagent/execution/ports";
@@ -25,6 +26,7 @@ import type {
   SupervisorPersistencePort,
   WorkflowGovernancePersistencePort,
   WorkspaceGoalRepository,
+  WorkspaceGoalOperationRepository,
 } from "@tagent/governance/ports";
 import type {
   LearningLedgerRepository,
@@ -119,6 +121,8 @@ export class LegacyStoreAdapter {
   readonly runtimeMutations: FencedRuntimeMutationPort;
   readonly taskRunTransitions: TaskRunTransitionPort;
   readonly workspaceGoals: WorkspaceGoalRepository;
+  readonly workspaceGoalOperations: WorkspaceGoalOperationRepository;
+  readonly taskRunCommands: TaskRunCommandReceiptRepository;
 
   constructor(store: Store, mutationUnitOfWork: MutationUnitOfWork) {
     const mutate = <Args extends unknown[], Result>(operation: SynchronousOperation<Args, Result>) =>
@@ -149,6 +153,11 @@ export class LegacyStoreAdapter {
       recordRunOutcome: mutate(sqliteWorkspaceGoals.recordRunOutcome.bind(sqliteWorkspaceGoals)),
       linkEvidence: mutate(sqliteWorkspaceGoals.linkEvidence.bind(sqliteWorkspaceGoals)),
       authorizeRunMutation: query(sqliteWorkspaceGoals.authorizeRunMutation.bind(sqliteWorkspaceGoals)),
+    });
+    this.workspaceGoalOperations = Object.freeze({
+      claimWorkspaceGoalOperation: mutate(store.claimWorkspaceGoalOperation.bind(store)),
+      getWorkspaceGoalOperation: query(store.getWorkspaceGoalOperation.bind(store)),
+      settleWorkspaceGoalOperation: mutate(store.settleWorkspaceGoalOperation.bind(store)),
     });
 
     this.learningIntegration = Object.freeze({
@@ -251,6 +260,7 @@ export class LegacyStoreAdapter {
 
     this.sessions = Object.freeze({
       createSession: mutate(store.createSession.bind(store)),
+      createSessionIdempotent: mutate(store.createSessionIdempotent.bind(store)),
       listSessions: query(store.listSessions.bind(store)),
       getSession: query(store.getSession.bind(store)),
       updateSession: mutate(store.updateSession.bind(store)),
@@ -258,6 +268,12 @@ export class LegacyStoreAdapter {
       listMessages: query(store.listMessages.bind(store)),
       listRecentMessages: query(store.listRecentMessages.bind(store)),
       appendMessage: mutate(store.appendMessage.bind(store)),
+    });
+
+    this.taskRunCommands = Object.freeze({
+      claimTaskRunCommand: mutate(store.claimTaskRunCommand.bind(store)),
+      getTaskRunCommand: query(store.getTaskRunCommand.bind(store)),
+      settleTaskRunCommand: mutate(store.settleTaskRunCommand.bind(store)),
     });
 
     this.messageSources = Object.freeze({
