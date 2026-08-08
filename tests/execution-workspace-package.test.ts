@@ -91,7 +91,7 @@ describe("Execution workspace package", () => {
       ...sourceFiles("packages/execution/src/domain"),
       ...sourceFiles("packages/execution/src/ports"),
     ];
-    expect(implementationFiles).toHaveLength(47);
+    expect(implementationFiles).toHaveLength(48);
     expect(implementationFiles).toEqual(expect.arrayContaining([
       "packages/execution/src/application/attempt-execution-failure.ts",
       "packages/execution/src/application/context-token-estimate.ts",
@@ -103,6 +103,7 @@ describe("Execution workspace package", () => {
       "packages/execution/src/ports/artifact-sink-port.ts",
       "packages/execution/src/ports/context-source-port.ts",
       "packages/execution/src/ports/workspace-edit-port.ts",
+      "packages/execution/src/ports/task-run-command-repository.ts",
     ]));
   });
 

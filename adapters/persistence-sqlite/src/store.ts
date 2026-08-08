@@ -2626,10 +2626,14 @@ ${source.content}`;
         WHERE run_id=? AND action_type=? AND target_id=? AND status='pending'`)
         .get(runId, actionType, targetId) as { id: string } | undefined;
       if (existing) return this.getApprovalRequest(existing.id)!;
+      const run = this.db.prepare(`SELECT r.session_id as sessionId,sd.attempt
+        FROM runs r LEFT JOIN supervisor_decisions sd ON sd.id=? WHERE r.id=?`)
+        .get(decisionId, runId) as { sessionId: string; attempt: number | null } | undefined;
       const request: ApprovalRequest = {
         id: randomUUID(),
         runId,
         decisionId,
+        ...(run?.attempt == null ? {} : { attempt: run.attempt }),
         actionType,
         targetType,
         targetId,
@@ -2641,8 +2645,6 @@ ${source.content}`;
         resolvedBy: "",
         resolution: "",
       };
-      const run = this.db.prepare("SELECT session_id as sessionId FROM runs WHERE id=?")
-        .get(runId) as { sessionId: string } | undefined;
       const canonical = mapLegacyRunApprovalOperation({
         id: request.id,
         runId,

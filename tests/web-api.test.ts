@@ -44,6 +44,8 @@ describe("Web API request headers", () => {
       consumerId: "web",
       generation: 1,
       acknowledgedSequence: 0,
+      settledAcknowledgedSequence: null,
+      finalAcknowledgedSequence: null,
       terminalAcknowledgedSequence: null,
       claimedAt: "2026-08-05T00:00:00.000Z",
       updatedAt: "2026-08-05T00:00:00.000Z",

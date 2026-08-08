@@ -2,10 +2,6 @@ import type {
   ArtifactContent,
   CommandReceipt,
   CoreCapabilities,
-  ConsoleGenerateWorkspaceGoalRoadmapRequest,
-  ConsoleWorkspaceGoal,
-  ConsoleWorkspaceGoalOperationReceipt,
-  ConsoleWorkspaceGoalSummary,
   EventConsumerAckRequest,
   EventConsumerCursor,
   EventStreamQuery,
@@ -23,8 +19,9 @@ import type {
 } from "@tagent/abi";
 import { loadCoreAbi, type CoreAbi } from "./abi-loader.js";
 import { CoreClientError, protocolError } from "./errors.js";
+import { ConsoleGoalClient } from "./console-goal-client.js";
 import { decodeJsonSse } from "./sse.js";
-import { CoreTransport, type CoreClientOptions, type CoreSseOptions, type CoreSseSubscription } from "./transport.js";
+import type { CoreClientOptions, CoreSseOptions, CoreSseSubscription } from "./transport.js";
 
 export type {
   ArtifactContent,
@@ -81,36 +78,12 @@ function validateEventStreamQueryInput(url: string, query: EventStreamQuery): Ev
   return query;
 }
 
-export class CoreClient extends CoreTransport {
+export class CoreClient extends ConsoleGoalClient {
   async getCapabilities(): Promise<CoreCapabilities> {
     const abi = await loadCoreAbi();
     return this.request("/api/v1/capabilities", { decode: (payload) => abi.decodeAbi(abi.CoreCapabilitiesResponseSchema, payload).data });
   }
 
-  async listWorkspaceGoals(workspaceId: string): Promise<ConsoleWorkspaceGoalSummary[]> {
-    const abi = await loadCoreAbi();
-    const path = `/api/v1/console/workspaces/${encodePathSegment(workspaceId)}/goals`;
-    return this.request(path, { decode: (payload) => decodeSuccessData(abi, payload, (data) => abi.decodeAbi(abi.ConsoleWorkspaceGoalSummariesSchema, data)) });
-  }
-
-  async getWorkspaceGoal(goalId: string): Promise<ConsoleWorkspaceGoal> {
-    const abi = await loadCoreAbi();
-    const path = `/api/v1/console/workspace-goals/${encodePathSegment(goalId)}`;
-    return this.request(path, { decode: (payload) => decodeSuccessData(abi, payload, (data) => abi.decodeAbi(abi.ConsoleWorkspaceGoalSchema, data)) });
-  }
-
-  async generateWorkspaceGoalRoadmap(goalId: string, input: ConsoleGenerateWorkspaceGoalRoadmapRequest): Promise<ConsoleWorkspaceGoal> {
-    const abi = await loadCoreAbi();
-    const path = `/api/v1/console/workspace-goals/${encodePathSegment(goalId)}/roadmap/generate`;
-    const body = validateRequest("POST", this.resolve(path), input, (value) => abi.decodeAbi(abi.ConsoleGenerateWorkspaceGoalRoadmapRequestSchema, value));
-    return this.request(path, { decode: (payload) => decodeSuccessData(abi, payload, (data) => abi.decodeAbi(abi.ConsoleWorkspaceGoalSchema, data)), idempotent: true, json: body, method: "POST", requestId: body.requestId });
-  }
-
-  async getWorkspaceGoalOperation(goalId: string, requestId: string): Promise<ConsoleWorkspaceGoalOperationReceipt> {
-    const abi = await loadCoreAbi();
-    const path = `/api/v1/console/workspace-goals/${encodePathSegment(goalId)}/operations/${encodePathSegment(requestId)}`;
-    return this.request(path, { decode: (payload) => decodeSuccessData(abi, payload, (data) => abi.decodeAbi(abi.ConsoleWorkspaceGoalOperationReceiptSchema, data)) });
-  }
   async createSession(input: SessionCreateRequest = {}): Promise<Session> {
     return this.createSessionIdempotent(crypto.randomUUID(), input);
   }

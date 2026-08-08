@@ -243,15 +243,18 @@ describe("final modular monolith gate", () => {
     const app = createApp({
       persistence: {
         sessions: {
-          createSession: (title: string) => ({
-            id: "session-final",
-            title,
-            modelId: "gpt-5.6-sol",
-            reasoningEffort: "high" as const,
-            createdAt: 0,
-            updatedAt: 0,
-            latestRunStatus: null,
-            latestRunPhase: null,
+          createSessionIdempotent: ({ title }: { title: string }) => ({
+            replayed: false,
+            session: {
+              id: "session-final",
+              title,
+              modelId: "gpt-5.6-sol",
+              reasoningEffort: "high" as const,
+              createdAt: 0,
+              updatedAt: 0,
+              latestRunStatus: null,
+              latestRunPhase: null,
+            },
           }),
         },
         submissions: {},
@@ -267,6 +270,7 @@ describe("final modular monolith gate", () => {
       const response = await app.inject({
         method: "POST",
         url: "/api/v1/sessions",
+        headers: { "idempotency-key": "final-monolith-session" },
         payload: { title: "Final modular monolith" },
       });
       expect(response.statusCode).toBe(200);
