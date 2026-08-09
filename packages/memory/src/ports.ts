@@ -30,7 +30,7 @@ export interface RecordStorePort {
   list(scopes: MemoryScope[], kinds?: MemoryKind[], limit?: number): Promise<WarmMemory[]>;
   countSummary?(scopes: MemoryScope[]): Promise<{ hot: number; warm: number; candidate: number; active: number; disputed: number }>;
   forget(scopes: MemoryScope[], ids?: string[], topicIds?: string[], options?: { reason?: string; purgeAfter?: number }): Promise<number>;
-  restore?(scopes: MemoryScope[], ids: string[]): Promise<number>;
+  restore?(scopes: MemoryScope[], ids?: string[], topicIds?: string[]): Promise<number>;
   purgeDeleted?(scopes: MemoryScope[], now: number, limit: number): Promise<string[]>;
   noteRecall?(ids: string[], scopes: MemoryScope[], at: number): Promise<void>;
   govern?(request: MemoryGovernanceRequest): Promise<MemoryGovernanceReceipt | null>;

@@ -89,7 +89,8 @@ describe("Store", () => {
     const store = createStore();
     const session = store.createSession();
     const first = store.enqueueSessionInbox(session.id, "first", analysis("first"), "request-1");
-    expect(store.enqueueSessionInbox(session.id, "duplicate body", analysis("duplicate body"), "request-1").id).toBe(first.id);
+    expect(store.enqueueSessionInbox(session.id, "first", analysis("first"), "request-1").id).toBe(first.id);
+    expect(() => store.enqueueSessionInbox(session.id, "duplicate body", analysis("duplicate body"), "request-1")).toThrow("idempotency conflict");
     const second = store.enqueueSessionInbox(session.id, "second", analysis("second"), "request-2");
     const third = store.enqueueSessionInbox(session.id, "third", analysis("third"), "request-3");
     expect(store.deleteSessionInboxItem(second.id, session.id)).toBe(true);

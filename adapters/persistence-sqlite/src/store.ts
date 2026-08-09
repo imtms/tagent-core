@@ -1525,6 +1525,7 @@ export class Store {
       const existing = this.db.prepare("SELECT id FROM session_supervisor_inbox WHERE session_id = ? AND request_id = ?").get(sessionId, requestId) as { id: string } | undefined;
       if (existing) {
         const item = this.getSessionInboxItem(existing.id)!;
+        if (item.content !== content) throw new Error("Session Inbox request idempotency conflict");
         if (audit) this.recordSubmissionAudit(item, audit);
         return item;
       }

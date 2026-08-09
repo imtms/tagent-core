@@ -65,7 +65,7 @@ export function registerAdminMemoryConsoleV1Routes(app: FastifyInstance, depende
 
   app.post("/api/v1/admin/memory/forget", { onRequest: authorize }, async (request) => {
     const body = request.body as { scope?: HttpMemoryScope; ids?: string[]; topicIds?: string[]; reason?: string; gracePeriodMs?: number };
-    if (!body.scope) throw consoleError(400, "memory.scope_required", "scope is required");
+    if (!body.scope || (!body.ids?.length && !body.topicIds?.length)) throw consoleError(400, "memory.forget_invalid", "scope and ids or topicIds are required");
     const result = await requireMemory().forget({ access: access(request, [body.scope], "memory_admin"), ...body, scope: body.scope });
     return successEnvelope(request, result);
   });

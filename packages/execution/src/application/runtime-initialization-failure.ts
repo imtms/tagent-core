@@ -56,6 +56,7 @@ export function settleRuntimeInitializationFailure(input: RuntimeInitializationF
     },
     input.error,
   );
+  publishTransitionOutcome(input.eventHub, transition);
   if (input.launchOptions?.inboxItemId) {
     input.postAttempt.attemptLaunchFailed({
       inboxItemId: input.launchOptions.inboxItemId,
@@ -63,6 +64,5 @@ export function settleRuntimeInitializationFailure(input: RuntimeInitializationF
       message,
     });
   }
-  publishTransitionOutcome(input.eventHub, transition);
   input.settlement.projectWorkflowExperience(input.run.id);
 }

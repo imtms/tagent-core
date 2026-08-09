@@ -183,6 +183,24 @@ describe("PostgreSQL memory query shape", () => {
     for (const call of counter.calls) expectValidParameters(call);
   });
 
+  it("guards empty forget and restores deleted records by record or Topic IDs with scoped typed parameters", async () => {
+    const counter = new QueryCounter();
+    const adapter = adapterWith(counter);
+
+    await expect(adapter.forget([scope])).rejects.toThrow("requires at least one");
+    expect(counter.calls).toHaveLength(0);
+
+    await adapter.restore([scope], ["record-1"], ["topic-1"]);
+    expect(counter.calls).toHaveLength(2);
+    for (const call of counter.calls) {
+      expect(call.values?.slice(0, 4)).toEqual([scope.type, scope.id, ["record-1"], ["topic-1"]]);
+      expect(call.text).toContain("id::text=ANY($3::text[])");
+      expect(call.text).toContain("topic_ids && $4::text[]");
+      expect(call.text).toContain("status='deleted'");
+      expectValidParameters(call);
+    }
+  });
+
   it("batches ordinary and preference record upserts into at most two data statements", async () => {
     const counter = new QueryCounter();
     (counter as QueryCounter & { connect: () => Promise<QueryCounter & { release: () => void }> }).connect = async () => Object.assign(counter, { release() {} });

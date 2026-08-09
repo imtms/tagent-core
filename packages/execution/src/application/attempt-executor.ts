@@ -3,6 +3,7 @@ import type { TaskRun } from "../domain/task-run.js";
 import type { ExecutionStateView } from "./execution-state.js";
 import { failRuntimeTaskRun, publishTransitionOutcome } from "./task-run-transition-helpers.js";
 import { settleRuntimeInitializationFailure } from "./runtime-initialization-failure.js";
+import { settleRuntimeFactoryFailure } from "./runtime-factory-failure.js";
 import { settleAttemptExecutionFailure } from "./attempt-execution-failure.js";
 import { selectRuntimeModel } from "./runtime-model-selection.js";
 import type {
@@ -189,13 +190,9 @@ export class AttemptExecutor {
         historicalTaskRunReceiptChars: this.state.runtimeDefaults.historicalTaskRunReceiptChars,
       });
     } catch (error) {
-      this.state.persistence.attempts.releaseExecutionLease({
-        attemptId: token.attemptId,
-        ownerId: token.ownerId,
-        leaseToken: token.leaseToken,
-        fence: token.executionFence,
-      });
-      throw error;
+      settleRuntimeFactoryFailure({ state: this.state, run, token, launchOptions, error,
+        settlement: this.dependencies.settlement, postAttempt: this.dependencies.postAttempt, eventHub: this.dependencies.eventHub });
+      return;
     }
     this.state.runtimes.set(run.id, runtime);
     executionLeaseTimer = setInterval(() => {

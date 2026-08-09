@@ -84,6 +84,7 @@ export class AdmissionCoordinator {
     if (activeRun) for (const observed of routerUsage) this.state.persistence.taskRuns.recordModelUsage(activeRun.id, "router", observed.model, observed.usage);
     const duplicate = !activeRun ? this.state.persistence.submissions.findMergeCandidate(sessionId, analysis) : undefined;
     const item = this.state.persistence.submissions.enqueueSessionInbox(sessionId, content, analysis, requestId, audit);
+    if (item.content !== content) throw new Error("Session Inbox request idempotency conflict");
     if (analysis.intent === "defer") {
       this.state.persistence.submissions.decideSessionInboxItem(item.id, sessionId, "defer");
       return { item: this.state.persistence.submissions.getSessionInboxItem(item.id)!, run: null };
@@ -326,7 +327,11 @@ export class AdmissionCoordinator {
     this.dependencies.contextService.publishContextEvents(run.id, sessionHistory);
     this.state.recalledMemory.set(run.id, sessionHistory.recalledMemory ?? "");
     this.dependencies.attemptExecutor.launch(run, this.buildContractPrompt(run, item.content), sessionHistory.messages, undefined, { initialize: true, inboxItemId: item.id, retry });
-    if (!this.state.runtimes.has(run.id)) throw new Error("Inbox TaskRun runtime did not start");
+    if (!this.state.runtimes.has(run.id)) {
+      const current = this.state.persistence.taskRuns.getRun(run.id);
+      if (current && current.status !== "running") return;
+      throw new Error("Inbox TaskRun runtime did not start");
+    }
   }
 
   public buildContractPrompt(run: TaskRun, sourceInput: string) {

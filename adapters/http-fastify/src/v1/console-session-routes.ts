@@ -7,6 +7,15 @@ function opaqueAutomationMarker(content: string): boolean {
   return /^(?:(?:final-)?ui-sync|release)-[a-z0-9._-]*\d{10,}$/i.test(content) && !/[\s：:，,。.!?？]/.test(content);
 }
 
+function paginationLimit(value: string | undefined, fallback: number): number {
+  if (value == null) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1 || parsed > 200) {
+    throw consoleError(400, "pagination.limit_invalid", "limit must be an integer between 1 and 200");
+  }
+  return parsed;
+}
+
 export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencies: V1ApiDependencies): void {
   const { sessions, submissions, taskRuns } = dependencies.persistence;
   const { service } = dependencies;
@@ -56,7 +65,7 @@ export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencie
     const { id } = request.params as { id: string };
     if (!sessions.getSession(id)) throw consoleError(404, "session.not_found", "session not found");
     const query = request.query as { limit?: string; beforeId?: string };
-    const limit = Math.min(200, Math.max(1, Number(query.limit ?? 80)));
+    const limit = paginationLimit(query.limit, 80);
     const beforeId = query.beforeId == null ? undefined : Number(query.beforeId);
     if (beforeId != null && (!Number.isFinite(beforeId) || beforeId <= 0)) throw consoleError(400, "message.before_id_invalid", "beforeId must be positive");
     return successEnvelope(request, sessions.listMessages(id, limit, beforeId));
@@ -65,7 +74,7 @@ export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencie
   app.get("/api/v1/console/sessions/:id/task-runs", { onRequest: read }, async (request) => {
     const { id } = request.params as { id: string };
     if (!sessions.getSession(id)) throw consoleError(404, "session.not_found", "session not found");
-    const limit = Math.min(200, Math.max(1, Number((request.query as { limit?: string }).limit ?? 50)));
+    const limit = paginationLimit((request.query as { limit?: string }).limit, 50);
     return successEnvelope(request, taskRuns.listRuns(id, limit));
   });
 
@@ -79,8 +88,15 @@ export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencie
     if (!content) throw consoleError(400, "submission.content_required", "content is required");
     if (opaqueAutomationMarker(content)) throw consoleError(422, "submission.non_actionable", "opaque automation marker is not executable");
     if (!sessions.getSession(id)) throw consoleError(404, "session.not_found", "session not found");
-    const result = await service.enqueueSessionInput(id, content, body.requestId);
-    return successEnvelope(request, result);
+    try {
+      const result = await service.enqueueSessionInput(id, content, body.requestId);
+      return successEnvelope(request, result);
+    } catch (error) {
+      if (error instanceof Error && error.message.toLowerCase().includes("idempotency conflict")) {
+        throw consoleError(409, "submission.idempotency_conflict", "requestId was already used with a different payload");
+      }
+      throw error;
+    }
   });
 
   app.get("/api/v1/console/sessions/:id/inbox", { onRequest: read }, async (request) => {

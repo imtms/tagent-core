@@ -64,11 +64,17 @@ describe("LegacyStoreAdapter", () => {
     );
     const retriedSubmission = adapter.submissions.enqueueSessionInbox(
       firstSession.id,
-      "Changed retry body",
-      inputAnalysis("Changed retry body"),
+      "Original submission",
+      inputAnalysis("Original submission"),
       "submission-request-1",
     );
     expect(retriedSubmission).toEqual(firstSubmission);
+    expect(() => adapter.submissions.enqueueSessionInbox(
+      firstSession.id,
+      "Changed retry body",
+      inputAnalysis("Changed retry body"),
+      "submission-request-1",
+    )).toThrow("idempotency conflict");
     expect(adapter.submissions.listSessionInbox(firstSession.id, true)).toEqual([firstSubmission]);
     expect(adapter).not.toHaveProperty("db");
     expect(adapter).not.toHaveProperty("store");
