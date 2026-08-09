@@ -7,16 +7,26 @@ import {
   EventConsumerParamsSchema,
   EventStreamQuerySchema,
   encodeAbi,
-  ProjectionCriticalTaskRunEventSchema,
+  ProjectionCriticalTaskRunEventSchemaByType,
   TaskRunEventSchema,
   TaskRunParamsSchema,
   type EventConsumerParams,
+  type KnownTaskRunEventType,
   type TaskRunParams,
 } from "@tagent/abi";
 import type { ChannelV1Dependencies } from "./dependencies.js";
 import { requestIdOf, successEnvelope, V1HttpError } from "./errors.js";
 import { mapEventConsumerCursor, mapTaskRunEvent } from "./mappers.js";
 import { authorizeChannel, conflict, decodeQuery, missing } from "./route-support.js";
+
+const EVENT_REPLAY_BATCH_SIZE = 256;
+const EVENT_REPLAY_BUFFER_LIMIT = 1_000;
+const EVENT_REPLAY_SLICE_EVENTS = 32;
+const EVENT_REPLAY_SLICE_MS = 10;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 export function registerEventV1Routes(app: FastifyInstance, dependencies: ChannelV1Dependencies): void {
   const { persistence, service, serviceCredentials } = dependencies;
@@ -67,19 +77,24 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
     let closed = false;
     let replaying = true;
     const buffered: ReturnType<typeof service.replay> = [];
+    let bufferedOffset = 0;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
     const closeStream = (): void => {
       if (closed) return;
       closed = true;
+      if (heartbeat) clearInterval(heartbeat);
       try { unsubscribe(); } catch { /* stream closure must remain deterministic */ }
       if (!response.writableEnded) response.end();
     };
+    response.once("close", closeStream);
+    const generationIsCurrent = (): boolean =>
+      eventConsumers.getEventConsumer(taskRunId, query.consumerId)?.generation === query.generation;
     const send = (event: ReturnType<typeof service.replay>[number]): boolean => {
       try {
-        if (eventConsumers.getEventConsumer(taskRunId, query.consumerId)?.generation !== query.generation) {
-          closeStream();
-          return false;
-        }
-        const projected = encodeAbi(ProjectionCriticalTaskRunEventSchema, mapTaskRunEvent(event) as never);
+        const publicEvent = mapTaskRunEvent(event);
+        const schema = ProjectionCriticalTaskRunEventSchemaByType[publicEvent.type as KnownTaskRunEventType];
+        if (!schema) throw new Error(`Unsupported public TaskRun event type: ${publicEvent.type}`);
+        const projected = encodeAbi(schema, publicEvent as never);
         const mapped = encodeAbi(TaskRunEventSchema, projected as never);
         const accepted = response.write(`id: ${mapped.eventId}\ndata: ${JSON.stringify(mapped)}\n\n`);
         if (!accepted) closeStream();
@@ -89,13 +104,41 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
         return false;
       }
     };
+    const sendLive = (event: ReturnType<typeof service.replay>[number]): boolean => {
+      try {
+        if (!generationIsCurrent()) {
+          closeStream();
+          return false;
+        }
+        return send(event);
+      } catch {
+        closeStream();
+        return false;
+      }
+    };
+    let sliceEventCount = 0;
+    let sliceStartedAt = performance.now();
+    const yieldReplaySlice = async (): Promise<boolean> => {
+      sliceEventCount += 1;
+      if (sliceEventCount < EVENT_REPLAY_SLICE_EVENTS
+        && performance.now() - sliceStartedAt < EVENT_REPLAY_SLICE_MS) return true;
+      await yieldToEventLoop();
+      sliceEventCount = 0;
+      sliceStartedAt = performance.now();
+      if (closed) return false;
+      if (!generationIsCurrent()) {
+        closeStream();
+        return false;
+      }
+      return true;
+    };
     try {
       const subscribed = service.subscribe(taskRunId, (event) => {
         if (replaying) {
-          if (buffered.length >= 1_000) return closeStream();
+          if (buffered.length - bufferedOffset >= EVENT_REPLAY_BUFFER_LIMIT) return closeStream();
           buffered.push(event);
         }
-        else send(event);
+        else sendLive(event);
       });
       unsubscribe = subscribed;
       if (closed) {
@@ -104,28 +147,41 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
       }
       let deliveredSequence = replayAfter;
       while (deliveredSequence < replayHighWatermark) {
-        const batch = service.replay(taskRunId, deliveredSequence, 256)
+        const batch = service.replay(taskRunId, deliveredSequence, EVENT_REPLAY_BATCH_SIZE)
           .filter((event) => event.seq <= replayHighWatermark);
         if (!batch.length) break;
         for (const event of batch) {
           if (!send(event)) return;
           deliveredSequence = event.seq;
+          if (!await yieldReplaySlice()) return;
+        }
+      }
+      while (bufferedOffset < buffered.length) {
+        const event = buffered[bufferedOffset++]!;
+        if (event.seq > deliveredSequence) {
+          if (!send(event)) return;
+          deliveredSequence = event.seq;
+          if (!await yieldReplaySlice()) return;
+        }
+        if (bufferedOffset >= EVENT_REPLAY_BATCH_SIZE) {
+          buffered.splice(0, bufferedOffset);
+          bufferedOffset = 0;
         }
       }
       replaying = false;
-      for (const event of buffered) {
-        if (event.seq > deliveredSequence && !send(event)) return;
-      }
+      buffered.length = 0;
     } catch {
       closeStream();
       return;
     }
     if (closed) return;
-    const heartbeat = setInterval(() => { if (!response.write(": heartbeat\n\n")) closeStream(); }, 15_000);
-    request.raw.on("close", () => {
-      clearInterval(heartbeat);
-      closeStream();
-    });
+    heartbeat = setInterval(() => {
+      try {
+        if (!generationIsCurrent() || !response.write(": heartbeat\n\n")) closeStream();
+      } catch {
+        closeStream();
+      }
+    }, 15_000);
   });
 
   app.post("/api/v1/task-runs/:taskRunId/event-consumers/:consumerId/ack", {

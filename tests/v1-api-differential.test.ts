@@ -82,6 +82,28 @@ async function readSseEvent(response: Response) {
   return JSON.parse(data) as unknown;
 }
 
+async function readSseEvents(response: Response, count: number) {
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  const events: unknown[] = [];
+  let body = "";
+  while (events.length < count) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    body += decoder.decode(chunk.value, { stream: true });
+    let boundary = body.indexOf("\n\n");
+    while (boundary >= 0) {
+      const block = body.slice(0, boundary);
+      body = body.slice(boundary + 2);
+      const data = block.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
+      if (data) events.push(JSON.parse(data) as unknown);
+      boundary = body.indexOf("\n\n");
+    }
+  }
+  if (events.length < count) throw new Error(`Expected ${count} SSE events, received ${events.length}`);
+  return events;
+}
+
 describe("v1 API contracts", () => {
   it("creates Sessions idempotently, exposes GET, and publishes capabilities", async () => {
     const { app, store } = await fixture();
@@ -264,6 +286,87 @@ describe("v1 API contracts", () => {
     });
     expect(decodeAbi(EventConsumerAckResponseSchema, ack.json()).data).toMatchObject({ status: "accepted", cursor: { acknowledgedSequence: 1 } });
     expect(store.listEvents(run.id)[0]).toMatchObject({ runId: run.id, seq: 1, type: "run.completed", data: { response: "done" } });
+  });
+
+  it("yields the event loop during large SSE replays and preserves the live handoff order", async () => {
+    const { app, service, store } = await fixture();
+    const run = store.createRun(store.createSession().id, "time-sliced event replay");
+    for (let ordinal = 1; ordinal <= 300; ordinal += 1) {
+      store.appendEvent(run.id, "message.delta", { delta: String(ordinal), ordinal });
+    }
+    const claim = decodeAbi(EventConsumerClaimResponseSchema, (await app.inject({
+      method: "POST",
+      url: `/api/v1/task-runs/${run.id}/event-consumers/time-sliced-client/claim`,
+    })).json()).data.cursor;
+    const originalReplay = service.replay.bind(service);
+    const originalSubscribe = service.subscribe.bind(service);
+    let subscribedListener: Parameters<typeof service.subscribe>[1] | undefined;
+    let timerFired = false;
+    let timerObservedBeforeSecondBatch = false;
+    let timerScheduled = false;
+    vi.spyOn(service, "subscribe").mockImplementation((runId, listener) => {
+      subscribedListener = listener;
+      return originalSubscribe(runId, listener);
+    });
+    vi.spyOn(service, "replay").mockImplementation((runId, after, limit) => {
+      if (!timerScheduled) {
+        timerScheduled = true;
+        setTimeout(() => {
+          timerFired = true;
+          const live = store.appendEvent(run.id, "message.delta", { delta: "live", ordinal: 301 });
+          subscribedListener?.(live);
+        }, 0);
+      } else if ((after ?? 0) >= 256) {
+        timerObservedBeforeSecondBatch = timerFired;
+      }
+      return originalReplay(runId, after, limit);
+    });
+
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const controller = new AbortController();
+    try {
+      const response = await fetch(`${address}/api/v1/task-runs/${run.id}/events?consumerId=time-sliced-client&generation=${claim.generation}&after=0`, { signal: controller.signal });
+      const events = await readSseEvents(response, 301) as Array<{ sequence: number; payload: { delta?: string } }>;
+      expect(events.map((event) => event.sequence)).toEqual(Array.from({ length: 301 }, (_, index) => index + 1));
+      expect(events.at(-1)?.payload.delta).toBe("live");
+      expect(timerObservedBeforeSecondBatch).toBe(true);
+    } finally {
+      controller.abort();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("stops a time-sliced SSE replay when another generation claims the consumer", async () => {
+    const { app, service, store } = await fixture();
+    const run = store.createRun(store.createSession().id, "fenced event replay");
+    for (let ordinal = 1; ordinal <= 300; ordinal += 1) {
+      store.appendEvent(run.id, "message.delta", { delta: String(ordinal), ordinal });
+    }
+    const claim = decodeAbi(EventConsumerClaimResponseSchema, (await app.inject({
+      method: "POST",
+      url: `/api/v1/task-runs/${run.id}/event-consumers/fenced-client/claim`,
+    })).json()).data.cursor;
+    const originalReplay = service.replay.bind(service);
+    let reclaimScheduled = false;
+    vi.spyOn(service, "replay").mockImplementation((runId, after, limit) => {
+      if (!reclaimScheduled) {
+        reclaimScheduled = true;
+        setTimeout(() => { store.claimEventConsumer(run.id, "fenced-client"); }, 0);
+      }
+      return originalReplay(runId, after, limit);
+    });
+
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    try {
+      const response = await fetch(`${address}/api/v1/task-runs/${run.id}/events?consumerId=fenced-client&generation=${claim.generation}&after=0`);
+      const body = await response.text();
+      const delivered = body.split("\n").filter((line) => line.startsWith("data: "));
+      expect(store.getEventConsumer(run.id, "fenced-client")?.generation).toBe(claim.generation + 1);
+      expect(delivered.length).toBeGreaterThan(0);
+      expect(delivered.length).toBeLessThan(300);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("returns a 422 non-actionable decision through the v1 envelope", async () => {

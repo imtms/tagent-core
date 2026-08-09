@@ -66,6 +66,30 @@ export const ApprovalResolvedEventSchema = eventSchema("approval.resolved", Type
 export const UserInputSubmittedEventSchema = eventSchema("user_input.submitted", Type.Object({ userInputRequestId: IdentifierSchema, fieldKeys: Type.Array(Type.String({ minLength: 1 })) }, { additionalProperties: false }));
 export const DiagnosticTaskRunEventSchema = eventSchema("diagnostic.internal", Type.Object({ sourceType: Type.String({ minLength: 1, maxLength: 128 }) }, { additionalProperties: false }));
 
+/** Avoids repeatedly traversing the full union when encoding high-volume event streams. */
+export const ProjectionCriticalTaskRunEventSchemaByType = {
+  "task_run.started": TaskRunStartedEventSchema,
+  "task_run.waiting_input": TaskRunWaitingInputEventSchema,
+  "task_run.blocked": TaskRunBlockedEventSchema,
+  "task_run.resumed": TaskRunResumedEventSchema,
+  "task_run.completed": TaskRunCompletedEventSchema,
+  "task_run.failed": TaskRunFailedEventSchema,
+  "task_run.cancelled": TaskRunCancelledEventSchema,
+  "task_run.interrupted": TaskRunInterruptedEventSchema,
+  "message.started": MessageStartedEventSchema,
+  "message.delta": MessageDeltaEventSchema,
+  "message.completed": MessageCompletedEventSchema,
+  "tool.started": ToolStartedEventSchema,
+  "tool.progress": ToolProgressEventSchema,
+  "tool.completed": ToolCompletedEventSchema,
+  "tool.failed": ToolFailedEventSchema,
+  "provider.failure": ProviderFailureEventSchema,
+  "approval.requested": ApprovalRequestedEventSchema,
+  "approval.resolved": ApprovalResolvedEventSchema,
+  "user_input.submitted": UserInputSubmittedEventSchema,
+  "diagnostic.internal": DiagnosticTaskRunEventSchema,
+} as const satisfies Record<KnownTaskRunEventType, TSchema>;
+
 /** Public producer contract. Internal events must be reduced to the diagnostic schema. */
 export const ProjectionCriticalTaskRunEventSchema = Type.Union([
   TaskRunStartedEventSchema, TaskRunWaitingInputEventSchema, TaskRunBlockedEventSchema,
