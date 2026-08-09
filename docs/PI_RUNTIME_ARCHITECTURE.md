@@ -28,8 +28,9 @@ The production and lockfile dependency graph contains no `pi-coding-agent` packa
 - projects text, thinking, tool, queue, retry, compaction and settled events;
 - applies Core tool guards before execution and reports final tool outcomes;
 - supports steering, follow-up, cancellation, manual compaction and model switching;
-- applies bounded provider retry and rate-limit fallback policy;
-- performs threshold compaction after successful turns and one compaction/retry cycle after context overflow;
+- applies abortable exponential-backoff full-turn retry and rate-limit fallback policy while disabling duplicate provider-library retries;
+- checks restored context before a new turn, performs threshold compaction after successful turns, tolerates non-overflow automatic-compaction failure, and runs one compaction/retry cycle after context overflow;
+- aborts an active Harness turn before manual compaction, then resumes the unresolved request without requiring a caller-side API change;
 - projects bounded historical tool output and TaskRun receipts before provider requests.
 
 The underlying `pi-agent-core` loop continues to provide schema validation, sequential/parallel tool execution, tool-result ordering, abort propagation and refusal to execute tool calls from token-truncated assistant output.
@@ -44,7 +45,7 @@ The runtime contract suite covers:
 - steering and follow-up queues, late-input rejection and abort queue audit;
 - provider retry, typed terminal failures and rate-limit model fallback;
 - custom OpenAI-compatible provider registration and runtime credentials;
-- automatic threshold compaction and context-overflow recovery;
+- pre-turn and post-turn threshold compaction, non-fatal automatic-compaction failure, active-turn manual compaction and context-overflow recovery;
 - cancellation during initialization/streaming;
 - package, dependency and ESLint ownership boundaries.
 

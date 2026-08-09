@@ -167,9 +167,14 @@ export class PiRuntime implements AttemptRuntimePort {
   private fallbackIndex = 0;
   private lastError?: string;
   private messages: RuntimeMessage[];
-  private steerCount = 0;
-  private followUpCount = 0;
   private compacting = false;
+  private retryDelayAbort?: AbortController;
+  private pendingManualCompaction?: {
+    instructions?: string;
+    promise: Promise<void>;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  };
 
   constructor(private readonly options: PiRuntimeOptions) {
     this.messages = [...(options.initialMessages ?? [])];
@@ -202,7 +207,9 @@ export class PiRuntime implements AttemptRuntimePort {
       followUpMode: "one-at-a-time",
       streamOptions: {
         timeoutMs: this.options.providerTimeoutMs,
-        maxRetries: this.options.providerMaxRetries ?? 1,
+        // Disable provider-library retries so transient failures are audited once
+        // and retried as complete turns from the persisted Harness session below.
+        maxRetries: 0,
         maxRetryDelayMs: 15_000,
       },
       retry: { enabled: (this.options.providerMaxRetries ?? 1) > 0, maxRetries: this.options.providerMaxRetries ?? 1, baseDelayMs: 1_000 },
@@ -233,7 +240,7 @@ export class PiRuntime implements AttemptRuntimePort {
     if (event.type === "message_end") {
       this.flushDelta(); this.flushThinkingDelta();
       const message = event.message as RuntimeMessage;
-      if (message.role === "assistant") this.lastError = message.errorMessage;
+      if (message.role === "assistant") this.lastError = message.stopReason === "error" || message.stopReason === "aborted" ? message.errorMessage : undefined;
       if (this.abortRequested && message.role === "assistant" && message.stopReason === "aborted") return;
       this.messages.push(message);
       const transcriptSeq = this.options.eventSink.appendTranscript(message);
@@ -241,7 +248,9 @@ export class PiRuntime implements AttemptRuntimePort {
       if (message.role === "assistant") {
         const kind = classifyProviderFailure(message, this.options.model?.contextWindow);
         const summary = (message.errorMessage ?? "").replace(/\s+/g, " ").slice(0, 500);
-        if (kind) this.emit("provider.failure", { kind, retryable: isRetryableProviderFailure(kind), summary, stopReason: message.stopReason });
+        if (kind && !(kind === "aborted" && this.pendingManualCompaction)) {
+          this.emit("provider.failure", { kind, retryable: isRetryableProviderFailure(kind), summary, stopReason: message.stopReason });
+        }
       }
     }
     if (event.type === "tool_execution_start") this.emit("tool.started", { toolCallId: event.toolCallId, toolName: event.toolName });
@@ -253,7 +262,6 @@ export class PiRuntime implements AttemptRuntimePort {
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") this.queueDelta(event.assistantMessageEvent.delta);
     if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") this.queueThinkingDelta(event.assistantMessageEvent.delta);
     if (event.type === "queue_update") {
-      this.steerCount = event.steer.length; this.followUpCount = event.followUp.length;
       this.emit("runtime.queue", { steering: event.steer, followUp: event.followUp, pendingMessageCount: event.steer.length + event.followUp.length + event.nextTurn.length });
     }
     if (event.type === "settled") this.emit("runtime.settled", { pendingMessageCount: event.nextTurnCount });
@@ -274,15 +282,23 @@ export class PiRuntime implements AttemptRuntimePort {
     if (this.abortRequested) throw new Error("Runtime aborted");
     this.streaming = true;
     try {
+      await this.compactIfNeeded();
       let assistant = await harness.prompt(query);
       let retryAttempt = 0;
       const maxRetries = this.options.providerMaxRetries ?? 1;
       let overflowRecoveryAttempted = false;
       while (!this.abortRequested && this.options.eventSink.isRunning()) {
+        if (this.pendingManualCompaction) {
+          await this.runPendingManualCompaction();
+          if (this.abortRequested || !this.options.eventSink.isRunning()) break;
+          assistant = await harness.prompt("Continue the same unresolved request after the requested context compaction. Do not repeat completed work or tool side effects.");
+          continue;
+        }
         const failure = classifyProviderFailure(assistant, harness.getModel().contextWindow);
         if (failure === "context_overflow" && !overflowRecoveryAttempted) {
           overflowRecoveryAttempted = true;
-          await this.compactWithReason("overflow", "Recover from provider context overflow. Preserve unresolved work, completed tool effects, blockers, and exact file paths.");
+          const compacted = await this.tryAutomaticCompaction("overflow", "Recover from provider context overflow. Preserve unresolved work, completed tool effects, blockers, and exact file paths.");
+          if (!compacted || assistant.stopReason === "stop") break;
           assistant = await harness.prompt("Continue the same unresolved request after context compaction. Do not repeat completed work or tool side effects.");
           continue;
         }
@@ -298,9 +314,11 @@ export class PiRuntime implements AttemptRuntimePort {
         }
         if (!failure || !isRetryableProviderFailure(failure) || retryAttempt >= maxRetries) break;
         retryAttempt += 1;
+        const delayMs = 1_000 * 2 ** (retryAttempt - 1);
         const summary = (assistant.errorMessage ?? "").replace(/\s+/g, " ").slice(0, 500);
-        this.emit("provider.retry", { attempt: retryAttempt, maxAttempts: maxRetries, delayMs: 0, summary });
+        this.emit("provider.retry", { attempt: retryAttempt, maxAttempts: maxRetries, delayMs, summary });
         this.emit("message.retrying", { content: messageText(assistant), willRetry: true, ordinal: this.assistantMessageOrdinal });
+        if (!await this.waitForRetry(delayMs)) break;
         assistant = await harness.prompt("Retry the same unresolved request using the persisted conversation and tool state. Do not repeat completed work.");
         const nextFailure = classifyProviderFailure(assistant, harness.getModel().contextWindow);
         this.emit("provider.retry.completed", { success: !nextFailure, attempt: retryAttempt, finalError: assistant.errorMessage?.replace(/\s+/g, " ").slice(0, 500) });
@@ -312,18 +330,68 @@ export class PiRuntime implements AttemptRuntimePort {
       if (!this.abortRequested && this.options.eventSink.isRunning()) {
         this.emit("message.completed", { content: messageText(assistant), willRetry: false, ordinal: this.assistantMessageOrdinal });
       }
-    } finally { this.streaming = false; }
+    } finally {
+      this.streaming = false;
+      if (this.pendingManualCompaction) {
+        const pending = this.pendingManualCompaction;
+        this.pendingManualCompaction = undefined;
+        pending.reject(new Error("Runtime settled before manual compaction could run"));
+      }
+    }
   }
 
   async steer(instruction: string) { const harness = await this.initialize(); if (!this.streaming) return "settled" as const; await harness.steer(instruction); return "accepted" as const; }
   async followUp(instruction: string) { const harness = await this.initialize(); if (!this.streaming) return "settled" as const; await harness.followUp(instruction); return "accepted" as const; }
-  async compact(instructions?: string) { await this.compactWithReason("manual", instructions); }
+  async compact(instructions?: string) {
+    const harness = await this.initialize();
+    if (!this.streaming) return this.compactWithReason("manual", instructions);
+    if (this.pendingManualCompaction) return this.pendingManualCompaction.promise;
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<void>((onResolve, onReject) => { resolve = onResolve; reject = onReject; });
+    this.pendingManualCompaction = { instructions, promise, resolve, reject };
+    await harness.abort();
+    return promise;
+  }
   private async compactIfNeeded() {
     if (!this.session || !this.harness || this.compacting) return;
     const context = await this.session.buildContext();
     const contextTokens = estimateContextTokens(context.messages).tokens;
     if (!shouldCompact(contextTokens, this.harness.getModel().contextWindow, DEFAULT_COMPACTION_SETTINGS)) return;
-    await this.compactWithReason("threshold");
+    await this.tryAutomaticCompaction("threshold");
+  }
+  private async tryAutomaticCompaction(reason: "threshold" | "overflow", instructions?: string) {
+    try { await this.compactWithReason(reason, instructions); return true; }
+    catch { return false; }
+  }
+  private async runPendingManualCompaction() {
+    const pending = this.pendingManualCompaction;
+    if (!pending) return;
+    try {
+      await this.compactWithReason("manual", pending.instructions);
+      this.lastError = undefined;
+      pending.resolve();
+    } catch (error) {
+      pending.reject(error);
+      throw error;
+    } finally {
+      if (this.pendingManualCompaction === pending) this.pendingManualCompaction = undefined;
+    }
+  }
+  private async waitForRetry(delayMs: number) {
+    if (this.abortRequested) return false;
+    const controller = new AbortController();
+    this.retryDelayAbort = controller;
+    try {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, delayMs);
+        timer.unref?.();
+        controller.signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+      });
+      return !controller.signal.aborted && !this.abortRequested;
+    } finally {
+      if (this.retryDelayAbort === controller) this.retryDelayAbort = undefined;
+    }
   }
   private async compactWithReason(reason: "manual" | "threshold" | "overflow", instructions?: string) {
     const harness = await this.initialize();
@@ -342,6 +410,12 @@ export class PiRuntime implements AttemptRuntimePort {
   }
   async abort() {
     this.abortRequested = true;
+    this.retryDelayAbort?.abort();
+    if (this.pendingManualCompaction) {
+      const pending = this.pendingManualCompaction;
+      this.pendingManualCompaction = undefined;
+      pending.reject(new Error("Runtime aborted"));
+    }
     if (!this.abortPromise) this.abortPromise = (async () => { const harness = this.harness ?? await this.initializing?.catch(() => undefined); if (harness) await harness.abort(); })();
     await this.abortPromise;
   }

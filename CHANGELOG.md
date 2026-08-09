@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.1] - 2026-08-09
+
+### Pi runtime compatibility hardening
+
+- Restored coding-agent-compatible full-turn retry semantics on top of `pi-agent-core.AgentHarness`: retries use bounded exponential backoff, are abortable, and do not duplicate provider-library retries.
+- Compacts restored context before a new turn, keeps successful turns successful when non-overflow automatic compaction fails, and retains one bounded context-overflow compaction/retry cycle.
+- Makes active-turn `task_run.compact` abort the current Harness turn, compact safely, and resume unresolved work without changing the existing runtime API.
+- Corrected the advertised release version and removed the last obsolete coding-agent wording from current production metadata and source comments.
+- Revalidated schema validation, truncated tool-call refusal, sequential mutation batches, stable tool-result ordering, steering/follow-up, cancellation, fallback, compaction, the complete non-PostgreSQL suite, and PostgreSQL memory integration.
+
 ## [0.5.0] - 2026-08-09
 
 ### Pi runtime decoupling
@@ -7,7 +17,7 @@
 - Replaced `pi-coding-agent.AgentSession` with a contained `pi-agent-core.AgentHarness` session adapter backed by `pi-ai` Models/providers, and removed `pi-coding-agent` from production code, manifests, the lockfile, tests and the installed dependency tree.
 - Added Execution-owned `RuntimeTool`, result/update and model contracts. `workspace-local` no longer imports `pi-agent-core`, `core-service` no longer imports `pi-ai`, and architecture/ESLint gates restrict all production Pi imports to `runtime-pi`.
 - Preserved streamed text/thinking, tool lifecycle and guards, steering/follow-up, abort queue audit, provider retry, rate-limit fallback, model/reasoning selection, historical context projection and manual compaction.
-- Added threshold compaction after successful turns and one compaction/retry recovery cycle for provider context overflow, with focused AgentHarness fault-injection coverage.
+- Added restored-context and post-turn threshold compaction, non-fatal automatic-compaction failure handling, active-turn manual compaction, abortable exponential-backoff full-turn retry, and one compaction/retry recovery cycle for provider context overflow, with focused AgentHarness fault-injection coverage.
 - Removed unused coding-agent TUI, built-in tool, extension, theme, template, project-resource and session-management dependency surface from the release graph.
 
 ### Runtime and control-plane reliability

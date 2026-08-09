@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createServer } from "node:http";
+import { existsSync } from "node:fs";
+import { readFile, rm } from "node:fs/promises";
 import { createModels, type Model } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider, fauxThinking } from "@earendil-works/pi-ai/providers/faux";
 import { PiRuntime, type PiRuntimeOptions } from "@tagent/runtime-pi";
@@ -132,7 +134,7 @@ describe("Pi 0.83 AgentHarness integration", () => {
     store.close();
   });
 
-  it("surfaces SDK auto-retry lifecycle events and succeeds on the next attempt", async () => {
+  it("applies bounded full-turn retry with lifecycle events and succeeds on the next attempt", async () => {
     const { faux, store, run, runtime } = await setup([
       fauxAssistantMessage([], { stopReason: "error", errorMessage: "503 Service unavailable" }),
       fauxAssistantMessage("recovered"),
@@ -144,6 +146,25 @@ describe("Pi 0.83 AgentHarness integration", () => {
     expect(store.listEvents(run.id).some((event) => event.type === "provider.retry.completed" && event.data.success === true)).toBe(true);
     expect(store.listEvents(run.id).filter((event) => event.type === "message.completed")).toHaveLength(1);
     expect(store.listEvents(run.id).some((event) => event.type === "message.retrying" && event.data.willRetry === true)).toBe(true);
+    runtime.dispose();
+    store.close();
+  });
+
+
+  it("keeps provider retry backoff abortable", async () => {
+    const { faux, store, run, runtime } = await setup([
+      fauxAssistantMessage([], { stopReason: "error", errorMessage: "503 Service unavailable" }),
+      fauxAssistantMessage("must not retry after abort"),
+    ]);
+    const prompt = runtime.prompt("retry then cancel");
+    for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "provider.retry"); index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const startedAt = Date.now();
+    await runtime.abort();
+    await prompt;
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(faux.state.callCount).toBe(1);
     runtime.dispose();
     store.close();
   });
@@ -196,6 +217,88 @@ describe("Pi 0.83 AgentHarness integration", () => {
     store.close();
   });
 
+
+  it("validates tool arguments before execution", async () => {
+    const { store, run, runtime } = await setup([
+      fauxAssistantMessage([{ type: "toolCall", id: "invalid-read", name: "read", arguments: { path: 42 } }], { stopReason: "toolUse" }),
+      fauxAssistantMessage("invalid input handled"),
+    ]);
+    await runtime.prompt("validate");
+    expect(store.listTranscript(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "toolResult", toolCallId: "invalid-read", isError: true }),
+    ]));
+    expect(store.listOperations(run.id)).toHaveLength(0);
+    runtime.dispose();
+    store.close();
+  });
+
+  it("does not execute tool calls from token-truncated assistant output", async () => {
+    const path = `.tagent/tmp/truncated-${Date.now()}.txt`;
+    const { store, run, runtime } = await setup([
+      fauxAssistantMessage([{ type: "toolCall", id: "truncated-write", name: "write", arguments: { path, content: "unsafe" } }], { stopReason: "length" }),
+      fauxAssistantMessage("reissued safely without the truncated write"),
+    ]);
+    await runtime.prompt("truncate");
+    expect(existsSync(path)).toBe(false);
+    expect(store.listTranscript(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "toolResult", toolCallId: "truncated-write", isError: true }),
+    ]));
+    expect(store.listOperations(run.id)).toHaveLength(0);
+    runtime.dispose();
+    store.close();
+  });
+
+  it("executes a batch sequentially when it contains a mutation tool and preserves result order", async () => {
+    const path = `.tagent/tmp/sequential-${Date.now()}.txt`;
+    const { store, run, runtime } = await setup([
+      fauxAssistantMessage([
+        { type: "toolCall", id: "ordered-write", name: "write", arguments: { path, content: "ordered" } },
+        { type: "toolCall", id: "ordered-read", name: "read", arguments: { path } },
+      ], { stopReason: "toolUse" }),
+      fauxAssistantMessage("ordered batch complete"),
+    ]);
+    try {
+      await runtime.prompt("ordered tools");
+      expect(await readFile(path, "utf8")).toBe("ordered");
+      const results = store.listTranscript(run.id).filter((message) => message.role === "toolResult");
+      expect(results.map((message) => message.role === "toolResult" ? message.toolCallId : "")).toEqual(["ordered-write", "ordered-read"]);
+      expect(results[1]).toMatchObject({ role: "toolResult", isError: false, content: [{ type: "text", text: "ordered" }] });
+    } finally {
+      runtime.dispose();
+      store.close();
+      await rm(path, { force: true });
+    }
+  });
+
+
+  it("aborts an active turn, compacts, and resumes for manual compaction", async () => {
+    const faux = fauxProvider({ models: [{ id: "faux-manual-compact", contextWindow: 32_000, maxTokens: 2_000 }], tokensPerSecond: 10 });
+    faux.setResponses([
+      fauxAssistantMessage("active answer that will be interrupted"),
+      fauxAssistantMessage("manual compaction summary"),
+      fauxAssistantMessage("continued after manual compaction"),
+    ]);
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "manual compaction");
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [], providerMaxRetries: 0 }));
+    const prompt = runtime.prompt("start long work");
+    for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "message.started"); index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await runtime.compact("Preserve unresolved work and completed side effects.");
+    await prompt;
+    expect(runtime.getError()).toBeUndefined();
+    expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "continued after manual compaction" }] });
+    expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "context.compaction.started", data: expect.objectContaining({ reason: "manual" }) }),
+      expect.objectContaining({ type: "context.compaction.completed", data: expect.objectContaining({ reason: "manual", aborted: false }) }),
+    ]));
+    expect(store.listEvents(run.id).filter((event) => event.type === "message.completed")).toHaveLength(1);
+    runtime.dispose();
+    store.close();
+  });
+
   it("automatically compacts after a successful turn crosses the context threshold", async () => {
     const faux = fauxProvider({ models: [{ id: "faux-compact", contextWindow: 17_000, maxTokens: 2_000 }] });
     const first = fauxAssistantMessage("large completed result");
@@ -216,10 +319,52 @@ describe("Pi 0.83 AgentHarness integration", () => {
     store.close();
   });
 
+
+  it("compacts before a new turn when restored history already crosses the threshold", async () => {
+    const faux = fauxProvider({ models: [{ id: "faux-precompact", contextWindow: 100_000, maxTokens: 2_000 }] });
+    const historical = fauxAssistantMessage("large restored response".repeat(12_000));
+    historical.usage = { ...historical.usage, input: 60_000, output: 30_000, totalTokens: 90_000 };
+    faux.setResponses([fauxAssistantMessage("restored summary"), fauxAssistantMessage("answer after pre-compaction")]);
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "pre-turn compaction");
+    const runtime = new PiRuntime(runtimeSpec(store, run, {
+      workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), providerMaxRetries: 0,
+      initialMessages: [{ role: "user", content: "historical request", timestamp: 1 }, historical],
+    }));
+    await runtime.prompt("continue after restore");
+    expect(faux.state.callCount).toBe(3);
+    expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "answer after pre-compaction" }] });
+    expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "context.compaction.started", data: expect.objectContaining({ reason: "threshold" }) }),
+    ]));
+    runtime.dispose();
+    store.close();
+  });
+
+  it("continues the completed turn when automatic threshold compaction fails", async () => {
+    const faux = fauxProvider({ models: [{ id: "faux-compact-failure", contextWindow: 17_000, maxTokens: 2_000 }] });
+    const first = fauxAssistantMessage("completed despite compaction failure");
+    first.usage = { ...first.usage, input: 2_000, output: 15_000, totalTokens: 17_000 };
+    faux.setResponses([first, fauxAssistantMessage([], { stopReason: "error", errorMessage: "401 summary unavailable" })]);
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "compaction failure");
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [], providerMaxRetries: 0 }));
+    await expect(runtime.prompt("finish first")).resolves.toBeUndefined();
+    expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "completed despite compaction failure" }] });
+    expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "context.compaction.completed", data: expect.objectContaining({ reason: "threshold", error: expect.any(String) }) }),
+      expect.objectContaining({ type: "message.completed", data: expect.objectContaining({ content: "completed despite compaction failure" }) }),
+    ]));
+    runtime.dispose();
+    store.close();
+  });
+
   it("compacts and retries once after a provider context overflow", async () => {
-    const faux = fauxProvider({ models: [{ id: "faux-overflow", contextWindow: 17_000, maxTokens: 2_000 }] });
-    const historical = fauxAssistantMessage("historical response");
-    historical.usage = { ...historical.usage, input: 2_000, output: 15_000, totalTokens: 17_000 };
+    const faux = fauxProvider({ models: [{ id: "faux-overflow", contextWindow: 100_000, maxTokens: 2_000 }] });
+    const historical = fauxAssistantMessage("historical response".repeat(12_000));
+    historical.usage = { ...historical.usage, input: 20_000, output: 10_000, totalTokens: 30_000 };
     faux.setResponses([
       fauxAssistantMessage([], { stopReason: "error", errorMessage: "Your input exceeds the context window of this model" }),
       fauxAssistantMessage("overflow summary"),
