@@ -6,7 +6,7 @@ import type { RunEventPublisherPort } from "./collaboration-ports.js";
 type RuntimeRegistryState = ExecutionStateView<
   | "checkpointDrafts" | "checkpointTimers" | "checkpointTokens" | "closing"
   | "continuationOwner" | "continuationRecoveryTimer" | "controlDeliveryTasks"
-    | "executionTasks" | "lastCheckpointTranscriptSeq" | "persistence" | "runtimes",
+    | "executionTasks" | "lastCheckpointTranscriptSeq" | "persistence" | "preparationTasks" | "runtimes",
     "continuations" | "events" | "taskRuns" | "taskRunTransitions"
 >;
 
@@ -38,6 +38,11 @@ export class RuntimeRegistry {
 
   async closeRuntimes() {
     this.state.closing = true;
+    for (const task of this.state.preparationTasks.values()) {
+      task.controller.abort(new Error("Service is shutting down"));
+    }
+    await Promise.allSettled([...this.state.preparationTasks.values()].map((task) => task.promise));
+    this.state.preparationTasks.clear();
     if (this.state.continuationRecoveryTimer) clearTimeout(this.state.continuationRecoveryTimer);
     this.state.continuationRecoveryTimer = undefined;
     await Promise.allSettled([...this.state.controlDeliveryTasks.values()]);

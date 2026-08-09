@@ -56,6 +56,17 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     const run = persistence.taskRuns.getRun(token.runId);
     return run?.attempt === token.ordinal ? run : undefined;
   };
+  const currentRunExecutionState = () => {
+    if (!currentAttempt()) return undefined;
+    const state = persistence.taskRuns.getRunExecutionState?.(token.runId);
+    if (state) return state.attempt === token.ordinal ? state : undefined;
+    const run = persistence.taskRuns.getRun(token.runId);
+    return run?.attempt === token.ordinal ? {
+      id: run.id, status: run.status, phase: run.phase, attempt: run.attempt,
+      lastEventSeq: run.lastEventSeq,
+      counts: { plan: run.plan.length, checks: run.checks.length, artifacts: run.artifacts.length },
+    } : undefined;
+  };
   const waitingRun = (): TaskRun | undefined => {
     const attempt = persistence.attempts.getAttempt(token.attemptId);
     if (!attempt || attempt.runId !== token.runId || attempt.ordinal !== token.ordinal
@@ -81,6 +92,7 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     artifactSink: options.artifactSink,
     workspaceEdit: options.workspaceEdit,
     getRun: currentRun,
+    getRunExecutionState: currentRunExecutionState,
     authorizeWorkspaceMutation: () => persistence.workspaceGoals.authorizeRunMutation(token.runId),
     advanceRunPhase: (phase) => persistence.runtimeMutations.advanceRunPhase(mutationContext, phase),
     setRunPhase: (phase) => persistence.runtimeMutations.setRunPhase(mutationContext, phase),
@@ -158,7 +170,7 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     },
     afterToolCall(input) {
       if (atomicallySettledToolCalls.delete(input.toolCallId)) return;
-      if (!currentRun()) return;
+      if (!currentAttempt()) return;
       persistence.runtimeMutations.completeToolAttempt(
         mutationContext,
         input.toolCallId,

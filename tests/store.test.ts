@@ -63,7 +63,7 @@ describe("Store", () => {
   it("persists Workspace execution preferences and snapshots them onto each TaskRun", () => {
     const store = createStore();
     const session = store.createSession("Configured");
-    expect(session).toMatchObject({ modelId: "gpt-5.6-sol", reasoningEffort: "high" });
+    expect(session).toMatchObject({ modelId: "gpt-5.6-sol", reasoningEffort: "medium" });
     const configured = store.updateSession(session.id, { modelId: "gpt-5.6-sol", reasoningEffort: "xhigh" });
     expect(configured).toMatchObject({ modelId: "gpt-5.6-sol", reasoningEffort: "xhigh" });
     const run = store.createRun(session.id, "snapshot settings");
@@ -83,6 +83,25 @@ describe("Store", () => {
     expect(store.getSession(idle.id)).toMatchObject({ latestRunStatus: null, latestRunPhase: null });
     expect(store.getSession(active.id)).toMatchObject({ latestRunStatus: "running", latestRunPhase: "implement" });
     expect(store.listSessions().find((item) => item.id === active.id)).toMatchObject({ latestRunStatus: "running", latestRunPhase: "implement" });
+  });
+
+  it("returns lightweight Run summaries and execution state without hydrating durable payloads", () => {
+    const store = createStore();
+    const session = store.createSession("Lightweight views");
+    const run = store.createRun(session.id, "large durable run");
+    store.upsertPlanItem(run.id, { key: "plan", title: "Plan", status: "pending", required: true, position: 1 });
+    store.upsertCheck(run.id, { key: "check", title: "Check", status: "pending", required: true, command: "npm test", evidence: "", stale: false });
+    store.addArtifact(run.id, { id: "large", title: "Large", kind: "report", content: "x".repeat(100_000), uri: "" });
+
+    expect(store.listRunSummaries(session.id)).toEqual([{
+      id: run.id, goal: run.goal, status: "running", phase: "implement", contract: null,
+      attempt: 1, createdAt: run.createdAt, updatedAt: expect.any(Number),
+    }]);
+    expect(store.getRunExecutionState(run.id)).toEqual({
+      id: run.id, status: "running", phase: "implement", attempt: 1, lastEventSeq: 0,
+      counts: { plan: 1, checks: 1, artifacts: 1 },
+    });
+    expect(JSON.stringify(store.listRunSummaries(session.id))).not.toContain("x".repeat(1_000));
   });
 
   it("persists, deduplicates, deletes, and atomically claims Session Supervisor inbox items", () => {
@@ -538,6 +557,9 @@ describe("Store", () => {
       expect.objectContaining({ kind: "thinking", text: "Inspect the file before deciding.", redacted: false }),
       expect.objectContaining({ kind: "assistant", text: "Before" }),
       expect.objectContaining({ kind: "tool", toolName: "read", arguments: { path: "a.txt" }, result: "file contents", status: "completed" }),
+    ]);
+    expect(store.listTranscriptView(run.id, { after: 1, limit: 20 })).toEqual([
+      expect.objectContaining({ seq: 1, kind: "tool", toolName: "read", result: "file contents", status: "completed" }),
     ]);
   });
 

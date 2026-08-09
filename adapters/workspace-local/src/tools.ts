@@ -69,14 +69,18 @@ function previewText(text: string) {
 
 function safeArtifactId(value: string) { return value.replace(/[^a-zA-Z0-9._:-]+/g, "-").slice(0, 180); }
 
+function currentAttemptOrdinal(capabilities: ToolCapabilityApplicationPort) {
+  return capabilities.getRunExecutionState?.()?.attempt ?? capabilities.getRun()?.attempt;
+}
+
 async function persistToolOutputArtifact(
   capabilities: ToolCapabilityApplicationPort, toolCallId: string, content: string | Buffer,
   title: string, totalBytes: number, truncatedAtSource: boolean,
 ) {
   if (!capabilities.artifactSink) throw new Error("Durable Artifact sink is required for oversized tool output");
-  const run = capabilities.getRun();
-  if (!run) throw new Error("Run not found");
-  const artifactId = safeArtifactId(`${capabilities.runId}:${run.attempt}:${toolCallId}:output`);
+  const attempt = currentAttemptOrdinal(capabilities);
+  if (attempt === undefined) throw new Error("Run not found");
+  const artifactId = safeArtifactId(`${capabilities.runId}:${attempt}:${toolCallId}:output`);
   const stored = await capabilities.artifactSink.write({ runId: capabilities.runId, artifactId, title, kind: "tool-output", content, totalBytes, truncatedAtSource, mediaType: "text/plain; charset=utf-8" });
   capabilities.addArtifact({ id: artifactId, title, kind: "tool-output", content: "", uri: stored.uri });
   return stored;
@@ -117,9 +121,9 @@ async function executeMutation(
   options: { invalidatesChecks?: boolean } = {},
 ) {
   const { runId } = capabilities;
-  const run = capabilities.getRun();
-  if (!run) throw new Error("Run not found");
-  const id = operationId(runId, run.attempt, toolCallId);
+  const attempt = currentAttemptOrdinal(capabilities);
+  if (attempt === undefined) throw new Error("Run not found");
+  const id = operationId(runId, attempt, toolCallId);
   const receipt = capabilities.claimOperation(id, operationType, payload);
   if (!receipt.claimed) {
     if (receipt.status === "succeeded") return receipt.result as AgentToolResult<Record<string, unknown>>;
@@ -200,7 +204,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
     async execute(id, params: Static<typeof EditSchema>) {
       requireWorkspaceMutationAuthorization();
       if (!capabilities.workspaceEdit) throw new Error("Workspace edit port is unavailable");
-      const payload = { patchId: operationId(runId, capabilities.getRun()?.attempt ?? 0, id), files: [{ path: params.path, snapshotId: params.snapshotId, contentHash: params.contentHash, hunks: [{ oldText: params.oldText, newText: params.newText }] }] };
+      const payload = { patchId: operationId(runId, currentAttemptOrdinal(capabilities) ?? 0, id), files: [{ path: params.path, snapshotId: params.snapshotId, contentHash: params.contentHash, hunks: [{ oldText: params.oldText, newText: params.newText }] }] };
       return executeMutation(capabilities, id, "tool.edit", payload, async () => {
         try {
           const result = await capabilities.workspaceEdit!.patch(payload);
@@ -220,7 +224,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
     async execute(id, params: Static<typeof PatchSchema>) {
       requireWorkspaceMutationAuthorization();
       if (!capabilities.workspaceEdit) throw new Error("Workspace edit port is unavailable");
-      const payload = { patchId: params.patchId ?? operationId(runId, capabilities.getRun()?.attempt ?? 0, id), files: params.files };
+      const payload = { patchId: params.patchId ?? operationId(runId, currentAttemptOrdinal(capabilities) ?? 0, id), files: params.files };
       return executeMutation(capabilities, id, "tool.patch", payload, async () => {
         try {
           const result = await capabilities.workspaceEdit!.patch(payload);
@@ -353,10 +357,10 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
         const required = mutation.required ?? true;
         let sourceOperationId = mutation.sourceOperationId?.trim() || null;
         if (mutation.status === "passed" && required && !sourceOperationId) {
-          const run = capabilities.getRun();
+          const attempt = currentAttemptOrdinal(capabilities);
           const command = mutation.command?.trim() ?? "";
           const candidates = evidenceCandidates().filter((operation) => {
-            if (operation.runId !== runId || operation.attempt !== run?.attempt || operation.operationType !== "tool.bash" || operation.status !== "succeeded") return false;
+            if (operation.runId !== runId || operation.attempt !== attempt || operation.operationType !== "tool.bash" || operation.status !== "succeeded") return false;
             if (!command) return true;
             const payload = operation.payload && typeof operation.payload === "object" && !Array.isArray(operation.payload)
               ? operation.payload as Record<string, unknown>
@@ -418,13 +422,12 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
         return textResult(JSON.stringify({ ok: true, action: params.action, runId, status: "waiting_input", requestId: request.id, requiredFields: request.fields.map((field) => field.key) }), { compact: true });
       }
       const changed = params.action !== "get";
-      const run = capabilities.getRun();
-      if (changed) capabilities.publish("run.updated", { action: params.action, phase: run?.phase ?? "discover" });
-      if (!changed) return textResult(JSON.stringify(run, null, 2));
+      if (!changed) return textResult(JSON.stringify(capabilities.getRun(), null, 2));
+      const state = capabilities.getRunExecutionState?.();
+      capabilities.publish("run.updated", { action: params.action, phase: state?.phase ?? params.phase ?? "discover" });
       return textResult(JSON.stringify({
-        ok: true, action: params.action, runId, status: run?.status, phase: run?.phase,
-        completionGate: run?.completionGate,
-        counts: { plan: run?.plan.length ?? 0, checks: run?.checks.length ?? 0, artifacts: run?.artifacts.length ?? 0 },
+        ok: true, action: params.action, runId, status: state?.status, phase: state?.phase,
+        counts: state?.counts,
       }), { compact: true });
     },
   };

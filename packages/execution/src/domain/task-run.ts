@@ -141,3 +141,17 @@ export interface TaskRun {
   launchRetryable: boolean;
   resumable: boolean;
 }
+
+export type TaskRunSummary = Pick<
+  TaskRun,
+  "id" | "goal" | "status" | "phase" | "contract" | "attempt" | "createdAt" | "updatedAt"
+>;
+
+export interface TaskRunExecutionState {
+  id: RunId;
+  status: RunStatus;
+  phase: RunPhase;
+  attempt: number;
+  lastEventSeq: number;
+  counts: { plan: number; checks: number; artifacts: number };
+}

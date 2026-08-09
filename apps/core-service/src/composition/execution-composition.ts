@@ -98,6 +98,7 @@ function createSessionInputModelPort(model: Model<"openai-completions">, apiKey:
           model: model.id,
           messages: [{ role: "user", content: prompt }],
           temperature: 0,
+          max_completion_tokens: model.maxTokens,
           response_format: { type: "json_object" },
           stream: true,
         }),
@@ -261,6 +262,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     get closing() { return state.closing; },
     persistence: options.persistence,
     recalledMemory: state.recalledMemory,
+    preparationTasks: state.preparationTasks,
     runtimes: state.runtimes,
   }, {
     attemptExecutor: attemptLauncherRef.port,

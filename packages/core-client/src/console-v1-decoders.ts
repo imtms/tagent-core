@@ -18,6 +18,7 @@ import type {
   ConsoleSession,
   ConsoleSessionInboxItem,
   ConsoleTaskRun,
+  ConsoleTaskRunSummary,
   ConsoleTranscriptItem,
   ConsoleWorkflowDefinition,
 } from "@tagent/abi";
@@ -71,6 +72,11 @@ async function taskRunOrNull(payload: unknown): Promise<ConsoleTaskRun | null> {
 async function taskRuns(payload: unknown): Promise<ConsoleTaskRun[]> {
   const abi = await loadCoreAbi();
   return arrayPayload(payload).map((item) => abi.decodeAbi(abi.ConsoleTaskRunSchema, item));
+}
+
+async function taskRunSummaries(payload: unknown): Promise<ConsoleTaskRunSummary[]> {
+  const abi = await loadCoreAbi();
+  return arrayPayload(payload).map((item) => abi.decodeAbi(abi.ConsoleTaskRunSummarySchema, item));
 }
 
 async function contextManifests(payload: unknown): Promise<ConsoleContextManifest[]> {
@@ -236,6 +242,7 @@ export const ConsoleDecode = {
   submissionResult,
   taskRun,
   taskRunOrNull,
+  taskRunSummaries,
   taskRuns,
   transcriptItems,
   workflowDefinition,

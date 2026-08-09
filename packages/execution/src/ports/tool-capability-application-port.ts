@@ -1,4 +1,4 @@
-import type { RunEvent, RunId, TaskRun, UserInputField, UserInputRequest } from "../domain/index.js";
+import type { RunEvent, RunId, TaskRun, TaskRunExecutionState, UserInputField, UserInputRequest } from "../domain/index.js";
 import type { ArtifactSinkPort } from "./artifact-sink-port.js";
 import type { WorkspaceEditPort } from "./workspace-edit-port.js";
 import type { TaskRunStateMutation } from "./attempt-repository.js";
@@ -17,6 +17,7 @@ export interface ToolCapabilityApplicationPort {
   readonly artifactSink?: ArtifactSinkPort;
   readonly workspaceEdit?: WorkspaceEditPort;
   getRun(): TaskRun | undefined;
+  getRunExecutionState?(): TaskRunExecutionState | undefined;
   authorizeWorkspaceMutation(): { allowed: boolean; reason: string };
   advanceRunPhase(phase: "implement"): boolean;
   setRunPhase(phase: "discover" | "plan" | "implement" | "verify" | "review"): boolean;

@@ -1,6 +1,6 @@
 {
   "name": "@tagent/core-service",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "type": "module",
   "sideEffects": false,
@@ -35,15 +35,15 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.83.0",
-    "@tagent/admission": "0.4.0",
-    "@tagent/execution": "0.4.0",
-    "@tagent/governance": "0.4.0",
-    "@tagent/http-fastify": "0.4.0",
-    "@tagent/learning": "0.4.0",
-    "@tagent/memory": "0.4.0",
-    "@tagent/persistence-sqlite": "0.4.0",
-    "@tagent/runtime-pi": "0.4.0",
-    "@tagent/workspace-local": "0.4.0"
+    "@tagent/admission": "0.4.1",
+    "@tagent/execution": "0.4.1",
+    "@tagent/governance": "0.4.1",
+    "@tagent/http-fastify": "0.4.1",
+    "@tagent/learning": "0.4.1",
+    "@tagent/memory": "0.4.1",
+    "@tagent/persistence-sqlite": "0.4.1",
+    "@tagent/runtime-pi": "0.4.1",
+    "@tagent/workspace-local": "0.4.1"
   },
   "engines": {
     "node": ">=24.18.1",

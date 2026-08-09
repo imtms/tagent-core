@@ -75,7 +75,7 @@ export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencie
     const { id } = request.params as { id: string };
     if (!sessions.getSession(id)) throw consoleError(404, "session.not_found", "session not found");
     const limit = paginationLimit((request.query as { limit?: string }).limit, 50);
-    return successEnvelope(request, taskRuns.listRuns(id, limit));
+    return successEnvelope(request, taskRuns.listRunSummaries?.(id, limit) ?? taskRuns.listRuns(id, limit));
   });
 
   app.get("/api/v1/console/sessions/:id/task-run", { onRequest: read }, async (request) =>

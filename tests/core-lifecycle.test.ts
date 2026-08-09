@@ -160,8 +160,8 @@ describe("Core lifecycle", () => {
 
     expect(lifecycle.snapshot()).toEqual({ phase: "closed", writerReady: false, lastFailure: null });
     expect(events).toEqual([
-      "background.stop",
       "runtime.join",
+      "background.stop",
       "guard.remove",
       "lease.release",
       "store.close",
@@ -193,8 +193,8 @@ describe("Core lifecycle", () => {
         "store.close",
         "lock.release",
       ].includes(event))).toEqual([
-        "background.stop",
         "runtime.join",
+        "background.stop",
         "guard.remove",
         "lease.release",
         "store.close",
@@ -319,8 +319,8 @@ describe("Core lifecycle", () => {
         "store.close",
         "lock.release",
       ].includes(event))).toEqual([
-        "background.stop",
         "runtime.join",
+        "background.stop",
         "guard.remove",
         "lease.release",
         "store.close",
@@ -666,17 +666,17 @@ describe("Core lifecycle", () => {
           .rejects.toThrow(`simulated ${failedWorker} worker start failure`);
         expect(markReady).not.toHaveBeenCalled();
         expect(events).toEqual(failedWorker === "memory" ? [
+          "runtime.close",
           "worker.distillation.close",
           "worker.memory.close",
-          "runtime.close",
           "guard.remove",
           "lease.release",
           "store.close",
           "lock.release",
         ] : [
+          "runtime.close",
           "worker.distillation.close",
           "worker.memory.close",
-          "runtime.close",
           "guard.remove",
           "lease.release",
           "store.close",

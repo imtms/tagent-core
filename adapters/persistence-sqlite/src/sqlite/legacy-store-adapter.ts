@@ -308,6 +308,7 @@ export class LegacyStoreAdapter {
       createRun: mutate(store.createRun.bind(store)),
       hasRun: query(store.hasRun.bind(store)),
       getRun: query(store.getRun.bind(store)),
+      getRunExecutionState: query(store.getRunExecutionState.bind(store)),
       getRunByRequestId: query(store.getRunByRequestId.bind(store)),
       listRuns: query(store.listRuns.bind(store)),
       listRunSummaries: query(store.listRunSummaries.bind(store)),

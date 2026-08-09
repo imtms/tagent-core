@@ -252,3 +252,10 @@ export const ConsoleTaskRunSchema = Type.Object({
 });
 /** @deprecated Use TaskRun from channel/v1. */
 export type ConsoleTaskRun = Static<typeof ConsoleTaskRunSchema>;
+
+export const ConsoleTaskRunSummarySchema = Type.Object({
+  id: Type.String(), goal: Type.String(), status: Type.String(), phase: Type.String(),
+  contract: Type.Union([ConsoleTaskRunContractSchema, Type.Null()]),
+  attempt: Type.Number(), createdAt: TimestampMillisecondsSchema, updatedAt: TimestampMillisecondsSchema,
+});
+export type ConsoleTaskRunSummary = Static<typeof ConsoleTaskRunSummarySchema>;

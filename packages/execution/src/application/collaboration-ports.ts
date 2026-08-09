@@ -116,7 +116,7 @@ export interface RunContextPort {
   buildSystemPrompt(run: TaskRun, recalledMemory?: string): string;
   requiresAsyncPreparation(): boolean;
   prepareContinuationTranscript(run: TaskRun, prompt: string): PreparedExecutionContext;
-  prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter?: number): Promise<PreparedExecutionContext>;
+  prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter?: number, signal?: AbortSignal): Promise<PreparedExecutionContext>;
   prepareSessionHistoryWithoutRecall(run: TaskRun, query: string, excludeCurrentUserAfter?: number): PreparedExecutionContext;
   publishContextEvents(runId: RunId, assembly: PreparedExecutionContext): void;
 }
@@ -151,7 +151,7 @@ export interface ExecutionContextEnrichment {
 
 export interface ContextEnrichmentPort {
   requiresAsyncPreparation(): boolean;
-  enrich(run: TaskRun, query: string): Promise<ExecutionContextEnrichment>;
+  enrich(run: TaskRun, query: string, signal?: AbortSignal): Promise<ExecutionContextEnrichment>;
   prepareWithoutRecall(run: TaskRun, query: string): ExecutionContextEnrichment;
   capturePrunedUserContext(run: TaskRun, messages: RuntimeMessage[]): void;
 }

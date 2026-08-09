@@ -409,8 +409,8 @@ export class CoreLifecycle implements WriterReadiness {
       }
     };
 
-    await attempt(async () => this.resources.stopBackground?.());
     await attempt(async () => this.resources.closeRuntimes?.());
+    await attempt(async () => this.resources.stopBackground?.());
 
     if (this.heartbeatTimer) this.timers.clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = undefined;

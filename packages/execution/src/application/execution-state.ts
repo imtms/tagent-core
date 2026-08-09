@@ -34,6 +34,11 @@ export interface ExecutionStateOptions {
   runtimeDefaults: ExecutionRuntimeDefaults;
 }
 
+export interface ExecutionPreparationTask {
+  readonly controller: AbortController;
+  readonly promise: Promise<unknown>;
+}
+
 /** Compile-time capability view used to keep process state and repository access explicit. */
 export type ExecutionStateView<
   Key extends keyof ExecutionState,
@@ -46,6 +51,7 @@ export type ExecutionStateView<
 /** Mutable process-local execution state shared by explicitly composed application services. */
 export class ExecutionState {
   readonly runtimes = new Map<RunId, AttemptRuntimePort>();
+  readonly preparationTasks = new Map<RunId, ExecutionPreparationTask>();
   readonly executionTasks = new Map<RunId, Promise<void>>();
   readonly controlDeliveryTasks = new Map<RunId, Promise<void>>();
   readonly checkpointDrafts = new Map<RunId, Omit<RunCheckpoint, "updatedAt" | "lastTranscriptSeq">>();

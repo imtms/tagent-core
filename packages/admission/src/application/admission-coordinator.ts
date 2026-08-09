@@ -38,6 +38,10 @@ interface AdmissionState {
     workspaceGoals: Pick<WorkspaceGoalRepository, "linkInbox" | "attachRun" | "recordRunOutcome">;
   };
   readonly recalledMemory: Map<string, string>;
+  readonly preparationTasks: Map<string, {
+    readonly controller: AbortController;
+    readonly promise: Promise<unknown>;
+  }>;
   readonly runtimes: ReadonlyMap<string, unknown>;
 }
 
@@ -316,11 +320,23 @@ export class AdmissionCoordinator {
         return this.state.persistence.taskRuns.getRun(run.id)!;
       } catch (error) { return this.failClaimedSessionLaunch(item, run, error); }
     }
-    void this.dependencies.contextService.prepareSessionHistory(run, item.content, currentUserAfter).then((sessionHistory) => this.completeClaimedSessionLaunch(item, run, sessionHistory, retry)).catch((error) => this.failClaimedSessionLaunch(item, run, error));
+    void this.trackPreparation(run.id, async (signal) => {
+      try {
+        const sessionHistory = await this.dependencies.contextService.prepareSessionHistory(run, item.content, currentUserAfter, signal);
+        if (signal.aborted || !this.currentLaunchRun(run)) return;
+        this.completeClaimedSessionLaunch(item, run, sessionHistory, retry);
+      } catch (error) {
+        if (signal.aborted || this.state.closing) return;
+        this.failClaimedSessionLaunch(item, run, error);
+      }
+    });
     return this.state.persistence.taskRuns.getRun(run.id)!;
   }
 
   public completeClaimedSessionLaunch(item: SessionInboxItem, run: TaskRun, sessionHistory: ContextAssembly & { recalledMemory?: string; memoryContextItems?: ContextManifestItem[] }, retry: boolean) {
+    const current = this.currentLaunchRun(run);
+    if (!current) return;
+    run = current;
     if (!retry) {
       this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(run.id, "run.started", { goal: run.goal, sourceInput: item.content, contract: run.contract, source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: sessionHistory.messages.length }));
     }
@@ -404,7 +420,11 @@ export class AdmissionCoordinator {
     let run = this.state.persistence.taskRuns.createRun(sessionId, query, requestId);
     this.state.persistence.workspaceGoals.attachRun(run.id, null);
     run = this.state.persistence.taskRuns.getRun(run.id) ?? run;
-    const sessionHistory = await this.dependencies.contextService.prepareSessionHistory(run, query);
+    const sessionHistory = await this.trackPreparation(run.id, (signal) =>
+      this.dependencies.contextService.prepareSessionHistory(run, query, undefined, signal));
+    const current = this.currentLaunchRun(run);
+    if (!current) throw new Error(`TaskRun ${run.id} preparation was cancelled`);
+    run = current;
     const userMessage = this.state.persistence.sessions.appendMessage(sessionId, "user", query);
     this.dependencies.continuation.captureUserMessage(run, userMessage.id, query);
     this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(run.id, "run.started", { goal: query, sessionHistoryCount: sessionHistory.messages.length }));
@@ -412,5 +432,25 @@ export class AdmissionCoordinator {
     this.state.recalledMemory.set(run.id, sessionHistory.recalledMemory ?? "");
     this.dependencies.attemptExecutor.launch(run, query, sessionHistory.messages);
     return this.state.persistence.taskRuns.getRun(run.id)!;
+  }
+
+  private currentLaunchRun(run: TaskRun) {
+    if (this.state.closing) return undefined;
+    const current = this.state.persistence.taskRuns.getRun(run.id);
+    if (!current || current.status !== "running" || current.attempt !== run.attempt) return undefined;
+    const attempt = this.state.persistence.attempts.getActiveAttempt(run.id);
+    return attempt?.ordinal === run.attempt ? current : undefined;
+  }
+
+  private trackPreparation<T>(runId: string, prepare: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const existing = this.state.preparationTasks.get(runId);
+    if (existing) throw new Error(`TaskRun ${runId} preparation is already active`);
+    const controller = new AbortController();
+    let task!: Promise<T>;
+    task = Promise.resolve().then(() => prepare(controller.signal)).finally(() => {
+      if (this.state.preparationTasks.get(runId)?.promise === task) this.state.preparationTasks.delete(runId);
+    });
+    this.state.preparationTasks.set(runId, { controller, promise: task });
+    return task;
   }
 }

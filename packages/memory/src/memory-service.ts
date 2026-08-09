@@ -32,12 +32,14 @@ export class MemoryService implements MemoryFacade {
  }
  async upsert(access:RecallRequest["access"],records:WarmMemory[],topics:TopicDescriptor[]=[]){const saved=await this.persistExtracted(access,records,topics);return{records:saved.length,topics:topics.length};}
  async recall(request:RecallRequest):Promise<RecallResult>{
+  request.signal?.throwIfAborted();
   const kinds=request.kinds?.length?request.kinds:allKinds,maxCards=request.maxCards??8,topicLimit=request.maxColdTopics??2;
   const trace=traceBase(Boolean(this.deps.embeddings),this.deps.embeddings?.generation);const cueGate=await this.deps.policy.evaluate("read",request.access,{text:request.cue,scope:request.access.scopes[0]});
   if(cueGate.action!=="allow"&&cueGate.action!=="transform")return emptyRecall(trace,1);if(cueGate.action==="transform")trace.policyTransforms++;
   const cue=cueGate.payload.text,domain=routeRecallDomain(cue);
   if(kinds.includes("fact")&&/(?:我是谁|我叫什么|我的名字|我的姓名|怎么称呼我|who am i|what(?:'s| is) my name)/i.test(cue)){const ids=request.access.scopes.map(s=>`${s.type}.${s.id}.fact.user-profile.identity`);const records=await this.deps.records.getByTopicIds(ids,request.access.scopes,["fact"],maxCards);if(records.length){trace.candidateCount=records.length;return this.finalize(request,records.map(r=>this.card(r,1,"canonical",request.access.scopes)),ids,maxCards,topicLimit,trace);}}
-  const [lexical,topics,entities,embedding]=await Promise.allSettled([this.deps.records.search(cue,request.access.scopes,kinds,maxCards*4),this.deps.topics.searchTopics(cue,request.access.scopes,kinds,maxCards*3),this.deps.graph?.resolveEntities(cue,request.access.scopes,8)??[],this.deps.embeddings?.embed([cue],request.embeddingTimeoutMs===undefined?undefined:{timeoutMs:request.embeddingTimeoutMs,maxRetries:0})??[]]);
+  const [lexical,topics,entities,embedding]=await Promise.allSettled([this.deps.records.search(cue,request.access.scopes,kinds,maxCards*4),this.deps.topics.searchTopics(cue,request.access.scopes,kinds,maxCards*3),this.deps.graph?.resolveEntities(cue,request.access.scopes,8)??[],this.deps.embeddings?.embed([cue],{...(request.embeddingTimeoutMs===undefined?{}:{timeoutMs:request.embeddingTimeoutMs,maxRetries:0}),signal:request.signal})??[]]);
+  request.signal?.throwIfAborted();
   if(embedding.status==="rejected"){trace.embedding.degraded=true;trace.embedding.error=String(embedding.reason);}
   const lexicalHits=lexical.status==="fulfilled"?lexical.value:[],topicHits=topics.status==="fulfilled"?topics.value:[],entityHits=entities.status==="fulfilled"?entities.value:[];
   let vectorHits:Awaited<ReturnType<NonNullable<typeof this.deps.vectors>["searchVectors"]>>=[];try{const vector=embedding.status==="fulfilled"?embedding.value[0]:undefined;if(vector&&this.deps.vectors)vectorHits=await this.deps.vectors.searchVectors(vector,request.access.scopes,kinds,maxCards*4,this.deps.embeddings?.generation);}catch(error){trace.embedding.degraded=true;trace.embedding.error=String(error);}

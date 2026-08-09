@@ -175,6 +175,81 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
+  it("cancels an admitted Run while asynchronous memory preparation is still active", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let recallSignal: AbortSignal | undefined;
+    const memory = {
+      recall: vi.fn((request: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+        recallSignal = request.signal;
+        request.signal?.addEventListener("abort", () => reject(request.signal?.reason), { once: true });
+      })),
+      enqueueCapture: vi.fn(async () => ({ jobId: "capture-cancel" })),
+    } as unknown as MemoryFacade;
+    const runtimeFactory = vi.fn(() => new DeferredRuntime());
+    const service = new AgentService(agentPersistence(store), "/tmp", runtimeFactory, {}, memory, "test-scope");
+
+    const admitted = await service.enqueueSessionInput(session.id, "cancel during memory recall", "cancel-preparation");
+    expect(service.cancel(admitted.run!.id)).toBe(true);
+    await vi.waitFor(() => expect(recallSignal?.aborted).toBe(true));
+    expect(runtimeFactory).not.toHaveBeenCalled();
+    expect(store.getRun(admitted.run!.id)).toMatchObject({ status: "cancelled" });
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("aborts and joins asynchronous preparation before runtime shutdown returns", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let recallCleanupFinished = false;
+    const memory = {
+      recall: vi.fn((request: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+        request.signal?.addEventListener("abort", () => {
+          setTimeout(() => { recallCleanupFinished = true; reject(request.signal?.reason); }, 20);
+        }, { once: true });
+      })),
+      enqueueCapture: vi.fn(async () => ({ jobId: "capture-close" })),
+    } as unknown as MemoryFacade;
+    const runtimeFactory = vi.fn(() => new DeferredRuntime());
+    const service = new AgentService(agentPersistence(store), "/tmp", runtimeFactory, {}, memory, "test-scope");
+
+    const admitted = await service.enqueueSessionInput(session.id, "close during memory recall", "close-preparation");
+    await service.closeRuntimes();
+    expect(recallCleanupFinished).toBe(true);
+    expect(runtimeFactory).not.toHaveBeenCalled();
+    expect(store.getRun(admitted.run!.id)).toMatchObject({ status: "interrupted" });
+    store.close();
+  });
+
+  it("passes the configured Router output budget to the OpenAI-compatible request", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const originalFetch = globalThis.fetch;
+    let requestBody = "";
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      requestBody = String(init?.body);
+      const analysis = {
+        summary: "Analyze and optimize the runtime",
+        objectives: [{ summary: "Analyze and optimize the runtime", timing: "current", kind: "change" }],
+        intent: "new_task", targetActiveRun: false, priority: 500, urgency: "normal", relation: "independent",
+        acceptanceCriteria: ["The runtime is optimized and verified"], scope: "runtime", nonGoals: [], confidence: 1, reason: "Explicit request",
+      };
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(analysis) } }] }), { headers: { "content-type": "application/json" } });
+    });
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new DeferredRuntime(), {
+      routerModel: { id: "router-test", api: "openai-completions", baseUrl: "https://router.test/v1", maxTokens: 321 } as never,
+      apiKey: "test-key",
+    });
+    try {
+      await service.enqueueSessionInput(session.id, "Analyze and optimize this runtime end to end, including all performance-sensitive paths and verification evidence. ".repeat(5), "router-budget");
+      expect(JSON.parse(requestBody)).toMatchObject({ model: "router-test", max_completion_tokens: 321, stream: true });
+    } finally {
+      await service.closeRuntimes();
+      globalThis.fetch = originalFetch;
+      store.close();
+    }
+  });
+
   it("routes active-run corrections into steer instead of a new TaskRun", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();

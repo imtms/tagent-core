@@ -34,15 +34,29 @@ export interface ExecutionCollaborationAdapters {
 const ONLINE_RECALL_DEADLINE_MS = 3_000;
 const ONLINE_EMBEDDING_TIMEOUT_MS = 2_200;
 
-async function withinDeadline<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+async function withinDeadline<T>(work: (signal: AbortSignal) => Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
+  signal?.throwIfAborted();
+  const controller = new AbortController();
+  const abortFromCaller = () => controller.abort(signal?.reason ?? new Error("memory recall cancelled"));
+  signal?.addEventListener("abort", abortFromCaller, { once: true });
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let pending: Promise<T> | undefined;
   try {
+    pending = work(controller.signal);
     return await Promise.race([
-      work,
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`online memory recall exceeded ${timeoutMs}ms`)), timeoutMs); }),
+      pending,
+      new Promise<never>((_, reject) => {
+        const rejectOnAbort = () => reject(controller.signal.reason ?? new Error("memory recall cancelled"));
+        controller.signal.addEventListener("abort", rejectOnAbort, { once: true });
+        timer = setTimeout(() => controller.abort(new Error(`online memory recall exceeded ${timeoutMs}ms`)), timeoutMs);
+      }),
     ]);
+  } catch (error) {
+    if (signal?.aborted && pending) await Promise.allSettled([pending]);
+    throw error;
   } finally {
     if (timer) clearTimeout(timer);
+    signal?.removeEventListener("abort", abortFromCaller);
   }
 }
 
@@ -112,17 +126,19 @@ export function createExecutionCollaborationAdapters(
           contextItems: [...profile.contextItems, ...workflows.contextItems],
         };
       },
-      async enrich(run, query) {
+      async enrich(run, query, signal) {
+        signal?.throwIfAborted();
         const memoryAccess = access(run);
         let recall: Awaited<ReturnType<MemoryFacade["recall"]>> | undefined;
         let coreSnapshot: Awaited<ReturnType<NonNullable<MemoryFacade["getCoreSnapshot"]>>> | undefined;
         if (options.memory) {
           try {
-            [recall, coreSnapshot] = await withinDeadline(Promise.all([
-              options.memory.recall({ access: memoryAccess, cue: query, embeddingTimeoutMs: ONLINE_EMBEDDING_TIMEOUT_MS }),
-              options.memory.getCoreSnapshot?.(memoryAccess),
-            ]), ONLINE_RECALL_DEADLINE_MS);
+            [recall, coreSnapshot] = await withinDeadline((deadlineSignal) => Promise.all([
+              options.memory!.recall({ access: memoryAccess, cue: query, embeddingTimeoutMs: ONLINE_EMBEDDING_TIMEOUT_MS, signal: deadlineSignal }),
+              options.memory!.getCoreSnapshot?.(memoryAccess),
+            ]), ONLINE_RECALL_DEADLINE_MS, signal);
           } catch (error) {
+            if (signal?.aborted) throw signal.reason ?? error;
             options.publish(run.id, "memory.recall.degraded", {
               reason: "online_deadline",
               timeoutMs: ONLINE_RECALL_DEADLINE_MS,
@@ -130,6 +146,7 @@ export function createExecutionCollaborationAdapters(
             });
           }
         }
+        signal?.throwIfAborted();
         const { workflows, profile } = learningContext(run, query);
         const coreSection = coreSnapshot?.markdown
           ? `<core_memory revision="${coreSnapshot.revision}">\n${coreSnapshot.markdown}\n</core_memory>`

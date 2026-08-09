@@ -33,6 +33,7 @@ import type {
   TaskRunCommandReceipt,
   TaskRunContractSnapshot,
   TaskRunEdge,
+  TaskRunExecutionState,
   UserInputField,
   UserInputRequest,
 } from "@tagent/execution/domain";
@@ -1270,7 +1271,7 @@ export class Store {
         const existing = this.db.prepare("SELECT session_id as sessionId FROM session_requests WHERE request_id = ?").get(requestId) as { sessionId: string } | undefined;
         if (existing) return this.getSession(existing.sessionId)!;
       }
-      const session: Session = { id: randomUUID(), title, modelId: this.defaultModelId, reasoningEffort: "high", createdAt: now(), updatedAt: now(), latestRunStatus: null, latestRunPhase: null };
+      const session: Session = { id: randomUUID(), title, modelId: this.defaultModelId, reasoningEffort: "medium", createdAt: now(), updatedAt: now(), latestRunStatus: null, latestRunPhase: null };
       this.db.prepare("INSERT INTO sessions (id, title, model_id, reasoning_effort, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(session.id, session.title, session.modelId, session.reasoningEffort, session.createdAt, session.updatedAt);
       if (requestId) this.db.prepare("INSERT INTO session_requests (request_id,session_id,created_at) VALUES (?,?,?)").run(requestId, session.id, session.createdAt);
       return session;
@@ -1300,7 +1301,7 @@ export class Store {
       if (existing) return replay(existing);
       const timestamp = now();
       const session: Session = {
-        id: randomUUID(), title: input.title, modelId: this.defaultModelId, reasoningEffort: "high",
+        id: randomUUID(), title: input.title, modelId: this.defaultModelId, reasoningEffort: "medium",
         createdAt: timestamp, updatedAt: timestamp, latestRunStatus: null, latestRunPhase: null,
       };
       this.db.prepare("INSERT INTO sessions (id,title,model_id,reasoning_effort,created_at,updated_at) VALUES (?,?,?,?,?,?)")
@@ -1880,6 +1881,20 @@ ${source.content}`;
     return task;
   }
 
+  getRunExecutionState(id: RunId): TaskRunExecutionState | undefined {
+    const row = this.db.prepare(`SELECT id,status,phase,attempt,last_event_seq as lastEventSeq,
+      (SELECT COUNT(*) FROM plan_items WHERE run_id=runs.id) as planCount,
+      (SELECT COUNT(*) FROM run_checks WHERE run_id=runs.id) as checkCount,
+      (SELECT COUNT(*) FROM artifacts WHERE run_id=runs.id) as artifactCount
+      FROM runs WHERE id=?`).get(id) as {
+        id: RunId; status: RunStatus; phase: RunPhase; attempt: number; lastEventSeq: number;
+        planCount: number; checkCount: number; artifactCount: number;
+      } | undefined;
+    if (!row) return undefined;
+    const { planCount, checkCount, artifactCount, ...state } = row;
+    return { ...state, counts: { plan: planCount, checks: checkCount, artifacts: artifactCount } };
+  }
+
   getRunByRequestId(requestId: string): TaskRun | undefined {
     const row = this.db.prepare("SELECT id FROM runs WHERE request_id = ?").get(requestId) as { id: RunId } | undefined;
     return row ? this.getRun(row.id) : undefined;
@@ -1890,10 +1905,10 @@ ${source.content}`;
     return rows.map((row) => this.getRun(row.id)!);
   }
 
-  listRunSummaries(sessionId: SessionId, limit = 50): Array<Pick<TaskRun, "id" | "goal" | "status" | "phase" | "contract" | "updatedAt">> {
-    const rows = this.db.prepare(`SELECT id,goal,status,phase,contract_json as contractJson,updated_at as updatedAt
+  listRunSummaries(sessionId: SessionId, limit = 50): Array<Pick<TaskRun, "id" | "goal" | "status" | "phase" | "contract" | "attempt" | "createdAt" | "updatedAt">> {
+    const rows = this.db.prepare(`SELECT id,goal,status,phase,contract_json as contractJson,attempt,created_at as createdAt,updated_at as updatedAt
       FROM runs WHERE session_id=? ORDER BY updated_at DESC LIMIT ?`).all(sessionId, limit) as Array<{
-        id: string; goal: string; status: RunStatus; phase: RunPhase; contractJson: string; updatedAt: number;
+        id: string; goal: string; status: RunStatus; phase: RunPhase; contractJson: string; attempt: number; createdAt: number; updatedAt: number;
       }>;
     return rows.map(({ contractJson, ...row }) => ({
       ...row,
@@ -2253,16 +2268,38 @@ ${source.content}`;
       | { seq: number; index: number; attempt: number; kind: "thinking"; text: string; redacted: boolean; createdAt: number }
       | { seq: number; index: number; attempt: number; kind: "tool"; toolCallId: string; toolName: string; arguments: unknown; result: string; isError: boolean; status: "pending" | "completed" | "failed"; createdAt: number };
     const toolResults = new Map<string, { content: string; isError: boolean; toolName: string }>();
-    const entries = this.listTranscriptEntries(runId, options);
+    const entries = [...this.listTranscriptEntries(runId, options)];
+    const supplementalEntrySeqs = new Set<number>();
     const toolCallIds = new Set<string>();
+    const completedToolCallIds = new Set<string>();
     for (const entry of entries) {
       const message = entry.message;
       if (message.role === "assistant") {
         for (const part of message.content) if (part.type === "toolCall") toolCallIds.add(part.id);
       }
       if (message.role !== "toolResult") continue;
+      completedToolCallIds.add(message.toolCallId);
       const content = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
       toolResults.set(message.toolCallId, { content, isError: message.isError, toolName: message.toolName });
+    }
+    const missingToolCallSources = [...completedToolCallIds].filter((id) => !toolCallIds.has(id));
+    if (missingToolCallSources.length) {
+      const rows = this.db.prepare(`SELECT DISTINCT t.seq,t.attempt,t.role,t.message_json as messageJson,t.created_at as createdAt
+        FROM run_transcript t, json_each(t.message_json,'$.content') part
+        WHERE t.run_id=? AND t.role='assistant'
+          AND json_extract(part.value,'$.type')='toolCall'
+          AND json_extract(part.value,'$.id') IN (SELECT value FROM json_each(?))`)
+        .all(runId, JSON.stringify(missingToolCallSources)) as Array<{ seq: number; attempt: number; role: string; messageJson: string; createdAt: number }>;
+      const existingSeq = new Set(entries.map((entry) => entry.seq));
+      for (const { messageJson, ...row } of rows) {
+        if (existingSeq.has(row.seq)) continue;
+        entries.push({ ...row, message: JSON.parse(messageJson) as AgentMessage });
+        supplementalEntrySeqs.add(row.seq);
+        existingSeq.add(row.seq);
+        const message = JSON.parse(messageJson) as Extract<AgentMessage, { role: "assistant" }>;
+        for (const part of message.content) if (part.type === "toolCall") toolCallIds.add(part.id);
+      }
+      entries.sort((left, right) => left.seq - right.seq);
     }
     const missingToolCallIds = [...toolCallIds].filter((id) => !toolResults.has(id));
     if (missingToolCallIds.length) {
@@ -2285,6 +2322,7 @@ ${source.content}`;
       }
       if (message.role !== "assistant") continue;
       for (const [index, part] of message.content.entries()) {
+        if (supplementalEntrySeqs.has(entry.seq) && (part.type !== "toolCall" || !completedToolCallIds.has(part.id))) continue;
         if (part.type === "text" && part.text) {
           view.push({ seq: entry.seq, index, attempt: entry.attempt, kind: "assistant", text: part.text, createdAt: entry.createdAt });
           continue;

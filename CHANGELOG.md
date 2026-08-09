@@ -1,12 +1,21 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.1] - 2026-08-09
 
 ### Runtime reliability
 
 - Fixed overlapping Memory capture and maintenance intervals replacing the Promise that shutdown was waiting for. The worker now has an explicit stopping barrier, drains capture, maintenance, heartbeat, metric, and reindex work, and closes the PostgreSQL pool only after the worker has settled.
-- Made Memory runtime and PostgreSQL pool closure idempotent, including concurrent callers, and explicitly handles asynchronous Memory heartbeat failures.
+- Made Memory runtime and PostgreSQL pool closure idempotent, including concurrent callers, and explicitly handled asynchronous Memory heartbeat failures.
 - Added bounded instance-lock heartbeat checks plus sanitized per-stage and event-loop-delay diagnostics. Synchronous heartbeat stages that cross the existing 10-second authority boundary now fail closed instead of refreshing writer readiness.
+- Fenced asynchronous Session-history and Memory-recall preparation by current Run/Attempt, propagated cancellation into embeddings, and made cancellation and shutdown abort and drain preparation before persistence resources close.
+- Added an idle timeout for stalled non-streaming OpenAI-compatible JSON bodies and capped Router completion tokens with the configured model limit.
+
+### Runtime and Console efficiency
+
+- Replaced repeated full TaskRun hydration on tool and post-tool hot paths with fenced lightweight execution-state queries while retaining full hydration for explicit TaskRun inspection.
+- Changed Console Run history to a versioned lightweight summary projection and hydrates only the selected, latest, and active Runs in the Web Console.
+- Added bounded incremental Transcript reads and serialized cursor-based Web merging, including tool-result reconciliation and isolation when viewing a historical Run during active execution.
+- Changed new Workspace reasoning effort from `high` to `medium` and added a reproducible SQLite wall-clock benchmark for Run history, tool state, and Transcript update paths.
 
 ## [0.4.0] - 2026-08-08
 

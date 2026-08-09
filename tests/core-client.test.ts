@@ -167,7 +167,7 @@ describe("channel v1 helpers", () => {
   it("sends explicit Session idempotency and decodes capabilities", async () => {
     const session = { id: "session-1", title: "Gateway", modelId: "gpt-5.6-sol", reasoningEffort: "high", createdAt: "2026-08-04T12:34:56.789Z", updatedAt: "2026-08-04T12:34:56.789Z", latestTaskRunStatus: null, latestTaskRunPhase: null };
     const capabilities = {
-      releaseVersion: "0.4.0", apiVersions: ["channel.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 40,
+      releaseVersion: "0.4.1", apiVersions: ["channel.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 40,
       commandTypes: ["task_run.steer"], eventTypes: ["task_run.started"],
       interactions: { approvalResolution: true, userInputSubmission: true },
       operator: { profileVersion: "1.0", endpointIds: ["channel.capabilities.get"], workspaceGoals: true, roadmapGenerationIdempotent: true },

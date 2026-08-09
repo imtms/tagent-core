@@ -25,6 +25,7 @@ function createTestTools(
     artifactSink: createWorkspaceArtifactSink(workspace),
     workspaceEdit: createWorkspaceEditPort(workspace),
     getRun: () => store.getRun(runId),
+    getRunExecutionState: () => store.getRunExecutionState(runId),
     authorizeWorkspaceMutation: () => ({ allowed: true, reason: "ordinary TaskRun" }),
     advanceRunPhase: (phase) => store.advanceRunPhase(runId, phase),
     setRunPhase: (phase) => store.setRunPhase(runId, phase),
@@ -286,7 +287,7 @@ describe("workspace tools", () => {
     ] }, undefined);
     expect(store.getRun(run.id)).toMatchObject({ phase: "review", plan: [{ key: "implement", status: "done" }], checks: [{ key: "tests", status: "passed", stale: false }], artifacts: [{ id: "report" }] });
     expect(events.filter((event) => event.type === "run.updated")).toHaveLength(1);
-    expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({ ok: true, action: "batch", counts: { plan: 1, checks: 1, artifacts: 1 }, completionGate: { passed: true } });
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({ ok: true, action: "batch", counts: { plan: 1, checks: 1, artifacts: 1 } });
     store.close();
   });
 

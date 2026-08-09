@@ -85,7 +85,39 @@ export async function readOpenAiChatContent(response: Response, options: { idleT
   if (response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) {
     return readOpenAiChatSse(response, options);
   }
-  const envelope = await response.json() as ChatCompletionChunk;
+  if (!response.body) throw new Error("OpenAI-compatible JSON response has no body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let body = "";
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let idleTimedOut = false;
+  const refreshIdleTimer = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      idleTimedOut = true;
+      const error = new OpenAiSseIdleTimeoutError(options.idleTimeoutMs);
+      options.controller.abort(error);
+      void reader.cancel(error).catch(() => undefined);
+    }, options.idleTimeoutMs);
+  };
+  refreshIdleTimer();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (idleTimedOut) throw new OpenAiSseIdleTimeoutError(options.idleTimeoutMs);
+      if (done) break;
+      refreshIdleTimer();
+      body += decoder.decode(value, { stream: true });
+    }
+    body += decoder.decode();
+  } catch (error) {
+    if (idleTimedOut) throw new OpenAiSseIdleTimeoutError(options.idleTimeoutMs);
+    throw error;
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer);
+    reader.releaseLock();
+  }
+  const envelope = JSON.parse(body) as ChatCompletionChunk;
   const usage = normalizedUsage(envelope.usage);
   if (usage) options.onUsage?.(usage);
   return envelope.choices?.[0]?.message?.content ?? "";

@@ -39,6 +39,13 @@ describe("OpenAI-compatible SSE idle timeout", () => {
     const response = new Response(JSON.stringify({ choices: [{ message: { content: "result" } }] }), { headers: { "content-type": "application/json" } });
     await expect(readOpenAiChatContent(response, { idleTimeoutMs: 15, controller })).resolves.toBe("result");
   });
+  it("aborts a non-streaming JSON body that stops making progress after headers", async () => {
+    const controller = new AbortController();
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(stream) { stream.enqueue(encoder.encode('{"choices":[')); },
+    }), { headers: { "content-type": "application/json" } });
+    await expect(readOpenAiChatContent(response, { idleTimeoutMs: 15, controller })).rejects.toBeInstanceOf(OpenAiSseIdleTimeoutError);
+  });
   it("reports streamed usage to callers", async () => {
     const controller = new AbortController();
     const observed: unknown[] = [];

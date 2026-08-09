@@ -5,7 +5,7 @@ import { authorizeConsole, consoleError } from "./console-route-support.js";
 
 export function registerConsoleRunV1Routes(app: FastifyInstance, dependencies: V1ApiDependencies): void {
   const { service, persistence, artifacts, workspaceRoot } = dependencies;
-  const { contextManifests, evidence, transcript } = persistence;
+  const { contextManifests, evidence, taskRuns, transcript } = persistence;
   const read = authorizeConsole(dependencies, "runs:read");
   const control = authorizeConsole(dependencies, "runs:control");
 
@@ -65,20 +65,25 @@ export function registerConsoleRunV1Routes(app: FastifyInstance, dependencies: V
 
   app.get("/api/v1/console/task-runs/:id/context-manifests", { onRequest: read }, async (request) => {
     const { id } = request.params as { id: string };
-    if (!service.getRun(id)) throw consoleError(404, "task_run.not_found", "TaskRun not found");
+    if (!taskRuns.hasRun(id)) throw consoleError(404, "task_run.not_found", "TaskRun not found");
     const limit = Math.min(100, Math.max(1, Number((request.query as { limit?: string }).limit ?? 20) || 20));
     return successEnvelope(request, contextManifests.listContextManifests(id, limit));
   });
 
   app.get("/api/v1/console/task-runs/:id/transcript", { onRequest: read }, async (request) => {
     const { id } = request.params as { id: string };
-    if (!service.getRun(id)) throw consoleError(404, "task_run.not_found", "TaskRun not found");
-    return successEnvelope(request, transcript.listTranscriptView(id));
+    if (!taskRuns.hasRun(id)) throw consoleError(404, "task_run.not_found", "TaskRun not found");
+    const query = request.query as { after?: string; limit?: string };
+    const after = query.after === undefined ? undefined : Number(query.after);
+    const limit = query.limit === undefined ? 200 : Number(query.limit);
+    if (after !== undefined && (!Number.isSafeInteger(after) || after < 0)) throw consoleError(400, "transcript.after_invalid", "after must be a non-negative integer");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw consoleError(400, "transcript.limit_invalid", "limit must be an integer between 1 and 200");
+    return successEnvelope(request, transcript.listTranscriptView(id, { after, limit }));
   });
 
   app.get("/api/v1/console/task-runs/:id/artifacts/:artifactId/content", { onRequest: read }, async (request) => {
     const { id, artifactId } = request.params as { id: string; artifactId: string };
-    if (!service.getRun(id)) throw consoleError(404, "task_run.not_found", "TaskRun not found");
+    if (!taskRuns.hasRun(id)) throw consoleError(404, "task_run.not_found", "TaskRun not found");
     const artifact = evidence.getArtifact(id, artifactId);
     if (!artifact) throw consoleError(404, "artifact.not_found", "artifact not found");
     try {
@@ -102,7 +107,7 @@ export function registerConsoleRunV1Routes(app: FastifyInstance, dependencies: V
 
   app.get("/api/v1/console/task-runs/:id/artifacts/:artifactId/download", { onRequest: read }, async (request, reply) => {
     const { id, artifactId } = request.params as { id: string; artifactId: string };
-    if (!service.getRun(id)) throw consoleError(404, "task_run.not_found", "TaskRun not found");
+    if (!taskRuns.hasRun(id)) throw consoleError(404, "task_run.not_found", "TaskRun not found");
     const artifact = evidence.getArtifact(id, artifactId);
     if (!artifact) throw consoleError(404, "artifact.not_found", "artifact not found");
     try {

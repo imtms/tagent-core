@@ -1,5 +1,8 @@
 /* global console */
+import { Buffer } from "node:buffer";
+import { performance } from "node:perf_hooks";
 import { ContextAssembler, estimateMessageTokens } from "../packages/execution/dist/composition.js";
+import { Store } from "../adapters/persistence-sqlite/dist/store.js";
 
 function assistant(content, timestamp) {
   return {
@@ -46,8 +49,64 @@ const after = measure(4_000, 600);
 const reduction = (key) => Number((((before[key] - after[key]) / before[key]) * 100).toFixed(1));
 const taskRunMutations = 12;
 const batchRoundTrips = 2;
+
+function measureMilliseconds(operation, iterations) {
+  operation();
+  const startedAt = performance.now();
+  for (let index = 0; index < iterations; index += 1) operation();
+  return Number(((performance.now() - startedAt) / iterations).toFixed(3));
+}
+
+const store = new Store(":memory:");
+const session = store.createSession("Performance benchmark");
+let representativeRun;
+for (let runIndex = 0; runIndex < 50; runIndex += 1) {
+  const run = store.createRun(session.id, `benchmark run ${runIndex}`);
+  representativeRun ??= run;
+  for (let itemIndex = 0; itemIndex < 10; itemIndex += 1) {
+    store.upsertPlanItem(run.id, { key: `plan-${itemIndex}`, title: `Plan ${itemIndex}`, status: "done", required: true, position: itemIndex });
+    store.upsertCheck(run.id, { key: `check-${itemIndex}`, title: `Check ${itemIndex}`, status: "pending", required: true, command: "npm test", evidence: "", stale: false });
+    store.addArtifact(run.id, { id: `artifact-${runIndex}-${itemIndex}`, title: `Artifact ${itemIndex}`, kind: "benchmark", content: "A".repeat(10_000), uri: "" });
+  }
+}
+const fullRuns = store.listRuns(session.id, 50);
+const runSummaries = store.listRunSummaries(session.id, 50);
+const fullRunBytes = Buffer.byteLength(JSON.stringify(fullRuns));
+const summaryBytes = Buffer.byteLength(JSON.stringify(runSummaries));
+const fullRunHistoryMs = measureMilliseconds(() => JSON.stringify(store.listRuns(session.id, 50)), 3);
+const summaryHistoryMs = measureMilliseconds(() => JSON.stringify(store.listRunSummaries(session.id, 50)), 50);
+const fullRunStateMs = measureMilliseconds(() => store.getRun(representativeRun.id), 100);
+const executionStateMs = measureMilliseconds(() => store.getRunExecutionState(representativeRun.id), 1_000);
+
+const transcriptRun = store.createRun(session.id, "transcript benchmark");
+for (let index = 0; index < 1_000; index += 1) {
+  store.appendTranscript(transcriptRun.id, 1, assistant([{ type: "text", text: `entry-${index}:${"T".repeat(4_000)}` }], index));
+}
+const fullTranscript = store.listTranscriptView(transcriptRun.id);
+const transcriptDelta = store.listTranscriptView(transcriptRun.id, { after: 999, limit: 200 });
+const fullTranscriptMs = measureMilliseconds(() => JSON.stringify(store.listTranscriptView(transcriptRun.id)), 3);
+const transcriptDeltaMs = measureMilliseconds(() => JSON.stringify(store.listTranscriptView(transcriptRun.id, { after: 999, limit: 200 })), 100);
+const ratio = (beforeValue, afterValue) => Number((beforeValue / Math.max(afterValue, 0.000_001)).toFixed(1));
+
 console.log(JSON.stringify({
   scenario: { turns: 10, taskRunReceipts: 10, bashResults: 10 },
   context: { before, after, charReductionPercent: reduction("chars"), estimatedTokenReductionPercent: reduction("estimatedTokens") },
   taskRunRoundTrips: { before: taskRunMutations, after: batchRoundTrips, reductionPercent: Number((((taskRunMutations - batchRoundTrips) / taskRunMutations) * 100).toFixed(1)) },
+  wallClock: {
+    runHistory: {
+      fullMilliseconds: fullRunHistoryMs, summaryMilliseconds: summaryHistoryMs,
+      speedup: ratio(fullRunHistoryMs, summaryHistoryMs), fullBytes: fullRunBytes, summaryBytes,
+      byteReductionPercent: Number((((fullRunBytes - summaryBytes) / fullRunBytes) * 100).toFixed(1)),
+    },
+    toolExecutionState: {
+      fullMilliseconds: fullRunStateMs, lightweightMilliseconds: executionStateMs,
+      speedup: ratio(fullRunStateMs, executionStateMs),
+    },
+    transcriptUpdate: {
+      fullMilliseconds: fullTranscriptMs, incrementalMilliseconds: transcriptDeltaMs,
+      speedup: ratio(fullTranscriptMs, transcriptDeltaMs),
+      fullBytes: Buffer.byteLength(JSON.stringify(fullTranscript)), incrementalBytes: Buffer.byteLength(JSON.stringify(transcriptDelta)),
+    },
+  },
 }, null, 2));
+store.close();

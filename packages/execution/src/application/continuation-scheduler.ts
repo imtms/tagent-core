@@ -12,7 +12,7 @@ import type {
 } from "./collaboration-ports.js";
 
 type ContinuationState = ExecutionStateView<
-  | "closing" | "continuationOwner" | "persistence" | "runtimeDefaults" | "runtimes",
+  | "closing" | "continuationOwner" | "persistence" | "preparationTasks" | "runtimeDefaults" | "runtimes",
   "attempts" | "continuations" | "events" | "sessions" | "taskRuns"
 >;
 
@@ -86,7 +86,6 @@ export class ContinuationScheduler {
 
   cancel(runId: RunId) {
     const runtime = this.state.runtimes.get(runId);
-    if (!runtime) return false;
     const attempt = this.state.persistence.attempts.getActiveAttempt(runId);
     if (!attempt) return false;
     let cancellation: ReturnType<typeof this.state.persistence.attempts.cancelAttempt>;
@@ -101,7 +100,8 @@ export class ContinuationScheduler {
     if (!cancellation.cancelled || !cancellation.event) return false;
     this.dependencies.eventHub.publish(cancellation.event);
     this.dependencies.settlement.projectWorkflowExperience(runId);
-    void this.dependencies.runtimeRegistry.abortRuntime(runtime, runId);
+    this.state.preparationTasks.get(runId)?.controller.abort(new Error("Cancelled by user"));
+    if (runtime) void this.dependencies.runtimeRegistry.abortRuntime(runtime, runId);
     return true;
   }
 }

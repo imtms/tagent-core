@@ -19,6 +19,13 @@ function consoleRun(id = "run", attempt = 1) {
   };
 }
 
+function consoleRunSummary(id = "run") {
+  return {
+    id, goal: "test", status: "running", phase: "implement", contract: null,
+    attempt: 1, createdAt: 1, updatedAt: 2,
+  };
+}
+
 function consoleInboxItem(id = "item") {
   return {
     id, sessionId: "session", requestId: "request", content: "queued", status: "queued", decision: "pending", runId: null,
@@ -62,6 +69,18 @@ describe("Web API request headers", () => {
     await api.ackConsumer("run", "web", 1, 1);
     const init = fetchMock.mock.calls[0][1] as RequestInit;
     expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+  });
+
+  it("decodes lightweight Run summaries and requests only incremental transcript rows", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(success([consoleRunSummary()])), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(success([])), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.runs("session")).resolves.toEqual([consoleRunSummary()]);
+    await expect(api.transcriptView("run", 41)).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/console/sessions/session/task-runs?limit=50", expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/console/task-runs/run/transcript?limit=200&after=41", expect.any(Object));
   });
 
   it("renames a workspace through the Session API", async () => {

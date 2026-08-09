@@ -23,6 +23,7 @@ export type ArtifactContent = ConsoleV1.ConsoleArtifactContent;
 export type UserInputField = ConsoleV1.ConsoleUserInputField;
 export type UserInputRequest = ConsoleV1.ConsoleUserInputRequest;
 export type TaskRun = ConsoleV1.ConsoleTaskRun;
+export type TaskRunSummary = ConsoleV1.ConsoleTaskRunSummary;
 export type EventConsumerCursor = ConsoleV1.ConsoleEventConsumerCursor;
 export type RunEvent = ConsoleV1.ConsoleRunEvent;
 export type TranscriptItem = ConsoleV1.ConsoleTranscriptItem;
@@ -167,11 +168,11 @@ export const api = {
   renameSession: (sessionId: string, title: string) => request(`/api/v1/console/sessions/${sessionId}`, { method: "PATCH", body: JSON.stringify({ title }) }, ConsoleDecode.session),
   updateSession: (sessionId: string, settings: Partial<Pick<Session, "title" | "modelId" | "reasoningEffort">>) => request(`/api/v1/console/sessions/${sessionId}`, { method: "PATCH", body: JSON.stringify(settings) }, ConsoleDecode.session),
   messages: (sessionId: string, limit = 80, beforeId?: number) => request(`/api/v1/console/sessions/${sessionId}/messages?limit=${limit}${beforeId ? `&beforeId=${beforeId}` : ""}`, undefined, ConsoleDecode.messages),
-  runs: (sessionId: string, limit = 50) => request(`/api/v1/console/sessions/${sessionId}/task-runs?limit=${limit}`, undefined, ConsoleDecode.taskRuns),
+  runs: (sessionId: string, limit = 50) => request(`/api/v1/console/sessions/${sessionId}/task-runs?limit=${limit}`, undefined, ConsoleDecode.taskRunSummaries),
   latestRun: (sessionId: string) => request(`/api/v1/console/sessions/${sessionId}/task-run`, undefined, ConsoleDecode.taskRunOrNull),
   run: (runId: string) => request(`/api/v1/console/task-runs/${runId}`, undefined, ConsoleDecode.taskRun),
   contextManifests: (runId: string, limit = 20) => request(`/api/v1/console/task-runs/${runId}/context-manifests?limit=${limit}`, undefined, ConsoleDecode.contextManifests),
-  transcriptView: (runId: string) => request(`/api/v1/console/task-runs/${runId}/transcript`, undefined, ConsoleDecode.transcriptItems),
+  transcriptView: (runId: string, after?: number, limit = 200) => request(`/api/v1/console/task-runs/${runId}/transcript?limit=${limit}${after === undefined ? "" : `&after=${after}`}`, undefined, ConsoleDecode.transcriptItems),
   artifactContent: (runId: string, artifactId: string) => request(`/api/v1/console/task-runs/${runId}/artifacts/${encodeURIComponent(artifactId)}/content`, undefined, ConsoleDecode.artifactContent),
   downloadArtifact: (runId: string, artifactId: string, filename: string) => downloadArtifact(runId, artifactId, filename),
   send: (sessionId: string, content: string) => request(`/api/v1/console/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId() }) }, ConsoleDecode.submissionResult),

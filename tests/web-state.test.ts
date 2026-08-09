@@ -174,6 +174,17 @@ describe("Web workbench state model", () => {
     expect(source).not.toContain('event.type.startsWith("tool.") || event.type.startsWith("continuation.")');
   });
 
+  it("merges serialized transcript deltas instead of reloading the full transcript for each event", async () => {
+    const source = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain("const refresh = transcriptRefreshTaskRef.current.catch(() => undefined).then(async () => {");
+    expect(source).toContain("const after = transcriptAfterRef.current;");
+    expect(source).toContain("if (transcriptRunIdRef.current !== runId) return;");
+    expect(source).toContain("const delta = await api.transcriptView(runId, after);");
+    expect(source).toContain("setTranscript((current) => mergeTranscriptItems(current, delta));");
+    expect(source).toContain("await refreshTranscriptThrough(Number(event.data.transcriptSeq));");
+    expect(source).not.toContain("if (event.type === \"transcript.updated\") setTranscript(await api.transcriptView(runId))");
+  });
+
   it("keeps active recoverable Runs subscribed while projecting interrupted Runs to Resume", async () => {
     const source = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
     const runState = await readFile(new URL("../apps/web-console/src/run-state.ts", import.meta.url), "utf8");
@@ -185,7 +196,7 @@ describe("Web workbench state model", () => {
     expect(source).toContain('document.addEventListener("visibilitychange", reconnect)');
     expect(source).toContain('window.addEventListener("online", reconnect)');
     expect(source).toContain('const shouldRefreshContent = currentRun.lastEventSeq !== activeRunRef.current?.lastEventSeq');
-    expect(source).toContain('Promise.all([api.transcriptView(active.id), api.messages(targetSessionId)])');
+    expect(source).toContain('refreshSelectedTranscript ? api.transcriptView(active.id) : Promise.resolve(undefined)');
     expect(source).toContain('setStreamGeneration((value) => value + 1)');
   });
 

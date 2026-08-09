@@ -61,10 +61,10 @@ TAGENT_HISTORICAL_TASK_RUN_RECEIPT_CHARS=600
 The deterministic benchmark can be run with:
 
 ```bash
-node scripts/performance-efficiency-benchmark.mjs
+npm run benchmark:performance
 ```
 
-Its representative 10-turn fixture reduces serialized historical context by about 61%, estimated historical tokens by about 62%, and representative TaskRun setup/settlement mutation round trips from 12 to 2. It measures deterministic projection opportunity, not provider wall-clock latency.
+Its representative 10-turn fixture reduces serialized historical context by about 61%, estimated historical tokens by about 62%, and representative TaskRun setup/settlement mutation round trips from 12 to 2. It also measures local SQLite wall-clock and serialized-byte differences for full versus lightweight Run history, tool execution state, and incremental Transcript reads. These local measurements do not represent provider or network latency.
 
 ## Bounded hot paths
 
