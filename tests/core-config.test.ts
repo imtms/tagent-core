@@ -75,7 +75,7 @@ describe("Core service configuration", () => {
     });
   });
 
-  it("normalizes custom base URLs and constructs a Pi model", () => {
+  it("normalizes custom base URLs and constructs a runtime-neutral model", () => {
     const config = loadConfig({
       TAGENT_API_BASE: "https://example.test/v1/",
       TAGENT_MODEL: "custom-model",
@@ -88,9 +88,7 @@ describe("Core service configuration", () => {
       baseUrl: "https://example.test/v1",
       reasoning: false,
     });
-    expect(model.compat && "maxTokensField" in model.compat
-      ? model.compat.maxTokensField
-      : undefined).toBe("max_completion_tokens");
+    expect(model).not.toHaveProperty("compat");
   });
 
   it("supports native Anthropic transport and loopback IPv6 hosting", () => {
@@ -104,7 +102,7 @@ describe("Core service configuration", () => {
       api: "anthropic-messages",
       baseUrl: "https://relay.example",
     });
-    expect(createModel(config.model).compat).toBeUndefined();
+    expect(createModel(config.model)).not.toHaveProperty("compat");
     expect(() => loadConfig({ TAGENT_API: "unsupported" })).toThrow("TAGENT_API must be");
   });
 

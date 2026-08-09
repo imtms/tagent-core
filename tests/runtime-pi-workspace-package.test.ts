@@ -75,7 +75,7 @@ describe("Pi runtime adapter workspace package", () => {
     const root = readJson<{ workspaces: string[]; devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const runtime = readJson<PackageManifest>("adapters/runtime-pi/package.json");
 
-    expect(runtime).toMatchObject({ name: "@tagent/runtime-pi", version: "0.4.1", private: true });
+    expect(runtime).toMatchObject({ name: "@tagent/runtime-pi", version: "0.5.0", private: true });
     expect(root.workspaces).toContain("adapters/*");
     expect(root.devDependencies[runtime.name]).toBe(runtime.version);
     expect(Object.keys(runtime.exports).sort()).toEqual(expectedExports);
@@ -83,8 +83,7 @@ describe("Pi runtime adapter workspace package", () => {
     expect(runtime.dependencies).toEqual({
       "@earendil-works/pi-agent-core": "0.83.0",
       "@earendil-works/pi-ai": "0.83.0",
-      "@earendil-works/pi-coding-agent": "0.83.0",
-      "@tagent/execution": "0.4.1",
+      "@tagent/execution": "0.5.0",
     });
     for (const target of Object.values(runtime.exports)) {
       expect(target.types).toMatch(/^\.\/dist\/.+\.d\.ts$/);
@@ -108,6 +107,10 @@ describe("Pi runtime adapter workspace package", () => {
       "RuntimeModelSpec",
       "RuntimeQueueResult",
       "RuntimeUsage",
+      "RuntimeTool",
+      "RuntimeToolExecutionMode",
+      "RuntimeToolResult",
+      "RuntimeToolUpdateCallback",
     ]);
     const owners = new Map<string, string[]>();
     for (const relativePath of productionSourceFiles()) {
@@ -128,7 +131,6 @@ describe("Pi runtime adapter workspace package", () => {
     const allowedExternal = (specifier: string) => specifier.startsWith("node:")
       || specifier === "@tagent/execution/ports"
       || specifier === "@earendil-works/pi-agent-core"
-      || specifier === "@earendil-works/pi-coding-agent"
       || specifier === "@earendil-works/pi-ai"
       || specifier.startsWith("@earendil-works/pi-ai/");
     const violations: string[] = [];

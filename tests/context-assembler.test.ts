@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
 import { ContextAssembler, estimateTextTokens } from "@tagent/execution/composition";
 
 function assistant(text: string, content?: Extract<AgentMessage, { role: "assistant" }>["content"]): AgentMessage {

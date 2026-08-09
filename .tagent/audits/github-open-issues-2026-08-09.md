@@ -142,3 +142,24 @@ AttemptExecutor 在 runtime/model selection 前已获取 execution lease 并安�
 - `tests/issue-regressions-24-28.test.ts` 及受影响模块测试共 217 项通过。
 - PostgreSQL 实例未配置，`tests/postgres-query-shape.test.ts` 的 10 项参数、guard 与 Topic restore 查询回归通过。
 - CDP 于 `2026-08-09T05:54:57.928Z` 逐项确认 #24–#28 均为 closed 且包含修复回复；重新读取开放 Issue 列表返回 `No results`，开放数为 0。
+
+
+## 第二次开放 Issue 审查与修复（2026-08-09 11:14Z）
+
+CDP 重新读取 `https://github.com/imtms/tagent-core/issues?q=is%3Aissue%20state%3Aopen`，页面显示 `0 of 4 selected`。开放 Issue 为 #29–#32；四项均属于当前仓库、可在当前基线复现且有明确自动验收条件，因此全部判定为 **应修复**：
+
+| Issue | 问题与根因 | 最小修复 | 验收与证据 |
+|---|---|---|---|
+| #29 | SSE 在读取 durable high watermark 后才注册 live subscription；窗口内新增事件既不在 replay 集也不在 live buffer。 | 先注册 subscription，再读取 high watermark；replay 到该水位后按序排空 live buffer。 | `tests/v1-api-differential.test.ts` 注入第二次 `getRun()` 窗口事件，断言 sequence 1、2 均到达。 |
+| #30 | `ServerResponse.write()` 返回 `false` 表示 chunk 已被接受但需要背压，旧代码却立即 `closeStream()`，导致 replay 中断。 | `write(false)` 不再关闭连接；事件继续按 Node write 契约写入，背压期间仅暂停 heartbeat，`drain` 清除背压状态。 | 受影响 SSE 回放、malformed stream 与 v1 API 契约测试通过；代码路径不再以 write 返回值调用 `closeStream()`。 |
+| #31 | parallel approval 在 launch 之前持久化为 approved；claim/launch 失败会留下虚假的已批准状态和 approval event。 | parallel 路径先成功 claim/launch，再原子式落 approval resolution 与 event；失败时 approval 保持 pending。 | `tests/runtime.test.ts` 删除待启动 inbox 后批准，断言抛出、approval 仍 pending、没有 approved event。 |
+| #32 | automatic continuation 的第二次 runtime factory 失败虽终结 TaskRun/Attempt，但 continuation 未更新，仍为 running 且保留 lease。 | runtime factory failure 接收 continuation identity/owner；失败路径将 continuation 标记 failed 并清空 lease。 | `tests/runtime.test.ts` 第二次 factory 抛错，断言 TaskRun/Attempt/checkpoint/continuation 均终态且 lease 已清除。 |
+
+### 本轮验证
+
+- `npm run check`：通过。
+- `npx vitest run tests/runtime.test.ts tests/v1-api-differential.test.ts tests/issue-regressions-24-28.test.ts tests/task-run-transition-caller-publish.test.ts --reporter=dot`：4 files、79 tests 全部通过。
+- `git diff --check`：通过。
+- CDP 初次审查时间：`2026-08-09T11:14:34.665Z`；最终复核快照时间：`2026-08-09T11:42:58.934Z`；浏览器 `Chrome/150.0.7871.181`，CDP `1.3`，target `95914B42AFD83DE9E2A44BA13DFC4868`。
+- 修复前最终 CDP 列表复核再次确认开放 Issue 仅有 #29–#32，且逐项页面正文、复现步骤与上述根因和验收条件一致。
+- CDP 于 `2026-08-09T11:55:06.440Z` 逐项确认 #29–#32 均包含修复回复并处于 closed；重新读取开放 Issue 列表返回 `No results`，开放数为 0。

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
 import { AgentService } from "@tagent/core-service/application";
 import { loadConfig } from "@tagent/core-service/config";
 import { Store } from "@tagent/persistence-sqlite/store";
@@ -906,6 +906,47 @@ describe("AgentService runtime boundary", () => {
     expect(store.listContinuations(run.id)[0]).toMatchObject({ ordinal: 1, status: "completed" });
     expect(store.listMessages(session.id).filter((message) => message.role === "assistant").map((message) => message.content)).toEqual(["done"]);
     expect(runtimes[1].prompts[0]).toContain("Automatic continuation 1");
+    store.close();
+  });
+
+  it("keeps a parallel approval pending when the approved launch cannot be claimed", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new DeferredRuntime());
+    const parent = await service.start(session.id, "parent task");
+    const queued = await service.enqueueSessionInput(session.id, "parallel task", "parallel-launch-failure");
+    store.db.prepare("UPDATE session_supervisor_inbox SET relation='parallel', target_run_id=? WHERE id=?").run(parent.id, queued.item.id);
+    const approval = service.requestParallelSessionInputApproval(session.id, queued.item.id);
+    store.deleteSessionInboxItem(queued.item.id, session.id);
+    await expect(service.approveRunApproval(approval.id)).rejects.toThrow("could not start: not_queued");
+    expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "pending", resolvedAt: null });
+    expect(store.listEvents(parent.id).some((event) => event.type === "supervisor.approval.approved" && event.data.approvalId === approval.id)).toBe(false);
+    service.cancel(parent.id);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("fails and releases an automatic continuation when its runtime factory throws", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let calls = 0;
+    const service = new AgentService(agentPersistence(store), "/tmp", (options) => {
+      calls += 1;
+      if (calls === 2) throw new Error("continuation factory unavailable");
+      return new CallbackRuntime(assistantMessage("blocked"), () => {
+        store.upsertPlanItem(options.token.runId, { key: "work", title: "Finish work", status: "pending", required: true, position: 1 });
+      });
+    }, { maxContinuations: 1, supervisorReviewer: reviewer(continuationAudit()) });
+    const run = await service.start(session.id, "continuation factory failure");
+    for (let index = 0; index < 100 && store.listContinuations(run.id)[0]?.status !== "failed"; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(calls).toBe(2);
+    expect(store.getRun(run.id)).toMatchObject({ status: "failed", attempt: 2, blockedReason: "continuation factory unavailable" });
+    expect(store.db.prepare("SELECT status, active FROM attempts WHERE run_id = ? AND ordinal = 2").get(run.id)).toMatchObject({ status: "failed", active: 0 });
+    expect(store.getCheckpoint(run.id)).toMatchObject({ active: false });
+    expect(store.listContinuations(run.id)[0]).toMatchObject({ status: "failed", error: "continuation factory unavailable", leaseOwner: "", leaseUntil: null });
+    await service.closeRuntimes();
     store.close();
   });
 

@@ -7,10 +7,12 @@ import type { AttemptSettlementPort, PostAttemptPort, RunEventPublisherPort } fr
 interface RuntimeFactoryFailureInput {
   state: ExecutionStateView<
     "checkpointDrafts" | "checkpointTokens" | "closing" | "lastCheckpointTranscriptSeq" | "persistence",
-    "attempts" | "taskRuns" | "taskRunTransitions"
+    "attempts" | "continuations" | "taskRuns" | "taskRunTransitions"
   >;
   run: TaskRun;
   token: AttemptExecutionToken;
+  continuationId?: string;
+  continuationOwner: string;
   launchOptions?: { initialize?: boolean; inboxItemId?: string; retry?: boolean };
   error: unknown;
   settlement: AttemptSettlementPort;
@@ -36,6 +38,10 @@ export function settleRuntimeFactoryFailure(input: RuntimeFactoryFailureInput): 
       eventHub: input.eventHub,
     });
   } finally {
+    if (input.continuationId && state.persistence.continuations.ownsContinuationLease(input.continuationId, input.continuationOwner)) {
+      const message = input.error instanceof Error ? input.error.message : String(input.error);
+      state.persistence.continuations.updateContinuation(input.continuationId, "failed", message, input.continuationOwner);
+    }
     state.persistence.attempts.releaseExecutionLease({
       attemptId: token.attemptId,
       ownerId: token.ownerId,

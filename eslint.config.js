@@ -5,7 +5,6 @@ const concretePackages = [
   "fastify",
   "better-sqlite3",
   "@earendil-works/pi-agent-core",
-  "@earendil-works/pi-coding-agent",
   "@earendil-works/pi-ai",
 ];
 
@@ -63,7 +62,6 @@ const workspaceBoundaries = [
   ]),
   workspaceBoundary("runtime-pi", ["adapters/runtime-pi/src/**/*.{ts,tsx}"], ["@tagent/execution"], [
     "@earendil-works/pi-agent-core",
-    "@earendil-works/pi-coding-agent",
     "@earendil-works/pi-ai",
   ]),
   workspaceBoundary("persistence-sqlite", ["adapters/persistence-sqlite/src/**/*.{ts,tsx}"], [
@@ -73,9 +71,7 @@ const workspaceBoundaries = [
     "@tagent/learning",
     "@tagent/memory",
   ], ["better-sqlite3"]),
-  workspaceBoundary("workspace-local", ["adapters/workspace-local/src/**/*.{ts,tsx}"], ["@tagent/execution"], [
-    "@earendil-works/pi-agent-core",
-  ]),
+  workspaceBoundary("workspace-local", ["adapters/workspace-local/src/**/*.{ts,tsx}"], ["@tagent/execution"]),
   workspaceBoundary("http-fastify", ["adapters/http-fastify/src/**/*.{ts,tsx}"], [
     "@tagent/abi",
     "@tagent/admission",
@@ -92,7 +88,7 @@ const workspaceBoundaries = [
     "@tagent/persistence-sqlite",
     "@tagent/runtime-pi",
     "@tagent/workspace-local",
-  ], ["@earendil-works/pi-ai"]),
+  ]),
   workspaceBoundary("web", ["apps/web-console/src/**/*.{ts,tsx}"], ["@tagent/abi", "@tagent/core-client"]),
 ];
 

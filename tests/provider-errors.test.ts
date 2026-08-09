@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { RuntimeMessage } from "@tagent/execution/ports";
+type AssistantMessage = Extract<RuntimeMessage, { role: "assistant" }>;
 import { classifyProviderFailure, isRetryableProviderFailure } from "@tagent/runtime-pi/provider-errors";
 
 function error(message: string, stopReason: AssistantMessage["stopReason"] = "error"): AssistantMessage {

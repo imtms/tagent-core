@@ -190,7 +190,7 @@ export class AttemptExecutor {
         historicalTaskRunReceiptChars: this.state.runtimeDefaults.historicalTaskRunReceiptChars,
       });
     } catch (error) {
-      settleRuntimeFactoryFailure({ state: this.state, run, token, launchOptions, error,
+      settleRuntimeFactoryFailure({ state: this.state, run, token, continuationId, continuationOwner: this.state.continuationOwner, launchOptions, error,
         settlement: this.dependencies.settlement, postAttempt: this.dependencies.postAttempt, eventHub: this.dependencies.eventHub });
       return;
     }

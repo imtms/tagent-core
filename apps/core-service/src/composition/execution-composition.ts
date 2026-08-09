@@ -44,7 +44,7 @@ import {
   type RunContextPort,
   type SupervisorPort,
 } from "@tagent/execution/composition";
-import type { AttemptRuntimeFactory } from "@tagent/execution/ports";
+import type { AttemptRuntimeFactory, RuntimeModelSpec } from "@tagent/execution/ports";
 import { createRuntimeHost } from "./runtime-host-adapter.js";
 import { createProjectContextSource } from "@tagent/workspace-local/project-context";
 import { createWorkspaceArtifactSink } from "@tagent/workspace-local/artifact-file-sink";
@@ -53,7 +53,6 @@ import type { AdmissionDispatchPort } from "@tagent/admission/composition";
 import type { AgentServicePersistencePort } from "../application/ports/index.js";
 import type { MemoryFacade } from "@tagent/memory";
 import type { LearningFeatureControl, SemanticJudge } from "@tagent/learning";
-import type { Model } from "@earendil-works/pi-ai/compat";
 import type { SupervisorReviewer } from "./supervisor-reviewer.js";
 import { createExecutionCollaborationAdapters } from "./execution-collaboration-adapters.js";
 import { CoreApplicationCoordinator } from "../application/core-application-coordinator.js";
@@ -62,9 +61,9 @@ import { CoreWorkspaceGoalApplication, type WorkspaceGoalRoadmapGenerator } from
 import { OpenAiWorkspaceGoalRoadmapGenerator } from "./workspace-goal-roadmap-generator.js";
 
 export type CoreRuntimeDefaults = ExecutionRuntimeDefaults & {
-  routerModel?: Model<"openai-completions">;
+  routerModel?: RuntimeModelSpec;
   routerTimeoutMs?: number;
-  supervisorModel?: Model<"openai-completions">;
+  supervisorModel?: RuntimeModelSpec;
   supervisorTimeoutMs?: number;
   supervisorReviewer?: SupervisorReviewer;
   workspaceGoalRoadmapGenerator?: WorkspaceGoalRoadmapGenerator;
@@ -84,7 +83,7 @@ export interface ExecutionCompositionOptions {
   startupOptions?: ExecutionCoordinatorStartupOptions;
 }
 
-function createSessionInputModelPort(model: Model<"openai-completions">, apiKey: string, timeoutMs: number): SessionInputModelPort {
+function createSessionInputModelPort(model: RuntimeModelSpec, apiKey: string, timeoutMs: number): SessionInputModelPort {
   return { request: async ({ prompt }) => {
     const controller = new AbortController();
     const usage: OpenAiUsage[] = [];
@@ -135,8 +134,8 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
   }
   const reviewer = runtimeDefaults.supervisorReviewer ?? (runtimeDefaults.model && runtimeDefaults.apiKey
     ? new OpenAiSupervisorReviewer({
-        model: runtimeDefaults.supervisorModel ?? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions">,
-        fallbackModel: runtimeDefaults.supervisorModel ? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions"> : undefined,
+        model: runtimeDefaults.supervisorModel ?? runtimeDefaults.model as RuntimeModelSpec,
+        fallbackModel: runtimeDefaults.supervisorModel ? runtimeDefaults.model as RuntimeModelSpec : undefined,
         apiKey: runtimeDefaults.apiKey,
         timeoutMs: runtimeDefaults.supervisorTimeoutMs ?? runtimeDefaults.providerTimeoutMs,
         onUsage: (runId, model, usage) => options.persistence.taskRuns.recordModelUsage(runId, "supervisor", model, usage),
@@ -153,7 +152,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     isReviewError: (error) => error instanceof SupervisorReviewError,
   };
   const routerModel = runtimeDefaults.routerModel
-    ?? runtimeDefaults.model as import("@earendil-works/pi-ai/compat").Model<"openai-completions"> | undefined;
+    ?? runtimeDefaults.model as RuntimeModelSpec | undefined;
   const routerTimeoutMs = runtimeDefaults.routerTimeoutMs ?? 5_000;
   const sessionRouter = new SessionInputRouter({
     model: routerModel && runtimeDefaults.apiKey

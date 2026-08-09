@@ -3,9 +3,8 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { Type, type Static } from "typebox";
-import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RunId } from "@tagent/execution/domain";
-import type { TaskRunStateMutation, ToolCapabilityApplicationPort } from "@tagent/execution/ports";
+import type { RuntimeTool, RuntimeToolResult, TaskRunStateMutation, ToolCapabilityApplicationPort } from "@tagent/execution/ports";
 import { listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "./workspace-path.js";
 
 const MAX_OUTPUT = 24_000;
@@ -49,7 +48,7 @@ const TaskRunSchema = Type.Object({
   mutations: Type.Optional(Type.Array(TaskRunBatchMutationSchema, { minItems: 1, maxItems: 50 })),
 });
 
-function textResult(text: string, details: Record<string, unknown> = {}): AgentToolResult<Record<string, unknown>> {
+function textResult(text: string, details: Record<string, unknown> = {}): RuntimeToolResult<Record<string, unknown>> {
   return { content: [{ type: "text", text: previewText(text) }], details };
 }
 
@@ -89,7 +88,7 @@ async function persistToolOutputArtifact(
 async function durableTextResult(
   capabilities: ToolCapabilityApplicationPort, toolCallId: string, text: string,
   details: Record<string, unknown> = {}, title = "Tool output", sourceTotalBytes = Buffer.byteLength(text), truncatedAtSource = false,
-): Promise<AgentToolResult<Record<string, unknown>>> {
+): Promise<RuntimeToolResult<Record<string, unknown>>> {
   const shown = previewText(text);
   const totalBytes = sourceTotalBytes;
   if (totalBytes <= MAX_OUTPUT && !truncatedAtSource) return { content: [{ type: "text", text: shown }], details: { ...details, totalBytes, shownBytes: Buffer.byteLength(shown), outputDiscardedBytes: 0 } };
@@ -117,7 +116,7 @@ async function executeMutation(
   toolCallId: string,
   operationType: string,
   payload: unknown,
-  effect: () => Promise<AgentToolResult<Record<string, unknown>>>,
+  effect: () => Promise<RuntimeToolResult<Record<string, unknown>>>,
   options: { invalidatesChecks?: boolean } = {},
 ) {
   const { runId } = capabilities;
@@ -126,7 +125,7 @@ async function executeMutation(
   const id = operationId(runId, attempt, toolCallId);
   const receipt = capabilities.claimOperation(id, operationType, payload);
   if (!receipt.claimed) {
-    if (receipt.status === "succeeded") return receipt.result as AgentToolResult<Record<string, unknown>>;
+    if (receipt.status === "succeeded") return receipt.result as RuntimeToolResult<Record<string, unknown>>;
     throw new Error(`Operation ${id} cannot be replayed from status ${receipt.status}`);
   }
   try {
@@ -135,7 +134,7 @@ async function executeMutation(
     const observedAt = Date.now();
     const resultDigest = createHash("sha256").update(JSON.stringify(result)).digest("hex");
     const receiptMarker = `\n[trusted operation receipt: ${id}]`;
-    const evidencedResult: AgentToolResult<Record<string, unknown>> = {
+    const evidencedResult: RuntimeToolResult<Record<string, unknown>> = {
       ...result,
       content: result.content.map((part, index) => index === 0 && part.type === "text"
         ? { ...part, text: previewText(`${part.text}${receiptMarker}`) }
@@ -156,13 +155,13 @@ async function executeMutation(
   }
 }
 
-export function createTools(capabilities: ToolCapabilityApplicationPort, workspace: string): AgentTool[] {
+export function createTools(capabilities: ToolCapabilityApplicationPort, workspace: string): RuntimeTool[] {
   const requireWorkspaceMutationAuthorization = () => {
     const authorization = capabilities.authorizeWorkspaceMutation();
     if (!authorization.allowed) throw new Error(`Workspace Goal mutation guard: ${authorization.reason}`);
   };
   const { runId } = capabilities;
-  const listTool: AgentTool<typeof ListSchema, Record<string, unknown>> = {
+  const listTool: RuntimeTool<Static<typeof ListSchema>, Record<string, unknown>> = {
     name: "ls", label: "List directory", description: "List entries in a workspace directory.", parameters: ListSchema,
     async execute(_id, params: Static<typeof ListSchema>) {
       const target = params.path ?? ".";
@@ -173,7 +172,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
     },
   };
 
-  const readTool: AgentTool<typeof ReadSchema, Record<string, unknown>> = {
+  const readTool: RuntimeTool<Static<typeof ReadSchema>, Record<string, unknown>> = {
     name: "read", label: "Read file", description: "Read a UTF-8 text file inside the workspace.", parameters: ReadSchema,
     async execute(id, params: Static<typeof ReadSchema>) {
       const { path: filename, relative, metadata: file, buffer } = await readWorkspaceFile(workspace, params.path);
@@ -188,7 +187,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
     },
   };
 
-  const writeTool: AgentTool<typeof WriteSchema, Record<string, unknown>> = {
+  const writeTool: RuntimeTool<Static<typeof WriteSchema>, Record<string, unknown>> = {
     name: "write", label: "Write file", description: "Create or overwrite a UTF-8 file inside the workspace.", parameters: WriteSchema, executionMode: "sequential",
     async execute(id, params: Static<typeof WriteSchema>) {
       requireWorkspaceMutationAuthorization();
@@ -199,7 +198,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
     },
   };
 
-  const editTool: AgentTool<typeof EditSchema, Record<string, unknown>> = {
+  const editTool: RuntimeTool<Static<typeof EditSchema>, Record<string, unknown>> = {
     name: "edit", label: "Edit file", description: "Apply a snapshot-bound exact edit. Use snapshotId/contentHash returned by read; stale snapshots are rejected.", parameters: EditSchema, executionMode: "sequential",
     async execute(id, params: Static<typeof EditSchema>) {
       requireWorkspaceMutationAuthorization();
@@ -219,7 +218,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
     },
   };
 
-  const patchTool: AgentTool<typeof PatchSchema, Record<string, unknown>> = {
+  const patchTool: RuntimeTool<Static<typeof PatchSchema>, Record<string, unknown>> = {
     name: "patch", label: "Patch files", description: "Atomically apply a snapshot-bound multi-file patch after preflighting every file and hunk.", parameters: PatchSchema, executionMode: "sequential",
     async execute(id, params: Static<typeof PatchSchema>) {
       requireWorkspaceMutationAuthorization();
@@ -239,7 +238,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
     },
   };
 
-  const bashTool: AgentTool<typeof BashSchema, Record<string, unknown>> = {
+  const bashTool: RuntimeTool<Static<typeof BashSchema>, Record<string, unknown>> = {
     name: "bash", label: "Run command", description: "Run a non-interactive shell command in the workspace. Destructive commands are blocked.", parameters: BashSchema, executionMode: "sequential",
     async execute(id, params: Static<typeof BashSchema>, signal, onUpdate) {
       requireWorkspaceMutationAuthorization();
@@ -247,7 +246,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
         if (/\b(rm\s+-rf|mkfs|shutdown|reboot|poweroff|git\s+reset\s+--hard|git\s+clean\s+-[a-z]*f)\b/i.test(params.command)) throw new Error("Command blocked by the minimal safety policy");
         const chainedStages = (params.command.match(/(?:&&|;|\|\||\n)/g) ?? []).length + 1;
         if (chainedStages >= BASH_CHAIN_WARNING_THRESHOLD) capabilities.publish("tool.bash.composite", { toolCallId: id, chainedStages, recommendation: "Split build, test, deploy, restart, and polling into separately evidenced commands so a late timeout does not repeat earlier stages." });
-        return await new Promise<AgentToolResult<Record<string, unknown>>>((resolve, reject) => {
+        return await new Promise<RuntimeToolResult<Record<string, unknown>>>((resolve, reject) => {
           const child = spawn("bash", ["-lc", params.command], { cwd: workspace, env: process.env, detached: process.platform !== "win32" });
         const stdoutChunks: Buffer[] = [];
         const stderrChunks: Buffer[] = [];
@@ -316,7 +315,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
           const stderr = Buffer.concat(stderrChunks).toString("utf8");
           const combined = [stdout, stderr && `STDERR:\n${stderr}`].filter(Boolean).join("\n");
           const totalBytes = stdoutBytes + stderrBytes;
-          let result: AgentToolResult<Record<string, unknown>>;
+          let result: RuntimeToolResult<Record<string, unknown>>;
           if (totalBytes > MAX_OUTPUT || sourceDroppedBytes > 0) {
             const stored = await persistToolOutputArtifact(capabilities, id, await readWorkspaceFile(workspace, captureRelative).then((value) => value.buffer), `Command output: ${params.command.slice(0, 80)}`, totalBytes, totalBytes > (capabilities.artifactSink?.maxBytes ?? MAX_DURABLE_OUTPUT));
             const shown = previewText(combined || "Command completed with no output");
@@ -342,7 +341,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
     },
   };
 
-  const taskRunTool: AgentTool<typeof TaskRunSchema, Record<string, unknown>> = {
+  const taskRunTool: RuntimeTool<Static<typeof TaskRunSchema>, Record<string, unknown>> = {
     name: "task_run", label: "Update task", description: "Inspect or update the current durable TaskRun. Passed required checks are bound to an actual successful Bash receipt; self-reported evidence is not trusted. Use action=batch to combine independent mutations in one model round-trip.", parameters: TaskRunSchema, executionMode: "sequential",
     async execute(_id, params: Static<typeof TaskRunSchema>) {
       let recentOperations: ReturnType<ToolCapabilityApplicationPort["listOperations"]> | undefined;
@@ -432,13 +431,13 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
     },
   };
 
-  const tools:AgentTool[]=[listTool, readTool, writeTool, editTool, patchTool, bashTool, taskRunTool];
+  const tools:RuntimeTool[]=[listTool, readTool, writeTool, editTool, patchTool, bashTool, taskRunTool];
   const memory = capabilities.memory;
   if(memory){
-    const memorySearchTool:AgentTool<typeof MemorySearchSchema,Record<string,unknown>>={name:"memory_search",label:"Search memory",description:"Search long-term memory when automatic recall is insufficient. Returns cards, topic IDs, confidence and provenance routes.",parameters:MemorySearchSchema,async execute(_id,params:Static<typeof MemorySearchSchema>){return textResult(JSON.stringify(await memory.search(params.query,params.kinds,params.maxResults),null,2));}};tools.push(memorySearchTool);
-    const memoryTopicTool:AgentTool<typeof MemoryTopicSchema,Record<string,unknown>>={name:"memory_topic_get",label:"Read memory topic",description:"Read one complete canonical Cold Topic page by exact topic ID.",parameters:MemoryTopicSchema,async execute(_id,params:Static<typeof MemoryTopicSchema>){const topic=await memory.getTopic(params.topicId);if(!topic)throw new Error("Memory topic not found");return textResult(topic.body,{topicId:params.topicId,revision:topic.revision,checksum:topic.checksum});}};tools.push(memoryTopicTool);
-    const memoryRecordTool:AgentTool<typeof MemoryRecordSchema,Record<string,unknown>>={name:"memory_record_get",label:"Read memory record",description:"Read one full memory record including source references, provenance, status, validity and canonical semantics.",parameters:MemoryRecordSchema,async execute(_id,params:Static<typeof MemoryRecordSchema>){const record=await memory.getRecord(params.id);if(!record)throw new Error("Memory record not found");return textResult(JSON.stringify(record,null,2));}};tools.push(memoryRecordTool);
-    const memoryForgetTool:AgentTool<typeof MemoryForgetSchema,Record<string,unknown>>={name:"memory_forget",label:"Forget memory",description:"Forget specified memory record IDs or Topic IDs. Use only when the user explicitly requests deletion or correction.",parameters:MemoryForgetSchema,executionMode:"sequential",async execute(id,params:Static<typeof MemoryForgetSchema>){if(!params.ids?.length&&!params.topicIds?.length)throw new Error("Memory forget requires at least one record ID or Topic ID");return executeMutation(capabilities,id,"tool.memory_forget",params,async()=>textResult(JSON.stringify(await memory.forget(params),null,2)));}};tools.push(memoryForgetTool);
+    const memorySearchTool:RuntimeTool<Static<typeof MemorySearchSchema>,Record<string,unknown>>={name:"memory_search",label:"Search memory",description:"Search long-term memory when automatic recall is insufficient. Returns cards, topic IDs, confidence and provenance routes.",parameters:MemorySearchSchema,async execute(_id,params:Static<typeof MemorySearchSchema>){return textResult(JSON.stringify(await memory.search(params.query,params.kinds,params.maxResults),null,2));}};tools.push(memorySearchTool);
+    const memoryTopicTool:RuntimeTool<Static<typeof MemoryTopicSchema>,Record<string,unknown>>={name:"memory_topic_get",label:"Read memory topic",description:"Read one complete canonical Cold Topic page by exact topic ID.",parameters:MemoryTopicSchema,async execute(_id,params:Static<typeof MemoryTopicSchema>){const topic=await memory.getTopic(params.topicId);if(!topic)throw new Error("Memory topic not found");return textResult(topic.body,{topicId:params.topicId,revision:topic.revision,checksum:topic.checksum});}};tools.push(memoryTopicTool);
+    const memoryRecordTool:RuntimeTool<Static<typeof MemoryRecordSchema>,Record<string,unknown>>={name:"memory_record_get",label:"Read memory record",description:"Read one full memory record including source references, provenance, status, validity and canonical semantics.",parameters:MemoryRecordSchema,async execute(_id,params:Static<typeof MemoryRecordSchema>){const record=await memory.getRecord(params.id);if(!record)throw new Error("Memory record not found");return textResult(JSON.stringify(record,null,2));}};tools.push(memoryRecordTool);
+    const memoryForgetTool:RuntimeTool<Static<typeof MemoryForgetSchema>,Record<string,unknown>>={name:"memory_forget",label:"Forget memory",description:"Forget specified memory record IDs or Topic IDs. Use only when the user explicitly requests deletion or correction.",parameters:MemoryForgetSchema,executionMode:"sequential",async execute(id,params:Static<typeof MemoryForgetSchema>){if(!params.ids?.length&&!params.topicIds?.length)throw new Error("Memory forget requires at least one record ID or Topic ID");return executeMutation(capabilities,id,"tool.memory_forget",params,async()=>textResult(JSON.stringify(await memory.forget(params),null,2)));}};tools.push(memoryForgetTool);
   }
   return tools;
 }

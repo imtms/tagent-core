@@ -23,6 +23,10 @@ export type {
   RuntimeUsage,
   RuntimeModelSpec,
   RuntimeQueueResult,
+  RuntimeTool,
+  RuntimeToolExecutionMode,
+  RuntimeToolResult,
+  RuntimeToolUpdateCallback,
 } from "./attempt-runtime.js";
 export type {
   AttemptAuthorityRepository,

@@ -76,17 +76,22 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
     let unsubscribe = () => {};
     let closed = false;
     let replaying = true;
+    let backpressured = false;
     const buffered: ReturnType<typeof service.replay> = [];
     let bufferedOffset = 0;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
+    const clearBackpressure = (): void => { backpressured = false; };
     const closeStream = (): void => {
       if (closed) return;
       closed = true;
       if (heartbeat) clearInterval(heartbeat);
       try { unsubscribe(); } catch { /* stream closure must remain deterministic */ }
+      response.off("drain", clearBackpressure);
       if (!response.writableEnded) response.end();
     };
     response.once("close", closeStream);
+    response.on("error", closeStream);
+    response.on("drain", clearBackpressure);
     const generationIsCurrent = (): boolean =>
       eventConsumers.getEventConsumer(taskRunId, query.consumerId)?.generation === query.generation;
     const send = (event: ReturnType<typeof service.replay>[number]): boolean => {
@@ -97,8 +102,8 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
         const projected = encodeAbi(schema, publicEvent as never);
         const mapped = encodeAbi(TaskRunEventSchema, projected as never);
         const accepted = response.write(`id: ${mapped.eventId}\ndata: ${JSON.stringify(mapped)}\n\n`);
-        if (!accepted) closeStream();
-        return accepted;
+        if (!accepted) backpressured = true;
+        return !closed;
       } catch {
         closeStream();
         return false;
@@ -177,11 +182,14 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
     if (closed) return;
     heartbeat = setInterval(() => {
       try {
-        if (!generationIsCurrent() || !response.write(": heartbeat\n\n")) closeStream();
+        if (!generationIsCurrent()) return closeStream();
+        if (closed || backpressured) return;
+        if (!response.write(": heartbeat\n\n")) backpressured = true;
       } catch {
         closeStream();
       }
     }, 15_000);
+    request.raw.on("close", closeStream);
   });
 
   app.post("/api/v1/task-runs/:taskRunId/event-consumers/:consumerId/ack", {

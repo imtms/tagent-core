@@ -58,9 +58,35 @@ export type RuntimeMessage =
   | { role: "branchSummary"; summary: string; fromId: string; timestamp: number }
   | { role: "compactionSummary"; summary: string; tokensBefore: number; timestamp: number };
 
-/** Opaque capability values are created by a host adapter and consumed by a runtime adapter. */
+export interface RuntimeToolResult<TDetails = unknown> {
+  content: Array<RuntimeTextPart | RuntimeImagePart>;
+  details: TDetails;
+  usage?: RuntimeUsage;
+  addedToolNames?: string[];
+  terminate?: boolean;
+}
+
+export type RuntimeToolUpdateCallback<TDetails = unknown> = (partialResult: RuntimeToolResult<TDetails>) => void;
+export type RuntimeToolExecutionMode = "sequential" | "parallel";
+
+/** Runtime-neutral tool ABI owned by Execution and adapted at the concrete runtime boundary. */
+export interface RuntimeTool<TParameters = unknown, TDetails = unknown> {
+  name: string;
+  label: string;
+  description: string;
+  parameters: unknown;
+  prepareArguments?: (args: unknown) => TParameters;
+  execute(
+    toolCallId: string,
+    params: TParameters,
+    signal?: AbortSignal,
+    onUpdate?: RuntimeToolUpdateCallback<TDetails>,
+  ): Promise<RuntimeToolResult<TDetails>>;
+  executionMode?: RuntimeToolExecutionMode;
+}
+
 export interface RuntimeCapabilityCatalog {
-  readonly tools: readonly unknown[];
+  readonly tools: readonly RuntimeTool[];
 }
 
 export interface RuntimeEventSink {

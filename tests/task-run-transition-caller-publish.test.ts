@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
 import type { AttemptRuntimePort } from "@tagent/execution/ports";
 import { settleRuntimeInitializationFailure } from "../packages/execution/src/application/runtime-initialization-failure.js";
 import { AgentService } from "@tagent/core-service/application";

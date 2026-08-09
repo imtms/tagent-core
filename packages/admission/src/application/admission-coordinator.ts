@@ -278,16 +278,20 @@ export class AdmissionCoordinator {
 
   async approveRunApproval(approvalId: string, resolution = "Approved by user") {
     const pending = this.state.persistence.approvals.getApprovalRequest(approvalId);
-    if (!pending) throw new Error("Approval request is not pending");
+    if (!pending || pending.status !== "pending") throw new Error("Approval request is not pending");
     const metadata = pending.metadata as {sessionId?:string;inboxItemId?:string};
+    if (pending.actionType === "start_parallel_taskrun") {
+      if (!metadata.sessionId || !metadata.inboxItemId) throw new Error("Parallel Session Inbox approval metadata is incomplete");
+      const launched = this.launchSessionInboxNow(metadata.sessionId, metadata.inboxItemId, true);
+      if (launched.status !== "started") throw new Error(`Parallel Session Inbox task could not start: ${launched.status}`);
+      const approval = this.state.persistence.approvals.resolveApprovalRequest(approvalId, "approved", "user", resolution);
+      if (!approval) throw new Error("Approval request is not pending");
+      this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(approval.runId, "supervisor.approval.approved", { approvalId, resolution }));
+      return launched.run;
+    }
     const approval = this.state.persistence.approvals.resolveApprovalRequest(approvalId, "approved", "user", resolution);
     if (!approval) throw new Error("Approval request is not pending");
     this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(approval.runId, "supervisor.approval.approved", { approvalId, resolution }));
-    if (pending.actionType === "start_parallel_taskrun" && metadata.sessionId && metadata.inboxItemId) {
-      const launched = this.launchSessionInboxNow(metadata.sessionId, metadata.inboxItemId, true);
-      if (launched.status !== "started") throw new Error(`Parallel Session Inbox task could not start: ${launched.status}`);
-      return launched.run;
-    }
     return this.dependencies.contextService.resume(approval.runId, { approvalId });
   }
 

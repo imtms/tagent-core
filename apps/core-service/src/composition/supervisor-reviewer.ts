@@ -1,4 +1,4 @@
-import type { Model } from "@earendil-works/pi-ai/compat";
+import type { RuntimeModelSpec } from "@tagent/execution/ports";
 import type { ContextManifest, TaskRunWorkspaceGoalSnapshot } from "@tagent/execution/domain";
 import type {
   CriterionCoverage,
@@ -229,7 +229,7 @@ function repairJsonSyntax(raw: string): unknown {
 export class OpenAiSupervisorReviewer implements SupervisorReviewer {
   readonly evaluator = "llm" as const;
   readonly model: string;
-  constructor(private readonly options: { model: Model<"openai-completions">; fallbackModel?: Model<"openai-completions">; apiKey: string; timeoutMs?: number; onUsage?: (runId: string, model: string, usage: import("./openai-sse.js").OpenAiUsage) => void }) { this.model = options.model.id; }
+  constructor(private readonly options: { model: RuntimeModelSpec; fallbackModel?: RuntimeModelSpec; apiKey: string; timeoutMs?: number; onUsage?: (runId: string, model: string, usage: import("./openai-sse.js").OpenAiUsage) => void }) { this.model = options.model.id; }
 
   async reviewSettled(input: SupervisorSettledReviewInput): Promise<SupervisorAudit> {
     const criteria = input.run.contract?.acceptanceCriteria ?? [];
@@ -521,7 +521,7 @@ Action must agree with the completion failures. TASKRUN_DATA=${JSON.stringify(pa
     throw lastError;
   }
 
-  private async requestModel(prompt: string, model: Model<"openai-completions">, runId: string): Promise<string> {
+  private async requestModel(prompt: string, model: RuntimeModelSpec, runId: string): Promise<string> {
     const controller = new AbortController();
     const idleTimeoutMs = this.options.timeoutMs ?? 5_000;
     const headerTimer = setTimeout(() => controller.abort(new OpenAiSseIdleTimeoutError(idleTimeoutMs)), idleTimeoutMs);

@@ -61,17 +61,17 @@ const rejectedProbes: LintProbe[] = [
     source: 'import "better-sqlite3";\n',
   },
   {
-    name: "pi-agent-core is concrete to runtime and local-workspace adapters",
+    name: "pi-agent-core is concrete to the runtime adapter",
     filePath: "packages/execution/src/eslint-probe.ts",
     source: 'import "@earendil-works/pi-agent-core";\n',
   },
   {
-    name: "pi-coding-agent is concrete to the runtime adapter",
-    filePath: "adapters/workspace-local/src/eslint-probe.ts",
-    source: 'import "@earendil-works/pi-coding-agent";\n',
+    name: "pi-ai is forbidden from core-service composition",
+    filePath: "apps/core-service/src/eslint-probe.ts",
+    source: 'import "@earendil-works/pi-ai/compat";\n',
   },
   {
-    name: "pi-ai is concrete to runtime and core composition",
+    name: "pi-ai is concrete to the runtime adapter",
     filePath: "adapters/http-fastify/src/eslint-probe.ts",
     source: 'import "@earendil-works/pi-ai/compat";\n',
   },
@@ -94,14 +94,18 @@ const acceptedProbes: LintProbe[] = [
     source: 'import "@tagent/abi/channel/v1";\nimport "fastify";\n',
   },
   {
-    name: "Core service may import adapters and pi-ai",
+    name: "Core service may import reviewed adapters",
     filePath: "apps/core-service/src/eslint-probe.ts",
     source: [
       'import "@tagent/http-fastify";',
       'import "@tagent/persistence-sqlite";',
-      'import "@earendil-works/pi-ai/compat";',
       "",
     ].join("\n"),
+  },
+  {
+    name: "Runtime adapter may import pi-agent-core and pi-ai",
+    filePath: "adapters/runtime-pi/src/eslint-probe.ts",
+    source: 'import "@earendil-works/pi-agent-core";\nimport "@earendil-works/pi-ai";\n',
   },
   {
     name: "Web may import channel ABI and Core client",

@@ -1,6 +1,6 @@
 import type { ServiceCredential, ServiceScope } from "@tagent/http-fastify";
 import type { GovernanceApprovalAuthority } from "@tagent/governance/domain";
-import type { Model } from "@earendil-works/pi-ai/compat";
+import type { RuntimeModelSpec } from "@tagent/execution/ports";
 
 export interface ModelConfig {
   provider: string;
@@ -429,34 +429,15 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
   };
 }
 
-export function createModel(config: ModelConfig): Model<any> {
-  const model: Model<any> = {
+export function createModel(config: ModelConfig): RuntimeModelSpec {
+  const model: RuntimeModelSpec = {
     id: config.modelId,
-    name: config.modelId,
     api: config.api,
     provider: config.provider,
     baseUrl: config.baseUrl,
     reasoning: config.reasoning,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: config.contextWindow,
     maxTokens: config.maxTokens,
-    compat: {
-      supportsStore: false,
-      supportsDeveloperRole: true,
-      supportsReasoningEffort: config.reasoning,
-      supportsUsageInStreaming: true,
-      maxTokensField: "max_completion_tokens",
-      requiresToolResultName: false,
-      requiresAssistantAfterToolResult: false,
-      requiresThinkingAsText: false,
-      requiresReasoningContentOnAssistantMessages: false,
-      thinkingFormat: "openai",
-      supportsStrictMode: true,
-      sendSessionAffinityHeaders: false,
-      supportsLongCacheRetention: config.api === "anthropic-messages",
-    },
   };
-  if (config.api === "anthropic-messages") delete model.compat;
   return model;
 }

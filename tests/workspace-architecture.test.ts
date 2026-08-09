@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = process.cwd();
 const workspaceGroups = ["packages", "adapters", "apps"] as const;
-const internalVersion = "0.4.1";
+const internalVersion = "0.5.0";
 const expectedInternalGraph = {
   "@tagent/abi": [],
   "@tagent/core-client": ["@tagent/abi"],
@@ -477,9 +477,8 @@ describe("workspace architecture", () => {
     const concreteOwners = new Map<string, Set<string>>([
       ["fastify", new Set(["adapters/http-fastify"])],
       ["better-sqlite3", new Set(["adapters/persistence-sqlite"])],
-      ["@earendil-works/pi-agent-core", new Set(["adapters/runtime-pi", "adapters/workspace-local"])],
-      ["@earendil-works/pi-coding-agent", new Set(["adapters/runtime-pi"])],
-      ["@earendil-works/pi-ai", new Set(["adapters/runtime-pi", "apps/core-service"])],
+      ["@earendil-works/pi-agent-core", new Set(["adapters/runtime-pi"])],
+      ["@earendil-works/pi-ai", new Set(["adapters/runtime-pi"])],
     ]);
     const violations: string[] = [];
     for (const workspace of workspaces) {

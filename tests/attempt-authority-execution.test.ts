@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
 import { AgentService, type AgentServicePersistencePort } from "@tagent/core-service/application";
 import { passingTestAudit, TestSupervisorReviewer, type SupervisorReviewer } from "@tagent/core-service/composition";
 import { ATTEMPT_AUTHORITY_SCENARIOS } from "@tagent/execution/domain";

@@ -650,6 +650,80 @@ describe("v1 API contracts", () => {
     }));
   });
 
+  it("subscribes before capturing the SSE replay watermark so gap events are delivered", async () => {
+    const { app, service, store } = await fixture();
+    const run = store.createRun(store.createSession().id, "replay subscription gap");
+    store.appendEvent(run.id, "run.updated", { step: 1 });
+    const claim = decodeAbi(EventConsumerClaimResponseSchema, (await app.inject({
+      method: "POST",
+      url: `/api/v1/task-runs/${run.id}/event-consumers/gap-client/claim`,
+    })).json()).data.cursor;
+    const originalGetRun = service.getRun.bind(service);
+    let getRunCalls = 0;
+    vi.spyOn(service, "getRun").mockImplementation((runId) => {
+      getRunCalls += 1;
+      if (runId === run.id && getRunCalls === 2) store.appendEvent(run.id, "run.updated", { step: 2 });
+      return originalGetRun(runId);
+    });
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const controller = new AbortController();
+    const response = await fetch(`${address}/api/v1/task-runs/${run.id}/events?consumerId=gap-client&generation=${claim.generation}&after=0`, { signal: controller.signal });
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let body = "";
+    while ((body.match(/^id: /gm)?.length ?? 0) < 2) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      body += decoder.decode(chunk.value, { stream: true });
+    }
+    controller.abort();
+    await reader.cancel().catch(() => {});
+    expect([...body.matchAll(/"sequence":(\d+)/g)].map((match) => Number(match[1]))).toEqual([1, 2]);
+  });
+
+  it("does not close an SSE stream when write reports backpressure", async () => {
+    const { app, store } = await fixture();
+    const run = store.createRun(store.createSession().id, "replay backpressure");
+    store.appendEvent(run.id, "run.updated", { step: 1 });
+    const claim = decodeAbi(EventConsumerClaimResponseSchema, (await app.inject({
+      method: "POST",
+      url: `/api/v1/task-runs/${run.id}/event-consumers/backpressure-client/claim`,
+    })).json()).data.cursor;
+    const { ServerResponse } = await import("node:http");
+    const rawWrite = ServerResponse.prototype.write;
+    let sseResponse: import("node:http").ServerResponse | undefined;
+    const writeSpy = vi.spyOn(ServerResponse.prototype, "write").mockImplementation(function (
+      this: import("node:http").ServerResponse,
+      chunk: string | Uint8Array,
+      encodingOrCallback?: BufferEncoding | ((error: Error | null | undefined) => void),
+      callback?: (error: Error | null | undefined) => void,
+    ) {
+      const result = typeof encodingOrCallback === "function"
+        ? (rawWrite as unknown as (this: import("node:http").ServerResponse, chunk: string | Uint8Array, callback: (error: Error | null | undefined) => void) => boolean).call(this, chunk, encodingOrCallback)
+        : encodingOrCallback === undefined
+          ? (rawWrite as unknown as (this: import("node:http").ServerResponse, chunk: string | Uint8Array) => boolean).call(this, chunk)
+          : rawWrite.call(this, chunk, encodingOrCallback, callback);
+      if (!sseResponse && String(chunk).startsWith("id: ")) {
+        sseResponse = writeSpy.mock.contexts.at(-1) as import("node:http").ServerResponse;
+        return false;
+      }
+      return result;
+    });
+    const endSpy = vi.spyOn(ServerResponse.prototype, "end");
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const controller = new AbortController();
+    const response = await fetch(`${address}/api/v1/task-runs/${run.id}/events?consumerId=backpressure-client&generation=${claim.generation}&after=0`, { signal: controller.signal });
+    expect(response.status).toBe(200);
+    for (let index = 0; index < 20 && !sseResponse; index += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(sseResponse).toBeDefined();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(endSpy.mock.contexts).not.toContain(sseResponse);
+    controller.abort();
+    await response.body?.cancel().catch(() => {});
+    writeSpy.mockRestore();
+    endSpy.mockRestore();
+  });
+
   it("closes malformed replay and live v1 SSE streams without leaking errors", async () => {
     const { app, service, store } = await fixture();
     const replayRun = store.createRun(store.createSession().id, "malformed replay event");

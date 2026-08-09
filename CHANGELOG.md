@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.0] - 2026-08-09
+
+### Pi runtime decoupling
+
+- Replaced `pi-coding-agent.AgentSession` with a contained `pi-agent-core.AgentHarness` session adapter backed by `pi-ai` Models/providers, and removed `pi-coding-agent` from production code, manifests, the lockfile, tests and the installed dependency tree.
+- Added Execution-owned `RuntimeTool`, result/update and model contracts. `workspace-local` no longer imports `pi-agent-core`, `core-service` no longer imports `pi-ai`, and architecture/ESLint gates restrict all production Pi imports to `runtime-pi`.
+- Preserved streamed text/thinking, tool lifecycle and guards, steering/follow-up, abort queue audit, provider retry, rate-limit fallback, model/reasoning selection, historical context projection and manual compaction.
+- Added threshold compaction after successful turns and one compaction/retry recovery cycle for provider context overflow, with focused AgentHarness fault-injection coverage.
+- Removed unused coding-agent TUI, built-in tool, extension, theme, template, project-resource and session-management dependency surface from the release graph.
+
+### Runtime and control-plane reliability
+
+- Fixed SSE replay subscription ordering so events committed at the replay/live handoff cannot be lost, and treated `ServerResponse.write(false)` as backpressure rather than a failed write while suppressing heartbeat writes until `drain`.
+- Kept parallel TaskRun approvals pending when the approved inbox item cannot be claimed instead of persisting a false approval event.
+- Failed and released claimed automatic continuations when runtime construction fails, keeping TaskRun, Attempt, checkpoint and continuation state consistent.
+
+### Compatibility and upgrade
+
+- There is no API, ABI or SQLite schema migration in this release; schema remains 40.
+- Runtime deployments continue to use `TAGENT_RUNTIME=in-process`. No configuration rename is required.
+- Deploy matching Core and Web Console 0.5.0 artifacts. The runtime package set is smaller because `pi-coding-agent` and its unused product dependencies are no longer shipped.
+
 ## [0.4.1] - 2026-08-09
 
 ### Runtime reliability

@@ -23,7 +23,8 @@ This directory contains the maintained contracts for the current TAgent Core mai
 ## Persistence and execution
 
 - [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md) — SQLite ownership, schema 40, Gateway/trusted receipts, writer fencing, Unit of Work, lifecycle, and restart recovery.
-- [Runtime](RUNTIME.md) — in-process Pi boundary, `TaskRun`/`Attempt` execution, timeouts, and tool authority.
+- [Runtime](RUNTIME.md) — in-process AgentHarness boundary, `TaskRun`/`Attempt` execution, compaction, timeouts, and tool authority.
+- [Pi runtime architecture](PI_RUNTIME_ARCHITECTURE.md) — Pi dependency containment, AgentHarness compatibility policy, and enforced package boundaries.
 - [Execution reliability and efficiency](EXECUTION_EFFICIENCY.md) — snapshot edits, Artifact spill, project context, batching, context projection, Bash repeat protection, and continuation stalls.
 - [Supervisor](SUPERVISOR.md) — trusted Bash evidence, bounded LLM review, approvals, candidate delivery, and continuations.
 

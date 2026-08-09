@@ -1,11 +1,11 @@
-import type { Model } from "@earendil-works/pi-ai/compat";
+import type { RuntimeModelSpec } from "@tagent/execution/ports";
 import type { WorkspaceGoalRoadmapGenerator } from "../application/workspace-goal-application.js";
 import { OpenAiSseIdleTimeoutError, readOpenAiChatContent } from "./openai-sse.js";
 
 export class OpenAiWorkspaceGoalRoadmapGenerator implements WorkspaceGoalRoadmapGenerator {
   readonly model: string;
 
-  constructor(private readonly options: { model: Model<"openai-completions">; apiKey: string; timeoutMs?: number }) {
+  constructor(private readonly options: { model: RuntimeModelSpec; apiKey: string; timeoutMs?: number }) {
     this.model = options.model.id;
   }
 
