@@ -31,9 +31,9 @@ export class ContinuationScheduler {
   ) {}
 
 
-  public captureUserMessage(run: TaskRun, messageId: number, content: string) {
+  public captureUserMessage(run: TaskRun, messageId: number, content: string, subjectId?: string) {
     const context = this.state.persistence.sessions.listRecentMessages(run.sessionId, 8).filter((message) => message.id < messageId).slice(-4).map((message) => `${message.role}: ${message.content}`).join("\n");
-    this.dependencies.userMessageObserver.observe({ run, messageId, content, context });
+    this.dependencies.userMessageObserver.observe({ run, messageId, content, context, subjectId });
   }
 
 

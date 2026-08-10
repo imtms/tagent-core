@@ -47,6 +47,8 @@ export interface SubmissionQueue {
   getSessionSubmission(sessionId: SessionId, requestId: string): SessionInboxItem | undefined;
   recordSubmissionAudit(item: SessionInboxItem, audit: SubmissionAuditInput): SubmissionAuditReceipt;
   getSubmissionAudit(sessionId: SessionId, requestId: string): SubmissionAuditReceipt | undefined;
+  /** Stable owner identity for user-level Memory/Learning; legacy Sessions may not have one. */
+  getSessionPrincipalId?(sessionId: SessionId): string | undefined;
   listSessionInbox(sessionId: SessionId, includeTerminal?: boolean): SessionInboxItem[];
   routeSessionInboxItem(
     id: string,

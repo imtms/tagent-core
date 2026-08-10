@@ -45,7 +45,7 @@ export interface AttemptSettlementPort {
 }
 
 export interface ContinuationControlPort {
-  captureUserMessage(run: TaskRun, messageId: number, content: string): void;
+  captureUserMessage(run: TaskRun, messageId: number, content: string, subjectId?: string): void;
   queueContinuation(runId: RunId): void;
   startQueuedContinuation(runId: RunId): void;
 }
@@ -141,6 +141,7 @@ export interface UserMessageObserverPort {
     messageId: number;
     content: string;
     context: string;
+    subjectId?: string;
   }): void;
 }
 

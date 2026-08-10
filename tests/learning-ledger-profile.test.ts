@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { LearningService } from "@tagent/learning";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { LearningService, WorkflowService } from "@tagent/learning";
 import type { RecallFeedbackSignal } from "@tagent/memory/domain";
 import { Store } from "@tagent/persistence-sqlite";
-import { learningPersistence } from "./support/test-persistence.js";
+import { createExecutionCollaborationAdapters } from "../apps/core-service/src/composition/execution-collaboration-adapters.js";
+import { agentPersistence, learningPersistence, workflowPersistence } from "./support/test-persistence.js";
 
 const stores: Store[] = [];
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
@@ -37,6 +38,43 @@ describe("Communication Profile", () => {
     learning.lockCommunicationProfile(profiles[0]!.id, true);
     learning.recordCommunicationPreference({ subjectId: "session:s1", scopeType: "session", scopeId: "s1", dimension: "language", value: "英文", sourceType: "inferred", sourceRef: "run:x" });
     expect(learning.resolveCommunicationProfile("session:s1", [{ type: "session", id: "s1" }]).values.language?.value).toBe("中文");
+  });
+
+  it("shares principal-owned global habits across Workspaces and retains legacy Session overrides", async () => {
+    const store = new Store(":memory:"); stores.push(store);
+    const first = store.createSessionIdempotent({ title: "First", principalId: "user:1", idempotencyKey: "first", canonicalPayload: "first" }).session;
+    const second = store.createSessionIdempotent({ title: "Second", principalId: "user:1", idempotencyKey: "second", canonicalPayload: "second" }).session;
+    const persistence = agentPersistence(store);
+    const learning = new LearningService(learningPersistence(store));
+    const workflows = new WorkflowService(workflowPersistence(store));
+    const captureRequests: any[] = [];
+    const adapters = createExecutionCollaborationAdapters({
+      persistence,
+      memory: { enqueueCapture: async (request: unknown) => { captureRequests.push(request); return { jobId: "capture" }; } } as never,
+      memoryScopeId: "default",
+      learningService: learning,
+      workflowService: workflows,
+      publish: () => undefined,
+    });
+    const firstRun = store.createRun(first.id, "first task");
+    const secondRun = store.createRun(second.id, "second task");
+    const message = store.appendMessage(first.id, "user", "以后回答短一些，只说重点");
+
+    adapters.userMessageObserver.observe({ run: firstRun, messageId: message.id, content: message.content, context: "" });
+    await vi.waitFor(() => expect(store.db.prepare("SELECT status FROM semantic_learning_jobs").get()).toEqual({ status: "completed" }));
+    expect(captureRequests[0].access).toMatchObject({ subjectId: "user:1", purpose: "capture" });
+    expect(captureRequests[0].access.scopes).toEqual(expect.arrayContaining([{ type: "user", id: "user:1" }, { type: "workspace", id: "default" }]));
+    expect(persistence.submissions.getSessionPrincipalId?.(first.id)).toBe("user:1");
+    expect(adapters.contextEnrichment.prepareWithoutRecall(secondRun, "unrelated task").promptSection).toContain("verbosity: 简洁");
+
+    const oneOff = store.appendMessage(first.id, "user", "请详细解释这一次变更");
+    adapters.userMessageObserver.observe({ run: firstRun, messageId: oneOff.id, content: oneOff.content, context: "" });
+    await vi.waitFor(() => expect(store.db.prepare("SELECT COUNT(*) AS count FROM semantic_learning_jobs WHERE status='completed'").get()).toEqual({ count: 2 }));
+    expect(adapters.contextEnrichment.prepareWithoutRecall(firstRun, "current task").promptSection).toContain("verbosity: 详细");
+    expect(adapters.contextEnrichment.prepareWithoutRecall(secondRun, "unrelated task").promptSection).toContain("verbosity: 简洁");
+
+    learning.recordCommunicationPreference({ subjectId: `session:${second.id}`, scopeType: "session", scopeId: second.id, dimension: "language", value: "中文", sourceType: "explicit_user", sourceRef: "legacy" });
+    expect(adapters.contextEnrichment.prepareWithoutRecall(secondRun, "unrelated task").promptSection).toContain("language: 中文");
   });
 });
 

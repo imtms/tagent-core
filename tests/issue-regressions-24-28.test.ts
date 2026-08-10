@@ -117,6 +117,7 @@ describe("GitHub issue regressions #24-#28", () => {
     expect(first.statusCode).toBe(200);
     expect(replay.statusCode).toBe(200);
     expect(replay.json().data.item.id).toBe(first.json().data.item.id);
+    expect(store.getSessionPrincipalId(session.id)).toBe("local-admin");
     const sequentialConflict = await post("second payload");
     expect(sequentialConflict.statusCode).toBe(409);
     expect(sequentialConflict.json()).toMatchObject({ error: { code: "submission.idempotency_conflict", retryable: false } });

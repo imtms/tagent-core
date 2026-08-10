@@ -9,6 +9,8 @@ export interface MessageSource {
 export interface DurableUserMessage {
   id: number;
   content: string;
+  sessionId?: string;
+  principalId?: string | null;
 }
 
 export interface MessageSourceRepository {

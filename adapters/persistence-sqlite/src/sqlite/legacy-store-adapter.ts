@@ -298,6 +298,7 @@ export class LegacyStoreAdapter {
       getSessionSubmission: query(store.getSessionSubmission.bind(store)),
       recordSubmissionAudit: mutate(store.recordSubmissionAudit.bind(store)),
       getSubmissionAudit: query(store.getSubmissionAudit.bind(store)),
+      getSessionPrincipalId: query(store.getSessionPrincipalId.bind(store)),
       listSessionInbox: query(store.listSessionInbox.bind(store)),
       routeSessionInboxItem: mutate(store.routeSessionInboxItem.bind(store)),
       findMergeCandidate: query(store.findMergeCandidate.bind(store)),

@@ -19,10 +19,22 @@ export interface CommunicationPreference {
 }
 export type CommunicationProfileValues = Partial<Record<CommunicationDimension, CommunicationPreference>>;
 export interface ResolvedCommunicationProfile { profileIds: string[]; revisionIds: string[]; values: CommunicationProfileValues; promptSection: string; contextItems: ContextManifestItem[] }
+export interface UserMessageAnalysisInput {
+  subjectId: string;
+  scopeId: string;
+  messageId: number;
+  content: string;
+  context?: string;
+  runId?: string;
+  attempt?: number;
+  preferenceScopeType?: CommunicationApplicability;
+  preferenceScopeId?: string;
+}
 
 const now = () => Date.now();
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const redact = (value: string) => value.replace(/(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}/g, "[REDACTED_SECRET]").replace(/\b(?:password|passwd|token|secret|api[_-]?key)\s*[:=]\s*\S+/gi, "$1=[REDACTED]");
+const normalizeVerbosity = (value: string) => /详细|详尽|长(?:一?些|点)/.test(value) ? "详细" : "简洁";
 const safeJson = <T>(value: string, fallback: T): T => { try { return JSON.parse(value) as T; } catch { return fallback; } };
 const communicationDimensions=new Set<CommunicationDimension>(["language","verbosity","technicalDepth","answerStructure","progressUpdatePolicy","clarificationTolerance","uncertaintyStyle","challengeLevel","forbiddenPatterns"]);
 const isCommunicationDimension=(value:string):value is CommunicationDimension=>communicationDimensions.has(value as CommunicationDimension);
@@ -68,21 +80,25 @@ export class LearningService {
     return this.getCommunicationProfile(profile.id)!;
   }
 
-  async analyzeUserMessage(input:{subjectId:string;scopeId:string;messageId:number;content:string;context?:string;runId?:string;attempt?:number}) {
+  async analyzeUserMessage(input: UserMessageAnalysisInput) {
+    const preferenceScope = {
+      type: input.preferenceScopeType ?? "session",
+      id: input.preferenceScopeId ?? input.scopeId,
+    };
     const failuresBefore=this.semanticJudge?.snapshot().failures??0;
     const semantic=this.semanticJudge?await this.semanticJudge.userMessage(input.content,input.context??""):undefined;
     if(this.semanticJudge&&!semantic&&this.semanticJudge.snapshot().failures>failuresBefore)throw new Error("Semantic user-message analysis failed");
-    if(semantic){for(const preference of semantic.communicationPreferences){if(isCommunicationDimension(preference.dimension))this.recordCommunicationPreference({subjectId:input.subjectId,scopeType:"session",scopeId:input.scopeId,dimension:preference.dimension,value:preference.value,sourceType:"explicit_user",sourceRef:`message:${input.messageId}`,confidence:semantic.confidence});}if(semantic.correction)this.recordCorrection({sessionId:input.scopeId,runId:input.runId,attempt:input.attempt,messageId:input.messageId,correctionType:semantic.correctionType,targetType:"run",targetId:input.runId,content:input.content,source:"explicit_user"});return semantic;}
-    this.captureExplicitCommunicationPreferences(input.subjectId,input.scopeId,input.messageId,input.content);
+    if(semantic){for(const preference of semantic.communicationPreferences){if(isCommunicationDimension(preference.dimension))this.recordCommunicationPreference({subjectId:input.subjectId,scopeType:preferenceScope.type,scopeId:preferenceScope.id,dimension:preference.dimension,value:preference.value,sourceType:"explicit_user",sourceRef:`message:${input.messageId}`,confidence:semantic.confidence});}if(semantic.correction)this.recordCorrection({sessionId:input.scopeId,runId:input.runId,attempt:input.attempt,messageId:input.messageId,correctionType:semantic.correctionType,targetType:"run",targetId:input.runId,content:input.content,source:"explicit_user"});return semantic;}
+    this.captureExplicitCommunicationPreferences(input.subjectId,input.scopeId,input.messageId,input.content,preferenceScope);
     if(/\b(?:correction|incorrect|wrong|inaccurate|learned wrong)\b|(?:不太对|不准确|不正确|不对|错了|学错|改为|纠正|不是.{0,20}而是|不要再)/i.test(input.content))this.recordCorrection({sessionId:input.scopeId,runId:input.runId,attempt:input.attempt,messageId:input.messageId,content:input.content,source:"explicit_user"});
     return undefined;
   }
 
-  captureExplicitCommunicationPreferences(subjectId: string, scopeId: string, messageId: number, content: string) {
+  captureExplicitCommunicationPreferences(subjectId: string, scopeId: string, messageId: number, content: string, preferenceScope: { type: CommunicationApplicability; id: string } = { type: "session", id: scopeId }) {
     const sourceRef = `message:${messageId}`; const recorded = [];
     const rules: Array<[CommunicationDimension, RegExp, (match: RegExpMatchArray) => string | string[]]> = [
       ["language", /(?:请|以后|始终|回答时)?(?:使用|用)(中文|英文|简体中文|繁体中文)(?:回答|回复)?/i, (m) => m[1]],
-      ["verbosity", /(?:回答|回复).{0,8}(简洁|简短|详细|详尽)|(?:尽量|请)(简洁|详细)/i, (m) => (m[1] || m[2])],
+      ["verbosity", /(?:回答|回复|输出).{0,10}(简洁|简短|详细|详尽|短(?:一?些|点)|少(?:一?些|点)|长(?:一?些|点))|(?:尽量|请|以后).{0,6}(简洁|简短|详细|详尽)|(?:只说重点|直接给结论|少说废话)/i, (m) => normalizeVerbosity(m[1] || m[2] || m[0])],
       ["technicalDepth", /(?:技术深度|技术细节).{0,8}(浅显|基础|深入|专家级)|(?:给我|使用)(技术性强|面向专家|通俗易懂)的?(?:回答|解释)?/i, (m) => (m[1] || m[2])],
       ["answerStructure", /(?:回答|输出).{0,8}(使用列表|分点|先结论后细节|表格|不要表格)/i, (m) => m[1]],
       ["progressUpdatePolicy", /(?:进度更新|过程更新).{0,8}(不要|需要|简短|详细)|(?:不要|请)(?:频繁)?汇报进度/i, (m) => m[1] || (m[0].startsWith("不要") ? "不要频繁汇报" : "需要汇报")],
@@ -93,22 +109,25 @@ export class LearningService {
     ];
     for (const [dimension, pattern, project] of rules) {
       const match = content.match(pattern); if (!match) continue;
-      recorded.push(this.recordCommunicationPreference({ subjectId, scopeType: "session", scopeId, dimension, value: project(match), sourceType: "explicit_user", sourceRef }));
+      recorded.push(this.recordCommunicationPreference({ subjectId, scopeType: preferenceScope.type, scopeId: preferenceScope.id, dimension, value: project(match), sourceType: "explicit_user", sourceRef }));
     }
     return recorded;
   }
 
-  resolveCommunicationProfile(subjectId: string, scopes: Array<{ type: CommunicationApplicability; id: string }>): ResolvedCommunicationProfile {
+  resolveCommunicationProfile(subjectId: string, scopes: Array<{ type: CommunicationApplicability; id: string }>, fallbackSubjectIds: string[] = []): ResolvedCommunicationProfile {
     const ordered = [{ type: "global" as const, id: "*" }, ...scopes];
+    const subjects = [...new Set([...fallbackSubjectIds, subjectId])];
     const values: CommunicationProfileValues = {}; const profileIds: string[] = []; const revisionIds: string[] = [];
     for (const scope of ordered) {
-      const row = this.persistence.learningLedger.findCommunicationProfile(subjectId, scope.type, scope.id);
-      if (!row?.activeRevisionId) continue;
-      const revision = this.getCommunicationRevision(row.activeRevisionId); if (!revision) continue;
-      profileIds.push(row.id); revisionIds.push(revision.id);
-      for (const [dimension, preference] of Object.entries(revision.values) as Array<[CommunicationDimension, CommunicationPreference]>) {
-        if (preference.status !== "active" || (preference.expiresAt && preference.expiresAt <= now())) continue;
-        values[dimension] = preference;
+      for (const candidateSubjectId of subjects) {
+        const row = this.persistence.learningLedger.findCommunicationProfile(candidateSubjectId, scope.type, scope.id);
+        if (!row?.activeRevisionId) continue;
+        const revision = this.getCommunicationRevision(row.activeRevisionId); if (!revision) continue;
+        profileIds.push(row.id); revisionIds.push(revision.id);
+        for (const [dimension, preference] of Object.entries(revision.values) as Array<[CommunicationDimension, CommunicationPreference]>) {
+          if (preference.status !== "active" || (preference.expiresAt && preference.expiresAt <= now())) continue;
+          values[dimension] = preference;
+        }
       }
     }
     const lines = Object.entries(values).map(([key, item]) => `- ${key}: ${Array.isArray(item!.value) ? item!.value.join("; ") : item!.value}`);
@@ -225,22 +244,22 @@ export class LearningService {
     if(corrected)for(const recordId of decision.harmfulRecordIds.filter((id)=>selectedIds.has(id))){const key=`memory-attribution:${run.id}:${run.attempt}:${recordId}:corrected`;this.persistence.learningLedger.recordFeedbackAttributionReceipt({id:randomUUID(),runId:run.id,attempt:run.attempt,actorId:`session:${run.sessionId}`,recordId,signal:"corrected",weight:-.75,basis:"semantic_correction_attribution",contextManifestId:manifestId,evidenceJson:JSON.stringify([`manifest:${manifestId}`,`semantic-confidence:${decision.confidence}`]),idempotencyKey:key,createdAt:now()});}
   }
 
-  enqueueUserMessageAnalysis(input:{subjectId:string;scopeId:string;messageId:number;content:string;context?:string;runId?:string;attempt?:number}) {
-    return this.persistence.enqueueSemanticLearningJob("user_message", input, `semantic-user-message:${input.scopeId}:${input.messageId}`, input.runId, input.attempt);
+  enqueueUserMessageAnalysis(input: UserMessageAnalysisInput) {
+    return this.persistence.enqueueSemanticLearningJob("user_message", { ...input }, `semantic-user-message:${input.scopeId}:${input.messageId}`, input.runId, input.attempt);
   }
 
   async drainSemanticLearningJobs(limit = 100) {
-    if (!this.semanticJudge) return 0;
     const owner = `semantic:${randomUUID()}`;
+    const supportedKinds = this.semanticJudge ? ["user_message", "feedback_attribution"] as const : ["user_message"] as const;
     let processed = 0;
     while (processed < limit) {
-      const [row] = this.persistence.claimSemanticLearningJobs(owner, ["user_message", "feedback_attribution"], 1);
+      const [row] = this.persistence.claimSemanticLearningJobs(owner, [...supportedKinds], 1);
       if (!row) break;
       const heartbeat = setInterval(() => this.persistence.renewSemanticLearningJob(row.id, owner, row.leaseToken, row.fence), 10_000);
       heartbeat.unref?.();
       try {
         const payload = safeJson<Record<string, unknown>>(row.payloadJson, {});
-        if (row.kind === "user_message") await this.analyzeUserMessage(payload as Parameters<LearningService["analyzeUserMessage"]>[0]);
+        if (row.kind === "user_message") await this.analyzeUserMessage(payload as unknown as UserMessageAnalysisInput);
         else if (row.kind === "feedback_attribution") await this.createSemanticFeedbackReceipts(
           this.persistence.getRun(String(payload.runId)) ?? (()=>{throw new Error("Semantic feedback Run not found")})(),
           String(payload.manifestId ?? ""),
@@ -266,9 +285,16 @@ export class LearningService {
     const rows = this.persistence.learningLedger.listFeedbackAttributionWork(timestamp, limit);
     for (const row of rows) {
       const run = this.persistence.getRun(row.runId); if (!run) continue;
-      const scope: MemoryScope = { type: "workspace", id: this.memoryScopeId };
+      const workspaceScope: MemoryScope = { type: "workspace", id: this.memoryScopeId };
+      const scopes: MemoryScope[] = [
+        ...(row.actorId.startsWith("session:") ? [] : [{ type: "user" as const, id: row.actorId }]),
+        workspaceScope,
+        { type: "session", id: run.sessionId },
+      ];
       try {
-        await this.memory.feedback({ subjectId: row.actorId, scopes: [scope, { type: "session", id: run.sessionId }], purpose: "memory_admin" }, scope, row.recordId, row.signal, { runId: row.runId, note: row.basis });
+        const access = { subjectId: row.actorId, scopes, purpose: "memory_admin" as const };
+        const record = typeof this.memory.getRecord === "function" ? await this.memory.getRecord(access, row.recordId) : undefined;
+        await this.memory.feedback(access, record?.scope ?? workspaceScope, row.recordId, row.signal, { runId: row.runId, note: row.basis });
         this.persistence.learningLedger.completeFeedbackAttribution(row.id, now());
       } catch (error) {
         const attempts = row.attempts + 1;

@@ -34,7 +34,7 @@ export class MemoryCaptureWorker {
       proposal.edges=proposal.edges.filter((edge)=>referencedEntities.has(edge.fromId)&&referencedEntities.has(edge.toId));
       if(leaseLost)return true;
       const integrated=this.lifecycle?await this.lifecycle.integrate(job.request.access,proposal):proposal;
-      if(leaseLost)return true;
+      if(leaseLost||!await this.jobs.renew(job.id,this.owner,leaseToken,fencingToken,leaseMs))return true;
       const persisted=await this.service.persistExtracted(job.request.access,integrated.records,integrated.topics,proposal.nodes,proposal.edges);
       const completed=await finish(()=>this.jobs.complete(job.id,this.owner,leaseToken,fencingToken,{extractedCount,proposalCount:proposal.records.length,persistedCount:persisted.length,filterReasons}));
       if(completed)this.onEvent?.({type:proposal.records.length?"memory.capture.completed":"memory.capture.empty",sourceRefs:job.request.sourceRefs,data:{jobId:job.id,attempts:job.attempts,extractedCount,proposalCount:proposal.records.length,persistedCount:persisted.length,filterReasons,latencyMs:Date.now()-job.createdAt,errorCode:proposal.records.length?(persisted.length<proposal.records.length?"partially_persisted":undefined):(extractedCount?"all_filtered":"extractor_zero")}});

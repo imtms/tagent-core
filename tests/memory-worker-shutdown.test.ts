@@ -16,6 +16,7 @@ function createWorker(options: {
   promote?: () => Promise<void>;
   heartbeat?: () => Promise<void>;
   reindex?: { runOnce: () => Promise<boolean> };
+  core?: { generate: () => Promise<unknown> };
   operations?: {
     recordMetric: () => Promise<void>;
     recordDegraded: () => Promise<void>;
@@ -37,7 +38,7 @@ function createWorker(options: {
     options.heartbeat,
     undefined,
     options.reindex as never,
-    undefined,
+    options.core as never,
     options.operations as never,
   );
 }
@@ -47,6 +48,20 @@ afterEach(() => {
 });
 
 describe("Local Memory worker shutdown barrier", () => {
+  it("does not rescan Core Memory merely because a capture job was claimed", async () => {
+    let captureCalls = 0;
+    let coreRefreshes = 0;
+    const worker = createWorker({
+      capture: async () => ++captureCalls === 1,
+      core: { generate: async () => { coreRefreshes += 1; } },
+    });
+
+    await expect(worker.captureTick()).resolves.toBe(true);
+    expect(captureCalls).toBe(2);
+    expect(coreRefreshes).toBe(0);
+    await worker.stop();
+  });
+
   it("does not overwrite an in-flight capture task when its interval overlaps", async () => {
     vi.useFakeTimers();
     const releaseCapture = deferred<boolean>();

@@ -5,7 +5,7 @@ import type { MemoryLifecycle } from "./lifecycle.js";
 import type { ColdStorageReconciler } from "./reconciler.js";
 import type { DurableReindexWorker } from "./reindex-worker.js";
 import type { CoreMemorySnapshotService } from "./core-snapshot.js";
-import type { BlobStorePort, OperationsStatePort } from "./ports.js";
+import type { BlobStorePort, OperationsStatePort, RecordStorePort } from "./ports.js";
 
 type MemoryWorkerState = "idle" | "running" | "stopping" | "closed";
 
@@ -32,6 +32,7 @@ export class LocalMemoryWorker {
     private readonly core?: CoreMemorySnapshotService,
     private readonly operations?: OperationsStatePort,
     private readonly blobs?: BlobStorePort,
+    private readonly records?: RecordStorePort,
   ) {}
 
   start(): void {
@@ -154,23 +155,28 @@ export class LocalMemoryWorker {
     this.trackHeartbeat();
     const started = Date.now();
     try {
-      await this.lifecycle.promote(this.access);
-      const batch = this.lifecycle.topicCandidateBatch
-        ? await this.lifecycle.topicCandidateBatch(this.access)
-        : { topics: await this.lifecycle.topicCandidates(this.access), evidence: undefined };
-      const candidates = batch.topics;
-      for (const topic of candidates.slice(0, 20)) {
-        await this.consolidator.consolidate(
-          this.access,
-          topic.topicId,
-          batch.evidence
-            ? { descriptor: topic, records: batch.evidence.get(topic.topicId) ?? [] }
-            : undefined,
-        );
+      const scopes = uniqueScopes([...(await this.records?.listScopes?.() ?? []), ...this.access.scopes]);
+      for (const scope of scopes) {
+        const scopedAccess = { ...this.access, scopes: [scope] };
+        const promoted = await this.lifecycle.promote(scopedAccess);
+        const batch = this.lifecycle.topicCandidateBatch
+          ? await this.lifecycle.topicCandidateBatch(scopedAccess)
+          : { topics: await this.lifecycle.topicCandidates(scopedAccess), evidence: undefined };
+        const candidates = batch.topics;
+        for (const topic of candidates.slice(0, 20)) {
+          await this.consolidator.consolidate(
+            scopedAccess,
+            topic.topicId,
+            batch.evidence
+              ? { descriptor: topic, records: batch.evidence.get(topic.topicId) ?? [] }
+              : undefined,
+          );
+        }
+        await this.reconciler.verify(scopedAccess, candidates.map((candidate) => candidate.topicId));
+        await this.reconciler.purgeExpired?.(scopedAccess);
+        if ((promoted?.updated ?? 0) > 0) await this.core?.generate(scopedAccess);
       }
-      await this.reconciler.verify(this.access, candidates.map((candidate) => candidate.topicId));
       await this.reconciler.cleanupStaged();
-      await this.core?.generate(this.access);
       this.onConsolidation?.();
       await this.operations?.recordMetric(this.access.scopes[0], "consolidation_total", 1, Date.now());
       await this.operations?.recordMetric(
@@ -186,3 +192,5 @@ export class LocalMemoryWorker {
     }
   }
 }
+
+function uniqueScopes(scopes:AccessContext["scopes"]){return[...new Map(scopes.map((scope)=>[`${scope.type}:${scope.id}`,scope])).values()];}

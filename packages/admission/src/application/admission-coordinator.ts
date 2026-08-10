@@ -100,7 +100,7 @@ export class AdmissionCoordinator {
 
     if (activeRun && analysis.targetRunId === activeRun.id && analysis.confidence >= 0.85) {
       const userMessage = this.state.persistence.sessions.appendMessage(sessionId, "user", content);
-      this.dependencies.continuation.captureUserMessage(activeRun, userMessage.id, content);
+      this.dependencies.continuation.captureUserMessage(activeRun, userMessage.id, content, audit?.principalId);
       if (analysis.intent === "steer_active" || analysis.intent === "update_active_context") {
         const currentObjectives = analysis.objectives.filter((objective) => objective.timing === "current");
         const followUpObjectives = analysis.objectives.filter((objective) => objective.timing === "follow_up");
@@ -314,7 +314,8 @@ export class AdmissionCoordinator {
     // keeps slow memory recall from hiding the message until a refresh or Run end.
     if (!retry) {
       const userMessage = this.state.persistence.sessions.appendMessage(run.sessionId, "user", item.content);
-      this.dependencies.continuation.captureUserMessage(run, userMessage.id, item.content);
+      const principalId = this.state.persistence.submissions.getSubmissionAudit(item.sessionId, item.requestId)?.principalId;
+      this.dependencies.continuation.captureUserMessage(run, userMessage.id, item.content, principalId);
     }
     const currentUserAfter = item.startedAt ?? run.createdAt;
     if (!this.dependencies.contextService.requiresAsyncPreparation()) {

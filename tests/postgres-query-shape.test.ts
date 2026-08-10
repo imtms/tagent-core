@@ -163,7 +163,7 @@ describe("PostgreSQL memory query shape", () => {
 
     await adapter.listDescriptors([scope], ["fact", "preference"], 20);
     await adapter.purgeDeleted([scope], now, 10);
-    await adapter.purgeDeletedTopics([scope], now, 5);
+    await adapter.listPurgeableTopics([scope], now, 5);
 
     const descriptor = counter.calls.find((call) => call.text.includes("FROM memory.topics") && call.text.includes("kind=ANY"));
     expect(descriptor?.values).toEqual([scope.type, scope.id, ["fact", "preference"], 20]);
@@ -179,7 +179,8 @@ describe("PostgreSQL memory query shape", () => {
 
     const topicPurge = counter.calls.find((call) => call.text.includes("SELECT topic_id FROM memory.topics"));
     expect(topicPurge?.values).toEqual([scope.type, scope.id, now, 5]);
-    expect(topicPurge?.text).toContain("::bigint<=$3 LIMIT $4");
+    expect(topicPurge?.text).toContain("::bigint<=$3");
+    expect(topicPurge?.text).toContain("LIMIT $4");
     for (const call of counter.calls) expectValidParameters(call);
   });
 

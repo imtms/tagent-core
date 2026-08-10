@@ -242,9 +242,15 @@ export class Store {
       Pick<Message, "id" | "role" | "content"> | undefined;
   }
 
-  listDurableUserMessages(): Array<Pick<Message, "id" | "content">> {
-    return this.db.prepare("SELECT id, content FROM messages WHERE role = 'user' ORDER BY id ASC").all() as
-      Array<Pick<Message, "id" | "content">>;
+  listDurableUserMessages(): Array<Pick<Message, "id" | "content"> & { sessionId: string; principalId: string | null }> {
+    return this.db.prepare(`
+      SELECT messages.id, messages.content, messages.session_id AS sessionId,
+        COALESCE(
+          (SELECT principal_id FROM session_create_receipts WHERE session_id = messages.session_id ORDER BY created_at LIMIT 1),
+          (SELECT principal_id FROM submission_audit_receipts WHERE session_id = messages.session_id ORDER BY created_at LIMIT 1)
+        ) AS principalId
+      FROM messages WHERE role = 'user' ORDER BY messages.id ASC
+    `).all() as Array<Pick<Message, "id" | "content"> & { sessionId: string; principalId: string | null }>;
   }
 
   close() {
@@ -1547,6 +1553,21 @@ export class Store {
       )
       WHERE sessions.id = ?
     `).get(id) as Session | undefined;
+  }
+
+  getSessionPrincipalId(sessionId: SessionId): string | undefined {
+    const row = this.db.prepare(`
+      SELECT principalId FROM (
+        SELECT principal_id AS principalId, 0 AS sourcePriority, created_at AS createdAt
+        FROM session_create_receipts WHERE session_id = ?
+        UNION ALL
+        SELECT principal_id AS principalId, 1 AS sourcePriority, created_at AS createdAt
+        FROM submission_audit_receipts WHERE session_id = ?
+      )
+      ORDER BY sourcePriority ASC, createdAt ASC
+      LIMIT 1
+    `).get(sessionId, sessionId) as { principalId: string } | undefined;
+    return row?.principalId;
   }
 
   updateSession(id: SessionId, settings: SessionSettingsUpdate): Session | undefined {

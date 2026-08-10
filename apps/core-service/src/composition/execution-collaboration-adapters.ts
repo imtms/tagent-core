@@ -15,13 +15,22 @@ import type {
 import type { AccessContext, MemoryFacade, MemoryProvenance } from "@tagent/memory";
 
 interface ExecutionCollaborationAdapterOptions {
-  persistence: Pick<AgentServicePersistencePort, "events" | "sessions" | "taskRuns">;
+  persistence: Pick<AgentServicePersistencePort, "events" | "sessions" | "submissions" | "taskRuns">;
   memory?: MemoryFacade;
   memoryScopeId: string;
   learningControl?: LearningFeatureControl;
   learningService: LearningService;
   workflowService: WorkflowService;
   publish(runId: string, type: string, data: Record<string, unknown>): void;
+}
+
+export function resolveMemorySubjectId(
+  persistence: Pick<AgentServicePersistencePort, "submissions">,
+  sessionId: string,
+): string {
+  // Unknown legacy ownership must remain Session-isolated. New Console/Channel
+  // submissions persist a principal before this resolver is used.
+  return persistence.submissions.getSessionPrincipalId?.(sessionId) ?? `session:${sessionId}`;
 }
 
 export interface ExecutionCollaborationAdapters {
@@ -33,6 +42,13 @@ export interface ExecutionCollaborationAdapters {
 
 const ONLINE_RECALL_DEADLINE_MS = 3_000;
 const ONLINE_EMBEDDING_TIMEOUT_MS = 2_200;
+
+function durableCommunicationPreferenceScope(content: string, sessionId: string) {
+  const durable = /(?:以后|今后|后续|始终|每次|一直|默认|记住|我的?习惯|我的?.{0,8}偏好|from now on|always|every time|by default|remember|my preference|i prefer)/i.test(content);
+  return durable
+    ? { preferenceScopeType: "global" as const, preferenceScopeId: "*" }
+    : { preferenceScopeType: "session" as const, preferenceScopeId: sessionId };
+}
 
 async function withinDeadline<T>(work: (signal: AbortSignal) => Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
   signal?.throwIfAborted();
@@ -64,22 +80,20 @@ export function createExecutionCollaborationAdapters(
   options: ExecutionCollaborationAdapterOptions,
 ): ExecutionCollaborationAdapters {
   const learningEnabled = () => options.learningControl?.snapshot().learningEnabled ?? true;
-  const access = (run: TaskRun): AccessContext => ({
-    subjectId: `session:${run.sessionId}`,
-    scopes: [
-      { type: "workspace", id: options.memoryScopeId },
-      { type: "session", id: run.sessionId },
-    ],
+  const subjectId = (run: TaskRun) => resolveMemorySubjectId(options.persistence, run.sessionId);
+  const access = (run: TaskRun, observedSubjectId = subjectId(run)): AccessContext => ({
+    subjectId: observedSubjectId,
+    scopes: memoryScopes(observedSubjectId, options.memoryScopeId, run.sessionId),
     purpose: "agent_recall",
   });
   const learningContext = (run: TaskRun, query: string) => {
     const workflows = options.workflowService.recall(run.sessionId, query, run.id, run.attempt);
     const profile = learningEnabled()
-      ? options.learningService.resolveCommunicationProfile(`session:${run.sessionId}`, [
+      ? options.learningService.resolveCommunicationProfile(subjectId(run), [
           { type: "workspace", id: options.memoryScopeId },
           { type: "session", id: run.sessionId },
           { type: "task", id: run.id },
-        ])
+        ], [`session:${run.sessionId}`])
       : { promptSection: "", contextItems: [] };
     return { workflows, profile };
   };
@@ -93,7 +107,7 @@ export function createExecutionCollaborationAdapters(
     const summary = durable.map((text) => `user: ${text}`).join("\n");
     const fingerprint = stableTextHash(summary);
     void options.memory.enqueueCapture({
-      access: access(run),
+      access: { ...access(run), purpose: "capture" },
       sourceRefs: [{ sourceType: "transcript", sourceId: run.id, revision: `context-prune:${run.attempt}:${fingerprint}` }],
       content: summary,
       idempotencyKey: `context-prune:${run.id}:${run.attempt}:${fingerprint}`,
@@ -130,12 +144,13 @@ export function createExecutionCollaborationAdapters(
         signal?.throwIfAborted();
         const memoryAccess = access(run);
         let recall: Awaited<ReturnType<MemoryFacade["recall"]>> | undefined;
-        let coreSnapshot: Awaited<ReturnType<NonNullable<MemoryFacade["getCoreSnapshot"]>>> | undefined;
+        let coreSnapshots: Array<NonNullable<Awaited<ReturnType<NonNullable<MemoryFacade["getCoreSnapshot"]>>>>> = [];
         if (options.memory) {
           try {
-            [recall, coreSnapshot] = await withinDeadline((deadlineSignal) => Promise.all([
+            [recall, coreSnapshots] = await withinDeadline((deadlineSignal) => Promise.all([
               options.memory!.recall({ access: memoryAccess, cue: query, embeddingTimeoutMs: ONLINE_EMBEDDING_TIMEOUT_MS, signal: deadlineSignal }),
-              options.memory!.getCoreSnapshot?.(memoryAccess),
+              Promise.all(memoryAccess.scopes.map((scope) => options.memory!.getCoreSnapshot?.({ ...memoryAccess, scopes: [scope] })))
+                .then((snapshots) => snapshots.filter((snapshot): snapshot is NonNullable<typeof snapshot> => Boolean(snapshot))),
             ]), ONLINE_RECALL_DEADLINE_MS, signal);
           } catch (error) {
             if (signal?.aborted) throw signal.reason ?? error;
@@ -148,22 +163,20 @@ export function createExecutionCollaborationAdapters(
         }
         signal?.throwIfAborted();
         const { workflows, profile } = learningContext(run, query);
-        const coreSection = coreSnapshot?.markdown
-          ? `<core_memory revision="${coreSnapshot.revision}">\n${coreSnapshot.markdown}\n</core_memory>`
-          : "";
+        const coreSection = coreSnapshots.map((snapshot) => `<core_memory scope="${snapshot.scope.type}:${snapshot.scope.id}" revision="${snapshot.revision}">\n${snapshot.markdown}\n</core_memory>`).join("\n\n");
         return {
           promptSection: [coreSection, profile.promptSection, recall?.promptSection, workflows.promptSection]
             .filter(Boolean)
             .join("\n\n"),
           contextItems: [
-            ...(coreSnapshot?.markdown ? [{
+            ...coreSnapshots.map((coreSnapshot) => ({
               kind: "core_memory" as const,
               sourceId: `${coreSnapshot.scope.type}:${coreSnapshot.scope.id}:revision:${coreSnapshot.revision}`,
               selected: true,
               reason: "stable core-memory injection",
               estimatedTokens: coreSnapshot.tokenCount,
               metadata: { revision: coreSnapshot.revision, sourceRecordIds: coreSnapshot.sourceRecordIds },
-            }] : []),
+            })),
             ...(recall?.cards.map((card) => ({
               kind: "memory_card" as const,
               sourceId: card.id,
@@ -219,11 +232,13 @@ export function createExecutionCollaborationAdapters(
       },
     },
     userMessageObserver: {
-      observe({ run, messageId, content, context }) {
+      observe({ run, messageId, content, context, subjectId: observedSubjectId }) {
+        const messageSubjectId = observedSubjectId ?? subjectId(run);
         if (learningEnabled()) {
           options.learningService.enqueueUserMessageAnalysis({
-            subjectId: `session:${run.sessionId}`,
+            subjectId: messageSubjectId,
             scopeId: run.sessionId,
+            ...durableCommunicationPreferenceScope(content, run.sessionId),
             messageId,
             content,
             context,
@@ -234,7 +249,7 @@ export function createExecutionCollaborationAdapters(
         }
         if (!options.memory) return;
         void options.memory.enqueueCapture({
-          access: access(run),
+          access: { ...access(run, messageSubjectId), purpose: "capture" },
           sourceRefs: [{ sourceType: "message", sourceId: String(messageId), revision: "user" }],
           content: `<context>\n${context}\n</context>\n<focus_user>\n${content}\n</focus_user>`,
           idempotencyKey: `user-message:${messageId}`,
@@ -278,6 +293,16 @@ function stableTextHash(text: string) {
     hash = Math.imul(hash ^ text.charCodeAt(index), 16777619);
   }
   return (hash >>> 0).toString(16);
+}
+
+function memoryScopes(subjectId: string, workspaceId: string, sessionId: string): AccessContext["scopes"] {
+  const shared = [
+    { type: "workspace" as const, id: workspaceId },
+    { type: "session" as const, id: sessionId },
+  ];
+  return subjectId.startsWith("session:")
+    ? shared
+    : [{ type: "user", id: subjectId }, ...shared];
 }
 
 function estimateContextTokens(text: string) {

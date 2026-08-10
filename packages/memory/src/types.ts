@@ -57,7 +57,7 @@ export interface VectorDocument { refType: "hot_record" | "warm_record" | "topic
 export interface VectorHit { refType: VectorDocument["refType"]; refId: string; score: number }
 export interface GraphNode { id: string; type: string; canonicalName: string; aliases: string[]; scope: MemoryScope }
 export interface GraphEdge { id: string; fromId: string; predicate: string; toId: string; scope: MemoryScope; confidence: number; status: MemoryStatus }
-export interface RecallRequest { access: AccessContext; cue: string; maxCards?: number; maxColdTopics?: number; kinds?: MemoryKind[]; embeddingTimeoutMs?: number; signal?: AbortSignal }
+export interface RecallRequest { access: AccessContext; cue: string; maxCards?: number; maxColdTopics?: number; maxColdTokens?: number; kinds?: MemoryKind[]; embeddingTimeoutMs?: number; signal?: AbortSignal }
 export type RetrievalChannel = "lexical" | "vector" | "topic" | "graph" | "canonical";
 export interface RecallScoreBreakdown { route: number; confidence: number; importance: number; recency: number; scope: number; trust: number; validity: number; currentState: number; feedback: number; final: number }
 export interface MemoryCard { id: string; kind: MemoryKind; tier: "hot" | "warm"; title: string; content: string; score: number; topicIds: string[]; confidence: number; sourceRefs: SourceReference[]; provenance?: MemoryProvenance; status: MemoryStatus; validFrom?: number; validTo?: number; semantic?: CanonicalSPO; retrievalChannels: RetrievalChannel[]; scoreBreakdown: RecallScoreBreakdown }

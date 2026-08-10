@@ -114,7 +114,7 @@ describe("LegacyStoreAdapter", () => {
       content: user.content,
     });
     expect(adapter.messageSources.listDurableUserMessages()).toEqual([
-      { id: user.id, content: user.content },
+      { id: user.id, content: user.content, sessionId: session.id, principalId: null },
     ]);
   });
 

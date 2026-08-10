@@ -72,6 +72,8 @@ Reindex is durable and generation-based. A new embedding generation is staged, c
 
 The local Memory worker serializes capture ticks and maintenance ticks independently. Overlapping intervals do not replace the active Promise. On shutdown it enters `stopping`, clears both timers, rejects new ticks, and waits for all active capture, maintenance, heartbeat, metric, and reindex work to settle before entering `closed`. Runtime closure then closes the PostgreSQL pool, and concurrent or repeated close calls share the same Promise. This ordering prevents background queries after `pool.end()`.
 
+Core Memory is generated from high-value active records. A capture refreshes only scopes whose durable Core-eligible records actually changed, so empty, failed, filtered, and idempotent retry jobs do not trigger a 50k-record rescan. Maintenance reconciles scopes whose lifecycle changed. Automatic sync preserves human-authored text while replacing provenance-marked generated lines; an explicit Generate action intentionally rebuilds the snapshot.
+
 ## Admin surface
 
 Memory administration uses `/api/v1/admin/memory/*`, including recall, capture, jobs/status, export, forget, restore, reindex, governance, feedback, and Core Memory snapshot operations. Use the `@tagent/abi/admin/v1` schemas rather than copying payload shapes from old routes.

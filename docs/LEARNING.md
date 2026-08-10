@@ -55,6 +55,8 @@ Learning may create proposals, requests, evaluations, and receipts. It cannot di
 
 The shared Semantic Judge may classify reusable evidence and cross-language similarity, but low-confidence or malformed output cannot activate a Workflow, grant capability, or weaken deterministic checks.
 
+User-message preference jobs remain durable when the Semantic Judge is disabled. Core consumes them with deterministic explicit-preference rules instead of leaving them pending. Explicitly durable communication habits (for example “以后…” or “always…”) are owned by the authenticated principal at global applicability; one-off formatting requests remain Session-scoped. Profiles resolve through global, Workspace, Session and Task overrides, and legacy `session:*` profiles remain readable as Session-level fallbacks.
+
 ## Admin surface
 
 Versioned admin routes include:

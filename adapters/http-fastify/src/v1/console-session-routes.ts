@@ -1,7 +1,9 @@
 import type { FastifyInstance } from "fastify";
+import { canonicalizeSessionCreateRequest, canonicalizeSubmissionRequest } from "@tagent/abi";
 import type { V1ApiDependencies } from "./plugin.js";
 import { successEnvelope } from "./errors.js";
 import { authorizeConsole, consoleError } from "./console-route-support.js";
+import { principalOf } from "./auth.js";
 
 function opaqueAutomationMarker(content: string): boolean {
   return /^(?:(?:final-)?ui-sync|release)-[a-z0-9._-]*\d{10,}$/i.test(content) && !/[\s：:，,。.!?？]/.test(content);
@@ -31,7 +33,15 @@ export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencie
     if (body.requestId != null && (typeof body.requestId !== "string" || !body.requestId.trim() || body.requestId.length > 300)) {
       throw consoleError(400, "session.request_id_invalid", "requestId is invalid");
     }
-    return successEnvelope(request, sessions.createSession(body.title?.trim() || "New workspace", body.requestId?.trim()));
+    const title = body.title?.trim() || "New workspace";
+    const result = sessions.createSessionIdempotent({
+      title,
+      principalId: principalOf(request).subjectId,
+      idempotencyKey: body.requestId?.trim() || request.id,
+      canonicalPayload: canonicalizeSessionCreateRequest({ title }),
+      provenance: { surface: "web_console" },
+    });
+    return successEnvelope(request, result.session);
   });
 
   app.patch("/api/v1/console/sessions/:id", { onRequest: write }, async (request) => {
@@ -89,7 +99,11 @@ export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencie
     if (opaqueAutomationMarker(content)) throw consoleError(422, "submission.non_actionable", "opaque automation marker is not executable");
     if (!sessions.getSession(id)) throw consoleError(404, "session.not_found", "session not found");
     try {
-      const result = await service.enqueueSessionInput(id, content, body.requestId);
+      const result = await service.enqueueSessionInput(id, content, body.requestId, {
+        principalId: principalOf(request).subjectId,
+        canonicalPayload: canonicalizeSubmissionRequest({ content }),
+        provenance: { surface: "web_console" },
+      });
       return successEnvelope(request, result);
     } catch (error) {
       if (error instanceof Error && error.message.toLowerCase().includes("idempotency conflict")) {

@@ -525,7 +525,7 @@ describe("local memory lifecycle", () => {
     };
     await adapter.upsertRecords([base]);
     const duplicate = await lifecycle.integrate(access, {
-      records: [{ ...base, id: "55555555-5555-4555-8555-555555555555" }],
+      records: [{ ...base, id: "55555555-5555-4555-8555-555555555555", sourceRefs: [{ sourceType: "message", sourceId: "second-confirmation" }] }],
       topics: [],
       nodes: [],
       edges: [],

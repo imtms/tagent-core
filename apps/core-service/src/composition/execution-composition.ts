@@ -54,7 +54,7 @@ import type { AgentServicePersistencePort } from "../application/ports/index.js"
 import type { MemoryFacade } from "@tagent/memory";
 import type { LearningFeatureControl, SemanticJudge } from "@tagent/learning";
 import type { SupervisorReviewer } from "./supervisor-reviewer.js";
-import { createExecutionCollaborationAdapters } from "./execution-collaboration-adapters.js";
+import { createExecutionCollaborationAdapters, resolveMemorySubjectId } from "./execution-collaboration-adapters.js";
 import { CoreApplicationCoordinator } from "../application/core-application-coordinator.js";
 import { CoreWorkflowGovernanceApplication } from "../application/workflow-governance-application.js";
 import { CoreWorkspaceGoalApplication, type WorkspaceGoalRoadmapGenerator } from "../application/workspace-goal-application.js";
@@ -232,15 +232,21 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     },
     recovery: recoveryRef.port,
     runtimeHost: {
-      create: (input) => createRuntimeHost({
-        persistence: options.persistence,
-        workspace: state.workspace,
-        memory: options.memory,
-        memoryScopeId: options.memoryScopeId ?? "default",
-        artifactSink,
-        workspaceEdit,
-        ...input,
-      }),
+      create: (input) => {
+        const run = options.persistence.taskRuns.getRun(input.token.runId);
+        return createRuntimeHost({
+          persistence: options.persistence,
+          workspace: state.workspace,
+          memory: options.memory,
+          memoryScopeId: options.memoryScopeId ?? "default",
+          artifactSink,
+          workspaceEdit,
+          ...input,
+          memorySubjectId: run
+            ? resolveMemorySubjectId(options.persistence, run.sessionId)
+            : input.memorySubjectId,
+        });
+      },
     },
     runtimeRegistry,
     settlement: settlementRef.port,

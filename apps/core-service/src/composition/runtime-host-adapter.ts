@@ -84,7 +84,11 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
   };
   const memoryAccess: AccessContext = {
     subjectId: options.memorySubjectId,
-    scopes: [{ type: "workspace", id: options.memoryScopeId }],
+    scopes: [
+      ...(options.memorySubjectId.startsWith("session:") ? [] : [{ type: "user" as const, id: options.memorySubjectId }]),
+      { type: "workspace", id: options.memoryScopeId },
+      ...(currentRun()?.sessionId ? [{ type: "session" as const, id: currentRun()!.sessionId }] : []),
+    ],
     purpose: "agent_recall",
   };
   const toolCapabilities: ToolCapabilityApplicationPort = {
