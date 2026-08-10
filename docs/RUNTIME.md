@@ -2,7 +2,7 @@
 
 ## Boundary
 
-The production runtime is `TAGENT_RUNTIME=in-process`, implemented by `@tagent/runtime-pi`. It adapts `pi-agent-core.AgentHarness` and `pi-ai` providers to TAgent-owned execution ports. There is no runtime RPC boundary and no `pi-coding-agent` dependency.
+The production runtime is `TAGENT_RUNTIME=in-process`, implemented by `@tagent/runtime-pi`. It adapts `pi-agent-core.AgentHarness` and `pi-ai` providers to TAgent-owned execution ports. There is no runtime RPC boundary.
 
 All Pi-owned types are contained in the runtime adapter. `@tagent/workspace-local` supplies Execution-owned `RuntimeTool` values and `@tagent/core-service` supplies `RuntimeModelSpec`; the adapter performs the concrete Pi conversion.
 
@@ -14,7 +14,21 @@ Pi owns the ephemeral model/tool loop within one bounded `Attempt`. TAgent Core 
 - operation idempotency and effect receipts;
 - workspace/capability policy, approvals, evidence, and final settlement.
 
-The runtime cannot mark a TaskRun complete or grant itself capability. See [PI runtime architecture](PI_RUNTIME_ARCHITECTURE.md) for the adapter dependency and compatibility details.
+The runtime cannot mark a TaskRun complete or grant itself capability.
+
+## Dependency and compatibility boundary
+
+Production imports of `pi-agent-core` and `pi-ai` are confined to `@tagent/runtime-pi`; other workspaces depend only on TAgent-owned execution contracts. The adapter:
+
+- constructs an in-memory Harness Session for each Attempt;
+- converts `RuntimeTool` and `RuntimeModelSpec` only at the adapter edge;
+- keeps retry, fallback, compaction and accepted control delivery transcript-safe;
+- retains failed provider messages in durable audit while removing them from the active continuation branch;
+- enforces response-header and body-chunk idle timeouts, including zero-as-disabled mode and compaction cancellation;
+- omits the optional OpenAI `store` field while preserving `pi-ai` dialect detection;
+- projects only historical tool output and TaskRun receipts, preserving the complete current turn.
+
+Architecture, package and runtime contract tests enforce this dependency boundary plus text/thinking streaming, tool ordering and guards, steering/follow-up, retry/fallback ordering, compaction, cancellation and provider transport behavior.
 
 ## Execution flow
 

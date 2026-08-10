@@ -62,6 +62,6 @@ All control-plane writes pass through the active SQLite writer fence. Multi-repo
 
 See [PERSISTENCE_AND_RECOVERY.md](PERSISTENCE_AND_RECOVERY.md) for the lifecycle and recovery contract.
 
-## Removed compatibility surfaces
+## Unsupported compatibility surfaces
 
-0.2.0 removes the pre-refactor root source tree, unversioned HTTP compatibility handlers, Core-hosted Web assets, compatibility ABI namespaces, and compatibility client decoders from the supported production surface. Migration code that is still required to open an existing database remains inside the persistence boundary.
+The supported production surface excludes pre-refactor root source trees, unversioned HTTP handlers, Core-hosted Web assets, compatibility ABI namespaces, and compatibility client decoders. Migration code required to open an existing database remains contained inside the persistence boundary.

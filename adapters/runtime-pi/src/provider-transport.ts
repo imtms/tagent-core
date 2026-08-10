@@ -100,8 +100,7 @@ export function withProviderIdleTimeout(streams: ProviderStreams, idleTimeoutMs:
       ...(idleFetch ? { fetch: idleFetch } : {}),
       // SDK timeouts are absolute deadlines. The transport wrapper above enforces
       // the intended header/body inactivity timeout and refreshes it on every chunk.
-      // A configured value of zero disables the idle watchdog, matching the
-      // previous coding-agent transport contract.
+      // A configured value of zero disables the idle watchdog.
       timeoutMs: DISABLED_SDK_TIMEOUT_MS,
     } : {}),
     ...(lifetimeSignal ? {

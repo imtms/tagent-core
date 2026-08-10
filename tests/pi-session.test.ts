@@ -10,7 +10,7 @@ import { createRuntimeHost } from "@tagent/core-service/composition";
 import { attemptIdFor } from "@tagent/execution/domain";
 import { agentPersistence } from "./support/test-persistence.js";
 
-describe("Pi 0.83 AgentHarness integration", () => {
+describe("Pi AgentHarness integration", () => {
   function fauxModels(faux: ReturnType<typeof fauxProvider>) {
     const models = createModels();
     models.setProvider(faux.provider);

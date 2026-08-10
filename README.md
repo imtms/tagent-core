@@ -4,7 +4,7 @@
 
 TAgent Core is a durable, self-hosted control plane for a single agent instance. It turns routed user intent into a persistent `TaskRun`, supervises bounded `Attempt`s, owns authoritative state, evidence, approvals, recovery, Memory, and Learning, and produces verifiable delivery results.
 
-The current 0.3 line adds lightweight Workspace Goals, snapshot-aware workspace mutation, durable large-output Artifacts, Core-owned project context, trusted verification receipts and runtime-efficiency improvements on the established modular boundary. Core remains API-only and TaskRun remains the only execution runtime.
+The current 0.5 line provides governed Workspace Goals, trusted execution receipts, durable Gateway contracts, optional Memory and Learning, and a contained `pi-agent-core` runtime on the established modular boundary. Core remains API-only and `TaskRun` remains the only execution runtime.
 
 ## Supported boundary
 

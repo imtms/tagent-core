@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.5.2] - 2026-08-10
 
 ### Pi runtime replacement correctness
 
@@ -8,6 +8,16 @@
 - Replaced retry, fallback, overflow and manual-compaction recovery prompts with transcript-invisible continuations, while retaining failed provider messages only in the durable audit transcript and removing them from active model context.
 - Made controls accepted during retry backoff, compaction and terminal provider failure deterministic: they are delivered by a continuation or explicitly cleared on abort, and `runtime.settled` is emitted only once for the complete Attempt runtime cycle.
 - Restored bounded provider header/body idle timeouts (including the documented zero-means-disabled setting), abort propagation into compaction requests, conservative generic OpenAI-compatible `store` omission without overriding provider dialect detection, primary-model retry before fallback, and successful-overflow answer retention.
+
+### Maintenance and release
+
+- Removed predecessor- and SDK-version-bound wording from current runtime code and tests, consolidated the duplicate Pi replacement design note into the maintained runtime contract, and corrected stale project/security release-line descriptions.
+- Synchronized Core, Web Console and all private workspace manifests, internal dependency pins, capabilities and release fixtures at 0.5.2.
+
+### Compatibility and upgrade
+
+- There is no HTTP API, ABI, configuration or SQLite schema migration in this release; schema remains 40.
+- Deploy matching Core and Web Console 0.5.2 artifacts. Existing 0.5.x schema-40 backups and rollback requirements are unchanged.
 
 ## [0.5.1] - 2026-08-09
 

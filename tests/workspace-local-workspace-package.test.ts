@@ -80,13 +80,13 @@ describe("Local workspace adapter package", () => {
   it("publishes a private minimal ABI with exact approved dependencies", () => {
     const root = readJson<{ devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const manifest = readJson<PackageManifest>(`${packageRoot}/package.json`);
-    expect(manifest).toMatchObject({ name: "@tagent/workspace-local", version: "0.5.1", private: true });
+    expect(manifest).toMatchObject({ name: "@tagent/workspace-local", version: "0.5.2", private: true });
     expect(root.devDependencies[manifest.name]).toBe(manifest.version);
     expect(Object.keys(manifest.exports).sort()).toEqual([
       ".", "./artifact-file-sink", "./project-context", "./snapshot-edit", "./tools", "./workspace-path",
     ]);
     expect(manifest.dependencies).toEqual({
-      "@tagent/execution": "0.5.1",
+      "@tagent/execution": "0.5.2",
       typebox: "^1.1.24",
     });
     for (const target of Object.values(manifest.exports)) {
@@ -175,7 +175,7 @@ describe("Local workspace adapter package", () => {
     expect(pathSource).toContain('operation === "list" ? 8 * 1024 * 1024 : 50 * 1024 * 1024');
   });
 
-  it("keeps production consumers on package ABIs and Pi concrete ownership on two adapters", () => {
+  it("keeps production consumers on package ABIs and Pi concrete ownership in runtime-pi", () => {
     const productionFiles = [...sourceFiles("src"), ...sourceFiles("packages"), ...sourceFiles("adapters")];
     const forbiddenConsumers = productionFiles.filter((relativePath) =>
       moduleSpecifiers(relativePath).some((specifier) =>

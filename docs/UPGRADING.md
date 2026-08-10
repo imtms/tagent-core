@@ -1,6 +1,6 @@
 # Upgrade and rollback
 
-This guide describes the current repository boundary: API v1, independently deployed Core and Web Console artifacts, one fenced SQLite writer, and control-plane schema 40. It replaces the version-specific 0.2 upgrade notes; release tags retain those historical instructions.
+This guide describes the current repository boundary: API v1, independently deployed Core and Web Console artifacts, one fenced SQLite writer, and control-plane schema 40. Release tags retain version-specific historical instructions.
 
 ## Compatibility boundary
 

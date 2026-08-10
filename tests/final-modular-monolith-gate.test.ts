@@ -235,7 +235,7 @@ describe("final modular monolith gate", () => {
       const content = source(file);
       for (const contract of contracts) expect(content, `${file} must document ${contract}`).toMatch(contract);
     }
-    expect(source("docs/MODULAR_MONOLITH.md")).toContain("removes the pre-refactor root source tree");
+    expect(source("docs/MODULAR_MONOLITH.md")).toContain("excludes pre-refactor root source trees");
     expect(source("docs/API_V1.md")).toContain("Unversioned paths");
   });
 

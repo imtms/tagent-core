@@ -65,7 +65,7 @@ Schema v39 introduces the named `gateway-contracts-v39` migration window. It int
 - event-consumer cursors add settled/final ACK fields;
 - Workspace Goal writes require `requestId`.
 
-Because v1 decoders reject unknown fields, a pre-v39 client is not wire-compatible with these tightened responses. `status: "duplicate"` and `terminalAcknowledgedSequence` remain as deprecated compatibility aliases for one release window. New consumers must use `replayed` plus `state/outcome`, and `settledAcknowledgedSequence`/`finalAcknowledgedSequence`.
+Because v1 decoders reject unknown fields, a pre-v39 client is not wire-compatible with these tightened responses. `status: "duplicate"` and `terminalAcknowledgedSequence` remain deprecated aliases only for the named schema-39 migration window. New consumers must use `replayed` plus `state/outcome`, and `settledAcknowledgedSequence`/`finalAcknowledgedSequence`; the aliases are removed with the next public API major.
 
 ## Gateway operator v40 migration window
 

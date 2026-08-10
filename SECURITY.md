@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are applied to the latest supported `0.3.x` release and the current `main` line.
+Security fixes are applied to the latest supported `0.5.x` release and the current `main` line.
 
 ## Deployment boundary
 
