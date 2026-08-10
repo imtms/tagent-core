@@ -123,6 +123,11 @@ export class LegacyStoreAdapter {
   readonly workspaceGoals: WorkspaceGoalRepository;
   readonly workspaceGoalOperations: WorkspaceGoalOperationRepository;
   readonly taskRunCommands: TaskRunCommandReceiptRepository;
+  readonly operatorRead: {
+    listSessionsPage: Store["listOperatorSessionsPage"];
+    listSessionTaskRunsPage: Store["listOperatorSessionTaskRunsPage"];
+    getLatestSessionTaskRun: Store["getLatestOperatorSessionTaskRun"];
+  };
 
   constructor(store: Store, mutationUnitOfWork: MutationUnitOfWork) {
     const mutate = <Args extends unknown[], Result>(operation: SynchronousOperation<Args, Result>) =>
@@ -268,6 +273,12 @@ export class LegacyStoreAdapter {
       listMessages: query(store.listMessages.bind(store)),
       listRecentMessages: query(store.listRecentMessages.bind(store)),
       appendMessage: mutate(store.appendMessage.bind(store)),
+    });
+
+    this.operatorRead = Object.freeze({
+      listSessionsPage: query(store.listOperatorSessionsPage.bind(store)),
+      listSessionTaskRunsPage: query(store.listOperatorSessionTaskRunsPage.bind(store)),
+      getLatestSessionTaskRun: query(store.getLatestOperatorSessionTaskRun.bind(store)),
     });
 
     this.taskRunCommands = Object.freeze({

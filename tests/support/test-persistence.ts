@@ -28,6 +28,7 @@ export function learningPersistence(store: Store): LearningServicePersistencePor
 export function httpPersistence(store: Store): HttpPersistencePort {
   const persistence = testPersistence(store);
   return {
+    operatorRead: persistence.operatorRead,
     sessions: persistence.sessions,
     submissions: persistence.submissions,
     taskRuns: persistence.taskRuns,

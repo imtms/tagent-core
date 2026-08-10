@@ -51,8 +51,8 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 ## Migration and recovery gate
 
 - [ ] A representative 0.1.x database plus WAL/SHM was backed up and restored in isolation.
-- [ ] The candidate migrated v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 → v40 and reopened idempotently.
-- [ ] `schema_meta.version` is 40; trusted-evidence and Goal-execution drift checks pass; complete v39 receipt/ACK columns, constraints, foreign keys and indexes plus the v40 Submission audit shape pass fail-closed validation; `migration_issues` has zero open rows.
+- [ ] The candidate migrated v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 → v40 → v41 and reopened idempotently.
+- [ ] `schema_meta.version` is 41; trusted-evidence and Goal-execution drift checks pass; complete v39 receipt/ACK shapes, the v40 Submission audit shape and exact v41 Operator Read indexes pass fail-closed validation; `migration_issues` has zero open rows.
 - [ ] A second Core process is rejected by the OS lock/writer authority.
 - [ ] Writer lease/fence loss clears health readiness and closes Core.
 - [ ] Restart recovery produces `outcome_unknown` for effects/deliveries whose outcome cannot be proven and `restart_before_effect` cancellation only before effect start.
@@ -65,7 +65,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 
 - [ ] [Gateway handoff status](GATEWAY_HANDOFF_STATUS.md) confirms every dependency is either Core Ready, explicitly Gateway-owned, or deferred by current policy; a passing Core runtime probe alone cannot prove Gateway-owned behavior.
 - [ ] `GET /api/v1/health` reports writer readiness; `/api/health` returns 404.
-- [ ] `GET /api/v1/capabilities` matches the release/schema, required commands/events, Operator allowlist, active Approval authority, receipt-recovery protocol, retention and limits.
+- [ ] `GET /api/v1/capabilities` matches the release/schema, required commands/events, legacy Operator allowlist, active Approval authority, receipt-recovery protocol, retention and limits; `operator.read.v1` and `/api/v1/operator/capabilities` match the independent read profile.
 - [ ] Credential mode fails closed for missing, invalid, and under-scoped opaque tokens.
 - [ ] Resource scopes are enforced from server configuration.
 - [ ] Exact CORS origins pass and wildcard/invalid origins fail startup or request policy as designed.
@@ -74,6 +74,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] Command receipt lookup precedes Attempt fencing; structured failures survive replay; unprovable effects are not repeated.
 - [ ] Event-consumer replay persists before ACK, reclaims a new generation, reaches zero lag, and settled/final events are acknowledged with the correct boundary.
 - [ ] Transcript, interaction and Artifact metadata pages enforce default/max limits; SSE batch/buffer bounds and HTTP 413 Artifact limits match capabilities.
+- [ ] Operator Session/TaskRun lists enforce scope/default/max limits, tied-key and snapshot pagination, cursor retry/mismatch/restart behavior, empty/latest semantics and public-summary redaction.
 - [ ] Core-owned ABI fixtures and provider/consumer tests pass. Gateway separately proves its fake Core and current/previous-client matrix before its production cutover.
 - [ ] `scripts/gateway-readiness-probe.mjs` exits 0 with `ready=true` and no reasons.
 - [ ] Web is served from its independent artifact and targets the Gateway/Core origin; Core serves no static Web content.

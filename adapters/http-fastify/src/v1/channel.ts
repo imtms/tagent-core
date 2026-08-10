@@ -7,11 +7,13 @@ import { registerConsoleSessionV1Routes } from "./console-session-routes.js";
 import { registerConsoleRunV1Routes } from "./console-run-routes.js";
 import { registerConsoleGoalV1Routes } from "./console-goal-routes.js";
 import { registerCapabilityV1Routes } from "./capability-routes.js";
+import { registerOperatorReadV1Routes } from "./operator-read-routes.js";
 
 export type { ChannelV1Dependencies } from "./dependencies.js";
 
 export async function registerChannelV1Routes(app: FastifyInstance, dependencies: ChannelV1Dependencies): Promise<void> {
   registerCapabilityV1Routes(app, dependencies);
+  registerOperatorReadV1Routes(app, dependencies);
   registerSubmissionV1Routes(app, dependencies);
   registerTaskRunV1Routes(app, dependencies);
   registerEventV1Routes(app, dependencies);

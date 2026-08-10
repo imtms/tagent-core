@@ -89,12 +89,16 @@ import {
   assertGatewayOperatorV40Schema,
   migrateGatewayOperatorV40,
 } from "./migrations/v40-gateway-operator.js";
+import {
+  assertOperatorReadV41Schema,
+  migrateOperatorReadV41,
+} from "./migrations/v41-operator-read.js";
 import { mapLegacyRunApprovalOperation } from "./sqlite/canonical-approval-mapper.js";
 import { appendProjectionPair, finalizeProjectionCheckpoint } from "./sqlite/canonical-integration-event.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 40;
+const SCHEMA_VERSION = 41;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
 export interface StoreOptions {
@@ -107,6 +111,42 @@ export type StoreSynchronousResult<T> = T extends PromiseLike<unknown> ? never :
 
 export interface StoreMutationRunner {
   run<T>(work: (db: Database.Database) => T & StoreSynchronousResult<T>): T;
+}
+
+export interface OperatorSessionReadRow {
+  id: string;
+  title: string;
+  modelId: string;
+  reasoningEffort: ReasoningEffort;
+  createdAt: number;
+  updatedAt: number;
+  latestTaskRunId: string | null;
+  latestTaskRunStatus: RunStatus | null;
+  latestTaskRunPhase: RunPhase | null;
+  latestActivityAt: number;
+}
+
+export interface OperatorTaskRunReadRow {
+  id: string;
+  sessionId: string;
+  status: RunStatus;
+  phase: RunPhase;
+  attempt: number;
+  goalSummary: string;
+  blockedReason: string | null;
+  pendingApproval: number;
+  pendingUserInput: number;
+  lastEventSequence: number;
+  createdAt: number;
+  updatedAt: number;
+  completedAt: number | null;
+  resumable: number;
+}
+
+export interface OperatorReadPageQuery {
+  snapshotRowId?: number;
+  after?: { createdAt: number; id: string };
+  limit: number;
 }
 
 export class Store {
@@ -1110,10 +1150,16 @@ export class Store {
     assertGatewayContractsV39Schema(this.db);
     const gatewayOperatorMigration = this.db.transaction(() => {
       migrateGatewayOperatorV40(this.db, previousVersion !== undefined && previousVersion >= 40 ? 40 : 39);
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+      this.db.prepare(`UPDATE schema_meta SET version=40,updated_at=? WHERE id=1`).run(now());
     });
     gatewayOperatorMigration();
     assertGatewayOperatorV40Schema(this.db);
+    const operatorReadMigration = this.db.transaction(() => {
+      migrateOperatorReadV41(this.db, previousVersion !== undefined && previousVersion >= 41 ? 41 : 40);
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+    });
+    operatorReadMigration();
+    assertOperatorReadV41Schema(this.db);
     // A process restart loses the in-memory executor for receipts that had only
     // reached "started". Surface uncertainty explicitly; never replay an effect
     // whose outcome may already have escaped Core.
@@ -1458,10 +1504,36 @@ export class Store {
         latest.status as latestRunStatus, latest.phase as latestRunPhase
       FROM sessions
       LEFT JOIN runs latest ON latest.id = (
-        SELECT runs.id FROM runs WHERE runs.session_id = sessions.id ORDER BY runs.updated_at DESC, runs.rowid DESC LIMIT 1
+        SELECT runs.id FROM runs WHERE runs.session_id = sessions.id ORDER BY runs.updated_at DESC, runs.id DESC LIMIT 1
       )
       ORDER BY sessions.updated_at DESC
     `).all() as Session[];
+  }
+
+  listOperatorSessionsPage(query: OperatorReadPageQuery): { items: OperatorSessionReadRow[]; snapshotRowId: number } {
+    const snapshotRowId = query.snapshotRowId ?? Number(this.db.prepare("SELECT COALESCE(MAX(rowid),0) FROM sessions").pluck().get());
+    const afterClause = query.after
+      ? "AND (sessions.created_at < @afterCreatedAt OR (sessions.created_at = @afterCreatedAt AND sessions.id < @afterId))"
+      : "";
+    const items = this.db.prepare(`
+      SELECT sessions.id,sessions.title,sessions.model_id as modelId,sessions.reasoning_effort as reasoningEffort,
+        sessions.created_at as createdAt,sessions.updated_at as updatedAt,
+        latest.id as latestTaskRunId,latest.status as latestTaskRunStatus,latest.phase as latestTaskRunPhase,
+        CASE WHEN latest.updated_at IS NOT NULL AND latest.updated_at > sessions.updated_at
+          THEN latest.updated_at ELSE sessions.updated_at END as latestActivityAt
+      FROM sessions
+      LEFT JOIN runs latest ON latest.rowid = (
+        SELECT candidate.rowid FROM runs candidate WHERE candidate.session_id=sessions.id
+        ORDER BY candidate.updated_at DESC,candidate.id DESC LIMIT 1
+      )
+      WHERE sessions.rowid <= @snapshotRowId ${afterClause}
+      ORDER BY sessions.created_at DESC,sessions.id DESC LIMIT @limit
+    `).all({
+      snapshotRowId,
+      limit: query.limit,
+      ...(query.after ? { afterCreatedAt: query.after.createdAt, afterId: query.after.id } : {}),
+    }) as OperatorSessionReadRow[];
+    return { items, snapshotRowId };
   }
 
   getSession(id: SessionId): Session | undefined {
@@ -1471,7 +1543,7 @@ export class Store {
         latest.status as latestRunStatus, latest.phase as latestRunPhase
       FROM sessions
       LEFT JOIN runs latest ON latest.id = (
-        SELECT runs.id FROM runs WHERE runs.session_id = sessions.id ORDER BY runs.updated_at DESC, runs.rowid DESC LIMIT 1
+        SELECT runs.id FROM runs WHERE runs.session_id = sessions.id ORDER BY runs.updated_at DESC, runs.id DESC LIMIT 1
       )
       WHERE sessions.id = ?
     `).get(id) as Session | undefined;
@@ -1916,8 +1988,61 @@ ${source.content}`;
     }));
   }
 
+  listOperatorSessionTaskRunsPage(
+    sessionId: SessionId,
+    query: OperatorReadPageQuery,
+  ): { items: OperatorTaskRunReadRow[]; snapshotRowId: number } {
+    const snapshotRowId = query.snapshotRowId ?? Number(this.db.prepare("SELECT COALESCE(MAX(rowid),0) FROM runs").pluck().get());
+    const afterClause = query.after
+      ? "AND (runs.created_at < @afterCreatedAt OR (runs.created_at = @afterCreatedAt AND runs.id < @afterId))"
+      : "";
+    const items = this.db.prepare(`
+      SELECT runs.id,runs.session_id as sessionId,runs.status,runs.phase,runs.attempt,
+        substr(CASE WHEN trim(COALESCE(json_extract(CASE WHEN json_valid(runs.contract_json) THEN runs.contract_json ELSE '{}' END,'$.summary'),''))<>''
+          THEN trim(json_extract(CASE WHEN json_valid(runs.contract_json) THEN runs.contract_json ELSE '{}' END,'$.summary')) ELSE trim(runs.goal) END,1,500) as goalSummary,
+        substr(runs.blocked_reason,1,500) as blockedReason,
+        EXISTS(SELECT 1 FROM approval_requests approval WHERE approval.run_id=runs.id AND approval.status='pending') as pendingApproval,
+        EXISTS(SELECT 1 FROM user_input_requests input WHERE input.run_id=runs.id AND input.status='pending') as pendingUserInput,
+        runs.last_event_seq as lastEventSequence,runs.created_at as createdAt,runs.updated_at as updatedAt,
+        runs.completed_at as completedAt,
+        CASE WHEN runs.status IN ('interrupted','blocked') THEN 1
+          WHEN runs.status='failed' AND EXISTS(
+            SELECT 1 FROM run_events event WHERE event.run_id=runs.id AND event.type='run.failed'
+              AND json_extract(event.data,'$.reason') IN ('idle_timeout','hard_timeout')
+          ) THEN 1 ELSE 0 END as resumable
+      FROM runs
+      WHERE runs.session_id=@sessionId AND runs.rowid <= @snapshotRowId ${afterClause}
+      ORDER BY runs.created_at DESC,runs.id DESC LIMIT @limit
+    `).all({
+      sessionId,
+      snapshotRowId,
+      limit: query.limit,
+      ...(query.after ? { afterCreatedAt: query.after.createdAt, afterId: query.after.id } : {}),
+    }) as OperatorTaskRunReadRow[];
+    return { items, snapshotRowId };
+  }
+
+  getLatestOperatorSessionTaskRun(sessionId: SessionId): OperatorTaskRunReadRow | undefined {
+    return this.db.prepare(`
+      SELECT runs.id,runs.session_id as sessionId,runs.status,runs.phase,runs.attempt,
+        substr(CASE WHEN trim(COALESCE(json_extract(CASE WHEN json_valid(runs.contract_json) THEN runs.contract_json ELSE '{}' END,'$.summary'),''))<>''
+          THEN trim(json_extract(CASE WHEN json_valid(runs.contract_json) THEN runs.contract_json ELSE '{}' END,'$.summary')) ELSE trim(runs.goal) END,1,500) as goalSummary,
+        substr(runs.blocked_reason,1,500) as blockedReason,
+        EXISTS(SELECT 1 FROM approval_requests approval WHERE approval.run_id=runs.id AND approval.status='pending') as pendingApproval,
+        EXISTS(SELECT 1 FROM user_input_requests input WHERE input.run_id=runs.id AND input.status='pending') as pendingUserInput,
+        runs.last_event_seq as lastEventSequence,runs.created_at as createdAt,runs.updated_at as updatedAt,
+        runs.completed_at as completedAt,
+        CASE WHEN runs.status IN ('interrupted','blocked') THEN 1
+          WHEN runs.status='failed' AND EXISTS(
+            SELECT 1 FROM run_events event WHERE event.run_id=runs.id AND event.type='run.failed'
+              AND json_extract(event.data,'$.reason') IN ('idle_timeout','hard_timeout')
+          ) THEN 1 ELSE 0 END as resumable
+      FROM runs WHERE runs.session_id=? ORDER BY runs.updated_at DESC,runs.id DESC LIMIT 1
+    `).get(sessionId) as OperatorTaskRunReadRow | undefined;
+  }
+
   getLatestRun(sessionId: SessionId): TaskRun | undefined {
-    const row = this.db.prepare("SELECT id FROM runs WHERE session_id = ? ORDER BY updated_at DESC LIMIT 1").get(sessionId) as { id: string } | undefined;
+    const row = this.db.prepare("SELECT id FROM runs WHERE session_id = ? ORDER BY updated_at DESC,id DESC LIMIT 1").get(sessionId) as { id: string } | undefined;
     return row ? this.getRun(row.id) : undefined;
   }
 

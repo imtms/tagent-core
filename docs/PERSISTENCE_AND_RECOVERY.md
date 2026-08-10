@@ -4,7 +4,7 @@
 
 `@tagent/persistence-sqlite` owns the control-plane SQLite schema, repositories, migrations, transaction boundary, writer authority, and restart recovery primitives. Domains depend on its ports through the Core composition root; they do not issue uncontrolled SQL.
 
-The current schema version is 40:
+The current schema version is 41:
 
 | Version | Authority introduced |
 | --- | --- |
@@ -19,6 +19,7 @@ The current schema version is 40:
 | 38 | automatic Goal guidance, Goal Roadmap admission/progress, Run link modes and repeatable lifecycle decisions |
 | 39 | Gateway Session/command/Goal operation receipts plus settled/final event-consumer ACK boundaries |
 | 40 | Submission principal/provenance audit receipts and canonical-payload recovery |
+| 41 | ordered Session/TaskRun indexes for bounded Operator Read keyset pagination |
 
 Schema 37 added `operations.payload_json`, `run_checks.source_operation_id`, `run_checks.observed_at`, and the partial source-operation index. Legacy operations are not retroactively promoted to trusted evidence.
 
@@ -28,7 +29,9 @@ Schema 39 adds `session_create_receipts`, `task_run_command_receipts`, `workspac
 
 Schema 40 adds `submission_audit_receipts`. Submission identity remains `(session_id,idempotency_key)` while the audit receipt preserves the first Core principal, canonical content-plus-origin payload/hash, channel-neutral provenance, and Submission identity. The inbox item and its audit receipt commit together for new submissions; replay returns the original audit chain and changed canonical provenance conflicts. Re-entry validates the full table, unique identity, foreign key and indexes.
 
-Migrations are forward-only for a running release. A binary that only understands schema 39 must never open a schema 40 database.
+Schema 41 adds `idx_sessions_operator_created`, `idx_runs_operator_session_created`, and `idx_runs_operator_session_updated`. They support immutable Session/TaskRun inventory order and deterministic latest-Run selection. Re-entry validates index ownership and exact column order fail-closed. Operator cursor snapshot membership uses persisted row boundaries; read values remain read-committed.
+
+Migrations are forward-only for a running release. A binary that only understands schema 40 must never open a schema 41 database.
 
 ## Startup order
 

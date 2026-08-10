@@ -33,6 +33,10 @@
       "types": "./dist/internal/v1/index.d.ts",
       "import": "./dist/internal/v1/index.js"
     },
+    "./operator/read-v1": {
+      "types": "./dist/operator/read-v1/index.d.ts",
+      "import": "./dist/operator/read-v1/index.js"
+    },
     "./shared": {
       "types": "./dist/shared/index.d.ts",
       "import": "./dist/shared/index.js"

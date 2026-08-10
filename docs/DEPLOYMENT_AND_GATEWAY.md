@@ -10,7 +10,7 @@ Browser -> Web Console static host -> identity Gateway -> private TAgent Core
 
 The Web host may also be the Gateway host, but Web assets and Core remain independent artifacts. Core is API-only and listens on `127.0.0.1:3100` by default.
 
-The schema-40 Channel and declared Operator profiles are ready for Gateway integration. Review [GATEWAY_HANDOFF_STATUS.md](GATEWAY_HANDOFF_STATUS.md) for the exact Core/Gateway responsibility boundary. Production cutover still requires both repositories' release gates; Core readiness cannot prove Gateway-local persistence, identity or external delivery behavior.
+The schema-41 Channel, legacy Operator and independent Operator Read profiles are ready for Gateway integration. Review [GATEWAY_HANDOFF_STATUS.md](GATEWAY_HANDOFF_STATUS.md) for the exact Core/Gateway responsibility boundary. Production cutover still requires both repositories' release gates; Core readiness cannot prove Gateway-local persistence, identity or external delivery behavior.
 
 ## Production prerequisites
 
@@ -65,9 +65,9 @@ Use Core-before-Gateway order:
 3. back up SQLite with WAL/SHM, optional PostgreSQL/Cold state, current artifact, config, and watermarks;
 4. verify the Core archive and checksum;
 5. switch to the new Core artifact and start it;
-6. allow migration to schema 40; if `migration_issues` contains an open row, correct the source data rather than bypassing the ledger;
+6. allow migration to schema 41; if `migration_issues` contains an open row, correct the source data rather than bypassing the ledger;
 7. require `GET /api/v1/health` to report `data.ok=true` and `data.writer.ready=true`;
-8. require `GET /api/v1/capabilities` to report schema 40, the required command/event catalogs, Operator endpoint allowlist, active Approval authority, exact receipt-recovery protocol, retention policy and current limits;
+8. require `GET /api/v1/capabilities` to report schema 41, the required command/event catalogs, Operator endpoint allowlist, active Approval authority, exact receipt-recovery protocol, retention policy, current limits and `operator.read.v1`; validate `/api/v1/operator/capabilities` before enabling historical inventory;
 9. start one Gateway consumer, claim a new event-consumer generation, replay, persist, then ACK;
 10. run the readiness probe and require zero lag, no settled/final unacknowledged events, no `outcome_unknown` receipts and no stale `started` receipts;
 11. deploy the matching Web artifact with its Gateway origin;
@@ -90,13 +90,13 @@ The script's service rollback changes the binary pointer only. It does not downg
 
 Gateway must persist its own external intent before calling Core, use stable Session/Submission/command/Goal request identities, and query Core receipts after ambiguous network failures. Core never accepts browser identity as authority and never receives Telegram/Feishu SDK objects or platform secrets. Gateway must persist each SSE event before ACK and treat `blocked` as settled but recoverable, not final.
 
-Core bounds SSE replay at 256 rows per database read and the replay/live handoff at 1,000 events. A closed slow-consumer stream is reconnected from its durable ACK. Current v40 retention does not automatically delete TaskRun events or expire cursors.
+Core bounds SSE replay at 256 rows per database read and the replay/live handoff at 1,000 events. A closed slow-consumer stream is reconnected from its durable ACK. Current v41 retention does not automatically delete TaskRun events or expire cursors. Gateway uses Operator Read for authoritative initial inventory and rebuild, while its local projection remains disposable.
 
 ## Backup and rollback
 
-Code rollback within schema 40 requires a binary that understands schema 40 and the current ABI window. Rollback to an older incompatible release requires stopping all writers and restoring the matching pre-upgrade SQLite/WAL/SHM backup plus the matching Memory state.
+Code rollback within schema 41 requires a binary that understands schema 41 and the current ABI window. Rollback to an older incompatible release requires stopping all writers and restoring the matching pre-upgrade SQLite/WAL/SHM backup plus the matching Memory state.
 
-Never run a schema-39-only or otherwise incompatible binary against schema 40 and never overwrite a live schema 40 database with partial old files. Preserve the last successful capability negotiation, readiness snapshot, command/Goal receipts and consumer/learning watermarks before changing Gateway ownership.
+Never run a schema-40-only or otherwise incompatible binary against schema 41 and never overwrite a live schema 41 database with partial old files. Preserve the last successful capability negotiation, Operator Read profile, readiness snapshot, command/Goal receipts and consumer/learning watermarks before changing Gateway ownership.
 
 ## Web deployment
 

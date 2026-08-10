@@ -12,6 +12,7 @@ Core is API-only. Unversioned paths such as `/api/health`, `/api/sessions`, `/ap
 | --- | --- | --- |
 | Public | `GET /api/v1/health` | process and writer readiness; no credential required |
 | Channel | `/api/v1/sessions`, `/api/v1/task-runs/*` | durable submission, TaskRun reads and commands, transcript, artifacts, event consumers |
+| Operator Read | `/api/v1/operator/*` | stable Gateway Session discovery and per-Session TaskRun history |
 | Console | `/api/v1/console/*` | operator projections and controls used by the Web Console |
 | Admin | `/api/v1/admin/*` | configuration, Memory, Learning, Workflow, and governance operations |
 | Internal | `/api/v1/internal/*` | trusted workflow evaluation and worker integration |
@@ -37,6 +38,19 @@ GET  /api/v1/capabilities
 ```
 
 Use the exported schemas for the complete route payload inventory. Console projections are richer than channel resources and are not a substitute for the stable channel contract.
+
+### Operator Read routes
+
+The independently versioned `operator.read.v1` profile adds stable authority reads without changing the closed Operator 1.0 allowlist:
+
+```text
+GET /api/v1/operator/capabilities
+GET /api/v1/operator/sessions?cursor=OPAQUE&limit=50
+GET /api/v1/operator/sessions/:sessionId/task-runs?cursor=OPAQUE&limit=50
+GET /api/v1/operator/sessions/:sessionId/task-runs/latest
+```
+
+Session inventory requires `sessions:read`; nested TaskRun reads require both `sessions:read` and `runs:read`. Both lists default to 50 and cap at 200. They use immutable `(createdAt DESC, id DESC)` order with snapshot membership and read-committed values. The latest route uses `(updatedAt DESC, id DESC)`, returns `data: null` for an existing empty Session and `404 session.not_found` when the Session is absent. Discover the profile through `apiVersions`, then negotiate its exact independent contract at `/api/v1/operator/capabilities`. See [OPERATOR_READ_API.md](OPERATOR_READ_API.md).
 
 ### Workspace Goal Console routes
 
@@ -101,7 +115,7 @@ Binary artifact responses and SSE streams use their media protocols rather than 
 
 When no Core service credential is configured, protected routes resolve to the `local-admin` principal. Keep this mode on `127.0.0.1` and do not configure cross-origin access.
 
-When credentials exist, protected routes require `Authorization: Bearer <opaque-token>` and one explicit scope:
+When credentials exist, protected routes require `Authorization: Bearer <opaque-token>` and one or more explicit scopes:
 
 ```text
 sessions:read       sessions:write
@@ -167,15 +181,15 @@ Event consumers are durable and generation-fenced:
 
 The durable acknowledged sequence is authoritative. The stream always replays from that sequence and then continues live; an optional `after` value may be equal to or behind the durable ACK but may never skip ahead of it. A client checkpoint may suppress re-applying an already hydrated event, but the client must still persist and ACK the replayed sequence. The stream sends JSON `TaskRunEvent` values in `data:` frames and a comment heartbeat every 15 seconds. A newer claim invalidates an older generation.
 
-Replay reads events in batches of 256 and bounds the replay/live handoff buffer at 1,000 events. Backpressure or overflow closes the stream; the consumer reconnects from its durable ACK. Core v40 does not automatically prune TaskRun events or expire cursors. `settledAcknowledgedSequence` includes recoverable `blocked` and terminal failure states; `finalAcknowledgedSequence` advances only for irreversible `completed` or `cancelled`. The deprecated `terminalAcknowledgedSequence` aliases the settled boundary during the compatibility window.
+Replay reads events in batches of 256 and bounds the replay/live handoff buffer at 1,000 events. Backpressure or overflow closes the stream; the consumer reconnects from its durable ACK. Core v41 does not automatically prune TaskRun events or expire cursors. `settledAcknowledgedSequence` includes recoverable `blocked` and terminal failure states; `finalAcknowledgedSequence` advances only for irreversible `completed` or `cancelled`. The deprecated `terminalAcknowledgedSequence` aliases the settled boundary during the compatibility window.
 
 Projection-critical events use per-type payload schemas and one canonical fixture per catalog member. Internal Supervisor/context/runtime/control detail is projected as `diagnostic.internal` with only `sourceType`; private reasoning and arbitrary internal payloads are never copied to Channel SSE. Unknown future public event types remain ignorable and ACK-able. `task_run.waiting_input` carries the public User Input request. The typed interaction read model is authoritative for the complete lifecycle, including states that do not have a dedicated public event.
 
 ## Capability discovery and Operator profile
 
-`GET /api/v1/capabilities` returns the Core release, API/event/schema versions, command/event catalogs, typed-interaction flags, `operator.profileVersion` and exact endpoint IDs, active Approval authority/readiness, exact receipt recovery, no-auto-delete/no-cursor-expiry retention policy, and enforced payload/stream limits. Gateway must fail fast before traffic if any required item is absent.
+`GET /api/v1/capabilities` returns the Core release, API/event/schema versions, command/event catalogs, typed-interaction flags, `operator.profileVersion` and exact endpoint IDs, active Approval authority/readiness, exact receipt recovery, no-auto-delete/no-cursor-expiry retention policy, and enforced payload/stream limits. It advertises `operator.read.v1` in `apiVersions`; the profile's own capabilities are returned separately from `GET /api/v1/operator/capabilities`. Gateway must fail fast for each feature if any required item is absent.
 
-Only endpoint IDs returned in the Operator allowlist are stable cross-team contracts. The current profile consists of the completed Channel Session/Submission/TaskRun/interaction/Transcript/Artifact/event-consumer routes and the Workspace Goal subset listed above. Other Console/Admin routes remain first-party or experimental because some use handwritten DTOs or non-receipted writes. Gateway must not transparently expose them. Browser credentials never enter Core; Gateway replaces them with a minimum-scope opaque service credential. See [GATEWAY_HANDOFF_STATUS.md](GATEWAY_HANDOFF_STATUS.md) for the responsibility decision.
+Only endpoint IDs returned by their owning capability profile are stable cross-team contracts. The legacy Operator profile consists of the completed Channel Session/Submission/TaskRun/interaction/Transcript/Artifact/event-consumer routes and the Workspace Goal subset listed above. Operator Read owns only its four declared endpoint IDs. Other Console/Admin routes remain first-party or experimental because some use handwritten DTOs or non-receipted writes. Gateway must not transparently expose them. Browser credentials never enter Core; Gateway replaces them with a minimum-scope opaque service credential. See [GATEWAY_HANDOFF_STATUS.md](GATEWAY_HANDOFF_STATUS.md) for the responsibility decision.
 
 ## CORS
 

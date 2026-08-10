@@ -54,7 +54,7 @@ describe("Workspace Goal execution schema v38 migration", () => {
       legacy.close();
 
       store = new Store(filename);
-      expect(store.getSchemaVersion()).toBe(40);
+      expect(store.getSchemaVersion()).toBe(41);
       expect(store.db.prepare("SELECT link_mode as mode FROM workspace_goal_run_links WHERE run_id=?").get(run.id)).toEqual({ mode: "roadmap" });
       expect(store.db.prepare(`SELECT item_id as itemId,status,run_id as runId,completed_at as completedAt
         FROM workspace_goal_roadmap_item_progress WHERE goal_id=? AND roadmap_revision_id=?`).get(goal.id, roadmap.id)).toEqual({

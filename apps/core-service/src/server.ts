@@ -137,6 +137,7 @@ function assembleAgentServicePersistence(
 
 function assembleHttpPersistence(persistence: LegacyStoreAdapter): HttpPersistencePort {
   return Object.freeze({
+    operatorRead: persistence.operatorRead,
     sessions: persistence.sessions,
     submissions: persistence.submissions,
     taskRuns: persistence.taskRuns,

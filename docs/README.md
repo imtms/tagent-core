@@ -18,11 +18,12 @@ This directory contains the maintained contracts for the current TAgent Core mai
 ## ABI and HTTP
 
 - [API v1](API_V1.md) — route surfaces, envelopes, authentication, idempotency, SSE, and removed routes.
+- [Operator Read API](OPERATOR_READ_API.md) — Gateway discovery, Session/TaskRun inventory, stable cursor semantics, scopes, and responsibility boundary.
 - [ABI versioning](ABI_VERSIONING.md) — package exports, `specVersion`, compatibility rules, and fixtures.
 
 ## Persistence and execution
 
-- [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md) — SQLite ownership, schema 40, Gateway/trusted receipts, writer fencing, Unit of Work, lifecycle, and restart recovery.
+- [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md) — SQLite ownership, schema 41, Gateway/trusted receipts, writer fencing, Unit of Work, lifecycle, and restart recovery.
 - [Runtime](RUNTIME.md) — in-process AgentHarness boundary, Pi dependency containment, `TaskRun`/`Attempt` execution, compaction, provider compatibility, timeouts, and tool authority.
 - [Execution reliability and efficiency](EXECUTION_EFFICIENCY.md) — snapshot edits, Artifact spill, project context, batching, context projection, Bash repeat protection, and continuation stalls.
 - [Supervisor](SUPERVISOR.md) — trusted Bash evidence, bounded LLM review, approvals, candidate delivery, and continuations.

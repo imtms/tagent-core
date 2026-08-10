@@ -4,6 +4,7 @@ import * as Abi from "@tagent/abi";
 import * as AdminV1 from "@tagent/abi/admin/v1";
 import * as ChannelV1 from "@tagent/abi/channel/v1";
 import * as InternalV1 from "@tagent/abi/internal/v1";
+import * as OperatorReadV1 from "@tagent/abi/operator/read-v1";
 import {
   AdminConfigStatusSchema,
   AdminConfigStatusResponseSchema,
@@ -43,6 +44,10 @@ import {
   taskRunCommandFixtures,
   taskRunEventFixture,
   unknownTaskRunEventFixture,
+  operatorReadCapabilitiesFixture,
+  operatorLatestTaskRunFixture,
+  operatorSessionListFixture,
+  operatorTaskRunListFixture,
   type SubmissionCreateRequest,
   type TaskRunCommand,
   type TaskRunEvent,
@@ -50,6 +55,17 @@ import {
 import { MEMORY_SOURCE_TYPES as DOMAIN_MEMORY_SOURCE_TYPES } from "@tagent/memory";
 
 describe("ABI runtime decoding", () => {
+  it("publishes the standalone Operator Read v1 ABI and canonical fixtures", () => {
+    expect(decodeAbi(OperatorReadV1.OperatorReadCapabilitiesResponseSchema, operatorReadCapabilitiesFixture))
+      .toEqual(operatorReadCapabilitiesFixture);
+    expect(decodeAbi(OperatorReadV1.OperatorSessionListResponseSchema, operatorSessionListFixture))
+      .toEqual(operatorSessionListFixture);
+    expect(decodeAbi(OperatorReadV1.OperatorSessionTaskRunListResponseSchema, operatorTaskRunListFixture))
+      .toEqual(operatorTaskRunListFixture);
+    expect(decodeAbi(OperatorReadV1.OperatorLatestSessionTaskRunResponseSchema, operatorLatestTaskRunFixture))
+      .toEqual(operatorLatestTaskRunFixture);
+  });
+
   it("decodes unknown input before a typed consumer can use it", () => {
     const input: unknown = { content: "implement the contract", modelId: "fixture-model" };
     const decoded = decodeAbi(SubmissionCreateRequestSchema, input);

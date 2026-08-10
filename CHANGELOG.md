@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Operator Read API
+
+- Added the independently discoverable `operator.read.v1` profile with bounded Session inventory, complete per-Session TaskRun history and unambiguous latest-TaskRun reads, without changing the closed legacy Operator 1.0 allowlist.
+- Added runtime-validated ABI schemas and fixtures, typed Core Client methods, scoped Fastify routes, stable snapshot-membership keyset cursors, deterministic public summaries and schema-41 ordered indexes.
+- Covered tied timestamps, concurrent inserts, cursor retry/mismatch/restart, empty versus missing Sessions, scope enforcement, large histories, migration re-entry/drift and public DTO redaction.
+- Kept Gateway OIDC, resource ACLs, WebSocket/northbound projection, fake Core and Gateway compatibility jobs outside Core; deferred filters, tombstones, bootstrap, batch reads and change feeds until an evidenced need.
+
+### Compatibility and upgrade
+
+- `GET /api/v1/capabilities` now advertises `operator.read.v1` only through the string-valued `apiVersions` list; consumers negotiate the separate `/api/v1/operator/capabilities` profile, so the closed Operator 1.0 object remains decoder-compatible. Deployments must still accept the new schema-41 marker.
+- SQLite advances from schema 40 to 41. Back up SQLite/WAL/SHM before upgrade; schema-40-only binaries must not open the migrated database.
+
 ## [0.5.2] - 2026-08-10
 
 ### Pi runtime replacement correctness

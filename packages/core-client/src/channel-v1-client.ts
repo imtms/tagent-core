@@ -20,7 +20,7 @@ import type {
 } from "@tagent/abi";
 import { loadCoreAbi, type CoreAbi } from "./abi-loader.js";
 import { CoreClientError, protocolError } from "./errors.js";
-import { ConsoleGoalClient } from "./console-goal-client.js";
+import { OperatorReadClient } from "./operator-read-v1-client.js";
 import { decodeJsonSse } from "./sse.js";
 import type { CoreClientOptions, CoreSseOptions, CoreSseSubscription } from "./transport.js";
 
@@ -52,6 +52,10 @@ export type {
   TaskRunInteractionsResponse,
   TranscriptItem,
   TranscriptResponse,
+  OperatorReadCapabilities,
+  OperatorSessionListResponse,
+  OperatorSessionTaskRunListResponse,
+  OperatorTaskRunSummary,
 } from "@tagent/abi";
 
 export interface TaskRunEventSseOptions extends Omit<CoreSseOptions<TaskRunEvent>, "decode"> {
@@ -73,9 +77,7 @@ function decodeSuccessData<T>(abi: CoreAbi, payload: unknown, decode: (data: unk
   return decode(envelope.data);
 }
 
-function encodePathSegment(value: string): string {
-  return encodeURIComponent(value);
-}
+function encodePathSegment(value: string): string { return encodeURIComponent(value); }
 
 function validateEventStreamQueryInput(url: string, query: EventStreamQuery): EventStreamQuery {
   const validConsumerId = typeof query.consumerId === "string" && query.consumerId.length >= 1 && query.consumerId.length <= 256;
@@ -87,7 +89,7 @@ function validateEventStreamQueryInput(url: string, query: EventStreamQuery): Ev
   return query;
 }
 
-export class CoreClient extends ConsoleGoalClient {
+export class CoreClient extends OperatorReadClient {
   async getCapabilities(): Promise<CoreCapabilities> {
     const abi = await loadCoreAbi();
     return this.request("/api/v1/capabilities", { decode: (payload) => abi.decodeAbi(abi.CoreCapabilitiesResponseSchema, payload).data });
@@ -294,6 +296,4 @@ export class CoreClient extends ConsoleGoalClient {
   }
 }
 
-export function createCoreClient(options: CoreClientOptions = {}): CoreClient {
-  return new CoreClient(options);
-}
+export function createCoreClient(options: CoreClientOptions = {}): CoreClient { return new CoreClient(options); }

@@ -12,6 +12,7 @@
 @tagent/abi/console/v1
 @tagent/abi/admin/v1
 @tagent/abi/internal/v1
+@tagent/abi/operator/read-v1
 ```
 
 Import only these declared exports. Deep imports from `src` or `dist` are not ABI.
@@ -88,4 +89,17 @@ Deploy schema-40 Core and the matching `@tagent/abi`/`@tagent/core-client` befor
 
 Gateway CI may support more client minors, but it cannot infer compatibility when capability negotiation or strict decoding fails.
 
-The next public API major should remove those aliases rather than extending the window indefinitely.
+The next public API major should remove the v39 compatibility aliases rather than extending that window indefinitely.
+
+## Operator Read v41 profile
+
+Schema 41 introduces a separate `operator.read.v1` capability profile for Session inventory, per-Session TaskRun inventory and latest TaskRun. `GET /api/v1/capabilities` adds only the API-version marker; clients then decode `GET /api/v1/operator/capabilities` with the dedicated schema. This avoids adding unknown endpoint literals or fields to the strict, closed Operator 1.0 decoder introduced in v40.
+
+The profile freezes bounded public summaries, dual-scope enforcement for nested TaskRun reads, immutable keyset order, cursor bindings, snapshot-membership/read-committed-value consistency and current no-expiry/no-deletion retention. The matching ABI export, fixtures, Core Client and provider must be deployed together.
+
+| Core profile | Client behavior | Support |
+| --- | --- | --- |
+| schema 41 + `operator.read.v1` | negotiate API marker and dedicated capabilities, then use matching ABI/client | Supported |
+| schema 41 + legacy Operator 1.0 decoder | unchanged legacy object still decodes; deployment policy must separately accept schema 41 | Wire-compatible only |
+| schema 40 without `operator.read.v1` | Gateway disables only historical inventory/rebuild | Supported feature downgrade |
+| any | depend on `/api/v1/console/*`, SQLite or private Store DTOs | Unsupported cross-team dependency |

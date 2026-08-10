@@ -404,6 +404,9 @@ function schemaInventory(store: Store): Array<{ name: string; type: string; sql:
       'attempts',
       'approval_receipts',
       'idx_operations_attempt_created',
+      'idx_runs_operator_session_created',
+      'idx_runs_operator_session_updated',
+      'idx_sessions_operator_created',
       'integration_outbox',
       'integration_consumer_delivery',
       'learning_projection_checkpoint',
@@ -848,7 +851,7 @@ describe("Gateway production readiness", () => {
     }
   });
 
-  it("opens a real v30 SQLite fixture through Store v40 and rolls authority back with replay", () => {
+  it("opens a real v30 SQLite fixture through Store v41 and rolls authority back with replay", () => {
     const directory = temporaryDirectory("tagent-gateway-migration-");
     const databasePath = path.join(directory, "core.sqlite");
     createV30DatabaseFixture(databasePath);
@@ -856,11 +859,14 @@ describe("Gateway production readiness", () => {
     const firstOpen = new Store(databasePath);
     const firstInventory = schemaInventory(firstOpen);
     expect(firstOpen.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-      .toEqual({ version: 40 });
+      .toEqual({ version: 41 });
     expect(firstInventory.map((entry) => [entry.type, entry.name])).toEqual([
       ["table", "approval_receipts"],
       ["table", "attempts"],
       ["index", "idx_operations_attempt_created"],
+      ["index", "idx_runs_operator_session_created"],
+      ["index", "idx_runs_operator_session_updated"],
+      ["index", "idx_sessions_operator_created"],
       ["table", "integration_consumer_delivery"],
       ["table", "integration_outbox"],
       ["table", "learning_projection_authority_state"],
@@ -872,7 +878,7 @@ describe("Gateway production readiness", () => {
     try {
       expect(schemaInventory(store)).toEqual(firstInventory);
       expect(store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-        .toEqual({ version: 40 });
+        .toEqual({ version: 41 });
 
       const writer = CoreWriterLease.claim(store.db, {
         ownerId: "gateway-authority-test",
@@ -985,7 +991,7 @@ describe("Gateway production readiness", () => {
         legacyLastAcked: 2,
       });
       expect(store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-        .toEqual({ version: 40 });
+        .toEqual({ version: 41 });
       writer.release();
     } finally {
       store.close();
@@ -1094,7 +1100,7 @@ describe("Gateway production readiness", () => {
       'import { Store } from "@tagent/persistence-sqlite/store";',
       "const store=new Store(process.env.TAGENT_DB);",
       'const schemaVersion=store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get().version;',
-      'const objects=store.db.prepare("SELECT name FROM sqlite_master WHERE name IN (\'attempts\',\'approval_receipts\',\'idx_operations_attempt_created\',\'integration_outbox\',\'learning_projection_authority_state\') ORDER BY name").all().map((row)=>row.name);',
+      'const objects=store.db.prepare("SELECT name FROM sqlite_master WHERE name IN (\'attempts\',\'approval_receipts\',\'idx_operations_attempt_created\',\'idx_runs_operator_session_created\',\'idx_runs_operator_session_updated\',\'idx_sessions_operator_created\',\'integration_outbox\',\'learning_projection_authority_state\') ORDER BY name").all().map((row)=>row.name);',
       "store.close();",
       "process.stdout.write(JSON.stringify({schemaVersion,objects}));",
     ].join("");
@@ -1119,11 +1125,14 @@ describe("Gateway production readiness", () => {
     );
     expect(secondSchemaOpen.status, secondSchemaOpen.stderr).toBe(0);
     const schemaEvidence = {
-      schemaVersion: 40,
+      schemaVersion: 41,
       objects: [
         "approval_receipts",
         "attempts",
         "idx_operations_attempt_created",
+        "idx_runs_operator_session_created",
+        "idx_runs_operator_session_updated",
+        "idx_sessions_operator_created",
         "integration_outbox",
         "learning_projection_authority_state",
       ],
@@ -1179,8 +1188,8 @@ describe("Gateway production readiness", () => {
         reasons: ready.reasons,
         thresholds: ready.thresholds,
       }).toEqual({
-        probeVersion: 3,
-        schemaVersion: 40,
+        probeVersion: 4,
+        schemaVersion: 41,
         migrationOpenIssues: 0,
         writerReady: true,
         writerFence: readinessLease.authority.fence,
@@ -1287,7 +1296,7 @@ describe("Gateway production readiness", () => {
         severity: rejected.severity,
         reasons: rejected.reasons,
       }).toEqual({
-        schemaVersion: 40,
+        schemaVersion: 41,
         writerReady: false,
         writerLeaseFresh: false,
         consumerLag: 0,

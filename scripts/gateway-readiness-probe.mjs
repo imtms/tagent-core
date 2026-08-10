@@ -11,7 +11,7 @@ const TERMINAL_UNACKED_CRITICAL_AGE_MS = 120_000;
 const RECEIPT_UNCERTAIN_CRITICAL_AGE_MS = 120_000;
 const SETTLED_STATUSES = ["completed", "failed", "cancelled", "blocked"];
 const FINAL_STATUSES = ["completed", "cancelled"];
-const EXPECTED_SCHEMA_VERSION = 40;
+const EXPECTED_SCHEMA_VERSION = 41;
 const REQUIRED_COMMANDS = ["task_run.steer", "task_run.follow_up", "task_run.cancel", "task_run.resume", "task_run.compact", "task_run.submit_user_input", "task_run.resolve_approval"];
 const REQUIRED_EVENTS = ["task_run.started", "task_run.waiting_input", "task_run.blocked", "task_run.resumed", "task_run.completed", "task_run.failed", "task_run.cancelled", "approval.requested", "approval.resolved", "user_input.submitted"];
 const REQUIRED_OPERATOR_ENDPOINTS = [
@@ -24,6 +24,10 @@ const REQUIRED_OPERATOR_ENDPOINTS = [
   "operator.workspace_goals.revise_definition", "operator.workspace_goals.revise_roadmap",
   "operator.workspace_goals.generate_roadmap", "operator.workspace_goals.get_operation",
   "operator.workspace_goals.decide", "operator.workspace_goals.start_task_run",
+];
+const REQUIRED_OPERATOR_READ_ENDPOINTS = [
+  "operator.read.capabilities.get", "operator.sessions.list",
+  "operator.sessions.task_runs.list", "operator.sessions.task_runs.latest",
 ];
 
 function tableExists(db, name) {
@@ -142,8 +146,10 @@ async function readCapabilities(url, token) {
     const commands = new Set(data?.commandTypes ?? []);
     const events = new Set(data?.eventTypes ?? []);
     const operatorEndpoints = new Set(data?.operator?.endpointIds ?? []);
+    const apiVersions = new Set(data?.apiVersions ?? []);
     const compatible = response.ok
       && data?.persistenceSchemaVersion === EXPECTED_SCHEMA_VERSION
+      && apiVersions.has("operator.read.v1")
       && REQUIRED_COMMANDS.every((item) => commands.has(item))
       && REQUIRED_EVENTS.every((item) => events.has(item))
       && data?.interactions?.approvalResolution === true
@@ -165,6 +171,37 @@ async function readCapabilities(url, token) {
   }
 }
 
+async function readOperatorReadCapabilities(url, token) {
+  try {
+    const response = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal: AbortSignal.timeout(5_000),
+    });
+    const body = await response.json();
+    const data = body?.data;
+    const endpoints = new Set(data?.endpointIds ?? []);
+    const bindings = new Set(data?.pagination?.cursorBindings ?? []);
+    const compatible = response.ok
+      && data?.profileVersion === "1.0"
+      && REQUIRED_OPERATOR_READ_ENDPOINTS.every((item) => endpoints.has(item))
+      && data?.pagination?.cursorOpaque === true
+      && data?.pagination?.cursorExpiry === false
+      && data?.pagination?.cursorSurvivesRestart === true
+      && data?.pagination?.membershipConsistency === "snapshot"
+      && data?.pagination?.valueConsistency === "read_committed"
+      && data?.pagination?.sessionOrder === "created_at_desc_id_desc"
+      && data?.pagination?.taskRunOrder === "created_at_desc_id_desc"
+      && ["endpoint", "resource", "filter", "snapshot"].every((item) => bindings.has(item))
+      && data?.retention?.automaticDeletion === false
+      && data?.retention?.tombstones === false
+      && data?.limits?.sessionListMax === 200
+      && data?.limits?.taskRunListMax === 200;
+    return { reachable: true, status: response.status, compatible, data };
+  } catch (error) {
+    return { reachable: false, status: null, compatible: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 function severityFor(snapshot) {
   if (snapshot.ready) return "ready";
   if (snapshot.schemaVersion !== EXPECTED_SCHEMA_VERSION
@@ -172,6 +209,7 @@ function severityFor(snapshot) {
     || snapshot.migrationOpenIssues > 0
     || !snapshot.health.reachable
     || !snapshot.capabilities.compatible
+    || !snapshot.operatorReadCapabilities.compatible
     || !snapshot.writerLeaseFresh
     || snapshot.consumerLag === null
     || snapshot.consumerLag >= CONSUMER_LAG_CRITICAL
@@ -191,6 +229,8 @@ async function main() {
   const consumerId = process.env.TAGENT_GATEWAY_CONSUMER_ID?.trim() || "gateway-production";
   const healthUrl = process.env.TAGENT_HEALTH_URL?.trim() || "http://127.0.0.1:3100/api/v1/health";
   const capabilitiesUrl = process.env.TAGENT_CAPABILITIES_URL?.trim() || healthUrl.replace(/\/health(?:\?.*)?$/, "/capabilities");
+  const operatorReadCapabilitiesUrl = process.env.TAGENT_OPERATOR_READ_CAPABILITIES_URL?.trim()
+    || capabilitiesUrl.replace(/\/capabilities(?:\?.*)?$/, "/operator/capabilities");
   const coreToken = process.env.TAGENT_GATEWAY_CORE_TOKEN?.trim() || "";
   const now = Date.now();
   const db = new Database(path.resolve(database), { readonly: true, fileMustExist: true });
@@ -217,6 +257,7 @@ async function main() {
 
   const health = await readHealth(healthUrl);
   const capabilities = await readCapabilities(capabilitiesUrl, coreToken);
+  const operatorReadCapabilities = await readOperatorReadCapabilities(operatorReadCapabilitiesUrl, coreToken);
   const authorityReady = databaseSnapshot.authority !== null
     && ["legacy_active", "integration_active"].includes(databaseSnapshot.authority.status);
   const reasons = [];
@@ -228,6 +269,8 @@ async function main() {
   else if (!health.ok || !health.writerReady) reasons.push("health_writer_not_ready");
   if (!capabilities.reachable) reasons.push("capabilities_unreachable");
   else if (!capabilities.compatible) reasons.push("capabilities_incompatible");
+  if (!operatorReadCapabilities.reachable) reasons.push("operator_read_capabilities_unreachable");
+  else if (!operatorReadCapabilities.compatible) reasons.push("operator_read_capabilities_incompatible");
   if (!databaseSnapshot.writerLeaseFresh) reasons.push("writer_lease_not_fresh");
   if (databaseSnapshot.consumerLag === null || databaseSnapshot.consumerLag > 0) reasons.push("consumer_lag");
   if (databaseSnapshot.settledUnacked === null || databaseSnapshot.settledUnacked > 0) reasons.push("settled_unacked");
@@ -251,16 +294,18 @@ async function main() {
   if (!authorityReady) reasons.push("authority_not_active");
 
   const snapshot = {
-    probeVersion: 3,
+    probeVersion: 4,
     database: path.resolve(database),
     healthUrl,
     capabilitiesUrl,
+    operatorReadCapabilitiesUrl,
     consumerId,
     ...databaseSnapshot,
     writerReady: health.writerReady && databaseSnapshot.writerLeaseFresh,
     authorityReady,
     health,
     capabilities,
+    operatorReadCapabilities,
     thresholds: {
       consumerLagWarningMin: CONSUMER_LAG_WARNING_MIN,
       consumerLagCritical: CONSUMER_LAG_CRITICAL,

@@ -6,7 +6,15 @@ import {
   decodeJsonSse,
   type CoreFetch,
 } from "@tagent/core-client";
-import { MEMORY_SOURCE_TYPES, submissionIdempotencyFixtures, taskRunEventFixture, unknownTaskRunEventFixture } from "@tagent/abi";
+import {
+  MEMORY_SOURCE_TYPES,
+  operatorReadCapabilitiesFixture,
+  operatorSessionListFixture,
+  operatorTaskRunListFixture,
+  submissionIdempotencyFixtures,
+  taskRunEventFixture,
+  unknownTaskRunEventFixture,
+} from "@tagent/abi";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -164,10 +172,47 @@ describe("core-client transport", () => {
 });
 
 describe("channel v1 helpers", () => {
+  it("decodes Operator Read capabilities and sends bounded opaque pagination cursors", async () => {
+    const latest = { data: operatorTaskRunListFixture.data.items[0], requestId: "latest" };
+    const fetchMock = vi.fn<CoreFetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(operatorReadCapabilitiesFixture), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(operatorSessionListFixture), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(operatorTaskRunListFixture), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(latest), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const client = createCoreClient({ baseUrl: "https://core.example", fetch: fetchMock });
+
+    await expect(client.getOperatorReadCapabilities()).resolves.toEqual(operatorReadCapabilitiesFixture.data);
+    await expect(client.listOperatorSessions({ cursor: "opaque cursor", limit: 25 })).resolves.toEqual(operatorSessionListFixture);
+    await expect(client.listSessionTaskRuns("session/id", { cursor: "run cursor", limit: 20 })).resolves.toEqual(operatorTaskRunListFixture);
+    await expect(client.getLatestSessionTaskRun("session/id")).resolves.toEqual(latest.data);
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://core.example/api/v1/operator/capabilities",
+      "https://core.example/api/v1/operator/sessions?cursor=opaque+cursor&limit=25",
+      "https://core.example/api/v1/operator/sessions/session%2Fid/task-runs?cursor=run+cursor&limit=20",
+      "https://core.example/api/v1/operator/sessions/session%2Fid/task-runs/latest",
+    ]);
+  });
+
+  it("rejects invalid Operator Read pagination before issuing a request", async () => {
+    const fetchMock = vi.fn<CoreFetch>();
+    const client = createCoreClient({ fetch: fetchMock });
+
+    await expect(client.listOperatorSessions({ limit: 201 })).rejects.toMatchObject({
+      code: "client.protocol_mismatch",
+      retryable: false,
+    });
+    await expect(client.listSessionTaskRuns("session-1", { cursor: "" })).rejects.toMatchObject({
+      code: "client.protocol_mismatch",
+      retryable: false,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("sends explicit Session idempotency and decodes capabilities", async () => {
     const session = { id: "session-1", title: "Gateway", modelId: "gpt-5.6-sol", reasoningEffort: "high", createdAt: "2026-08-04T12:34:56.789Z", updatedAt: "2026-08-04T12:34:56.789Z", latestTaskRunStatus: null, latestTaskRunPhase: null };
     const capabilities = {
-      releaseVersion: "0.5.2", apiVersions: ["channel.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 40,
+      releaseVersion: "0.5.2", apiVersions: ["channel.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 41,
       commandTypes: ["task_run.steer"], eventTypes: ["task_run.started"],
       interactions: { approvalResolution: true, userInputSubmission: true },
       operator: { profileVersion: "1.0", endpointIds: ["channel.capabilities.get"], workspaceGoals: true, roadmapGenerationIdempotent: true },
