@@ -32,7 +32,7 @@ git diff --check
 - [ ] No generated `*.tsbuildinfo`, database, WAL/SHM, secret, log, or release archive is tracked.
 - [ ] Architecture tests confirm the 13-workspace DAG, package exports, API-only Core, and Web dependency boundary.
 - [ ] `pi-coding-agent` is absent from source, manifests, lockfile, release archive and `npm ls`; production `pi-agent-core`/`pi-ai` imports exist only in `adapters/runtime-pi`.
-- [ ] AgentHarness runtime contracts cover retry/fallback, steering/follow-up, abort queue audit, tool lifecycle, threshold compaction and context-overflow recovery.
+- [ ] AgentHarness runtime contracts cover transcript-invisible retry/fallback, steering/follow-up during retry and compaction, abort queue audit, tool lifecycle, current-turn context preservation, provider idle timeout, threshold compaction and context-overflow recovery.
 - [ ] Differential API tests confirm removed unversioned routes return 404.
 
 ## PostgreSQL Memory gate

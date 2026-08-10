@@ -28,10 +28,14 @@ The production and lockfile dependency graph contains no `pi-coding-agent` packa
 - projects text, thinking, tool, queue, retry, compaction and settled events;
 - applies Core tool guards before execution and reports final tool outcomes;
 - supports steering, follow-up, cancellation, manual compaction and model switching;
-- applies abortable exponential-backoff full-turn retry and rate-limit fallback policy while disabling duplicate provider-library retries;
+- applies abortable exponential-backoff full-turn retry before rate-limit fallback while disabling duplicate provider-library retries;
 - checks restored context before a new turn, performs threshold compaction after successful turns, tolerates non-overflow automatic-compaction failure, and runs one compaction/retry cycle after context overflow;
-- aborts an active Harness turn before manual compaction, then resumes the unresolved request without requiring a caller-side API change;
-- projects bounded historical tool output and TaskRun receipts before provider requests.
+- aborts an active Harness turn before manual compaction, then resumes the unresolved request without adding a synthetic user message;
+- keeps retry/fallback/compaction failures in the durable audit transcript but removes them from the active continuation branch;
+- queues controls received between Harness turns and drives every accepted message after retry backoff or compaction;
+- enforces provider response-header and body-chunk idle timeouts, including cancellation of compaction transport;
+- applies conservative OpenAI-compatible payload defaults for custom endpoints;
+- projects bounded historical tool output and TaskRun receipts before provider requests while preserving the entire current turn.
 
 The underlying `pi-agent-core` loop continues to provide schema validation, sequential/parallel tool execution, tool-result ordering, abort propagation and refusal to execute tool calls from token-truncated assistant output.
 
@@ -42,11 +46,12 @@ The runtime contract suite covers:
 - streamed text and thinking;
 - transcript persistence and completion ordering;
 - tool start/progress/end and aborted tool settlement;
-- steering and follow-up queues, late-input rejection and abort queue audit;
-- provider retry, typed terminal failures and rate-limit model fallback;
-- custom OpenAI-compatible provider registration and runtime credentials;
+- steering and follow-up queues during streaming, retry and compaction, late-input rejection and abort queue audit;
+- provider retry, transcript-invisible continuation, typed terminal failures and rate-limit model fallback ordering;
+- custom OpenAI-compatible provider registration, conservative payload compatibility, runtime credentials and header/body idle timeout;
 - pre-turn and post-turn threshold compaction, non-fatal automatic-compaction failure, active-turn manual compaction and context-overflow recovery;
-- cancellation during initialization/streaming;
+- cancellation during initialization, streaming and compaction;
+- current-turn thinking/tool-result preservation and bounded historical projection;
 - package, dependency and ESLint ownership boundaries.
 
 The replacement is behavior-compatible for the TAgent runtime surface covered by these contracts. It intentionally does not reproduce unused coding-agent features such as TUI, themes, built-in coding tools, extension loading, prompt templates, project context discovery or persistent coding-agent session files.

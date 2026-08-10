@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createServer } from "node:http";
 import { existsSync } from "node:fs";
-import { readFile, rm } from "node:fs/promises";
-import { createModels, type Model } from "@earendil-works/pi-ai";
+import { readFile, rm, writeFile } from "node:fs/promises";
+import { createModels, type Context, type Model } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider, fauxThinking } from "@earendil-works/pi-ai/providers/faux";
 import { PiRuntime, type PiRuntimeOptions } from "@tagent/runtime-pi";
 import { Store } from "@tagent/persistence-sqlite/store";
@@ -32,7 +32,7 @@ describe("Pi 0.83 AgentHarness integration", () => {
     return { ...options, token, ...host };
   }
 
-  async function setup(responses: ReturnType<typeof fauxAssistantMessage>[], tokensPerSecond = 10_000) {
+  async function setup(responses: Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0], tokensPerSecond = 10_000) {
     const faux = fauxProvider({ models: [{ id: "faux-session", contextWindow: 32_000, maxTokens: 2_000 }], tokensPerSecond });
     faux.setResponses(responses);
     const store = new Store(":memory:");
@@ -101,6 +101,26 @@ describe("Pi 0.83 AgentHarness integration", () => {
     store.close();
   });
 
+  it("uses abort semantics when disposed during an active response", async () => {
+    const faux = fauxProvider({ models: [{ id: "faux-dispose", contextWindow: 32_000, maxTokens: 2_000 }], tokensPerSecond: 10 });
+    faux.setResponses([fauxAssistantMessage("late response")]);
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "dispose active response");
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [] }));
+    const prompt = runtime.prompt("start");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    runtime.dispose();
+    await prompt;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const eventTypes = store.listEvents(run.id).map((event) => event.type);
+    expect(eventTypes).not.toContain("message.completed");
+    expect(eventTypes).not.toContain("message.retrying");
+    expect(eventTypes).not.toContain("provider.failure");
+    expect(store.listTranscript(run.id).some((message) => message.role === "assistant" && message.stopReason === "aborted")).toBe(false);
+    store.close();
+  });
+
   it("settles an active tool attempt before disposing an aborted session", async () => {
     const faux = fauxProvider({ models: [{ id: "faux-abort", contextWindow: 32_000, maxTokens: 2_000 }] });
     faux.setResponses([fauxAssistantMessage([{ type: "toolCall", id: "slow-bash", name: "bash", arguments: { command: "sleep 30" } }], { stopReason: "toolUse" })]);
@@ -135,9 +155,10 @@ describe("Pi 0.83 AgentHarness integration", () => {
   });
 
   it("applies bounded full-turn retry with lifecycle events and succeeds on the next attempt", async () => {
+    let retryContext: Context | undefined;
     const { faux, store, run, runtime } = await setup([
       fauxAssistantMessage([], { stopReason: "error", errorMessage: "503 Service unavailable" }),
-      fauxAssistantMessage("recovered"),
+      (context) => { retryContext = context; return fauxAssistantMessage("recovered"); },
     ]);
     await runtime.prompt("retry");
     expect(faux.state.callCount).toBe(2);
@@ -146,6 +167,12 @@ describe("Pi 0.83 AgentHarness integration", () => {
     expect(store.listEvents(run.id).some((event) => event.type === "provider.retry.completed" && event.data.success === true)).toBe(true);
     expect(store.listEvents(run.id).filter((event) => event.type === "message.completed")).toHaveLength(1);
     expect(store.listEvents(run.id).some((event) => event.type === "message.retrying" && event.data.willRetry === true)).toBe(true);
+    expect(store.listEvents(run.id).filter((event) => event.type === "runtime.settled")).toHaveLength(1);
+    expect(store.listTranscript(run.id).filter((message) => message.role === "user")).toEqual([
+      expect.objectContaining({ role: "user", content: [{ type: "text", text: "retry" }] }),
+    ]);
+    expect(retryContext?.messages.filter((message) => message.role === "assistant" && message.stopReason === "error")).toHaveLength(0);
+    expect(JSON.stringify(retryContext?.messages)).not.toContain("TAgent internal continuation");
     runtime.dispose();
     store.close();
   });
@@ -165,6 +192,56 @@ describe("Pi 0.83 AgentHarness integration", () => {
     await prompt;
     expect(Date.now() - startedAt).toBeLessThan(500);
     expect(faux.state.callCount).toBe(1);
+    expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "provider.retry.completed", data: expect.objectContaining({ success: false, finalError: "Retry cancelled" }) }),
+    ]));
+    runtime.dispose();
+    store.close();
+  });
+
+  it("delivers steering accepted during provider retry backoff", async () => {
+    let retryContext: Context | undefined;
+    const { faux, store, run, runtime } = await setup([
+      fauxAssistantMessage([], { stopReason: "error", errorMessage: "503 Service unavailable" }),
+      (context) => { retryContext = context; return fauxAssistantMessage("steered retry recovered"); },
+    ]);
+    const prompt = runtime.prompt("retry then steer");
+    for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "provider.retry"); index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await expect(runtime.steer("new direction during backoff")).resolves.toBe("accepted");
+    await prompt;
+    expect(faux.state.callCount).toBe(2);
+    expect(JSON.stringify(retryContext?.messages)).toContain("new direction during backoff");
+    expect(store.listTranscript(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "user", content: [{ type: "text", text: "new direction during backoff" }] }),
+    ]));
+    runtime.dispose();
+    store.close();
+  });
+
+  it("delivers steering queued before a terminal provider failure settles", async () => {
+    let providerEntered!: () => void;
+    let releaseFailure!: () => void;
+    const entered = new Promise<void>((resolve) => { providerEntered = resolve; });
+    const failureGate = new Promise<void>((resolve) => { releaseFailure = resolve; });
+    let recoveryContext: Context | undefined;
+    const { faux, store, runtime } = await setup([
+      async () => {
+        providerEntered();
+        await failureGate;
+        return fauxAssistantMessage([], { stopReason: "error", errorMessage: "401 Unauthorized" });
+      },
+      (context) => { recoveryContext = context; return fauxAssistantMessage("control recovered terminal failure"); },
+    ]);
+    const prompt = runtime.prompt("start terminal request");
+    await entered;
+    await expect(runtime.steer("replace the failing direction")).resolves.toBe("accepted");
+    releaseFailure();
+    await prompt;
+    expect(faux.state.callCount).toBe(2);
+    expect(JSON.stringify(recoveryContext?.messages)).toContain("replace the failing direction");
+    expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "control recovered terminal failure" }] });
     runtime.dispose();
     store.close();
   });
@@ -215,6 +292,36 @@ describe("Pi 0.83 AgentHarness integration", () => {
     expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "follow-up result" }] });
     runtime.dispose();
     store.close();
+  });
+
+  it("preserves current-turn thinking and full tool output for the immediate continuation", async () => {
+    const path = `.tagent/tmp/current-turn-${Date.now()}.txt`;
+    const fullOutput = "current tool output ".repeat(600);
+    let continuationContext: Context | undefined;
+    await writeFile(path, fullOutput);
+    const { store, run, runtime } = await setup([
+      fauxAssistantMessage([
+        fauxThinking("signed current-turn reasoning"),
+        { type: "toolCall", id: "current-read", name: "read", arguments: { path } },
+      ], { stopReason: "toolUse" }),
+      (context) => { continuationContext = context; return fauxAssistantMessage("used full output"); },
+    ]);
+    try {
+      await runtime.prompt("inspect the current file");
+      const assistant = continuationContext?.messages.find((message) => message.role === "assistant");
+      const toolResult = continuationContext?.messages.find((message) => message.role === "toolResult");
+      expect(assistant?.content).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "thinking", thinking: "signed current-turn reasoning" }),
+      ]));
+      expect(toolResult && toolResult.role === "toolResult" ? toolResult.content[0] : undefined)
+        .toMatchObject({ type: "text", text: fullOutput });
+      expect(store.listTranscript(run.id).find((message) => message.role === "toolResult"))
+        .toMatchObject({ content: [{ type: "text", text: fullOutput }] });
+    } finally {
+      runtime.dispose();
+      store.close();
+      await rm(path, { force: true });
+    }
   });
 
 
@@ -294,7 +401,31 @@ describe("Pi 0.83 AgentHarness integration", () => {
       expect.objectContaining({ type: "context.compaction.started", data: expect.objectContaining({ reason: "manual" }) }),
       expect.objectContaining({ type: "context.compaction.completed", data: expect.objectContaining({ reason: "manual", aborted: false }) }),
     ]));
+    expect(runtime.getMessages().some((message) => message.role === "assistant" && message.stopReason === "aborted")).toBe(false);
+    expect(JSON.stringify(store.listTranscript(run.id))).not.toContain("TAgent internal continuation");
     expect(store.listEvents(run.id).filter((event) => event.type === "message.completed")).toHaveLength(1);
+    runtime.dispose();
+    store.close();
+  });
+
+  it("interrupts provider retry backoff for manual compaction and resumes", async () => {
+    const { faux, store, run, runtime } = await setup([
+      fauxAssistantMessage([], { stopReason: "error", errorMessage: "503 Service unavailable" }),
+      fauxAssistantMessage("manual retry summary"),
+      fauxAssistantMessage("continued after retry compaction"),
+    ]);
+    const prompt = runtime.prompt("retry then compact");
+    for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "provider.retry"); index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await runtime.compact("Preserve the request while replacing retry backoff.");
+    await prompt;
+    expect(faux.state.callCount).toBe(3);
+    expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "continued after retry compaction" }] });
+    expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "provider.retry.completed", data: expect.objectContaining({ success: false, finalError: "Retry superseded by manual compaction" }) }),
+      expect.objectContaining({ type: "context.compaction.completed", data: expect.objectContaining({ reason: "manual", aborted: false }) }),
+    ]));
     runtime.dispose();
     store.close();
   });
@@ -317,6 +448,44 @@ describe("Pi 0.83 AgentHarness integration", () => {
     expect(faux.state.callCount).toBe(2);
     runtime.dispose();
     store.close();
+  });
+
+  it("delivers follow-up accepted while automatic compaction is running", async () => {
+    const faux = fauxProvider({ models: [{ id: "faux-compact-follow-up", contextWindow: 17_000, maxTokens: 2_000 }] });
+    const first = fauxAssistantMessage("large completed result");
+    first.usage = { ...first.usage, input: 2_000, output: 15_000, totalTokens: 17_000 };
+    let releaseSummary!: () => void;
+    const summaryGate = new Promise<void>((resolve) => { releaseSummary = resolve; });
+    faux.setResponses([
+      first,
+      async () => { await summaryGate; return fauxAssistantMessage("automatic summary"); },
+      fauxAssistantMessage("follow-up after compaction"),
+      fauxAssistantMessage("post-follow-up summary"),
+    ]);
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "automatic compaction follow-up");
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [], providerMaxRetries: 0 }));
+    const prompt = runtime.prompt("compact and keep listening");
+    try {
+      for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "context.compaction.started"); index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await expect(runtime.followUp("queued during compaction")).resolves.toBe("accepted");
+      releaseSummary();
+      await prompt;
+      expect(faux.state.callCount).toBe(4);
+      expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "follow-up after compaction" }] });
+      expect(store.listTranscript(run.id)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ role: "user", content: [{ type: "text", text: "queued during compaction" }] }),
+      ]));
+      expect(store.listEvents(run.id).filter((event) => event.type === "runtime.settled")).toHaveLength(1);
+    } finally {
+      releaseSummary();
+      await prompt.catch(() => undefined);
+      runtime.dispose();
+      store.close();
+    }
   });
 
 
@@ -384,8 +553,53 @@ describe("Pi 0.83 AgentHarness integration", () => {
       expect.objectContaining({ type: "context.compaction.completed", data: expect.objectContaining({ reason: "overflow", willRetry: true }) }),
     ]));
     expect(faux.state.callCount).toBe(3);
+    expect(runtime.getMessages().some((message) => message.role === "assistant" && message.stopReason === "error")).toBe(false);
+    expect(JSON.stringify(store.listTranscript(run.id))).not.toContain("TAgent internal continuation");
     runtime.dispose();
     store.close();
+  });
+
+  it("keeps a successful answer when reported input usage triggers overflow compaction", async () => {
+    let callCount = 0;
+    const server = createServer((_request, response) => {
+      callCount += 1;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      const content = callCount === 1 ? "successful oversized answer" : "overflow summary";
+      const promptTokens = callCount === 1 ? 33_000 : 100;
+      response.end([
+        `data: {"id":"chatcmpl-overflow","object":"chat.completion.chunk","created":1,"model":"overflow-model","choices":[{"index":0,"delta":{"role":"assistant","content":${JSON.stringify(content)}},"finish_reason":null}]}`,
+        `data: {"id":"chatcmpl-overflow","object":"chat.completion.chunk","created":1,"model":"overflow-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":${promptTokens},"completion_tokens":2,"total_tokens":${promptTokens + 2}}}`,
+        "data: [DONE]",
+        "",
+      ].join("\n\n"));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("HTTP test server did not bind");
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "successful overflow compaction");
+    const model: Model<"openai-completions"> = {
+      id: "overflow-model", name: "overflow-model", api: "openai-completions", provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
+    };
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, apiKey: "test-runtime-key", initialMessages: [], providerMaxRetries: 0, providerTimeoutMs: 1_000 }));
+    try {
+      await runtime.prompt("oversized input ".repeat(10_000));
+      expect(callCount).toBe(2);
+      expect(runtime.getError()).toBeUndefined();
+      expect(runtime.getMessages()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ role: "assistant", content: [{ type: "text", text: "successful oversized answer" }] }),
+      ]));
+      expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "context.compaction.completed", data: expect.objectContaining({ reason: "overflow", willRetry: false }) }),
+      ]));
+    } finally {
+      runtime.dispose();
+      store.close();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   });
 
   it("keeps typed final provider failure audit after SDK retries are exhausted", async () => {
@@ -398,15 +612,21 @@ describe("Pi 0.83 AgentHarness integration", () => {
 
   it("registers an unknown OpenAI-compatible provider before applying its runtime key", async () => {
     let authorization = "";
+    let payload: Record<string, unknown> = {};
     const server = createServer((request, response) => {
       authorization = request.headers.authorization ?? "";
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end([
-        'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"custom-model","choices":[{"index":0,"delta":{"role":"assistant","content":"custom ready"},"finish_reason":null}]}',
-        'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"custom-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}}',
-        "data: [DONE]",
-        "",
-      ].join("\n\n"));
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end([
+          'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"custom-model","choices":[{"index":0,"delta":{"role":"assistant","content":"custom ready"},"finish_reason":null}]}',
+          'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"custom-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"));
+      });
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
@@ -423,12 +643,172 @@ describe("Pi 0.83 AgentHarness integration", () => {
     try {
       await runtime.prompt("hello");
       expect(authorization).toBe("Bearer test-runtime-key");
+      expect(payload).not.toHaveProperty("store");
       expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "custom ready" }] });
     } finally {
       runtime.dispose();
       store.close();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
+  });
+  it("aborts an OpenAI-compatible response body after the configured idle interval", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write('data: {"id":"chatcmpl-idle","object":"chat.completion.chunk","created":1,"model":"idle-model","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}\n\n');
+      setTimeout(() => response.end("data: [DONE]\n\n"), 250).unref();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("HTTP test server did not bind");
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "idle provider");
+    const model: Model<"openai-completions"> = {
+      id: "idle-model", name: "idle-model", api: "openai-completions", provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
+    };
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, apiKey: "test-runtime-key", initialMessages: [], providerMaxRetries: 0, providerTimeoutMs: 30 }));
+    const startedAt = Date.now();
+    try {
+      await runtime.prompt("wait for stalled body");
+      expect(Date.now() - startedAt).toBeLessThan(200);
+      expect(runtime.getError()).toMatch(/idle|timed out|timeout/i);
+    } finally {
+      runtime.dispose();
+      store.close();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+  it("keeps a provider stream alive while body chunks continue arriving", async () => {
+    let streamTimer: ReturnType<typeof setInterval> | undefined;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write('data: {"id":"chatcmpl-active","object":"chat.completion.chunk","created":1,"model":"active-model","choices":[{"index":0,"delta":{"role":"assistant","content":"0"},"finish_reason":null}]}\n\n');
+      let chunk = 0;
+      streamTimer = setInterval(() => {
+        chunk += 1;
+        if (chunk <= 6) {
+          response.write(`data: {"id":"chatcmpl-active","object":"chat.completion.chunk","created":1,"model":"active-model","choices":[{"index":0,"delta":{"content":"${chunk}"},"finish_reason":null}]}\n\n`);
+          return;
+        }
+        clearInterval(streamTimer);
+        streamTimer = undefined;
+        response.end([
+          'data: {"id":"chatcmpl-active","object":"chat.completion.chunk","created":1,"model":"active-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":7,"total_tokens":9}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"));
+      }, 100);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("HTTP test server did not bind");
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "active provider stream");
+    const model: Model<"openai-completions"> = {
+      id: "active-model", name: "active-model", api: "openai-completions", provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
+    };
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, apiKey: "test-runtime-key", initialMessages: [], providerMaxRetries: 0, providerTimeoutMs: 500 }));
+    const startedAt = Date.now();
+    try {
+      await runtime.prompt("read the active stream");
+      expect(Date.now() - startedAt).toBeGreaterThan(500);
+      expect(runtime.getError()).toBeUndefined();
+      expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "0123456" }] });
+    } finally {
+      if (streamTimer) clearInterval(streamTimer);
+      runtime.dispose();
+      store.close();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+  it("aborts an OpenAI-compatible request when response headers remain idle", async () => {
+    const server = createServer((_request, response) => {
+      setTimeout(() => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end("data: [DONE]\n\n");
+      }, 250).unref();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("HTTP test server did not bind");
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "idle provider headers");
+    const model: Model<"openai-completions"> = {
+      id: "idle-header-model", name: "idle-header-model", api: "openai-completions", provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
+    };
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, apiKey: "test-runtime-key", initialMessages: [], providerMaxRetries: 0, providerTimeoutMs: 30 }));
+    const startedAt = Date.now();
+    try {
+      await runtime.prompt("wait for stalled headers");
+      expect(Date.now() - startedAt).toBeLessThan(200);
+      expect(runtime.getError()).toMatch(/idle|timed out|timeout/i);
+      expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "provider.failure", data: expect.objectContaining({ kind: "timeout" }) }),
+      ]));
+    } finally {
+      runtime.dispose();
+      store.close();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+  it("aborts an in-flight compaction provider request", async () => {
+    let providerEntered!: () => void;
+    const entered = new Promise<void>((resolve) => { providerEntered = resolve; });
+    const server = createServer(() => { providerEntered(); });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("HTTP test server did not bind");
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "abort compaction provider");
+    const model: Model<"openai-completions"> = {
+      id: "compact-abort-model", name: "compact-abort-model", api: "openai-completions", provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100_000, maxTokens: 2_000,
+    };
+    const historical = fauxAssistantMessage("historical response".repeat(12_000));
+    historical.usage = { ...historical.usage, input: 20_000, output: 10_000, totalTokens: 30_000 };
+    const runtime = new PiRuntime(runtimeSpec(store, run, {
+      workspace: process.cwd(), systemPrompt: "Controlled prompt", model, apiKey: "test-runtime-key", providerTimeoutMs: 5_000, providerMaxRetries: 0,
+      initialMessages: [{ role: "user", content: "historical request", timestamp: 1 }, historical],
+    }));
+    const compaction = runtime.compact("Preserve unresolved work.");
+    try {
+      await entered;
+      const startedAt = Date.now();
+      await runtime.abort();
+      expect(Date.now() - startedAt).toBeLessThan(200);
+      await expect(compaction).rejects.toThrow();
+      expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "context.compaction.completed", data: expect.objectContaining({ aborted: true }) }),
+      ]));
+    } finally {
+      await compaction.catch(() => undefined);
+      runtime.dispose();
+      store.close();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+  it("retries the primary model before consuming a rate-limit fallback", async () => {
+    const faux = fauxProvider({ models: [{ id: "primary", contextWindow: 32_000, maxTokens: 2_000 }, { id: "fallback", contextWindow: 32_000, maxTokens: 2_000 }] });
+    faux.setResponses([
+      fauxAssistantMessage([], { stopReason: "error", errorMessage: "429 rate limit exceeded" }),
+      fauxAssistantMessage("primary recovered"),
+    ]);
+    const store = new Store(":memory:"); const session = store.createSession(); const run = store.createRun(session.id, "primary retry before fallback");
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel("primary")!, fallbackModels: [faux.getModel("fallback")!], models: fauxModels(faux), providerMaxRetries: 1 }));
+    await runtime.prompt("hello");
+    expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", model: "primary", content: [{ type: "text", text: "primary recovered" }] });
+    expect(store.listEvents(run.id).some((event) => event.type === "provider.fallback")).toBe(false);
+    runtime.dispose(); store.close();
   });
   it("switches to the next configured model after a rate-limit failure", async () => {
     const faux = fauxProvider({ models: [{ id: "primary", contextWindow: 32_000, maxTokens: 2_000 }, { id: "fallback", contextWindow: 32_000, maxTokens: 2_000 }] });
@@ -441,6 +821,8 @@ describe("Pi 0.83 AgentHarness integration", () => {
     await runtime.prompt("hello");
     expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", model: "fallback", content: [{ type: "text", text: "fallback recovered" }] });
     expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([expect.objectContaining({ type: "provider.fallback", data: expect.objectContaining({ previousModel: "primary", model: "fallback" }) })]));
+    expect(runtime.getMessages().some((message) => message.role === "assistant" && message.stopReason === "error")).toBe(false);
+    expect(JSON.stringify(store.listTranscript(run.id))).not.toContain("TAgent internal continuation");
     runtime.dispose(); store.close();
   });
 

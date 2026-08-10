@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Pi runtime replacement correctness
+
+- Kept current-turn thinking blocks and full tool results intact until the turn completes; historical projection now starts strictly before the latest real user message.
+- Replaced retry, fallback, overflow and manual-compaction recovery prompts with transcript-invisible continuations, while retaining failed provider messages only in the durable audit transcript and removing them from active model context.
+- Made controls accepted during retry backoff, compaction and terminal provider failure deterministic: they are delivered by a continuation or explicitly cleared on abort, and `runtime.settled` is emitted only once for the complete Attempt runtime cycle.
+- Restored bounded provider header/body idle timeouts, abort propagation into compaction requests, conservative generic OpenAI-compatible payload fields, primary-model retry before fallback, and successful-overflow answer retention.
+
 ## [0.5.1] - 2026-08-09
 
 ### Pi runtime compatibility hardening
