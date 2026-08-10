@@ -651,6 +651,93 @@ describe("Pi 0.83 AgentHarness integration", () => {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
   });
+  it("preserves pi-ai compatibility detection for DeepSeek-style providers", async () => {
+    let payload: {
+      messages?: Array<Record<string, unknown>>;
+      thinking?: unknown;
+    } = {};
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as typeof payload;
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end([
+          'data: {"id":"chatcmpl-deepseek","object":"chat.completion.chunk","created":1,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"role":"assistant","content":"deepseek ready"},"finish_reason":null}]}',
+          'data: {"id":"chatcmpl-deepseek","object":"chat.completion.chunk","created":1,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("HTTP test server did not bind");
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "deepseek provider compatibility");
+    const model: Model<"openai-completions"> = {
+      id: "deepseek-reasoner", name: "deepseek-reasoner", api: "openai-completions", provider: "deepseek",
+      // Keep the real provider hostname in the local route so pi-ai exercises
+      // both its provider-id and base-URL dialect detection without network I/O.
+      baseUrl: `http://127.0.0.1:${address.port}/deepseek.com/v1`, reasoning: true, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
+    };
+    const runtime = new PiRuntime(runtimeSpec(store, run, {
+      workspace: process.cwd(), systemPrompt: "Controlled prompt", model, apiKey: "test-runtime-key", providerMaxRetries: 0,
+      initialMessages: [{ role: "user", content: "historical request", timestamp: 1 }, fauxAssistantMessage("historical answer")],
+    }));
+    try {
+      await runtime.prompt("continue");
+      expect(payload.messages?.[0]).toMatchObject({ role: "system", content: "Controlled prompt" });
+      expect(payload.messages).toEqual(expect.arrayContaining([
+        expect.objectContaining({ role: "assistant", content: "historical answer", reasoning_content: "" }),
+      ]));
+      expect(payload.thinking).toEqual({ type: "enabled" });
+      expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "deepseek ready" }] });
+    } finally {
+      runtime.dispose();
+      store.close();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+  it("disables provider idle timeout when configured to zero", async () => {
+    const server = createServer((_request, response) => {
+      setTimeout(() => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end([
+          'data: {"id":"chatcmpl-no-timeout","object":"chat.completion.chunk","created":1,"model":"no-timeout-model","choices":[{"index":0,"delta":{"role":"assistant","content":"delayed ready"},"finish_reason":null}]}',
+          'data: {"id":"chatcmpl-no-timeout","object":"chat.completion.chunk","created":1,"model":"no-timeout-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"));
+      }, 50);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("HTTP test server did not bind");
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "disabled provider timeout");
+    const model: Model<"openai-completions"> = {
+      id: "no-timeout-model", name: "no-timeout-model", api: "openai-completions", provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
+    };
+    const runtime = new PiRuntime(runtimeSpec(store, run, {
+      workspace: process.cwd(), systemPrompt: "Controlled prompt", model, apiKey: "test-runtime-key",
+      initialMessages: [], providerMaxRetries: 0, providerTimeoutMs: 0,
+    }));
+    try {
+      await runtime.prompt("wait without an idle timeout");
+      expect(runtime.getError()).toBeUndefined();
+      expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "delayed ready" }] });
+    } finally {
+      runtime.dispose();
+      store.close();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
   it("aborts an OpenAI-compatible response body after the configured idle interval", async () => {
     const server = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/event-stream" });

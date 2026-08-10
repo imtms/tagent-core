@@ -33,8 +33,8 @@ The production and lockfile dependency graph contains no `pi-coding-agent` packa
 - aborts an active Harness turn before manual compaction, then resumes the unresolved request without adding a synthetic user message;
 - keeps retry/fallback/compaction failures in the durable audit transcript but removes them from the active continuation branch;
 - queues controls received between Harness turns and drives every accepted message after retry backoff or compaction;
-- enforces provider response-header and body-chunk idle timeouts, including cancellation of compaction transport;
-- applies conservative OpenAI-compatible payload defaults for custom endpoints;
+- enforces provider response-header and body-chunk idle timeouts, including cancellation of compaction transport and zero-as-disabled compatibility;
+- omits the optional OpenAI `store` field for generic compatibility while preserving `pi-ai` dialect detection for DeepSeek, ZAI, Moonshot, Together, OpenRouter, NVIDIA and other providers;
 - projects bounded historical tool output and TaskRun receipts before provider requests while preserving the entire current turn.
 
 The underlying `pi-agent-core` loop continues to provide schema validation, sequential/parallel tool execution, tool-result ordering, abort propagation and refusal to execute tool calls from token-truncated assistant output.
@@ -48,7 +48,7 @@ The runtime contract suite covers:
 - tool start/progress/end and aborted tool settlement;
 - steering and follow-up queues during streaming, retry and compaction, late-input rejection and abort queue audit;
 - provider retry, transcript-invisible continuation, typed terminal failures and rate-limit model fallback ordering;
-- custom OpenAI-compatible provider registration, conservative payload compatibility, runtime credentials and header/body idle timeout;
+- custom OpenAI-compatible provider registration, provider-dialect detection, conservative `store` omission, runtime credentials and header/body idle timeout including disabled mode;
 - pre-turn and post-turn threshold compaction, non-fatal automatic-compaction failure, active-turn manual compaction and context-overflow recovery;
 - cancellation during initialization, streaming and compaction;
 - current-turn thinking/tool-result preservation and bounded historical projection;

@@ -90,13 +90,18 @@ function withIdleTimeout(baseFetch: typeof fetch, idleTimeoutMs: number): typeof
 
 export function withProviderIdleTimeout(streams: ProviderStreams, idleTimeoutMs: number | undefined, lifetimeSignal?: AbortSignal): ProviderStreams {
   if (idleTimeoutMs === undefined && !lifetimeSignal) return streams;
-  const idleFetch = idleTimeoutMs === undefined ? undefined : withIdleTimeout(globalThis.fetch, idleTimeoutMs);
+  const hasTimeoutSetting = idleTimeoutMs !== undefined;
+  const idleFetch = idleTimeoutMs !== undefined && idleTimeoutMs > 0
+    ? withIdleTimeout(globalThis.fetch, idleTimeoutMs)
+    : undefined;
   const streamOptions = <T extends StreamOptions | SimpleStreamOptions>(options: T | undefined): T => ({
     ...options,
-    ...(idleFetch ? {
-      fetch: idleFetch,
+    ...(hasTimeoutSetting ? {
+      ...(idleFetch ? { fetch: idleFetch } : {}),
       // SDK timeouts are absolute deadlines. The transport wrapper above enforces
       // the intended header/body inactivity timeout and refreshes it on every chunk.
+      // A configured value of zero disables the idle watchdog, matching the
+      // previous coding-agent transport contract.
       timeoutMs: DISABLED_SDK_TIMEOUT_MS,
     } : {}),
     ...(lifetimeSignal ? {

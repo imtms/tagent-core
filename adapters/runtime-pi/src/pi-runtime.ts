@@ -49,23 +49,11 @@ function toPiModel(spec: RuntimeModelSpec): Model<Api> {
     contextWindow: spec.contextWindow,
     maxTokens: spec.maxTokens,
     ...(spec.api === "openai-completions" ? {
-      // Preserve the conservative generic OpenAI-compatible contract used by
-      // the previous runtime. Unknown endpoints frequently reject OpenAI-only
-      // optional fields such as `store`.
+      // Unknown endpoints frequently reject the OpenAI-only `store` field.
+      // Leave every provider-specific field unset so pi-ai can auto-detect
+      // DeepSeek, ZAI, Moonshot, Together, OpenRouter, NVIDIA, and other dialects.
       compat: {
         supportsStore: false,
-        supportsDeveloperRole: true,
-        supportsReasoningEffort: spec.reasoning ?? false,
-        supportsUsageInStreaming: true,
-        maxTokensField: "max_completion_tokens" as const,
-        requiresToolResultName: false,
-        requiresAssistantAfterToolResult: false,
-        requiresThinkingAsText: false,
-        requiresReasoningContentOnAssistantMessages: false,
-        thinkingFormat: "openai" as const,
-        supportsStrictMode: true,
-        sendSessionAffinityHeaders: false,
-        supportsLongCacheRetention: false,
       },
     } : {}),
   };
