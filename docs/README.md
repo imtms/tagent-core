@@ -27,6 +27,7 @@ This directory contains the maintained contracts for the current TAgent Core mai
 - [Runtime](RUNTIME.md) — in-process AgentHarness boundary, Pi dependency containment, `TaskRun`/`Attempt` execution, compaction, provider compatibility, timeouts, and tool authority.
 - [Execution reliability and efficiency](EXECUTION_EFFICIENCY.md) — snapshot edits, Artifact spill, project context, batching, context projection, Bash repeat protection, and continuation stalls.
 - [Supervisor](SUPERVISOR.md) — trusted Bash evidence, bounded LLM review, approvals, candidate delivery, and continuations.
+- [TaskRun finalization](TASKRUN_FINALIZATION.md) — plan-key convergence, delivery ordering, fresh required checks, final gate audit, and blocked-Run recovery.
 
 ## Security, Web, and Gateway
 

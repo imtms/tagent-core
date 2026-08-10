@@ -35,6 +35,8 @@ Follow [docs/NAMING_CONVENTIONS.md](docs/NAMING_CONVENTIONS.md). Use `TaskRun`, 
 
 ## Change workflow
 
+When work is executed as a substantial TaskRun, follow [the TaskRun finalization workflow](docs/TASKRUN_FINALIZATION.md). Reuse existing plan keys, finish all Git, release, migration, deployment, and production operations before registering final required checks, then require every plan to be terminal and every check to be passed and non-stale before submitting the final candidate.
+
 1. Add or update regression tests before changing behavior.
 2. Make the smallest workspace-owned change.
 3. Update ABI fixtures and client behavior together when a wire contract changes.
