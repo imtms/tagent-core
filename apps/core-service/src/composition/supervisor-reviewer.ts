@@ -335,14 +335,28 @@ Each failure is {"kind":"...","key":"...","reason":"...","disposition":"auto_fix
 Action must agree with the completion failures. TASKRUN_DATA=${JSON.stringify(payload)}`;
     try {
       const response = await this.request(basePrompt, input.run.id);
-      const audit = this.parseSettledAudit(repairJsonSyntax(response), criteria, validEvidenceRefs, input, trusted);
-      return this.removeProjectionOnlyFailures(audit, input.modelOutputTruncated === true, candidateProjection.strategy);
+      try {
+        const audit = this.parseSettledAudit(repairJsonSyntax(response), criteria, validEvidenceRefs, input, trusted);
+        return this.removeProjectionOnlyFailures(audit, input.modelOutputTruncated === true, candidateProjection.strategy);
+      } catch (validationError) {
+        const repairPrompt = `${basePrompt}
+
+The previous Supervisor response failed local schema or evidence validation. Repair only the structured audit; do not change or rerun the Agent candidate. Return one corrected compact JSON object using only TASKRUN_DATA and allowedEvidenceRefs. Preserve every bounded-review and evidence rule above. VALIDATION_ERROR=${JSON.stringify(validationError instanceof Error ? validationError.message : String(validationError))} PREVIOUS_RESPONSE=${JSON.stringify(truncateUtf8(response, 8_000))}`;
+        const repairedResponse = await this.request(repairPrompt, input.run.id);
+        try {
+          const audit = this.parseSettledAudit(repairJsonSyntax(repairedResponse), criteria, validEvidenceRefs, input, trusted);
+          return this.removeProjectionOnlyFailures(audit, input.modelOutputTruncated === true, candidateProjection.strategy);
+        } catch (repairError) {
+          throw new SupervisorReviewError(`Supervisor LLM audit failed local validation after one bounded review-only repair: ${repairError instanceof Error ? repairError.message : String(repairError)}`);
+        }
+      }
     } catch (error) {
+      if (error instanceof SupervisorReviewError) throw error;
       if (error instanceof SupervisorRequestError) {
         if (error.retryable) return this.conservativeSettledAudit(input, error.message);
         throw new SupervisorReviewError(error.message);
       }
-      throw new SupervisorReviewError(`Supervisor LLM audit failed local validation; no repair LLM was called: ${error instanceof Error ? error.message : String(error)}`);
+      throw new SupervisorReviewError(`Supervisor LLM audit failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

@@ -4,13 +4,19 @@ import { existsSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { createModels, type Context, type Model } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider, fauxThinking } from "@earendil-works/pi-ai/providers/faux";
-import { PiRuntime, type PiRuntimeOptions } from "@tagent/runtime-pi";
+import { PiRuntime, providerRetryDelayMs, type PiRuntimeOptions } from "@tagent/runtime-pi";
 import { Store } from "@tagent/persistence-sqlite/store";
 import { createRuntimeHost } from "@tagent/core-service/composition";
 import { attemptIdFor } from "@tagent/execution/domain";
 import { agentPersistence } from "./support/test-persistence.js";
 
 describe("Pi AgentHarness integration", () => {
+  it("bounds provider retry backoff by watchdog budgets and Node timer limits", () => {
+    expect(providerRetryDelayMs(1, 1_200_000, 86_400_000)).toBe(1_000);
+    expect(providerRetryDelayMs(12, 1_200_000, 86_400_000)).toBe(1_199_999);
+    expect(providerRetryDelayMs(23)).toBe(2_147_483_647);
+    expect(providerRetryDelayMs(1_000, 1_200_000, 86_400_000)).toBe(1_199_999);
+  });
   function fauxModels(faux: ReturnType<typeof fauxProvider>) {
     const models = createModels();
     models.setProvider(faux.provider);

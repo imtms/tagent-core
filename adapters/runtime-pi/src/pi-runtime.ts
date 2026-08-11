@@ -31,6 +31,19 @@ import type {
   RuntimeTool,
 } from "@tagent/execution/ports";
 
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const RETRY_DELAY_SAFETY_MARGIN_MS = 1;
+
+export function providerRetryDelayMs(retryAttempt: number, runTimeoutMs?: number, runHardTimeoutMs?: number) {
+  const idleBudget = runTimeoutMs === undefined ? Number.POSITIVE_INFINITY : Math.max(0, runTimeoutMs - RETRY_DELAY_SAFETY_MARGIN_MS);
+  const hardBudget = runHardTimeoutMs === undefined ? Number.POSITIVE_INFINITY : Math.max(0, runHardTimeoutMs - RETRY_DELAY_SAFETY_MARGIN_MS);
+  const cap = Math.min(MAX_TIMER_DELAY_MS, idleBudget, hardBudget);
+  if (cap <= 0) return 0;
+  const exponent = Math.max(0, Math.floor(retryAttempt) - 1);
+  if (exponent >= 31) return cap;
+  return Math.min(1_000 * 2 ** exponent, cap);
+}
+
 export interface PiRuntimeOptions extends AttemptRuntimeSpec {
   /** Test-only injection point for a preconfigured pi-ai model collection. */
   models?: MutableModels;
@@ -354,7 +367,7 @@ export class PiRuntime implements AttemptRuntimePort {
         }
         if (failure && isRetryableProviderFailure(failure) && retryAttempt < maxRetries) {
           retryAttempt += 1;
-          const delayMs = 1_000 * 2 ** (retryAttempt - 1);
+          const delayMs = providerRetryDelayMs(retryAttempt, this.options.runTimeoutMs, this.options.runHardTimeoutMs);
           const summary = (assistant.errorMessage ?? "").replace(/\s+/g, " ").slice(0, 500);
           this.emit("provider.retry", { attempt: retryAttempt, maxAttempts: maxRetries, delayMs, summary });
           this.emit("message.retrying", { content: messageText(assistant), willRetry: true, ordinal: this.assistantMessageOrdinal });

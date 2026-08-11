@@ -244,19 +244,23 @@ describe("TaskRunSupervisor LLM audit", () => {
     } finally { globalThis.fetch = original; store.close(); }
   });
 
-  it("rejects malformed Supervisor schema after one LLM call without creating another Agent attempt", async () => {
+  it("repairs a malformed Supervisor schema once without creating another Agent attempt", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "retry audit only");
     let requests = 0;
     const original = globalThis.fetch;
+    const repairedAudit = passingTestAudit();
     globalThis.fetch = async () => {
       requests += 1;
-      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ action: "complete_taskrun" }) } }] }), { status: 200 });
+      const content = requests === 1 ? JSON.stringify({ action: "complete_taskrun" }) : JSON.stringify(repairedAudit);
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
     };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("no repair LLM was called");
-      expect(requests).toBe(1);
+      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
+      expect(audit.action).toBe("complete_taskrun");
+      expect(requests).toBe(2);
       expect(store.getRun(run.id)?.attempt).toBe(1);
+      expect(store.getRun(run.id)?.continuations).toHaveLength(0);
     } finally { globalThis.fetch = original; store.close(); }
   });
 
@@ -482,7 +486,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     } finally { globalThis.fetch = original; store.close(); }
   });
 
-  it("fails closed on missing coverage receipts without a schema-repair LLM call", async () => {
+  it("keeps missing coverage repair bounded to one review-only call", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "correct missing coverage");
     const criteria = ["Criterion one", "Criterion two"];
     store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, objectives: [], acceptanceCriteria: criteria, scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
@@ -498,13 +502,13 @@ describe("TaskRunSupervisor LLM audit", () => {
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
       await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "done", operations: [], progress: undefined })).rejects.toThrow("missing: ac-2");
-      expect(requests).toBe(1);
+      expect(requests).toBe(2);
       expect(store.getRun(run.id)?.attempt).toBe(1);
       expect(store.getRun(run.id)?.continuations).toHaveLength(0);
     } finally { globalThis.fetch = original; store.close(); }
   });
 
-  it("does not issue a second Supervisor call to repair an invalid schema", async () => {
+  it("uses a compact bounded prompt for one invalid-schema repair", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "compact repair");
     const criterion = "Return a verified explanation";
     store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: "S".repeat(1800), objectives: [], acceptanceCriteria: [criterion], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
@@ -519,9 +523,11 @@ describe("TaskRunSupervisor LLM audit", () => {
     };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "A complete standalone explanation.", operations: [], progress: undefined })).rejects.toThrow("no repair LLM was called");
-      expect(prompts).toHaveLength(1);
+      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "A complete standalone explanation.", operations: [], progress: undefined })).rejects.toThrow("after one bounded review-only repair");
+      expect(prompts).toHaveLength(2);
       expect(prompts[0]).toContain("TASKRUN_DATA=");
+      expect(prompts[1]).toContain("VALIDATION_ERROR=");
+      expect(prompts[1]).toContain("PREVIOUS_RESPONSE=");
     } finally { globalThis.fetch = original; store.close(); }
   });
 
@@ -549,8 +555,8 @@ describe("TaskRunSupervisor LLM audit", () => {
     globalThis.fetch = async () => { requests += 1; return new Response(JSON.stringify({ choices: [{ message: { content: '{"action":"complete_taskrun","rationale":"unterminated}' } }] }), { status: 200 }); };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("no repair LLM was called");
-      expect(requests).toBe(1);
+      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("after one bounded review-only repair");
+      expect(requests).toBe(2);
       expect(store.getRun(run.id)?.attempt).toBe(1);
       expect(store.getRun(run.id)?.continuations).toHaveLength(0);
     } finally { globalThis.fetch = original; store.close(); }

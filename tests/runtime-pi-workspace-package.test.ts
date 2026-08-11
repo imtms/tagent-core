@@ -176,7 +176,7 @@ describe("Pi runtime adapter workspace package", () => {
       const root = await import("@tagent/runtime-pi");
       const factory = await import("@tagent/runtime-pi/factory");
       const errors = await import("@tagent/runtime-pi/provider-errors");
-      if (Object.keys(root).join(",") !== "PiRuntime") process.exit(1);
+      if (Object.keys(root).join(",") !== "PiRuntime,providerRetryDelayMs") process.exit(1);
       if (!factory.createInProcessRuntime || !factory.resolveRuntimeFactory) process.exit(1);
       if (!errors.classifyProviderFailure || !errors.isRetryableProviderFailure) process.exit(1);
     `;
