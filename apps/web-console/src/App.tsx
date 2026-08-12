@@ -11,6 +11,7 @@ import { formatShortcut, useShortcutModifier } from "./shortcut-platform";
 import { useDrawerFocus } from "./use-drawer-focus";
 import { useMobileDrawerSwipe } from "./use-mobile-drawer-swipe";
 import { usePopoverFocus } from "./use-popover-focus";
+import { useStickyConversation } from "./use-sticky-conversation";
 import { WorkspaceContextMenu } from "./WorkspaceContextMenu";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
@@ -477,7 +478,6 @@ export function App() {
   const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(() => storedStringArray("tagent.pinned-workspaces"));
   const [lastSeenBySession, setLastSeenBySession] = useState<Record<string, number>>(() => storedNumberRecord("tagent.workspace-last-seen"));
   const [sessionActivityBaseline, setSessionActivityBaseline] = useState<Record<string, number>>({});
-  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [viewingEarlierHistory, setViewingEarlierHistory] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(() => storedBoolean("tagent.left-rail-collapsed"));
   const [rightCollapsed, setRightCollapsed] = useState(() => storedBoolean("tagent.right-panel-collapsed", true));
@@ -491,14 +491,11 @@ export function App() {
   const [goalsOpen, setGoalsOpen] = useState(false);
   const [memoryJobs, setMemoryJobs] = useState<CaptureJob[]>([]);
   const [memoryJobsLoaded, setMemoryJobsLoaded] = useState(false);
-  const messageScrollRef = useRef<HTMLElement>(null);
   const sessionRailRef = useRef<HTMLElement>(null);
+  const conversationStageRef = useRef<HTMLDivElement>(null);
   const runPanelRef = useRef<HTMLElement>(null);
   const mobileBackdropRef = useRef<HTMLButtonElement>(null);
   const workspaceMenuRef = useRef<HTMLDivElement>(null);
-  const endRef = useRef<HTMLDivElement>(null);
-  const autoScrollRef = useRef(true);
-  const forceScrollRef = useRef(true);
   const cancelRenameRef = useRef(false);
   const renameSubmittingRef = useRef(false);
   const activeRunIdRef = useRef("");
@@ -514,6 +511,8 @@ export function App() {
   const [workspacePrefetchCache] = useState(() => new IntentPrefetchCache<string, WorkspaceSnapshot>(30_000, 6));
   const shortcutModifier = useShortcutModifier();
   const workspaceShortcut = formatShortcut(shortcutModifier, "K");
+  const conversationActivityKey = `${messages.at(-1)?.id ?? 0}:${pendingUserMessage?.sessionId === sessionId ? pendingUserMessage.createdAt : 0}:${transcript.at(-1)?.seq ?? 0}:${events.at(-1)?.seq ?? 0}:${streaming.length}:${liveThinking.length}`;
+  const { viewportRef: messageScrollRef, contentRef: messageFeedRef, pinnedToLatest, hasNewActivity, handleScroll: handleMessageScroll, jumpToLatest: scrollToLatest, pinToLatest } = useStickyConversation(sessionId, conversationActivityKey, conversationStageRef);
 
   const applyWorkspaceSnapshot = useCallback((snapshot: WorkspaceSnapshot) => {
     replaceStreamingOnNextDeltaRef.current = false;
@@ -554,7 +553,7 @@ export function App() {
   }
 
   useEffect(() => { activeRunIdRef.current = activeRun?.id ?? ""; activeRunRef.current = activeRun; }, [activeRun]);
-  useEffect(() => { sessionIdRef.current = sessionId; setViewingEarlierHistory(false); setShowJumpToLatest(false); }, [sessionId]);
+  useEffect(() => { sessionIdRef.current = sessionId; setViewingEarlierHistory(false); }, [sessionId]);
   useEffect(() => {
     setDraft(draftBySession[sessionId] ?? "");
     setHistoryCursor(null);
@@ -870,32 +869,10 @@ export function App() {
     return () => { flushAck(); closed = true; if (ackTimer) clearTimeout(ackTimer); unsubscribe(); };
   }, [activeRun?.id, activeRun?.status, sessionId, loadSessions, streamGeneration]);
 
-  useEffect(() => {
-    const viewport = messageScrollRef.current;
-    if (!viewport || (!autoScrollRef.current && !forceScrollRef.current)) return;
-    viewport.scrollTop = viewport.scrollHeight;
-    autoScrollRef.current = true;
-    forceScrollRef.current = false;
-    setShowJumpToLatest(false);
-  }, [messages, pendingUserMessage, transcript, streaming, liveThinking, events]);
-
-  const handleMessageScroll = useCallback(() => {
-    const viewport = messageScrollRef.current;
-    if (!viewport) return;
-    const nearLatest = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 96;
-    autoScrollRef.current = nearLatest;
-    setShowJumpToLatest(!nearLatest);
-  }, []);
-
   const jumpToLatest = useCallback(() => {
-    const viewport = messageScrollRef.current;
-    if (!viewport) return;
-    autoScrollRef.current = true;
-    forceScrollRef.current = false;
-    viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
-    setShowJumpToLatest(false);
+    scrollToLatest("smooth");
     setViewingEarlierHistory(false);
-  }, []);
+  }, [scrollToLatest]);
 
   const activeTools = useMemo(() => events.filter((event) => event.type.startsWith("tool.")).slice(-20), [events]);
   const transcriptTools = useMemo(() => transcript.filter((item): item is Extract<TranscriptItem, { kind: "tool" }> => item.kind === "tool"), [transcript]);
@@ -1009,7 +986,7 @@ export function App() {
     if (!content || !targetSessionId || submitting) return;
     void preloadMarkdown().catch(() => undefined);
     const optimistic = { sessionId: targetSessionId, content, createdAt: Date.now() };
-    setSubmitting(true); updateComposerDraft(""); setError(""); setNotice(""); forceScrollRef.current = true;
+    setSubmitting(true); updateComposerDraft(""); setError(""); setNotice(""); pinToLatest();
     setInputHistoryBySession((current) => {
       const history = current[targetSessionId] ?? [];
       const deduplicated = history.filter((item) => item !== content);
@@ -1096,7 +1073,7 @@ export function App() {
     try {
       const resumed = await api.submitUserInput(request.id, values);
       setActiveRun(resumed); setSelectedRun(resumed); setRuns((current) => current.map((item) => item.id === resumed.id ? resumed : item));
-      setEvents([]); setStreaming(""); setLiveThinking(""); setNotice("Information submitted. TaskRun resumed."); forceScrollRef.current = true;
+      setEvents([]); setStreaming(""); setLiveThinking(""); setNotice("Information submitted. TaskRun resumed."); pinToLatest();
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setSubmittingUserInputId(""); }
   }
@@ -1225,8 +1202,9 @@ export function App() {
         </div>
       </header>
 
-      <section className="message-scroll" ref={messageScrollRef} onScroll={handleMessageScroll}>
-        <div className="message-feed">
+      <div className="conversation-stage" ref={conversationStageRef}>
+        <section className="message-scroll" ref={messageScrollRef} onScroll={handleMessageScroll}>
+          <div className="message-feed" ref={messageFeedRef}>
         {conversationLoading && !messages.length ? <div className="conversation-skeleton" aria-label="Loading conversation"><span /><span /><span /></div> : !messages.length && !streaming && pendingUserMessage?.sessionId !== sessionId && <div className="empty-state"><div className="empty-icon"><Sparkles size={23} /></div><span className="empty-kicker">Durable agent workspace</span><h2>What should we accomplish?</h2><p>Start with an outcome. TAgent will plan the work, preserve progress, and verify the result.</p><div className="starter-prompts" aria-label="Starter prompts">{starterPrompts.map((starter) => <button type="button" key={starter.label} onClick={() => { updateComposerDraft(starter.prompt); requestAnimationFrame(() => composerTextareaRef.current?.focus()); }}><Sparkles size={13} /><span>{starter.label}</span><ChevronRight size={13} /></button>)}</div><div className="empty-capabilities" aria-label="TAgent workflow"><span>Plan</span><i /><span>Execute</span><i /><span>Verify</span></div></div>}
         {hasOlderMessages && <button className="load-older" onClick={() => void loadOlderMessages()} disabled={loadingOlderMessages}>{loadingOlderMessages ? "Loading…" : "Load earlier messages"}</button>}
         {viewingEarlierHistory && <div className="history-context"><span>Viewing earlier history</span><button type="button" onClick={jumpToLatest}>Return to latest</button></div>}
@@ -1235,10 +1213,10 @@ export function App() {
         {activeRun && <div className="active-run-strip"><Activity size={14} /><span>Attempt {activeRun.attempt}</span><strong>{activeRun.phase}</strong><small>{activeRun.usage.totalTokens.toLocaleString()} tokens</small></div>}
         {selectedRun?.pendingUserInput && <UserInputCard request={selectedRun.pendingUserInput} submitting={submittingUserInputId === selectedRun.pendingUserInput.id} onSubmit={(values) => submitRequestedInput(selectedRun.pendingUserInput!, values)} />}
         {(activeRun || selectedRun) && transcript.length + events.length + Number(Boolean(liveThinking || streaming)) > 0 && <ExecutionTimeline runId={(activeRun ?? selectedRun)!.id} isRunning={activeRun?.status === "running"} items={transcript} events={activeRun ? events : []} liveThinking={activeRun ? liveThinking : ""} liveOutput={activeRun ? streaming : ""} />}
-        <div ref={endRef} />
-        </div>
-      </section>
-      {showJumpToLatest && <button className="jump-to-latest" type="button" onClick={jumpToLatest}><ArrowDown size={14} /><span>Latest</span></button>}
+          </div>
+        </section>
+        {!pinnedToLatest && <button className={`jump-to-latest ${hasNewActivity ? "has-new-activity" : ""}`} type="button" onClick={jumpToLatest} aria-label={hasNewActivity ? "New activity. Jump to latest" : "Jump to latest"}><ArrowDown size={14} /><span>{hasNewActivity ? "New activity" : "Latest"}</span>{hasNewActivity && <i aria-hidden="true" />}</button>}
+      </div>
 
       <footer className="composer-wrap">
         {error && <div className="error-banner">{error}</div>}

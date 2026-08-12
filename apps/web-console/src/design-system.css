@@ -596,7 +596,14 @@ a:focus-visible {
 }
 
 /* Conversation */
+.conversation-stage {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .message-scroll {
+  height: 100%;
   padding: 30px clamp(22px, 3.4vw, 52px) 18px;
   background: var(--surface);
 }
@@ -1793,8 +1800,8 @@ a:focus-visible {
 .jump-to-latest {
   position: absolute;
   z-index: 8;
-  right: 24px;
-  bottom: 112px;
+  left: 50%;
+  bottom: 12px;
   min-height: 34px;
   padding: 0 11px;
   display: inline-flex;
@@ -1808,12 +1815,31 @@ a:focus-visible {
   cursor: pointer;
   font-size: 10px;
   font-weight: 700;
+  transform: translateX(-50%);
+  transition: color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out);
 }
 
 .jump-to-latest:hover {
   color: var(--accent);
   border-color: color-mix(in oklab, var(--accent) 38%, var(--border));
   background: var(--accent-soft);
+  transform: translateX(-50%) translateY(-1px);
+}
+
+.jump-to-latest:active {
+  transform: translateX(-50%) translateY(0);
+}
+
+.jump-to-latest i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.jump-to-latest.has-new-activity {
+  color: var(--accent);
+  border-color: color-mix(in oklab, var(--accent) 30%, var(--border));
 }
 
 .composer-mode {
@@ -2195,8 +2221,7 @@ a:focus-visible {
   }
 
   .jump-to-latest {
-    right: 14px;
-    bottom: calc(100px + env(safe-area-inset-bottom));
+    bottom: 10px;
   }
 
   .workspace-switcher-backdrop { padding: env(safe-area-inset-top) 0 0; align-items: stretch; }

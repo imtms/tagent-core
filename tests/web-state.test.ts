@@ -65,7 +65,7 @@ describe("Web workbench state model", () => {
     expect(shortcutHelp).toContain("shortcutKeyTokens(modifier, \"K\")");
     expect(app).toContain('const auditAvailable = Boolean(activeRun || selectedRun || runs.length)');
     expect(app).toContain('className="starter-prompts"');
-    expect(app).toContain('className="jump-to-latest"');
+    expect(app).toContain("jump-to-latest");
     expect(app).toContain('className="conversation-skeleton"');
     expect(app).toContain('function TAgentMark');
     expect(design).toContain('.run-panel.needs-attention.collapsed');
@@ -101,6 +101,27 @@ describe("Web workbench state model", () => {
     expect(timeAgo).toContain("title={formatExactDateTime(value)}");
     expect(timeAgo).toContain("subscribers = new Set");
     expect(design).toContain(".conversation-date-divider");
+  });
+
+  it("follows the live edge without stealing the reader's history position", async () => {
+    const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    const sticky = await readFile(new URL("../apps/web-console/src/use-sticky-conversation.ts", import.meta.url), "utf8");
+    const scroll = await readFile(new URL("../apps/web-console/src/conversation-scroll.ts", import.meta.url), "utf8");
+    const design = await readFile(new URL("../apps/web-console/src/design-system.css", import.meta.url), "utf8");
+    expect(app).toContain("useStickyConversation(sessionId, conversationActivityKey, conversationStageRef)");
+    expect(app).toContain('ref={messageFeedRef}');
+    expect(app).toContain('"New activity. Jump to latest"');
+    expect(sticky).toContain("new ResizeObserver");
+    expect(sticky).toContain("observer.observe(content)");
+    expect(sticky).toContain("observer.observe(viewport)");
+    expect(sticky).toContain("if (stage) observer.observe(stage)");
+    expect(sticky).toContain("nextConversationPinState");
+    expect(sticky).toContain("previousActivityRef.current === activityKey");
+    expect(sticky).toContain("activityReadyRef.current && !pinnedRef.current");
+    expect(sticky).toContain("contentChanged && activityReadyRef.current");
+    expect(scroll).toContain("sample.nextTop < sample.previousTop - 2");
+    expect(design).toContain(".conversation-stage");
+    expect(design).toMatch(/\.jump-to-latest\s*\{[\s\S]*?left: 50%;[\s\S]*?transform: translateX\(-50%\);/);
   });
 
   it("persists per-workspace drafts and provides IME-safe keyboard composition", async () => {
