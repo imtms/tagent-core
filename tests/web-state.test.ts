@@ -16,18 +16,30 @@ describe("Web workbench state model", () => {
     expect(design).toContain(':root[data-theme="dark"]');
     expect(design).toContain('--background:');
     expect(design).toContain('--surface-raised:');
-    expect(design).toContain('.mobile-tools-menu');
+    expect(design).toContain('.workspace-actions-menu');
     expect(design).toContain('@media (prefers-reduced-motion: reduce)');
   });
 
   it("keeps chat primary while progressively disclosing navigation and audit detail", async () => {
     const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    const contextMenu = await readFile(new URL("../apps/web-console/src/WorkspaceContextMenu.tsx", import.meta.url), "utf8");
+    const switcher = await readFile(new URL("../apps/web-console/src/WorkspaceSwitcher.tsx", import.meta.url), "utf8");
     const design = await readFile(new URL("../apps/web-console/src/design-system.css", import.meta.url), "utf8");
     expect(app).toContain('storedBoolean("tagent.right-panel-collapsed", true)');
     expect(app).toContain('className="session-search"');
-    expect(app).toContain('className="session-context-menu"');
+    expect(app).toContain('<WorkspaceContextMenu session={session}');
+    expect(app).toContain('onContextMenu={(event) =>');
+    expect(app).toContain("useDrawerFocus(leftOpen, sessionRailRef)");
+    expect(app).toContain("usePopoverFocus(workspaceMenuOpen, workspaceMenuRef");
+    expect(app).toContain('role={leftOpen ? "dialog" : undefined} aria-label="Workspaces"');
+    expect(contextMenu).toContain('className="session-context-menu"');
+    expect(contextMenu).toContain('event.key === "ArrowDown"');
     expect(app).toContain('<WorkspaceSwitcher open={workspaceSwitcherOpen}');
     expect(app).toContain('event.key.toLocaleLowerCase() === "k"');
+    expect(switcher).toContain('appShell.inert = true');
+    expect(switcher).toContain('previouslyFocusedRef.current?.focus');
+    expect(switcher).toContain('scrollIntoView({ block: "nearest" })');
+    expect(switcher).toContain('role="option" tabIndex={-1}');
     expect(app).toContain('const auditAvailable = Boolean(activeRun || selectedRun || runs.length)');
     expect(app).toContain('className="starter-prompts"');
     expect(app).toContain('className="jump-to-latest"');
@@ -145,8 +157,10 @@ describe("Web workbench state model", () => {
 
   it("supports renaming workspaces from the session rail", async () => {
     const source = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    const contextMenu = await readFile(new URL("../apps/web-console/src/WorkspaceContextMenu.tsx", import.meta.url), "utf8");
     expect(source).toContain("api.renameSession(session.id, title)");
-    expect(source).toContain('aria-label="Rename workspace"');
+    expect(contextMenu).toContain("onRename(); onClose();");
+    expect(contextMenu).toContain("<span>Rename workspace</span>");
     expect(source).toContain('className="session-title-input"');
   });
 

@@ -198,8 +198,7 @@ a:focus-visible {
 
 .icon-button,
 .new-session,
-.resume-button,
-.memory-launch {
+.resume-button {
   border-color: var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-xs);
@@ -214,10 +213,6 @@ a:focus-visible {
   color: var(--foreground-strong);
   border-color: var(--border-strong);
   background: var(--surface-hover);
-}
-
-.theme-toggle {
-  box-shadow: none;
 }
 
 .new-session {
@@ -278,30 +273,6 @@ a:focus-visible {
   border-color: var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-muted);
-}
-
-.session-emoji:hover,
-.session-emoji[aria-expanded="true"] {
-  border-color: var(--border-strong);
-  background: var(--surface-raised);
-}
-
-.emoji-picker {
-  border-color: var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-md);
-}
-
-.emoji-picker button:hover,
-.emoji-picker button[aria-selected="true"] {
-  border-color: color-mix(in oklab, var(--accent) 34%, var(--border));
-  background: var(--accent-soft);
-}
-
-.rename-session:hover {
-  color: var(--accent);
-  background: var(--surface-hover);
 }
 
 .session-title-input,
@@ -369,34 +340,6 @@ a:focus-visible {
 .topbar p {
   color: var(--foreground-muted);
   font-size: 9px;
-}
-
-.execution-preferences {
-  gap: 5px;
-}
-
-.execution-preferences label {
-  height: 38px;
-  padding: 4px 8px;
-  border-color: var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-muted);
-}
-
-.execution-preferences label:hover {
-  border-color: var(--border-strong);
-  background: var(--surface-hover);
-}
-
-.execution-preferences label > span {
-  color: var(--foreground-muted);
-  font-size: 8px;
-  letter-spacing: 0.06em;
-}
-
-.execution-preferences select {
-  color: var(--foreground);
-  font-size: 10px;
 }
 
 .top-actions {
@@ -480,10 +423,6 @@ a:focus-visible {
 .workspace-profile-settings label { min-width: 0; padding: 7px 8px; border: 1px solid var(--border); border-radius: var(--radius-md); display: grid; gap: 3px; background: var(--surface-muted); }
 .workspace-profile-settings label > span { color: var(--foreground-muted); font-size: 7px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
 .workspace-profile-settings select { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--foreground); background: transparent; font: 650 9px/1.4 var(--font-sans); cursor: pointer; }
-
-.mobile-tools-menu {
-  display: none;
-}
 
 /* Workspace switcher — a fast navigation layer inspired by Hermit's compact,
    keyboard-friendly dashboard without importing its visual skin. */
@@ -589,7 +528,6 @@ a:focus-visible {
 .workspace-switcher > footer > button:hover { background: var(--accent-soft); }
 .workspace-switcher > footer > span { display: flex; align-items: center; gap: 4px; }
 
-.memory-launch,
 .resume-button {
   height: 36px;
   color: var(--accent);
@@ -597,46 +535,10 @@ a:focus-visible {
   background: var(--accent-soft);
 }
 
-.memory-launch:hover,
 .resume-button:hover {
   color: var(--accent-hover);
   border-color: color-mix(in oklab, var(--accent) 50%, var(--border));
   background: color-mix(in oklab, var(--accent-soft) 78%, var(--surface-raised));
-}
-
-.memory-launch i {
-  background: var(--success);
-  box-shadow: 0 0 0 3px var(--success-soft);
-}
-
-.learning-execution-control {
-  min-height: 38px;
-  border-color: color-mix(in oklab, var(--warning) 34%, var(--border));
-  border-radius: var(--radius-md);
-  background: var(--warning-soft);
-}
-
-.learning-execution-control.enabled {
-  border-color: color-mix(in oklab, var(--success) 35%, var(--border));
-  background: var(--success-soft);
-}
-
-.learning-execution-control.dependency-disabled {
-  border-color: var(--border);
-  background: var(--surface-muted);
-}
-
-.learning-execution-control button[role="switch"] {
-  background: var(--border-strong);
-}
-
-.learning-execution-control button[role="switch"] span {
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-xs);
-}
-
-.learning-execution-control button[role="switch"][aria-checked="true"] {
-  background: var(--accent);
 }
 
 /* Conversation */
@@ -1429,12 +1331,6 @@ a:focus-visible {
   position: relative;
 }
 
-.desktop-top-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .tagent-mark {
   display: block;
   transform: translateY(0.5px);
@@ -1566,36 +1462,6 @@ a:focus-visible {
   font-weight: 760;
 }
 
-.pin-session {
-  position: absolute;
-  z-index: 3;
-  top: 12px;
-  right: 31px;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: var(--radius-xs);
-  color: var(--foreground-muted);
-  background: transparent;
-  cursor: pointer;
-  opacity: 0;
-}
-
-.session-item:hover .pin-session,
-.pin-session:focus-visible,
-.pin-session.active {
-  opacity: 1;
-}
-
-.pin-session:hover,
-.pin-session.active {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
 .session-more {
   position: absolute;
   z-index: 4;
@@ -1635,7 +1501,7 @@ a:focus-visible {
   backdrop-filter: blur(14px);
 }
 
-.session-menu-scrim { position: fixed; z-index: 81; inset: 0; padding: 0; border: 0; background: transparent; }
+.session-menu-scrim { position: fixed; z-index: 81; inset: 0; background: transparent; }
 
 .session-context-menu > button {
   min-height: 34px;
@@ -1652,12 +1518,18 @@ a:focus-visible {
   cursor: pointer;
 }
 .session-context-menu > button:hover { background: var(--surface-hover); }
+.session-context-menu > button:focus-visible,
+.session-emoji-options button:focus-visible { outline-offset: -1px; }
 .session-emoji-options { margin-top: 3px; padding: 8px; border-top: 1px solid var(--border); display: grid; gap: 7px; }
 .session-emoji-options > span { color: var(--foreground-muted); font-size: 8px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
 .session-emoji-options > div { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; }
 .session-emoji-options button { width: 32px; height: 30px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
 .session-emoji-options button:hover,
-.session-emoji-options button[aria-pressed="true"] { border-color: var(--border-strong); background: var(--surface-hover); }
+.session-emoji-options button[aria-checked="true"] { border-color: var(--border-strong); background: var(--surface-hover); }
+
+@media (hover: none), (pointer: coarse) {
+  .session-more { opacity: 1; }
+}
 
 .session-skeletons {
   display: grid;
@@ -1895,10 +1767,6 @@ a:focus-visible {
   background: color-mix(in oklab, var(--warning-soft) 36%, var(--surface-muted));
 }
 
-.mobile-run-status {
-  display: none;
-}
-
 :root[data-theme="dark"] .session-search,
 :root[data-theme="dark"] .history-context {
   background: color-mix(in oklab, var(--surface-raised) 86%, transparent);
@@ -1941,14 +1809,6 @@ a:focus-visible {
     grid-template-columns: 60px minmax(0, 1fr);
   }
 
-  .learning-execution-control > div,
-  .memory-launch span {
-    display: none;
-  }
-
-  .learning-execution-control {
-    padding-inline: 6px;
-  }
 }
 
 @media (min-width: 981px) {
@@ -1989,7 +1849,6 @@ a:focus-visible {
 
   .session-rail.collapsed .session-search,
   .session-rail.collapsed .session-group-label,
-  .session-rail.collapsed .pin-session,
   .session-rail.collapsed .session-more,
   .session-rail.collapsed .session-search-empty {
     display: none;
@@ -2018,6 +1877,7 @@ a:focus-visible {
   .workspace-menu-toggle { width: 40px; height: 40px; padding: 0; justify-content: center; }
   .run-status-control { min-height: 40px; padding: 0 9px; }
   .workspace-actions-menu { position: fixed; top: calc(58px + env(safe-area-inset-top)); right: 10px; width: min(300px, calc(100vw - 20px)); }
+  .session-more { opacity: 1; }
 }
 
 @media (max-width: 760px) {
@@ -2092,128 +1952,8 @@ a:focus-visible {
     align-items: center;
   }
 
-  .desktop-top-actions,
-  .execution-preferences {
-    display: none;
-  }
-
   .run-status-control { width: 40px; padding: 0; justify-content: center; }
   .run-status-control strong { display: none; }
-
-  .mobile-run-status {
-    min-height: 32px;
-    padding: 0 8px;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    color: var(--foreground-muted);
-    background: var(--surface-muted);
-    cursor: pointer;
-    font-size: 8px;
-    text-transform: capitalize;
-  }
-
-  .mobile-run-status > span {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--foreground-muted);
-  }
-
-  .mobile-run-status.running > span,
-  .mobile-run-status.completed > span {
-    background: var(--success);
-  }
-
-  .mobile-run-status.waiting_input > span {
-    background: var(--warning);
-  }
-
-  .mobile-run-status.failed > span,
-  .mobile-run-status.blocked > span {
-    background: var(--danger);
-  }
-
-  .mobile-tools-toggle,
-  .top-actions > .mobile-only {
-    width: 40px;
-    height: 40px;
-  }
-
-  .mobile-tools-menu {
-    position: absolute;
-    z-index: 60;
-    top: 46px;
-    right: 0;
-    width: min(264px, calc(100vw - 20px));
-    padding: 6px;
-    display: grid;
-    gap: 2px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    background: var(--surface-raised);
-    box-shadow: var(--shadow-md);
-  }
-
-  .mobile-tools-menu button {
-    width: 100%;
-    min-height: 38px;
-    padding: 0 10px;
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    border: 0;
-    border-radius: var(--radius-sm);
-    color: var(--foreground);
-    background: transparent;
-    cursor: pointer;
-    font-size: 11px;
-    text-align: left;
-  }
-
-  .mobile-tools-menu button small {
-    margin-left: auto;
-    color: var(--foreground-muted);
-    font-size: 8px;
-    text-transform: capitalize;
-  }
-
-  .mobile-tools-menu .mobile-stop-run {
-    color: var(--danger);
-  }
-
-  .mobile-menu-select {
-    min-height: 38px;
-    padding: 0 10px;
-    display: grid;
-    grid-template-columns: 72px minmax(0, 1fr);
-    align-items: center;
-    gap: 8px;
-    color: var(--foreground-muted);
-    font-size: 9px;
-  }
-
-  .mobile-menu-select select {
-    min-width: 0;
-    border: 0;
-    outline: 0;
-    color: var(--foreground);
-    background: transparent;
-    font-size: 10px;
-    font-weight: 650;
-  }
-
-  .mobile-tools-menu button:hover {
-    color: var(--accent);
-    background: var(--surface-hover);
-  }
-
-  .mobile-tools-menu button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
 
   .message-scroll {
     padding: 18px 12px 12px;
@@ -2273,7 +2013,7 @@ a:focus-visible {
   }
 
   .workspace-switcher-backdrop { padding: env(safe-area-inset-top) 0 0; align-items: stretch; }
-  .workspace-switcher { width: 100%; max-height: 100dvh; border: 0; border-radius: 0; }
+  .workspace-switcher { width: 100%; height: 100dvh; max-height: 100dvh; border: 0; border-radius: 0; }
   .workspace-switcher-results > button { min-height: 60px; }
   .workspace-switcher > footer > span { display: none; }
 

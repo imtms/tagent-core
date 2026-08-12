@@ -1,11 +1,13 @@
 import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { Activity, ArrowDown, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Menu, Moon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Pin, Play, Plus, Search, Send, Settings2, ShieldAlert, ShieldCheck, Sparkles, Square, Sun, Target, Terminal, X } from "lucide-react";
-import { createPortal } from "react-dom";
+import { Activity, ArrowDown, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Menu, Moon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Search, Send, Settings2, ShieldAlert, ShieldCheck, Sparkles, Square, Sun, Target, Terminal, X } from "lucide-react";
 import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
 import { LiveText, Markdown } from "./Markdown";
 import { createRequestId } from "./id";
 import { deriveCurrentOperation } from "./current-operation";
 import { canResumeRun, findActiveRun, isActiveRunStatus } from "./run-state";
+import { useDrawerFocus } from "./useDrawerFocus";
+import { usePopoverFocus } from "./usePopoverFocus";
+import { WorkspaceContextMenu } from "./WorkspaceContextMenu";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 const MemoryPanel = lazy(() => import("./MemoryPanel").then((module) => ({ default: module.MemoryPanel })));
 const LearningCenter = lazy(() => import("./LearningCenter").then((module) => ({ default: module.LearningCenter })));
@@ -453,6 +455,9 @@ export function App() {
   const [memoryJobs, setMemoryJobs] = useState<CaptureJob[]>([]);
   const [memoryJobsLoaded, setMemoryJobsLoaded] = useState(false);
   const messageScrollRef = useRef<HTMLElement>(null);
+  const sessionRailRef = useRef<HTMLElement>(null);
+  const runPanelRef = useRef<HTMLElement>(null);
+  const workspaceMenuRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
   const forceScrollRef = useRef(true);
@@ -468,6 +473,22 @@ export function App() {
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const composerIsComposingRef = useRef(false);
   const historySeedRef = useRef("");
+
+  useDrawerFocus(leftOpen, sessionRailRef);
+  useDrawerFocus(rightOpen, runPanelRef);
+  usePopoverFocus(workspaceMenuOpen, workspaceMenuRef, useCallback(() => setWorkspaceMenuOpen(false), []));
+
+  function openSessionMenu(session: Session, anchor: DOMRect | { top: number; bottom: number; left: number }, x?: number, y?: number) {
+    const menuWidth = 208;
+    const menuHeight = 198;
+    const left = x === undefined ? anchor.left : x;
+    const top = y === undefined ? anchor.bottom + 4 : y;
+    setSessionMenuPosition({
+      top: Math.max(8, Math.min(top, globalThis.innerHeight - menuHeight - 8)),
+      left: Math.max(8, Math.min(left, globalThis.innerWidth - menuWidth - 8)),
+    });
+    setSessionMenuId(session.id);
+  }
 
   useEffect(() => { activeRunIdRef.current = activeRun?.id ?? ""; activeRunRef.current = activeRun; }, [activeRun]);
   useEffect(() => { sessionIdRef.current = sessionId; setViewingEarlierHistory(false); setShowJumpToLatest(false); }, [sessionId]);
@@ -1069,15 +1090,19 @@ export function App() {
 
   return <div className={`app-shell ${leftCollapsed ? "left-collapsed" : ""} ${rightCollapsed ? "right-collapsed" : ""} ${auditNeedsAttention ? "audit-needs-attention" : ""} ${auditAvailable ? "" : "audit-unavailable"}`}>
     <WorkspaceSwitcher open={workspaceSwitcherOpen} sessions={sessions} selectedSessionId={sessionId} pinnedSessionIds={pinnedSessionIds} workspaceEmojiById={workspaceEmojiById} onClose={() => setWorkspaceSwitcherOpen(false)} onSelect={selectSession} onCreate={createSession} />
-    <aside className={`session-rail ${leftOpen ? "mobile-open" : ""} ${leftCollapsed ? "collapsed" : ""}`}>
-      <div className="brand"><div className="brand-mark"><TAgentMark /></div><div className="brand-copy"><strong>TAgent</strong><span>Core runtime</span></div><button className="icon-button desktop-only rail-collapse" onClick={() => setLeftCollapsed((current) => !current)} aria-label={leftCollapsed ? "Expand workspace sidebar" : "Collapse workspace sidebar"} title={leftCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{leftCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button><button className="icon-button mobile-only" onClick={() => setLeftOpen(false)} aria-label="Close sessions"><X size={18} /></button></div>
+    <aside ref={sessionRailRef} className={`session-rail ${leftOpen ? "mobile-open" : ""} ${leftCollapsed ? "collapsed" : ""}`} role={leftOpen ? "dialog" : undefined} aria-label="Workspaces" aria-modal={leftOpen ? "true" : undefined}>
+      <div className="brand"><div className="brand-mark"><TAgentMark /></div><div className="brand-copy"><strong>TAgent</strong><span>Core runtime</span></div><button className="icon-button desktop-only rail-collapse" onClick={() => setLeftCollapsed((current) => !current)} aria-label={leftCollapsed ? "Expand workspace sidebar" : "Collapse workspace sidebar"} title={leftCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{leftCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button><button className="icon-button mobile-only" data-drawer-close onClick={() => setLeftOpen(false)} aria-label="Close sessions"><X size={18} /></button></div>
       <button className="new-session" onClick={createSession} title="New workspace"><Plus size={16} /><span>New workspace</span></button>
       <label className="session-search"><Search size={14} /><input type="search" value={sessionSearch} onChange={(event) => setSessionSearch(event.target.value)} placeholder="Filter workspaces" aria-label="Filter workspaces" />{sessionSearch ? <button type="button" onClick={() => setSessionSearch("")} aria-label="Clear workspace filter"><X size={13} /></button> : <kbd>⌘K</kbd>}</label>
       <div className="session-list" onScroll={() => { if (sessionMenuId) setSessionMenuId(""); }}>
         {sessionsLoading ? <div className="session-skeletons" aria-label="Loading workspaces"><i /><i /><i /></div> : sessionGroups.map((group) => <section className="session-group" key={group.label}><div className="session-group-label"><span>{group.label}</span><small>{group.sessions.length}</small></div>{group.sessions.map((session) => {
           const pinned = pinnedSessionIds.includes(session.id);
           const unread = session.id !== sessionId && session.updatedAt > (lastSeenBySession[session.id] ?? sessionActivityBaseline[session.id] ?? session.updatedAt);
-          return <div key={session.id} className={`session-item ${session.id === sessionId ? "active" : ""} ${unread ? "unread" : ""}`}>
+          return <div key={session.id} className={`session-item ${session.id === sessionId ? "active" : ""} ${unread ? "unread" : ""}`} onContextMenu={(event) => {
+            if (renamingSessionId === session.id) return;
+            event.preventDefault();
+            openSessionMenu(session, event.currentTarget.getBoundingClientRect(), event.clientX, event.clientY);
+          }}>
           <span className="session-emoji" aria-hidden="true">{workspaceEmojiById[session.id] ?? "💬"}</span>
           {renamingSessionId === session.id ? <div className="session-select session-editor">
             <span><input className="session-title-input" value={sessionTitleDraft} autoFocus onChange={(event) => setSessionTitleDraft(event.target.value)} onKeyDown={(event) => {
@@ -1089,14 +1114,9 @@ export function App() {
             <button className="session-more" type="button" onClick={(event) => {
               if (sessionMenuId === session.id) { setSessionMenuId(""); return; }
               const item = event.currentTarget.closest(".session-item")?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
-              setSessionMenuPosition({ top: Math.min(item.bottom + 4, globalThis.innerHeight - 198), left: Math.max(8, item.left) });
-              setSessionMenuId(session.id);
-            }} aria-expanded={sessionMenuId === session.id} aria-label={`More actions for ${session.title}`}><MoreHorizontal size={14} /></button>
-            {sessionMenuId === session.id && createPortal(<><button className="session-menu-scrim" type="button" aria-label="Close workspace row actions" onClick={() => setSessionMenuId("")} /><div className="session-context-menu" role="menu" aria-label={`Actions for ${session.title}`} style={sessionMenuPosition}>
-              <button type="button" role="menuitem" onClick={() => { togglePinnedSession(session.id); setSessionMenuId(""); }}><Pin size={13} /><span>{pinned ? "Unpin workspace" : "Pin workspace"}</span></button>
-              <button type="button" role="menuitem" aria-label="Rename workspace" onClick={() => { setRenamingSessionId(session.id); setSessionTitleDraft(session.title); setSessionMenuId(""); }}><Pencil size={13} /><span>Rename workspace</span></button>
-              <div className="session-emoji-options"><span>Icon</span><div>{workspaceEmojis.map((emoji) => <button type="button" aria-label={`Use ${emoji} for ${session.title}`} aria-pressed={(workspaceEmojiById[session.id] ?? "💬") === emoji} key={emoji} onClick={() => { setWorkspaceEmojiById((current) => ({ ...current, [session.id]: emoji })); setSessionMenuId(""); }}>{emoji}</button>)}</div></div>
-            </div></>, document.body)}
+              openSessionMenu(session, item);
+            }} aria-haspopup="menu" aria-expanded={sessionMenuId === session.id} aria-label={`More actions for ${session.title}`}><MoreHorizontal size={14} /></button>
+            {sessionMenuId === session.id && <WorkspaceContextMenu session={session} pinned={pinned} currentEmoji={workspaceEmojiById[session.id] ?? "💬"} emojis={workspaceEmojis} position={sessionMenuPosition} onClose={() => setSessionMenuId("")} onTogglePinned={() => togglePinnedSession(session.id)} onRename={() => { setRenamingSessionId(session.id); setSessionTitleDraft(session.title); }} onChooseEmoji={(emoji) => setWorkspaceEmojiById((current) => ({ ...current, [session.id]: emoji }))} />}
           </>}
         </div>})}</section>)}
         {!sessionsLoading && filteredSessions.length === 0 && <div className="session-search-empty"><Search size={16} /><span>No matching workspaces</span><button type="button" onClick={() => setSessionSearch("")}>Clear search</button></div>}
@@ -1112,8 +1132,8 @@ export function App() {
           {auditAvailable && selectedRunStatus && <button className={`run-status-control ${selectedRunStatus}`} onClick={() => { setWorkspaceMenuOpen(false); setRightCollapsed(false); setRightOpen(true); }} aria-label={`Open audit panel. Task status: ${selectedRunStatus}`}><span /><strong>{selectedRunStatus === "waiting_input" ? "Needs input" : selectedRunStatus.replaceAll("_", " ")}</strong></button>}
           {canResumeRun(selectedRun, activeRun) && <button className="resume-button desktop-only" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}
           {activeRun?.status === "running" && <button className="icon-button danger desktop-only" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={17} /></button>}
-          <button className={`workspace-menu-toggle ${workspaceMenuOpen ? "active" : ""}`} type="button" aria-label="More workspace actions" aria-expanded={workspaceMenuOpen} onClick={() => setWorkspaceMenuOpen((current) => !current)}><Settings2 size={16} /><span className="desktop-only">Workspace</span><ChevronDown className="desktop-only" size={12} /></button>
-          {workspaceMenuOpen && <><button className="workspace-menu-scrim" type="button" aria-label="Close workspace actions" onClick={() => setWorkspaceMenuOpen(false)} /><div className="workspace-actions-menu">
+          <button className={`workspace-menu-toggle ${workspaceMenuOpen ? "active" : ""}`} type="button" aria-label="More workspace actions" aria-haspopup="dialog" aria-expanded={workspaceMenuOpen} onClick={() => setWorkspaceMenuOpen((current) => !current)}><Settings2 size={16} /><span className="desktop-only">Workspace</span><ChevronDown className="desktop-only" size={12} /></button>
+          {workspaceMenuOpen && <><button className="workspace-menu-scrim" type="button" aria-label="Close workspace actions" onClick={() => setWorkspaceMenuOpen(false)} /><div ref={workspaceMenuRef} className="workspace-actions-menu" role="dialog" aria-label="Workspace settings">
             <div className="workspace-actions-heading"><span>Workspace settings</span><small>{selectedSession?.title ?? "TAgent Core"}</small></div>
             {auditAvailable && <button onClick={() => { setRightCollapsed(false); setRightOpen(true); setWorkspaceMenuOpen(false); }}><PanelRight size={15} /><span>Supervisor & execution</span>{selectedRunStatus && <small>{selectedRunStatus.replaceAll("_", " ")}</small>}</button>}
             {selectedSession && <div className="workspace-profile-settings"><label><span>Model</span><select value={selectedSession.modelId || runtimeStatus?.modelId || "gpt-5.6-sol"} disabled={savingExecutionProfile} onChange={(event) => void updateExecutionProfile({ modelId: event.target.value })}>{selectableModels.map((modelId) => <option value={modelId} key={modelId}>{modelId}</option>)}</select></label><label><span>Reasoning</span><select value={selectedSession.reasoningEffort} disabled={savingExecutionProfile} onChange={(event) => void updateExecutionProfile({ reasoningEffort: event.target.value as Session["reasoningEffort"] })}>{reasoningEfforts.map((effort) => <option value={effort} key={effort}>{effort}</option>)}</select></label></div>}
@@ -1162,8 +1182,8 @@ export function App() {
       </footer>
     </main>
 
-    {auditAvailable && <aside className={`run-panel ${rightOpen ? "mobile-open" : ""} ${rightCollapsed ? "collapsed" : ""} ${auditNeedsAttention ? "needs-attention" : ""}`}>
-      <div className="panel-heading"><div><span className="eyebrow">On demand</span><h2>Supervisor & execution</h2></div><button className={`icon-button desktop-only panel-collapse ${auditNeedsAttention ? "attention" : ""}`} onClick={() => setRightCollapsed((current) => !current)} aria-label={rightCollapsed ? "Expand audit sidebar" : "Collapse audit sidebar"} title={rightCollapsed ? "Expand audit details" : "Collapse audit details"}>{rightCollapsed ? <><PanelRightOpen size={17} />{selectedRunStatus && <span className={`collapsed-audit-dot ${selectedRunStatus}`} />}</> : <PanelRightClose size={17} />}</button><button className="icon-button mobile-only" onClick={() => setRightOpen(false)} aria-label="Close task panel"><X size={18} /></button></div>
+    {auditAvailable && <aside ref={runPanelRef} className={`run-panel ${rightOpen ? "mobile-open" : ""} ${rightCollapsed ? "collapsed" : ""} ${auditNeedsAttention ? "needs-attention" : ""}`} role={rightOpen ? "dialog" : undefined} aria-label="Supervisor and execution" aria-modal={rightOpen ? "true" : undefined}>
+      <div className="panel-heading"><div><span className="eyebrow">On demand</span><h2>Supervisor & execution</h2></div><button className={`icon-button desktop-only panel-collapse ${auditNeedsAttention ? "attention" : ""}`} onClick={() => setRightCollapsed((current) => !current)} aria-label={rightCollapsed ? "Expand audit sidebar" : "Collapse audit sidebar"} title={rightCollapsed ? "Expand audit details" : "Collapse audit details"}>{rightCollapsed ? <><PanelRightOpen size={17} />{selectedRunStatus && <span className={`collapsed-audit-dot ${selectedRunStatus}`} />}</> : <PanelRightClose size={17} />}</button><button className="icon-button mobile-only" data-drawer-close onClick={() => setRightOpen(false)} aria-label="Close task panel"><X size={18} /></button></div>
       {!runs.length ? <div className="panel-empty"><Play size={20} /><p>No TaskRuns</p></div> : <div className="run-history">{runs.map((item, index) => {
         const expanded = item.id === expandedRunId;
         return <section className={`run-history-item ${expanded ? "expanded" : ""}`} key={item.id}>
