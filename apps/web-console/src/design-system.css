@@ -269,6 +269,7 @@ a:focus-visible {
 .session-emoji {
   top: 11px;
   left: 8px;
+  pointer-events: none;
   color: var(--foreground);
   border-color: var(--border);
   border-radius: var(--radius-sm);
@@ -440,6 +441,57 @@ a:focus-visible {
 }
 
 @keyframes workspace-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Shortcut help reuses the command layer's quiet depth while keeping content
+   compact enough to scan as a reference, not another settings page. */
+.shortcut-help-backdrop {
+  position: fixed;
+  z-index: 125;
+  inset: 0;
+  padding: min(14vh, 112px) 20px 20px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  background: color-mix(in oklab, var(--foreground-strong) 20%, transparent);
+  backdrop-filter: blur(5px);
+  animation: workspace-backdrop-in var(--motion-fast) var(--ease-out) both;
+}
+
+.shortcut-help {
+  width: min(520px, 100%);
+  max-height: min(680px, calc(100dvh - 40px));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  overflow: auto;
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--surface-raised) 98%, transparent);
+  box-shadow: var(--shadow-xl);
+  animation: workspace-switcher-in var(--motion-base) var(--ease-out) both;
+}
+
+.shortcut-help > header {
+  min-height: 72px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 10px;
+}
+.shortcut-help > header > span { width: 36px; height: 36px; border-radius: var(--radius-md); display: grid; place-items: center; color: var(--accent); background: var(--accent-soft); }
+.shortcut-help > header small { color: var(--foreground-muted); font-size: 8px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.shortcut-help > header h2 { margin: 3px 0 0; color: var(--foreground-strong); font-size: 15px; letter-spacing: -.015em; }
+.shortcut-help > header button { width: 32px; height: 32px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-md); display: grid; place-items: center; color: var(--foreground-muted); background: var(--surface-raised); cursor: pointer; }
+.shortcut-help > header button:hover { color: var(--foreground); background: var(--surface-hover); }
+.shortcut-help-groups { padding: 8px 16px 14px; }
+.shortcut-help-groups > section { padding: 12px 0 4px; }
+.shortcut-help-groups > section + section { border-top: 1px solid var(--border); }
+.shortcut-help-groups h3 { margin: 0 8px 6px; color: var(--foreground-muted); font-size: 8px; font-weight: 760; letter-spacing: .085em; text-transform: uppercase; }
+.shortcut-help-row { min-height: 42px; padding: 0 8px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-radius: var(--radius-sm); font-size: 11px; }
+.shortcut-help-row:hover { background: var(--surface-muted); }
+.shortcut-help-row kbd { display: flex; gap: 4px; }
+.shortcut-help-row kbd i { min-width: 27px; height: 25px; padding: 0 7px; border: 1px solid var(--border); border-radius: var(--radius-sm); display: inline-grid; place-items: center; color: var(--foreground-muted); background: var(--surface-raised); box-shadow: 0 1px 0 color-mix(in oklab, var(--foreground) 10%, transparent); font: 650 9px/1 var(--font-mono); font-style: normal; white-space: nowrap; }
+.shortcut-help > footer { padding: 12px 16px; border-top: 1px solid var(--border); color: var(--foreground-muted); background: var(--surface-muted); font-size: 9px; text-align: center; }
 
 .workspace-switcher {
   width: min(600px, 100%);
@@ -1405,6 +1457,7 @@ a:focus-visible {
   background: var(--surface-raised);
   font: 650 8px/1 var(--font-mono);
   box-shadow: 0 1px 0 color-mix(in oklab, var(--foreground) 9%, transparent);
+  white-space: nowrap;
 }
 
 .session-list {
@@ -1460,6 +1513,10 @@ a:focus-visible {
 .session-item.unread strong {
   color: var(--foreground-strong);
   font-weight: 760;
+}
+
+.collapsed-workspace-tooltip {
+  display: none;
 }
 
 .session-more {
@@ -1857,6 +1914,76 @@ a:focus-visible {
   .session-rail.collapsed .session-group + .session-group {
     margin-top: 5px;
   }
+
+  .session-rail.collapsed .session-item {
+    overflow: visible;
+  }
+
+  .session-rail.collapsed .collapsed-workspace-tooltip {
+    position: absolute;
+    z-index: 40;
+    top: 50%;
+    left: calc(100% + 11px);
+    width: max-content;
+    max-width: 240px;
+    min-width: 132px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    display: grid;
+    gap: 4px;
+    color: var(--foreground);
+    background: color-mix(in oklab, var(--surface-raised) 97%, transparent);
+    box-shadow: var(--shadow-sm);
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-4px, -50%);
+    transition: opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out);
+  }
+
+  .session-rail.collapsed .session-item:hover .collapsed-workspace-tooltip,
+  .session-rail.collapsed .session-item:focus-within .collapsed-workspace-tooltip {
+    opacity: 1;
+    transform: translate(0, -50%);
+  }
+
+  .session-rail.collapsed .collapsed-workspace-tooltip strong {
+    position: static;
+    padding: 0;
+    overflow: hidden;
+    color: var(--foreground-strong);
+    font-size: 11px;
+    font-weight: 680;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .session-rail.collapsed .collapsed-workspace-tooltip small {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: visible;
+    color: var(--foreground-muted);
+    font: 650 9px/1.2 var(--font-mono);
+    text-transform: capitalize;
+  }
+
+  .workspace-tooltip-status {
+    width: 6px;
+    height: 6px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--border-strong);
+  }
+
+  .workspace-tooltip-status.running,
+  .workspace-tooltip-status.completed { background: var(--success); }
+  .workspace-tooltip-status.blocked,
+  .workspace-tooltip-status.waiting_input,
+  .workspace-tooltip-status.waiting_approval { background: var(--warning); }
+  .workspace-tooltip-status.failed,
+  .workspace-tooltip-status.cancelled,
+  .workspace-tooltip-status.interrupted { background: var(--danger); }
 }
 
 @media (max-width: 980px) {
@@ -2016,6 +2143,8 @@ a:focus-visible {
   .workspace-switcher { width: 100%; height: 100dvh; max-height: 100dvh; border: 0; border-radius: 0; }
   .workspace-switcher-results > button { min-height: 60px; }
   .workspace-switcher > footer > span { display: none; }
+  .shortcut-help-backdrop { padding: max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom)); align-items: center; }
+  .shortcut-help { max-height: calc(100dvh - max(20px, env(safe-area-inset-top) + env(safe-area-inset-bottom))); }
 
   .memory-heading-icon {
     width: 38px;

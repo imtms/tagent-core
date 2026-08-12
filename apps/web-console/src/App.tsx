@@ -1,13 +1,17 @@
 import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { Activity, ArrowDown, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Menu, Moon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Search, Send, Settings2, ShieldAlert, ShieldCheck, Sparkles, Square, Sun, Target, Terminal, X } from "lucide-react";
+import { Activity, ArrowDown, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Keyboard, Menu, Moon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Search, Send, Settings2, ShieldAlert, ShieldCheck, Sparkles, Square, Sun, Target, Terminal, X } from "lucide-react";
 import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
 import { LiveText, Markdown } from "./Markdown";
 import { createRequestId } from "./id";
+import { IntentPrefetchCache } from "./intent-prefetch-cache";
 import { deriveCurrentOperation } from "./current-operation";
 import { canResumeRun, findActiveRun, isActiveRunStatus } from "./run-state";
+import { formatShortcut, useShortcutModifier } from "./shortcut-platform";
 import { useDrawerFocus } from "./useDrawerFocus";
+import { useMobileDrawerSwipe } from "./useMobileDrawerSwipe";
 import { usePopoverFocus } from "./usePopoverFocus";
 import { WorkspaceContextMenu } from "./WorkspaceContextMenu";
+import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 const MemoryPanel = lazy(() => import("./MemoryPanel").then((module) => ({ default: module.MemoryPanel })));
 const LearningCenter = lazy(() => import("./LearningCenter").then((module) => ({ default: module.LearningCenter })));
@@ -24,6 +28,28 @@ const starterPrompts = [
 ] as const;
 type Theme = "light" | "dark";
 const initialWorkspaceRequestId = createRequestId();
+
+type WorkspaceSnapshot = {
+  sessionId: string;
+  history: Message[];
+  runHistory: TaskRunSummary[];
+  queued: SessionInboxItem[];
+  active: TaskRun | null;
+  latest: TaskRun | null;
+  transcript: TranscriptItem[];
+};
+
+async function loadWorkspaceSnapshot(sessionId: string): Promise<WorkspaceSnapshot> {
+  const [history, runHistory, queued] = await Promise.all([api.messages(sessionId), api.runs(sessionId), api.inbox(sessionId)]);
+  const latestSummary = runHistory[0] ?? null;
+  const activeSummary = findActiveRun(runHistory);
+  const runIds = [...new Set([latestSummary?.id, activeSummary?.id].filter((value): value is string => Boolean(value)))];
+  const hydrated = new Map(await Promise.all(runIds.map(async (runId) => [runId, await api.run(runId)] as const)));
+  const latest = latestSummary ? hydrated.get(latestSummary.id) ?? null : null;
+  const active = activeSummary ? hydrated.get(activeSummary.id) ?? null : null;
+  const transcript = latest ? await api.transcriptView(latest.id) : [];
+  return { sessionId, history, runHistory, queued, active, latest, transcript };
+}
 
 function storedBoolean(key: string, fallback = false): boolean {
   try {
@@ -436,6 +462,7 @@ export function App() {
   const [rightOpen, setRightOpen] = useState(false);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [workspaceSwitcherOpen, setWorkspaceSwitcherOpen] = useState(false);
+  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [sessionSearch, setSessionSearch] = useState("");
   const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(() => storedStringArray("tagent.pinned-workspaces"));
   const [lastSeenBySession, setLastSeenBySession] = useState<Record<string, number>>(() => storedNumberRecord("tagent.workspace-last-seen"));
@@ -457,6 +484,7 @@ export function App() {
   const messageScrollRef = useRef<HTMLElement>(null);
   const sessionRailRef = useRef<HTMLElement>(null);
   const runPanelRef = useRef<HTMLElement>(null);
+  const mobileBackdropRef = useRef<HTMLButtonElement>(null);
   const workspaceMenuRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
@@ -473,9 +501,34 @@ export function App() {
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const composerIsComposingRef = useRef(false);
   const historySeedRef = useRef("");
+  const [workspacePrefetchCache] = useState(() => new IntentPrefetchCache<string, WorkspaceSnapshot>(30_000, 6));
+  const shortcutModifier = useShortcutModifier();
+  const workspaceShortcut = formatShortcut(shortcutModifier, "K");
+
+  const applyWorkspaceSnapshot = useCallback((snapshot: WorkspaceSnapshot) => {
+    replaceStreamingOnNextDeltaRef.current = false;
+    setMessages(snapshot.history); setHasOlderMessages(snapshot.history.length === 80); setRuns(snapshot.runHistory); setInbox(snapshot.queued); setActiveRun(snapshot.active); setSelectedRun(snapshot.latest); setExpandedRunId(snapshot.latest?.id ?? "");
+    setStreaming(snapshot.active?.checkpoint?.active ? snapshot.active.checkpoint.assistantPartial : ""); setLiveThinking("");
+    setEvents(snapshot.active?.checkpoint?.active && snapshot.active.checkpoint.currentTool ? [{ runId: snapshot.active.id, seq: snapshot.active.checkpoint.lastEventSeq, type: "tool.started", data: snapshot.active.checkpoint.currentTool, createdAt: snapshot.active.checkpoint.updatedAt }] : []);
+    transcriptRunIdRef.current = snapshot.latest?.id ?? "";
+    transcriptAfterRef.current = snapshot.latest?.transcriptCount ?? 0;
+    setTranscript(snapshot.transcript);
+  }, []);
+
+  const prefetchWorkspace = useCallback((targetSessionId: string) => {
+    if (!targetSessionId || targetSessionId === sessionIdRef.current) return;
+    void workspacePrefetchCache.load(targetSessionId, () => loadWorkspaceSnapshot(targetSessionId)).catch(() => undefined);
+  }, [workspacePrefetchCache]);
 
   useDrawerFocus(leftOpen, sessionRailRef);
   useDrawerFocus(rightOpen, runPanelRef);
+  useMobileDrawerSwipe({
+    open: leftOpen,
+    enabled: !rightOpen && !workspaceSwitcherOpen && !shortcutHelpOpen && !workspaceMenuOpen && !memoryOpen && !learningOpen && !goalsOpen,
+    drawerRef: sessionRailRef,
+    backdropRef: mobileBackdropRef,
+    onOpenChange: setLeftOpen,
+  });
   usePopoverFocus(workspaceMenuOpen, workspaceMenuRef, useCallback(() => setWorkspaceMenuOpen(false), []));
 
   function openSessionMenu(session: Session, anchor: DOMRect | { top: number; bottom: number; left: number }, x?: number, y?: number) {
@@ -508,14 +561,22 @@ export function App() {
   useEffect(() => {
     const handleGlobalKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setWorkspaceMenuOpen(false); setWorkspaceSwitcherOpen(false); setSessionMenuId(""); setLeftOpen(false); setRightOpen(false);
+        setWorkspaceMenuOpen(false); setWorkspaceSwitcherOpen(false); setShortcutHelpOpen(false); setSessionMenuId(""); setLeftOpen(false); setRightOpen(false);
         return;
       }
       const target = event.target as HTMLElement | null;
       if (event.key.toLocaleLowerCase() === "k" && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
         setWorkspaceMenuOpen(false);
+        setShortcutHelpOpen(false);
         setWorkspaceSwitcherOpen(true);
+        return;
+      }
+      if (event.key === "?" && !event.metaKey && !event.ctrlKey && !event.altKey && !target?.closest("input, textarea, select, [contenteditable='true']")) {
+        event.preventDefault();
+        setWorkspaceMenuOpen(false);
+        setWorkspaceSwitcherOpen(false);
+        setShortcutHelpOpen(true);
         return;
       }
       if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey && !target?.closest("input, textarea, select, [contenteditable='true']")) {
@@ -668,32 +729,27 @@ export function App() {
     if (!sessionId) return;
     const targetSessionId = sessionId;
     let closed = false;
-    replaceStreamingOnNextDeltaRef.current = false;
-    transcriptRunIdRef.current = "";
-    transcriptAfterRef.current = 0;
-    setMessages([]); setHasOlderMessages(false); setRuns([]); setInbox([]); setActiveRun(null); setSelectedRun(null); setExpandedRunId("");
-    setStreaming(""); setLiveThinking(""); setEvents([]); setError(""); setEditingInboxId(""); setInboxDraft(""); setDraggingInboxId(""); setPendingUserMessage(null);
-    void Promise.all([api.messages(targetSessionId), api.runs(targetSessionId), api.inbox(targetSessionId)]).then(async ([history, runHistory, queued]) => {
+    const cached = workspacePrefetchCache.peek(targetSessionId);
+    if (cached) {
+      applyWorkspaceSnapshot(cached);
+      setConversationLoading(false);
+      workspacePrefetchCache.invalidate(targetSessionId);
+    }
+    else {
+      replaceStreamingOnNextDeltaRef.current = false;
+      transcriptRunIdRef.current = "";
+      transcriptAfterRef.current = 0;
+      setMessages([]); setHasOlderMessages(false); setRuns([]); setInbox([]); setActiveRun(null); setSelectedRun(null); setExpandedRunId("");
+      setStreaming(""); setLiveThinking(""); setEvents([]); setTranscript([]); setConversationLoading(true);
+    }
+    setError(""); setEditingInboxId(""); setInboxDraft(""); setDraggingInboxId(""); setPendingUserMessage(null);
+    void workspacePrefetchCache.load(targetSessionId, () => loadWorkspaceSnapshot(targetSessionId)).then((snapshot) => {
       if (closed || sessionIdRef.current !== targetSessionId) return;
-      const latestSummary = runHistory[0] ?? null;
-      const activeSummary = findActiveRun(runHistory);
-      const hydrated = new Map<string, TaskRun>();
-      for (const id of new Set([latestSummary?.id, activeSummary?.id].filter((value): value is string => Boolean(value)))) {
-        hydrated.set(id, await api.run(id));
-      }
-      if (closed || sessionIdRef.current !== targetSessionId) return;
-      const latest = latestSummary ? hydrated.get(latestSummary.id) ?? null : null;
-      const active = activeSummary ? hydrated.get(activeSummary.id) ?? null : null;
-      setMessages(history); setHasOlderMessages(history.length === 80); setRuns(runHistory); setInbox(queued); setActiveRun(active); setSelectedRun(latest); setExpandedRunId(latest?.id ?? "");
-      setStreaming(active?.checkpoint?.active ? active.checkpoint.assistantPartial : ""); setLiveThinking("");
-      setEvents(active?.checkpoint?.active && active.checkpoint.currentTool ? [{ runId: active.id, seq: active.checkpoint.lastEventSeq, type: "tool.started", data: active.checkpoint.currentTool, createdAt: active.checkpoint.updatedAt }] : []);
-      if (!latest) { transcriptRunIdRef.current = ""; transcriptAfterRef.current = 0; setTranscript([]); return; }
-      const view = await api.transcriptView(latest.id);
-      if (!closed && sessionIdRef.current === targetSessionId) { transcriptRunIdRef.current = latest.id; transcriptAfterRef.current = latest.transcriptCount; setTranscript(view); }
+      applyWorkspaceSnapshot(snapshot);
     }).catch((cause) => { if (!closed && sessionIdRef.current === targetSessionId) setError(cause instanceof Error ? cause.message : String(cause)); })
-      .finally(() => { if (!closed && sessionIdRef.current === targetSessionId) setConversationLoading(false); });
+      .finally(() => { workspacePrefetchCache.invalidate(targetSessionId); if (!closed && sessionIdRef.current === targetSessionId) setConversationLoading(false); });
     return () => { closed = true; };
-  }, [sessionId]);
+  }, [applyWorkspaceSnapshot, sessionId, workspacePrefetchCache]);
 
   const [streamGeneration, setStreamGeneration] = useState(0);
   useEffect(() => {
@@ -869,6 +925,11 @@ export function App() {
 
   function selectSession(nextSession: Session) {
     setLastSeenBySession((current) => ({ ...current, [nextSession.id]: nextSession.updatedAt }));
+    if (nextSession.id === sessionIdRef.current) { setLeftOpen(false); setSessionMenuId(""); setWorkspaceSwitcherOpen(false); return; }
+    const cached = workspacePrefetchCache.peek(nextSession.id);
+    sessionIdRef.current = nextSession.id;
+    if (cached) { applyWorkspaceSnapshot(cached); setConversationLoading(false); }
+    else setConversationLoading(true);
     setSessionId(nextSession.id); setLeftOpen(false); setSessionMenuId(""); setWorkspaceSwitcherOpen(false);
   }
 
@@ -1089,11 +1150,12 @@ export function App() {
   const enterSubmits = !globalThis.matchMedia?.("(pointer: coarse)").matches;
 
   return <div className={`app-shell ${leftCollapsed ? "left-collapsed" : ""} ${rightCollapsed ? "right-collapsed" : ""} ${auditNeedsAttention ? "audit-needs-attention" : ""} ${auditAvailable ? "" : "audit-unavailable"}`}>
-    <WorkspaceSwitcher open={workspaceSwitcherOpen} sessions={sessions} selectedSessionId={sessionId} pinnedSessionIds={pinnedSessionIds} workspaceEmojiById={workspaceEmojiById} onClose={() => setWorkspaceSwitcherOpen(false)} onSelect={selectSession} onCreate={createSession} />
+    <WorkspaceSwitcher open={workspaceSwitcherOpen} sessions={sessions} selectedSessionId={sessionId} pinnedSessionIds={pinnedSessionIds} workspaceEmojiById={workspaceEmojiById} onClose={() => setWorkspaceSwitcherOpen(false)} onSelect={selectSession} onCreate={createSession} onPrefetch={prefetchWorkspace} />
+    <KeyboardShortcutsDialog open={shortcutHelpOpen} modifier={shortcutModifier} enterSubmits={enterSubmits} onClose={() => setShortcutHelpOpen(false)} />
     <aside ref={sessionRailRef} className={`session-rail ${leftOpen ? "mobile-open" : ""} ${leftCollapsed ? "collapsed" : ""}`} role={leftOpen ? "dialog" : undefined} aria-label="Workspaces" aria-modal={leftOpen ? "true" : undefined}>
       <div className="brand"><div className="brand-mark"><TAgentMark /></div><div className="brand-copy"><strong>TAgent</strong><span>Core runtime</span></div><button className="icon-button desktop-only rail-collapse" onClick={() => setLeftCollapsed((current) => !current)} aria-label={leftCollapsed ? "Expand workspace sidebar" : "Collapse workspace sidebar"} title={leftCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{leftCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button><button className="icon-button mobile-only" data-drawer-close onClick={() => setLeftOpen(false)} aria-label="Close sessions"><X size={18} /></button></div>
       <button className="new-session" onClick={createSession} title="New workspace"><Plus size={16} /><span>New workspace</span></button>
-      <label className="session-search"><Search size={14} /><input type="search" value={sessionSearch} onChange={(event) => setSessionSearch(event.target.value)} placeholder="Filter workspaces" aria-label="Filter workspaces" />{sessionSearch ? <button type="button" onClick={() => setSessionSearch("")} aria-label="Clear workspace filter"><X size={13} /></button> : <kbd>⌘K</kbd>}</label>
+      <label className="session-search"><Search size={14} /><input type="search" value={sessionSearch} onChange={(event) => setSessionSearch(event.target.value)} placeholder="Filter workspaces" aria-label="Filter workspaces" />{sessionSearch ? <button type="button" onClick={() => setSessionSearch("")} aria-label="Clear workspace filter"><X size={13} /></button> : <kbd aria-label={`${workspaceShortcut} shortcut`}>{workspaceShortcut}</kbd>}</label>
       <div className="session-list" onScroll={() => { if (sessionMenuId) setSessionMenuId(""); }}>
         {sessionsLoading ? <div className="session-skeletons" aria-label="Loading workspaces"><i /><i /><i /></div> : sessionGroups.map((group) => <section className="session-group" key={group.label}><div className="session-group-label"><span>{group.label}</span><small>{group.sessions.length}</small></div>{group.sessions.map((session) => {
           const pinned = pinnedSessionIds.includes(session.id);
@@ -1110,12 +1172,13 @@ export function App() {
               if (event.key === "Escape") { event.preventDefault(); cancelRename(); event.currentTarget.blur(); }
             }} onBlur={() => void renameSession(session)} aria-label="Workspace name" /><span className="session-meta"><small>{formatTime(session.updatedAt)}</small><WorkspaceRunStatus session={session} /></span></span>
           </div> : <>
-            <button className="session-select" onClick={() => selectSession(session)}><span><strong>{session.title}{unread && <i className="unread-dot" aria-label="Unread activity" />}</strong><span className="session-meta"><small>{formatTime(session.updatedAt)}</small><WorkspaceRunStatus session={session} /></span></span></button>
+            <button className="session-select" onMouseEnter={() => prefetchWorkspace(session.id)} onFocus={() => prefetchWorkspace(session.id)} onClick={() => selectSession(session)} aria-label={`Open workspace ${session.title}${unread ? ". Unread activity" : ""}`} aria-describedby={leftCollapsed ? `workspace-tooltip-${session.id}` : undefined}><span><strong>{session.title}{unread && <i className="unread-dot" aria-label="Unread activity" />}</strong><span className="session-meta"><small>{formatTime(session.updatedAt)}</small><WorkspaceRunStatus session={session} /></span></span></button>
             <button className="session-more" type="button" onClick={(event) => {
               if (sessionMenuId === session.id) { setSessionMenuId(""); return; }
               const item = event.currentTarget.closest(".session-item")?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
               openSessionMenu(session, item);
             }} aria-haspopup="menu" aria-expanded={sessionMenuId === session.id} aria-label={`More actions for ${session.title}`}><MoreHorizontal size={14} /></button>
+            <span id={`workspace-tooltip-${session.id}`} className="collapsed-workspace-tooltip" role="tooltip"><strong>{session.title}</strong><small><i className={`workspace-tooltip-status ${session.latestRunStatus ?? "idle"}`} />{session.latestRunStatus ? session.latestRunStatus.replaceAll("_", " ") : "No tasks"}{unread ? " · Unread" : ""}</small></span>
             {sessionMenuId === session.id && <WorkspaceContextMenu session={session} pinned={pinned} currentEmoji={workspaceEmojiById[session.id] ?? "💬"} emojis={workspaceEmojis} position={sessionMenuPosition} onClose={() => setSessionMenuId("")} onTogglePinned={() => togglePinnedSession(session.id)} onRename={() => { setRenamingSessionId(session.id); setSessionTitleDraft(session.title); }} onChooseEmoji={(emoji) => setWorkspaceEmojiById((current) => ({ ...current, [session.id]: emoji }))} />}
           </>}
         </div>})}</section>)}
@@ -1127,7 +1190,7 @@ export function App() {
     <main className="conversation">
       <header className="topbar">
         <button className="icon-button mobile-only" onClick={() => setLeftOpen(true)} aria-label="Open sessions"><Menu size={19} /></button>
-        <div className="workspace-heading"><span className="workspace-kicker">Workspace</span><h1><button type="button" onClick={() => setWorkspaceSwitcherOpen(true)} title="Switch workspace (⌘K)">{selectedSession?.title ?? "TAgent Core"}<ChevronDown size={13} /></button></h1><p>{activeRun ? `${activeRun.phase} · ${activeRun.status} · ${activeRun.modelId || runtimeStatus?.modelId || "default model"} · ${activeRun.reasoningEffort}` : runtimeStatus ? `${runtimeStatus.runtime} · ready` : "Ready for a new task"}</p></div>
+        <div className="workspace-heading"><span className="workspace-kicker">Workspace</span><h1><button type="button" onClick={() => setWorkspaceSwitcherOpen(true)} title={`Switch workspace (${workspaceShortcut})`}>{selectedSession?.title ?? "TAgent Core"}<ChevronDown size={13} /></button></h1><p>{activeRun ? `${activeRun.phase} · ${activeRun.status} · ${activeRun.modelId || runtimeStatus?.modelId || "default model"} · ${activeRun.reasoningEffort}` : runtimeStatus ? `${runtimeStatus.runtime} · ready` : "Ready for a new task"}</p></div>
         <div className="top-actions">
           {auditAvailable && selectedRunStatus && <button className={`run-status-control ${selectedRunStatus}`} onClick={() => { setWorkspaceMenuOpen(false); setRightCollapsed(false); setRightOpen(true); }} aria-label={`Open audit panel. Task status: ${selectedRunStatus}`}><span /><strong>{selectedRunStatus === "waiting_input" ? "Needs input" : selectedRunStatus.replaceAll("_", " ")}</strong></button>}
           {canResumeRun(selectedRun, activeRun) && <button className="resume-button desktop-only" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}
@@ -1141,6 +1204,7 @@ export function App() {
             {selectedRun?.status === "failed" && selectedRun.launchRetryable && !activeRun && <button onClick={() => { setWorkspaceMenuOpen(false); void retryLaunch(selectedRun); }} disabled={Boolean(retryingRunId)}><Play size={15} /><span>{retryingRunId === selectedRun.id ? "Retrying launch…" : "Retry launch"}</span></button>}
             {activeRun?.status === "running" && <button className="workspace-stop-run" onClick={() => { setWorkspaceMenuOpen(false); void api.cancel(activeRun.id); }}><Square size={15} /><span>Stop TaskRun</span></button>}
             <div className="workspace-actions-separator" />
+            <button onClick={() => { setShortcutHelpOpen(true); setWorkspaceMenuOpen(false); }}><Keyboard size={15} /><span>Keyboard shortcuts</span><small>?</small></button>
             <button onClick={() => { setTheme((current) => current === "dark" ? "light" : "dark"); setWorkspaceMenuOpen(false); }}>{theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}<span>{theme === "dark" ? "Light theme" : "Dark theme"}</span></button>
             {sessionId && <button onClick={() => { setGoalsOpen(true); setWorkspaceMenuOpen(false); }}><Target size={15} /><span>Workspace Goals</span></button>}
             {sessionId && <button aria-label="Open learning center" onClick={() => { setLearningOpen(true); setWorkspaceMenuOpen(false); }} disabled={!learningSettings?.learningEnabled}><ShieldCheck size={15} /><span>Learning center</span></button>}
@@ -1203,6 +1267,6 @@ export function App() {
     {runtimeStatus?.memoryEnabled && memoryOpen && <Suspense fallback={null}><MemoryPanel runtime={runtimeStatus} onClose={() => setMemoryOpen(false)} /></Suspense>}
     {learningOpen && sessionId && learningSettings?.learningEnabled && <Suspense fallback={null}><LearningCenter sessionId={sessionId} onClose={() => setLearningOpen(false)} /></Suspense>}
     {goalsOpen && sessionId && <Suspense fallback={null}><GoalsPanel workspaceId={sessionId} onClose={() => setGoalsOpen(false)} onOpenRun={(runId) => { void api.run(runId).then(async (run) => { const view = await api.transcriptView(run.id); transcriptRunIdRef.current = run.id; transcriptAfterRef.current = run.transcriptCount; setSelectedRun(run); setExpandedRunId(run.id); setTranscript(view); setGoalsOpen(false); setRightOpen(true); }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }} /></Suspense>}
-    {(leftOpen || rightOpen) && <button className="backdrop mobile-only" onClick={() => { setLeftOpen(false); setRightOpen(false); }} aria-label="Close panel" />}
+    <button ref={mobileBackdropRef} className={`backdrop mobile-only ${leftOpen || rightOpen ? "visible" : ""}`} onClick={() => { setLeftOpen(false); setRightOpen(false); }} aria-label="Close panel" aria-hidden={leftOpen || rightOpen ? undefined : "true"} tabIndex={leftOpen || rightOpen ? 0 : -1} />
   </div>;
 }

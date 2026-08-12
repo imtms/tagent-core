@@ -305,7 +305,8 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 .artifact-preview-state.failed small { color: var(--muted); }
 .muted { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .mobile-only { display: none; }
-.backdrop { position: fixed; inset: 0; background: rgba(17, 23, 19, .34); z-index: 20; border: 0; }
+.backdrop { position: fixed; inset: 0; visibility: hidden; pointer-events: none; opacity: 0; background: rgba(17, 23, 19, .34); z-index: 20; border: 0; transition: opacity .18s ease, visibility 0s linear .18s; }
+.backdrop.visible { visibility: visible; pointer-events: auto; opacity: 1; transition-delay: 0s; }
 @media (min-width: 981px) {
   .app-shell.left-collapsed { grid-template-columns: 52px minmax(0, 1fr) clamp(248px, 18vw, 276px); }
   .app-shell.right-collapsed { grid-template-columns: 220px minmax(0, 1fr) 52px; }
