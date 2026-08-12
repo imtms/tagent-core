@@ -43,6 +43,7 @@ export interface ApprovalReuse {
 export type CanonicalApprovalAction =
   | "task_run.resume"
   | "task_run.start_parallel"
+  | "task_run.execute_external"
   | "workflow.activate"
   | "workflow.revision.apply"
   | "workflow.canary.start"
@@ -51,6 +52,7 @@ export type CanonicalApprovalAction =
 export const LEGACY_APPROVAL_ACTION_MAP = {
   resume_taskrun: "task_run.resume",
   start_parallel_taskrun: "task_run.start_parallel",
+  execute_external_action: "task_run.execute_external",
   activate_workflow: "workflow.activate",
   apply_revision: "workflow.revision.apply",
   start_canary: "workflow.canary.start",
@@ -61,7 +63,7 @@ export function canonicalApprovalAction(action: string): CanonicalApprovalAction
   return (LEGACY_APPROVAL_ACTION_MAP as Record<string, CanonicalApprovalAction>)[action];
 }
 
-const legacyRunActions = new Set(["resume_taskrun", "start_parallel_taskrun"]);
+const legacyRunActions = new Set(["resume_taskrun", "start_parallel_taskrun", "execute_external_action"]);
 const legacyWorkflowActions = new Set(["activate_workflow", "apply_revision", "start_canary", "execute_workflow"]);
 
 export function canonicalApprovalActionForSource(
@@ -79,7 +81,7 @@ export function canonicalApprovalStatus(
 ): ApprovalStatus | undefined {
   if (source === "legacy_workflow" && status === "executed") return "consumed";
   const allowed = source === "legacy_run"
-    ? ["pending", "approved", "rejected", "superseded"]
+    ? ["pending", "approved", "rejected", "superseded", "consumed"]
     : ["pending", "approved", "rejected", "revoked", "expired"];
   if (!allowed.includes(status)) return undefined;
   if (status === "approved" && reuse && reuse.maxUses !== null

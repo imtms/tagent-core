@@ -3,6 +3,7 @@ import type { AttemptExecutionToken, AttemptRuntimePort } from "../ports/attempt
 import type { RunId } from "../domain/task-run.js";
 import type { CandidateResult } from "../domain/index.js";
 import type { ExecutionStateView } from "./execution-state.js";
+import { ensureSettlementApproval } from "./settlement-approval.js";
 import { blockRuntimeTaskRun, canonicalGateEvaluations, completeRuntimeTaskRun, publishTransitionOutcome } from "./task-run-transition-helpers.js";
 import type {
   AttemptProjectionPort,
@@ -113,7 +114,7 @@ export class AttemptSettlementService {
       publishTransitionOutcome(this.dependencies.eventHub, transition);
       this.projectWorkflowExperience(runId);
       if (decision.action === "pause_for_approval") {
-        const approval = this.state.persistence.approvals.ensureApprovalRequest(runId, decision.id, reason);
+        const approval = ensureSettlementApproval(this.state.persistence.approvals, current, decision.id, reason);
         this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "supervisor.approval.requested", { approvalId: approval.id, decisionId: decision.id, reason }));
       }
       return decision.action === "start_continuation" || decision.action === "request_evidence" || decision.action === "wait_for_runtime";
@@ -191,7 +192,7 @@ export class AttemptSettlementService {
       );
       this.dependencies.supervisor.markExecuted(decision.id, "executed");
       if (decision.action === "pause_for_approval") {
-        const approval = this.state.persistence.approvals.ensureApprovalRequest(runId, decision.id, message);
+        const approval = ensureSettlementApproval(this.state.persistence.approvals, current, decision.id, message);
         this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "supervisor.approval.requested", { approvalId: approval.id, decisionId: decision.id, reason: message }));
       }
       this.state.persistence.sessions.appendMessage(current.sessionId, "assistant", decision.action === "pause_for_approval" ? `Run paused for approval: ${message}` : `Run blocked: ${message}`);
@@ -256,7 +257,7 @@ export class AttemptSettlementService {
       }
       this.projectWorkflowExperience(token.runId);
       if (status === "blocked" && action === "pause_for_approval") {
-        const approval = this.state.persistence.approvals.ensureApprovalRequest(token.runId, supervisorDecisionId, reason);
+        const approval = ensureSettlementApproval(this.state.persistence.approvals, current, supervisorDecisionId, reason);
         this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(token.runId, "supervisor.approval.requested", { approvalId: approval.id, decisionId: supervisorDecisionId, reason }));
       }
       return action === "start_continuation" || action === "request_evidence" || action === "wait_for_runtime";

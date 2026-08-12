@@ -1,4 +1,4 @@
-import type { RuntimeMessage as AgentMessage } from "../ports/attempt-runtime.js";
+import type { RuntimeMessage as AgentMessage, RuntimeMessagePart } from "../ports/attempt-runtime.js";
 import type { ContextManifestItem } from "../domain/task-run.js";
 
 export type ContextSource = "session" | "transcript";
@@ -56,8 +56,16 @@ export class ContextAssembler {
     let estimatedMessageTokens = 0;
     for (let index = prepared.length - 1; index >= 0; index -= 1) {
       const turn = prepared[index];
+      const remaining = Math.max(0, messageBudget - estimatedMessageTokens);
       const tokens = estimateTurnTokens(turn);
-      if (kept.length && estimatedMessageTokens + tokens > messageBudget) continue;
+      if (tokens > remaining) {
+        if (kept.length) continue;
+        const projected = projectTurnToBudget(turn, remaining);
+        if (!projected) continue;
+        kept.unshift(projected);
+        estimatedMessageTokens += estimateTurnTokens(projected);
+        continue;
+      }
       kept.unshift(turn);
       estimatedMessageTokens += tokens;
     }
@@ -101,6 +109,53 @@ export class ContextAssembler {
     });
     return { compressed, entries };
   }
+}
+
+function projectTurnToBudget(turn: Turn, tokenBudget: number): Turn | undefined {
+  if (tokenBudget <= 0) return undefined;
+  const project = (characterLimit: number): Turn => ({
+    compressed: true,
+    entries: turn.entries.map((entry) => ({
+      ...entry,
+      message: projectMessageContent(entry.message, characterLimit),
+    })),
+  });
+  let low = 0;
+  let high = Math.max(1, ...turn.entries.map((entry) => JSON.stringify(entry.message).length));
+  let selected: Turn | undefined;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const candidate = project(middle);
+    if (estimateTurnTokens(candidate) <= tokenBudget) {
+      selected = candidate;
+      low = middle + 1;
+    } else high = middle - 1;
+  }
+  return selected;
+}
+
+function projectMessageContent(message: AgentMessage, limit: number): AgentMessage {
+  const bounded = (value: string) => value.length <= limit ? value : `${value.slice(0, Math.max(0, limit - 26))}[context content truncated]`;
+  if (message.role === "user") {
+    if (typeof message.content === "string") return { ...message, content: bounded(message.content) };
+    return { ...message, content: message.content.map((part) => part.type === "text" ? { ...part, text: bounded(part.text) } : part) };
+  }
+  if (message.role === "assistant") {
+    const content: RuntimeMessagePart[] = [];
+    for (const part of message.content) {
+      if (part.type === "thinking") continue;
+      if (part.type === "text") content.push({ ...part, text: bounded(part.text) });
+      else content.push({ ...part, arguments: limit ? { contextProjection: true, originalChars: JSON.stringify(part.arguments).length } : {} });
+    }
+    return { ...message, content } as AgentMessage;
+  }
+  if (message.role === "toolResult") return { ...message, content: message.content.map((part) => part.type === "text" ? { ...part, text: bounded(part.text) } : part) };
+  if (message.role === "custom" && typeof message.content !== "string") return { ...message, content: message.content.map((part) => part.type === "text" ? { ...part, text: bounded(part.text) } : part) };
+  if ("content" in message && typeof message.content === "string") return { ...message, content: bounded(message.content) } as AgentMessage;
+  if (message.role === "branchSummary") return { ...message, summary: bounded(message.summary) };
+  if (message.role === "compactionSummary") return { ...message, summary: bounded(message.summary) };
+  if (message.role === "bashExecution") return { ...message, command: bounded(message.command), output: bounded(message.output) };
+  return message;
 }
 
 export function estimateTextTokens(text: string) {

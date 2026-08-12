@@ -59,7 +59,9 @@ The runtime records provider-reported input, output, cache, total token, cost, a
 
 ## Timeouts and progress
 
-`TAGENT_RUN_TIMEOUT_MS` is an inactivity watchdog refreshed by model chunks and tool progress. `TAGENT_RUN_HARD_TIMEOUT_MS` is the absolute TaskRun wall-clock ceiling. Provider, Router, and Supervisor transports have their own bounded idle/retry settings.
+`TAGENT_RUN_TIMEOUT_MS` is an inactivity watchdog refreshed by model chunks, tool progress, and a low-frequency in-memory liveness heartbeat while a bounded tool is still running. `TAGENT_RUN_HARD_TIMEOUT_MS` is the absolute TaskRun wall-clock ceiling. Provider, Router, and Supervisor transports have their own bounded idle/retry settings.
+
+Submission, steer, and follow-up content is limited to 200,000 characters. Context assembly enforces the effective model budget even for the latest turn by projecting oversized text/tool arguments while retaining the complete durable source in SQLite or an Artifact.
 
 Timeout or transport failure is classified through durable Attempt settlement. A transient failure may schedule a bounded continuation; missing user input, permission, approval, or a non-recoverable condition blocks or pauses instead of looping indefinitely.
 

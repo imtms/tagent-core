@@ -44,6 +44,8 @@ export class RecoveryCoordinator {
   }
 
   public scheduleContinuationRecovery() {
+    if (this.state.continuationRecoveryTimer) clearTimeout(this.state.continuationRecoveryTimer);
+    this.state.continuationRecoveryTimer = undefined;
     if (this.state.closing) return;
     const leaseUntil = this.state.persistence.continuations.nextContinuationLeaseExpiry();
     if (leaseUntil === null) return;

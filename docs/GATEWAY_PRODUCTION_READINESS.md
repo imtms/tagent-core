@@ -217,7 +217,7 @@ Use **Core before Gateway** order:
 
 ## Rollback point
 
-The rollback point is the last verified prior compatible Gateway source plus the recorded Core consumer and Learning watermarks. Schema v41 is forward-only during application rollback.
+The rollback point is the last verified prior compatible Gateway source plus the recorded Core consumer and Learning watermarks. Schema v42 is forward-only during application rollback.
 
 Rollback steps:
 
@@ -227,7 +227,7 @@ Rollback steps:
 4. Activate the prior compatible Gateway source through the production learning authority rollback API.
 5. Reclaim the Core event consumer, receiving a new generation.
 6. Resume after the durable ACK watermark; replay persisted-but-unacked events and persist the new-generation exact receipt before ACK.
-7. Keep schema version `41`. Do not restore an older database over it.
+7. Keep schema version `42`. Do not restore an older database over it.
 8. Run the release-local readiness probe again and reopen traffic only after exit `0`.
 
-If the prior deployment cannot coexist with schema v41 or honor the current receipt/ACK contract, keep traffic stopped and deploy a forward-compatible build. Do not perform a destructive schema downgrade.
+If the prior deployment cannot coexist with schema v42 or honor the current receipt/ACK contract, keep traffic stopped and deploy a forward-compatible build. Do not perform a destructive schema downgrade.

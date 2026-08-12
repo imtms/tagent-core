@@ -240,7 +240,7 @@ describe("production TaskRun transition authority", () => {
     void store; // Store is a class and intentionally remains a persistence compatibility surface.
   });
 
-  it("routes the ten known production callers through the bounded transition port", () => {
+  it("routes the known production callers through the bounded transition port", () => {
     expect(transitionCalls("packages/execution/src/application/attempt-executor.ts"))
       .toEqual({ runtime: 2, system: 0 });
     expect(transitionCalls("packages/execution/src/application/attempt-settlement-service.ts"))
@@ -248,7 +248,7 @@ describe("production TaskRun transition authority", () => {
     expect(transitionCalls("packages/execution/src/application/runtime-initialization-failure.ts"))
       .toEqual({ runtime: 1, system: 0 });
     expect(transitionCalls("packages/admission/src/application/admission-coordinator.ts"))
-      .toEqual({ runtime: 0, system: 1 });
+      .toEqual({ runtime: 0, system: 2 });
     expect(transitionCalls("packages/execution/src/application/execution-lifecycle-service.ts"))
       .toEqual({ runtime: 0, system: 1 });
     expect(transitionCalls("packages/execution/src/application/runtime-registry.ts"))

@@ -39,6 +39,8 @@ GET  /api/v1/capabilities
 
 Use the exported schemas for the complete route payload inventory. Console projections are richer than channel resources and are not a substitute for the stable channel contract.
 
+Submission bodies and `task_run.steer`/`task_run.follow_up` command content are non-empty and limited to 200,000 characters. The first-party Console message, Inbox-edit and steer routes enforce the same limit; the application and SQLite persistence boundaries recheck it so alternate in-process callers cannot bypass the cap.
+
 ### Operator Read routes
 
 The independently versioned `operator.read.v1` profile adds stable authority reads without changing the closed Operator 1.0 allowlist:

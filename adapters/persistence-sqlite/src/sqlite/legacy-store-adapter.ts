@@ -341,6 +341,7 @@ export class LegacyStoreAdapter {
       nextContinuationLeaseExpiry: query(store.nextContinuationLeaseExpiry.bind(store)),
       ownsContinuationLease: query(store.ownsContinuationLease.bind(store)),
       recoverContinuationsAfterRestart: mutate(store.recoverContinuationsAfterRestart.bind(store)),
+      releaseContinuationLease: mutate(store.releaseContinuationLease.bind(store)),
       releaseContinuationLeases: mutate(store.releaseContinuationLeases.bind(store)),
       renewContinuationLease: mutate(store.renewContinuationLease.bind(store)),
       listContinuations: query(store.listContinuations.bind(store)),
@@ -426,6 +427,7 @@ export class LegacyStoreAdapter {
       listApprovalRequests: query(store.listApprovalRequests.bind(store)),
       resolveApprovalRequest: mutate(store.resolveApprovalRequest.bind(store)),
       hasPendingApproval: query(store.hasPendingApproval.bind(store)),
+      authorizeExternalAction: mutate(store.authorizeExternalAction.bind(store)),
     });
 
     this.supervisorDecisions = Object.freeze({

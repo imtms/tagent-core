@@ -1,6 +1,6 @@
 # Upgrade and rollback
 
-This guide describes the current repository boundary: API v1, independently deployed Core and Web Console artifacts, one fenced SQLite writer, and control-plane schema 41. Release tags retain version-specific historical instructions.
+This guide describes the current repository boundary: API v1, independently deployed Core and Web Console artifacts, one fenced SQLite writer, and control-plane schema 42. Release tags retain version-specific historical instructions.
 
 ## Compatibility boundary
 
@@ -8,7 +8,7 @@ This guide describes the current repository boundary: API v1, independently depl
 - Core is API-only and does not serve the Web Console or an SPA fallback.
 - Durable submissions use the `Idempotency-Key` header and v1 receipt envelopes.
 - Production uses Node.js `24.18.1`, npm 12 or newer, and Linux x64/Node ABI 137 for the immutable Core artifact.
-- SQLite migrations are forward-only. A binary that understands at most schema 40 must not open schema 41.
+- SQLite migrations are forward-only. A binary that understands at most schema 41 must not open schema 42.
 - Core, Gateway and Web must honor generation-fenced event replay and durable persist-before-ACK behavior.
 
 ## Before upgrading
@@ -82,9 +82,9 @@ The schema 33 preflight may record ambiguous source rows in `migration_issues`. 
 
 1. Verify the candidate Core archive and checksum.
 2. Open a restored database with the release-local `Store` twice.
-3. Require both opens to report `schema_meta.version=41`, zero open migration issues, the trusted-evidence/Goal execution shapes, all v39 receipt/ACK shapes, the v40 Submission audit shape, and all v41 Operator Read indexes.
+3. Require both opens to report `schema_meta.version=42`, zero open migration issues, the trusted-evidence/Goal execution shapes, all v39 receipt/ACK shapes, the v40 Submission audit shape, all v41 Operator Read indexes, and the v42 Inbox execution-policy column.
 4. Start exactly one Core writer and require `/api/v1/health` to report `data.ok=true` and `data.writer.ready=true`.
-5. Negotiate `GET /api/v1/capabilities`; require schema 41, the necessary commands/events, the versioned Operator allowlist, current Approval authority, receipt-recovery protocol, retention policy, documented limits and the `operator.read.v1` marker. Then validate `GET /api/v1/operator/capabilities` before enabling historical inventory.
+5. Negotiate `GET /api/v1/capabilities`; require schema 42, the necessary commands/events, the versioned Operator allowlist, current Approval authority, receipt-recovery protocol, retention policy, documented limits and the `operator.read.v1` marker. Then validate `GET /api/v1/operator/capabilities` before enabling historical inventory.
 6. Start one Gateway consumer, claim a new generation, replay from the durable ACK, persist each event, then ACK it.
 7. Run `scripts/gateway-readiness-probe.mjs`; require exit 0, `ready=true`, zero lag and no settled/final unacknowledged events.
 8. Deploy the matching independent Web Console artifact.
@@ -95,7 +95,7 @@ Use [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for the e
 ## Verification
 
 - `/api/v1/health` is ready and removed `/api/health` returns 404;
-- schema version is 41 and a second open is idempotent;
+- schema version is 42 and a second open is idempotent;
 - `migration_issues` has zero open rows;
 - only one fresh writer fence exists;
 - a passed required check is rejected unless it references a successful Bash operation from the current Attempt;
@@ -108,7 +108,7 @@ Use [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for the e
 
 There is no in-place schema downgrade.
 
-For a binary rollback that still understands schema 41 and the current ABI window, stop traffic and the current writer, switch the immutable release pointer, start one replacement writer and rerun readiness checks.
+For a binary rollback that still understands schema 42 and the current ABI window, stop traffic and the current writer, switch the immutable release pointer, start one replacement writer and rerun readiness checks.
 
 For any rollback to a schema-40-only or older binary:
 
@@ -119,4 +119,4 @@ For any rollback to a schema-40-only or older binary:
 5. restore the matching artifact and configuration;
 6. start exactly one old writer and validate it before reopening compatible traffic.
 
-Do not overwrite a live schema 41 database with old files, and do not run an incompatible binary merely to inspect it.
+Do not overwrite a live schema 42 database with old files, and do not run an incompatible binary merely to inspect it.

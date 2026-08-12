@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.5.4] - 2026-08-12
+
+### Execution safety and proportional governance
+
+- Added a pre-effect approval boundary for routed `external_action` TaskRuns. Admission pauses before Runtime launch, approval is bound to the next Attempt, and the runtime host atomically consumes that authorization before the first mutation-capable tool call.
+- Persisted Admission execution policy in Session Inbox records through SQLite schema 42, closing the gap where an in-memory Router classification could be lost before TaskRun creation.
+- Raised governance after failed mutation-capable operations whose effect already started, while retaining an explicit `pre_effect_rejected` escape hatch for guards that prove no effect began.
+
+### Reliability and latency
+
+- Renewed continuation leases during context preparation, scheduled recovery for every claim, and safely requeued pre-launch failures instead of leaving Runs permanently running.
+- Replaced the legacy direct-start path with standard Inbox Admission, requeued only the affected continuation lease after preparation failure, and now requires a fresh Attempt-bound approval before external-action continuation instead of starting a guaranteed unauthorized retry.
+- Made continuation instructions policy-specific, so semantic and exact deliveries no longer receive artificial Bash/check requirements.
+- Expanded ambiguous external-action routing, sends open-ended imperatives to the semantic Router, and fails conservatively when semantic classification is unavailable. Explicit long-term Memory deletion now enters the same pre-launch approval path while explanatory requests remain semantically distinguishable.
+- Bounded PostgreSQL Memory connection/query/statement timeouts and shutdown joins, kept cooperative cancellation cleanup, refreshed Run liveness during bounded silent tools, capped Submission/control content at 200,000 characters, and enforced a hard projected context budget for oversized latest turns.
+
+### Compatibility and upgrade
+
+- SQLite advances from schema 41 to 42 by additively storing `session_supervisor_inbox.execution_policy_json`. Back up SQLite/WAL/SHM before upgrade; schema-41-only binaries must not open the migrated database.
+- Approval ABI adds `execute_external_action` and terminal `consumed` state. Deploy matching Core and Web Console 0.5.4 artifacts.
+
 ## [0.5.3] - 2026-08-12
 
 ### Operator Read API

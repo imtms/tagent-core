@@ -76,7 +76,7 @@ export class TaskRunSupervisor {
     const reviewedAudit = deterministicAudit ?? (executionPolicy.reviewPolicy === "semantic_lite" && this.reviewer.reviewSemanticLite
       ? await this.reviewer.reviewSemanticLite(reviewInput)
       : await this.reviewer.reviewSettled(reviewInput));
-    const audit = this.enforceAuditAlgebra(reviewedAudit);
+    const audit = this.enforceAuditAlgebra(this.requireExternalContinuationApproval(reviewedAudit, executionPolicy));
     const evaluator = deterministicAudit ? "system" as const : audit.evaluator ?? this.reviewer.evaluator;
     const evaluatorModel = prerequisiteAudit ? "deterministic-prerequisite-gate" : exactAudit ? "deterministic-exact-delivery-v1" : audit.evaluatorModel ?? this.reviewer.model;
     const createdAt = Date.now();
@@ -217,6 +217,41 @@ export class TaskRunSupervisor {
     };
   }
 
+  private requireExternalContinuationApproval(
+    source: SupervisorAudit,
+    executionPolicy: ReturnType<typeof effectiveTaskExecutionPolicy>,
+  ): SupervisorAudit {
+    if (executionPolicy.mode !== "external_action"
+      || !["start_continuation", "request_evidence", "wait_for_runtime"].includes(source.action)) return source;
+    const failure: GateFailure = {
+      kind: "approval",
+      key: "external_action_attempt_authorization",
+      reason: "A new Attempt cannot inherit the consumed external-action authorization; explicit approval is required before continuation.",
+      disposition: "needs_approval",
+    };
+    return {
+      ...source,
+      action: "pause_for_approval",
+      reasonCode: "external_action_reapproval_required",
+      rationale: failure.reason,
+      gates: {
+        ...source.gates,
+        completion: {
+          ...source.gates.completion,
+          passed: false,
+          failures: [...source.gates.completion.failures, failure],
+          summary: failure.reason,
+        },
+        continuation: {
+          ...source.gates.continuation,
+          passed: false,
+          failures: [...source.gates.continuation.failures, failure],
+          summary: failure.reason,
+        },
+      },
+    };
+  }
+
   private uniqueFailures(failures: GateFailure[]) {
     const seen = new Set<string>();
     return failures.filter((failure) => {
@@ -230,18 +265,33 @@ export class TaskRunSupervisor {
   async reviewAttemptFailure(run: GovernanceTaskRunView, checkpointSeq: number, error: string) {
     const deterministic = this.classifyAttemptFailure(error);
     if (deterministic) {
-      return this.createDecision(run, checkpointSeq, "attempt_terminal", deterministic.action,
-        deterministic.reasonCode, deterministic.rationale, 1, "", "system", "deterministic-runtime-failure-v1");
+      const normalized = this.requireExternalFailureApproval(run, deterministic);
+      return this.createDecision(run, checkpointSeq, "attempt_terminal", normalized.action,
+        normalized.reasonCode, normalized.rationale, 1, "", "system", "deterministic-runtime-failure-v1");
     }
     try {
       const audit = await this.reviewer.reviewAttemptFailure({ run, error });
-      return this.createDecision(run, checkpointSeq, "attempt_terminal", audit.action, audit.reasonCode, audit.rationale, audit.confidence);
+      const normalized = this.requireExternalFailureApproval(run, audit);
+      return this.createDecision(run, checkpointSeq, "attempt_terminal", normalized.action, normalized.reasonCode, normalized.rationale, audit.confidence);
     } catch (failure) {
       return this.createDecision(run, checkpointSeq, "attempt_terminal", "block_taskrun",
         "runtime_failure_review_unavailable",
         `Runtime failed and the bounded semantic failure classifier was unavailable. The Run was safely terminalized without another Agent attempt. ${failure instanceof Error ? failure.message : String(failure)}`,
         1, "", "system", "deterministic-failure-fallback-v1");
     }
+  }
+
+  private requireExternalFailureApproval<T extends { action: "pause_for_approval" | "block_taskrun" | "start_continuation"; reasonCode: string; rationale: string }>(
+    run: GovernanceTaskRunView,
+    source: T,
+  ): T {
+    if (source.action !== "start_continuation" || effectiveTaskExecutionPolicy(run.contract).mode !== "external_action") return source;
+    return {
+      ...source,
+      action: "pause_for_approval",
+      reasonCode: "external_action_reapproval_required",
+      rationale: "A new Attempt cannot inherit the consumed external-action authorization; explicit approval is required before retrying the external action.",
+    };
   }
 
   private classifyAttemptFailure(error: string): { action: "pause_for_approval" | "block_taskrun" | "start_continuation"; reasonCode: string; rationale: string } | undefined {
@@ -265,6 +315,11 @@ export class TaskRunSupervisor {
   proposeParallelTaskStart(parentRunId: string, inboxItemId: string, summary: string) {
     const run = this.store.getRun(parentRunId); if (!run) throw new Error("Parent TaskRun not found");
     return this.createDecision(run, run.lastEventSeq, "manual", "pause_for_approval", "parallel_task_start_requested", `Start related Session Inbox task ${inboxItemId}: ${summary}`, 1);
+  }
+
+  proposeExternalActionStart(runId: string, summary: string) {
+    const run = this.store.getRun(runId); if (!run) throw new Error("TaskRun not found");
+    return this.createDecision(run, run.lastEventSeq, "manual", "pause_for_approval", "external_action_approval_required", `Approve external action before execution: ${summary}`, 1);
   }
 
   markExecuted(id: string, status: "executed" | "superseded" | "failed", error = "") {

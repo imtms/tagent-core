@@ -43,6 +43,11 @@ export type SystemTransitionCommand =
     readonly error: string;
     readonly retryable: boolean;
   })
+  | (AttemptBoundSystemCommand & {
+    readonly kind: "require_external_approval";
+    readonly approvalId: string;
+    readonly reason: string;
+  })
   | { readonly kind: "startup_interrupt_active" }
   | { readonly kind: "shutdown_interrupt_active" }
   | (AttemptBoundSystemCommand & {
@@ -63,6 +68,11 @@ export type SystemTransitionAuthority =
     readonly kind: "admission_launch_failure";
     readonly component: "admission_coordinator";
     readonly inboxItemId: string;
+  }
+  | {
+    readonly kind: "external_action_guard";
+    readonly component: "admission_coordinator";
+    readonly approvalId: string;
   }
   | {
     readonly kind: "lifecycle_interrupt";

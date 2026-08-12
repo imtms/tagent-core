@@ -60,7 +60,7 @@ describe("ContextAssembler", () => {
     expect(result.contextItems.find((item) => !item.selected)?.reason).toContain("turn limit");
   });
 
-  it("preserves the selected recent turn while observing its token use", () => {
+  it("projects an oversized recent turn inside the hard token budget", () => {
     const messages = [
       { role: "user", content: "do work", timestamp: 1 },
       assistant("final answer", [{ type: "thinking", thinking: "R".repeat(2_000) }, { type: "toolCall", id: "call-1", name: "write", arguments: { content: "X".repeat(5_000) } }, { type: "text", text: "final answer" }]),
@@ -68,7 +68,8 @@ describe("ContextAssembler", () => {
     const result = new ContextAssembler({ contextWindow: 1_000, maxOutputTokens: 100, maxTurns: 1 }).assemble("transcript", messages, "system", "prompt");
     expect(result.messages).toHaveLength(2);
     expect(result.stats.keptTurns).toBe(1);
-    expect(result.stats.estimatedMessageTokens).toBeGreaterThan(1_000);
+    expect(result.stats.estimatedMessageTokens).toBeLessThanOrEqual(898);
+    expect(JSON.stringify(result.messages)).toContain("contextProjection");
   });
   it("removes historical thinking while preserving the latest active turn", () => {
     const messages: AgentMessage[] = [

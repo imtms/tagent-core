@@ -220,7 +220,7 @@ describe("Capability authorization schema v32 migration", () => {
     directories.push(directory);
     const filename = join(directory, "core.db");
     const initial = new Store(filename, { deferPostMigrationRecovery: true });
-    expect(initial.getSchemaVersion()).toBe(41);
+    expect(initial.getSchemaVersion()).toBe(42);
     initial.db.exec(`
       DROP INDEX idx_approval_receipts_one_allow_per_operation;
       DROP INDEX idx_operations_attempt_created;
@@ -230,12 +230,12 @@ describe("Capability authorization schema v32 migration", () => {
     initial.close();
 
     const upgraded = new Store(filename, { deferPostMigrationRecovery: true });
-    expect(upgraded.getSchemaVersion()).toBe(41);
+    expect(upgraded.getSchemaVersion()).toBe(42);
     expect(schemaObject(upgraded.db, "operations_identity_immutable")).toBeDefined();
     upgraded.close();
 
     const reopened = new Store(filename, { deferPostMigrationRecovery: true });
     databases.push(reopened.db);
-    expect(reopened.getSchemaVersion()).toBe(41);
+    expect(reopened.getSchemaVersion()).toBe(42);
   });
 });

@@ -18,4 +18,5 @@ export interface ApprovalRepository {
     resolution?: string,
   ): ApprovalRequest | undefined;
   hasPendingApproval(runId: string): boolean;
+  authorizeExternalAction(runId: string, attempt: number): { allowed: boolean; reason: string; approvalId?: string };
 }

@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
 import { JsonObjectSchema, TimestampMillisecondsSchema } from "../../shared/primitives.js";
+import { MAX_SUBMISSION_CONTENT_CHARS } from "../../channel/v1/submission-schemas.js";
 
 const ConsoleNullableTimestampSchema = Type.Union([TimestampMillisecondsSchema, Type.Null()]);
 const ConsoleTaskExecutionPolicySchema = Type.Object({
@@ -10,6 +11,17 @@ export const ConsoleReasoningEffortSchema = Type.Union([
   Type.Literal("minimal"), Type.Literal("low"), Type.Literal("medium"),
   Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max"),
 ]);
+
+export const ConsoleContentRequestSchema = Type.Object({
+  content: Type.String({ minLength: 1, maxLength: MAX_SUBMISSION_CONTENT_CHARS }),
+  requestId: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })),
+}, { additionalProperties: false });
+export type ConsoleContentRequest = Static<typeof ConsoleContentRequestSchema>;
+
+export const ConsoleInboxContentRequestSchema = Type.Object({
+  content: Type.String({ minLength: 1, maxLength: MAX_SUBMISSION_CONTENT_CHARS }),
+}, { additionalProperties: false });
+export type ConsoleInboxContentRequest = Static<typeof ConsoleInboxContentRequestSchema>;
 
 /** @deprecated Use Session from channel/v1. */
 export const ConsoleSessionSchema = Type.Object({
@@ -246,10 +258,10 @@ export const ConsoleTaskRunSchema = Type.Object({
     }), Type.Null()]),
     approvalRequests: Type.Array(Type.Object({
       id: Type.String(), decisionId: Type.String(),
-      actionType: Type.Union([Type.Literal("resume_taskrun"), Type.Literal("start_parallel_taskrun")]),
+      actionType: Type.Union([Type.Literal("resume_taskrun"), Type.Literal("start_parallel_taskrun"), Type.Literal("execute_external_action")]),
       targetType: Type.Union([Type.Literal("taskrun"), Type.Literal("session_inbox_item")]),
       targetId: Type.String(), reason: Type.String(), metadata: JsonObjectSchema,
-      status: Type.Union([Type.Literal("pending"), Type.Literal("approved"), Type.Literal("rejected"), Type.Literal("superseded")]),
+      status: Type.Union([Type.Literal("pending"), Type.Literal("approved"), Type.Literal("rejected"), Type.Literal("superseded"), Type.Literal("consumed")]),
       requestedAt: TimestampMillisecondsSchema, resolvedAt: ConsoleNullableTimestampSchema,
       resolvedBy: Type.String(), resolution: Type.String(),
     })),

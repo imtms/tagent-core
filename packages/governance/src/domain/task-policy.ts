@@ -99,8 +99,8 @@ export function effectiveTaskExecutionPolicy(
   }
   const currentOperations = currentAttempt === undefined ? operations : operations.filter((item) => item.attempt === currentAttempt);
   const mutationObserved = currentOperations.some((item) =>
-    ["tool.write", "tool.edit", "tool.patch", "tool.bash"].includes(item.operationType)
-    && item.status !== "failed");
+    ["tool.write", "tool.edit", "tool.patch", "tool.bash", "tool.memory_forget"].includes(item.operationType)
+    && item.status !== "pre_effect_rejected");
   if (contract?.workspaceGoal || mutationObserved) {
     mode = mode === "external_action" ? mode : "workspace_mutation";
     sideEffectRisk = maxByRank(sideEffectRisk, "workspace", riskRank);

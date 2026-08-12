@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { symlinkSync, unlinkSync } from "node:fs";
 import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
 import { AgentService } from "@tagent/core-service/application";
 import { loadConfig } from "@tagent/core-service/config";
@@ -470,6 +471,70 @@ describe("AgentService runtime boundary", () => {
     await service.closeRuntimes(); store.close();
   });
 
+  it("pauses external actions before runtime launch and binds approval to the resumed Attempt", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let runtimeOptions: Parameters<RuntimeFactory>[0] | undefined;
+    const service = new AgentService(agentPersistence(store), "/tmp", (options) => {
+      runtimeOptions = options;
+      return new DeferredRuntime();
+    });
+    const admitted = await service.enqueueSessionInput(session.id, "请部署到生产环境。", "external-pre-effect-approval");
+    const runId = admitted.run!.id;
+    expect(store.getRun(runId)).toMatchObject({ status: "blocked", attempt: 1 });
+    expect(runtimeOptions).toBeUndefined();
+    const approval = store.listApprovalRequests(runId)[0]!;
+    expect(approval).toMatchObject({ actionType: "execute_external_action", status: "pending", metadata: { approvedAttempt: 2 } });
+    await service.approveRunApproval(approval.id);
+    expect(runtimeOptions).toBeDefined();
+    expect(runtimeOptions!.eventSink.beforeToolCall({ toolCallId: "external-read", toolName: "read", args: { path: "README.md" } })).toEqual({ blocked: false });
+    expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "approved" });
+    expect(runtimeOptions!.eventSink.beforeToolCall({ toolCallId: "external-call", toolName: "memory_forget", args: { ids: ["memory-1"] } })).toEqual({ blocked: false });
+    expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "consumed" });
+    expect(store.authorizeExternalAction(runId, 3)).toMatchObject({ allowed: false });
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("normalizes a persisted external-risk policy before runtime admission", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const inconsistentPolicy = { mode: "semantic_delivery", sideEffectRisk: "external_high", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "legacy-bad", confidence: 1, reason: "legacy mismatch" } as const;
+    const analysis = { summary: "external legacy task", objectives: [{ id: "o1", summary: "external legacy task", timing: "current" as const, kind: "other" as const }], intent: "new_task" as const, targetRunId: null, priority: 500, urgency: "normal" as const, relation: "independent" as const, acceptanceCriteria: ["complete"], scope: "external", nonGoals: [], confidence: 1, reason: "legacy", routerVersion: "legacy", executionPolicy: inconsistentPolicy };
+    store.enqueueSessionInbox(session.id, "legacy external action", analysis, "legacy-external");
+    let launched = false;
+    const service = new AgentService(agentPersistence(store), "/tmp", () => { launched = true; return new DeferredRuntime(); });
+    expect(service.recoverSessionInbox()).toHaveLength(1);
+    const run = store.listRuns(session.id)[0]!;
+    expect(run).toMatchObject({ status: "blocked" });
+    expect(store.listApprovalRequests(run.id)[0]).toMatchObject({ actionType: "execute_external_action", status: "pending" });
+    expect(launched).toBe(false);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("requires a fresh external-action approval instead of starting an unauthorized continuation", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let runtimeCalls = 0;
+    const service = new AgentService(agentPersistence(store), "/tmp", () => {
+      runtimeCalls += 1;
+      return new FakeRuntime([assistantMessage("External action needs more work.")]);
+    });
+    const admitted = await service.enqueueSessionInput(session.id, "请部署到生产环境。", "external-reapproval");
+    const runId = admitted.run!.id;
+    await service.approveRunApproval(store.listApprovalRequests(runId)[0]!.id);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(runtimeCalls).toBe(1);
+    expect(store.getRun(runId)).toMatchObject({ status: "blocked", attempt: 2, continuations: [] });
+    expect(store.listApprovalRequests(runId)).toEqual([
+      expect.objectContaining({ actionType: "execute_external_action", status: "approved", metadata: expect.objectContaining({ approvedAttempt: 2 }) }),
+      expect.objectContaining({ actionType: "execute_external_action", status: "pending", metadata: expect.objectContaining({ approvedAttempt: 3 }) }),
+    ]);
+    await service.closeRuntimes();
+    store.close();
+  });
+
   it("throttles partial checkpoints and persists tool boundaries immediately", async () => {
     const store = new Store(":memory:");
     const writes = vi.spyOn(store, "upsertCheckpoint");
@@ -514,6 +579,9 @@ describe("AgentService runtime boundary", () => {
     const complete = "Root cause found and fixed. The durable completed response is preserved and the regression test passed.";
     const runtimeFactory: RuntimeFactory = (options) => ({
       async prompt() {
+        const active = store.getActiveRun(session.id)!;
+        store.upsertPlanItem(active.id, { key: "done", title: "Done", status: "done", required: true, position: 1 });
+        upsertTrustedCheck(store, active.id, { key: "verify", title: "Verify", command: "npm test", output: "regression test passed" });
         options.eventSink.publish("message.started", { ordinal: 1 });
         options.eventSink.publish("message.delta", { ordinal: 1, delta: complete });
         options.eventSink.publish("message.completed", { ordinal: 1, content: complete });
@@ -525,8 +593,6 @@ describe("AgentService runtime boundary", () => {
     });
     const service = new AgentService(agentPersistence(store), "/tmp", runtimeFactory);
     const run = await service.start(session.id, "find and fix the missing final response");
-    store.upsertPlanItem(run.id, { key: "done", title: "Done", status: "done", required: true, position: 1 });
-    upsertTrustedCheck(store, run.id, { key: "verify", title: "Verify", command: "npm test", output: "regression test passed" });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(store.getRun(run.id)?.status).toBe("completed");
     expect(store.listMessages(session.id).at(-1)).toMatchObject({ role: "assistant", content: complete });
@@ -578,7 +644,8 @@ describe("AgentService runtime boundary", () => {
     const run = await service.start(session.id, "test factory");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(factory).toHaveBeenCalledOnce();
-    expect(runtime.prompts).toEqual(["test factory"]);
+    expect(runtime.prompts).toHaveLength(1);
+    expect(runtime.prompts[0]).toContain("test factory");
     expect(store.getRun(run.id)?.status).toBe("blocked");
     store.close();
   });
@@ -742,7 +809,8 @@ describe("AgentService runtime boundary", () => {
     expect(options?.initialMessages?.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(options?.initialMessages?.[0]).toMatchObject({ role: "user", content: "Remember project codename Atlas" });
     expect(options?.initialMessages?.[1]).toMatchObject({ role: "assistant", content: [{ type: "text", text: "The project codename is Atlas." }] });
-    expect(runtime.prompts).toEqual(["What is the project codename?"]);
+    expect(runtime.prompts).toHaveLength(1);
+    expect(runtime.prompts[0]).toContain("What is the project codename?");
     expect(JSON.stringify(options?.initialMessages)).not.toContain("What is the project codename?");
     expect(store.listEvents(run.id).some((event) => event.type === "context.loaded"
       && event.data.source === "session"
@@ -789,7 +857,8 @@ describe("AgentService runtime boundary", () => {
 
     const resumed = await service.resume(started.id);
     expect(resumed.id).toBe(started.id);
-    expect(resumed.requestId).toBe("stable-request");
+    expect(resumed.requestId).toMatch(/^inbox:/);
+    expect(store.getSessionSubmission(session.id, "stable-request")?.runId).toBe(started.id);
     expect(resumed.attempt).toBe(2);
     expect(resumed.resumedAt).toBeTypeOf("number");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -797,7 +866,8 @@ describe("AgentService runtime boundary", () => {
     expect(factory).toHaveBeenCalledTimes(2);
     expect(options[1].initialMessages).toEqual([]);
     expect(second.prompts[0]).toContain("Resume this interrupted or blocked TaskRun");
-    expect(second.prompts[0]).toContain("Completion-gate requirements override conflicting instructions");
+    expect(second.prompts[0]).toContain("no-side-effect semantic delivery");
+    expect(second.prompts[0]).not.toContain("Completion-gate requirements override conflicting instructions");
     expect(second.prompts[0]).toContain("resume goal");
     expect(store.listMessages(session.id).filter((message) => message.role === "user")).toHaveLength(1);
     expect(store.listEvents(started.id).some((event) => event.type === "run.resumed" && event.data.attempt === 2)).toBe(true);
@@ -862,6 +932,49 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
+  it("safely requeues a claimed continuation when project-context preparation fails", async () => {
+    const fs = await import("node:fs/promises");
+    const workspace = await fs.mkdtemp(`${process.env.TMPDIR ?? "/tmp"}/tagent-continuation-prep-`);
+    await fs.writeFile(`${workspace}/AGENTS.md`, "rules");
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let calls = 0;
+    const service = new AgentService(agentPersistence(store), workspace, () => {
+      calls += 1;
+      return new CallbackRuntime(assistantMessage("first candidate"), () => {
+        if (calls === 1) {
+          unlinkSync(`${workspace}/AGENTS.md`);
+          symlinkSync("missing-rules.md", `${workspace}/AGENTS.md`);
+        }
+      });
+    }, { maxContinuations: 2, supervisorReviewer: reviewer(continuationAudit()) });
+    const run = await service.start(session.id, "prepare continuation safely");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(calls).toBe(1);
+    expect(store.getRun(run.id)).toMatchObject({ status: "blocked" });
+    expect(store.getRun(run.id)!.attempt).toBeGreaterThanOrEqual(2);
+    expect(store.listContinuations(run.id)[0]).toMatchObject({ status: "queued", leaseOwner: "" });
+    expect(store.listEvents(run.id).some((event) => event.type === "continuation.preparation.failed")).toBe(true);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("uses semantic continuation instructions without artificial Bash requirements", async () => {
+    const store = new Store(":memory:"); const session = store.createSession();
+    const policy = { mode: "semantic_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "test", confidence: 1, reason: "translation" } as const;
+    const contract = { sourceInput: "translate", summary: "translate", objectives: [{ id: "o1", summary: "translate", timing: "current" as const, kind: "other" as const }], acceptanceCriteria: ["Preserve meaning"], scope: "text", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
+    const run = store.createRun(session.id, "translate", undefined, contract);
+    store.blockRun(run.id, "semantic correction required");
+    store.queueContinuation(run.id, "semantic correction required");
+    let prompt = "";
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new CallbackRuntime(assistantMessage("translated"), (value) => { prompt = value; }), { maxContinuations: 1 });
+    service.recoverContinuations();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(prompt).toContain("no-side-effect semantic delivery");
+    expect(prompt).not.toMatch(/rerun.*Bash|verification command|rebind every required check/i);
+    await service.closeRuntimes(); store.close();
+  });
+
   it("prunes old transcript turns before resume", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
@@ -906,8 +1019,8 @@ describe("AgentService runtime boundary", () => {
     expect(store.listContinuations(run.id)[0]).toMatchObject({ ordinal: 1, status: "completed" });
     expect(store.listMessages(session.id).filter((message) => message.role === "assistant").map((message) => message.content)).toEqual(["done"]);
     expect(runtimes[1].prompts[0]).toContain("Automatic continuation 1");
-    expect(runtimes[1].prompts[0]).toContain("Any required check carried over from an earlier Attempt cannot satisfy the deterministic gate");
-    expect(runtimes[1].prompts[0]).toContain("Rerun the affected final verification and rebind the required checks");
+    expect(runtimes[1].prompts[0]).toContain("no-side-effect semantic delivery");
+    expect(runtimes[1].prompts[0]).not.toContain("Maintain a concise required plan");
     store.close();
   });
 
@@ -1230,7 +1343,7 @@ describe("AgentService runtime boundary", () => {
       async reviewAttemptFailure() { throw new Error("Supervisor review failures must not be reclassified as Agent runtime failures"); },
     };
     const service = new AgentService(agentPersistence(store), "/tmp", () => { runtimeCalls += 1; return new FakeRuntime([assistantMessage("candidate result")]); }, { maxContinuations: 8, supervisorReviewer: failedReviewer });
-    const run = await service.start(session.id, "audit failure isolation");
+    const run = await service.start(session.id, "Explain audit failure isolation.");
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(runtimeCalls).toBe(1);
     expect(store.getRun(run.id)).toMatchObject({ status: "blocked", attempt: 1 });

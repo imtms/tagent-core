@@ -48,3 +48,11 @@ export {
   assertGatewayOperatorV40Schema,
   migrateGatewayOperatorV40,
 } from "./migrations/v40-gateway-operator.js";
+export {
+  assertOperatorReadV41Schema,
+  migrateOperatorReadV41,
+} from "./migrations/v41-operator-read.js";
+export {
+  assertExecutionPolicyV42Schema,
+  migrateExecutionPolicyV42,
+} from "./migrations/v42-execution-policy.js";

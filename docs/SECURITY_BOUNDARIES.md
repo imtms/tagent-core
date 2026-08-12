@@ -39,6 +39,7 @@ The following are server-owned and cannot be asserted by a caller:
 - OS instance lock, writer lease, fence, and connection mutation guard;
 - canonical TaskRun/Attempt transition authority;
 - approval and capability authorization receipts;
+- Attempt-bound external-action approval consumption before mutation-capable tools, with fresh approval required before any later Attempt retries the action;
 - current-Attempt Bash bindings and Core-derived check evidence;
 - event-consumer generation and acknowledged sequence;
 - internal evaluation receipt verification;

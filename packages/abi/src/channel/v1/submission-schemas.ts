@@ -3,6 +3,8 @@ import { IdempotencyKeySchema } from "../../shared/idempotency.js";
 import { IdentifierSchema, IsoDateTimeSchema, RequestIdSchema } from "../../shared/primitives.js";
 import { GatewayProvenanceSchema, GatewayRequestAuditSchema } from "./provenance-schemas.js";
 
+export const MAX_SUBMISSION_CONTENT_CHARS = 200_000;
+
 export {
   IDEMPOTENCY_KEY_HEADER,
   IDEMPOTENCY_KEY_PATTERN,
@@ -16,7 +18,7 @@ export const SubmissionCreateHeadersSchema = Type.Object({
 export type SubmissionCreateHeaders = Static<typeof SubmissionCreateHeadersSchema>;
 
 export const SubmissionCreateRequestSchema = Type.Object({
-  content: Type.String({ minLength: 1 }),
+  content: Type.String({ minLength: 1, maxLength: MAX_SUBMISSION_CONTENT_CHARS }),
   modelId: Type.Optional(Type.String({
     minLength: 1,
     description: "Advisory compatibility hint; excluded from v1 idempotency and execution semantics.",
@@ -27,14 +29,14 @@ export type SubmissionCreateRequest = Static<typeof SubmissionCreateRequestSchem
 
 export const SubmissionApplicationInputSchema = Type.Object({
   idempotencyKey: IdempotencyKeySchema,
-  content: Type.String({ minLength: 1 }),
+  content: Type.String({ minLength: 1, maxLength: MAX_SUBMISSION_CONTENT_CHARS }),
   modelId: Type.Optional(Type.String({ minLength: 1 })),
   origin: Type.Optional(GatewayProvenanceSchema),
 }, { additionalProperties: false });
 export type SubmissionApplicationInput = Static<typeof SubmissionApplicationInputSchema>;
 
 export const SubmissionExecutionRequestSchema = Type.Object({
-  content: Type.String({ minLength: 1 }),
+  content: Type.String({ minLength: 1, maxLength: MAX_SUBMISSION_CONTENT_CHARS }),
   requestId: RequestIdSchema,
   modelId: Type.Optional(Type.String({ minLength: 1 })),
 }, { additionalProperties: false });

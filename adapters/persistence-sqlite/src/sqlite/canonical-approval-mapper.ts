@@ -130,6 +130,14 @@ export function mapLegacyRunApprovalOperation(input: LegacyRunApprovalSemanticIn
     payload.parentRunId = parentRunId;
     payload.inboxItemId = inboxItemId;
   }
+  if (action === "task_run.execute_external") {
+    const approvedAttempt = metadata.approvedAttempt;
+    if (input.targetType !== "taskrun" || input.targetId !== input.runId
+      || typeof approvedAttempt !== "number" || !Number.isSafeInteger(approvedAttempt) || approvedAttempt < 1) {
+      return mappingFailure(`found conflicting external-action target for ${input.id}`);
+    }
+    payload.approvedAttempt = approvedAttempt;
+  }
   const operation: LegacyCanonicalOperation = {
     subject: { kind: "task_run", id: input.runId },
     action,

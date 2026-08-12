@@ -4,7 +4,7 @@
 
 `@tagent/persistence-sqlite` owns the control-plane SQLite schema, repositories, migrations, transaction boundary, writer authority, and restart recovery primitives. Domains depend on its ports through the Core composition root; they do not issue uncontrolled SQL.
 
-The current schema version is 41:
+The current schema version is 42:
 
 | Version | Authority introduced |
 | --- | --- |
@@ -20,6 +20,7 @@ The current schema version is 41:
 | 39 | Gateway Session/command/Goal operation receipts plus settled/final event-consumer ACK boundaries |
 | 40 | Submission principal/provenance audit receipts and canonical-payload recovery |
 | 41 | ordered Session/TaskRun indexes for bounded Operator Read keyset pagination |
+| 42 | durable Session Inbox execution-policy snapshots for effect-before-approval enforcement |
 
 Schema 37 added `operations.payload_json`, `run_checks.source_operation_id`, `run_checks.observed_at`, and the partial source-operation index. Legacy operations are not retroactively promoted to trusted evidence.
 
@@ -31,7 +32,9 @@ Schema 40 adds `submission_audit_receipts`. Submission identity remains `(sessio
 
 Schema 41 adds `idx_sessions_operator_created`, `idx_runs_operator_session_created`, and `idx_runs_operator_session_updated`. They support immutable Session/TaskRun inventory order and deterministic latest-Run selection. Re-entry validates index ownership and exact column order fail-closed. Operator cursor snapshot membership uses persisted row boundaries; read values remain read-committed.
 
-Migrations are forward-only for a running release. A binary that only understands schema 40 must never open a schema 41 database.
+Schema 42 adds `session_supervisor_inbox.execution_policy_json`. The Router decision now survives queueing and is copied into the immutable TaskRun contract, so external-action approval cannot be bypassed by the Inbox persistence boundary. Existing rows remain readable and use conservative legacy normalization.
+
+Migrations are forward-only for a running release. A binary that only understands schema 41 must never open a schema 42 database.
 
 ## Startup order
 
@@ -76,7 +79,8 @@ Recovery does not guess that an interrupted external effect succeeded or failed:
 - a Pi control delivery that was in delivery becomes `outcome_unknown`;
 - a TaskRun command or Workspace Goal operation left at `started` becomes `outcome_unknown` before HTTP readiness;
 - interrupted `Attempt`s release stale execution leases, reject unresolved candidate state, and preserve an auditable recovery event;
-- pending Supervisor continuations, Session Inbox work, Learning deliveries, and checkpoints are reconciled through their durable state.
+- pending Supervisor continuations, Session Inbox work, Learning deliveries, and checkpoints are reconciled through their durable state; a preparation failure requeues only its own continuation lease, not every lease held by the process owner;
+- external-action continuations require a fresh approval bound to the next Attempt and never inherit a consumed authorization.
 
 `outcome_unknown` requires explicit reconciliation or operator action. Replaying the same external mutation automatically could duplicate side effects.
 

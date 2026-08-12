@@ -4,6 +4,7 @@ import type {
   SessionInboxItem,
   SessionInputAnalysis,
 } from "../domain/index.js";
+import { assertSubmissionContent } from "../domain/index.js";
 import type { SessionRepository, SubmissionAuditInput, SubmissionQueue } from "../ports/index.js";
 import type { ContextManifestItem, TaskRun } from "@tagent/execution/domain";
 import type {
@@ -14,6 +15,7 @@ import type {
 } from "@tagent/execution/ports";
 import type { ApprovalRepository } from "@tagent/governance/ports";
 import type { WorkspaceGoalRepository } from "@tagent/governance/ports";
+import { effectiveTaskExecutionPolicy } from "@tagent/governance";
 import type {
   AttemptLauncherPort,
   AttemptSettlementPort,
@@ -76,6 +78,7 @@ export class AdmissionCoordinator {
     audit?: SubmissionAuditInput,
   ) {
     if (this.state.closing) throw new Error("Service is shutting down");
+    assertSubmissionContent(content);
     const existing = this.state.persistence.submissions.getSessionSubmission(sessionId, requestId);
     if (existing) {
       if (existing.content !== content) throw new Error("Session Inbox request idempotency conflict");
@@ -224,6 +227,7 @@ export class AdmissionCoordinator {
   }
 
   async updateSessionInput(sessionId: SessionId, itemId: string, content: string) {
+    assertSubmissionContent(content);
     const item = this.state.persistence.submissions.getSessionInboxItem(itemId);
     if (!item || item.sessionId !== sessionId || item.status !== "queued") return undefined;
     const activeRun = this.state.persistence.taskRuns.getActiveRun(sessionId);
@@ -290,6 +294,12 @@ export class AdmissionCoordinator {
       this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(approval.runId, "supervisor.approval.approved", { approvalId, resolution }));
       return launched.run;
     }
+    if (pending.actionType === "execute_external_action") {
+      const approval = this.state.persistence.approvals.resolveApprovalRequest(approvalId, "approved", "user", resolution);
+      if (!approval) throw new Error("Approval request is not pending");
+      this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(approval.runId, "supervisor.approval.approved", { approvalId, resolution, actionType: approval.actionType }));
+      return this.dependencies.contextService.resume(approval.runId, { actorId: "user", reason: `External action approved by ${approvalId}` });
+    }
     const approval = this.state.persistence.approvals.resolveApprovalRequest(approvalId, "approved", "user", resolution);
     if (!approval) throw new Error("Approval request is not pending");
     this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(approval.runId, "supervisor.approval.approved", { approvalId, resolution }));
@@ -318,6 +328,10 @@ export class AdmissionCoordinator {
       const principalId = this.state.persistence.submissions.getSubmissionAudit(item.sessionId, item.requestId)?.principalId;
       this.dependencies.continuation.captureUserMessage(run, userMessage.id, item.content, principalId);
     }
+    if (effectiveTaskExecutionPolicy(run.contract).mode === "external_action") {
+      this.pauseForExternalActionApproval(item, run, retry);
+      return this.state.persistence.taskRuns.getRun(run.id)!;
+    }
     const currentUserAfter = item.startedAt ?? run.createdAt;
     if (!this.dependencies.contextService.requiresAsyncPreparation()) {
       try {
@@ -337,6 +351,38 @@ export class AdmissionCoordinator {
       }
     });
     return this.state.persistence.taskRuns.getRun(run.id)!;
+  }
+
+  private pauseForExternalActionApproval(item: SessionInboxItem, run: TaskRun, retry: boolean) {
+    const reason = `External action requires explicit approval before any mutation-capable tool can execute: ${run.contract?.summary || item.content}`;
+    const decision = this.dependencies.supervisor.proposeExternalActionStart(run.id, run.contract?.summary || item.content);
+    const approval = this.state.persistence.approvals.ensureApprovalRequest(run.id, decision.id, reason, {
+      actionType: "execute_external_action",
+      targetType: "taskrun",
+      targetId: run.id,
+      metadata: { sessionId: run.sessionId, approvedAttempt: run.attempt + 1 },
+    });
+    if (!retry) {
+      this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(run.id, "run.started", {
+        goal: run.goal, sourceInput: item.content, contract: run.contract,
+        source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: 0,
+      }));
+    }
+    const attempt = this.state.persistence.attempts.getAttemptForRun(run.id, run.attempt);
+    if (!attempt) throw new Error(`TaskRun ${run.id} has no Attempt ${run.attempt} for external approval`);
+    const transition = this.state.persistence.taskRunTransitions.transitionSystem({
+      kind: "require_external_approval", attemptId: attempt.id, expectedVersion: attempt.version,
+      approvalId: approval.id, reason,
+    }, {
+      kind: "external_action_guard", component: "admission_coordinator", approvalId: approval.id,
+    }).transitions[0];
+    if (!transition?.event) throw new Error(`TaskRun ${run.id} external approval transition returned no event`);
+    this.dependencies.supervisor.markExecuted(decision.id, "executed");
+    this.dependencies.eventHub.publish(transition.event);
+    this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(run.id, "supervisor.approval.requested", {
+      approvalId: approval.id, decisionId: decision.id, reason, actionType: approval.actionType,
+    }));
+    this.state.persistence.workspaceGoals.recordRunOutcome(run.id);
   }
 
   public completeClaimedSessionLaunch(item: SessionInboxItem, run: TaskRun, sessionHistory: ContextAssembly & { recalledMemory?: string; memoryContextItems?: ContextManifestItem[] }, retry: boolean) {
@@ -416,28 +462,9 @@ export class AdmissionCoordinator {
   }
 
   async start(sessionId: SessionId, query: string, requestId: string = randomUUID()) {
-    if (this.state.closing) throw new Error("Service is shutting down");
-    const existing = this.state.persistence.taskRuns.getRunByRequestId(requestId);
-    if (existing) {
-      if (existing.sessionId !== sessionId || existing.goal !== query) throw new Error("TaskRun request idempotency conflict");
-      return existing;
-    }
-
-    let run = this.state.persistence.taskRuns.createRun(sessionId, query, requestId);
-    this.state.persistence.workspaceGoals.attachRun(run.id, null);
-    run = this.state.persistence.taskRuns.getRun(run.id) ?? run;
-    const sessionHistory = await this.trackPreparation(run.id, (signal) =>
-      this.dependencies.contextService.prepareSessionHistory(run, query, undefined, signal));
-    const current = this.currentLaunchRun(run);
-    if (!current) throw new Error(`TaskRun ${run.id} preparation was cancelled`);
-    run = current;
-    const userMessage = this.state.persistence.sessions.appendMessage(sessionId, "user", query);
-    this.dependencies.continuation.captureUserMessage(run, userMessage.id, query);
-    this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(run.id, "run.started", { goal: query, sessionHistoryCount: sessionHistory.messages.length }));
-    this.dependencies.contextService.publishContextEvents(run.id, sessionHistory);
-    this.state.recalledMemory.set(run.id, sessionHistory.recalledMemory ?? "");
-    this.dependencies.attemptExecutor.launch(run, query, sessionHistory.messages);
-    return this.state.persistence.taskRuns.getRun(run.id)!;
+    const admitted = await this.enqueueSessionInput(sessionId, query, requestId);
+    if (!admitted.run) throw new Error(`Submission ${requestId} did not create a TaskRun`);
+    return admitted.run;
   }
 
   private currentLaunchRun(run: TaskRun) {

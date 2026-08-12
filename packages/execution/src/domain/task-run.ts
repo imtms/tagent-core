@@ -33,6 +33,15 @@ export type RunPhase = "discover" | "plan" | "implement" | "verify" | "review" |
 export type PlanStatus = PlanItem["status"];
 export type CheckStatus = RunCheck["status"];
 
+export const MAX_CONTROL_CONTENT_CHARS = 200_000;
+
+export function assertControlContent(content: string): void {
+  if (!content.trim()) throw new Error("Control content is required");
+  if (content.length > MAX_CONTROL_CONTENT_CHARS) {
+    throw new Error(`Control content cannot exceed ${MAX_CONTROL_CONTENT_CHARS} characters`);
+  }
+}
+
 export interface RunCheckpoint {
   runId: RunId;
   attempt: number;

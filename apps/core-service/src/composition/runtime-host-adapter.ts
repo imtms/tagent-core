@@ -11,12 +11,14 @@ import type {
   WorkspaceEditPort,
 } from "@tagent/execution/ports";
 import type { AccessContext, MemoryFacade, MemoryKind } from "@tagent/memory";
+import { effectiveTaskExecutionPolicy } from "@tagent/governance/domain";
 import { createTools } from "@tagent/workspace-local/tools";
 
 export interface RuntimeHostOptions {
   persistence: Pick<
     AgentServicePersistencePort,
     "attempts" | "runtime" | "runtimeMutations" | "taskRuns" | "workspaceGoals"
+    | "approvals"
   >;
   token: AttemptExecutionToken;
   workspace: string;
@@ -158,7 +160,12 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     isWaitingForInput: () => Boolean(waitingRun()),
     beforeToolCall(input) {
       if (!currentAttempt()) return { blocked: true, reason: "Attempt is no longer current" };
-      if (["write", "edit", "patch", "bash"].includes(input.toolName)) {
+      if (["write", "edit", "patch", "bash", "memory_forget"].includes(input.toolName)) {
+        const run = currentRun();
+        if (effectiveTaskExecutionPolicy(run?.contract ?? null).mode === "external_action") {
+          const approval = persistence.approvals.authorizeExternalAction(token.runId, token.ordinal);
+          if (!approval.allowed) return { blocked: true, reason: `External action approval guard: ${approval.reason}` };
+        }
         const goalGuard = persistence.workspaceGoals.authorizeRunMutation(token.runId);
         if (!goalGuard.allowed) return { blocked: true, reason: `Workspace Goal mutation guard: ${goalGuard.reason}` };
         persistence.runtimeMutations.advanceRunPhase(mutationContext, "implement");

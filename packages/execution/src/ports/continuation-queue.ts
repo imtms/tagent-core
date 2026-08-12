@@ -16,6 +16,7 @@ export interface ContinuationQueue {
   nextContinuationLeaseExpiry(): number | null;
   ownsContinuationLease(id: string, owner: string): boolean;
   recoverContinuationsAfterRestart(timestamp?: number): ContinuationRecoveryItem[];
+  releaseContinuationLease(id: string, owner: string, reason?: string): ContinuationRecoveryItem | undefined;
   releaseContinuationLeases(owner: string, reason?: string): ContinuationRecoveryItem[];
   renewContinuationLease(id: string, owner: string, leaseMs: number): boolean;
   listContinuations(runId: RunId): RunContinuation[];

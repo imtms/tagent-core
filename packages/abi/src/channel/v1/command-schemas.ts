@@ -34,14 +34,14 @@ const TaskRunCommandBase = {
 export const TaskRunSteerCommandSchema = Type.Object({
   ...TaskRunCommandBase,
   type: Type.Literal("task_run.steer"),
-  payload: Type.Object({ content: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
+  payload: Type.Object({ content: Type.String({ minLength: 1, maxLength: 200_000 }) }, { additionalProperties: false }),
 }, { additionalProperties: false });
 export type TaskRunSteerCommand = Static<typeof TaskRunSteerCommandSchema>;
 
 export const TaskRunFollowUpCommandSchema = Type.Object({
   ...TaskRunCommandBase,
   type: Type.Literal("task_run.follow_up"),
-  payload: Type.Object({ content: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
+  payload: Type.Object({ content: Type.String({ minLength: 1, maxLength: 200_000 }) }, { additionalProperties: false }),
 }, { additionalProperties: false });
 export type TaskRunFollowUpCommand = Static<typeof TaskRunFollowUpCommandSchema>;
 

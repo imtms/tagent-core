@@ -1,6 +1,15 @@
 import type { SessionInputAnalysis } from "./session-input.js";
 import type { SessionId } from "./session.js";
 
+export const MAX_SUBMISSION_CONTENT_CHARS = 200_000;
+
+export function assertSubmissionContent(content: string): void {
+  if (!content.trim()) throw new Error("Submission content is required");
+  if (content.length > MAX_SUBMISSION_CONTENT_CHARS) {
+    throw new Error(`Submission content cannot exceed ${MAX_SUBMISSION_CONTENT_CHARS} characters`);
+  }
+}
+
 export interface Submission {
   id: string;
   sessionId: SessionId;

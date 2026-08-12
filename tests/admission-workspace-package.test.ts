@@ -87,12 +87,12 @@ describe("Admission workspace package", () => {
     const root = readJson<{ devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const admission = readJson<PackageManifest>("packages/admission/package.json");
 
-    expect(admission).toMatchObject({ name: "@tagent/admission", version: "0.5.3", private: true });
+    expect(admission).toMatchObject({ name: "@tagent/admission", version: "0.5.4", private: true });
     expect(root.devDependencies[admission.name]).toBe(admission.version);
     expect(Object.keys(admission.exports).sort()).toEqual(expectedExports);
     expect(admission.dependencies).toEqual({
-      "@tagent/execution": "0.5.3",
-      "@tagent/governance": "0.5.3",
+      "@tagent/execution": "0.5.4",
+      "@tagent/governance": "0.5.4",
     });
     for (const [subpath, target] of Object.entries(admission.exports)) {
       expect(subpath).not.toContain("*");
@@ -111,6 +111,7 @@ describe("Admission workspace package", () => {
       "@tagent/execution/domain",
       "@tagent/execution/ports",
       "@tagent/execution/composition",
+      "@tagent/governance",
       "@tagent/governance/ports",
     ]);
     const violations: string[] = [];

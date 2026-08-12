@@ -48,6 +48,7 @@ import type {
   SessionSettingsUpdate,
   TaskObjective,
 } from "@tagent/admission/domain";
+import { assertControlContent } from "@tagent/execution/domain";
 import type { SubmissionAuditInput, SubmissionAuditReceipt } from "@tagent/admission/ports";
 import {
   ATTEMPT_SCHEMA_V30_SQL,
@@ -94,13 +95,22 @@ import {
   assertOperatorReadV41Schema,
   migrateOperatorReadV41,
 } from "./migrations/v41-operator-read.js";
+import { assertExecutionPolicyV42Schema, migrateExecutionPolicyV42 } from "./migrations/v42-execution-policy.js";
 import { mapLegacyRunApprovalOperation } from "./sqlite/canonical-approval-mapper.js";
 import { appendProjectionPair, finalizeProjectionCheckpoint } from "./sqlite/canonical-integration-event.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 41;
+const SCHEMA_VERSION = 42;
+const MAX_SUBMISSION_CONTENT_CHARS = 200_000;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
+
+function assertSubmissionContentBound(content: string): void {
+  if (!content.trim()) throw new Error("Submission content is required");
+  if (content.length > MAX_SUBMISSION_CONTENT_CHARS) {
+    throw new Error(`Submission content cannot exceed ${MAX_SUBMISSION_CONTENT_CHARS} characters`);
+  }
+}
 
 export interface StoreOptions {
   deferPostMigrationRecovery?: boolean;
@@ -406,6 +416,7 @@ export class Store {
         confidence REAL NOT NULL DEFAULT 0,
         decision_reason TEXT NOT NULL DEFAULT '',
         router_version TEXT NOT NULL DEFAULT '',
+        execution_policy_json TEXT NOT NULL DEFAULT '',
         manual_order INTEGER NOT NULL DEFAULT 0,
         UNIQUE(session_id, request_id)
       );
@@ -1163,10 +1174,17 @@ export class Store {
     assertGatewayOperatorV40Schema(this.db);
     const operatorReadMigration = this.db.transaction(() => {
       migrateOperatorReadV41(this.db, previousVersion !== undefined && previousVersion >= 41 ? 41 : 40);
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`)
+        .run(previousVersion !== undefined && previousVersion >= 42 ? 42 : 41, now());
     });
     operatorReadMigration();
     assertOperatorReadV41Schema(this.db);
+    const executionPolicyMigration = this.db.transaction(() => {
+      migrateExecutionPolicyV42(this.db, previousVersion !== undefined && previousVersion >= 42 ? 42 : 41);
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+    });
+    executionPolicyMigration();
+    assertExecutionPolicyV42Schema(this.db);
     // A process restart loses the in-memory executor for receipts that had only
     // reached "started". Surface uncertainty explicitly; never replay an effect
     // whose outcome may already have escaped Core.
@@ -1616,6 +1634,7 @@ export class Store {
     requestId: string = randomUUID(),
     audit?: SubmissionAuditInput,
   ): SessionInboxItem {
+    assertSubmissionContentBound(content);
     const transaction = this.db.transaction(() => {
       const existing = this.db.prepare("SELECT id FROM session_supervisor_inbox WHERE session_id = ? AND request_id = ?").get(sessionId, requestId) as { id: string } | undefined;
       if (existing) {
@@ -1628,8 +1647,8 @@ export class Store {
       const position = (this.db.prepare("SELECT COALESCE(MAX(position),0)+1 as position FROM session_supervisor_inbox WHERE session_id = ? AND status = 'queued'").get(sessionId) as { position: number }).position;
       const id = randomUUID();
       this.db.prepare(`INSERT INTO session_supervisor_inbox
-        (id,session_id,request_id,content,status,decision,position,created_at,updated_at,summary,objectives_json,intent,target_run_id,priority,urgency,relation,acceptance_json,scope,non_goals_json,confidence,decision_reason,router_version)
-        VALUES (?,?,?,?,'queued','pending',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, sessionId, requestId, content, position, timestamp, timestamp, analysis.summary, JSON.stringify(analysis.objectives ?? [{ id: "objective-1", summary: analysis.summary, timing: "current", kind: "other" }]), analysis.intent, analysis.targetRunId, analysis.priority, analysis.urgency, analysis.relation, JSON.stringify(analysis.acceptanceCriteria), analysis.scope, JSON.stringify(analysis.nonGoals), analysis.confidence, analysis.reason, analysis.routerVersion);
+        (id,session_id,request_id,content,status,decision,position,created_at,updated_at,summary,objectives_json,intent,target_run_id,priority,urgency,relation,acceptance_json,scope,non_goals_json,confidence,decision_reason,router_version,execution_policy_json)
+        VALUES (?,?,?,?,'queued','pending',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, sessionId, requestId, content, position, timestamp, timestamp, analysis.summary, JSON.stringify(analysis.objectives ?? [{ id: "objective-1", summary: analysis.summary, timing: "current", kind: "other" }]), analysis.intent, analysis.targetRunId, analysis.priority, analysis.urgency, analysis.relation, JSON.stringify(analysis.acceptanceCriteria), analysis.scope, JSON.stringify(analysis.nonGoals), analysis.confidence, analysis.reason, analysis.routerVersion, JSON.stringify(analysis.executionPolicy ?? null));
       const item = this.getSessionInboxItem(id)!;
       if (audit) this.recordSubmissionAudit(item, audit);
       return item;
@@ -1643,14 +1662,15 @@ export class Store {
     const nonGoals = JSON.parse(String(row.nonGoalsJson || "[]")) as string[];
     const objectives = JSON.parse(String(row.objectivesJson || "[]")) as TaskObjective[];
     const fallbackObjective = { id: "objective-1", summary: String(row.summary || row.content || ""), timing: row.relation === "parallel" ? "parallel" : row.relation === "follow_up" ? "follow_up" : "current", kind: "other" } as const;
-    return { ...row, manualOrder: Boolean(row.manualOrder), analysis: { summary: String(row.summary || row.content || ""), objectives: objectives.length ? objectives : [fallbackObjective], intent: row.intent, targetRunId: row.targetRunId || null, priority: Number(row.priority || 0), urgency: row.urgency, relation: row.relation, acceptanceCriteria, scope: String(row.scope || row.summary || ""), nonGoals, confidence: Number(row.confidence || 0), reason: String(row.decisionReason || ""), routerVersion: String(row.routerVersion || "") } } as SessionInboxItem;
+    const executionPolicy = row.executionPolicyJson ? JSON.parse(String(row.executionPolicyJson)) : undefined;
+    return { ...row, manualOrder: Boolean(row.manualOrder), analysis: { summary: String(row.summary || row.content || ""), objectives: objectives.length ? objectives : [fallbackObjective], intent: row.intent, targetRunId: row.targetRunId || null, priority: Number(row.priority || 0), urgency: row.urgency, relation: row.relation, acceptanceCriteria, scope: String(row.scope || row.summary || ""), nonGoals, confidence: Number(row.confidence || 0), reason: String(row.decisionReason || ""), routerVersion: String(row.routerVersion || ""), ...(executionPolicy ? { executionPolicy } : {}) } } as SessionInboxItem;
   }
 
   private sessionInboxSelect(where: string) {
     return `SELECT id,session_id as sessionId,request_id as requestId,content,status,decision,run_id as runId,error,position,
       created_at as createdAt,updated_at as updatedAt,claimed_at as claimedAt,started_at as startedAt,
       summary,objectives_json as objectivesJson,intent,target_run_id as targetRunId,priority,urgency,relation,acceptance_json as acceptanceJson,scope,
-      non_goals_json as nonGoalsJson,confidence,decision_reason as decisionReason,router_version as routerVersion,manual_order as manualOrder
+      non_goals_json as nonGoalsJson,confidence,decision_reason as decisionReason,router_version as routerVersion,execution_policy_json as executionPolicyJson,manual_order as manualOrder
       FROM session_supervisor_inbox ${where}`;
   }
 
@@ -1731,13 +1751,14 @@ export class Store {
   updateSessionInboxItem(id: string, sessionId: SessionId, content: string, analysis?: SessionInputAnalysis) {
     const trimmed = content.trim();
     if (!trimmed) return undefined;
+    assertSubmissionContentBound(content);
     const resolved = analysis ?? { ...this.getSessionInboxItem(id)?.analysis, summary: trimmed.slice(0, 120), scope: trimmed.slice(0, 120) } as SessionInputAnalysis;
     const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET content=?,summary=?,objectives_json=?,intent=?,target_run_id=?,priority=?,urgency=?,relation=?,
-      acceptance_json=?,scope=?,non_goals_json=?,confidence=?,decision_reason=?,router_version=?,updated_at=?
+      acceptance_json=?,scope=?,non_goals_json=?,confidence=?,decision_reason=?,router_version=?,execution_policy_json=?,updated_at=?
       WHERE id=? AND session_id=? AND status='queued'`)
       .run(trimmed, resolved.summary, JSON.stringify(resolved.objectives), resolved.intent, resolved.targetRunId, resolved.priority, resolved.urgency, resolved.relation,
         JSON.stringify(resolved.acceptanceCriteria), resolved.scope, JSON.stringify(resolved.nonGoals), resolved.confidence, resolved.reason,
-        resolved.routerVersion, now(), id, sessionId).changes;
+        resolved.routerVersion, JSON.stringify(resolved.executionPolicy ?? null), now(), id, sessionId).changes;
     return changed === 1 ? this.getSessionInboxItem(id) : undefined;
   }
 
@@ -2233,6 +2254,33 @@ ${source.content}`;
         });
       }
       return active.map(({ id, runId, ordinal }) => ({ id, runId, ordinal }));
+    });
+    return transaction();
+  }
+
+  releaseContinuationLease(id: string, owner: string, reason = "Continuation preparation failed") {
+    const transaction = this.db.transaction(() => {
+      const timestamp = now();
+      const item = this.db.prepare(`SELECT continuation.id, continuation.run_id as runId, continuation.ordinal,
+          run.attempt, run.last_event_seq as lastEventSeq FROM run_continuations continuation
+        JOIN runs run ON run.id=continuation.run_id
+        WHERE continuation.id = ? AND continuation.status = 'running' AND continuation.lease_owner = ?`)
+        .get(id, owner) as { id: string; runId: RunId; ordinal: number; attempt: number; lastEventSeq: number } | undefined;
+      if (!item) return undefined;
+      const released = this.db.prepare(`UPDATE run_continuations SET status = 'queued', error = ?, started_at = NULL,
+          completed_at = NULL, lease_owner = '', lease_until = NULL, heartbeat_at = NULL
+          WHERE id = ? AND status = 'running' AND lease_owner = ?`).run(reason, item.id, owner);
+      if (released.changes !== 1) return undefined;
+      this.db.prepare(`UPDATE runs SET status = 'blocked', phase = 'blocked', blocked_reason = ?,
+        completed_at = NULL, updated_at = ? WHERE id = ? AND status IN ('running', 'interrupted', 'blocked')`)
+        .run(reason, timestamp, item.runId);
+      this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id = ?")
+        .run(timestamp, item.runId);
+      this.projectAttempt({
+        runId: item.runId, ordinal: item.attempt, trigger: "recovery", status: "blocked", scenario: "recovery",
+        reason, legacyEventSeq: item.lastEventSeq, timestamp,
+      });
+      return { id: item.id, runId: item.runId, ordinal: item.ordinal };
     });
     return transaction();
   }
@@ -2769,6 +2817,7 @@ ${source.content}`;
   }
 
   enqueueControl(runId: RunId, requestId: string, kind: ControlInboxItem["kind"], content: string, capacity: number) {
+    assertControlContent(content);
     const transaction = this.db.transaction(() => {
       const existing = this.db.prepare("SELECT id FROM control_inbox WHERE run_id = ? AND request_id = ?").get(runId, requestId) as { id: string } | undefined;
       if (existing) return { status: "duplicate" as const, item: this.getControlItem(existing.id)! };
@@ -2985,6 +3034,23 @@ ${source.content}`;
 
   hasPendingApproval(runId: RunId) {
     return Boolean(this.db.prepare("SELECT 1 FROM approval_requests WHERE run_id=? AND status='pending'").get(runId));
+  }
+
+  authorizeExternalAction(runId: RunId, attempt: number) {
+    return this.db.transaction(() => {
+      const approved = this.db.prepare(`SELECT id,status FROM approval_requests
+        WHERE run_id=? AND action_type='execute_external_action'
+          AND status IN ('approved','consumed')
+          AND CAST(json_extract(metadata_json,'$.approvedAttempt') AS INTEGER)=?
+        ORDER BY requested_at DESC LIMIT 1`).get(runId, attempt) as { id: string; status: string } | undefined;
+      if (!approved) return { allowed: false, reason: `Attempt ${attempt} has no approved external-action authorization` };
+      if (approved.status === "approved") {
+        const consumed = this.db.prepare(`UPDATE approval_requests SET status='consumed',used_count=1
+          WHERE id=? AND status='approved'`).run(approved.id);
+        if (consumed.changes !== 1) return { allowed: false, reason: "External-action authorization was consumed concurrently" };
+      }
+      return { allowed: true, reason: `External action approved for Attempt ${attempt}`, approvalId: approved.id };
+    })();
   }
 
   updateProgressSnapshot(run: GovernanceProgressRunView, event: GovernanceRunEventView): ProgressSnapshot {
@@ -3305,8 +3371,8 @@ ${source.content}`;
     const requiredPlan = run.plan.filter((item) => item.required);
     const requiredChecks = run.checks.filter((item) => item.required);
     const mutationObserved = Boolean(this.db.prepare(`SELECT 1 FROM operations
-      WHERE run_id=? AND attempt=? AND operation_type IN ('tool.write','tool.edit','tool.patch','tool.bash')
-        AND status <> 'failed' LIMIT 1`).get(run.id, run.attempt));
+      WHERE run_id=? AND attempt=? AND operation_type IN ('tool.write','tool.edit','tool.patch','tool.bash','tool.memory_forget')
+        AND status <> 'pre_effect_rejected' LIMIT 1`).get(run.id, run.attempt));
     const executionPolicy = effectiveTaskExecutionPolicy(run.contract, mutationObserved ? [{ operationType: "tool.write", status: "succeeded", attempt: run.attempt }] : [], run.attempt);
     let operations: Map<string, OperationRecord> | undefined;
     const operationById = (id: string) => {

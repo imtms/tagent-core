@@ -122,6 +122,18 @@ describe("Store", () => {
     expect(store.claimNextSessionInbox(session.id)?.item.id).toBe(third.id);
   });
 
+  it("rejects oversized Session Inbox content at the persistence boundary", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const oversized = "x".repeat(200_001);
+    expect(() => store.enqueueSessionInbox(session.id, oversized, analysis("oversized"), "oversized-submit"))
+      .toThrow("Submission content cannot exceed 200000 characters");
+    const item = store.enqueueSessionInbox(session.id, "editable", analysis("editable"), "oversized-edit");
+    expect(() => store.updateSessionInboxItem(item.id, session.id, oversized))
+      .toThrow("Submission content cannot exceed 200000 characters");
+    expect(store.getSessionInboxItem(item.id)?.content).toBe("editable");
+  });
+
   it("prioritizes analyzed inbox work and persists a TaskRun contract", () => {
     const store = createStore(); const session = store.createSession();
     const low = store.enqueueSessionInbox(session.id, "low work", analysis("Concise low goal", 100), "priority-low");
@@ -409,6 +421,14 @@ describe("Store", () => {
     expect(store.getControlItem(second.item!.id)).toMatchObject({ status: "superseded" });
   });
 
+  it("rejects oversized control content at the persistence boundary", () => {
+    const store = createStore();
+    const run = store.createRun(store.createSession().id, "control content bound");
+    expect(() => store.enqueueControl(run.id, "oversized-control", "steer", "x".repeat(200_001), 32))
+      .toThrow("Control content cannot exceed 200000 characters");
+    expect(store.listControlInbox(run.id)).toEqual([]);
+  });
+
   it("preserves control admission order when timestamps tie", () => {
     const store = createStore();
     const run = store.createRun(store.createSession().id, "control ordering");
@@ -544,6 +564,25 @@ describe("Store", () => {
     expect(store.getRun(run.id)).toMatchObject({ status: "blocked", phase: "blocked" });
   });
 
+  it("releases only the specified continuation when an owner has multiple leases", () => {
+    const store = createStore();
+    const firstRun = store.createRun(store.createSession().id, "first release");
+    const secondRun = store.createRun(store.createSession().id, "second remains live");
+    for (const run of [firstRun, secondRun]) {
+      store.db.prepare("UPDATE runs SET status = 'blocked' WHERE id = ?").run(run.id);
+      store.queueContinuation(run.id, run.goal);
+    }
+    const first = store.claimContinuation(firstRun.id, "shared-owner", 10_000)!;
+    const second = store.claimContinuation(secondRun.id, "shared-owner", 10_000)!;
+    expect(store.releaseContinuationLease(first.continuation.id, "other-owner")).toBeUndefined();
+    expect(store.releaseContinuationLease(first.continuation.id, "shared-owner", "preparation failed"))
+      .toEqual({ id: first.continuation.id, runId: firstRun.id, ordinal: 1 });
+    expect(store.listContinuations(firstRun.id)[0]).toMatchObject({ status: "queued", leaseOwner: "" });
+    expect(store.listContinuations(secondRun.id)[0]).toMatchObject({ status: "running", leaseOwner: "shared-owner" });
+    expect(store.getRun(secondRun.id)).toMatchObject({ status: "running" });
+    expect(second.continuation.id).not.toBe(first.continuation.id);
+  });
+
   it("normalizes assistant text and paired tool calls for the Web transcript", () => {
     const store = createStore();
     const session = store.createSession();
@@ -668,16 +707,16 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(41);
+    expect(store.getSchemaVersion()).toBe(42);
   });
 
-  it("migrates an older database to schema version 41", () => {
+  it("migrates an older database to schema version 42", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE core_writer_lease; DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(41);
+    expect(migrated.getSchemaVersion()).toBe(42);
     expect((migrated.db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
     expect((migrated.db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
     expect((migrated.db.prepare("PRAGMA table_info(operations)").all() as Array<{ name: string }>).map((column) => column.name)).toContain("payload_json");
@@ -719,7 +758,7 @@ describe("Store", () => {
     initial.close();
 
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(41);
+    expect(migrated.getSchemaVersion()).toBe(42);
     expect((migrated.db.prepare("PRAGMA table_info(run_checks)").all() as Array<{ name: string }>).map((column) => column.name))
       .toEqual(expect.arrayContaining(["source_operation_id", "observed_at"]));
     expect(migrated.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_run_checks_source_operation'").get())
@@ -969,6 +1008,32 @@ describe("Store", () => {
     const operation = store.claimOperation("write-op", run.id, run.attempt, "tool.write", { path: "result.txt" });
     store.updateOperation(operation.id, { status: "succeeded", result: { path: "result.txt" } });
     expect(store.getRun(run.id)?.completionGate).toMatchObject({ passed: false, failures: expect.arrayContaining([expect.objectContaining({ key: "plan" }), expect.objectContaining({ key: "trusted_evidence" })]) }); store.close();
+  });
+
+  it("raises governance after a mutation-capable operation fails after effect start", () => {
+    const store = new Store(":memory:"); const session = store.createSession();
+    const policy = { mode: "semantic_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "test", confidence: 1, reason: "model proposal" } as const;
+    const contract = { sourceInput: "try write", summary: "try write", objectives: [{ id: "o1", summary: "try write", timing: "current" as const, kind: "other" as const }], acceptanceCriteria: ["done"], scope: "workspace", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
+    const run = store.createRun(session.id, "try write", undefined, contract);
+    const operation = store.claimOperation("failed-write", run.id, run.attempt, "tool.write", { path: "result.txt" });
+    store.updateOperation(operation.id, { status: "failed", stage: "execution_failed", error: "disk full" });
+    expect(store.getRun(run.id)?.completionGate.failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "plan" }), expect.objectContaining({ key: "trusted_evidence" }),
+    ]));
+    store.close();
+  });
+
+  it("raises governance after a memory deletion operation starts", () => {
+    const store = new Store(":memory:"); const session = store.createSession();
+    const policy = { mode: "semantic_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "test", confidence: 1, reason: "model proposal" } as const;
+    const contract = { sourceInput: "forget it", summary: "forget it", objectives: [{ id: "o1", summary: "forget it", timing: "current" as const, kind: "other" as const }], acceptanceCriteria: ["done"], scope: "memory", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
+    const run = store.createRun(session.id, "forget it", undefined, contract);
+    const operation = store.claimOperation("forget-op", run.id, run.attempt, "tool.memory_forget", { ids: ["memory-1"] });
+    store.updateOperation(operation.id, { status: "failed", stage: "execution_failed", error: "backend failed" });
+    expect(store.getRun(run.id)?.completionGate.failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "plan" }), expect.objectContaining({ key: "trusted_evidence" }),
+    ]));
+    store.close();
   });
 
   it("normalizes an inconsistent persisted policy to its strongest safety implication", () => {

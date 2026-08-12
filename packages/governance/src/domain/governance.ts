@@ -90,12 +90,12 @@ export interface ApprovalRequest {
   runId: string;
   decisionId: string;
   attempt?: number;
-  actionType: "resume_taskrun" | "start_parallel_taskrun";
+  actionType: "resume_taskrun" | "start_parallel_taskrun" | "execute_external_action";
   targetType: "taskrun" | "session_inbox_item";
   targetId: string;
   reason: string;
   metadata: Record<string, unknown>;
-  status: "pending" | "approved" | "rejected" | "superseded";
+  status: "pending" | "approved" | "rejected" | "superseded" | "consumed";
   requestedAt: number;
   resolvedAt: number | null;
   resolvedBy: string;

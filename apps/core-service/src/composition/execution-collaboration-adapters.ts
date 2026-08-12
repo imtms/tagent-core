@@ -70,7 +70,16 @@ async function withinDeadline<T>(work: (signal: AbortSignal) => Promise<T>, time
       }),
     ]);
   } catch (error) {
-    if (signal?.aborted && pending) await Promise.allSettled([pending]);
+    // A deadline is a latency boundary. Caller-driven shutdown still gives a
+    // cooperative adapter a short cleanup join before the outer hard bound.
+    if (pending && !signal?.aborted) void pending.catch(() => undefined);
+    if (pending && signal?.aborted) {
+      const cleanup = Promise.allSettled([pending]);
+      let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([cleanup, new Promise<void>((resolve) => { cleanupTimer = setTimeout(resolve, 250); })]);
+      } finally { if (cleanupTimer) clearTimeout(cleanupTimer); }
+    }
     throw error;
   } finally {
     if (timer) clearTimeout(timer);

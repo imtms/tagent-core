@@ -29,10 +29,11 @@ const evidencePolicies = new Set<TaskExecutionPolicy["evidencePolicy"]>(["none",
 const reviewPolicies = new Set<TaskExecutionPolicy["reviewPolicy"]>(["local", "semantic_lite", "full"]);
 const EXACT_OUTPUT = /^(?:只|仅|请只|please only)\s*(?:回复|回答|输出|return|reply|respond)\s*[“"'`]?(.+?)[”"'`]?\s*[。.!！]?$/i;
 const SEMANTIC_DELIVERY = /(翻译|译成|改写|润色|摘要|总结|概括|提炼|起草|撰写|写一封|文案|命名|名称|语病|错别字|校对|格式(?:化|转换)|translate|rewrite|rephrase|polish|summari[sz]e|draft|proofread|copyedit|format)/i;
-const EXTERNAL_ACTION = /(部署到|发布到|上线到|生产环境|发送(?:邮件|消息)|删除(?:数据|账号|资源)|修改权限|授予权限|deploy to|publish to|production|send (?:an? )?(?:email|message)|delete (?:data|account|resource)|grant permission)/i;
+const EXTERNAL_ACTION = /(部署到|发布到|上线到|同步到线上|交付到(?:客户|线上|生产)|推到(?:主分支|远端)|合并并推|生产环境|线上(?:环境|实例|缓存)|发送(?:邮件|消息)|通知客户|发给客户|删除(?:数据|账号|资源|远端资源)|(?:忘记|删除|清除).{0,80}(?:长期)?记忆(?:记录)?|清空远端|撤掉线上|修改权限|授予权限|开管理员权限|设为管理员|deploy to|publish to|production|send (?:an? )?(?:email|message)|delete (?:data|account|resource)|(?:forget|delete|remove|erase)\b.{0,80}\b(?:long[- ]?term )?memor(?:y|ies)(?: records?)?|grant permission)/i;
 const WORKSPACE_MUTATION = /(修复|实现|完善|改造|更新|修改|删除|迁移|重构|写入|创建文件|fix|implement|improve|update|modify|remove|migrate|refactor|write (?:the )?file|create (?:a )?file)/i;
 const EXECUTION_AS_TOPIC = /^(?:(?:请|麻烦|帮我|请你|please|could you|would you)\s*)?(?:解释|介绍|说明|讲解|讨论|比较|分析|评估|描述|列出|告诉我|给出|explain|describe|discuss|compare|analy[sz]e|evaluate|list)(?:\s+|[:：])?.*(?:如何|为什么|流程|方法|步骤|含义|区别|优缺点|风险|how|why|process|method|steps?|meaning|difference|trade-?offs?|risks?)/i;
-const COMBINED_REAL_ACTION = /(?:并|并且|然后|随后|接着|同时|再|and|then|also).*(?:部署到|发布到|上线到|发送(?:邮件|消息)|删除(?:数据|账号|资源)|修改权限|授予权限|修复|实现|更新|修改|写入|创建文件|deploy to|publish to|send (?:an? )?(?:email|message)|delete (?:data|account|resource)|grant permission|fix|implement|update|modify|write (?:the )?file|create (?:a )?file)/i;
+const COMBINED_REAL_ACTION = /(?:并|并且|然后|随后|接着|同时|再|and|then|also).*(?:部署到|发布到|上线到|发送(?:邮件|消息)|删除(?:数据|账号|资源)|(?:忘记|删除|清除).{0,80}(?:长期)?记忆|修改权限|授予权限|修复|实现|更新|修改|写入|创建文件|deploy to|publish to|send (?:an? )?(?:email|message)|delete (?:data|account|resource)|(?:forget|delete|remove|erase)\b.{0,80}\bmemor(?:y|ies)|grant permission|fix|implement|update|modify|write (?:the )?file|create (?:a )?file)/i;
+const AMBIGUOUS_IMPERATIVE = /^(?:(?:请|麻烦|帮我|请你|please|could you|would you)\s*)?(?:(?:把|将|给|对|为|合并|同步|交付|推送|发送|通知|忘记|删除|清除|清空|撤掉|设置|设为|开启|关闭|执行|运行)|(?:apply|merge|sync|deliver|push|send|notify|forget|delete|clear|remove|erase|set|enable|disable|run|execute)\b)/i;
 
 function hasSemanticRiskAmbiguity(source: string) {
   const riskLanguage = EXTERNAL_ACTION.test(source) || WORKSPACE_MUTATION.test(source);
@@ -152,7 +153,8 @@ export class SessionInputRouter {
 
   async analyze(content: string, activeRun?: SessionInputRouterTaskRun, context: SessionInputRouterContext = {}): Promise<SessionInputAnalysis> {
     const fallback = ruleAnalysis(content, activeRun);
-    if (!this.model || this.canUseDeterministicResult(content, activeRun, fallback)) return fallback;
+    if (this.canUseDeterministicResult(content, activeRun, fallback)) return fallback;
+    if (!this.model) return this.conservativeFallback(content, fallback, "semantic Router model is unavailable");
     try {
       const result = await this.model.request({ prompt: this.prompt(content, activeRun, context) });
       const parsed = this.parse(result.value, activeRun, content);
@@ -162,16 +164,24 @@ export class SessionInputRouter {
       return parsed;
     }
     catch (error) {
-      return { ...fallback, reason: `${fallback.reason} LLM parsing failed; deterministic fallback used: ${error instanceof Error ? error.message : String(error)}` };
+      return this.conservativeFallback(content, fallback, error instanceof Error ? error.message : String(error));
     }
+  }
+
+  private conservativeFallback(content: string, fallback: SessionInputAnalysis, detail: string): SessionInputAnalysis {
+    const policy = AMBIGUOUS_IMPERATIVE.test(normalize(content))
+      && !["external_action", "workspace_mutation"].includes(fallback.executionPolicy?.mode ?? "")
+      ? { mode: "external_action" as const, ...canonicalPolicyProfile("external_action"), policyVersion: "task-policy-conservative-fallback-v1", confidence: .55, reason: "Core conservatively classified an unresolved imperative as external action because semantic routing was unavailable." }
+      : fallback.executionPolicy;
+    return { ...fallback, executionPolicy: policy, reason: `${fallback.reason} Semantic routing unavailable; deterministic fallback used: ${detail}` };
   }
 
   private canUseDeterministicResult(content: string, activeRun: SessionInputRouterTaskRun | undefined, result: SessionInputAnalysis) {
     const compact = normalize(content);
     if (compact.length > 280 || result.objectives.length > 2) return false;
     // Let the semantic Router distinguish discussing/drafting a risky operation from executing it.
-    // If the model is unavailable, the conservative rule result remains the fallback.
     if (hasSemanticRiskAmbiguity(compact)) return false;
+    if (AMBIGUOUS_IMPERATIVE.test(compact) && !SEMANTIC_DELIVERY.test(compact) && !exactOutput(compact)) return false;
     if (result.intent === "defer" || result.intent === "clarification" || result.executionPolicy?.mode === "exact_delivery") return true;
     if (activeRun && ["steer_active", "follow_up_active", "update_active_context", "parallel_task"].includes(result.intent) && result.confidence >= 0.92) return true;
     return !activeRun && result.objectives.length === 1 && result.confidence >= 0.9 && !/(以上|上述|前面|刚才|继续|this|that|above|previous)/i.test(compact);

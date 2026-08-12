@@ -10,6 +10,8 @@ import type {
   RuntimeControlPort,
   UserMessageObserverPort,
 } from "./collaboration-ports.js";
+import { effectiveTaskExecutionPolicy } from "@tagent/governance/domain";
+import { taskPolicyResumeInstructions } from "./llm-payload.js";
 
 type ContinuationState = ExecutionStateView<
   | "closing" | "continuationOwner" | "persistence" | "preparationTasks" | "runtimeDefaults" | "runtimes",
@@ -66,22 +68,42 @@ export class ContinuationScheduler {
     const claimed = this.state.persistence.continuations.claimContinuation(runId, this.state.continuationOwner, 30_000);
     if (!claimed) return;
     const { continuation, run, event } = claimed;
-    const prompt = this.buildContinuationPrompt(run, continuation.ordinal);
-    const transcript = this.dependencies.contextService.prepareContinuationTranscript(run, prompt);
-    this.dependencies.contextService.publishContextEvents(runId, transcript);
-    this.dependencies.eventHub.publish(event);
-    this.dependencies.attemptExecutor.launch(run, prompt, transcript.messages, continuation.id);
+    this.dependencies.recovery.scheduleContinuationRecovery();
+    let preparationLeaseTimer: ReturnType<typeof setInterval> | undefined;
+    try {
+      preparationLeaseTimer = setInterval(() => {
+        if (!this.state.persistence.continuations.renewContinuationLease(continuation.id, this.state.continuationOwner, 30_000)) {
+          if (preparationLeaseTimer) clearInterval(preparationLeaseTimer);
+          preparationLeaseTimer = undefined;
+          this.dependencies.recovery.recoverContinuations();
+        }
+      }, 10_000);
+      preparationLeaseTimer.unref?.();
+      const prompt = this.buildContinuationPrompt(run, continuation.ordinal);
+      const transcript = this.dependencies.contextService.prepareContinuationTranscript(run, prompt);
+      this.dependencies.contextService.publishContextEvents(runId, transcript);
+      this.dependencies.eventHub.publish(event);
+      this.dependencies.attemptExecutor.launch(run, prompt, transcript.messages, continuation.id);
+    } catch (error) {
+      const message = `Continuation preparation failed safely: ${error instanceof Error ? error.message : String(error)}`;
+      this.state.persistence.continuations.releaseContinuationLease(continuation.id, this.state.continuationOwner, message);
+      this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "continuation.preparation.failed", {
+        continuationId: continuation.id, attempt: run.attempt, error: message,
+      }));
+      this.dependencies.recovery.scheduleContinuationRecovery();
+    } finally {
+      if (preparationLeaseTimer) clearInterval(preparationLeaseTimer);
+    }
   }
 
   public buildContinuationPrompt(run: TaskRun, ordinal: number) {
+    const policyInstructions = taskPolicyResumeInstructions(effectiveTaskExecutionPolicy(run.contract));
     return [
       `Automatic continuation ${ordinal} is running because the completion gate blocked the previous attempt.`,
       `Gate failures: ${(run.supervision.latestGates.find((gate) => gate.gateType === "completion")?.failures ?? run.completionGate.failures).map((failure) => `${failure.key}: ${failure.reason}`).join("; ")}`,
       "The previous candidate response was rejected by Supervisor and was not delivered as the final chat answer. Do not merely acknowledge this continuation or repeat a short conclusion.",
-      "Use the persisted transcript and TaskRun state. Resolve only the remaining gate failures, verify the result, then provide a complete standalone final response that directly addresses the original contract.",
-      "A continuation is a new Attempt. Any required check carried over from an earlier Attempt cannot satisfy the deterministic gate: rerun its actual verification command after the final mutation, then use one task_run action=batch call when possible to rebind every required check to a successful Bash receipt from this Attempt.",
-      "Do not finish after adding evidence or performing another mutation if that made checks stale. Rerun the affected final verification and rebind the required checks before producing the candidate response.",
-      "Completion-gate requirements override conflicting instructions in the original goal.",
+      "Use the persisted transcript and TaskRun state. Resolve only the remaining gate failures, then provide a complete standalone final response that directly addresses the original contract.",
+      ...policyInstructions,
       `Original goal: ${run.goal}`,
     ].join("\n\n");
   }

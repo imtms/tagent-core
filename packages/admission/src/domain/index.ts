@@ -14,7 +14,12 @@ export type {
   TaskReviewPolicy,
   TaskSideEffectRisk,
 } from "./task-execution-policy.js";
-export type { SessionInboxItem, Submission } from "./submission.js";
+export {
+  MAX_SUBMISSION_CONTENT_CHARS,
+  assertSubmissionContent,
+  type SessionInboxItem,
+  type Submission,
+} from "./submission.js";
 export type {
   Message,
   Session,

@@ -208,6 +208,7 @@ export class PiRuntime implements AttemptRuntimePort {
   private deltaTimer?: ReturnType<typeof setTimeout>;
   private thinkingDeltaTimer?: ReturnType<typeof setTimeout>;
   private lastToolProgressAt = new Map<string, number>();
+  private readonly toolLivenessTimers = new Map<string, ReturnType<typeof setInterval>>();
   private fallbackIndex = 0;
   private lastError?: string;
   private messages: RuntimeMessage[];
@@ -309,12 +310,17 @@ export class PiRuntime implements AttemptRuntimePort {
         }
       }
     }
-    if (event.type === "tool_execution_start") this.emit("tool.started", { toolCallId: event.toolCallId, toolName: event.toolName });
+    if (event.type === "tool_execution_start") {
+      this.emit("tool.started", { toolCallId: event.toolCallId, toolName: event.toolName });
+      const timer = setInterval(() => this.options.eventSink.activity(), 15_000);
+      timer.unref?.();
+      this.toolLivenessTimers.set(event.toolCallId, timer);
+    }
     if (event.type === "tool_execution_update") {
       const timestamp = Date.now(), previous = this.lastToolProgressAt.get(event.toolCallId) ?? 0;
       if (timestamp - previous >= 1_000) { this.lastToolProgressAt.set(event.toolCallId, timestamp); this.emit("tool.progress", { toolCallId: event.toolCallId, toolName: event.toolName }); }
     }
-    if (event.type === "tool_execution_end") { this.lastToolProgressAt.delete(event.toolCallId); this.emit("tool.completed", { toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError }); }
+    if (event.type === "tool_execution_end") { const timer = this.toolLivenessTimers.get(event.toolCallId); if (timer) clearInterval(timer); this.toolLivenessTimers.delete(event.toolCallId); this.lastToolProgressAt.delete(event.toolCallId); this.emit("tool.completed", { toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError }); }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") this.queueDelta(event.assistantMessageEvent.delta);
     if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") this.queueThinkingDelta(event.assistantMessageEvent.delta);
     if (event.type === "queue_update") {
@@ -526,6 +532,8 @@ export class PiRuntime implements AttemptRuntimePort {
     await this.abortPromise;
   }
   dispose() {
+    for (const timer of this.toolLivenessTimers.values()) clearInterval(timer);
+    this.toolLivenessTimers.clear();
     this.flushDelta();
     this.flushThinkingDelta();
     this.disposed = true;

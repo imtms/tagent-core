@@ -53,6 +53,7 @@ export interface ContinuationControlPort {
 export interface RecoveryControlPort {
   repairTranscript(runId: RunId, reason: "cancelled" | "resume" | "continuation"): Array<{ toolCallId: string; toolName: string }>;
   recoverContinuations(): RunId[];
+  scheduleContinuationRecovery(): void;
 }
 
 export interface RuntimeControlPort {

@@ -169,7 +169,34 @@ export class SqliteTaskRunTransitionRepository implements TaskRunTransitionPort 
     if (normalizedCommand.kind === "admission_launch_failed") {
       return this.transitionAdmissionFailure(normalizedCommand, scope);
     }
+    if (normalizedCommand.kind === "require_external_approval") {
+      return this.transitionExternalApproval(normalizedCommand, scope);
+    }
     return this.transitionResume(normalizedCommand, normalizedAuthority, scope);
+  }
+
+  private transitionExternalApproval(
+    command: Extract<SystemTransitionCommand, { kind: "require_external_approval" }>,
+    scope: SystemAttemptScope,
+  ): TaskRunTransitionResult {
+    if (!scope.active || scope.attemptStatus !== "running" || scope.runStatus !== "running") {
+      throw new Error(`External approval requires the active running Attempt ${scope.attemptId}`);
+    }
+    const approval = this.db.prepare(`SELECT 1 FROM approval_requests
+      WHERE id=? AND run_id=? AND action_type='execute_external_action' AND status='pending'`)
+      .get(command.approvalId, scope.runId);
+    if (!approval) throw new Error(`External approval ${command.approvalId} is not pending for ${scope.runId}`);
+    const event = this.store.transitionRun(
+      scope.runId, ["running"], "blocked", "run.blocked",
+      { reason: command.reason, approvalId: command.approvalId, action: "execute_external_action" },
+      command.reason, scope.ordinal,
+    );
+    if (!event) throw new Error(`TaskRun ${scope.runId} external approval boundary lost its compare-and-set`);
+    return { transitions: [{
+      runId: scope.runId, sourceAttemptId: scope.attemptId, sourceOrdinal: scope.ordinal,
+      targetAttemptId: scope.attemptId, targetOrdinal: scope.ordinal, fromStatus: "running",
+      toStatus: "blocked", precedingEvents: [], event,
+    }] };
   }
 
   private transitionAdmissionFailure(
@@ -330,6 +357,11 @@ export class SqliteTaskRunTransitionRepository implements TaskRunTransitionPort 
           error: value.error,
           retryable: value.retryable,
         };
+      case "require_external_approval":
+        assertExactKeys(value, ["kind", "attemptId", "expectedVersion", "approvalId", "reason"], "SystemTransitionCommand");
+        assertNonEmpty(value.approvalId, "SystemTransitionCommand.approvalId");
+        assertNonEmpty(value.reason, "SystemTransitionCommand.reason");
+        break;
       case "resume_manual":
         assertExactKeys(value, ["kind", "attemptId", "expectedVersion", "reason"], "SystemTransitionCommand");
         assertNonEmpty(value.reason, "SystemTransitionCommand.reason");
@@ -358,6 +390,11 @@ export class SqliteTaskRunTransitionRepository implements TaskRunTransitionPort 
         if (value.component !== "admission_coordinator") throw new TypeError("Admission authority component is invalid");
         assertNonEmpty(value.inboxItemId, "SystemTransitionAuthority.inboxItemId");
         return { kind: value.kind, component: value.component, inboxItemId: value.inboxItemId };
+      case "external_action_guard":
+        assertExactKeys(value, ["kind", "component", "approvalId"], "SystemTransitionAuthority");
+        if (value.component !== "admission_coordinator") throw new TypeError("External action guard component is invalid");
+        assertNonEmpty(value.approvalId, "SystemTransitionAuthority.approvalId");
+        return { kind: value.kind, component: value.component, approvalId: value.approvalId };
       case "lifecycle_interrupt":
         assertExactKeys(value, ["kind", "component", "phase"], "SystemTransitionAuthority");
         if (value.component === "execution_lifecycle_service" && value.phase === "startup") {
@@ -390,6 +427,8 @@ export class SqliteTaskRunTransitionRepository implements TaskRunTransitionPort 
   ): void {
     const matches = command.kind === "admission_launch_failed"
       ? authority.kind === "admission_launch_failure" && authority.inboxItemId === command.inboxItemId
+      : command.kind === "require_external_approval"
+        ? authority.kind === "external_action_guard" && authority.approvalId === command.approvalId
       : command.kind === "startup_interrupt_active"
         ? authority.kind === "lifecycle_interrupt" && authority.phase === "startup"
         : command.kind === "shutdown_interrupt_active"

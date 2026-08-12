@@ -14,6 +14,8 @@ export interface AdmissionRouterPort {
 
 export interface AdmissionSupervisorPort {
   proposeParallelTaskStart(parentRunId: RunId, inboxItemId: string, summary: string): { id: string };
+  proposeExternalActionStart(runId: RunId, summary: string): { id: string };
+  markExecuted(id: string, status: "executed" | "superseded" | "failed", error?: string): unknown;
 }
 
 export interface AdmissionDispatchPort {

@@ -23,7 +23,7 @@ describe("Operator Read schema v41", () => {
     seed.close();
 
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(41);
+    expect(migrated.getSchemaVersion()).toBe(42);
     for (const index of ["idx_sessions_operator_created", "idx_runs_operator_session_created", "idx_runs_operator_session_updated"]) {
       expect(migrated.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name=?").pluck().get(index)).toBe(index);
     }

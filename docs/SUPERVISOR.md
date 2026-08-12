@@ -12,9 +12,11 @@ Admission proposes an immutable execution policy for each new contract. Core con
 - `semantic_delivery` — translation, rewriting, summarization, drafting, prose review, naming, or ordinary answers;
 - `read_only_analysis` — repository/code/runtime investigation without mutation;
 - `workspace_mutation` — durable workspace or code changes;
-- `external_action` — deploy, publish, send, delete, permission, or other high-impact external action.
+- `external_action` — deploy, publish, send, persistent Memory deletion, permission, or other high-impact external action.
 
-The proposal also declares side-effect risk, evidence policy and review policy. It is not an authority grant: Core raises the policy to full review and trusted checks whenever a Workspace Goal or a current-Attempt `write`, `edit`, `patch`, or `bash` operation is observed. A model can never lower this floor.
+The proposal also declares side-effect risk, evidence policy and review policy. It is not an authority grant: Core raises the policy to full review and trusted checks whenever a Workspace Goal or a current-Attempt mutation-capable operation is observed, including one that failed after its effect started. A model can never lower this floor.
+
+`external_action` has a separate effect-before-approval boundary. Admission persists a pending request and blocks the first Attempt before Runtime construction. Approval is bound to the next Attempt and atomically consumed by the runtime host before its first mutation-capable tool call; it is not a reusable Run-wide bypass. If settlement or a transient failure would otherwise require another Attempt, Core pauses for a fresh next-Attempt approval instead of automatically launching a retry that cannot inherit authority. LLMs may classify semantic risk but cannot create, approve, or consume this authority.
 
 Successful `read` and `ls` calls produce read-only operation receipts that Full Supervisor review can cite. They do not trigger mutation governance or create an artificial Bash-check requirement.
 

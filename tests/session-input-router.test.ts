@@ -86,6 +86,11 @@ describe("SessionInputRouter", async () => {
     expect((await router.analyze("只回复 OK。")).executionPolicy).toMatchObject({ mode: "exact_delivery", reviewPolicy: "local", exactOutput: "OK" });
     expect((await router.analyze("解释 OK 的含义。")).executionPolicy).toMatchObject({ mode: "semantic_delivery", reviewPolicy: "semantic_lite" });
   });
+  it("fails closed for an unresolved imperative when no semantic Router model is configured", async () => {
+    const result = await router.analyze("执行这个方案");
+    expect(result.executionPolicy).toMatchObject({ mode: "external_action", sideEffectRisk: "external_high", policyVersion: "task-policy-conservative-fallback-v1" });
+    expect(result.reason).toContain("Semantic routing unavailable");
+  });
   it("uses the LLM to distinguish discussing a risky action from executing it", async () => {
     let calls = 0;
     const router = new SessionInputRouter({ model: modelPort(async () => {
@@ -101,6 +106,32 @@ describe("SessionInputRouter", async () => {
     expect((await router.analyze("解释如何部署到生产环境。")).executionPolicy).toMatchObject({ mode: "semantic_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite" });
     expect(calls).toBe(1);
     expect((await router.analyze("请部署到生产环境。")).executionPolicy).toMatchObject({ mode: "external_action", reviewPolicy: "full", evidencePolicy: "trusted_check" });
+    expect(calls).toBe(1);
+  });
+  it("routes external-action synonyms through semantic classification and preserves the safety floor", async () => {
+    const phrases = ["把最新版同步到线上", "把这个结果通知客户", "清空远端缓存", "给 Alice 开管理员权限", "合并并推到主分支", "把最新构建交付到客户环境", "撤掉线上旧实例", "将账号设为管理员", "把报告发给客户", "删除远端资源", "忘记关于 Alice 的长期记忆", "删除这些记忆记录", "forget these memory records"];
+    let calls = 0;
+    const semantic = new SessionInputRouter({ model: modelPort(async (prompt) => {
+      calls += 1;
+      const input = JSON.parse(prompt.split("INPUT_DATA=")[1]!) as { userInput: string };
+      return { summary: input.userInput, objectives: [{ summary: input.userInput, timing: "current", kind: "change" }], intent: "new_task", targetActiveRun: false, priority: 700, urgency: "normal", relation: "independent", acceptanceCriteria: ["完成外部动作"], scope: "external", nonGoals: [], confidence: .9, reason: "external imperative", executionPolicy: { mode: "external_action", sideEffectRisk: "external_high", evidencePolicy: "trusted_check", reviewPolicy: "full", confidence: .9, reason: "external effect" } };
+    }) });
+    for (const phrase of phrases) expect((await semantic.analyze(phrase)).executionPolicy).toMatchObject({ mode: "external_action", reviewPolicy: "full" });
+    expect(calls).toBe(phrases.length);
+  });
+  it("uses semantic routing to distinguish explaining memory deletion from executing it", async () => {
+    let calls = 0;
+    const semantic = new SessionInputRouter({ model: modelPort(async () => {
+      calls += 1;
+      return {
+        summary: "解释长期记忆删除机制", objectives: [{ summary: "解释如何删除长期记忆", timing: "current", kind: "answer" }],
+        intent: "discussion", targetActiveRun: false, priority: 350, urgency: "normal", relation: "independent",
+        acceptanceCriteria: ["解释删除机制"], scope: "机制说明", nonGoals: ["不删除记忆"], confidence: .98,
+        reason: "用户要求解释机制而非执行删除",
+        executionPolicy: { mode: "semantic_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", confidence: .98, reason: "Explanation only." },
+      };
+    }) });
+    expect((await semantic.analyze("解释如何删除长期记忆。")).executionPolicy).toMatchObject({ mode: "semantic_delivery", reviewPolicy: "semantic_lite" });
     expect(calls).toBe(1);
   });
   it("fails closed when the LLM returns an internally inconsistent policy", async () => {

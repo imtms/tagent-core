@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { RunId } from "../domain/task-run.js";
+import { assertControlContent, type RunId } from "../domain/task-run.js";
 import type { ExecutionStateView } from "./execution-state.js";
 import type { RunEventPublisherPort } from "./collaboration-ports.js";
 
@@ -21,6 +21,7 @@ export class ControlInboxDispatcher {
 
   async enqueueControl(runId: RunId, kind: "steer" | "follow_up", instruction: string, requestId: string) {
     if (this.state.closing) return { status: "closing" as const };
+    assertControlContent(instruction);
     const admission = this.state.persistence.controlInbox.enqueueControl(runId, requestId, kind, instruction, this.state.runtimeDefaults.controlInboxCapacity ?? 32);
     if (admission.status !== "accepted" && admission.status !== "duplicate") return { status: admission.status };
     const item = admission.item;

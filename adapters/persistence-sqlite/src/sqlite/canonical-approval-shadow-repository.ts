@@ -290,6 +290,11 @@ implements CanonicalApprovalReadPort, CanonicalApprovalShadowPort {
     if (action === "task_run.resume" && (row.targetType !== "taskrun" || row.targetId !== row.runId)) {
       reasonCodes.push("legacy_field_conflict");
     }
+    if (action === "task_run.execute_external" && (
+      row.targetType !== "taskrun" || row.targetId !== row.runId
+      || typeof metadata?.approvedAttempt !== "number"
+      || !Number.isSafeInteger(metadata.approvedAttempt) || metadata.approvedAttempt < 1
+    )) reasonCodes.push("legacy_field_conflict");
     if (action === "task_run.start_parallel") {
       const parentRunId = metadata ? optionalString(metadata, "parentRunId") : undefined;
       const inboxItemId = metadata ? optionalString(metadata, "inboxItemId") : undefined;
@@ -326,9 +331,9 @@ implements CanonicalApprovalReadPort, CanonicalApprovalShadowPort {
       || row.maxUses !== LEGACY_RUN_APPROVAL_DEFAULTS.reuse.maxUses)) {
       reasonCodes.push("legacy_field_conflict");
     }
-    if (row.status === "approved" && row.usedCount === null) {
+    if ((row.status === "approved" || row.status === "consumed") && row.usedCount === null) {
       reasonCodes.push("run_approved_without_receipt");
-    } else if (row.usedCount !== LEGACY_RUN_APPROVAL_DEFAULTS.reuse.usedCount) {
+    } else if (row.usedCount !== (row.status === "consumed" ? 1 : LEGACY_RUN_APPROVAL_DEFAULTS.reuse.usedCount)) {
       reasonCodes.push("reuse_status_conflict");
     }
     if (reasonCodes.length > 0 || !metadata || !action || !status || !scopeId || !canonical) {

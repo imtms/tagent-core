@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { ConsoleContentRequestSchema } from "@tagent/abi";
 import type { V1ApiDependencies } from "./plugin.js";
 import { successEnvelope, V1HttpError } from "./errors.js";
 import { authorizeConsole, consoleError } from "./console-route-support.js";
@@ -20,7 +21,7 @@ export function registerConsoleRunV1Routes(app: FastifyInstance, dependencies: V
     return successEnvelope(request, { ok: true });
   });
 
-  app.post("/api/v1/console/task-runs/:id/steer", { onRequest: control }, async (request) => {
+  app.post("/api/v1/console/task-runs/:id/steer", { onRequest: control, schema: { body: ConsoleContentRequestSchema } }, async (request) => {
     const { id } = request.params as { id: string };
     const body = request.body as { content?: string; requestId?: string };
     const content = body?.content?.trim();

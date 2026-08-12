@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { canonicalizeSessionCreateRequest, canonicalizeSubmissionRequest } from "@tagent/abi";
+import {
+  ConsoleContentRequestSchema,
+  ConsoleInboxContentRequestSchema,
+  canonicalizeSessionCreateRequest,
+  canonicalizeSubmissionRequest,
+} from "@tagent/abi";
 import type { V1ApiDependencies } from "./plugin.js";
 import { successEnvelope } from "./errors.js";
 import { authorizeConsole, consoleError } from "./console-route-support.js";
@@ -92,7 +97,7 @@ export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencie
   app.get("/api/v1/console/sessions/:id/task-run", { onRequest: read }, async (request) =>
     successEnvelope(request, taskRuns.getLatestRun((request.params as { id: string }).id) ?? null));
 
-  app.post("/api/v1/console/sessions/:id/messages", { onRequest: write }, async (request) => {
+  app.post("/api/v1/console/sessions/:id/messages", { onRequest: write, schema: { body: ConsoleContentRequestSchema } }, async (request) => {
     const { id } = request.params as { id: string };
     const body = request.body as { content?: string; requestId?: string };
     const content = body?.content?.trim();
@@ -129,7 +134,7 @@ export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencie
     return successEnvelope(request, items);
   });
 
-  app.patch("/api/v1/console/sessions/:id/inbox/:itemId", { onRequest: write }, async (request) => {
+  app.patch("/api/v1/console/sessions/:id/inbox/:itemId", { onRequest: write, schema: { body: ConsoleInboxContentRequestSchema } }, async (request) => {
     const { id, itemId } = request.params as { id: string; itemId: string };
     const content = (request.body as { content?: string })?.content?.trim();
     if (!content) throw consoleError(400, "inbox.content_required", "content is required");
