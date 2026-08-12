@@ -72,6 +72,57 @@ describe("SessionInputRouter", async () => {
     expect(await router.analyze("为什么需要 completion gate？")).toMatchObject({ intent: "discussion", priority: 350 });
     expect(await router.analyze("刚才具体哪个路径错了？")).toMatchObject({ intent: "clarification", priority: 350 });
   });
+  it("classifies non-programming deliveries by execution rather than topic keywords", async () => {
+    const translation = await router.analyze("把下面这句话翻译成英文：我们明天见。");
+    const proofreading = await router.analyze("检查这句话有没有语病。");
+    const releaseExplanation = await router.analyze("介绍一下安全发布流程。");
+    expect([translation, proofreading, releaseExplanation].map((item) => item.executionPolicy)).toEqual([
+      expect.objectContaining({ mode: "semantic_delivery", reviewPolicy: "semantic_lite", evidencePolicy: "semantic" }),
+      expect.objectContaining({ mode: "semantic_delivery", reviewPolicy: "semantic_lite", evidencePolicy: "semantic" }),
+      expect.objectContaining({ mode: "semantic_delivery", reviewPolicy: "semantic_lite", evidencePolicy: "semantic" }),
+    ]);
+  });
+  it("uses local review only for a literal response", async () => {
+    expect((await router.analyze("只回复 OK。")).executionPolicy).toMatchObject({ mode: "exact_delivery", reviewPolicy: "local", exactOutput: "OK" });
+    expect((await router.analyze("解释 OK 的含义。")).executionPolicy).toMatchObject({ mode: "semantic_delivery", reviewPolicy: "semantic_lite" });
+  });
+  it("uses the LLM to distinguish discussing a risky action from executing it", async () => {
+    let calls = 0;
+    const router = new SessionInputRouter({ model: modelPort(async () => {
+      calls += 1;
+      return {
+        summary: "解释生产部署流程", objectives: [{ summary: "解释如何部署到生产环境", timing: "current", kind: "answer" }],
+        intent: "discussion", targetActiveRun: false, priority: 350, urgency: "normal", relation: "independent",
+        acceptanceCriteria: ["清楚解释部署流程"], scope: "流程说明", nonGoals: ["不执行部署"], confidence: .98,
+        reason: "用户要求解释流程，不是执行部署",
+        executionPolicy: { mode: "semantic_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", confidence: .98, reason: "The operation is only the subject of an explanation." },
+      };
+    }) });
+    expect((await router.analyze("解释如何部署到生产环境。")).executionPolicy).toMatchObject({ mode: "semantic_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite" });
+    expect(calls).toBe(1);
+    expect((await router.analyze("请部署到生产环境。")).executionPolicy).toMatchObject({ mode: "external_action", reviewPolicy: "full", evidencePolicy: "trusted_check" });
+    expect(calls).toBe(1);
+  });
+  it("fails closed when the LLM returns an internally inconsistent policy", async () => {
+    const router = new SessionInputRouter({ model: modelPort(async () => ({
+      summary: "解释生产部署流程", objectives: [{ summary: "解释如何部署到生产环境", timing: "current", kind: "answer" }],
+      intent: "discussion", targetActiveRun: false, priority: 350, urgency: "normal", relation: "independent",
+      acceptanceCriteria: ["清楚解释部署流程"], scope: "流程说明", nonGoals: ["不执行部署"], confidence: .98, reason: "answer",
+      executionPolicy: { mode: "semantic_delivery", sideEffectRisk: "external_high", evidencePolicy: "trusted_check", reviewPolicy: "full", confidence: .98, reason: "inconsistent" },
+    })) });
+    const result = await router.analyze("结合以上说明解释如何部署到生产环境。");
+    expect(result).toMatchObject({ routerVersion: "semantic-rules-v3", executionPolicy: { mode: "external_action", reviewPolicy: "full" } });
+    expect(result.reason).toContain("inconsistent execution policy profile");
+  });
+  it("rejects model-proposed exact validation without an explicit literal request", async () => {
+    const router = new SessionInputRouter({ model: modelPort(async () => ({
+      summary: "解释 OK", objectives: [{ summary: "解释 OK 的含义", timing: "current", kind: "answer" }],
+      intent: "discussion", targetActiveRun: false, priority: 350, urgency: "normal", relation: "independent",
+      acceptanceCriteria: ["解释 OK 的含义"], scope: "普通解释", nonGoals: [], confidence: .96, reason: "answer",
+      executionPolicy: { mode: "exact_delivery", sideEffectRisk: "none", evidencePolicy: "none", reviewPolicy: "local", exactOutput: "OK", confidence: .9, reason: "incorrect literal proposal" },
+    })) });
+    expect((await router.analyze("结合以上说明解释 OK 的含义。")).executionPolicy).toMatchObject({ mode: "semantic_delivery", reviewPolicy: "semantic_lite", exactOutput: undefined });
+  });
   it("persists explicit postponement as deferred work", async () => {
     expect(await router.analyze("暂时不做")).toMatchObject({ intent: "defer", priority: 100, acceptanceCriteria: [] });
   });

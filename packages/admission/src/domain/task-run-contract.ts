@@ -3,6 +3,7 @@ import type {
   SessionInputRelation,
   TaskObjective,
 } from "./session-input.js";
+import type { TaskExecutionPolicy } from "./task-execution-policy.js";
 
 /** Admission decision copied into Execution as an immutable launch snapshot. */
 export interface TaskRunContract {
@@ -18,4 +19,5 @@ export interface TaskRunContract {
   intent: SessionInputIntent;
   decisionReason: string;
   routerVersion: string;
+  executionPolicy?: TaskExecutionPolicy;
 }

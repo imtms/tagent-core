@@ -101,7 +101,7 @@ Only the active fenced writer may mutate control-plane state. Multi-repository w
 
 A passed required check is trusted only when Core binds it to a successful `tool.bash` operation from the current Attempt. Core derives the command, exit code, output projection, completion time, digest and Artifact reference from the operation receipt; Agent-authored evidence text is not proof. Change, verification and release work requires at least one such trusted required check, after which the Supervisor performs one semantic review against the actual receipts and acceptance criteria.
 
-Deterministic prerequisite failures and narrowly bounded low-risk answers do not call the Supervisor LLM. A normal substantial settlement uses one call, malformed output is repaired or rejected locally without a second model call, and retryable transport failure is retried only against a separately hosted fallback. See [docs/SUPERVISOR.md](docs/SUPERVISOR.md) and [docs/EXECUTION_EFFICIENCY.md](docs/EXECUTION_EFFICIENCY.md).
+Deterministic prerequisite failures and exact literal deliveries do not call the Supervisor LLM. Translation, rewriting, summarization, drafting, prose review and ordinary answers use one compact semantic judge; mutation and high-impact work use one full evidence review. Malformed output is repaired or rejected locally without a second model call, and retryable transport failure is retried only against a separately hosted fallback. See [docs/SUPERVISOR.md](docs/SUPERVISOR.md) and [docs/EXECUTION_EFFICIENCY.md](docs/EXECUTION_EFFICIENCY.md).
 
 ## Optional Memory and Learning
 

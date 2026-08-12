@@ -9,6 +9,7 @@ export function toTaskRunContractSnapshot(contract: TaskRunContract): TaskRunCon
     acceptanceCriteria: [...contract.acceptanceCriteria],
     nonGoals: [...contract.nonGoals],
     sourceInboxIds: [...contract.sourceInboxIds],
+    executionPolicy: contract.executionPolicy ? { ...contract.executionPolicy } : undefined,
   };
 }
 

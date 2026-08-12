@@ -6,6 +6,7 @@ import type {
   SupervisorAction,
   SupervisorDecision,
 } from "@tagent/governance/domain";
+import { deriveSupervisorAction, effectiveTaskExecutionPolicy } from "@tagent/governance/domain";
 import type {
   GovernanceRunEventView,
   GovernanceTaskRunView,
@@ -66,14 +67,18 @@ export class TaskRunSupervisor {
       limit: 16,
       ids: run.checks.flatMap((check) => check.sourceOperationId ? [check.sourceOperationId] : []),
     });
-    const lightweightAudit = prerequisiteAudit ? undefined : this.reviewLightweightCompletion(run, response, operations, options);
-    const deterministicAudit = prerequisiteAudit ?? lightweightAudit;
+    const executionPolicy = effectiveTaskExecutionPolicy(run.contract, operations, run.attempt);
+    const exactAudit = prerequisiteAudit ? undefined : this.reviewExactCompletion(run, response, operations, options, executionPolicy);
+    const deterministicAudit = prerequisiteAudit ?? exactAudit;
     const progress = deterministicAudit ? undefined : this.store.getProgressSnapshot(run.id);
     const contextManifest = deterministicAudit ? undefined : this.store.getLatestContextManifest(run.id);
-    const reviewedAudit = deterministicAudit ?? await this.reviewer.reviewSettled({ run, response, modelOutputTruncated: options.modelOutputTruncated, operations, progress, contextManifest });
+    const reviewInput = { run, response, modelOutputTruncated: options.modelOutputTruncated, operations, progress, contextManifest };
+    const reviewedAudit = deterministicAudit ?? (executionPolicy.reviewPolicy === "semantic_lite" && this.reviewer.reviewSemanticLite
+      ? await this.reviewer.reviewSemanticLite(reviewInput)
+      : await this.reviewer.reviewSettled(reviewInput));
     const audit = this.enforceAuditAlgebra(reviewedAudit);
     const evaluator = deterministicAudit ? "system" as const : audit.evaluator ?? this.reviewer.evaluator;
-    const evaluatorModel = prerequisiteAudit ? "deterministic-prerequisite-gate" : lightweightAudit ? "deterministic-lightweight-delivery-v1" : audit.evaluatorModel ?? this.reviewer.model;
+    const evaluatorModel = prerequisiteAudit ? "deterministic-prerequisite-gate" : exactAudit ? "deterministic-exact-delivery-v1" : audit.evaluatorModel ?? this.reviewer.model;
     const createdAt = Date.now();
     const manifest = {
       attempt: run.attempt, checkpointSeq, contract: run.contract, plan: run.plan, checks: run.checks,
@@ -93,39 +98,41 @@ export class TaskRunSupervisor {
     return { gates, decision: this.createDecision(run, checkpointSeq, "settled", audit.action, audit.reasonCode, audit.rationale, audit.confidence, response, evaluator, evaluatorModel) };
   }
 
-  private reviewLightweightCompletion(run: GovernanceTaskRunView, response: string, operations: OperationRecord[], options: { modelOutputTruncated?: boolean }): SupervisorAudit | undefined {
+  private reviewExactCompletion(
+    run: GovernanceTaskRunView,
+    response: string,
+    operations: OperationRecord[],
+    options: { modelOutputTruncated?: boolean },
+    executionPolicy: ReturnType<typeof effectiveTaskExecutionPolicy>,
+  ): SupervisorAudit | undefined {
     const contract = run.contract;
-    const objectives = contract?.objectives.filter((item) => item.timing === "current") ?? [];
-    const objective = objectives[0];
-    const risky = /(?:release|deploy|publish|production|credential|secret|permission|delete|remove|migration|security|发布|发版|部署|生产|凭据|密钥|权限|删除|迁移|安全)/i;
-    const candidate = response.trim();
-    // This path is intentionally narrow: a single discussion/answer objective, no side
-    // effects, no truncation, and all deterministic prerequisites already satisfied.
-    // Any ambiguity or execution work keeps the independent semantic reviewer.
-    if (!contract || contract.intent !== "discussion" || objectives.length !== 1 || objective?.kind !== "answer") return undefined;
-    if (contract.objectives.length !== 1 || contract.acceptanceCriteria.length > 1 || contract.nonGoals.length > 0) return undefined;
-    if (operations.length > 0 || run.checks.some((check) => check.required) || run.artifacts.length > 0) return undefined;
-    if (options.modelOutputTruncated || candidate.length < 20 || risky.test(`${contract.summary} ${contract.scope} ${candidate}`)) return undefined;
+    if (!contract) return undefined;
+    if (executionPolicy.reviewPolicy !== "local" || executionPolicy.mode !== "exact_delivery") return undefined;
+    const expected = executionPolicy.exactOutput?.trim();
+    if (!expected) return undefined;
+    const passed = !options.modelOutputTruncated && response.trim() === expected && operations.length === 0 && run.artifacts.length === 0;
     const coverage: CriterionCoverage[] = contract.acceptanceCriteria.map((criterion) => ({
       criterion,
-      status: "covered",
+      status: passed ? "covered" : "contradicted",
       evidenceRefs: [],
-      reason: "The single low-risk answer objective is addressed by the complete standalone candidate.",
+      reason: passed ? "Core matched the complete candidate to the requested literal output." : "The candidate did not exactly match the requested literal output.",
     }));
-    const gate = (summary: string, criterionCoverage?: CriterionCoverage[]) => ({ passed: true, failures: [], summary, criterionCoverage });
+    const failure: GateFailure = { kind: "contract", key: "exact_output", reason: "The candidate did not exactly match the requested literal output.", disposition: "auto_fixable" };
+    const failures = passed ? [] : [failure];
+    const gate = (summary: string, gateFailures: GateFailure[] = [], criterionCoverage?: CriterionCoverage[]) => ({ passed: gateFailures.length === 0, failures: gateFailures, summary, criterionCoverage });
     return {
-      action: "complete_taskrun",
-      reasonCode: "lightweight_delivery_validated",
-      rationale: "Skipped the general semantic Supervisor for a low-risk single-answer Run after deterministic delivery validation.",
+      action: passed ? "complete_taskrun" : "start_continuation",
+      reasonCode: passed ? "exact_delivery_validated" : "exact_delivery_mismatch",
+      rationale: passed ? "Core exactly matched the requested literal delivery." : failure.reason,
       confidence: 1,
       evaluator: "system",
-      evaluatorModel: "deterministic-lightweight-delivery-v1",
+      evaluatorModel: "deterministic-exact-delivery-v1",
       gates: {
-        progress: gate("The required lightweight plan is complete."),
-        evidence: gate("This discussion-only Run requires no external operation or check evidence."),
-        contract: gate("The complete candidate directly addresses the single low-risk answer objective.", coverage),
-        completion: gate("Deterministic prerequisites and lightweight delivery validation passed."),
-        continuation: gate("No unresolved blocker requires continuation."),
+        progress: gate("Exact delivery requires no execution plan."),
+        evidence: gate("Exact delivery requires no external evidence."),
+        contract: gate(passed ? "The candidate exactly matches the requested literal output." : failure.reason, failures, coverage),
+        completion: gate(passed ? "Exact delivery validation passed." : failure.reason, failures),
+        continuation: gate(passed ? "No continuation is required." : "A corrected literal response can be produced automatically."),
       },
     };
   }
@@ -200,7 +207,7 @@ export class TaskRunSupervisor {
     ]);
     gates.completion.passed = gates.completion.passed && gates.progress.passed && gates.evidence.passed
       && gates.contract.passed && gates.completion.failures.length === 0;
-    const action = this.actionForFailures(gates.completion.failures);
+    const action = deriveSupervisorAction(gates.completion.failures);
     return {
       ...source,
       gates,
@@ -218,20 +225,6 @@ export class TaskRunSupervisor {
       seen.add(key);
       return true;
     });
-  }
-
-  private actionForFailures(failures: GateFailure[]): SupervisorAction {
-    if (!failures.length) return "complete_taskrun";
-    if (failures.some((failure) => failure.disposition === "needs_approval")) return "pause_for_approval";
-    if (failures.some((failure) => ["needs_user_input", "external_dependency", "non_recoverable"].includes(failure.disposition))) return "block_taskrun";
-    const evidenceRepairOnly = failures.some((failure) => failure.kind === "evidence" || failure.kind === "check")
-      && failures.every((failure) => failure.disposition === "auto_fixable" && (
-        failure.kind === "evidence"
-        || failure.kind === "check"
-        || failure.kind === "contract" && failure.key === "semantic_review_deferred"
-      ));
-    if (evidenceRepairOnly) return "start_continuation";
-    return "start_continuation";
   }
 
   async reviewAttemptFailure(run: GovernanceTaskRunView, checkpointSeq: number, error: string) {

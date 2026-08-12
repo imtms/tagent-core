@@ -98,6 +98,7 @@ export function mapTaskRun(run: TaskRun): V1TaskRun {
       intent: run.contract.intent,
       decisionReason: run.contract.decisionReason,
       routerVersion: run.contract.routerVersion,
+      executionPolicy: run.contract.executionPolicy ?? null,
       workspaceGoal: run.contract.workspaceGoal ? {
         ...run.contract.workspaceGoal,
         attachedAt: iso(run.contract.workspaceGoal.attachedAt),

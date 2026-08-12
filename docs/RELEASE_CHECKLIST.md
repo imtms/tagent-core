@@ -58,7 +58,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] Restart recovery produces `outcome_unknown` for effects/deliveries whose outcome cannot be proven and `restart_before_effect` cancellation only before effect start.
 - [ ] An interrupted TaskRun command or Goal operation becomes `outcome_unknown`; a Session and its create receipt remain atomic across restart.
 - [ ] A required passed check rejects self-reported, failed, stale, wrong-Run and wrong-Attempt evidence, and accepts only the matching successful Bash receipt.
-- [ ] Substantial settlement sends actual bounded receipts to one semantic Supervisor call; deterministic failures skip it and malformed output does not trigger a schema-repair call.
+- [ ] Semantic delivery uses the compact judge; substantial settlement sends actual bounded receipts to one full Supervisor call; deterministic failures/exact delivery skip it and malformed output does not trigger a schema-repair call.
 - [ ] Restoring the pre-upgrade backup with the old artifact was tested as the 0.1.x rollback path.
 
 ## API, Web, and Gateway gate

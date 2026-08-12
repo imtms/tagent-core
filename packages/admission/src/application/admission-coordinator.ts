@@ -184,6 +184,7 @@ export class AdmissionCoordinator {
       confidence: 1,
       reason: expectedReason,
       routerVersion: "workspace-goal-roadmap-v1",
+      executionPolicy: { mode: "workspace_mutation", sideEffectRisk: "workspace", evidencePolicy: "trusted_check", reviewPolicy: "full", policyVersion: "workspace-goal-v1", confidence: 1, reason: "Workspace Goal Roadmap execution mutates durable workspace state and requires trusted verification." },
     };
     const item = this.state.persistence.submissions.enqueueSessionInbox(input.workspaceId, content, analysis, requestId);
     try {

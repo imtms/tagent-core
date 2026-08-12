@@ -156,6 +156,44 @@ async function executeMutation(
   }
 }
 
+async function executeObservation(
+  capabilities: ToolCapabilityApplicationPort,
+  toolCallId: string,
+  operationType: "tool.list" | "tool.read",
+  payload: unknown,
+  observe: () => Promise<RuntimeToolResult<Record<string, unknown>>>,
+) {
+  const { runId } = capabilities;
+  const attempt = currentAttemptOrdinal(capabilities);
+  if (attempt === undefined) throw new Error("Run not found");
+  const id = operationId(runId, attempt, toolCallId);
+  // Only successful observations enter the evidence ledger. Invalid arguments,
+  // missing paths, and access failures remain ordinary failed tool attempts.
+  const result = await observe();
+  const receipt = capabilities.claimOperation(id, operationType, payload);
+  if (!receipt.claimed) {
+    if (receipt.status === "succeeded") return receipt.result as RuntimeToolResult<Record<string, unknown>>;
+    throw new Error(`Operation ${id} cannot be recorded from status ${receipt.status}`);
+  }
+  const observedAt = Date.now();
+  const evidencedResult = {
+    ...result,
+    details: {
+      ...result.details,
+      operationId: id,
+      observedAt,
+      resultDigest: createHash("sha256").update(JSON.stringify(result)).digest("hex"),
+    },
+  };
+  capabilities.updateOperation(id, {
+    status: "succeeded",
+    stage: "observed",
+    effects: [{ kind: "workspace", action: "read_only" }],
+    result: evidencedResult,
+  });
+  return evidencedResult;
+}
+
 export function createTools(capabilities: ToolCapabilityApplicationPort, workspace: string): RuntimeTool[] {
   const requireWorkspaceMutationAuthorization = () => {
     const authorization = capabilities.authorizeWorkspaceMutation();
@@ -164,27 +202,31 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
   const { runId } = capabilities;
   const listTool: RuntimeTool<Static<typeof ListSchema>, Record<string, unknown>> = {
     name: "ls", label: "List directory", description: "List entries in a workspace directory.", parameters: ListSchema,
-    async execute(_id, params: Static<typeof ListSchema>) {
+    async execute(id, params: Static<typeof ListSchema>) {
       const target = params.path ?? ".";
-      const entries = await listWorkspaceDirectory(workspace, target);
-      const limit = params.limit ?? 200;
-      const names = entries.sort((left, right) => left.name.localeCompare(right.name)).slice(0, limit).map((entry) => `${entry.name}${entry.directory ? "/" : ""}`);
-      return textResult(names.join("\n") || "Directory is empty", { path: path.resolve(workspace, target), totalEntries: entries.length, returnedEntries: names.length, truncated: entries.length > limit });
+      return executeObservation(capabilities, id, "tool.list", { path: target, limit: params.limit ?? 200 }, async () => {
+        const entries = await listWorkspaceDirectory(workspace, target);
+        const limit = params.limit ?? 200;
+        const names = entries.sort((left, right) => left.name.localeCompare(right.name)).slice(0, limit).map((entry) => `${entry.name}${entry.directory ? "/" : ""}`);
+        return textResult(names.join("\n") || "Directory is empty", { path: path.resolve(workspace, target), totalEntries: entries.length, returnedEntries: names.length, truncated: entries.length > limit });
+      });
     },
   };
 
   const readTool: RuntimeTool<Static<typeof ReadSchema>, Record<string, unknown>> = {
     name: "read", label: "Read file", description: "Read a UTF-8 text file inside the workspace.", parameters: ReadSchema,
     async execute(id, params: Static<typeof ReadSchema>) {
-      const { path: filename, relative, metadata: file, buffer } = await readWorkspaceFile(workspace, params.path);
-      if (buffer.subarray(0, Math.min(buffer.length, 8192)).includes(0)) return textResult(`Binary file: ${params.path}`, { path: filename, type: "binary", bytes: file.size });
-      const content = buffer.toString("utf8").replace(/^\uFEFF/, "");
-      const contentHash = createHash("sha256").update(content).digest("hex");
-      const snapshotId = `sha256:${contentHash}`;
-      const lines = content.split("\n");
-      const offset = params.offset ?? 1;
-      const limit = params.limit ?? 300;
-      return durableTextResult(capabilities, id, lines.slice(offset - 1, offset - 1 + limit).join("\n"), { path: relative, absolutePath: filename, type: "text", bytes: file.size, totalLines: lines.length, offset, limit, snapshotId, contentHash }, `Read output: ${params.path}`);
+      return executeObservation(capabilities, id, "tool.read", { path: params.path, offset: params.offset ?? 1, limit: params.limit ?? 300 }, async () => {
+        const { path: filename, relative, metadata: file, buffer } = await readWorkspaceFile(workspace, params.path);
+        if (buffer.subarray(0, Math.min(buffer.length, 8192)).includes(0)) return textResult(`Binary file: ${params.path}`, { path: filename, type: "binary", bytes: file.size });
+        const content = buffer.toString("utf8").replace(/^\uFEFF/, "");
+        const contentHash = createHash("sha256").update(content).digest("hex");
+        const snapshotId = `sha256:${contentHash}`;
+        const lines = content.split("\n");
+        const offset = params.offset ?? 1;
+        const limit = params.limit ?? 300;
+        return durableTextResult(capabilities, id, lines.slice(offset - 1, offset - 1 + limit).join("\n"), { path: relative, absolutePath: filename, type: "text", bytes: file.size, totalLines: lines.length, offset, limit, snapshotId, contentHash }, `Read output: ${params.path}`);
+      });
     },
   };
 

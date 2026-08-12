@@ -6,13 +6,25 @@ The TaskRun Supervisor governs settlement; the Agent runtime cannot declare dura
 
 ## Deterministic floor
 
-Before semantic review, Core checks authoritative prerequisites:
+Admission proposes an immutable execution policy for each new contract. Core consumes five execution modes:
 
-- the TaskRun has a contract and required plan state where applicable;
+- `exact_delivery` — one literal response, locally comparable;
+- `semantic_delivery` — translation, rewriting, summarization, drafting, prose review, naming, or ordinary answers;
+- `read_only_analysis` — repository/code/runtime investigation without mutation;
+- `workspace_mutation` — durable workspace or code changes;
+- `external_action` — deploy, publish, send, delete, permission, or other high-impact external action.
+
+The proposal also declares side-effect risk, evidence policy and review policy. It is not an authority grant: Core raises the policy to full review and trusted checks whenever a Workspace Goal or a current-Attempt `write`, `edit`, `patch`, or `bash` operation is observed. A model can never lower this floor.
+
+Successful `read` and `ls` calls produce read-only operation receipts that Full Supervisor review can cite. They do not trigger mutation governance or create an artificial Bash-check requirement.
+
+Before semantic review, Core checks authoritative prerequisites appropriate to that policy:
+
+- read-only analysis, workspace mutation and external actions have required plan state;
 - every required plan item is complete;
 - every required check is passed, non-stale and bound to a completed, successful `tool.bash` receipt from the current Attempt;
 - the bound receipt contains the actual command, reports exit code zero, and has the same completion time recorded by the check;
-- change, verification and release objectives have at least one trusted required check;
+- workspace mutation and external actions have at least one trusted required check;
 - no durable steer/follow-up remains pending delivery.
 
 A semantic reviewer cannot convert a failed deterministic prerequisite into success.
@@ -29,14 +41,19 @@ covered | unsupported | contradicted | blocked
 
 The review receives bounded actual operation payloads, results and effects, including Bash command, exit code, output, digest, Artifact and completion time. A `succeeded` status alone is not semantic proof: the LLM must compare the receipt content with the criterion and candidate claim. Evidence references may point only to trusted checks, supplied operations, substantive artifacts, or selected Memory records/revisions. Candidate prose is not independent proof of its own claims, and invented references fail local validation.
 
-A narrow low-risk single-answer discussion may use deterministic lightweight completion when it has no side effects, required checks, artifacts, truncation, or risky release/security semantics.
+Only an explicit literal response uses deterministic local completion. Core compares the complete trimmed candidate with the literal value; a mismatch starts bounded repair.
+
+Semantic delivery uses one compact semantic-lite call containing only the contract, criteria and candidate projection. The model judges relevance, completeness, contradictions and criterion coverage; it is explicitly forbidden from demanding plans or operation receipts for text-only work. It cannot emit the final Core action.
+
+Full review returns only a compact semantic verdict: delivery quality, one coverage receipt per criterion, and semantic failures. Core owns progress/evidence/contract/completion/continuation gate construction and the single final-action algebra. The obsolete model-authored five-gate/action response is rejected instead of maintaining a second policy path.
 
 ## LLM call policy
 
 | Situation | Supervisor LLM calls |
 | --- | --- |
 | Required plan/check prerequisite already fails | 0; start a bounded continuation for local repair |
-| Narrow low-risk single-answer discussion | 0 |
+| Exact literal delivery | 0 |
+| Translation, rewriting, summarization, drafting, prose review, naming, ordinary answer | 1 compact semantic-lite call |
 | Substantial settlement with valid deterministic prerequisites | 1 |
 | Malformed or schema-invalid review output | no repair call; limited JSON syntax repair or fail closed locally |
 | Retryable failure on the same upstream | no retry |

@@ -2,6 +2,10 @@ import { Type, type Static } from "typebox";
 import { JsonObjectSchema, TimestampMillisecondsSchema } from "../../shared/primitives.js";
 
 const ConsoleNullableTimestampSchema = Type.Union([TimestampMillisecondsSchema, Type.Null()]);
+const ConsoleTaskExecutionPolicySchema = Type.Object({
+  mode: Type.String(), sideEffectRisk: Type.String(), evidencePolicy: Type.String(), reviewPolicy: Type.String(),
+  policyVersion: Type.String(), confidence: Type.Number(), reason: Type.String(), exactOutput: Type.Optional(Type.String()),
+});
 export const ConsoleReasoningEffortSchema = Type.Union([
   Type.Literal("minimal"), Type.Literal("low"), Type.Literal("medium"),
   Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max"),
@@ -42,6 +46,7 @@ export const ConsoleSessionInputAnalysisSchema = Type.Object({
   confidence: Type.Number(),
   reason: Type.String(),
   routerVersion: Type.String(),
+  executionPolicy: Type.Optional(ConsoleTaskExecutionPolicySchema),
 });
 export type ConsoleSessionInputAnalysis = Static<typeof ConsoleSessionInputAnalysisSchema>;
 
@@ -75,6 +80,7 @@ export const ConsoleTaskRunContractSchema = Type.Object({
   intent: ConsoleSessionInputAnalysisSchema.properties.intent,
   decisionReason: Type.String(),
   routerVersion: Type.String(),
+  executionPolicy: Type.Optional(Type.Union([ConsoleTaskExecutionPolicySchema, Type.Null()])),
   workspaceGoal: Type.Optional(Type.Union([ConsoleTaskRunWorkspaceGoalSchema, Type.Null()])),
 });
 export type ConsoleTaskRunContract = Static<typeof ConsoleTaskRunContractSchema>;

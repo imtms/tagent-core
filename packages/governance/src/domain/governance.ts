@@ -22,6 +22,14 @@ export interface GateFailure {
     | "non_recoverable";
 }
 
+/** One Core-owned action algebra shared by deterministic and model-backed audits. */
+export function deriveSupervisorAction(failures: GateFailure[]): SupervisorAction {
+  if (!failures.length) return "complete_taskrun";
+  if (failures.some((failure) => failure.disposition === "needs_approval")) return "pause_for_approval";
+  if (failures.some((failure) => ["needs_user_input", "external_dependency", "non_recoverable"].includes(failure.disposition))) return "block_taskrun";
+  return "start_continuation";
+}
+
 export interface CriterionCoverage {
   criterion: string;
   status: "covered" | "unsupported" | "contradicted" | "blocked";

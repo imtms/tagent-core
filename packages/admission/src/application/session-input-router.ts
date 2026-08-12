@@ -1,6 +1,7 @@
 import type {
   SessionInputAnalysis,
   SessionInputIntent,
+  TaskExecutionPolicy,
   TaskObjective,
   TaskRunContract,
 } from "../domain/index.js";
@@ -22,6 +23,42 @@ const timings = new Set<TaskObjective["timing"]>(["current", "follow_up", "paral
 const kinds = new Set<TaskObjective["kind"]>(["change", "investigate", "verify", "document", "release", "answer", "other"]);
 const urgencies = new Set<SessionInputAnalysis["urgency"]>(["low", "normal", "high", "critical"]);
 const relations = new Set<SessionInputAnalysis["relation"]>(["same_goal", "correction", "constraint", "follow_up", "parallel", "independent"]);
+const taskModes = new Set<TaskExecutionPolicy["mode"]>(["exact_delivery", "semantic_delivery", "read_only_analysis", "workspace_mutation", "external_action"]);
+const sideEffectRisks = new Set<TaskExecutionPolicy["sideEffectRisk"]>(["none", "read_only", "workspace", "external_high"]);
+const evidencePolicies = new Set<TaskExecutionPolicy["evidencePolicy"]>(["none", "semantic", "operation_receipt", "trusted_check"]);
+const reviewPolicies = new Set<TaskExecutionPolicy["reviewPolicy"]>(["local", "semantic_lite", "full"]);
+const EXACT_OUTPUT = /^(?:只|仅|请只|please only)\s*(?:回复|回答|输出|return|reply|respond)\s*[“"'`]?(.+?)[”"'`]?\s*[。.!！]?$/i;
+const SEMANTIC_DELIVERY = /(翻译|译成|改写|润色|摘要|总结|概括|提炼|起草|撰写|写一封|文案|命名|名称|语病|错别字|校对|格式(?:化|转换)|translate|rewrite|rephrase|polish|summari[sz]e|draft|proofread|copyedit|format)/i;
+const EXTERNAL_ACTION = /(部署到|发布到|上线到|生产环境|发送(?:邮件|消息)|删除(?:数据|账号|资源)|修改权限|授予权限|deploy to|publish to|production|send (?:an? )?(?:email|message)|delete (?:data|account|resource)|grant permission)/i;
+const WORKSPACE_MUTATION = /(修复|实现|完善|改造|更新|修改|删除|迁移|重构|写入|创建文件|fix|implement|improve|update|modify|remove|migrate|refactor|write (?:the )?file|create (?:a )?file)/i;
+const EXECUTION_AS_TOPIC = /^(?:(?:请|麻烦|帮我|请你|please|could you|would you)\s*)?(?:解释|介绍|说明|讲解|讨论|比较|分析|评估|描述|列出|告诉我|给出|explain|describe|discuss|compare|analy[sz]e|evaluate|list)(?:\s+|[:：])?.*(?:如何|为什么|流程|方法|步骤|含义|区别|优缺点|风险|how|why|process|method|steps?|meaning|difference|trade-?offs?|risks?)/i;
+const COMBINED_REAL_ACTION = /(?:并|并且|然后|随后|接着|同时|再|and|then|also).*(?:部署到|发布到|上线到|发送(?:邮件|消息)|删除(?:数据|账号|资源)|修改权限|授予权限|修复|实现|更新|修改|写入|创建文件|deploy to|publish to|send (?:an? )?(?:email|message)|delete (?:data|account|resource)|grant permission|fix|implement|update|modify|write (?:the )?file|create (?:a )?file)/i;
+
+function hasSemanticRiskAmbiguity(source: string) {
+  const riskLanguage = EXTERNAL_ACTION.test(source) || WORKSPACE_MUTATION.test(source);
+  const semanticFraming = EXECUTION_AS_TOPIC.test(source) || SEMANTIC_DELIVERY.test(source);
+  return riskLanguage && semanticFraming && !COMBINED_REAL_ACTION.test(source);
+}
+
+function exactOutput(source: string) { return normalize(source).match(EXACT_OUTPUT)?.[1]?.trim(); }
+
+function canonicalPolicyProfile(mode: TaskExecutionPolicy["mode"]): Pick<TaskExecutionPolicy, "sideEffectRisk" | "evidencePolicy" | "reviewPolicy"> {
+  if (mode === "external_action") return { sideEffectRisk: "external_high", evidencePolicy: "trusted_check", reviewPolicy: "full" };
+  if (mode === "workspace_mutation") return { sideEffectRisk: "workspace", evidencePolicy: "trusted_check", reviewPolicy: "full" };
+  if (mode === "read_only_analysis") return { sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full" };
+  if (mode === "exact_delivery") return { sideEffectRisk: "none", evidencePolicy: "none", reviewPolicy: "local" };
+  return { sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite" };
+}
+
+function ruleExecutionPolicy(source: string, parsedObjectives: TaskObjective[]): TaskExecutionPolicy {
+  const literal = exactOutput(source);
+  const currentKinds = parsedObjectives.filter((item) => item.timing === "current").map((item) => item.kind);
+  if (literal) return { mode: "exact_delivery", sideEffectRisk: "none", evidencePolicy: "none", reviewPolicy: "local", exactOutput: literal, policyVersion: "task-policy-rules-v1", confidence: .99, reason: "The user requested one literal response that Core can validate exactly." };
+  if (EXTERNAL_ACTION.test(source)) return { mode: "external_action", sideEffectRisk: "external_high", evidencePolicy: "trusted_check", reviewPolicy: "full", policyVersion: "task-policy-rules-v1", confidence: .9, reason: "The request asks for an external or high-impact action." };
+  if (WORKSPACE_MUTATION.test(source) || currentKinds.some((kind) => kind === "change")) return { mode: "workspace_mutation", sideEffectRisk: "workspace", evidencePolicy: "trusted_check", reviewPolicy: "full", policyVersion: "task-policy-rules-v1", confidence: .9, reason: "The request asks to change durable workspace state." };
+  if (SEMANTIC_DELIVERY.test(source) || DISCUSSION.test(source) || currentKinds.every((kind) => ["answer", "other"].includes(kind))) return { mode: "semantic_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "task-policy-rules-v1", confidence: .9, reason: "The requested result is a semantic text delivery without side effects." };
+  return { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", policyVersion: "task-policy-rules-v1", confidence: .82, reason: "The request is read-only analysis whose factual conclusions may depend on inspected evidence." };
+}
 
 export interface SessionInputRouterMessage {
   id: number;
@@ -93,7 +130,7 @@ function ruleAnalysis(content: string, activeRun?: SessionInputRouterTaskRun): S
     else targetRunId = null;
   }
   const acceptanceCriteria = intent === "defer" ? [] : [...new Set(parsedObjectives.flatMap(criterion))];
-  return { summary, objectives: parsedObjectives, intent, targetRunId, priority, urgency, relation, acceptanceCriteria, scope: parsedObjectives.map((item) => item.summary).join("; "), nonGoals: [], confidence, reason, routerVersion: RULE_ROUTER_VERSION };
+  return { summary, objectives: parsedObjectives, intent, targetRunId, priority, urgency, relation, acceptanceCriteria, scope: parsedObjectives.map((item) => item.summary).join("; "), nonGoals: [], confidence, reason, routerVersion: RULE_ROUTER_VERSION, executionPolicy: ruleExecutionPolicy(source, parsedObjectives) };
 }
 
 export class SessionInputRouter {
@@ -118,7 +155,7 @@ export class SessionInputRouter {
     if (!this.model || this.canUseDeterministicResult(content, activeRun, fallback)) return fallback;
     try {
       const result = await this.model.request({ prompt: this.prompt(content, activeRun, context) });
-      const parsed = this.parse(result.value, activeRun);
+      const parsed = this.parse(result.value, activeRun, content);
       if (result.usage.length) {
         this.usageByAnalysis.set(parsed, result.usage.map(({ model, ...usage }) => ({ model, usage })));
       }
@@ -132,7 +169,10 @@ export class SessionInputRouter {
   private canUseDeterministicResult(content: string, activeRun: SessionInputRouterTaskRun | undefined, result: SessionInputAnalysis) {
     const compact = normalize(content);
     if (compact.length > 280 || result.objectives.length > 2) return false;
-    if (result.intent === "defer" || result.intent === "clarification") return true;
+    // Let the semantic Router distinguish discussing/drafting a risky operation from executing it.
+    // If the model is unavailable, the conservative rule result remains the fallback.
+    if (hasSemanticRiskAmbiguity(compact)) return false;
+    if (result.intent === "defer" || result.intent === "clarification" || result.executionPolicy?.mode === "exact_delivery") return true;
     if (activeRun && ["steer_active", "follow_up_active", "update_active_context", "parallel_task"].includes(result.intent) && result.confidence >= 0.92) return true;
     return !activeRun && result.objectives.length === 1 && result.confidence >= 0.9 && !/(以上|上述|前面|刚才|继续|this|that|above|previous)/i.test(compact);
   }
@@ -170,10 +210,12 @@ The most important distinction is TASK versus BACKGROUND:
 - If the input only supplies background for the active Run and asks for no additional work, return objectives=[] and intent=update_active_context.
 - If there is no active Run and the input contains no actionable request, return objectives=[] and intent=discussion; do not invent work.
 
-Preserve genuine corrections, constraints, sequencing, and explicit parallel tasks. When an active Run exists, only target it if the input actually steers it, supplies its context, requests follow-up, or requests explicit parallel work. Return JSON only with this shape: {"summary":"concise actionable goal or context summary","objectives":[{"summary":"...","timing":"current|follow_up|parallel","kind":"change|investigate|verify|document|release|answer|other"}],"intent":"steer_active|follow_up_active|update_active_context|new_task|parallel_task|merge_candidate|discussion|clarification|defer","targetActiveRun":true,"priority":500,"urgency":"low|normal|high|critical","relation":"same_goal|correction|constraint|follow_up|parallel|independent","acceptanceCriteria":["verifiable criterion"],"scope":"...","nonGoals":["..."],"confidence":0.0,"reason":"specific semantic routing reason"}. Use at most 12 objectives and 24 criteria. For defer or zero objectives, criteria must be empty. INPUT_DATA=${JSON.stringify(data)}`;
+Classify the requested EXECUTION, not merely its topic. Explaining a release, checking prose, or discussing security does not execute a release, verification command, or security operation. Translation, rewriting, summarization, drafting, naming and prose review are semantic_delivery. Code/workspace changes are workspace_mutation. Real deploy, publish, send, delete or permission actions are external_action. Read-only code/repository investigation is read_only_analysis. exact_delivery is allowed only for one literal response that Core can compare exactly.
+
+Preserve genuine corrections, constraints, sequencing, and explicit parallel tasks. When an active Run exists, only target it if the input actually steers it, supplies its context, requests follow-up, or requests explicit parallel work. Return JSON only with this shape: {"summary":"concise actionable goal or context summary","objectives":[{"summary":"...","timing":"current|follow_up|parallel","kind":"change|investigate|verify|document|release|answer|other"}],"intent":"steer_active|follow_up_active|update_active_context|new_task|parallel_task|merge_candidate|discussion|clarification|defer","targetActiveRun":true,"priority":500,"urgency":"low|normal|high|critical","relation":"same_goal|correction|constraint|follow_up|parallel|independent","acceptanceCriteria":["verifiable criterion"],"scope":"...","nonGoals":["..."],"confidence":0.0,"reason":"specific semantic routing reason","executionPolicy":{"mode":"exact_delivery|semantic_delivery|read_only_analysis|workspace_mutation|external_action","sideEffectRisk":"none|read_only|workspace|external_high","evidencePolicy":"none|semantic|operation_receipt|trusted_check","reviewPolicy":"local|semantic_lite|full","exactOutput":"literal only for exact_delivery","confidence":0.0,"reason":"why this execution class applies"}}. Use at most 12 objectives and 24 criteria. For defer or zero objectives, criteria must be empty. INPUT_DATA=${JSON.stringify(data)}`;
   }
 
-  private parse(raw: unknown, activeRun?: SessionInputRouterTaskRun): SessionInputAnalysis {
+  private parse(raw: unknown, activeRun?: SessionInputRouterTaskRun, sourceInput = ""): SessionInputAnalysis {
     if (!raw || Array.isArray(raw) || typeof raw !== "object") throw new Error("LLM router returned a non-object"); const value = raw as Record<string, unknown>;
     const text = (entry: unknown, label: string, limit: number) => { if (typeof entry !== "string" || !entry.trim()) throw new Error(`invalid ${label}`); return normalize(entry).slice(0, limit); };
     if (!Array.isArray(value.objectives) || value.objectives.length > 12) throw new Error("invalid objectives");
@@ -189,7 +231,31 @@ Preserve genuine corrections, constraints, sequencing, and explicit parallel tas
     if (parsedObjectives.length === 0 && !((intent === "update_active_context" && activeRun && targetsActive) || (intent === "discussion" && !targetsActive))) throw new Error("zero objectives require background-only context or discussion routing");
     if (parsedObjectives.length === 0 && (value.acceptanceCriteria as string[]).length > 0) throw new Error("background-only input cannot have acceptance criteria");
     const acceptanceCriteria = intent === "defer" || parsedObjectives.length === 0 ? [] : [...new Set((value.acceptanceCriteria as string[]).map((item) => normalize(item).slice(0, 300)))];
-    return { summary: text(value.summary, "summary", 240), objectives: parsedObjectives, intent, targetRunId: targetsActive && activeRun ? activeRun.id : null, priority: value.priority, urgency, relation, acceptanceCriteria, scope: text(value.scope, "scope", 1000), nonGoals: (value.nonGoals as string[]).map((item) => normalize(item).slice(0, 300)), confidence: value.confidence, reason: text(value.reason, "reason", 1000), routerVersion: LLM_ROUTER_VERSION };
+    const policyValue = value.executionPolicy;
+    const fallbackPolicy = ruleExecutionPolicy(sourceInput || parsedObjectives.map((item) => item.summary).join("; "), parsedObjectives);
+    if (policyValue !== undefined && (!policyValue || Array.isArray(policyValue) || typeof policyValue !== "object")) throw new Error("invalid execution policy");
+    const proposed = policyValue as Record<string, unknown> | undefined;
+    if (!proposed) {
+      return { summary: text(value.summary, "summary", 240), objectives: parsedObjectives, intent, targetRunId: targetsActive && activeRun ? activeRun.id : null, priority: value.priority, urgency, relation, acceptanceCriteria, scope: text(value.scope, "scope", 1000), nonGoals: (value.nonGoals as string[]).map((item) => normalize(item).slice(0, 300)), confidence: value.confidence, reason: text(value.reason, "reason", 1000), routerVersion: LLM_ROUTER_VERSION, executionPolicy: { ...fallbackPolicy, policyVersion: "task-policy-llm-fallback-v1", reason: `${fallbackPolicy.reason} The semantic Router omitted its policy proposal, so Core used the bounded local classification.` } };
+    }
+    const mode = proposed.mode as TaskExecutionPolicy["mode"];
+    const sideEffectRisk = proposed.sideEffectRisk as TaskExecutionPolicy["sideEffectRisk"];
+    const evidencePolicy = proposed.evidencePolicy as TaskExecutionPolicy["evidencePolicy"];
+    const reviewPolicy = proposed.reviewPolicy as TaskExecutionPolicy["reviewPolicy"];
+    if (!taskModes.has(mode) || !sideEffectRisks.has(sideEffectRisk) || !evidencePolicies.has(evidencePolicy) || !reviewPolicies.has(reviewPolicy)) throw new Error("invalid execution policy classification");
+    if (typeof proposed.confidence !== "number" || proposed.confidence < 0 || proposed.confidence > 1) throw new Error("invalid execution policy confidence");
+    const canonicalProfile = canonicalPolicyProfile(mode);
+    if (sideEffectRisk !== canonicalProfile.sideEffectRisk || evidencePolicy !== canonicalProfile.evidencePolicy || reviewPolicy !== canonicalProfile.reviewPolicy) {
+      throw new Error("inconsistent execution policy profile");
+    }
+    const policy: TaskExecutionPolicy = { mode, ...canonicalProfile, policyVersion: "task-policy-llm-v1", confidence: proposed.confidence, reason: text(proposed.reason, "execution policy reason", 500) };
+    if (mode === "exact_delivery") policy.exactOutput = text(proposed.exactOutput, "exact output", 2_000);
+    if (mode === "exact_delivery" && fallbackPolicy.mode !== "exact_delivery") Object.assign(policy, { mode: "semantic_delivery", ...canonicalPolicyProfile("semantic_delivery"), exactOutput: undefined, reason: `${policy.reason} Core rejected local exact validation because the user did not request one literal response.` });
+    // A model may raise risk, but cannot lower a locally unambiguous mutation/external floor.
+    const semanticallyAmbiguousRisk = hasSemanticRiskAmbiguity(sourceInput);
+    if (fallbackPolicy.mode === "external_action" && !semanticallyAmbiguousRisk) Object.assign(policy, fallbackPolicy, { policyVersion: "task-policy-llm-v1", confidence: Math.max(policy.confidence, fallbackPolicy.confidence), reason: `${policy.reason} Core applied the external-action safety floor.` });
+    else if (fallbackPolicy.mode === "workspace_mutation" && !semanticallyAmbiguousRisk && !["workspace_mutation", "external_action"].includes(policy.mode)) Object.assign(policy, fallbackPolicy, { policyVersion: "task-policy-llm-v1", confidence: Math.max(policy.confidence, fallbackPolicy.confidence), reason: `${policy.reason} Core applied the workspace-mutation safety floor.` });
+    return { summary: text(value.summary, "summary", 240), objectives: parsedObjectives, intent, targetRunId: targetsActive && activeRun ? activeRun.id : null, priority: value.priority, urgency, relation, acceptanceCriteria, scope: text(value.scope, "scope", 1000), nonGoals: (value.nonGoals as string[]).map((item) => normalize(item).slice(0, 300)), confidence: value.confidence, reason: text(value.reason, "reason", 1000), routerVersion: LLM_ROUTER_VERSION, executionPolicy: policy };
   }
 
 }

@@ -78,7 +78,9 @@ Long-lived Sessions and TaskRuns no longer load their complete history for norma
 - Bash stdout/stderr capture accumulates Buffer chunks and concatenates once, avoiding quadratic string growth;
 - online Memory recall has a 3-second overall deadline; online embedding uses a 2.2-second timeout with no retry on the Attempt startup path.
 
-Router and Supervisor transports default to 5 seconds. Deterministic routing, prerequisite gates, lightweight discussion completion and known runtime-error classification avoid their respective LLM call entirely when the result is authoritative locally.
+Router and Supervisor transports default to 5 seconds. Admission records an execution/review policy so Core can route literal delivery to local validation, semantic text delivery to a compact judge, and mutation/high-impact work to full evidence review. Deterministic routing, prerequisite gates, exact delivery and known runtime-error classification avoid their respective LLM call when the result is authoritative locally.
+
+The compact semantic-lite prompt omits plan, operation and Artifact payloads. Read-only `read`/`ls` calls create citable observation receipts without raising the Run to mutation governance. The full Supervisor prompt asks only for delivery quality, criterion coverage and semantic failures; Core derives all gates and the final action. Invalid schemas are never resent to the model.
 
 ## Bash timeout and repeat protection
 

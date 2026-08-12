@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.3] - 2026-08-12
 
 ### Operator Read API
 
@@ -9,10 +9,29 @@
 - Covered tied timestamps, concurrent inserts, cursor retry/mismatch/restart, empty versus missing Sessions, scope enforcement, large histories, migration re-entry/drift and public DTO redaction.
 - Kept Gateway OIDC, resource ACLs, WebSocket/northbound projection, fake Core and Gateway compatibility jobs outside Core; deferred filters, tombstones, bootstrap, batch reads and change feeds until an evidenced need.
 
+### Proportional TaskRun governance
+
+- Added an Admission-owned execution policy with exact delivery, semantic delivery, read-only analysis, workspace mutation and external-action modes; Core normalizes inconsistent or legacy contracts without allowing a model proposal to lower the required safety level.
+- Exact literal responses now complete through local comparison, ordinary text work uses one compact semantic judge, and read-only `read`/`ls` operations create citable observation receipts without being treated as workspace mutation.
+- Workspace changes, Bash execution, Workspace Goal work and external actions retain required plans, full semantic review and trusted current-Attempt checks.
+
+### Supervisor efficiency and correctness
+
+- Reduced the LLM role to semantic delivery quality, per-criterion coverage and semantic failures. Core alone derives progress, evidence, contract, completion and continuation gates plus the final action.
+- Removed the obsolete model-authored five-gate/action response parser and its compatibility fixtures, eliminating a second policy path that was neither persisted ABI nor requested by current prompts.
+- Rejects invalid Supervisor schemas locally without a repair-model call, removes length-based criterion inference, and clears consecutive operation failures after a successful tool call.
+
+### Contracts, documentation and release
+
+- Persisted and exposed the normalized execution policy through TaskRun domain, ABI and HTTP projections, with conservative fallback for existing contracts that predate the field.
+- Updated the Supervisor, execution-efficiency, Gateway handoff and release documentation for the proportional policy and current call counts.
+- Synchronized Core, Web Console and all private workspace manifests, internal dependency pins, capabilities and release fixtures at 0.5.3.
+
 ### Compatibility and upgrade
 
 - `GET /api/v1/capabilities` now advertises `operator.read.v1` only through the string-valued `apiVersions` list; consumers negotiate the separate `/api/v1/operator/capabilities` profile, so the closed Operator 1.0 object remains decoder-compatible. Deployments must still accept the new schema-41 marker.
-- SQLite advances from schema 40 to 41. Back up SQLite/WAL/SHM before upgrade; schema-40-only binaries must not open the migrated database.
+- The TaskRun execution-policy fields are additive; existing stored contracts remain readable and are normalized conservatively.
+- SQLite advances from schema 40 to 41. Back up SQLite/WAL/SHM before upgrade; schema-40-only binaries must not open the migrated database. Deploy matching Core and Web Console 0.5.3 artifacts.
 
 ## [0.5.2] - 2026-08-10
 

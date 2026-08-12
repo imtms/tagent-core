@@ -1,3 +1,5 @@
+import type { TaskExecutionPolicy } from "@tagent/governance/domain";
+
 export type TaskRunObjectiveTiming = "current" | "follow_up" | "parallel";
 export type TaskRunObjectiveKind = "change" | "investigate" | "verify" | "document" | "release" | "answer" | "other";
 export type TaskRunContractRelation = "same_goal" | "correction" | "constraint" | "follow_up" | "parallel" | "derived" | "depends_on" | "independent";
@@ -61,6 +63,7 @@ export interface TaskRunContractSnapshot {
   intent: TaskRunIntent;
   decisionReason: string;
   routerVersion: string;
+  executionPolicy?: TaskExecutionPolicy;
   workspaceGoal?: TaskRunWorkspaceGoalSnapshot | null;
 }
 

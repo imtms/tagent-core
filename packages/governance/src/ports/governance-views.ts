@@ -4,6 +4,7 @@ import type {
   PlanItem,
   RunCheck,
   SupervisorDecision,
+  TaskExecutionPolicy,
 } from "../domain/index.js";
 
 export interface GovernanceRunEventView {
@@ -29,6 +30,7 @@ export interface GovernanceCompletionRunView {
     acceptanceCriteria: string[];
     nonGoals: string[];
     workspaceGoal?: object | null;
+    executionPolicy?: TaskExecutionPolicy | null;
   } | null;
   plan: PlanItem[];
   checks: RunCheck[];
@@ -47,6 +49,7 @@ export interface GovernanceTaskRunView extends GovernanceCompletionRunView, Gove
     acceptanceCriteria: string[];
     nonGoals: string[];
     workspaceGoal?: object | null;
+    executionPolicy?: TaskExecutionPolicy | null;
   } | null;
   artifacts: Artifact[];
   completionGate: CompletionGate;

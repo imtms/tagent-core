@@ -13,6 +13,15 @@ export const TaskObjectiveSchema = Type.Object({
 });
 export type TaskObjective = Static<typeof TaskObjectiveSchema>;
 
+export const TaskExecutionPolicySchema = Type.Object({
+  mode: Type.Union([Type.Literal("exact_delivery"), Type.Literal("semantic_delivery"), Type.Literal("read_only_analysis"), Type.Literal("workspace_mutation"), Type.Literal("external_action")]),
+  sideEffectRisk: Type.Union([Type.Literal("none"), Type.Literal("read_only"), Type.Literal("workspace"), Type.Literal("external_high")]),
+  evidencePolicy: Type.Union([Type.Literal("none"), Type.Literal("semantic"), Type.Literal("operation_receipt"), Type.Literal("trusted_check")]),
+  reviewPolicy: Type.Union([Type.Literal("local"), Type.Literal("semantic_lite"), Type.Literal("full")]),
+  policyVersion: Type.String({ minLength: 1 }), confidence: Type.Number({ minimum: 0, maximum: 1 }), reason: Type.String({ minLength: 1 }),
+  exactOutput: Type.Optional(Type.String()),
+});
+
 export const TaskRunWorkspaceGoalCriterionSchema = Type.Object({
   key: Type.String({ minLength: 1 }),
   title: Type.String({ minLength: 1 }),
@@ -71,6 +80,7 @@ export const TaskRunContractSchema = Type.Object({
   ]),
   decisionReason: Type.String(),
   routerVersion: Type.String(),
+  executionPolicy: Type.Optional(Type.Union([TaskExecutionPolicySchema, Type.Null()])),
   workspaceGoal: Type.Optional(Type.Union([TaskRunWorkspaceGoalSchema, Type.Null()])),
 });
 export type TaskRunContract = Static<typeof TaskRunContractSchema>;

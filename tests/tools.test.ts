@@ -73,6 +73,10 @@ describe("workspace tools", () => {
     const list = createTestTools(store, run.id, workspace).find((tool) => tool.name === "ls")!;
     expect((await list.execute("root", { path: "." }, undefined)).content[0]).toMatchObject({ type: "text", text: "hello.txt" });
     await expect(read.execute("2", { path: "../work-evil/secret.txt" }, undefined)).rejects.toThrow("escapes");
+    expect(store.listOperations(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ operationType: "tool.read", status: "succeeded", effects: [{ kind: "workspace", action: "read_only" }] }),
+      expect.objectContaining({ operationType: "tool.list", status: "succeeded", effects: [{ kind: "workspace", action: "read_only" }] }),
+    ]));
     store.close();
   });
 

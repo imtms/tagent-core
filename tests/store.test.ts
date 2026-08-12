@@ -942,6 +942,49 @@ describe("Store", () => {
     store.upsertCheck(run.id, { key: "test", title: "Tests", status: "passed", required: true, command: "npm test", evidence: "old", stale: true });
     expect(store.getRun(run.id)?.completionGate.failures[0]?.reason).toBe("Evidence is stale");
   });
+
+  it("does not require plans or Bash checks for semantic delivery", async () => {
+    const store = new Store(":memory:"); const session = store.createSession();
+    const policy = { mode: "semantic_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "test", confidence: 1, reason: "text delivery" } as const;
+    const contract = { sourceInput: "translate", summary: "translate", objectives: [{ id: "o1", summary: "translate", timing: "current" as const, kind: "other" as const }], acceptanceCriteria: ["Preserve meaning"], scope: "text", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
+    const run = store.createRun(session.id, "translate", undefined, contract);
+    expect(store.getRun(run.id)?.completionGate).toEqual({ passed: true, failures: [] }); store.close();
+  });
+
+  it("requires a completed plan but no artificial Bash check for read-only analysis", () => {
+    const store = new Store(":memory:"); const session = store.createSession();
+    const policy = { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "inspection" } as const;
+    const contract = { sourceInput: "inspect", summary: "inspect", objectives: [{ id: "o1", summary: "inspect", timing: "current" as const, kind: "investigate" as const }], acceptanceCriteria: ["Report findings"], scope: "workspace", nonGoals: ["No mutation"], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
+    const run = store.createRun(session.id, "inspect", undefined, contract);
+    expect(store.getRun(run.id)?.completionGate).toMatchObject({ passed: false, failures: [expect.objectContaining({ key: "plan" })] });
+    store.upsertPlanItem(run.id, { key: "inspect", title: "Inspect evidence", status: "done", required: true, position: 1 });
+    expect(store.getRun(run.id)?.completionGate).toEqual({ passed: true, failures: [] }); store.close();
+  });
+
+  it("raises a low-risk policy after an observed workspace mutation", () => {
+    const store = new Store(":memory:"); const session = store.createSession();
+    const policy = { mode: "semantic_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "test", confidence: 1, reason: "model proposal" } as const;
+    const contract = { sourceInput: "write result", summary: "write result", objectives: [{ id: "o1", summary: "write result", timing: "current" as const, kind: "other" as const }], acceptanceCriteria: ["done"], scope: "workspace", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
+    const run = store.createRun(session.id, "write result", undefined, contract);
+    const operation = store.claimOperation("write-op", run.id, run.attempt, "tool.write", { path: "result.txt" });
+    store.updateOperation(operation.id, { status: "succeeded", result: { path: "result.txt" } });
+    expect(store.getRun(run.id)?.completionGate).toMatchObject({ passed: false, failures: expect.arrayContaining([expect.objectContaining({ key: "plan" }), expect.objectContaining({ key: "trusted_evidence" })]) }); store.close();
+  });
+
+  it("normalizes an inconsistent persisted policy to its strongest safety implication", () => {
+    const store = new Store(":memory:"); const session = store.createSession();
+    const policy = { mode: "semantic_delivery", sideEffectRisk: "external_high", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "legacy-bad", confidence: 1, reason: "inconsistent legacy policy" } as const;
+    const contract = { sourceInput: "unsafe", summary: "unsafe", objectives: [{ id: "o1", summary: "unsafe", timing: "current" as const, kind: "other" as const }], acceptanceCriteria: ["done"], scope: "external", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
+    const run = store.createRun(session.id, "unsafe", undefined, contract);
+    expect(store.getRun(run.id)?.completionGate).toMatchObject({ passed: false, failures: expect.arrayContaining([expect.objectContaining({ key: "plan" }), expect.objectContaining({ key: "trusted_evidence" })]) }); store.close();
+  });
+
+  it("resets the consecutive failure streak after any successful tool completion", () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "diagnose");
+    store.updateProgressSnapshot(run, { runId: run.id, seq: 1, type: "tool.completed", data: { toolName: "bash", isError: true }, createdAt: 1 });
+    const reset = store.updateProgressSnapshot(run, { runId: run.id, seq: 2, type: "tool.completed", data: { toolName: "read", isError: false }, createdAt: 2 });
+    expect(reset.consecutiveFailures).toBe(0); store.close();
+  });
   it("returns the newest message window in chronological order", () => {
     const store = new Store(":memory:");
     const session = store.createSession();

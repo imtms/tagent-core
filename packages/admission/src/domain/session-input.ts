@@ -1,3 +1,5 @@
+import type { TaskExecutionPolicy } from "./task-execution-policy.js";
+
 /** Durable classification produced at the Admission boundary. */
 export type SessionInputIntent =
   | "steer_active"
@@ -52,4 +54,5 @@ export interface SessionInputAnalysis {
   confidence: number;
   reason: string;
   routerVersion: string;
+  executionPolicy?: TaskExecutionPolicy;
 }

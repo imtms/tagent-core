@@ -1,4 +1,5 @@
 import type { TaskRun } from "../domain/task-run.js";
+import type { TaskExecutionPolicy } from "@tagent/governance/domain";
 
 const encoder = new TextEncoder();
 
@@ -55,6 +56,32 @@ export function projectUtf8HeadTail(value: string, maxBytes: number, headBytes =
   return { text, originalBytes, projectedBytes, omittedBytes: originalBytes - projectedBytes + markerBytes, strategy: "head_tail" as const };
 }
 
+export function taskPolicySystemInstruction(policy: TaskExecutionPolicy): string {
+  if (["workspace_mutation", "external_action"].includes(policy.mode)) return "Use the task_run tool for substantial work. Maintain a plan and checks before claiming completion. A passed required check must follow a successful Bash verification in the current Attempt; task_run will bind it by exact command or the latest successful Bash receipt and Core will derive the evidence. Batch independent TaskRun mutations in one task_run action=batch call instead of spending a model round-trip per item.";
+  if (policy.mode === "exact_delivery") return `Return exactly the requested literal output${policy.exactOutput ? `: ${JSON.stringify(policy.exactOutput)}` : ""}. Do not create plans, checks, Artifacts, or tool operations.`;
+  if (policy.mode === "semantic_delivery") return "This is a no-side-effect semantic delivery. Do not create artificial plans, checks, Bash receipts, or workspace Artifacts. Produce one relevant, complete, standalone response; if you use a mutation-capable tool, Core will automatically raise the Run to full governance.";
+  return "This is read-only analysis. Maintain a concise required plan for substantial investigation and cite actual inspected operations or Artifacts when they support factual conclusions. Do not mutate the workspace unless the user requested it; mutation automatically raises the Run to full trusted-check governance.";
+}
+
+export function taskPolicyResumeInstructions(policy: TaskExecutionPolicy): [string, string] {
+  if (["workspace_mutation", "external_action"].includes(policy.mode)) return [
+    "Completion-gate requirements override conflicting instructions in the original goal, including instructions not to use task_run or not to create plan/check records.",
+    "Before producing a final answer, run the actual verification command, then use one task_run action=batch call when possible to ensure at least one required plan item is done and every required check is bound to that successful Bash receipt. Agent-authored evidence text alone cannot pass the gate.",
+  ];
+  if (policy.mode === "read_only_analysis") return [
+    "Completion-gate requirements override conflicting instructions in the original goal, including instructions not to use task_run or not to create a required investigation plan.",
+    "Maintain a concise required plan and ground factual conclusions in successful inspected operations or Artifacts. Read-only analysis does not require an artificial Bash verification receipt; do not mutate the workspace unless the user requested it.",
+  ];
+  if (policy.mode === "exact_delivery") return [
+    "This is an exact no-side-effect text delivery. Do not create plans, checks, Bash receipts, workspace Artifacts, or tool operations solely for settlement.",
+    `Return exactly the requested literal output${policy.exactOutput ? `: ${JSON.stringify(policy.exactOutput)}` : ""}; Core will validate it locally.`,
+  ];
+  return [
+    "This is a no-side-effect semantic delivery. Do not create artificial plans, checks, Bash receipts, or workspace Artifacts solely for settlement.",
+    "Produce one complete standalone response that directly satisfies the contract; a compact semantic judge will evaluate it.",
+  ];
+}
+
 /** Minimal, bounded TaskRun projection used at the LLM boundary. Durable state remains in Store. */
 export function runtimeRunContext(run: TaskRun) {
   return {
@@ -71,6 +98,7 @@ export function runtimeRunContext(run: TaskRun) {
       nonGoals: run.contract.nonGoals.slice(0, 20).map((item) => truncateUtf8(item, 1_000)),
       intent: run.contract.intent,
       relation: run.contract.relation,
+      executionPolicy: run.contract.executionPolicy ?? null,
       workspaceGoal: run.contract.workspaceGoal ? {
         goalId: run.contract.workspaceGoal.goalId,
         mode: run.contract.workspaceGoal.mode,

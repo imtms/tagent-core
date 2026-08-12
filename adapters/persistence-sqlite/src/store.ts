@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
 import {
   LEGACY_RUN_APPROVAL_DEFAULTS,
+  effectiveTaskExecutionPolicy,
   type ApprovalRequest,
   type Artifact,
   type CompletionGate,
@@ -1836,7 +1837,7 @@ ${source.content}`;
     const claimed = this.db.prepare("UPDATE session_supervisor_inbox SET status='claimed',decision='start_taskrun',claimed_at=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'").run(timestamp,timestamp,itemId,sessionId);
     if (claimed.changes !== 1) return undefined;
     const inbox = this.getSessionInboxItem(itemId)!;
-    const contract: TaskRunContractSnapshot = { sourceInput: inbox.content, summary: inbox.analysis.summary, objectives: inbox.analysis.objectives, acceptanceCriteria: inbox.analysis.acceptanceCriteria, scope: inbox.analysis.scope, nonGoals: inbox.analysis.nonGoals, sourceInboxIds: [inbox.id], parentRunId: inbox.analysis.targetRunId, relation: inbox.analysis.relation, intent: inbox.analysis.intent, decisionReason: inbox.analysis.reason, routerVersion: inbox.analysis.routerVersion };
+    const contract: TaskRunContractSnapshot = { sourceInput: inbox.content, summary: inbox.analysis.summary, objectives: inbox.analysis.objectives, acceptanceCriteria: inbox.analysis.acceptanceCriteria, scope: inbox.analysis.scope, nonGoals: inbox.analysis.nonGoals, sourceInboxIds: [inbox.id], parentRunId: inbox.analysis.targetRunId, relation: inbox.analysis.relation, intent: inbox.analysis.intent, decisionReason: inbox.analysis.reason, routerVersion: inbox.analysis.routerVersion, executionPolicy: inbox.analysis.executionPolicy };
     const run = this.createRun(sessionId, inbox.analysis.summary || inbox.content, `inbox:${inbox.id}`, contract);
     if (contract.parentRunId && contract.parentRunId !== run.id) {
       const edgeRelation = contract.relation === "parallel" || contract.relation === "follow_up" || contract.relation === "derived" || contract.relation === "depends_on" ? contract.relation : "derived";
@@ -2989,7 +2990,8 @@ ${source.content}`;
   updateProgressSnapshot(run: GovernanceProgressRunView, event: GovernanceRunEventView): ProgressSnapshot {
     const previous = this.getProgressSnapshot(run.id);
     const toolName = String(event.data.toolName ?? "");
-    const progressEvent = event.type === "run.updated" || event.type === "tool.completed" && !event.data.isError && ["write", "edit", "task_run"].includes(toolName);
+    const successfulToolEvent = event.type === "tool.completed" && !event.data.isError;
+    const progressEvent = event.type === "run.updated" || successfulToolEvent && ["write", "edit", "patch", "task_run"].includes(toolName);
     const failureEvent = event.type === "tool.completed" && Boolean(event.data.isError) || event.type === "tool.guard.blocked";
     let repeatedOperations = previous?.attempt === run.attempt ? previous.repeatedOperations : 0;
     const toolCallId = String(event.data.toolCallId ?? "");
@@ -3003,7 +3005,7 @@ ${source.content}`;
     }
     const snapshot: ProgressSnapshot = { runId: run.id, attempt: run.attempt, checkpointSeq: event.seq,
       meaningfulChanges: (previous?.attempt === run.attempt ? previous.meaningfulChanges : 0) + (progressEvent ? 1 : 0),
-      consecutiveFailures: failureEvent ? (previous?.attempt === run.attempt ? previous.consecutiveFailures : 0) + 1 : progressEvent ? 0 : previous?.consecutiveFailures ?? 0,
+      consecutiveFailures: failureEvent ? (previous?.attempt === run.attempt ? previous.consecutiveFailures : 0) + 1 : successfulToolEvent || progressEvent ? 0 : previous?.consecutiveFailures ?? 0,
       repeatedOperations,
       lastProgressAt: progressEvent ? event.createdAt : previous?.lastProgressAt ?? event.createdAt,
       lastDecisionId: previous?.lastDecisionId ?? "", updatedAt: event.createdAt };
@@ -3302,6 +3304,10 @@ ${source.content}`;
     const failures: CompletionGate["failures"] = [];
     const requiredPlan = run.plan.filter((item) => item.required);
     const requiredChecks = run.checks.filter((item) => item.required);
+    const mutationObserved = Boolean(this.db.prepare(`SELECT 1 FROM operations
+      WHERE run_id=? AND attempt=? AND operation_type IN ('tool.write','tool.edit','tool.patch','tool.bash')
+        AND status <> 'failed' LIMIT 1`).get(run.id, run.attempt));
+    const executionPolicy = effectiveTaskExecutionPolicy(run.contract, mutationObserved ? [{ operationType: "tool.write", status: "succeeded", attempt: run.attempt }] : [], run.attempt);
     let operations: Map<string, OperationRecord> | undefined;
     const operationById = (id: string) => {
       operations ??= new Map(this.listOperations(run.id, {
@@ -3326,22 +3332,16 @@ ${source.content}`;
         : undefined;
       return typeof payload?.command === "string" && payload.command.trim() === check.command.trim() && details?.exitCode === 0;
     };
-    const lightweightDiscussion = run.contract?.intent === "discussion"
-      && run.contract.objectives.length === 1
-      && run.contract.objectives[0]?.timing === "current"
-      && run.contract.objectives[0]?.kind === "answer"
-      && run.contract.acceptanceCriteria.length <= 1
-      && run.contract.nonGoals.length === 0;
-    if (requiredPlan.length === 0 && !lightweightDiscussion) failures.push({ kind: "plan", key: "plan", reason: "No required plan items" });
+    const planRequired = ["read_only_analysis", "workspace_mutation", "external_action"].includes(executionPolicy.mode);
+    if (requiredPlan.length === 0 && planRequired) failures.push({ kind: "plan", key: "plan", reason: "No required plan items" });
     for (const item of requiredPlan) if (item.status !== "done") failures.push({ kind: "plan_item", key: item.key, reason: `Required plan item is ${item.status}` });
     for (const check of requiredChecks) {
       if (check.status !== "passed") failures.push({ kind: "check", key: check.key, reason: `Required check is ${check.status}` });
       else if (check.stale) failures.push({ kind: "check", key: check.key, reason: "Evidence is stale" });
       else if (!trustedCheck(check)) failures.push({ kind: "check", key: check.key, reason: "Evidence is not bound to a successful Bash receipt from the current Attempt" });
     }
-    const requiresTrustedVerification = run.contract?.objectives.some((objective) =>
-      objective.timing === "current" && ["change", "verify", "release"].includes(objective.kind)) ?? false;
-    if (requiresTrustedVerification && !requiredChecks.some(trustedCheck)) {
+    const requiresTrustedVerification = executionPolicy.evidencePolicy === "trusted_check";
+    if (requiresTrustedVerification && requiredChecks.length === 0) {
       failures.push({ kind: "check", key: "trusted_evidence", reason: "Change, verify, and release work requires at least one trusted required check" });
     }
     return { passed: failures.length === 0, failures };

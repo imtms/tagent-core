@@ -10,6 +10,25 @@ function failedAudit(action: SupervisorAudit["action"], reasonCode: string, fail
   const gate = (failures = [failure], criterionCoverage = undefined as typeof coverage | undefined) => ({ passed: failures.length === 0, failures, criterionCoverage, summary: failures.length ? failure.reason : "Passed." });
   return { action, reasonCode, rationale: failure.reason, confidence: .97, gates: { progress: gate(failure.kind === "progress" ? [failure] : []), evidence: gate(failure.kind === "evidence" ? [failure] : []), contract: gate(failure.kind === "contract" ? [failure] : [], coverage), completion: gate([failure], coverage), continuation: gate(failure.disposition === "auto_fixable" ? [] : [failure]) } };
 }
+function semanticVerdict(options: {
+  complete?: boolean;
+  relevant?: boolean;
+  contradictory?: boolean;
+  reason?: string;
+  criterionCoverage?: unknown[];
+  failures?: unknown[];
+} = {}) {
+  return {
+    delivery: {
+      complete: options.complete ?? true,
+      relevant: options.relevant ?? true,
+      contradictory: options.contradictory ?? false,
+      reason: options.reason ?? "Complete.",
+    },
+    criterionCoverage: options.criterionCoverage ?? [],
+    failures: options.failures ?? [],
+  };
+}
 
 describe("TaskRunSupervisor LLM audit", () => {
   it("keeps deterministic checkpoint loop protection while completion quality is LLM-reviewed", () => {
@@ -72,7 +91,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     store.close();
   });
 
-  it("completes a low-risk single-answer discussion without a general Supervisor call", async () => {
+  it("uses semantic-lite review for a low-risk single-answer discussion", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "explain caching");
     const contract = { sourceInput: run.goal, summary: run.goal, objectives: [{ id: "objective-1", summary: run.goal, timing: "current" as const, kind: "answer" as const }], acceptanceCriteria: ["Explain caching clearly"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "discussion" as const, decisionReason: "test", routerVersion: "test" };
     store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify(contract), run.id);
@@ -80,15 +99,80 @@ describe("TaskRunSupervisor LLM audit", () => {
     const reviewer = {
       evaluator: "llm" as const, model: "must-not-run",
       async reviewSettled() { calls += 1; return passingTestAudit(); },
+      async reviewSemanticLite() { calls += 1; return { ...passingTestAudit(), evaluatorModel: "semantic-lite-test", gates: { ...passingTestAudit().gates, contract: { passed: true, failures: [], summary: "Covered semantically.", criterionCoverage: [{ criterion: "Explain caching clearly", status: "covered" as const, evidenceRefs: [], reason: "The response explains caching." }] } } }; },
       async reviewAttemptFailure() { return { action: "block_taskrun" as const, reasonCode: "unused", rationale: "unused", confidence: 1 }; },
     };
     const current = store.getRun(run.id)!;
     expect(current.completionGate.passed).toBe(true);
     const review = await new TaskRunSupervisor(store, reviewer).reviewSettled(current, 2, "Caching stores reusable results so repeated work completes faster.");
-    expect(calls).toBe(0);
-    expect(review.decision).toMatchObject({ action: "complete_taskrun", evaluator: "system", evaluatorModel: "deterministic-lightweight-delivery-v1", reasonCode: "lightweight_delivery_validated" });
+    expect(calls).toBe(1);
+    expect(review.decision).toMatchObject({ action: "complete_taskrun", evaluator: "llm", evaluatorModel: "semantic-lite-test" });
     expect(review.gates.find((gate) => gate.gateType === "contract")?.criterionCoverage).toEqual([expect.objectContaining({ criterion: "Explain caching clearly", status: "covered" })]);
     store.close();
+  });
+
+  it("locally completes only an exact literal delivery and repairs a mismatch", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "only reply OK");
+    const executionPolicy = { mode: "exact_delivery", sideEffectRisk: "none", evidencePolicy: "none", reviewPolicy: "local", exactOutput: "OK", policyVersion: "test", confidence: 1, reason: "literal" } as const;
+    const contract = { sourceInput: run.goal, summary: run.goal, objectives: [{ id: "objective-1", summary: run.goal, timing: "current" as const, kind: "other" as const }], acceptanceCriteria: ["Return OK"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy };
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify(contract), run.id);
+    let calls = 0;
+    const reviewer = { evaluator: "llm" as const, model: "must-not-run", async reviewSettled() { calls += 1; return passingTestAudit(); }, async reviewAttemptFailure() { return { action: "block_taskrun" as const, reasonCode: "unused", rationale: "unused", confidence: 1 }; } };
+    const supervisor = new TaskRunSupervisor(store, reviewer);
+    expect((await supervisor.reviewSettled(store.getRun(run.id)!, 1, "OK")).decision).toMatchObject({ action: "complete_taskrun", evaluatorModel: "deterministic-exact-delivery-v1" });
+    expect((await supervisor.reviewSettled(store.getRun(run.id)!, 2, "Okay")).decision).toMatchObject({ action: "start_continuation", reasonCode: "exact_delivery_mismatch" });
+    expect(calls).toBe(0); store.close();
+  });
+
+  it("does not use exact local validation for an inconsistent persisted semantic policy", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "only reply OK");
+    const executionPolicy = { mode: "exact_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "local", exactOutput: "OK", policyVersion: "legacy-bad", confidence: 1, reason: "inconsistent" } as const;
+    const contract = { sourceInput: run.goal, summary: run.goal, objectives: [{ id: "objective-1", summary: run.goal, timing: "current" as const, kind: "other" as const }], acceptanceCriteria: ["Return OK"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy };
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify(contract), run.id);
+    let semanticCalls = 0;
+    const reviewer = {
+      evaluator: "llm" as const, model: "semantic-lite-test",
+      async reviewSettled() { throw new Error("full review must not run"); },
+      async reviewSemanticLite() { semanticCalls += 1; return { ...passingTestAudit(), evaluatorModel: "semantic-lite-test", gates: { ...passingTestAudit().gates, contract: { passed: true, failures: [], summary: "Covered.", criterionCoverage: [{ criterion: "Return OK", status: "covered" as const, evidenceRefs: [], reason: "Covered semantically." }] } } }; },
+      async reviewAttemptFailure() { return { action: "block_taskrun" as const, reasonCode: "unused", rationale: "unused", confidence: 1 }; },
+    };
+    const review = await new TaskRunSupervisor(store, reviewer).reviewSettled(store.getRun(run.id)!, 1, "OK");
+    expect(semanticCalls).toBe(1);
+    expect(review.decision).toMatchObject({ action: "complete_taskrun", evaluatorModel: "semantic-lite-test" }); store.close();
+  });
+
+  it("rejects an irrelevant semantic-lite candidate instead of inferring coverage from length", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "explain caching");
+    const executionPolicy = { mode: "semantic_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "test", confidence: 1, reason: "answer" } as const;
+    const contract = { sourceInput: run.goal, summary: run.goal, objectives: [{ id: "objective-1", summary: run.goal, timing: "current" as const, kind: "answer" as const }], acceptanceCriteria: ["Explain caching"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "discussion" as const, decisionReason: "test", routerVersion: "test", executionPolicy };
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify(contract), run.id);
+    const failure = { kind: "completion", key: "delivery_irrelevant", reason: "The answer discusses weather.", disposition: "auto_fixable" as const };
+    const failed = failedAudit("start_continuation", "semantic_lite_repair_required", failure, contract.acceptanceCriteria);
+    const reviewer = new TestSupervisorReviewer(failed) as TestSupervisorReviewer & { reviewSemanticLite: TestSupervisorReviewer["reviewSettled"] };
+    reviewer.reviewSemanticLite = reviewer.reviewSettled.bind(reviewer);
+    const review = await new TaskRunSupervisor(store, reviewer).reviewSettled(store.getRun(run.id)!, 1, "The weather is pleasant today and the park is open.");
+    expect(review.decision.action).toBe("start_continuation");
+    expect(review.gates.find((gate) => gate.gateType === "contract")?.passed).toBe(false); store.close();
+  });
+
+  it("accepts the documented semantic-lite receipt schema with empty evidence refs", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "translate greeting");
+    const executionPolicy = { mode: "semantic_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "test", confidence: 1, reason: "translation" } as const;
+    const contract = { sourceInput: run.goal, summary: run.goal, objectives: [{ id: "objective-1", summary: run.goal, timing: "current" as const, kind: "other" as const }], acceptanceCriteria: ["Preserve the greeting"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy };
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify(contract), run.id);
+    let prompt = "";
+    const original = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => {
+      prompt = (JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> }).messages[0].content;
+      const content = { delivery: { complete: true, relevant: true, contradictory: false, reason: "The translation preserves the greeting." }, criterionCoverage: [{ criterionId: "ac-1", status: "covered", evidenceRefs: [], reason: "Meaning is preserved." }] };
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }), { status: 200 });
+    };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSemanticLite({ run: store.getRun(run.id)!, response: "Hello.", operations: [], progress: undefined });
+      expect(prompt).toContain('"evidenceRefs":[]');
+      expect(audit).toMatchObject({ action: "complete_taskrun", gates: { contract: { passed: true }, completion: { passed: true } } });
+    } finally { globalThis.fetch = original; store.close(); }
   });
 
   it("escalates lightweight-looking discussions when delivery risk is present", async () => {
@@ -188,16 +272,12 @@ describe("TaskRunSupervisor LLM audit", () => {
     const operation = upsertTrustedCheck(store, run.id, { key: "tests", title: "Tests", command: "npm test", output: "FAIL 1 test, PASS 20 tests" });
     expect(store.getRun(run.id)?.completionGate.passed).toBe(true);
     const failure = { kind: "evidence", key: "tests", reason: "The actual receipt reports a failing test.", disposition: "auto_fixable" };
-    const payload = {
-      action: "start_continuation", reasonCode: "test_failure_in_receipt", rationale: "The receipt contradicts the completion claim.", confidence: 1,
-      gates: {
-        progress: { passed: true, summary: "Progress is complete.", failures: [] },
-        evidence: { passed: false, summary: "The receipt reports failure.", failures: [failure] },
-        contract: { passed: false, summary: "The criterion is unsupported.", failures: [{ kind: "contract", key: "ac-1", reason: "Tests did not all pass.", disposition: "auto_fixable" }], criterionCoverage: [{ criterionId: "ac-1", status: "contradicted", evidenceRefs: [`check:tests`, `operation:${operation.id}`], reason: "The actual output contains a failing test." }] },
-        completion: { passed: false, summary: "Completion is contradicted.", failures: [failure] },
-        continuation: { passed: true, summary: "The failure is repairable.", failures: [] },
-      },
-    };
+    const payload = semanticVerdict({
+      contradictory: true,
+      reason: "The receipt contradicts the completion claim.",
+      criterionCoverage: [{ criterionId: "ac-1", status: "contradicted", evidenceRefs: [`check:tests`, `operation:${operation.id}`], reason: "The actual output contains a failing test." }],
+      failures: [failure],
+    });
     let prompt = "";
     const original = globalThis.fetch;
     globalThis.fetch = async (_url, init) => {
@@ -218,10 +298,8 @@ describe("TaskRunSupervisor LLM audit", () => {
   it("rejects hallucinated evidence references from the LLM", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "strict evidence refs");
     store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, objectives: [], acceptanceCriteria: ["Provide verified output"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
-    const payload = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: Object.fromEntries(["progress", "evidence", "continuation"].map((type) => [type, { passed: true, summary: "Passed.", failures: [] }])) as Record<string, unknown> };
     const receipt = [{ criterionId: "ac-1", status: "covered", evidenceRefs: ["check:invented"], reason: "Claimed support." }];
-    payload.gates.contract = { passed: true, summary: "Passed.", failures: [], criterionCoverage: receipt };
-    payload.gates.completion = { passed: true, summary: "Passed.", failures: [], criterionCoverage: receipt };
+    const payload = semanticVerdict({ criterionCoverage: receipt });
     const original = globalThis.fetch;
     globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(payload) } }] }), { status: 200 });
     try {
@@ -230,12 +308,11 @@ describe("TaskRunSupervisor LLM audit", () => {
     } finally { globalThis.fetch = original; store.close(); }
   });
 
-  it("uses one authoritative contract coverage receipt set and does not require completion duplication", async () => {
+  it("uses one authoritative criterion coverage receipt set", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "single coverage owner");
     const criterion = "Explain the result";
     store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, objectives: [], acceptanceCriteria: [criterion], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "discussion", decisionReason: "test", routerVersion: "test" }), run.id);
-    const payload = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: Object.fromEntries(["progress", "evidence", "completion", "continuation"].map((type) => [type, { passed: true, summary: "Passed.", failures: [] }])) as Record<string, unknown> };
-    payload.gates.contract = { passed: true, summary: "Covered.", failures: [], criterionCoverage: [{ criterionId: "ac-1", status: "covered", evidenceRefs: [], reason: "The response directly explains the result." }] };
+    const payload = semanticVerdict({ criterionCoverage: [{ criterionId: "ac-1", status: "covered", evidenceRefs: [], reason: "The response directly explains the result." }] });
     const original = globalThis.fetch;
     globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(payload) } }] }), { status: 200 });
     try {
@@ -247,21 +324,34 @@ describe("TaskRunSupervisor LLM audit", () => {
     } finally { globalThis.fetch = original; store.close(); }
   });
 
-  it("repairs a malformed Supervisor schema once without creating another Agent attempt", async () => {
+  it("derives full gates and action from the compact semantic verdict", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "compact semantic verdict");
+    const criterion = "Explain the inspected result";
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, objectives: [], acceptanceCriteria: [criterion], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
+    store.upsertPlanItem(run.id, { key: "inspect", title: "Inspect", status: "done", required: true, position: 1 });
+    const compact = { delivery: { complete: false, relevant: true, contradictory: false, reason: "The candidate omits the root cause." }, criterionCoverage: [{ criterionId: "ac-1", status: "unsupported", evidenceRefs: [], reason: "No root cause is given." }], failures: [] };
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(compact) } }] }), { status: 200 });
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "Partial answer", operations: [], progress: undefined });
+      expect(audit).toMatchObject({ action: "start_continuation", reasonCode: "authoritative_start_continuation", gates: { progress: { passed: true }, evidence: { passed: true }, contract: { passed: false }, completion: { passed: false }, continuation: { passed: true } } });
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("rejects a malformed Supervisor schema locally without another model call", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "retry audit only");
     let requests = 0;
     const original = globalThis.fetch;
-    const repairedAudit = passingTestAudit();
     globalThis.fetch = async () => {
       requests += 1;
-      const content = requests === 1 ? JSON.stringify({ action: "complete_taskrun" }) : JSON.stringify(repairedAudit);
+      const content = JSON.stringify({ action: "complete_taskrun" });
       return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
     };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
-      expect(audit.action).toBe("complete_taskrun");
-      expect(requests).toBe(2);
+      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("no repair LLM was called");
+      expect(requests).toBe(1);
       expect(store.getRun(run.id)?.attempt).toBe(1);
       expect(store.getRun(run.id)?.continuations).toHaveLength(0);
     } finally { globalThis.fetch = original; store.close(); }
@@ -347,7 +437,7 @@ describe("TaskRunSupervisor LLM audit", () => {
   it("falls back once from the lightweight Supervisor model to a main model on a different upstream", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "fallback audit");
     const models: string[] = [];
-    const valid = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } } };
+    const valid = semanticVerdict();
     const original = globalThis.fetch;
     globalThis.fetch = async (_url, init) => {
       const modelId = String(JSON.parse(String(init?.body)).model);
@@ -369,7 +459,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify(contract), run.id);
     upsertTrustedCheck(store, run.id, { key: "verify", title: "Verify", command: "C".repeat(10_000), output: "E".repeat(20_000) });
     store.addArtifact(run.id, { id: "large", title: "Large", kind: "report", content: "A".repeat(20_000), uri: "artifact://large" });
-    const valid = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } } };
+    const valid = semanticVerdict();
     let requestBody = "";
     const original = globalThis.fetch;
     globalThis.fetch = async (_url, init) => { requestBody = String(init?.body); return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(valid) } }] }), { status: 200 }); };
@@ -391,7 +481,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "long delivery");
     const ending = "FINAL DELIVERY: implementation complete; all regression checks passed; no deployment was requested.";
     const response = `Opening context.\n${"middle detail 中文证据。".repeat(2_000)}\n${ending}`;
-    const valid = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } } };
+    const valid = semanticVerdict();
     let requestBody = "";
     const original = globalThis.fetch;
     globalThis.fetch = async (_url, init) => { requestBody = String(init?.body); return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(valid) } }] }), { status: 200 }); };
@@ -413,11 +503,10 @@ describe("TaskRunSupervisor LLM audit", () => {
   it("corrects a projection-only truncation verdict without creating an Agent continuation", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "long candidate correction");
     const failure = { kind: "delivery", key: "final_delivery_truncated", reason: "Candidate response was truncated by the review projection.", disposition: "auto_fixable" as const };
-    const invalid = failedAudit("start_continuation", "final_delivery_truncated", failure);
-    const valid = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "The preserved tail contains the complete delivery.", confidence: 1, gates: { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } } };
+    const invalid = semanticVerdict({ complete: false, reason: failure.reason, failures: [failure] });
     let requests = 0;
     const original = globalThis.fetch;
-    globalThis.fetch = async () => { requests += 1; const content = requests === 1 ? invalid : valid; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }), { status: 200 }); };
+    globalThis.fetch = async () => { requests += 1; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(invalid) } }] }), { status: 200 }); };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
       const response = `${"long middle\n".repeat(1_000)}\nFINAL: complete and verified.`;
@@ -433,7 +522,7 @@ describe("TaskRunSupervisor LLM audit", () => {
   it("locally removes repeated projection-only truncation failures without another LLM call", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "projection loop fuse");
     const failure = { kind: "delivery", key: "candidate_truncated", reason: "The answer is truncated because the middle was omitted.", disposition: "auto_fixable" as const };
-    const invalid = failedAudit("start_continuation", "candidate_truncated", failure);
+    const invalid = semanticVerdict({ complete: false, reason: failure.reason, failures: [failure] });
     let requests = 0;
     const original = globalThis.fetch;
     globalThis.fetch = async () => { requests += 1; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(invalid) } }] }), { status: 200 }); };
@@ -449,7 +538,7 @@ describe("TaskRunSupervisor LLM audit", () => {
   it("still allows a genuine model length stop to be classified as truncated", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "real output truncation");
     const failure = { kind: "delivery", key: "final_delivery_truncated", reason: "The model output ended at its length limit.", disposition: "auto_fixable" as const };
-    const auditPayload = failedAudit("start_continuation", "final_delivery_truncated", failure);
+    const auditPayload = semanticVerdict({ complete: false, reason: failure.reason, failures: [failure] });
     let requests = 0;
     const original = globalThis.fetch;
     globalThis.fetch = async () => { requests += 1; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(auditPayload) } }] }), { status: 200 }); };
@@ -478,7 +567,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "stable coverage mapping");
     const criteria = ["First exact criterion", "Second exact criterion"];
     store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, objectives: [], acceptanceCriteria: criteria, scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
-    const valid = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [{ criterionId: "ac-2", status: "covered", evidenceRefs: [], reason: "Second is covered." }, { criterionId: "ac-1", status: "covered", evidenceRefs: [], reason: "First is covered." }] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } } };
+    const valid = semanticVerdict({ criterionCoverage: [{ criterionId: "ac-2", status: "covered", evidenceRefs: [], reason: "Second is covered." }, { criterionId: "ac-1", status: "covered", evidenceRefs: [], reason: "First is covered." }] });
     const original = globalThis.fetch;
     globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(valid) } }] }), { status: 200 });
     try {
@@ -489,34 +578,31 @@ describe("TaskRunSupervisor LLM audit", () => {
     } finally { globalThis.fetch = original; store.close(); }
   });
 
-  it("keeps missing coverage repair bounded to one review-only call", async () => {
+  it("rejects missing coverage after one model call", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "correct missing coverage");
     const criteria = ["Criterion one", "Criterion two"];
     store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, objectives: [], acceptanceCriteria: criteria, scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
-    const gates = { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } };
-    const audit = (criterionCoverage: unknown[]) => ({ action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: { ...gates, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage } } });
     let requests = 0;
     const original = globalThis.fetch;
     globalThis.fetch = async () => {
       requests += 1;
-      const content = audit([{ criterionId: "ac-1", status: "covered", evidenceRefs: [], reason: "One." }]);
+      const content = semanticVerdict({ criterionCoverage: [{ criterionId: "ac-1", status: "covered", evidenceRefs: [], reason: "One." }] });
       return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }), { status: 200 });
     };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
       await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "done", operations: [], progress: undefined })).rejects.toThrow("missing: ac-2");
-      expect(requests).toBe(2);
+      expect(requests).toBe(1);
       expect(store.getRun(run.id)?.attempt).toBe(1);
       expect(store.getRun(run.id)?.continuations).toHaveLength(0);
     } finally { globalThis.fetch = original; store.close(); }
   });
 
-  it("uses a compact bounded prompt for one invalid-schema repair", async () => {
+  it("rejects the obsolete model-authored gate schema without a second prompt", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "compact repair");
     const criterion = "Return a verified explanation";
     store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: "S".repeat(1800), objectives: [], acceptanceCriteria: [criterion], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
-    const gates = { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } };
-    const first = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: { ...gates, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [] } } };
+    const first = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: {} };
     const prompts: string[] = [];
     const original = globalThis.fetch;
     globalThis.fetch = async (_url, init) => {
@@ -526,18 +612,15 @@ describe("TaskRunSupervisor LLM audit", () => {
     };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "A complete standalone explanation.", operations: [], progress: undefined })).rejects.toThrow("after one bounded review-only repair");
-      expect(prompts).toHaveLength(2);
+      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "A complete standalone explanation.", operations: [], progress: undefined })).rejects.toThrow("no repair LLM was called");
+      expect(prompts).toHaveLength(1);
       expect(prompts[0]).toContain("TASKRUN_DATA=");
-      expect(prompts[1]).toContain("VALIDATION_ERROR=");
-      expect(prompts[1]).toContain("PREVIOUS_RESPONSE=");
     } finally { globalThis.fetch = original; store.close(); }
   });
 
   it("repairs a bounded missing-comma JSON syntax error without rerunning the Agent", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "repair malformed audit JSON");
-    const valid = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: { progress: { passed: true, summary: "Passed.", failures: [] }, evidence: { passed: true, summary: "Passed.", failures: [] }, contract: { passed: true, summary: "Passed.", failures: [], criterionCoverage: [] }, completion: { passed: true, summary: "Passed.", failures: [] }, continuation: { passed: true, summary: "Passed.", failures: [] } } };
-    const malformed = JSON.stringify(valid).replace('"reasonCode"', '"reasonCode"').replace(',"confidence"', '"confidence"');
+    const malformed = JSON.stringify(semanticVerdict()).replace(',"criterionCoverage"', '"criterionCoverage"');
     let requests = 0;
     const original = globalThis.fetch;
     globalThis.fetch = async () => { requests += 1; return new Response(JSON.stringify({ choices: [{ message: { content: malformed } }] }), { status: 200 }); };
@@ -558,8 +641,8 @@ describe("TaskRunSupervisor LLM audit", () => {
     globalThis.fetch = async () => { requests += 1; return new Response(JSON.stringify({ choices: [{ message: { content: '{"action":"complete_taskrun","rationale":"unterminated}' } }] }), { status: 200 }); };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("after one bounded review-only repair");
-      expect(requests).toBe(2);
+      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("no repair LLM was called");
+      expect(requests).toBe(1);
       expect(store.getRun(run.id)?.attempt).toBe(1);
       expect(store.getRun(run.id)?.continuations).toHaveLength(0);
     } finally { globalThis.fetch = original; store.close(); }
