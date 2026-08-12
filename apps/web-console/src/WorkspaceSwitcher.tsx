@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Activity, ArrowRight, Circle, CornerDownLeft, Pin, Plus, Search, X } from "lucide-react";
 import type { Session } from "./api";
-import { useModalFocus } from "./useModalFocus";
+import { useModalFocus } from "./use-modal-focus";
 
 function statusLabel(session: Session): string {
   if (!session.latestRunStatus) return "No tasks";

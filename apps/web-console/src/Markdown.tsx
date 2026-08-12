@@ -167,7 +167,3 @@ export const Markdown = memo(function Markdown({ children }: { children: string 
 
   return <div ref={rootRef} className="markdown" onClick={handleClick} dangerouslySetInnerHTML={{ __html: html }} />;
 });
-
-export const LiveText = memo(function LiveText({ children }: { children: string }) {
-  return <div className="markdown live-text">{children}</div>;
-});

@@ -1,15 +1,16 @@
 import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Activity, ArrowDown, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Keyboard, Menu, Moon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Search, Send, Settings2, ShieldAlert, ShieldCheck, Sparkles, Square, Sun, Target, Terminal, X } from "lucide-react";
 import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
-import { LiveText, Markdown } from "./Markdown";
+import { Markdown, preloadMarkdown } from "./LazyMarkdown";
+import { LiveText } from "./LiveText";
 import { createRequestId } from "./id";
 import { IntentPrefetchCache } from "./intent-prefetch-cache";
 import { deriveCurrentOperation } from "./current-operation";
 import { canResumeRun, findActiveRun, isActiveRunStatus } from "./run-state";
 import { formatShortcut, useShortcutModifier } from "./shortcut-platform";
-import { useDrawerFocus } from "./useDrawerFocus";
-import { useMobileDrawerSwipe } from "./useMobileDrawerSwipe";
-import { usePopoverFocus } from "./usePopoverFocus";
+import { useDrawerFocus } from "./use-drawer-focus";
+import { useMobileDrawerSwipe } from "./use-mobile-drawer-swipe";
+import { usePopoverFocus } from "./use-popover-focus";
 import { WorkspaceContextMenu } from "./WorkspaceContextMenu";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
@@ -41,6 +42,7 @@ type WorkspaceSnapshot = {
 
 async function loadWorkspaceSnapshot(sessionId: string): Promise<WorkspaceSnapshot> {
   const [history, runHistory, queued] = await Promise.all([api.messages(sessionId), api.runs(sessionId), api.inbox(sessionId)]);
+  if (history.some((message) => message.content.trim())) void preloadMarkdown().catch(() => undefined);
   const latestSummary = runHistory[0] ?? null;
   const activeSummary = findActiveRun(runHistory);
   const runIds = [...new Set([latestSummary?.id, activeSummary?.id].filter((value): value is string => Boolean(value)))];
@@ -48,6 +50,8 @@ async function loadWorkspaceSnapshot(sessionId: string): Promise<WorkspaceSnapsh
   const latest = latestSummary ? hydrated.get(latestSummary.id) ?? null : null;
   const active = activeSummary ? hydrated.get(activeSummary.id) ?? null : null;
   const transcript = latest ? await api.transcriptView(latest.id) : [];
+  const transcriptHasRichText = transcript.some((item) => (item.kind === "assistant" || item.kind === "thinking") && item.text.trim());
+  if (transcriptHasRichText) void preloadMarkdown().catch(() => undefined);
   return { sessionId, history, runHistory, queued, active, latest, transcript };
 }
 
@@ -997,6 +1001,7 @@ export function App() {
     const content = draft.trim();
     const targetSessionId = sessionId;
     if (!content || !targetSessionId || submitting) return;
+    void preloadMarkdown().catch(() => undefined);
     const optimistic = { sessionId: targetSessionId, content, createdAt: Date.now() };
     setSubmitting(true); updateComposerDraft(""); setError(""); setNotice(""); forceScrollRef.current = true;
     setInputHistoryBySession((current) => {
@@ -1220,7 +1225,7 @@ export function App() {
         {hasOlderMessages && <button className="load-older" onClick={() => void loadOlderMessages()} disabled={loadingOlderMessages}>{loadingOlderMessages ? "Loading…" : "Load earlier messages"}</button>}
         {viewingEarlierHistory && <div className="history-context"><span>Viewing earlier history</span><button type="button" onClick={jumpToLatest}>Return to latest</button></div>}
         {messages.map((message) => <ChatMessage key={message.id} message={message} memoryEnabled={Boolean(runtimeStatus?.memoryEnabled)} memoryJob={message.role === "user" ? (memoryJobsLoaded ? memoryJobByMessageId.get(message.id) ?? null : undefined) : undefined} />)}
-        {pendingUserMessage?.sessionId === sessionId && !messages.some((message) => message.role === "user" && message.content === pendingUserMessage.content && message.createdAt >= pendingUserMessage.createdAt - 5_000) && <article className="message user pending" aria-label="Sending message"><div className="message-meta"><span>You</span><time>Sending…</time></div><div className="message-body"><Markdown>{pendingUserMessage.content}</Markdown></div>{runtimeStatus?.memoryEnabled && <MemoryExtraction job={undefined} />}</article>}
+        {pendingUserMessage?.sessionId === sessionId && !messages.some((message) => message.role === "user" && message.content === pendingUserMessage.content && message.createdAt >= pendingUserMessage.createdAt - 5_000) && <article className="message user pending" aria-label="Sending message"><div className="message-meta"><span>You</span><time>Sending…</time></div><div className="message-body"><LiveText>{pendingUserMessage.content}</LiveText></div>{runtimeStatus?.memoryEnabled && <MemoryExtraction job={undefined} />}</article>}
         {activeRun && <div className="active-run-strip"><Activity size={14} /><span>Attempt {activeRun.attempt}</span><strong>{activeRun.phase}</strong><small>{activeRun.usage.totalTokens.toLocaleString()} tokens</small></div>}
         {selectedRun?.pendingUserInput && <UserInputCard request={selectedRun.pendingUserInput} submitting={submittingUserInputId === selectedRun.pendingUserInput.id} onSubmit={(values) => submitRequestedInput(selectedRun.pendingUserInput!, values)} />}
         {(activeRun || selectedRun) && transcript.length + events.length + Number(Boolean(liveThinking || streaming)) > 0 && <ExecutionTimeline runId={(activeRun ?? selectedRun)!.id} isRunning={activeRun?.status === "running"} items={transcript} events={activeRun ? events : []} liveThinking={activeRun ? liveThinking : ""} liveOutput={activeRun ? streaming : ""} />}

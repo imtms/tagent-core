@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { drawerGestureDecision, shouldSettleDrawerOpen } from "../apps/web-console/src/useMobileDrawerSwipe";
+import { drawerGestureDecision, shouldSettleDrawerOpen } from "../apps/web-console/src/use-mobile-drawer-swipe";
 import { formatShortcut, shortcutKeyTokens, shortcutModifierForPlatform } from "../apps/web-console/src/shortcut-platform";
 
 describe("mobile drawer gesture", () => {

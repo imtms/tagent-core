@@ -25,8 +25,8 @@ describe("Web workbench state model", () => {
     const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
     const contextMenu = await readFile(new URL("../apps/web-console/src/WorkspaceContextMenu.tsx", import.meta.url), "utf8");
     const switcher = await readFile(new URL("../apps/web-console/src/WorkspaceSwitcher.tsx", import.meta.url), "utf8");
-    const drawerSwipe = await readFile(new URL("../apps/web-console/src/useMobileDrawerSwipe.ts", import.meta.url), "utf8");
-    const modalFocus = await readFile(new URL("../apps/web-console/src/useModalFocus.ts", import.meta.url), "utf8");
+    const drawerSwipe = await readFile(new URL("../apps/web-console/src/use-mobile-drawer-swipe.ts", import.meta.url), "utf8");
+    const modalFocus = await readFile(new URL("../apps/web-console/src/use-modal-focus.ts", import.meta.url), "utf8");
     const shortcutHelp = await readFile(new URL("../apps/web-console/src/KeyboardShortcutsDialog.tsx", import.meta.url), "utf8");
     const design = await readFile(new URL("../apps/web-console/src/design-system.css", import.meta.url), "utf8");
     expect(app).toContain('storedBoolean("tagent.right-panel-collapsed", true)');
@@ -146,6 +146,7 @@ describe("Web workbench state model", () => {
   it("renders Markdown without raw HTML injection and exposes expandable tool calls", async () => {
     const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
     const markdown = await readFile(new URL("../apps/web-console/src/Markdown.tsx", import.meta.url), "utf8");
+    const lazyMarkdown = await readFile(new URL("../apps/web-console/src/LazyMarkdown.tsx", import.meta.url), "utf8");
     expect(app).toContain("<Markdown>{message.content}</Markdown>");
     expect(app).toContain("<details className={`tool-call");
     expect(app).toContain("api.transcriptView");
@@ -153,6 +154,8 @@ describe("Web workbench state model", () => {
     expect(markdown).toContain("dangerouslySetInnerHTML");
     expect(markdown).toContain('tokens[index].attrSet("target", "_blank")');
     expect(markdown).toContain('tokens[index].attrSet("rel", "noopener noreferrer")');
+    expect(lazyMarkdown).toContain('import("./Markdown")');
+    expect(lazyMarkdown).toContain('fallback={<div className="markdown markdown-loading" aria-busy="true">');
   });
 
   it("refreshes the active Run when structured task state changes", async () => {
@@ -200,6 +203,8 @@ describe("Web workbench state model", () => {
   it("paginates and isolates expensive rendering in long chats", async () => {
     const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
     const markdown = await readFile(new URL("../apps/web-console/src/Markdown.tsx", import.meta.url), "utf8");
+    const liveText = await readFile(new URL("../apps/web-console/src/LiveText.tsx", import.meta.url), "utf8");
+    const lazyMarkdown = await readFile(new URL("../apps/web-console/src/LazyMarkdown.tsx", import.meta.url), "utf8");
     const styles = await readFile(new URL("../apps/web-console/src/styles.css", import.meta.url), "utf8");
     expect(app).toContain("loadOlderMessages");
     expect(app).toContain("<ChatMessage key={message.id}");
@@ -209,6 +214,13 @@ describe("Web workbench state model", () => {
     expect(app).toContain("items={transcript}");
     expect(app).not.toContain("api.sessions(), api.messages(targetSessionId)");
     expect(markdown).toContain("export const Markdown = memo");
+    expect(liveText).toContain("export const LiveText = memo");
+    expect(liveText).not.toContain("markdown-it");
+    expect(lazyMarkdown).toContain('const RichMarkdown = lazy(() => preloadMarkdown()');
+    expect(app).toContain("if (history.some((message) => message.content.trim())) void preloadMarkdown().catch(() => undefined)");
+    expect(app).toContain("if (transcriptHasRichText) void preloadMarkdown().catch(() => undefined)");
+    expect(app).toMatch(/async function submit\(\)[\s\S]*?void preloadMarkdown\(\)\.catch\(\(\) => undefined\);/);
+    expect(app).toContain("<LiveText>{pendingUserMessage.content}</LiveText>");
     expect(styles).toContain("content-visibility: auto");
   });
 

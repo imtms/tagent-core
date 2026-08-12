@@ -746,6 +746,11 @@ a:focus-visible {
   color: color-mix(in oklab, var(--danger) 82%, var(--foreground));
 }
 
+.markdown-loading {
+  min-height: 1.68em;
+  white-space: pre-wrap;
+}
+
 .markdown .code-block,
 .markdown .code-block-header,
 .markdown pre {

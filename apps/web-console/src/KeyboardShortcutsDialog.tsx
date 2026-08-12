@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { createPortal } from "react-dom";
 import { Keyboard, X } from "lucide-react";
 import { shortcutKeyTokens, type ShortcutModifier } from "./shortcut-platform";
-import { useModalFocus } from "./useModalFocus";
+import { useModalFocus } from "./use-modal-focus";
 
 export function KeyboardShortcutsDialog({ open, modifier, enterSubmits, onClose }: { open: boolean; modifier: ShortcutModifier; enterSubmits: boolean; onClose: () => void }) {
   const dialogRef = useRef<HTMLElement>(null);

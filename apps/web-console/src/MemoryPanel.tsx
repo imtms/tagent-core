@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Archive, BrainCircuit, Check, Database, Flame, Plus, RefreshCw, Search, ShieldCheck, Snowflake, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import { api, type CaptureJob, type ColdTopic, type MemoryKind, type MemoryScope, type MemoryStatusResult, type PreferenceRecord, type RecallResult, type ReindexJob, type RuntimeStatus, type WarmMemory, type CoreMemorySnapshot } from "./api";
-import { Markdown } from "./Markdown";
+import { Markdown } from "./LazyMarkdown";
 
 const kinds: Array<{ value: "all" | MemoryKind; label: string }> = [{ value: "all", label: "All" }, { value: "fact", label: "Facts" }, { value: "preference", label: "Preferences" }, { value: "episode", label: "Episodes" }, { value: "procedure", label: "Procedures" }];
 const formatDate = (value: number) => new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(value);
