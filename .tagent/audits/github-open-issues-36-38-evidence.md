@@ -76,3 +76,14 @@ Issue 指出 `/api/v1/console/sessions` 在未提供可选 `requestId` 时使用
 - `git diff --check`：PASS。
 
 GitHub 回复、关闭、推送提交及最终开放 Issue CDP 复核将在发布步骤完成后追加。
+
+## GitHub 发布与最终 CDP 复核
+
+- 修复提交：`5f4b76c90845149649877cf82c3f5344b445b20d`（`fix: resolve open issues 36 through 38`）。
+- 已推送至 `origin/main`；远端 `refs/heads/main` 与本地 HEAD 一致。
+- #36、#37、#38 均已通过 CDP 发布包含复现结论、根因、修改和验证证据的回复，并关闭。
+- 单页最终复核：
+  - #36：`2026-08-12T03:04:44.199Z`，reply=true，closed=true。
+  - #37：`2026-08-12T03:04:46.599Z`，reply=true，closed=true。
+  - #38：`2026-08-12T03:04:49.003Z`，reply=true，closed=true。
+- 开放 Issue 列表最终 CDP 复核：`2026-08-12T03:03:57.684Z`，Open `0`，Closed `26`，`No results`。
