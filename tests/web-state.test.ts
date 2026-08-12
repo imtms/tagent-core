@@ -25,13 +25,17 @@ describe("Web workbench state model", () => {
     const design = await readFile(new URL("../apps/web-console/src/design-system.css", import.meta.url), "utf8");
     expect(app).toContain('storedBoolean("tagent.right-panel-collapsed", true)');
     expect(app).toContain('className="session-search"');
-    expect(app).toContain('className={`pin-session ${pinned ? "active" : ""}`}');
+    expect(app).toContain('className="session-context-menu"');
+    expect(app).toContain('<WorkspaceSwitcher open={workspaceSwitcherOpen}');
+    expect(app).toContain('event.key.toLocaleLowerCase() === "k"');
+    expect(app).toContain('const auditAvailable = Boolean(activeRun || selectedRun || runs.length)');
     expect(app).toContain('className="starter-prompts"');
     expect(app).toContain('className="jump-to-latest"');
     expect(app).toContain('className="conversation-skeleton"');
     expect(app).toContain('function TAgentMark');
     expect(design).toContain('.run-panel.needs-attention.collapsed');
-    expect(design).toContain('.mobile-menu-select');
+    expect(design).toContain('.workspace-actions-menu');
+    expect(design).toContain('.workspace-switcher-backdrop');
   });
 
   it("persists per-workspace drafts and provides IME-safe keyboard composition", async () => {

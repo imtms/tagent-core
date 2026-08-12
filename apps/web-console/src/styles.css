@@ -71,8 +71,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 .workspace-run-status.blocked .workspace-status-dot { background: #d68b26; }
 .workspace-run-status.running { color: var(--accent); }
 
-.session-emoji { position: absolute; z-index: 2; top: 11px; left: 8px; width: 26px; height: 26px; padding: 0; display: grid; place-items: center; border: 1px solid #d6dcd7; border-radius: 5px; background: #fdfefd; cursor: pointer; font-size: 15px; line-height: 1; }
-.session-emoji:hover, .session-emoji[aria-expanded="true"] { border-color: #9eb3a6; background: #fff; }
+.session-emoji { position: absolute; z-index: 2; top: 11px; left: 8px; width: 26px; height: 26px; padding: 0; display: grid; place-items: center; border: 1px solid #d6dcd7; border-radius: 5px; background: #fdfefd; font-size: 15px; line-height: 1; }
 .emoji-picker { position: absolute; z-index: 20; top: 42px; left: 8px; width: 170px; padding: 7px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; border: 1px solid #ccd6cf; border-radius: 8px; background: #fff; box-shadow: 0 12px 32px rgba(24,34,28,.16); }
 .emoji-picker button { width: 28px; height: 28px; padding: 0; display: grid; place-items: center; border: 1px solid transparent; border-radius: 5px; background: transparent; cursor: pointer; font-size: 16px; }
 .emoji-picker button:hover, .emoji-picker button[aria-selected="true"] { border-color: #b8cbbf; background: var(--accent-soft); }
