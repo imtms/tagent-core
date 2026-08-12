@@ -108,7 +108,7 @@ describe("Core service configuration", () => {
 
   it("exposes runtime status without exposing credentials", () => {
     const status = publicRuntimeConfig(loadConfig({ OPENAI_API_KEY: "secret" }));
-    expect(status.releaseVersion).toBe("0.5.4");
+    expect(status.releaseVersion).toBe("0.5.5");
     expect(status.credentialConfigured).toBe(true);
     expect(status).not.toHaveProperty("apiKey");
     expect(JSON.stringify(status)).not.toContain("secret");

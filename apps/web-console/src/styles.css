@@ -329,7 +329,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
   .session-rail.collapsed .rename-session, .session-rail.collapsed .rail-footer { display: none; }
   .session-rail.collapsed .brand .icon-button { margin: 0; width: 36px; }
   .session-rail.collapsed .new-session { width: 36px; padding: 0; }
-  .session-rail.collapsed .session-list { overflow: visible; }
+  .session-rail.collapsed .session-list { overflow: visible; margin-top: 12px; }
   .session-rail.collapsed .session-item, .session-rail.collapsed .session-select { min-height: 40px; }
   .session-rail.collapsed .session-select { padding: 0; }
   .session-rail.collapsed .session-emoji { top: 7px; left: 5px; }
@@ -341,10 +341,10 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 @media (max-width: 980px) {
   .app-shell { display: block; }
   .conversation { height: 100vh; height: 100dvh; }
-  .session-rail { position: fixed; z-index: 30; inset: 0 auto 0 0; width: min(290px, 86vw); transform: translateX(-100%); transition: transform .18s ease; box-shadow: var(--shadow); }
-  .session-rail.mobile-open { transform: translateX(0); }
-  .run-panel { position: fixed; z-index: 30; top: 0; right: 0; bottom: 0; width: min(340px, 88vw); transform: translateX(100%); transition: transform .18s ease; box-shadow: var(--shadow); }
-  .run-panel.mobile-open { transform: translateX(0); }
+  .session-rail { position: fixed; z-index: 30; inset: 0 auto 0 0; width: min(290px, 86vw); visibility: hidden; pointer-events: none; transform: translateX(-100%); transition: transform .18s ease, visibility 0s linear .18s; box-shadow: var(--shadow); }
+  .session-rail.mobile-open { visibility: visible; pointer-events: auto; transform: translateX(0); transition-delay: 0s; }
+  .run-panel { position: fixed; z-index: 30; top: 0; right: 0; bottom: 0; width: min(340px, 88vw); visibility: hidden; pointer-events: none; transform: translateX(100%); transition: transform .18s ease, visibility 0s linear .18s; box-shadow: var(--shadow); }
+  .run-panel.mobile-open { visibility: visible; pointer-events: auto; transform: translateX(0); transition-delay: 0s; }
   .mobile-only { display: grid; }
   .desktop-only { display: none; }
   .message-scroll { padding-inline: clamp(24px, 7vw, 64px); }
@@ -353,10 +353,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
   .conversation { grid-template-rows: auto minmax(0, 1fr) auto; }
   .topbar { min-height: calc(58px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 10px 0; }
   .topbar h1 { max-width: 48vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .workspace-heading p, .execution-preferences label > span { display: none; }
-  .execution-preferences label { padding-inline: 5px; grid-template-columns: minmax(0,1fr); }
-  .execution-preferences select { max-width: 104px; }
-  .execution-preferences label:last-child select { max-width: 58px; }
+  .workspace-heading p { display: none; }
   .message-scroll { padding: 18px 12px 10px; scrollbar-gutter: auto; }
   .message { margin-bottom: 18px; }
   .message.user { width: 94%; }

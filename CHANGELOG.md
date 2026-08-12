@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.5] - 2026-08-12
+
+### Chat-first Web Console
+
+- Rebalanced the workbench around conversation: Supervisor audit detail now starts collapsed, while pending approvals, requested input, failures, and blocked work remain visible at the point of action.
+- Added searchable and pinnable Workspace navigation with Pinned/Recent grouping, unread activity indicators, loading skeletons, and a compact mobile header with progressively disclosed workspace actions.
+- Added per-Workspace draft persistence, IME-safe keyboard submission, input history, composer focus shortcuts, failed-send recovery, starter prompts, long-history context, and a floating return-to-latest control.
+- Refined responsive, dark-theme, safe-area, and hidden-drawer behavior and introduced a small TAgent connection mark without changing the existing warm neutral visual language.
+
+### Compatibility and upgrade
+
+- Pending approvals are surfaced directly above the composer; governance state and audit detail remain available in the contextual Run panel.
+- There is no HTTP API, ABI, configuration, or SQLite schema migration in this release; schema remains 42. Deploy matching Core and Web Console 0.5.5 artifacts.
+
 ## [0.5.4] - 2026-08-12
 
 ### Execution safety and proportional governance

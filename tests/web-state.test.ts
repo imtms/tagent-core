@@ -10,7 +10,7 @@ describe("Web workbench state model", () => {
     expect(app).toContain('type Theme = "light" | "dark"');
     expect(app).toContain('document.documentElement.dataset.theme = theme');
     expect(app).toContain('globalThis.localStorage?.setItem("tagent.theme", theme)');
-    expect(app).toContain('aria-label="Open workspace tools"');
+    expect(app).toContain('aria-label="More workspace actions"');
     expect(app).toContain('aria-label="Open memory center"');
     expect(app).toContain('aria-label="Open learning center"');
     expect(design).toContain(':root[data-theme="dark"]');
@@ -18,6 +18,30 @@ describe("Web workbench state model", () => {
     expect(design).toContain('--surface-raised:');
     expect(design).toContain('.mobile-tools-menu');
     expect(design).toContain('@media (prefers-reduced-motion: reduce)');
+  });
+
+  it("keeps chat primary while progressively disclosing navigation and audit detail", async () => {
+    const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    const design = await readFile(new URL("../apps/web-console/src/design-system.css", import.meta.url), "utf8");
+    expect(app).toContain('storedBoolean("tagent.right-panel-collapsed", true)');
+    expect(app).toContain('className="session-search"');
+    expect(app).toContain('className={`pin-session ${pinned ? "active" : ""}`}');
+    expect(app).toContain('className="starter-prompts"');
+    expect(app).toContain('className="jump-to-latest"');
+    expect(app).toContain('className="conversation-skeleton"');
+    expect(app).toContain('function TAgentMark');
+    expect(design).toContain('.run-panel.needs-attention.collapsed');
+    expect(design).toContain('.mobile-menu-select');
+  });
+
+  it("persists per-workspace drafts and provides IME-safe keyboard composition", async () => {
+    const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    expect(app).toContain('storedStringRecord("tagent.composer-drafts")');
+    expect(app).toContain('storedStringLists("tagent.composer-history")');
+    expect(app).toContain('onCompositionStart={() => { composerIsComposingRef.current = true; }}');
+    expect(app).toContain('!event.nativeEvent.isComposing');
+    expect(app).toContain('event.key === "ArrowUp"');
+    expect(app).toContain('event.key === "/"');
   });
 
   it("renders the persisted user-input form and submits it to resume", async () => {
@@ -189,7 +213,8 @@ describe("Web workbench state model", () => {
     expect(source).toContain('aria-label="Sending message"');
     expect(source).toContain("api.messages(targetSessionId)");
     expect(source).toContain("sessionIdRef.current !== targetSessionId");
-    expect(source).toContain("setDraft(content)");
+    expect(source).toContain("updateComposerDraft(content)");
+    expect(source).toContain('globalThis.localStorage?.setItem("tagent.composer-drafts"');
   });
 
   it("debounces SSE acknowledgements and avoids full Run refreshes for routine tool events", async () => {

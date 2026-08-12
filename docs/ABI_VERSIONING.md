@@ -99,7 +99,7 @@ The profile freezes bounded public summaries, dual-scope enforcement for nested 
 
 | Core profile | Client behavior | Support |
 | --- | --- | --- |
-| schema 42 + `operator.read.v1` | negotiate current capabilities and use the matching 0.5.4 ABI/client | Supported current profile |
+| schema 42 + `operator.read.v1` | negotiate current capabilities and use the matching 0.5.5 ABI/client | Supported current profile |
 | schema 41 + `operator.read.v1` | negotiate API marker and dedicated capabilities, then use matching ABI/client | Supported |
 | schema 41 + legacy Operator 1.0 decoder | unchanged legacy object still decodes; deployment policy must separately accept schema 41 | Wire-compatible only |
 | schema 40 without `operator.read.v1` | Gateway disables only historical inventory/rebuild | Supported feature downgrade |

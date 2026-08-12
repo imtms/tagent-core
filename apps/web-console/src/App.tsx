@@ -1,5 +1,5 @@
 import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Menu, Moon, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Send, ShieldAlert, ShieldCheck, SlidersHorizontal, Sparkles, Square, Sun, Target, Terminal, X } from "lucide-react";
+import { Activity, ArrowDown, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Menu, Moon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Pin, Play, Plus, Search, Send, ShieldAlert, ShieldCheck, Sparkles, Square, Sun, Target, Terminal, X } from "lucide-react";
 import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
 import { LiveText, Markdown } from "./Markdown";
 import { createRequestId } from "./id";
@@ -12,11 +12,51 @@ const GoalsPanel = lazy(() => import("./GoalsPanel").then((module) => ({ default
 const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
 const workspaceEmojis = ["💬", "🧠", "🛠️", "🚀", "📚", "🔬", "🎨", "📦", "🧭", "⚙️"] as const;
 const reasoningEfforts = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const starterPrompts = [
+  { label: "Analyze this repository", prompt: "Analyze this repository and identify the highest-impact improvements, with evidence and a prioritized plan." },
+  { label: "Fix failing tests", prompt: "Find the failing tests, diagnose their root causes, implement the fixes, and verify the full relevant test suite." },
+  { label: "Review recent changes", prompt: "Review the recent changes for correctness, regressions, maintainability, and missing verification." },
+  { label: "Improve the documentation", prompt: "Audit the project documentation, fix stale or unclear guidance, and verify the documented commands." },
+] as const;
 type Theme = "light" | "dark";
 const initialWorkspaceRequestId = createRequestId();
 
-function storedBoolean(key: string): boolean {
-  try { return globalThis.localStorage?.getItem(key) === "true"; } catch { return false; }
+function storedBoolean(key: string, fallback = false): boolean {
+  try {
+    const value = globalThis.localStorage?.getItem(key);
+    return value === null || value === undefined ? fallback : value === "true";
+  } catch { return fallback; }
+}
+
+function storedStringRecord(key: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(globalThis.localStorage?.getItem(key) ?? "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+  } catch { return {}; }
+}
+
+function storedNumberRecord(key: string): Record<string, number> {
+  try {
+    const parsed = JSON.parse(globalThis.localStorage?.getItem(key) ?? "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1])));
+  } catch { return {}; }
+}
+
+function storedStringLists(key: string): Record<string, string[]> {
+  try {
+    const parsed = JSON.parse(globalThis.localStorage?.getItem(key) ?? "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string[]] => Array.isArray(entry[1]) && entry[1].every((item) => typeof item === "string")));
+  } catch { return {}; }
+}
+
+function storedStringArray(key: string): string[] {
+  try {
+    const parsed = JSON.parse(globalThis.localStorage?.getItem(key) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch { return []; }
 }
 
 function storedWorkspaceEmojis(): Record<string, string> {
@@ -32,6 +72,15 @@ function storedTheme(): Theme {
     if (saved === "light" || saved === "dark") return saved;
   } catch { /* Browser storage is optional. */ }
   return globalThis.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function TAgentMark({ size = 18 }: { size?: number }) {
+  return <svg className="tagent-mark" width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M5 6.5h14M12 6.5V18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    <circle cx="5" cy="6.5" r="2" fill="currentColor" />
+    <circle cx="19" cy="6.5" r="2" fill="currentColor" />
+    <circle cx="12" cy="18" r="2" fill="currentColor" />
+  </svg>;
 }
 
 function MemoryExtraction({ job }: { job: CaptureJob | null | undefined }) {
@@ -340,6 +389,8 @@ function QueuePrompt({ item, index, editing, draft, busy, starting, dragging, ca
 
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [conversationLoading, setConversationLoading] = useState(true);
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [learningSettings, setLearningSettings] = useState<LearningFeatureState | null>(null);
   const [learningToggleBusy, setLearningToggleBusy] = useState(false);
@@ -362,6 +413,9 @@ export function App() {
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [draft, setDraft] = useState("");
+  const [draftBySession, setDraftBySession] = useState<Record<string, string>>(() => storedStringRecord("tagent.composer-drafts"));
+  const [inputHistoryBySession, setInputHistoryBySession] = useState<Record<string, string[]>>(() => storedStringLists("tagent.composer-history"));
+  const [historyCursor, setHistoryCursor] = useState<number | null>(null);
   const [inbox, setInbox] = useState<SessionInboxItem[]>([]);
   const [startingInboxId, setStartingInboxId] = useState("");
   const [editingInboxId, setEditingInboxId] = useState("");
@@ -377,8 +431,14 @@ export function App() {
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
+  const [sessionSearch, setSessionSearch] = useState("");
+  const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(() => storedStringArray("tagent.pinned-workspaces"));
+  const [lastSeenBySession, setLastSeenBySession] = useState<Record<string, number>>(() => storedNumberRecord("tagent.workspace-last-seen"));
+  const [sessionActivityBaseline, setSessionActivityBaseline] = useState<Record<string, number>>({});
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [viewingEarlierHistory, setViewingEarlierHistory] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(() => storedBoolean("tagent.left-rail-collapsed"));
-  const [rightCollapsed, setRightCollapsed] = useState(() => storedBoolean("tagent.right-panel-collapsed"));
+  const [rightCollapsed, setRightCollapsed] = useState(() => storedBoolean("tagent.right-panel-collapsed", true));
   const [theme, setTheme] = useState<Theme>(storedTheme);
   const [workspaceEmojiById, setWorkspaceEmojiById] = useState<Record<string, string>>(storedWorkspaceEmojis);
   const [emojiPickerSessionId, setEmojiPickerSessionId] = useState("");
@@ -402,9 +462,16 @@ export function App() {
   const transcriptAfterRef = useRef(0);
   const transcriptRefreshTaskRef = useRef<Promise<void>>(Promise.resolve());
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const composerIsComposingRef = useRef(false);
+  const historySeedRef = useRef("");
 
   useEffect(() => { activeRunIdRef.current = activeRun?.id ?? ""; activeRunRef.current = activeRun; }, [activeRun]);
-  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+  useEffect(() => { sessionIdRef.current = sessionId; setViewingEarlierHistory(false); setShowJumpToLatest(false); }, [sessionId]);
+  useEffect(() => {
+    setDraft(draftBySession[sessionId] ?? "");
+    setHistoryCursor(null);
+    historySeedRef.current = "";
+  }, [sessionId]);
   useEffect(() => {
     const textarea = composerTextareaRef.current;
     if (!textarea) return;
@@ -413,6 +480,21 @@ export function App() {
     textarea.style.height = `${height}px`;
     textarea.style.overflowY = textarea.scrollHeight > 140 ? "auto" : "hidden";
   }, [draft]);
+  useEffect(() => {
+    const handleGlobalKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMobileToolsOpen(false); setEmojiPickerSessionId(""); setLeftOpen(false); setRightOpen(false);
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey && !target?.closest("input, textarea, select, [contenteditable='true']")) {
+        event.preventDefault();
+        composerTextareaRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, []);
 
   useEffect(() => {
     try { globalThis.localStorage?.setItem("tagent.left-rail-collapsed", String(leftCollapsed)); } catch { /* Browser storage is optional. */ }
@@ -424,6 +506,28 @@ export function App() {
     try { globalThis.localStorage?.setItem("tagent.workspace-emojis", JSON.stringify(workspaceEmojiById)); } catch { /* Browser storage is optional. */ }
   }, [workspaceEmojiById]);
   useEffect(() => {
+    try { globalThis.localStorage?.setItem("tagent.composer-drafts", JSON.stringify(draftBySession)); } catch { /* Browser storage is optional. */ }
+  }, [draftBySession]);
+  useEffect(() => {
+    try { globalThis.localStorage?.setItem("tagent.composer-history", JSON.stringify(inputHistoryBySession)); } catch { /* Browser storage is optional. */ }
+  }, [inputHistoryBySession]);
+  useEffect(() => {
+    try { globalThis.localStorage?.setItem("tagent.pinned-workspaces", JSON.stringify(pinnedSessionIds)); } catch { /* Browser storage is optional. */ }
+  }, [pinnedSessionIds]);
+  useEffect(() => {
+    try { globalThis.localStorage?.setItem("tagent.workspace-last-seen", JSON.stringify(lastSeenBySession)); } catch { /* Browser storage is optional. */ }
+  }, [lastSeenBySession]);
+  useEffect(() => {
+    setSessionActivityBaseline((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const session of sessions) {
+        if (next[session.id] === undefined) { next[session.id] = session.updatedAt; changed = true; }
+      }
+      return changed ? next : current;
+    });
+  }, [sessions]);
+  useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
     document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#171715" : "#f5f4f2");
@@ -431,10 +535,13 @@ export function App() {
   }, [theme]);
 
   const loadSessions = useCallback(async () => {
-    let items = await api.sessions();
-    if (!items.length) items = [await api.createSession("First workspace", initialWorkspaceRequestId)];
-    setSessions(items);
-    setSessionId((current) => current || items[0].id);
+    setSessionsLoading(true);
+    try {
+      let items = await api.sessions();
+      if (!items.length) items = [await api.createSession("First workspace", initialWorkspaceRequestId)];
+      setSessions(items);
+      setSessionId((current) => current || items[0].id);
+    } finally { setSessionsLoading(false); }
   }, []);
 
   useEffect(() => { void loadSessions(); void api.status().then(setRuntimeStatus); void api.learningSettings().then(setLearningSettings); }, [loadSessions]);
@@ -466,6 +573,7 @@ export function App() {
     if (!sessionId) return;
     const targetSessionId = sessionId;
     let closed = false;
+    setConversationLoading(true);
     let polling = false;
     const refresh = async () => {
       if (closed || polling) return;
@@ -532,6 +640,7 @@ export function App() {
     replaceStreamingOnNextDeltaRef.current = false;
     transcriptRunIdRef.current = "";
     transcriptAfterRef.current = 0;
+    setMessages([]); setHasOlderMessages(false); setRuns([]); setInbox([]); setActiveRun(null); setSelectedRun(null); setExpandedRunId("");
     setStreaming(""); setLiveThinking(""); setEvents([]); setError(""); setEditingInboxId(""); setInboxDraft(""); setDraggingInboxId(""); setPendingUserMessage(null);
     void Promise.all([api.messages(targetSessionId), api.runs(targetSessionId), api.inbox(targetSessionId)]).then(async ([history, runHistory, queued]) => {
       if (closed || sessionIdRef.current !== targetSessionId) return;
@@ -550,7 +659,8 @@ export function App() {
       if (!latest) { transcriptRunIdRef.current = ""; transcriptAfterRef.current = 0; setTranscript([]); return; }
       const view = await api.transcriptView(latest.id);
       if (!closed && sessionIdRef.current === targetSessionId) { transcriptRunIdRef.current = latest.id; transcriptAfterRef.current = latest.transcriptCount; setTranscript(view); }
-    }).catch((cause) => { if (!closed && sessionIdRef.current === targetSessionId) setError(cause instanceof Error ? cause.message : String(cause)); });
+    }).catch((cause) => { if (!closed && sessionIdRef.current === targetSessionId) setError(cause instanceof Error ? cause.message : String(cause)); })
+      .finally(() => { if (!closed && sessionIdRef.current === targetSessionId) setConversationLoading(false); });
     return () => { closed = true; };
   }, [sessionId]);
 
@@ -667,13 +777,27 @@ export function App() {
     const viewport = messageScrollRef.current;
     if (!viewport || (!autoScrollRef.current && !forceScrollRef.current)) return;
     viewport.scrollTop = viewport.scrollHeight;
+    autoScrollRef.current = true;
     forceScrollRef.current = false;
+    setShowJumpToLatest(false);
   }, [messages, pendingUserMessage, transcript, streaming, liveThinking, events]);
 
   const handleMessageScroll = useCallback(() => {
     const viewport = messageScrollRef.current;
     if (!viewport) return;
-    autoScrollRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 96;
+    const nearLatest = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 96;
+    autoScrollRef.current = nearLatest;
+    setShowJumpToLatest(!nearLatest);
+  }, []);
+
+  const jumpToLatest = useCallback(() => {
+    const viewport = messageScrollRef.current;
+    if (!viewport) return;
+    autoScrollRef.current = true;
+    forceScrollRef.current = false;
+    viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
+    setShowJumpToLatest(false);
+    setViewingEarlierHistory(false);
   }, []);
 
   const activeTools = useMemo(() => events.filter((event) => event.type.startsWith("tool.")).slice(-20), [events]);
@@ -701,6 +825,7 @@ export function App() {
       const older = await api.messages(sessionId, 80, messages[0].id);
       setMessages((current) => [...older.filter((item) => !current.some((existing) => existing.id === item.id)), ...current]);
       setHasOlderMessages(older.length === 80);
+      if (older.length) setViewingEarlierHistory(true);
       requestAnimationFrame(() => { if (viewport) viewport.scrollTop += viewport.scrollHeight - previousHeight; });
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setLoadingOlderMessages(false); }
@@ -709,6 +834,39 @@ export function App() {
   async function createSession() {
     const session = await api.createSession(`Workspace ${sessions.length + 1}`);
     setSessions((current) => [session, ...current]); setSessionId(session.id); setLeftOpen(false);
+  }
+
+  function selectSession(nextSession: Session) {
+    setLastSeenBySession((current) => ({ ...current, [nextSession.id]: nextSession.updatedAt }));
+    setSessionId(nextSession.id); setLeftOpen(false); setEmojiPickerSessionId("");
+  }
+
+  function togglePinnedSession(targetSessionId: string) {
+    setPinnedSessionIds((current) => current.includes(targetSessionId)
+      ? current.filter((id) => id !== targetSessionId)
+      : [targetSessionId, ...current]);
+  }
+
+  function updateComposerDraft(value: string, resetHistory = true) {
+    setDraft(value);
+    if (sessionId) setDraftBySession((current) => ({ ...current, [sessionId]: value }));
+    if (resetHistory) { setHistoryCursor(null); historySeedRef.current = value; }
+  }
+
+  function navigateComposerHistory(direction: -1 | 1) {
+    const history = inputHistoryBySession[sessionId] ?? [];
+    if (!history.length) return;
+    if (historyCursor === null) historySeedRef.current = draft;
+    const nextCursor = historyCursor === null
+      ? (direction === -1 ? history.length - 1 : null)
+      : historyCursor + direction;
+    if (nextCursor === null || nextCursor >= history.length) {
+      setHistoryCursor(null); updateComposerDraft(historySeedRef.current, false); return;
+    }
+    const bounded = Math.max(0, nextCursor);
+    const nextDraft = history[bounded] ?? "";
+    setHistoryCursor(bounded); updateComposerDraft(nextDraft, false);
+    requestAnimationFrame(() => composerTextareaRef.current?.setSelectionRange(nextDraft.length, nextDraft.length));
   }
 
   function cancelRename() {
@@ -748,7 +906,12 @@ export function App() {
     const targetSessionId = sessionId;
     if (!content || !targetSessionId || submitting) return;
     const optimistic = { sessionId: targetSessionId, content, createdAt: Date.now() };
-    setSubmitting(true); setDraft(""); setError(""); setNotice(""); forceScrollRef.current = true;
+    setSubmitting(true); updateComposerDraft(""); setError(""); setNotice(""); forceScrollRef.current = true;
+    setInputHistoryBySession((current) => {
+      const history = current[targetSessionId] ?? [];
+      const deduplicated = history.filter((item) => item !== content);
+      return { ...current, [targetSessionId]: [...deduplicated, content].slice(-50) };
+    });
     try {
       const admission = await api.send(targetSessionId, content);
       if (sessionIdRef.current !== targetSessionId) return;
@@ -762,7 +925,7 @@ export function App() {
         transcriptRunIdRef.current = nextRun.id; transcriptAfterRef.current = 0; setActiveRun(nextRun); setSelectedRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setTranscript([]); setStreaming(""); setLiveThinking("");
       }
     } catch (cause) {
-      if (sessionIdRef.current === targetSessionId) { setPendingUserMessage(null); setDraft(content); setError(cause instanceof Error ? cause.message : String(cause)); }
+      if (sessionIdRef.current === targetSessionId) { setPendingUserMessage(null); updateComposerDraft(content); setError(cause instanceof Error ? cause.message : String(cause)); }
     } finally { setSubmitting(false); }
   }
 
@@ -876,14 +1039,33 @@ export function App() {
   }
 
   const selectedSession = sessions.find((session) => session.id === sessionId);
+  useEffect(() => {
+    if (!selectedSession || lastSeenBySession[selectedSession.id] === selectedSession.updatedAt) return;
+    setLastSeenBySession((current) => ({ ...current, [selectedSession.id]: selectedSession.updatedAt }));
+  }, [selectedSession?.id, selectedSession?.updatedAt]);
   const selectableModels = [...new Set([runtimeStatus?.modelId ?? "gpt-5.6-sol", ...(runtimeStatus?.fallbackModelIds ?? [])])];
+  const normalizedSessionSearch = sessionSearch.trim().toLocaleLowerCase();
+  const filteredSessions = sessions.filter((session) => !normalizedSessionSearch || session.title.toLocaleLowerCase().includes(normalizedSessionSearch));
+  const pinnedSessions = filteredSessions.filter((session) => pinnedSessionIds.includes(session.id));
+  const recentSessions = filteredSessions.filter((session) => !pinnedSessionIds.includes(session.id));
+  const sessionGroups = [
+    ...(pinnedSessions.length ? [{ label: "Pinned", sessions: pinnedSessions }] : []),
+    ...((recentSessions.length || !pinnedSessions.length) ? [{ label: normalizedSessionSearch ? "Matches" : "Recent", sessions: recentSessions }] : []),
+  ];
+  const selectedRunStatus = activeRun?.status ?? selectedRun?.status;
+  const auditNeedsAttention = pendingApprovals.length > 0 || selectedRunStatus === "waiting_input" || selectedRunStatus === "failed" || selectedRunStatus === "blocked";
+  const enterSubmits = !globalThis.matchMedia?.("(pointer: coarse)").matches;
 
-  return <div className={`app-shell ${leftCollapsed ? "left-collapsed" : ""} ${rightCollapsed ? "right-collapsed" : ""}`}>
+  return <div className={`app-shell ${leftCollapsed ? "left-collapsed" : ""} ${rightCollapsed ? "right-collapsed" : ""} ${auditNeedsAttention ? "audit-needs-attention" : ""}`}>
     <aside className={`session-rail ${leftOpen ? "mobile-open" : ""} ${leftCollapsed ? "collapsed" : ""}`}>
-      <div className="brand"><div className="brand-mark"><Bot size={18} /></div><div className="brand-copy"><strong>TAgent</strong><span>Core runtime</span></div><button className="icon-button desktop-only rail-collapse" onClick={() => setLeftCollapsed((current) => !current)} aria-label={leftCollapsed ? "Expand workspace sidebar" : "Collapse workspace sidebar"} title={leftCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{leftCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button><button className="icon-button mobile-only" onClick={() => setLeftOpen(false)} aria-label="Close sessions"><X size={18} /></button></div>
+      <div className="brand"><div className="brand-mark"><TAgentMark /></div><div className="brand-copy"><strong>TAgent</strong><span>Core runtime</span></div><button className="icon-button desktop-only rail-collapse" onClick={() => setLeftCollapsed((current) => !current)} aria-label={leftCollapsed ? "Expand workspace sidebar" : "Collapse workspace sidebar"} title={leftCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{leftCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button><button className="icon-button mobile-only" onClick={() => setLeftOpen(false)} aria-label="Close sessions"><X size={18} /></button></div>
       <button className="new-session" onClick={createSession} title="New workspace"><Plus size={16} /><span>New workspace</span></button>
+      <label className="session-search"><Search size={14} /><input type="search" value={sessionSearch} onChange={(event) => setSessionSearch(event.target.value)} placeholder="Search workspaces" aria-label="Search workspaces" />{sessionSearch && <button type="button" onClick={() => setSessionSearch("")} aria-label="Clear workspace search"><X size={13} /></button>}</label>
       <div className="session-list">
-        {sessions.map((session) => <div key={session.id} className={`session-item ${session.id === sessionId ? "active" : ""}`}>
+        {sessionsLoading ? <div className="session-skeletons" aria-label="Loading workspaces"><i /><i /><i /></div> : sessionGroups.map((group) => <section className="session-group" key={group.label}><div className="session-group-label"><span>{group.label}</span><small>{group.sessions.length}</small></div>{group.sessions.map((session) => {
+          const pinned = pinnedSessionIds.includes(session.id);
+          const unread = session.id !== sessionId && session.updatedAt > (lastSeenBySession[session.id] ?? sessionActivityBaseline[session.id] ?? session.updatedAt);
+          return <div key={session.id} className={`session-item ${session.id === sessionId ? "active" : ""} ${unread ? "unread" : ""}`}>
           <button className="session-emoji" type="button" aria-label={`Choose emoji for ${session.title}`} aria-expanded={emojiPickerSessionId === session.id} onClick={() => setEmojiPickerSessionId((current) => current === session.id ? "" : session.id)}>{workspaceEmojiById[session.id] ?? "💬"}</button>
           {emojiPickerSessionId === session.id && <div className="emoji-picker" role="listbox" aria-label={`Emoji for ${session.title}`}>{workspaceEmojis.map((emoji) => <button type="button" role="option" aria-selected={(workspaceEmojiById[session.id] ?? "💬") === emoji} key={emoji} onClick={() => { setWorkspaceEmojiById((current) => ({ ...current, [session.id]: emoji })); setEmojiPickerSessionId(""); }}>{emoji}</button>)}</div>}
           {renamingSessionId === session.id ? <div className="session-select session-editor">
@@ -892,10 +1074,12 @@ export function App() {
               if (event.key === "Escape") { event.preventDefault(); cancelRename(); event.currentTarget.blur(); }
             }} onBlur={() => void renameSession(session)} aria-label="Workspace name" /><span className="session-meta"><small>{formatTime(session.updatedAt)}</small><WorkspaceRunStatus session={session} /></span></span>
           </div> : <>
-            <button className="session-select" onClick={() => { setSessionId(session.id); setLeftOpen(false); setEmojiPickerSessionId(""); }}><span><strong>{session.title}</strong><span className="session-meta"><small>{formatTime(session.updatedAt)}</small><WorkspaceRunStatus session={session} /></span></span></button>
+            <button className="session-select" onClick={() => selectSession(session)}><span><strong>{session.title}{unread && <i className="unread-dot" aria-label="Unread activity" />}</strong><span className="session-meta"><small>{formatTime(session.updatedAt)}</small><WorkspaceRunStatus session={session} /></span></span></button>
+            <button className={`pin-session ${pinned ? "active" : ""}`} onClick={() => togglePinnedSession(session.id)} title={pinned ? "Unpin workspace" : "Pin workspace"} aria-label={pinned ? "Unpin workspace" : "Pin workspace"}><Pin size={12} /></button>
             <button className="rename-session" onClick={() => { setRenamingSessionId(session.id); setSessionTitleDraft(session.title); }} title="Rename workspace" aria-label="Rename workspace"><Pencil size={13} /></button>
           </>}
-        </div>)}
+        </div>})}</section>)}
+        {!sessionsLoading && filteredSessions.length === 0 && <div className="session-search-empty"><Search size={16} /><span>No matching workspaces</span><button type="button" onClick={() => setSessionSearch("")}>Clear search</button></div>}
       </div>
       <div className="rail-footer"><span className="status-dot" />Local control plane{runtimeStatus?.schemaVersion ? ` · db v${runtimeStatus.schemaVersion}` : ""}</div>
     </aside>
@@ -905,13 +1089,38 @@ export function App() {
         <button className="icon-button mobile-only" onClick={() => setLeftOpen(true)} aria-label="Open sessions"><Menu size={19} /></button>
         <div className="workspace-heading"><span className="workspace-kicker">Workspace</span><h1>{selectedSession?.title ?? "TAgent Core"}</h1><p>{activeRun ? `${activeRun.phase} · ${activeRun.status} · ${activeRun.modelId || runtimeStatus?.modelId || "default model"} · ${activeRun.reasoningEffort}` : runtimeStatus ? `${runtimeStatus.runtime} · ready` : "Ready for a new task"}</p></div>
         {selectedSession && <div className="execution-preferences" aria-label="Workspace execution preferences"><label><span>Model</span><select aria-label="Model" value={selectedSession.modelId || runtimeStatus?.modelId || "gpt-5.6-sol"} disabled={savingExecutionProfile} onChange={(event) => void updateExecutionProfile({ modelId: event.target.value })}>{selectableModels.map((modelId) => <option value={modelId} key={modelId}>{modelId}</option>)}</select></label><label><span>Reasoning</span><select aria-label="Reasoning effort" value={selectedSession.reasoningEffort} disabled={savingExecutionProfile} onChange={(event) => void updateExecutionProfile({ reasoningEffort: event.target.value as Session["reasoningEffort"] })}>{reasoningEfforts.map((effort) => <option value={effort} key={effort}>{effort}</option>)}</select></label></div>}
-        <div className="top-actions"><button className="icon-button theme-toggle" type="button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Use ${theme === "dark" ? "light" : "dark"} theme`}>{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}</button>{learningSettings && <div className={`learning-execution-control ${!learningSettings.memoryEnabled ? "dependency-disabled" : learningSettings.autoExecutionEnabled ? "enabled" : "passive"}`} title={!learningSettings.memoryEnabled ? "Learning requires Memory" : learningSettings.autoExecutionEnabled ? "Learning may participate in execution, but every active action still requires human approval" : "Passive-only: observation, learning, distillation and candidate evolution"}><div><strong>Learning execution</strong><small>{!learningSettings.memoryEnabled ? "Memory required" : learningSettings.autoExecutionEnabled ? "On · approval always required" : "Off · passive learning only"}</small></div><button type="button" role="switch" aria-label="Allow approved learning workflows to participate in execution" aria-checked={learningSettings.autoExecutionEnabled} disabled={!learningSettings.learningEnabled || learningToggleBusy} onClick={() => void toggleLearningAutoExecution()}><span /></button></div>}{sessionId && <button className="memory-launch" onClick={() => setGoalsOpen(true)} aria-label="Open Workspace Goals" title="Workspace Goals"><Target size={16} /><span>Goals</span></button>}{sessionId && <button className="memory-launch" onClick={() => setLearningOpen(true)} disabled={!learningSettings?.learningEnabled} aria-label="Open learning center" title="Learning center"><ShieldCheck size={16} /><span>Learning</span></button>}{runtimeStatus?.memoryEnabled && <button className="memory-launch" onClick={() => setMemoryOpen(true)} aria-label="Open memory center" title="Memory center"><BrainCircuit size={16} /><span>Memory</span><i /></button>}{canResumeRun(selectedRun, activeRun) && <button className="resume-button" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}{selectedRun?.status === "failed" && selectedRun.launchRetryable && !activeRun && <button className="resume-button" onClick={() => void retryLaunch(selectedRun)} disabled={Boolean(retryingRunId)}><Play size={15} />{retryingRunId === selectedRun.id ? "Retrying…" : "Retry launch"}</button>}{activeRun?.status === "running" && <button className="icon-button danger" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={17} /></button>}<button className="icon-button mobile-only mobile-tools-toggle" type="button" aria-label="Open workspace tools" aria-expanded={mobileToolsOpen} onClick={() => setMobileToolsOpen((current) => !current)}><SlidersHorizontal size={17} /></button><button className="icon-button mobile-only" onClick={() => { setMobileToolsOpen(false); setRightOpen(true); }} aria-label="Open task panel"><PanelRight size={19} /></button>{mobileToolsOpen && <div className="mobile-tools-menu"><button onClick={() => { setTheme((current) => current === "dark" ? "light" : "dark"); setMobileToolsOpen(false); }}>{theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}<span>{theme === "dark" ? "Light theme" : "Dark theme"}</span></button>{sessionId && <button onClick={() => { setGoalsOpen(true); setMobileToolsOpen(false); }}><Target size={15} /><span>Workspace Goals</span></button>}{sessionId && <button onClick={() => { setLearningOpen(true); setMobileToolsOpen(false); }} disabled={!learningSettings?.learningEnabled}><ShieldCheck size={15} /><span>Learning center</span></button>}{runtimeStatus?.memoryEnabled && <button onClick={() => { setMemoryOpen(true); setMobileToolsOpen(false); }}><BrainCircuit size={15} /><span>Memory center</span></button>}{learningSettings && <button onClick={() => void toggleLearningAutoExecution()} disabled={!learningSettings.learningEnabled || learningToggleBusy}><Activity size={15} /><span>Learning execution: {learningSettings.autoExecutionEnabled ? "on" : "off"}</span></button>}</div>}</div>
+        <div className="top-actions">
+          <div className="desktop-top-actions">
+            <button className="icon-button theme-toggle" type="button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Use ${theme === "dark" ? "light" : "dark"} theme`}>{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}</button>
+            {learningSettings && <div className={`learning-execution-control ${!learningSettings.memoryEnabled ? "dependency-disabled" : learningSettings.autoExecutionEnabled ? "enabled" : "passive"}`} title={!learningSettings.memoryEnabled ? "Learning requires Memory" : learningSettings.autoExecutionEnabled ? "Learning may participate in execution, but every active action still requires human approval" : "Passive-only: observation, learning, distillation and candidate evolution"}><div><strong>Learning execution</strong><small>{!learningSettings.memoryEnabled ? "Memory required" : learningSettings.autoExecutionEnabled ? "On · approval always required" : "Off · passive learning only"}</small></div><button type="button" role="switch" aria-label="Allow approved learning workflows to participate in execution" aria-checked={learningSettings.autoExecutionEnabled} disabled={!learningSettings.learningEnabled || learningToggleBusy} onClick={() => void toggleLearningAutoExecution()}><span /></button></div>}
+            {sessionId && <button className="memory-launch" onClick={() => setGoalsOpen(true)} aria-label="Open Workspace Goals" title="Workspace Goals"><Target size={16} /><span>Goals</span></button>}
+            {sessionId && <button className="memory-launch" onClick={() => setLearningOpen(true)} disabled={!learningSettings?.learningEnabled} aria-label="Open learning center" title="Learning center"><ShieldCheck size={16} /><span>Learning</span></button>}
+            {runtimeStatus?.memoryEnabled && <button className="memory-launch" onClick={() => setMemoryOpen(true)} aria-label="Open memory center" title="Memory center"><BrainCircuit size={16} /><span>Memory</span><i /></button>}
+            {canResumeRun(selectedRun, activeRun) && <button className="resume-button" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}
+            {selectedRun?.status === "failed" && selectedRun.launchRetryable && !activeRun && <button className="resume-button" onClick={() => void retryLaunch(selectedRun)} disabled={Boolean(retryingRunId)}><Play size={15} />{retryingRunId === selectedRun.id ? "Retrying…" : "Retry launch"}</button>}
+            {activeRun?.status === "running" && <button className="icon-button danger" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={17} /></button>}
+          </div>
+          {selectedRunStatus && <button className={`mobile-run-status mobile-only ${selectedRunStatus}`} onClick={() => { setMobileToolsOpen(false); setRightOpen(true); }} aria-label={`Open audit panel. Task status: ${selectedRunStatus}`}><span /><strong>{selectedRunStatus === "waiting_input" ? "Input" : selectedRunStatus}</strong></button>}
+          <button className="icon-button mobile-only mobile-tools-toggle" type="button" aria-label="More workspace actions" aria-expanded={mobileToolsOpen} onClick={() => setMobileToolsOpen((current) => !current)}><MoreHorizontal size={19} /></button>
+          {mobileToolsOpen && <div className="mobile-tools-menu">
+            <button onClick={() => { setRightOpen(true); setMobileToolsOpen(false); }}><PanelRight size={15} /><span>Supervisor & execution</span>{selectedRunStatus && <small>{selectedRunStatus}</small>}</button>
+            {selectedSession && <><label className="mobile-menu-select"><span>Model</span><select value={selectedSession.modelId || runtimeStatus?.modelId || "gpt-5.6-sol"} disabled={savingExecutionProfile} onChange={(event) => void updateExecutionProfile({ modelId: event.target.value })}>{selectableModels.map((modelId) => <option value={modelId} key={modelId}>{modelId}</option>)}</select></label><label className="mobile-menu-select"><span>Reasoning</span><select value={selectedSession.reasoningEffort} disabled={savingExecutionProfile} onChange={(event) => void updateExecutionProfile({ reasoningEffort: event.target.value as Session["reasoningEffort"] })}>{reasoningEfforts.map((effort) => <option value={effort} key={effort}>{effort}</option>)}</select></label></>}
+            {canResumeRun(selectedRun, activeRun) && <button onClick={async () => { setMobileToolsOpen(false); setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} /><span>Resume TaskRun</span></button>}
+            {activeRun?.status === "running" && <button className="mobile-stop-run" onClick={() => { setMobileToolsOpen(false); void api.cancel(activeRun.id); }}><Square size={15} /><span>Stop TaskRun</span></button>}
+            <button onClick={() => { setTheme((current) => current === "dark" ? "light" : "dark"); setMobileToolsOpen(false); }}>{theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}<span>{theme === "dark" ? "Light theme" : "Dark theme"}</span></button>
+            {sessionId && <button onClick={() => { setGoalsOpen(true); setMobileToolsOpen(false); }}><Target size={15} /><span>Workspace Goals</span></button>}
+            {sessionId && <button onClick={() => { setLearningOpen(true); setMobileToolsOpen(false); }} disabled={!learningSettings?.learningEnabled}><ShieldCheck size={15} /><span>Learning center</span></button>}
+            {runtimeStatus?.memoryEnabled && <button onClick={() => { setMemoryOpen(true); setMobileToolsOpen(false); }}><BrainCircuit size={15} /><span>Memory center</span></button>}
+            {learningSettings && <button onClick={() => void toggleLearningAutoExecution()} disabled={!learningSettings.learningEnabled || learningToggleBusy}><Activity size={15} /><span>Learning execution: {learningSettings.autoExecutionEnabled ? "on" : "off"}</span></button>}
+          </div>}
+        </div>
       </header>
 
       <section className="message-scroll" ref={messageScrollRef} onScroll={handleMessageScroll}>
         <div className="message-feed">
-        {!messages.length && !streaming && pendingUserMessage?.sessionId !== sessionId && <div className="empty-state"><div className="empty-icon"><Sparkles size={23} /></div><span className="empty-kicker">Durable agent workspace</span><h2>Start with the outcome</h2><p>Describe the result you want. TAgent turns it into governed work with durable progress, evidence, and recovery.</p><div className="empty-capabilities" aria-label="TAgent workflow"><span>Plan</span><i /><span>Execute</span><i /><span>Verify</span></div></div>}
+        {conversationLoading && !messages.length ? <div className="conversation-skeleton" aria-label="Loading conversation"><span /><span /><span /></div> : !messages.length && !streaming && pendingUserMessage?.sessionId !== sessionId && <div className="empty-state"><div className="empty-icon"><Sparkles size={23} /></div><span className="empty-kicker">Durable agent workspace</span><h2>What should we accomplish?</h2><p>Start with an outcome. TAgent will plan the work, preserve progress, and verify the result.</p><div className="starter-prompts" aria-label="Starter prompts">{starterPrompts.map((starter) => <button type="button" key={starter.label} onClick={() => { updateComposerDraft(starter.prompt); requestAnimationFrame(() => composerTextareaRef.current?.focus()); }}><Sparkles size={13} /><span>{starter.label}</span><ChevronRight size={13} /></button>)}</div><div className="empty-capabilities" aria-label="TAgent workflow"><span>Plan</span><i /><span>Execute</span><i /><span>Verify</span></div></div>}
         {hasOlderMessages && <button className="load-older" onClick={() => void loadOlderMessages()} disabled={loadingOlderMessages}>{loadingOlderMessages ? "Loading…" : "Load earlier messages"}</button>}
+        {viewingEarlierHistory && <div className="history-context"><span>Viewing earlier history</span><button type="button" onClick={jumpToLatest}>Return to latest</button></div>}
         {messages.map((message) => <ChatMessage key={message.id} message={message} memoryEnabled={Boolean(runtimeStatus?.memoryEnabled)} memoryJob={message.role === "user" ? (memoryJobsLoaded ? memoryJobByMessageId.get(message.id) ?? null : undefined) : undefined} />)}
         {pendingUserMessage?.sessionId === sessionId && !messages.some((message) => message.role === "user" && message.content === pendingUserMessage.content && message.createdAt >= pendingUserMessage.createdAt - 5_000) && <article className="message user pending" aria-label="Sending message"><div className="message-meta"><span>You</span><time>Sending…</time></div><div className="message-body"><Markdown>{pendingUserMessage.content}</Markdown></div>{runtimeStatus?.memoryEnabled && <MemoryExtraction job={undefined} />}</article>}
         {activeRun && <div className="active-run-strip"><Activity size={14} /><span>Attempt {activeRun.attempt}</span><strong>{activeRun.phase}</strong><small>{activeRun.usage.totalTokens.toLocaleString()} tokens</small></div>}
@@ -920,19 +1129,27 @@ export function App() {
         <div ref={endRef} />
         </div>
       </section>
+      {showJumpToLatest && <button className="jump-to-latest" type="button" onClick={jumpToLatest}><ArrowDown size={14} /><span>Latest</span></button>}
 
       <footer className="composer-wrap">
         {error && <div className="error-banner">{error}</div>}
         {notice && <div className="success-banner">{notice}</div>}
         {activeRun && pendingApprovals.length > 0 && <ApprovalDock run={activeRun} approvals={pendingApprovals} resolvingId={resolvingApprovalId} resolvingDecision={resolvingApprovalDecision} onResolve={resolveRunApproval} />}
-        <div className="composer-mode"><span><Activity size={13} />Supervisor inbox</span><span>{activeRun ? "New input is classified as steer, context, follow-up, parallel work, or a new TaskRun" : "Supervisor summarizes, prioritizes, and starts the next eligible contract"}</span></div>
-        <div className="composer"><textarea ref={composerTextareaRef} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Add a task, correction, constraint, context update, or follow-up" rows={1} aria-label="Message. Enter inserts a new line; use Send to submit." /><button type="button" onClick={() => void submit()} disabled={!draft.trim() || submitting} aria-label="Add to Supervisor queue">{submitting ? <Activity className="spin" size={18} /> : <Send size={18} />}</button></div>
+        <div className="composer-mode"><span><Activity size={13} />{activeRun ? "Steer or queue" : "Supervisor inbox"}</span><span>{activeRun ? "New input is classified as steer, context, follow-up, parallel work, or a new TaskRun" : "Supervisor summarizes, prioritizes, and starts the next eligible contract"}</span><kbd>/</kbd></div>
+        <div className="composer"><textarea ref={composerTextareaRef} value={draft} onChange={(event) => updateComposerDraft(event.target.value)} onCompositionStart={() => { composerIsComposingRef.current = true; }} onCompositionEnd={() => { composerIsComposingRef.current = false; }} onKeyDown={(event) => {
+          if (event.key === "Enter" && enterSubmits && !event.shiftKey && !composerIsComposingRef.current && !event.nativeEvent.isComposing) { event.preventDefault(); if (draft.trim() && !submitting) void submit(); return; }
+          const caretAtStart = event.currentTarget.selectionStart === 0 && event.currentTarget.selectionEnd === 0;
+          const caretAtEnd = event.currentTarget.selectionStart === draft.length && event.currentTarget.selectionEnd === draft.length;
+          if (event.key === "ArrowUp" && (historyCursor !== null || caretAtStart)) { event.preventDefault(); navigateComposerHistory(-1); }
+          if (event.key === "ArrowDown" && historyCursor !== null && caretAtEnd) { event.preventDefault(); navigateComposerHistory(1); }
+        }} placeholder="Describe an outcome, correction, constraint, or follow-up…" rows={1} aria-label={enterSubmits ? "Message. Press Enter to send and Shift Enter for a new line." : "Message. Use the send button to submit."} /><button type="button" onClick={() => void submit()} disabled={!draft.trim() || submitting} aria-label="Add to Supervisor queue">{submitting ? <Activity className="spin" size={18} /> : <Send size={18} />}</button></div>
+        <div className="composer-hint"><span>{enterSubmits ? "Enter to send · Shift+Enter for a new line" : "Use the arrow to send"}</span>{draftBySession[sessionId]?.trim() && <span>Draft saved</span>}</div>
         {inbox.length > 0 && <section className="supervisor-inbox"><div className="inbox-heading"><span>Up next</span><small>{inbox.length} queued</small></div>{inbox.map((item, index) => <QueuePrompt key={item.id} item={item} index={index} editing={editingInboxId === item.id} draft={editingInboxId === item.id ? inboxDraft : item.content} busy={Boolean(startingInboxId || savingInboxId || reorderingInbox || mutatingInboxId)} starting={startingInboxId === item.id} dragging={draggingInboxId === item.id} canMoveUp={index > 0} canMoveDown={index < inbox.length - 1} onEdit={() => { setEditingInboxId(item.id); setInboxDraft(item.content); setError(""); setNotice(""); }} onDraftChange={setInboxDraft} onSave={() => void saveInbox(item)} onCancelEdit={() => { setEditingInboxId(""); setInboxDraft(""); }} onStart={() => void runInboxNow(item)} onToggleDefer={() => void mutateInbox(item.id, () => api.decideInbox(sessionId, item.id, item.decision === "defer" ? "pending" : "defer"))} onMergeFirst={() => void mutateInbox(item.id, () => api.mergeInbox(sessionId, item.id, inbox[0].id))} onDelete={() => void mutateInbox(item.id, () => api.deleteInbox(sessionId, item.id))} onMoveUp={() => void moveInbox(item.id, -1)} onMoveDown={() => void moveInbox(item.id, 1)} onDragStart={(event) => { setDraggingInboxId(item.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); }} onDragEnd={() => setDraggingInboxId("")} onDrop={(event) => { event.preventDefault(); void reorderInbox(item.id); }} />)}</section>}
       </footer>
     </main>
 
-    <aside className={`run-panel ${rightOpen ? "mobile-open" : ""} ${rightCollapsed ? "collapsed" : ""}`}>
-      <div className="panel-heading"><div><span className="eyebrow">Audit workspace</span><h2>Supervisor & execution</h2></div><button className="icon-button desktop-only panel-collapse" onClick={() => setRightCollapsed((current) => !current)} aria-label={rightCollapsed ? "Expand audit sidebar" : "Collapse audit sidebar"} title={rightCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{rightCollapsed ? <PanelRightOpen size={17} /> : <PanelRightClose size={17} />}</button><button className="icon-button mobile-only" onClick={() => setRightOpen(false)} aria-label="Close task panel"><X size={18} /></button></div>
+    <aside className={`run-panel ${rightOpen ? "mobile-open" : ""} ${rightCollapsed ? "collapsed" : ""} ${auditNeedsAttention ? "needs-attention" : ""}`}>
+      <div className="panel-heading"><div><span className="eyebrow">On demand</span><h2>Supervisor & execution</h2></div><button className={`icon-button desktop-only panel-collapse ${auditNeedsAttention ? "attention" : ""}`} onClick={() => setRightCollapsed((current) => !current)} aria-label={rightCollapsed ? "Expand audit sidebar" : "Collapse audit sidebar"} title={rightCollapsed ? "Expand audit details" : "Collapse audit details"}>{rightCollapsed ? <><PanelRightOpen size={17} />{selectedRunStatus && <span className={`collapsed-audit-dot ${selectedRunStatus}`} />}</> : <PanelRightClose size={17} />}</button><button className="icon-button mobile-only" onClick={() => setRightOpen(false)} aria-label="Close task panel"><X size={18} /></button></div>
       {!runs.length ? <div className="panel-empty"><Play size={20} /><p>No TaskRuns</p></div> : <div className="run-history">{runs.map((item, index) => {
         const expanded = item.id === expandedRunId;
         return <section className={`run-history-item ${expanded ? "expanded" : ""}`} key={item.id}>
