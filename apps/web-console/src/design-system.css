@@ -672,18 +672,34 @@ a:focus-visible {
 }
 
 .message {
-  margin-bottom: 28px;
+  margin-bottom: 24px;
 }
 
-.message-meta {
+.message-footer {
   color: var(--foreground-muted);
   font: 500 10px/1.2 var(--font-mono);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
 }
 
-.message-meta span:first-child {
-  color: var(--foreground);
+.message-copy {
+  color: var(--foreground-muted);
+  transition: color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), opacity var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out);
+}
+
+.message-copy:hover,
+.message-copy.copied {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.message-copy.failed {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.message-copy:active {
+  transform: translateY(1px);
 }
 
 .message-body,
@@ -705,7 +721,7 @@ a:focus-visible {
 }
 
 .message.assistant {
-  margin-bottom: 34px;
+  margin-bottom: 28px;
   border-bottom: 0;
 }
 
@@ -820,7 +836,6 @@ a:focus-visible {
   background: oklch(0.215 0.014 150);
 }
 
-.turn-memory,
 .active-run-strip,
 .tool-history,
 .live-tools,
@@ -829,7 +844,6 @@ a:focus-visible {
   background: var(--surface-muted);
 }
 
-.turn-memory.completed,
 .active-run-strip,
 .live-tools {
   color: var(--accent);
@@ -837,21 +851,14 @@ a:focus-visible {
   background: var(--accent-soft);
 }
 
+.turn-memory { color: var(--foreground-muted); }
+.turn-memory.completed { color: var(--accent); }
 .turn-memory.queued,
 .turn-memory.running,
-.turn-memory.loading {
-  color: var(--warning);
-  border-color: color-mix(in oklab, var(--warning) 28%, var(--border));
-  background: var(--warning-soft);
-}
-
+.turn-memory.loading { color: var(--warning); }
 .turn-memory.failed,
 .turn-memory.dead_letter,
-.turn-memory.retryable_failed {
-  color: var(--danger);
-  border-color: color-mix(in oklab, var(--danger) 28%, var(--border));
-  background: var(--danger-soft);
-}
+.turn-memory.retryable_failed { color: var(--danger); }
 
 .tool-history[open] > summary,
 .live-tools[open] > summary,
@@ -2181,7 +2188,18 @@ a:focus-visible {
   }
 
   .message.assistant {
-    margin-bottom: 28px;
+    margin-bottom: 24px;
+  }
+
+  .message-copy {
+    width: 28px;
+    padding-inline: 0;
+    justify-content: center;
+    opacity: .58;
+  }
+
+  .message-copy span {
+    display: none;
   }
 
   .composer-wrap {

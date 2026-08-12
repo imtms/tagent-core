@@ -93,9 +93,13 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 .message.user { width: fit-content; max-width: min(680px, 82%); margin-right: 0; margin-left: auto; }
 .message.user.pending { opacity: .76; }
 .message.user.pending .message-body { border-color: #b8c9bf; background: #f7faf8; }
-.message-meta { display: flex; align-items: center; justify-content: flex-start; gap: 7px; color: var(--muted); font-size: 10px; margin-bottom: 7px; }
-.message.user .message-meta { justify-content: flex-end; }
-.message-meta span:first-child { color: #424b45; font-weight: 700; }
+.message-footer { min-height: 24px; margin-top: 4px; display: flex; align-items: center; justify-content: flex-start; gap: 3px; color: var(--muted); font: 500 9px/1 var(--font-mono); font-variant-numeric: tabular-nums; }
+.message.user .message-footer { justify-content: flex-end; }
+.message-copy { min-height: 24px; padding: 0 5px; border: 0; border-radius: 5px; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); background: transparent; cursor: pointer; font: inherit; opacity: 0; transition: color .14s ease, background-color .14s ease, opacity .14s ease; }
+.message:hover .message-copy, .message:focus-within .message-copy, .message-copy:focus-visible, .message-copy.copied, .message-copy.failed { opacity: 1; }
+.message-copy:hover, .message-copy.copied { color: var(--accent); background: var(--accent-soft); }
+.message-copy.failed { color: var(--danger); background: var(--danger-soft); }
+@media (hover: none), (pointer: coarse) { .message-copy { opacity: .72; } }
 .message-body { font-size: 13px; line-height: 1.72; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* Markdown content is untrusted: HTML is disabled in the renderer. */
 .markdown { min-width: 0; overflow-wrap: anywhere; white-space: normal; line-height: 1.68; }
@@ -135,17 +139,13 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 .markdown tbody tr:nth-child(even) { background: #fafbfa; }
 .markdown input[type="checkbox"] { margin: 0 6px 0 0; vertical-align: -1px; accent-color: var(--accent); }
 .message.user .message-body { background: #eef2ef; border: 1px solid #e0e6e1; padding: 12px 14px; border-radius: var(--radius); }
-.turn-memory { min-height: 32px; margin-top: 7px; padding: 6px 9px; display: flex; align-items: center; gap: 8px; border: 1px solid #dce5df; border-radius: 7px; background: #f8faf8; color: #536159; }
-.turn-memory > span { min-width: 0; display: flex; align-items: baseline; gap: 7px; }
-.turn-memory strong { font-size: 10px; color: #3f4d45; }
-.turn-memory small { min-width: 0; color: var(--muted); font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.turn-memory b { margin-left: auto; min-width: 20px; height: 20px; display: grid; place-items: center; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-size: 9px; }
-.turn-memory.completed { border-color: #c9e0d2; background: #f2f8f4; color: var(--accent); }
-.turn-memory.empty { color: #768179; background: #fafbfa; }
-.turn-memory.queued, .turn-memory.running, .turn-memory.loading { color: #8a641f; border-color: #eadbbd; background: #fdf9f0; }
-.turn-memory.failed, .turn-memory.dead_letter, .turn-memory.retryable_failed { color: var(--danger); border-color: #ebcccc; background: #fff5f5; }
+.turn-memory { min-height: 16px; margin-top: -2px; display: flex; align-items: center; justify-content: flex-end; gap: 5px; color: var(--muted); font: 500 9px/1.3 var(--font-mono); font-variant-numeric: tabular-nums; }
+.turn-memory svg { flex: none; }
+.turn-memory.completed { color: var(--accent); }
+.turn-memory.empty { color: var(--muted); }
+.turn-memory.queued, .turn-memory.running, .turn-memory.loading { color: #8a641f; }
+.turn-memory.failed, .turn-memory.dead_letter, .turn-memory.retryable_failed { color: var(--danger); }
 .message.assistant { padding: 0; border-bottom: 0; }
-.message.assistant .message-meta { padding-inline: 0; }
 .message.assistant .message-body { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .active-run-strip { max-width: var(--conversation-measure); min-height: 36px; margin: 0 auto 20px; padding: 0 12px; display: flex; align-items: center; gap: 9px; border: 1px solid #cfe0d6; background: #f3f8f5; color: #496158; border-radius: var(--radius); font-size: 10px; font-variant-numeric: tabular-nums; }
 .active-run-strip svg { color: var(--accent); }

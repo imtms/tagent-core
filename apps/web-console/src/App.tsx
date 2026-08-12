@@ -1,4 +1,4 @@
-import { Fragment, Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Activity, ArrowDown, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Keyboard, Menu, Moon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Search, Send, Settings2, ShieldAlert, ShieldCheck, Sparkles, Square, Sun, Target, Terminal, X } from "lucide-react";
 import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
 import { Markdown, preloadMarkdown } from "./LazyMarkdown";
@@ -17,6 +17,7 @@ import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { TimeAgo } from "./TimeAgo";
 import { formatConversationDay, formatTime, localDayKey } from "./time-format";
+import { ConversationMessage, PendingConversationMessage } from "./ConversationMessage";
 const MemoryPanel = lazy(() => import("./MemoryPanel").then((module) => ({ default: module.MemoryPanel })));
 const LearningCenter = lazy(() => import("./LearningCenter").then((module) => ({ default: module.LearningCenter })));
 const GoalsPanel = lazy(() => import("./GoalsPanel").then((module) => ({ default: module.GoalsPanel })));
@@ -118,25 +119,6 @@ function TAgentMark({ size = 18 }: { size?: number }) {
     <circle cx="12" cy="18" r="2" fill="currentColor" />
   </svg>;
 }
-
-function MemoryExtraction({ job }: { job: CaptureJob | null | undefined }) {
-  if (job === undefined) return <div className="turn-memory loading"><BrainCircuit size={13} /><span><strong>Memory extraction</strong><small>Checking this turn…</small></span></div>;
-  if (!job) return <div className="turn-memory empty"><BrainCircuit size={13} /><span><strong>Memory extraction</strong><small>No extraction record for this turn</small></span></div>;
-  const completed = job.status === "completed";
-  const empty = job.status === "completed_empty";
-  const failed = job.status === "dead_letter" || job.status === "retryable_failed";
-  const count = job.persistedCount ?? job.proposalCount ?? 0;
-  const detail = completed
-    ? `${count} ${count === 1 ? "memory" : "memories"} extracted`
-    : empty ? "No durable memory extracted"
-    : failed ? `Extraction failed${job.errorCode ? ` · ${job.errorCode}` : ""}`
-    : job.status === "running" ? "Extracting durable memory…" : "Queued for extraction";
-  return <div className={`turn-memory ${completed ? "completed" : empty ? "empty" : failed ? "failed" : job.status}`} title={`Capture job ${job.id}`}><BrainCircuit size={13} /><span><strong>Memory extraction</strong><small>{detail}</small></span>{completed && <b>{count}</b>}</div>;
-}
-
-const ChatMessage = memo(function ChatMessage({ message, memoryEnabled, memoryJob }: { message: Message; memoryEnabled: boolean; memoryJob?: CaptureJob | null }) {
-  return <article className={`message ${message.role}`}><div className="message-meta"><span>{message.role === "user" ? "You" : "TAgent"}</span><TimeAgo value={message.createdAt} /></div><div className="message-body"><Markdown>{message.content}</Markdown></div>{memoryEnabled && message.role === "user" && <MemoryExtraction job={memoryJob} />}</article>;
-});
 
 function ConversationDateDivider({ value }: { value: number }) {
   const label = formatConversationDay(value);
@@ -1208,8 +1190,8 @@ export function App() {
         {conversationLoading && !messages.length ? <div className="conversation-skeleton" aria-label="Loading conversation"><span /><span /><span /></div> : !messages.length && !streaming && pendingUserMessage?.sessionId !== sessionId && <div className="empty-state"><div className="empty-icon"><Sparkles size={23} /></div><span className="empty-kicker">Durable agent workspace</span><h2>What should we accomplish?</h2><p>Start with an outcome. TAgent will plan the work, preserve progress, and verify the result.</p><div className="starter-prompts" aria-label="Starter prompts">{starterPrompts.map((starter) => <button type="button" key={starter.label} onClick={() => { updateComposerDraft(starter.prompt); requestAnimationFrame(() => composerTextareaRef.current?.focus()); }}><Sparkles size={13} /><span>{starter.label}</span><ChevronRight size={13} /></button>)}</div><div className="empty-capabilities" aria-label="TAgent workflow"><span>Plan</span><i /><span>Execute</span><i /><span>Verify</span></div></div>}
         {hasOlderMessages && <button className="load-older" onClick={() => void loadOlderMessages()} disabled={loadingOlderMessages}>{loadingOlderMessages ? "Loading…" : "Load earlier messages"}</button>}
         {viewingEarlierHistory && <div className="history-context"><span>Viewing earlier history</span><button type="button" onClick={jumpToLatest}>Return to latest</button></div>}
-        {messages.map((message, index) => <Fragment key={message.id}>{(index === 0 || localDayKey(messages[index - 1].createdAt) !== localDayKey(message.createdAt)) && <ConversationDateDivider value={message.createdAt} />}<ChatMessage message={message} memoryEnabled={Boolean(runtimeStatus?.memoryEnabled)} memoryJob={message.role === "user" ? (memoryJobsLoaded ? memoryJobByMessageId.get(message.id) ?? null : undefined) : undefined} /></Fragment>)}
-        {pendingUserMessage?.sessionId === sessionId && !messages.some((message) => message.role === "user" && message.content === pendingUserMessage.content && message.createdAt >= pendingUserMessage.createdAt - 5_000) && <>{(!messages.length || localDayKey(messages[messages.length - 1].createdAt) !== localDayKey(pendingUserMessage.createdAt)) && <ConversationDateDivider value={pendingUserMessage.createdAt} />}<article className="message user pending" aria-label="Sending message"><div className="message-meta"><span>You</span><time>Sending…</time></div><div className="message-body"><LiveText>{pendingUserMessage.content}</LiveText></div>{runtimeStatus?.memoryEnabled && <MemoryExtraction job={undefined} />}</article></>}
+        {messages.map((message, index) => <Fragment key={message.id}>{(index === 0 || localDayKey(messages[index - 1].createdAt) !== localDayKey(message.createdAt)) && <ConversationDateDivider value={message.createdAt} />}<ConversationMessage message={message} memoryEnabled={Boolean(runtimeStatus?.memoryEnabled)} memoryJob={message.role === "user" ? (memoryJobsLoaded ? memoryJobByMessageId.get(message.id) ?? null : undefined) : undefined} /></Fragment>)}
+        {pendingUserMessage?.sessionId === sessionId && !messages.some((message) => message.role === "user" && message.content === pendingUserMessage.content && message.createdAt >= pendingUserMessage.createdAt - 5_000) && <>{(!messages.length || localDayKey(messages[messages.length - 1].createdAt) !== localDayKey(pendingUserMessage.createdAt)) && <ConversationDateDivider value={pendingUserMessage.createdAt} />}<PendingConversationMessage content={pendingUserMessage.content} memoryEnabled={Boolean(runtimeStatus?.memoryEnabled)} /></>}
         {activeRun && <div className="active-run-strip"><Activity size={14} /><span>Attempt {activeRun.attempt}</span><strong>{activeRun.phase}</strong><small>{activeRun.usage.totalTokens.toLocaleString()} tokens</small></div>}
         {selectedRun?.pendingUserInput && <UserInputCard request={selectedRun.pendingUserInput} submitting={submittingUserInputId === selectedRun.pendingUserInput.id} onSubmit={(values) => submitRequestedInput(selectedRun.pendingUserInput!, values)} />}
         {(activeRun || selectedRun) && transcript.length + events.length + Number(Boolean(liveThinking || streaming)) > 0 && <ExecutionTimeline runId={(activeRun ?? selectedRun)!.id} isRunning={activeRun?.status === "running"} items={transcript} events={activeRun ? events : []} liveThinking={activeRun ? liveThinking : ""} liveOutput={activeRun ? streaming : ""} />}

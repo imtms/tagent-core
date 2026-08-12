@@ -89,12 +89,13 @@ describe("Web workbench state model", () => {
 
   it("adds quiet time orientation to long conversations and workspace recency", async () => {
     const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    const message = await readFile(new URL("../apps/web-console/src/ConversationMessage.tsx", import.meta.url), "utf8");
     const switcher = await readFile(new URL("../apps/web-console/src/WorkspaceSwitcher.tsx", import.meta.url), "utf8");
     const timeAgo = await readFile(new URL("../apps/web-console/src/TimeAgo.tsx", import.meta.url), "utf8");
     const design = await readFile(new URL("../apps/web-console/src/design-system.css", import.meta.url), "utf8");
     expect(app).toContain("function ConversationDateDivider");
     expect(app).toContain("localDayKey(messages[index - 1].createdAt)");
-    expect(app).toContain("<TimeAgo value={message.createdAt}");
+    expect(message).toContain('<MessageFooter createdAt={message.createdAt} content={message.content} />');
     expect(app).toContain("<TimeAgo value={session.updatedAt}");
     expect(switcher).toContain("<TimeAgo value={session.updatedAt}");
     expect(timeAgo).toContain("dateTime={new Date(value).toISOString()}");
@@ -122,6 +123,26 @@ describe("Web workbench state model", () => {
     expect(scroll).toContain("sample.nextTop < sample.previousTop - 2");
     expect(design).toContain(".conversation-stage");
     expect(design).toMatch(/\.jump-to-latest\s*\{[\s\S]*?left: 50%;[\s\S]*?transform: translateX\(-50%\);/);
+  });
+
+  it("keeps conversation metadata quiet until it is useful", async () => {
+    const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    const message = await readFile(new URL("../apps/web-console/src/ConversationMessage.tsx", import.meta.url), "utf8");
+    const legacy = await readFile(new URL("../apps/web-console/src/styles.css", import.meta.url), "utf8");
+    const design = await readFile(new URL("../apps/web-console/src/design-system.css", import.meta.url), "utf8");
+    expect(app).toContain("<ConversationMessage message={message}");
+    expect(message).toContain('aria-label={`Message from ${speaker}`}');
+    expect(message).toContain('<MessageFooter createdAt={message.createdAt} content={message.content} />');
+    expect(message).toContain('failed ? "Copy unavailable" : "Copy message"');
+    expect(message).toContain('failed ? "Unavailable" : "Copy"');
+    expect(message).toContain('<BrainCircuit size={11} /><span>{detail}</span>');
+    expect(message).toContain('document.execCommand("copy")');
+    expect(message).not.toContain('className="message-meta"');
+    expect(legacy).toContain(".message:hover .message-copy");
+    expect(legacy).toContain("@media (hover: none), (pointer: coarse) { .message-copy { opacity: .72; } }");
+    expect(design).toContain(".message-footer");
+    expect(design).toContain(".turn-memory { color: var(--foreground-muted); }");
+    expect(design).toMatch(/@media \(max-width: 680px\)[\s\S]*?\.message-copy\s*\{[\s\S]*?opacity: \.58;/);
   });
 
   it("persists per-workspace drafts and provides IME-safe keyboard composition", async () => {
@@ -196,9 +217,10 @@ describe("Web workbench state model", () => {
 
   it("renders Markdown without raw HTML injection and exposes expandable tool calls", async () => {
     const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    const message = await readFile(new URL("../apps/web-console/src/ConversationMessage.tsx", import.meta.url), "utf8");
     const markdown = await readFile(new URL("../apps/web-console/src/Markdown.tsx", import.meta.url), "utf8");
     const lazyMarkdown = await readFile(new URL("../apps/web-console/src/LazyMarkdown.tsx", import.meta.url), "utf8");
-    expect(app).toContain("<Markdown>{message.content}</Markdown>");
+    expect(message).toContain("<Markdown>{message.content}</Markdown>");
     expect(app).toContain("<details className={`tool-call");
     expect(app).toContain("api.transcriptView");
     expect(markdown).toContain("html: false");
@@ -253,13 +275,14 @@ describe("Web workbench state model", () => {
   });
   it("paginates and isolates expensive rendering in long chats", async () => {
     const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    const message = await readFile(new URL("../apps/web-console/src/ConversationMessage.tsx", import.meta.url), "utf8");
     const markdown = await readFile(new URL("../apps/web-console/src/Markdown.tsx", import.meta.url), "utf8");
     const liveText = await readFile(new URL("../apps/web-console/src/LiveText.tsx", import.meta.url), "utf8");
     const lazyMarkdown = await readFile(new URL("../apps/web-console/src/LazyMarkdown.tsx", import.meta.url), "utf8");
     const styles = await readFile(new URL("../apps/web-console/src/styles.css", import.meta.url), "utf8");
     expect(app).toContain("loadOlderMessages");
     expect(app).toContain("<Fragment key={message.id}");
-    expect(app).toContain("<ChatMessage message={message}");
+    expect(app).toContain("<ConversationMessage message={message}");
     expect(app).toContain("<LiveText>{liveOutput}</LiveText>");
     expect(app).toContain("<LiveText>{liveThinking}</LiveText>");
     expect(app).toContain("<ExecutionTimeline runId=");
@@ -272,7 +295,7 @@ describe("Web workbench state model", () => {
     expect(app).toContain("if (history.some((message) => message.content.trim())) void preloadMarkdown().catch(() => undefined)");
     expect(app).toContain("if (transcriptHasRichText) void preloadMarkdown().catch(() => undefined)");
     expect(app).toMatch(/async function submit\(\)[\s\S]*?void preloadMarkdown\(\)\.catch\(\(\) => undefined\);/);
-    expect(app).toContain("<LiveText>{pendingUserMessage.content}</LiveText>");
+    expect(message).toContain("<LiveText>{content}</LiveText>");
     expect(styles).toContain("content-visibility: auto");
   });
 
@@ -315,9 +338,11 @@ describe("Web workbench state model", () => {
 
   it("shows submitted messages optimistically and continuously reconciles persisted chat state", async () => {
     const source = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    const message = await readFile(new URL("../apps/web-console/src/ConversationMessage.tsx", import.meta.url), "utf8");
     expect(source).toContain("const [pendingUserMessage, setPendingUserMessage]");
     expect(source).toContain("setPendingUserMessage(optimistic)");
-    expect(source).toContain('aria-label="Sending message"');
+    expect(source).toContain("<PendingConversationMessage content={pendingUserMessage.content}");
+    expect(message).toContain('aria-label="Sending message"');
     expect(source).toContain("api.messages(targetSessionId)");
     expect(source).toContain("sessionIdRef.current !== targetSessionId");
     expect(source).toContain("updateComposerDraft(content)");
