@@ -44,7 +44,9 @@ const ONLINE_RECALL_DEADLINE_MS = 3_000;
 const ONLINE_EMBEDDING_TIMEOUT_MS = 2_200;
 
 function durableCommunicationPreferenceScope(content: string, sessionId: string) {
-  const durable = /(?:以后|今后|后续|始终|每次|一直|默认|记住|我的?习惯|我的?.{0,8}偏好|from now on|always|every time|by default|remember|my preference|i prefer)/i.test(content);
+  const explicitlyLocal = /(?:这次(?:任务)?|本次(?:任务)?|当前(?:任务|会话|session)|仅限(?:这次|本次|当前)|(?:for|in)\s+(?:this|the current)\s+(?:task|session)|this\s+(?:task|session)\s+only)/i.test(content);
+  const durable = !explicitlyLocal
+    && /(?:以后|今后|后续|始终|每次|一直|默认|记住|我的?习惯|我的?.{0,8}偏好|from now on|always|every time|by default|remember|my preference|i prefer)/i.test(content);
   return durable
     ? { preferenceScopeType: "global" as const, preferenceScopeId: "*" }
     : { preferenceScopeType: "session" as const, preferenceScopeId: sessionId };
@@ -300,7 +302,7 @@ function memoryScopes(subjectId: string, workspaceId: string, sessionId: string)
     { type: "workspace" as const, id: workspaceId },
     { type: "session" as const, id: sessionId },
   ];
-  return subjectId.startsWith("session:")
+  return subjectId === `session:${sessionId}`
     ? shared
     : [{ type: "user", id: subjectId }, ...shared];
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { canonicalizeSessionCreateRequest, canonicalizeSubmissionRequest } from "@tagent/abi";
 import type { V1ApiDependencies } from "./plugin.js";
@@ -37,7 +38,7 @@ export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencie
     const result = sessions.createSessionIdempotent({
       title,
       principalId: principalOf(request).subjectId,
-      idempotencyKey: body.requestId?.trim() || request.id,
+      idempotencyKey: body.requestId?.trim() || `console-session:${randomUUID()}`,
       canonicalPayload: canonicalizeSessionCreateRequest({ title }),
       provenance: { surface: "web_console" },
     });

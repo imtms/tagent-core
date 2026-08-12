@@ -82,12 +82,13 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     options.onEvent(event);
     return event;
   };
+  const memorySessionId = currentRun()?.sessionId;
   const memoryAccess: AccessContext = {
     subjectId: options.memorySubjectId,
     scopes: [
-      ...(options.memorySubjectId.startsWith("session:") ? [] : [{ type: "user" as const, id: options.memorySubjectId }]),
+      ...(options.memorySubjectId === `session:${memorySessionId}` ? [] : [{ type: "user" as const, id: options.memorySubjectId }]),
       { type: "workspace", id: options.memoryScopeId },
-      ...(currentRun()?.sessionId ? [{ type: "session" as const, id: currentRun()!.sessionId }] : []),
+      ...(memorySessionId ? [{ type: "session" as const, id: memorySessionId }] : []),
     ],
     purpose: "agent_recall",
   };
