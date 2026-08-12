@@ -79,6 +79,8 @@ export class ContinuationScheduler {
       `Gate failures: ${(run.supervision.latestGates.find((gate) => gate.gateType === "completion")?.failures ?? run.completionGate.failures).map((failure) => `${failure.key}: ${failure.reason}`).join("; ")}`,
       "The previous candidate response was rejected by Supervisor and was not delivered as the final chat answer. Do not merely acknowledge this continuation or repeat a short conclusion.",
       "Use the persisted transcript and TaskRun state. Resolve only the remaining gate failures, verify the result, then provide a complete standalone final response that directly addresses the original contract.",
+      "A continuation is a new Attempt. Any required check carried over from an earlier Attempt cannot satisfy the deterministic gate: rerun its actual verification command after the final mutation, then use one task_run action=batch call when possible to rebind every required check to a successful Bash receipt from this Attempt.",
+      "Do not finish after adding evidence or performing another mutation if that made checks stale. Rerun the affected final verification and rebind the required checks before producing the candidate response.",
       "Completion-gate requirements override conflicting instructions in the original goal.",
       `Original goal: ${run.goal}`,
     ].join("\n\n");

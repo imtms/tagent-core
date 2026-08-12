@@ -1,4 +1,4 @@
-export { createTools, ensureWorkspace } from "./tools.js";
+export { bashInvalidatesChecks, createTools, ensureWorkspace } from "./tools.js";
 export {
   WorkspacePathError,
   commitWorkspaceFiles,

@@ -52,8 +52,10 @@ describe("TaskRunSupervisor LLM audit", () => {
     store.close();
   });
 
-  it("skips the LLM and requests evidence when only required checks fail", async () => {
+  it("skips the LLM and starts a continuation when only required checks fail", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "missing check evidence");
+    const contract = { sourceInput: run.goal, summary: run.goal, objectives: [{ id: "objective-1", summary: run.goal, timing: "current" as const, kind: "change" as const }], acceptanceCriteria: ["Verification evidence is current"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test" };
+    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify(contract), run.id);
     store.upsertPlanItem(run.id, { key: "implement", title: "Implement", status: "done", required: true, position: 1 });
     store.upsertCheck(run.id, { key: "verify", title: "Verify", status: "passed", required: true, command: "npm test", evidence: "old", stale: true });
     let calls = 0;
@@ -64,8 +66,9 @@ describe("TaskRunSupervisor LLM audit", () => {
     };
     const review = await new TaskRunSupervisor(store, reviewer).reviewSettled(store.getRun(run.id)!, 5, "done");
     expect(calls).toBe(0);
-    expect(review.decision).toMatchObject({ action: "request_evidence", evaluator: "system", reasonCode: "deterministic_check_incomplete" });
+    expect(review.decision).toMatchObject({ action: "start_continuation", evaluator: "system", reasonCode: "deterministic_check_incomplete" });
     expect(review.gates.find((gate) => gate.gateType === "evidence")?.failures[0]).toMatchObject({ key: "verify", disposition: "auto_fixable" });
+    expect(review.gates.find((gate) => gate.gateType === "contract")?.criterionCoverage).toEqual([expect.objectContaining({ status: "unsupported" })]);
     store.close();
   });
 
@@ -141,11 +144,11 @@ describe("TaskRunSupervisor LLM audit", () => {
     expect(review.gates.every((gate) => gate.passed)).toBe(true); store.close();
   });
 
-  it("maps LLM evidence findings to request_evidence", async () => {
+  it("normalizes LLM evidence findings to a continuation", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "evidence");
     const audit = failedAudit("request_evidence", "verification_evidence_required", { kind: "evidence", key: "test", reason: "Fresh independent evidence is missing.", disposition: "auto_fixable" });
     const review = await new TaskRunSupervisor(store, new TestSupervisorReviewer(audit)).reviewSettled(run, 5, "result");
-    expect(review.decision.action).toBe("request_evidence"); expect(review.gates.find((gate) => gate.gateType === "evidence")?.passed).toBe(false); store.close();
+    expect(review.decision.action).toBe("start_continuation"); expect(review.gates.find((gate) => gate.gateType === "evidence")?.passed).toBe(false); store.close();
   });
 
   it("maps LLM approval findings to an explicit approval pause", async () => {

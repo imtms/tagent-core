@@ -5,7 +5,7 @@ import path from "node:path";
 import { Store } from "@tagent/persistence-sqlite/store";
 import type { RunEvent, RunId } from "@tagent/execution/domain";
 import type { ToolCapabilityApplicationPort } from "@tagent/execution/ports";
-import { createTools, createWorkspaceArtifactSink, createWorkspaceEditPort, listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "@tagent/workspace-local";
+import { bashInvalidatesChecks, createTools, createWorkspaceArtifactSink, createWorkspaceEditPort, listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "@tagent/workspace-local";
 
 async function waitForFile(filename: string) {
   for (let index = 0; index < 1_000; index += 1) {
@@ -304,6 +304,7 @@ describe("workspace tools", () => {
 
     await bash.execute("observe", { command: "ls", timeoutSeconds: 5 }, undefined);
     expect(store.getRun(run.id)?.checks[0].stale).toBe(false);
+    expect(bashInvalidatesChecks(`cd ${workspace} && npm run lint && npx vitest run tests/tools.test.ts`)).toBe(false);
     await bash.execute("mutate", { command: "touch changed.txt", timeoutSeconds: 5 }, undefined);
     expect(store.getRun(run.id)?.checks[0].stale).toBe(true);
     store.close();

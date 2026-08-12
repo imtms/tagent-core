@@ -106,8 +106,9 @@ export function bashInvalidatesChecks(command: string) {
   const source = command.trim();
   if (!source) return false;
   if (/(?:^|\s)(?:>|>>|tee\b|sed\s+-i\b)|\b(?:git\s+(?:add|commit|push|pull|merge|rebase|checkout|switch|restore|reset|clean)|npm\s+(?:install|uninstall|publish)|pnpm\s+(?:add|remove|install)|yarn\s+(?:add|remove|install)|rm|mv|cp|mkdir|touch|chmod|chown)\b/i.test(source)) return true;
-  const stages = source.split(/(?:&&|;|\|\||\n)/).map((stage) => stage.trim()).filter(Boolean);
-  const observation = /^(?:(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+)\s+)*(?:git\s+(?:status|diff|log|show|rev-parse|branch\s+--show-current)\b|npm\s+(?:test\b|run\s+(?:test|lint|check|typecheck)\b)|pnpm\s+(?:test\b|run\s+(?:test|lint|check|typecheck)\b)|yarn\s+(?:test\b|run\s+(?:test|lint|check|typecheck)\b)|npx\s+(?:vitest|eslint|tsc\s+--noEmit)\b|(?:vitest|pytest|eslint)\b|python(?:3)?\s+-m\s+pytest\b|go\s+test\b|cargo\s+(?:test|check|clippy)\b|tsc\s+--noEmit\b|rg\b|grep\b|ls\b|find\b|cat\b|head\b|tail\b|wc\b|pwd\b|sed\s+-n\b)/i;
+  const shellPrefix = /^(?:(?:cd\s+(?:'[^']*'|"[^"]*"|[^;&|]+?)\s*&&\s*)|(?:(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+)\s+))*/i;
+  const observation = /^(?:git\s+(?:status|diff|log|show|rev-parse|branch\s+--show-current)\b|npm\s+(?:test\b|run\s+(?:test|lint|check|typecheck)\b)|pnpm\s+(?:test\b|run\s+(?:test|lint|check|typecheck)\b)|yarn\s+(?:test\b|run\s+(?:test|lint|check|typecheck)\b)|npx\s+(?:vitest|eslint|tsc\s+--noEmit)\b|(?:vitest|pytest|eslint)\b|python(?:3)?\s+-m\s+pytest\b|go\s+test\b|cargo\s+(?:test|check|clippy)\b|tsc\s+--noEmit\b|rg\b|grep\b|ls\b|find\b|cat\b|head\b|tail\b|wc\b|pwd\b|sed\s+-n\b)/i;
+  const stages = source.replace(shellPrefix, "").split(/(?:&&|;|\|\||\n)/).map((stage) => stage.trim()).filter(Boolean);
   return stages.some((stage) => !observation.test(stage));
 }
 

@@ -35,7 +35,7 @@ A narrow low-risk single-answer discussion may use deterministic lightweight com
 
 | Situation | Supervisor LLM calls |
 | --- | --- |
-| Required plan/check prerequisite already fails | 0 |
+| Required plan/check prerequisite already fails | 0; start a bounded continuation for local repair |
 | Narrow low-risk single-answer discussion | 0 |
 | Substantial settlement with valid deterministic prerequisites | 1 |
 | Malformed or schema-invalid review output | no repair call; limited JSON syntax repair or fail closed locally |
@@ -53,14 +53,14 @@ Long candidates and operation receipts use bounded head/tail projections. Projec
 | Action | Meaning |
 | --- | --- |
 | `complete_taskrun` | persist the candidate as the final Session answer |
-| `request_evidence` | continue specifically to produce missing verification evidence |
+| `request_evidence` | legacy semantic action normalized to `start_continuation` for current-Attempt evidence repair |
 | `start_continuation` | start bounded repair or completion work |
 | `pause_for_approval` | create/retain a durable approval request; do not auto-continue |
 | `wait_for_runtime` | wait for pending durable control delivery |
 | `block_taskrun` | stop on missing user/external state or non-recoverable failure |
 | `steer` / `follow_up` | bounded intervention while an Attempt is active |
 
-If a candidate is rejected, Core emits/persists rejection state, keeps the candidate in the TaskRun transcript for audit, and does not append it as the final chat answer. The next continuation must produce a complete standalone replacement.
+If a candidate is rejected, Core emits/persists rejection state, keeps the candidate in the TaskRun transcript for audit, and does not append it as the final chat answer. The next continuation must produce a complete standalone replacement. Because a continuation is a new Attempt, required checks from the rejected Attempt must be rerun and rebound after the final mutation; otherwise Core keeps the Run in bounded automatic continuation instead of terminally blocking it.
 
 ## Attempt-terminal review
 

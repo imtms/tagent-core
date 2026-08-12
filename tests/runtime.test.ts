@@ -906,6 +906,8 @@ describe("AgentService runtime boundary", () => {
     expect(store.listContinuations(run.id)[0]).toMatchObject({ ordinal: 1, status: "completed" });
     expect(store.listMessages(session.id).filter((message) => message.role === "assistant").map((message) => message.content)).toEqual(["done"]);
     expect(runtimes[1].prompts[0]).toContain("Automatic continuation 1");
+    expect(runtimes[1].prompts[0]).toContain("Any required check carried over from an earlier Attempt cannot satisfy the deterministic gate");
+    expect(runtimes[1].prompts[0]).toContain("Rerun the affected final verification and rebind the required checks");
     store.close();
   });
 

@@ -148,7 +148,7 @@ export class TaskRunSupervisor {
     const criteria = run.contract?.acceptanceCriteria ?? [];
     const coverage: CriterionCoverage[] = criteria.map((criterion) => ({
       criterion,
-      status: "blocked",
+      status: "unsupported",
       evidenceRefs: [],
       reason: "Semantic contract audit deferred until deterministic plan and check prerequisites pass.",
     }));
@@ -161,11 +161,10 @@ export class TaskRunSupervisor {
     const gate = (failures: GateFailure[], summary: string, criterionCoverage?: CriterionCoverage[]) => ({
       passed: failures.length === 0, failures, summary, criterionCoverage,
     });
-    const action: SupervisorAction = planFailures.length === 0 && checkFailures.length > 0 ? "request_evidence" : "start_continuation";
     return {
-      action,
+      action: "start_continuation",
       reasonCode: planFailures.length ? "deterministic_plan_incomplete" : "deterministic_check_incomplete",
-      rationale: `Skipped semantic Supervisor call because ${localFailures.length} authoritative prerequisite failure(s) require repair first.`,
+      rationale: `Skipped semantic Supervisor call because ${localFailures.length} authoritative prerequisite failure(s) require repair in a new Attempt.`,
       confidence: 1,
       gates: {
         progress: gate(planFailures, planFailures.length ? "Required plan work is incomplete." : "Required plan work is complete."),
@@ -231,7 +230,7 @@ export class TaskRunSupervisor {
         || failure.kind === "check"
         || failure.kind === "contract" && failure.key === "semantic_review_deferred"
       ));
-    if (evidenceRepairOnly) return "request_evidence";
+    if (evidenceRepairOnly) return "start_continuation";
     return "start_continuation";
   }
 
