@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.5.6] - 2026-08-13
+
+### Workspace navigation and interaction
+
+- Consolidated Workspace navigation into a searchable switcher with pinned and recent grouping, contextual actions, keyboard shortcuts, intent-based prefetching, loading feedback, and focused empty states.
+- Hardened keyboard and screen-reader operation across dialogs, popovers, drawers, and icon actions, and added deliberate swipe gestures for mobile drawers without changing desktop behavior.
+- Refined the responsive workbench, compact mobile controls, dark theme, safe-area handling, and interaction feedback while preserving TAgent's warm neutral visual language and green semantic accents.
+
+### Conversation reading experience
+
+- Deferred rich Markdown rendering and retained lightweight live text during active output, reducing work on long conversations without changing persisted content or rendering safety.
+- Clarified the reading hierarchy between user messages, assistant responses, execution detail, and governance surfaces; added quiet date and relative-time orientation for long histories.
+- Preserved the operator's reading position during live updates, exposed a return-to-latest affordance only when useful, and kept new-message behavior stable across history loading and active streaming.
+- Moved repeated role labels, timestamps, copy actions, and per-turn Memory extraction status into a quieter metadata layer while retaining accessible sender names and touch-discoverable controls.
+
+### Maintenance, compatibility, and upgrade
+
+- Synchronized Core, Web Console, all 13 private workspace manifests, internal dependency pins, capability metadata, release fixtures, and the lockfile at 0.5.6.
+- There is no HTTP API, ABI, configuration, or SQLite schema migration in this release; schema remains 42.
+- Deploy matching Core and Web Console 0.5.6 artifacts. Existing 0.5.5 schema-42 backups and rollback requirements are unchanged.
+
 ## [0.5.5] - 2026-08-12
 
 ### Chat-first Web Console
