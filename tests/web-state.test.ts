@@ -73,6 +73,20 @@ describe("Web workbench state model", () => {
     expect(design).toContain('.workspace-switcher-backdrop');
   });
 
+  it("uses a directional, flat conversation rhythm with technical metadata", async () => {
+    const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    const switcher = await readFile(new URL("../apps/web-console/src/WorkspaceSwitcher.tsx", import.meta.url), "utf8");
+    const styles = await readFile(new URL("../apps/web-console/src/styles.css", import.meta.url), "utf8");
+    const design = await readFile(new URL("../apps/web-console/src/design-system.css", import.meta.url), "utf8");
+    expect(design).toContain("--conversation-measure: 860px");
+    expect(styles).toContain(".message.user { width: fit-content; max-width: min(680px, 82%); margin-right: 0; margin-left: auto; }");
+    expect(styles).toContain(".message.assistant .message-body { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }");
+    expect(design).toContain("font: 500 8px/1.2 var(--font-mono)");
+    expect(design).toContain(".message.assistant .markdown > :not(.code-block):not(.markdown-table-wrap)");
+    expect(app).toContain('className="workspace-run-status idle"><span className="workspace-status-dot" />No tasks');
+    expect(switcher).toContain('className="workspace-switcher-dot"');
+  });
+
   it("persists per-workspace drafts and provides IME-safe keyboard composition", async () => {
     const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
     expect(app).toContain('storedStringRecord("tagent.composer-drafts")');

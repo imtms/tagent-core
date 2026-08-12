@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Activity, ArrowRight, Circle, CornerDownLeft, Pin, Plus, Search, X } from "lucide-react";
+import { Activity, ArrowRight, CornerDownLeft, Pin, Plus, Search, X } from "lucide-react";
 import type { Session } from "./api";
 import { useModalFocus } from "./use-modal-focus";
 
@@ -94,7 +94,7 @@ export function WorkspaceSwitcher({
           const selected = session.id === selectedSessionId;
           return <button ref={(element) => { optionRefs.current[index] = element; }} id={`workspace-option-${session.id}`} type="button" role="option" tabIndex={-1} aria-selected={selected} className={`${index === activeIndex ? "highlighted" : ""} ${selected ? "selected" : ""}`} key={session.id} onMouseEnter={() => { setActiveIndex(index); onPrefetch(session.id); }} onClick={() => choose(session)}>
             <span className="workspace-switcher-avatar">{workspaceEmojiById[session.id] ?? "💬"}</span>
-            <span className="workspace-switcher-copy"><strong>{session.title}</strong><small><time>{new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(session.updatedAt)}</time><i className={`workspace-switcher-status ${session.latestRunStatus ?? "idle"}`}>{session.latestRunStatus === "running" ? <Activity size={10} /> : <Circle size={7} />}{statusLabel(session)}</i></small></span>
+            <span className="workspace-switcher-copy"><strong>{session.title}</strong><small><time>{new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(session.updatedAt)}</time><i className={`workspace-switcher-status ${session.latestRunStatus ?? "idle"}`}>{session.latestRunStatus === "running" ? <Activity size={10} /> : <span className="workspace-switcher-dot" />}{statusLabel(session)}</i></small></span>
             {pinned && <Pin className="workspace-switcher-pin" size={13} />}
             {selected ? <span className="workspace-switcher-current">Current</span> : index === activeIndex ? <CornerDownLeft className="workspace-switcher-enter" size={14} /> : <ArrowRight className="workspace-switcher-arrow" size={14} />}
           </button>;

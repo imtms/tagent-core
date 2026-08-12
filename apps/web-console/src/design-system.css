@@ -43,6 +43,7 @@
   --radius: var(--radius-sm);
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Geist Mono", Menlo, Consolas, monospace;
+  --conversation-measure: 860px;
   --shadow-xs: 0 1px 2px color-mix(in oklab, var(--foreground) 7%, transparent);
   --shadow-sm: 0 1px 2px color-mix(in oklab, var(--foreground) 5%, transparent), 0 8px 22px color-mix(in oklab, var(--foreground) 6%, transparent);
   --shadow-md: 0 2px 5px color-mix(in oklab, var(--foreground) 8%, transparent), 0 20px 48px color-mix(in oklab, var(--foreground) 11%, transparent);
@@ -564,6 +565,7 @@ a:focus-visible {
 .workspace-switcher-copy strong { overflow: hidden; color: var(--foreground-strong); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-switcher-copy small { display: flex; align-items: center; gap: 8px; color: var(--foreground-muted); font: 500 8px/1.2 var(--font-mono); font-variant-numeric: tabular-nums; }
 .workspace-switcher-status { display: inline-flex; align-items: center; gap: 4px; font-style: normal; text-transform: capitalize; }
+.workspace-switcher-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentColor; opacity: 0.72; }
 .workspace-switcher-status.running { color: var(--accent); }
 .workspace-switcher-status.waiting_input,
 .workspace-switcher-status.blocked { color: var(--warning); }
@@ -663,12 +665,14 @@ a:focus-visible {
 }
 
 .message {
-  margin-bottom: 24px;
+  margin-bottom: 28px;
 }
 
 .message-meta {
   color: var(--foreground-muted);
-  font-size: 9px;
+  font: 500 8px/1.2 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
 }
 
 .message-meta span:first-child {
@@ -685,6 +689,7 @@ a:focus-visible {
   border-color: var(--border);
   border-radius: var(--radius-lg) var(--radius-lg) var(--radius-xs) var(--radius-lg);
   background: var(--surface-muted);
+  box-shadow: none;
 }
 
 .message.user.pending .message-body {
@@ -693,20 +698,36 @@ a:focus-visible {
 }
 
 .message.assistant {
-  border-bottom-color: var(--border);
+  margin-bottom: 34px;
+  border-bottom: 0;
 }
 
 .message.assistant .message-body {
-  padding: 18px 20px;
-  border-color: var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-xs);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
-.message.assistant.live .message-body {
-  border-color: color-mix(in oklab, var(--accent) 34%, var(--border));
-  background: color-mix(in oklab, var(--accent-soft) 20%, var(--surface-raised));
+.message.assistant .markdown > :not(.code-block):not(.markdown-table-wrap) {
+  max-width: 72ch;
+}
+
+.session-meta,
+.workspace-run-status,
+.rail-footer,
+.workspace-heading p,
+.active-run-strip,
+.phase-line,
+.run-metrics,
+.execution-timeline-heading small,
+.composer-hint,
+.inbox-heading small,
+.section-title small {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
 }
 
 .markdown h1,
@@ -1635,27 +1656,28 @@ a:focus-visible {
 }
 
 .conversation-skeleton {
-  width: min(820px, 100%);
+  width: min(var(--conversation-measure), 100%);
   margin: 44px auto 0;
   display: grid;
-  gap: 24px;
+  gap: 28px;
 }
 
 .conversation-skeleton span {
-  width: 76%;
-  height: 92px;
-  border-radius: var(--radius-lg);
+  width: 72%;
+  height: 72px;
+  border-radius: var(--radius-sm);
 }
 
 .conversation-skeleton span:nth-child(2) {
-  width: 58%;
+  width: 52%;
   justify-self: end;
-  height: 68px;
+  height: 54px;
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-xs) var(--radius-lg);
 }
 
 .conversation-skeleton span:nth-child(3) {
-  width: 88%;
-  height: 116px;
+  width: 78%;
+  height: 96px;
 }
 
 @keyframes skeleton-shimmer {
@@ -2100,7 +2122,11 @@ a:focus-visible {
   }
 
   .message.user {
-    width: 96%;
+    max-width: 92%;
+  }
+
+  .message.assistant {
+    margin-bottom: 28px;
   }
 
   .composer-wrap {

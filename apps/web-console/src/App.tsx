@@ -138,7 +138,7 @@ const ChatMessage = memo(function ChatMessage({ message, memoryEnabled, memoryJo
 
 function WorkspaceRunStatus({ session }: { session: Session }) {
   const status = session.latestRunStatus;
-  if (!status) return <span className="workspace-run-status idle"><Circle size={8} />No tasks</span>;
+  if (!status) return <span className="workspace-run-status idle"><span className="workspace-status-dot" />No tasks</span>;
   return <span className={`workspace-run-status ${status}`} title={`${status}${session.latestRunPhase ? ` · ${session.latestRunPhase}` : ""}`}>
     {status === "running" ? <Activity size={10} /> : <span className="workspace-status-dot" />}
     <span>{status}</span>
