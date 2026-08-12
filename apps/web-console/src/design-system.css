@@ -699,6 +699,63 @@ a:focus-visible {
   backdrop-filter: blur(18px);
 }
 
+.approval-dock-heading > span {
+  color: var(--warning);
+}
+
+.approval-dock-heading small,
+.approval-card-copy p {
+  color: var(--foreground-muted);
+}
+
+.approval-card {
+  border-color: color-mix(in oklab, var(--warning) 34%, var(--border));
+  background: color-mix(in oklab, var(--warning-soft) 62%, var(--surface-raised));
+  box-shadow: inset 3px 0 0 color-mix(in oklab, var(--warning) 82%, transparent), var(--shadow-sm);
+}
+
+.approval-card-icon {
+  color: var(--warning);
+  border: 1px solid color-mix(in oklab, var(--warning) 25%, var(--border));
+  background: color-mix(in oklab, var(--warning-soft) 78%, var(--surface-raised));
+}
+
+.approval-card-copy > span {
+  color: var(--warning);
+}
+
+.approval-card-copy strong {
+  color: var(--foreground-strong);
+}
+
+.approval-card-actions button {
+  transition-property: color, background-color, border-color, opacity, transform, box-shadow;
+}
+
+.approval-approve {
+  color: var(--accent-contrast);
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: var(--shadow-xs);
+}
+
+.approval-approve:hover:not(:disabled) {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
+.approval-reject {
+  color: var(--foreground);
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+}
+
+.approval-reject:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: color-mix(in oklab, var(--danger) 32%, var(--border));
+  background: var(--danger-soft);
+}
+
 .composer-mode {
   color: var(--foreground-muted);
 }

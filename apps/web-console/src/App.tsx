@@ -1,5 +1,5 @@
 import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Menu, Moon, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Send, ShieldCheck, SlidersHorizontal, Sparkles, Square, Sun, Target, Terminal, X } from "lucide-react";
+import { Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Menu, Moon, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Send, ShieldAlert, ShieldCheck, SlidersHorizontal, Sparkles, Square, Sun, Target, Terminal, X } from "lucide-react";
 import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
 import { LiveText, Markdown } from "./Markdown";
 import { createRequestId } from "./id";
@@ -247,7 +247,7 @@ function ArtifactsPanel({ run }: { run: TaskRun }) {
   </section>;
 }
 
-function RunDetails({ run, toolEvents, transcriptTools, onRefresh }: { run: TaskRun; toolEvents: RunEvent[]; transcriptTools: Extract<TranscriptItem, { kind: "tool" }>[]; onRefresh?: () => Promise<void> }) {
+function RunDetails({ run, toolEvents, transcriptTools }: { run: TaskRun; toolEvents: RunEvent[]; transcriptTools: Extract<TranscriptItem, { kind: "tool" }>[] }) {
   return <div className="run-details">
     <CurrentOperationPanel run={run} />
     <section className="run-summary"><div className="phase-line"><span className={`phase-badge ${run.status}`}>{run.status}</span><span>{run.phase}</span><span>attempt {run.attempt}</span></div><p>{run.goal}</p>{run.contract && <div className="run-contract"><span>{run.contract.intent.replaceAll("_", " ")} · {run.contract.relation}</span><small>{run.contract.decisionReason}</small><ul>{run.contract.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></div>}<div className="run-metrics"><span>{run.transcriptCount} messages</span><span>{run.usage.totalTokens.toLocaleString()} tokens</span><span>{run.usage.input.toLocaleString()} in / {run.usage.output.toLocaleString()} out</span><span>token usage is observational only</span></div>{run.blockedReason && <div className="blocked-note">{run.blockedReason}</div>}</section>
@@ -256,12 +256,63 @@ function RunDetails({ run, toolEvents, transcriptTools, onRefresh }: { run: Task
     <GateAuditPanel run={run} />
     <ToolActivityPanel transcriptItems={transcriptTools} events={toolEvents} />
     <ContextManifestPanel run={run} />
-    {run.supervision.approvalRequests.length > 0 && <section className="panel-section"><div className="section-title"><span>Approvals</span><small>{run.supervision.approvalRequests.filter((item) => item.status === "pending").length} pending</small></div><div className="task-list">{run.supervision.approvalRequests.map((approval) => <div className="approval-row-inline" key={approval.id}><div><strong>{approval.reason}</strong><small>{approval.status}{approval.resolution ? ` · ${approval.resolution}` : ""}</small></div>{approval.status === "pending" && <span className="proposal-actions"><button onClick={async () => { await api.approveRunApproval(approval.id); await onRefresh?.(); }}>Approve & resume</button><button onClick={async () => { await api.rejectRunApproval(approval.id); await onRefresh?.(); }}>Reject</button></span>}</div>)}</div></section>}
     <section className="panel-section"><div className="section-title"><span>Plan</span><small>{run.plan.filter((item) => item.status === "done").length}/{run.plan.length}</small></div><div className="task-list">{run.plan.length ? run.plan.map((item) => <div className="task-row" key={item.key}>{item.status === "done" ? <Check size={15} /> : <Circle size={14} />}<span>{item.title}</span><small>{item.status}</small></div>) : <p className="muted">No structured plan.</p>}</div></section>
     <section className="panel-section"><div className="section-title"><span>Checks</span><small>{run.checks.filter((item) => item.status === "passed" && !item.stale).length}/{run.checks.length}</small></div><div className="task-list">{run.checks.length ? run.checks.map((check) => <div className="task-row" key={check.key}>{check.status === "passed" && !check.stale ? <Check size={15} /> : <Circle size={14} />}<span>{check.title}</span><small>{check.stale ? "stale" : check.status}</small></div>) : <p className="muted">No required checks.</p>}</div></section>
     <section className="panel-section"><div className="section-title"><span>Continuations</span><small>{run.continuations.length}</small></div><div className="task-list">{run.continuations.length ? run.continuations.map((item) => <div className="continuation-row" key={item.id}><div><strong>#{item.ordinal}</strong><span>{item.reason}</span></div><small className={`continuation-status ${item.status}`}>{item.status}{item.leaseUntil && item.status === "running" ? " · leased" : ""}</small></div>) : <p className="muted">No automatic continuation.</p>}</div></section>
     <ArtifactsPanel run={run} />
   </div>;
+}
+
+type RunApproval = TaskRun["supervision"]["approvalRequests"][number];
+
+function approvalHeading(actionType: RunApproval["actionType"]): string {
+  if (actionType === "execute_external_action") return "External action needs your approval";
+  if (actionType === "start_parallel_taskrun") return "Parallel TaskRun needs your approval";
+  return "TaskRun needs your approval";
+}
+
+function approvalActionLabel(actionType: RunApproval["actionType"]): string {
+  if (actionType === "execute_external_action") return "Approve & execute";
+  if (actionType === "start_parallel_taskrun") return "Approve & start";
+  return "Approve & resume";
+}
+
+function approvalResolutionNotice(actionType: RunApproval["actionType"], decision: "approved" | "rejected"): string {
+  if (decision === "rejected") return actionType === "start_parallel_taskrun"
+    ? "Approval rejected. Parallel TaskRun was not started."
+    : "Approval rejected. TaskRun remains paused.";
+  if (actionType === "start_parallel_taskrun") return "Approval recorded. Parallel TaskRun started.";
+  if (actionType === "execute_external_action") return "Approval recorded. External action authorized and TaskRun resumed.";
+  return "Approval recorded. TaskRun resumed.";
+}
+
+function ApprovalDock({ run, approvals, resolvingId, resolvingDecision, onResolve }: {
+  run: TaskRun;
+  approvals: RunApproval[];
+  resolvingId: string;
+  resolvingDecision: "approved" | "rejected" | "";
+  onResolve: (approval: RunApproval, decision: "approved" | "rejected") => Promise<void>;
+}) {
+  return <section className="approval-dock" aria-label="Pending approvals" aria-live="polite">
+    <header className="approval-dock-heading"><span><ShieldAlert size={14} />Approval required</span><small>{approvals.length} {approvals.length === 1 ? "action is" : "actions are"} paused</small></header>
+    {approvals.map((approval) => {
+      const approvedAttempt = approval.metadata.approvedAttempt;
+      const attempt = typeof approvedAttempt === "number" ? approvedAttempt : run.attempt;
+      const busy = resolvingId === approval.id;
+      return <article className="approval-card" key={approval.id}>
+        <span className="approval-card-icon" aria-hidden="true"><ShieldAlert size={18} /></span>
+        <div className="approval-card-copy">
+          <span>Human checkpoint · Attempt {attempt}</span>
+          <strong>{approvalHeading(approval.actionType)}</strong>
+          <p>{approval.reason}</p>
+        </div>
+        <div className="approval-card-actions">
+          <button className="approval-approve" type="button" disabled={Boolean(resolvingId)} onClick={() => void onResolve(approval, "approved")}>{busy && resolvingDecision === "approved" ? <Activity className="spin" size={15} /> : <ShieldCheck size={15} />}{busy && resolvingDecision === "approved" ? "Approving…" : approvalActionLabel(approval.actionType)}</button>
+          <button className="approval-reject" type="button" disabled={Boolean(resolvingId)} onClick={() => void onResolve(approval, "rejected")}>{busy && resolvingDecision === "rejected" && <Activity className="spin" size={15} />}{busy && resolvingDecision === "rejected" ? "Rejecting…" : "Reject"}</button>
+        </div>
+      </article>;
+    })}
+  </section>;
 }
 
 function mergeTranscriptItems(current: TranscriptItem[], incoming: TranscriptItem[]) {
@@ -302,6 +353,8 @@ export function App() {
   const [pendingUserMessage, setPendingUserMessage] = useState<{ sessionId: string; content: string; createdAt: number } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submittingUserInputId, setSubmittingUserInputId] = useState("");
+  const [resolvingApprovalId, setResolvingApprovalId] = useState("");
+  const [resolvingApprovalDecision, setResolvingApprovalDecision] = useState<"approved" | "rejected" | "">("");
   const [activeRun, setActiveRun] = useState<TaskRun | null>(null);
   const [selectedRun, setSelectedRun] = useState<TaskRun | null>(null);
   const [runs, setRuns] = useState<TaskRunSummary[]>([]);
@@ -625,6 +678,7 @@ export function App() {
 
   const activeTools = useMemo(() => events.filter((event) => event.type.startsWith("tool.")).slice(-20), [events]);
   const transcriptTools = useMemo(() => transcript.filter((item): item is Extract<TranscriptItem, { kind: "tool" }> => item.kind === "tool"), [transcript]);
+  const pendingApprovals = useMemo(() => activeRun?.supervision.approvalRequests.filter((approval) => approval.status === "pending") ?? [], [activeRun]);
   const memoryJobByMessageId = useMemo(() => {
     const jobs = new Map<number, CaptureJob>();
     for (const job of memoryJobs) {
@@ -781,6 +835,34 @@ export function App() {
     finally { setSubmittingUserInputId(""); }
   }
 
+  async function resolveRunApproval(approval: RunApproval, decision: "approved" | "rejected") {
+    if (resolvingApprovalId) return;
+    const sourceRun = activeRun;
+    const targetSessionId = sessionId;
+    setResolvingApprovalId(approval.id); setResolvingApprovalDecision(decision); setError(""); setNotice("");
+    try {
+      const updated = decision === "approved"
+        ? await api.approveRunApproval(approval.id)
+        : await api.rejectRunApproval(approval.id);
+      if (sessionIdRef.current !== targetSessionId) return;
+      const refreshedSource = sourceRun && sourceRun.id !== updated.id
+        ? await api.run(sourceRun.id)
+        : updated;
+      if (sessionIdRef.current !== targetSessionId) return;
+      const resolvedRuns = refreshedSource.id === updated.id ? [updated] : [updated, refreshedSource];
+      setActiveRun((current) => resolvedRuns.find((run) => run.id === current?.id) ?? current);
+      setSelectedRun((current) => resolvedRuns.find((run) => run.id === current?.id) ?? current);
+      setRuns((current) => {
+        const replacements = new Map(resolvedRuns.map((run) => [run.id, run]));
+        const knownIds = new Set(current.map((run) => run.id));
+        return [...resolvedRuns.filter((run) => !knownIds.has(run.id)), ...current.map((run) => replacements.get(run.id) ?? run)];
+      });
+      if (decision === "approved" && sourceRun?.id === updated.id) { setEvents([]); setStreaming(""); setLiveThinking(""); }
+      setNotice(approvalResolutionNotice(approval.actionType, decision));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setResolvingApprovalId(""); setResolvingApprovalDecision(""); }
+  }
+
   async function retryLaunch(run: TaskRun) {
     if (retryingRunId) return;
     setRetryingRunId(run.id); setError(""); setNotice("");
@@ -842,6 +924,7 @@ export function App() {
       <footer className="composer-wrap">
         {error && <div className="error-banner">{error}</div>}
         {notice && <div className="success-banner">{notice}</div>}
+        {activeRun && pendingApprovals.length > 0 && <ApprovalDock run={activeRun} approvals={pendingApprovals} resolvingId={resolvingApprovalId} resolvingDecision={resolvingApprovalDecision} onResolve={resolveRunApproval} />}
         <div className="composer-mode"><span><Activity size={13} />Supervisor inbox</span><span>{activeRun ? "New input is classified as steer, context, follow-up, parallel work, or a new TaskRun" : "Supervisor summarizes, prioritizes, and starts the next eligible contract"}</span></div>
         <div className="composer"><textarea ref={composerTextareaRef} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Add a task, correction, constraint, context update, or follow-up" rows={1} aria-label="Message. Enter inserts a new line; use Send to submit." /><button type="button" onClick={() => void submit()} disabled={!draft.trim() || submitting} aria-label="Add to Supervisor queue">{submitting ? <Activity className="spin" size={18} /> : <Send size={18} />}</button></div>
         {inbox.length > 0 && <section className="supervisor-inbox"><div className="inbox-heading"><span>Up next</span><small>{inbox.length} queued</small></div>{inbox.map((item, index) => <QueuePrompt key={item.id} item={item} index={index} editing={editingInboxId === item.id} draft={editingInboxId === item.id ? inboxDraft : item.content} busy={Boolean(startingInboxId || savingInboxId || reorderingInbox || mutatingInboxId)} starting={startingInboxId === item.id} dragging={draggingInboxId === item.id} canMoveUp={index > 0} canMoveDown={index < inbox.length - 1} onEdit={() => { setEditingInboxId(item.id); setInboxDraft(item.content); setError(""); setNotice(""); }} onDraftChange={setInboxDraft} onSave={() => void saveInbox(item)} onCancelEdit={() => { setEditingInboxId(""); setInboxDraft(""); }} onStart={() => void runInboxNow(item)} onToggleDefer={() => void mutateInbox(item.id, () => api.decideInbox(sessionId, item.id, item.decision === "defer" ? "pending" : "defer"))} onMergeFirst={() => void mutateInbox(item.id, () => api.mergeInbox(sessionId, item.id, inbox[0].id))} onDelete={() => void mutateInbox(item.id, () => api.deleteInbox(sessionId, item.id))} onMoveUp={() => void moveInbox(item.id, -1)} onMoveDown={() => void moveInbox(item.id, 1)} onDragStart={(event) => { setDraggingInboxId(item.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); }} onDragEnd={() => setDraggingInboxId("")} onDrop={(event) => { event.preventDefault(); void reorderInbox(item.id); }} />)}</section>}
@@ -862,7 +945,7 @@ export function App() {
             <span className="history-copy"><strong>{item.goal}</strong><small>{item.status} · attempt {item.attempt}</small></span>
             <time>{index === 0 && item.status === "running" ? "current" : formatTime(item.updatedAt ?? item.createdAt)}</time>
           </button>
-          {expanded && selectedRun?.id === item.id && <RunDetails run={selectedRun} toolEvents={activeRun?.id === item.id ? activeTools : []} transcriptTools={transcriptTools} onRefresh={async () => { const refreshed = await api.run(item.id); setSelectedRun(refreshed); setRuns((current) => current.map((run) => run.id === refreshed.id ? refreshed : run)); }} />}
+          {expanded && selectedRun?.id === item.id && <RunDetails run={selectedRun} toolEvents={activeRun?.id === item.id ? activeTools : []} transcriptTools={transcriptTools} />}
         </section>;
       })}</div>}
     </aside>

@@ -30,6 +30,31 @@ describe("Web workbench state model", () => {
     expect(api).toContain("/api/v1/console/user-input-requests/${requestId}/submit");
   });
 
+  it("puts pending approvals directly above the chat composer instead of in the audit sidebar", async () => {
+    const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    const styles = await readFile(new URL("../apps/web-console/src/design-system.css", import.meta.url), "utf8");
+    const footerStart = app.indexOf('<footer className="composer-wrap">');
+    const footer = app.slice(footerStart, app.indexOf("</footer>", footerStart));
+    const runDetails = app.slice(app.indexOf("function RunDetails"), app.indexOf("type RunApproval"));
+    expect(app).toContain("function ApprovalDock");
+    expect(app).toContain('activeRun?.supervision.approvalRequests.filter((approval) => approval.status === "pending")');
+    expect(footer).toMatch(/<ApprovalDock[\s\S]*<div className="composer">/);
+    expect(footer).toContain("resolvingId={resolvingApprovalId}");
+    expect(footer).toContain("resolvingDecision={resolvingApprovalDecision}");
+    expect(app).toContain("await api.approveRunApproval(approval.id)");
+    expect(app).toContain("await api.rejectRunApproval(approval.id)");
+    expect(app).toContain('resolvingDecision === "rejected" ? "Rejecting…"');
+    expect(app).toContain("sourceRun && sourceRun.id !== updated.id");
+    expect(app).toContain("await api.run(sourceRun.id)");
+    expect(app).toContain("sessionIdRef.current !== targetSessionId");
+    expect(app).toContain('decision === "approved" && sourceRun?.id === updated.id');
+    expect(app).toContain('return "Approve & execute"');
+    expect(app).toContain('return "Approve & start"');
+    expect(runDetails).not.toContain("approvalRequests");
+    expect(styles).toContain(".approval-card");
+    expect(styles).toContain("var(--warning-soft)");
+  });
+
   it("opens text and Markdown artifacts in the Web UI without removing downloads", async () => {
     const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
     const api = await readFile(new URL("../apps/web-console/src/api.ts", import.meta.url), "utf8");
