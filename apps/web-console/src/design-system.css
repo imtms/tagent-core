@@ -563,7 +563,7 @@ a:focus-visible {
 .workspace-switcher-avatar { width: 32px; height: 32px; border: 1px solid var(--border); border-radius: var(--radius-md); display: grid; place-items: center; background: var(--surface-raised); font-size: 15px; }
 .workspace-switcher-copy { min-width: 0; display: grid; gap: 3px; }
 .workspace-switcher-copy strong { overflow: hidden; color: var(--foreground-strong); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-switcher-copy small { display: flex; align-items: center; gap: 8px; color: var(--foreground-muted); font: 500 8px/1.2 var(--font-mono); font-variant-numeric: tabular-nums; }
+.workspace-switcher-copy small { display: flex; align-items: center; gap: 8px; color: var(--foreground-muted); font: 500 10px/1.2 var(--font-mono); font-variant-numeric: tabular-nums; }
 .workspace-switcher-status { display: inline-flex; align-items: center; gap: 4px; font-style: normal; text-transform: capitalize; }
 .workspace-switcher-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentColor; opacity: 0.72; }
 .workspace-switcher-status.running { color: var(--accent); }
@@ -670,7 +670,7 @@ a:focus-visible {
 
 .message-meta {
   color: var(--foreground-muted);
-  font: 500 8px/1.2 var(--font-mono);
+  font: 500 10px/1.2 var(--font-mono);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
 }
@@ -714,6 +714,26 @@ a:focus-visible {
   max-width: 72ch;
 }
 
+.conversation-date-divider {
+  display: grid;
+  grid-template-columns: minmax(20px, 1fr) auto minmax(20px, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 24px;
+  color: var(--foreground-muted);
+  font: 500 9px/1.2 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.conversation-date-divider::before,
+.conversation-date-divider::after {
+  height: 1px;
+  background: var(--border);
+  content: "";
+}
+
 .session-meta,
 .workspace-run-status,
 .rail-footer,
@@ -728,6 +748,15 @@ a:focus-visible {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
+}
+
+.session-meta {
+  font-size: 10px;
+}
+
+.session-meta time {
+  flex: none;
+  white-space: nowrap;
 }
 
 .markdown h1,

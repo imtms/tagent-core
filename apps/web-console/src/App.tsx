@@ -1,4 +1,4 @@
-import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { Fragment, Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Activity, ArrowDown, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Keyboard, Menu, Moon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Search, Send, Settings2, ShieldAlert, ShieldCheck, Sparkles, Square, Sun, Target, Terminal, X } from "lucide-react";
 import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
 import { Markdown, preloadMarkdown } from "./LazyMarkdown";
@@ -14,11 +14,12 @@ import { usePopoverFocus } from "./use-popover-focus";
 import { WorkspaceContextMenu } from "./WorkspaceContextMenu";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { TimeAgo } from "./TimeAgo";
+import { formatConversationDay, formatTime, localDayKey } from "./time-format";
 const MemoryPanel = lazy(() => import("./MemoryPanel").then((module) => ({ default: module.MemoryPanel })));
 const LearningCenter = lazy(() => import("./LearningCenter").then((module) => ({ default: module.LearningCenter })));
 const GoalsPanel = lazy(() => import("./GoalsPanel").then((module) => ({ default: module.GoalsPanel })));
 
-const formatTime = (value: number) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(value);
 const workspaceEmojis = ["💬", "🧠", "🛠️", "🚀", "📚", "🔬", "🎨", "📦", "🧭", "⚙️"] as const;
 const reasoningEfforts = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const starterPrompts = [
@@ -133,8 +134,13 @@ function MemoryExtraction({ job }: { job: CaptureJob | null | undefined }) {
 }
 
 const ChatMessage = memo(function ChatMessage({ message, memoryEnabled, memoryJob }: { message: Message; memoryEnabled: boolean; memoryJob?: CaptureJob | null }) {
-  return <article className={`message ${message.role}`}><div className="message-meta"><span>{message.role === "user" ? "You" : "TAgent"}</span><time>{formatTime(message.createdAt)}</time></div><div className="message-body"><Markdown>{message.content}</Markdown></div>{memoryEnabled && message.role === "user" && <MemoryExtraction job={memoryJob} />}</article>;
+  return <article className={`message ${message.role}`}><div className="message-meta"><span>{message.role === "user" ? "You" : "TAgent"}</span><TimeAgo value={message.createdAt} /></div><div className="message-body"><Markdown>{message.content}</Markdown></div>{memoryEnabled && message.role === "user" && <MemoryExtraction job={memoryJob} />}</article>;
 });
+
+function ConversationDateDivider({ value }: { value: number }) {
+  const label = formatConversationDay(value);
+  return <div className="conversation-date-divider" role="separator" aria-label={label}><span>{label}</span></div>;
+}
 
 function WorkspaceRunStatus({ session }: { session: Session }) {
   const status = session.latestRunStatus;
@@ -1175,9 +1181,9 @@ export function App() {
             <span><input className="session-title-input" value={sessionTitleDraft} autoFocus onChange={(event) => setSessionTitleDraft(event.target.value)} onKeyDown={(event) => {
               if (event.key === "Enter") { event.preventDefault(); void renameSession(session); }
               if (event.key === "Escape") { event.preventDefault(); cancelRename(); event.currentTarget.blur(); }
-            }} onBlur={() => void renameSession(session)} aria-label="Workspace name" /><span className="session-meta"><small>{formatTime(session.updatedAt)}</small><WorkspaceRunStatus session={session} /></span></span>
+            }} onBlur={() => void renameSession(session)} aria-label="Workspace name" /><span className="session-meta"><TimeAgo value={session.updatedAt} /><WorkspaceRunStatus session={session} /></span></span>
           </div> : <>
-            <button className="session-select" onMouseEnter={() => prefetchWorkspace(session.id)} onFocus={() => prefetchWorkspace(session.id)} onClick={() => selectSession(session)} aria-label={`Open workspace ${session.title}${unread ? ". Unread activity" : ""}`} aria-describedby={leftCollapsed ? `workspace-tooltip-${session.id}` : undefined}><span><strong>{session.title}{unread && <i className="unread-dot" aria-label="Unread activity" />}</strong><span className="session-meta"><small>{formatTime(session.updatedAt)}</small><WorkspaceRunStatus session={session} /></span></span></button>
+            <button className="session-select" onMouseEnter={() => prefetchWorkspace(session.id)} onFocus={() => prefetchWorkspace(session.id)} onClick={() => selectSession(session)} aria-label={`Open workspace ${session.title}${unread ? ". Unread activity" : ""}`} aria-describedby={leftCollapsed ? `workspace-tooltip-${session.id}` : undefined}><span><strong>{session.title}{unread && <i className="unread-dot" aria-label="Unread activity" />}</strong><span className="session-meta"><TimeAgo value={session.updatedAt} /><WorkspaceRunStatus session={session} /></span></span></button>
             <button className="session-more" type="button" onClick={(event) => {
               if (sessionMenuId === session.id) { setSessionMenuId(""); return; }
               const item = event.currentTarget.closest(".session-item")?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
@@ -1224,8 +1230,8 @@ export function App() {
         {conversationLoading && !messages.length ? <div className="conversation-skeleton" aria-label="Loading conversation"><span /><span /><span /></div> : !messages.length && !streaming && pendingUserMessage?.sessionId !== sessionId && <div className="empty-state"><div className="empty-icon"><Sparkles size={23} /></div><span className="empty-kicker">Durable agent workspace</span><h2>What should we accomplish?</h2><p>Start with an outcome. TAgent will plan the work, preserve progress, and verify the result.</p><div className="starter-prompts" aria-label="Starter prompts">{starterPrompts.map((starter) => <button type="button" key={starter.label} onClick={() => { updateComposerDraft(starter.prompt); requestAnimationFrame(() => composerTextareaRef.current?.focus()); }}><Sparkles size={13} /><span>{starter.label}</span><ChevronRight size={13} /></button>)}</div><div className="empty-capabilities" aria-label="TAgent workflow"><span>Plan</span><i /><span>Execute</span><i /><span>Verify</span></div></div>}
         {hasOlderMessages && <button className="load-older" onClick={() => void loadOlderMessages()} disabled={loadingOlderMessages}>{loadingOlderMessages ? "Loading…" : "Load earlier messages"}</button>}
         {viewingEarlierHistory && <div className="history-context"><span>Viewing earlier history</span><button type="button" onClick={jumpToLatest}>Return to latest</button></div>}
-        {messages.map((message) => <ChatMessage key={message.id} message={message} memoryEnabled={Boolean(runtimeStatus?.memoryEnabled)} memoryJob={message.role === "user" ? (memoryJobsLoaded ? memoryJobByMessageId.get(message.id) ?? null : undefined) : undefined} />)}
-        {pendingUserMessage?.sessionId === sessionId && !messages.some((message) => message.role === "user" && message.content === pendingUserMessage.content && message.createdAt >= pendingUserMessage.createdAt - 5_000) && <article className="message user pending" aria-label="Sending message"><div className="message-meta"><span>You</span><time>Sending…</time></div><div className="message-body"><LiveText>{pendingUserMessage.content}</LiveText></div>{runtimeStatus?.memoryEnabled && <MemoryExtraction job={undefined} />}</article>}
+        {messages.map((message, index) => <Fragment key={message.id}>{(index === 0 || localDayKey(messages[index - 1].createdAt) !== localDayKey(message.createdAt)) && <ConversationDateDivider value={message.createdAt} />}<ChatMessage message={message} memoryEnabled={Boolean(runtimeStatus?.memoryEnabled)} memoryJob={message.role === "user" ? (memoryJobsLoaded ? memoryJobByMessageId.get(message.id) ?? null : undefined) : undefined} /></Fragment>)}
+        {pendingUserMessage?.sessionId === sessionId && !messages.some((message) => message.role === "user" && message.content === pendingUserMessage.content && message.createdAt >= pendingUserMessage.createdAt - 5_000) && <>{(!messages.length || localDayKey(messages[messages.length - 1].createdAt) !== localDayKey(pendingUserMessage.createdAt)) && <ConversationDateDivider value={pendingUserMessage.createdAt} />}<article className="message user pending" aria-label="Sending message"><div className="message-meta"><span>You</span><time>Sending…</time></div><div className="message-body"><LiveText>{pendingUserMessage.content}</LiveText></div>{runtimeStatus?.memoryEnabled && <MemoryExtraction job={undefined} />}</article></>}
         {activeRun && <div className="active-run-strip"><Activity size={14} /><span>Attempt {activeRun.attempt}</span><strong>{activeRun.phase}</strong><small>{activeRun.usage.totalTokens.toLocaleString()} tokens</small></div>}
         {selectedRun?.pendingUserInput && <UserInputCard request={selectedRun.pendingUserInput} submitting={submittingUserInputId === selectedRun.pendingUserInput.id} onSubmit={(values) => submitRequestedInput(selectedRun.pendingUserInput!, values)} />}
         {(activeRun || selectedRun) && transcript.length + events.length + Number(Boolean(liveThinking || streaming)) > 0 && <ExecutionTimeline runId={(activeRun ?? selectedRun)!.id} isRunning={activeRun?.status === "running"} items={transcript} events={activeRun ? events : []} liveThinking={activeRun ? liveThinking : ""} liveOutput={activeRun ? streaming : ""} />}
@@ -1263,7 +1269,7 @@ export function App() {
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
             <span className={`history-status ${item.status}`} />
             <span className="history-copy"><strong>{item.goal}</strong><small>{item.status} · attempt {item.attempt}</small></span>
-            <time>{index === 0 && item.status === "running" ? "current" : formatTime(item.updatedAt ?? item.createdAt)}</time>
+            {index === 0 && item.status === "running" ? <time>current</time> : <TimeAgo value={item.updatedAt ?? item.createdAt} />}
           </button>
           {expanded && selectedRun?.id === item.id && <RunDetails run={selectedRun} toolEvents={activeRun?.id === item.id ? activeTools : []} transcriptTools={transcriptTools} />}
         </section>;

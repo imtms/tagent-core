@@ -81,10 +81,26 @@ describe("Web workbench state model", () => {
     expect(design).toContain("--conversation-measure: 860px");
     expect(styles).toContain(".message.user { width: fit-content; max-width: min(680px, 82%); margin-right: 0; margin-left: auto; }");
     expect(styles).toContain(".message.assistant .message-body { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }");
-    expect(design).toContain("font: 500 8px/1.2 var(--font-mono)");
+    expect(design).toContain("font: 500 10px/1.2 var(--font-mono)");
     expect(design).toContain(".message.assistant .markdown > :not(.code-block):not(.markdown-table-wrap)");
     expect(app).toContain('className="workspace-run-status idle"><span className="workspace-status-dot" />No tasks');
     expect(switcher).toContain('className="workspace-switcher-dot"');
+  });
+
+  it("adds quiet time orientation to long conversations and workspace recency", async () => {
+    const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    const switcher = await readFile(new URL("../apps/web-console/src/WorkspaceSwitcher.tsx", import.meta.url), "utf8");
+    const timeAgo = await readFile(new URL("../apps/web-console/src/TimeAgo.tsx", import.meta.url), "utf8");
+    const design = await readFile(new URL("../apps/web-console/src/design-system.css", import.meta.url), "utf8");
+    expect(app).toContain("function ConversationDateDivider");
+    expect(app).toContain("localDayKey(messages[index - 1].createdAt)");
+    expect(app).toContain("<TimeAgo value={message.createdAt}");
+    expect(app).toContain("<TimeAgo value={session.updatedAt}");
+    expect(switcher).toContain("<TimeAgo value={session.updatedAt}");
+    expect(timeAgo).toContain("dateTime={new Date(value).toISOString()}");
+    expect(timeAgo).toContain("title={formatExactDateTime(value)}");
+    expect(timeAgo).toContain("subscribers = new Set");
+    expect(design).toContain(".conversation-date-divider");
   });
 
   it("persists per-workspace drafts and provides IME-safe keyboard composition", async () => {
@@ -221,7 +237,8 @@ describe("Web workbench state model", () => {
     const lazyMarkdown = await readFile(new URL("../apps/web-console/src/LazyMarkdown.tsx", import.meta.url), "utf8");
     const styles = await readFile(new URL("../apps/web-console/src/styles.css", import.meta.url), "utf8");
     expect(app).toContain("loadOlderMessages");
-    expect(app).toContain("<ChatMessage key={message.id}");
+    expect(app).toContain("<Fragment key={message.id}");
+    expect(app).toContain("<ChatMessage message={message}");
     expect(app).toContain("<LiveText>{liveOutput}</LiveText>");
     expect(app).toContain("<LiveText>{liveThinking}</LiveText>");
     expect(app).toContain("<ExecutionTimeline runId=");
