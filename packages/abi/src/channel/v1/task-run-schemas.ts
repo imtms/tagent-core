@@ -19,6 +19,7 @@ export const TaskExecutionPolicySchema = Type.Object({
   evidencePolicy: Type.Union([Type.Literal("none"), Type.Literal("semantic"), Type.Literal("operation_receipt"), Type.Literal("trusted_check")]),
   reviewPolicy: Type.Union([Type.Literal("local"), Type.Literal("semantic_lite"), Type.Literal("full")]),
   policyVersion: Type.String({ minLength: 1 }), confidence: Type.Number({ minimum: 0, maximum: 1 }), reason: Type.String({ minLength: 1 }),
+  gateProfile: Type.Optional(Type.Union([Type.Literal("off"), Type.Literal("relaxed"), Type.Literal("strict")])),
   exactOutput: Type.Optional(Type.String()),
 });
 

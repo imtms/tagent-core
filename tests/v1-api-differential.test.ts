@@ -151,7 +151,7 @@ describe("v1 API contracts", () => {
     const read = await app.inject({ method: "GET", url: `/api/v1/sessions/${session.id}` });
     expect(decodeAbi(SessionSchema, decodeAbi(SuccessEnvelopeSchema, read.json()).data)).toEqual(session);
     const capabilities = decodeAbi(CoreCapabilitiesResponseSchema, (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).data;
-    expect(capabilities).toMatchObject({ releaseVersion: "0.6.1", persistenceSchemaVersion: 44, interactions: { approvalResolution: true, userInputSubmission: true }, operator: { roadmapGenerationIdempotent: true } });
+    expect(capabilities).toMatchObject({ releaseVersion: "0.6.2", persistenceSchemaVersion: 44, interactions: { approvalResolution: true, userInputSubmission: true }, operator: { roadmapGenerationIdempotent: true } });
   });
 
   it("converges 100 concurrent Session create retries on one durable Session", async () => {
@@ -201,6 +201,26 @@ describe("v1 API contracts", () => {
     expect(conflict.json().error).not.toHaveProperty("category");
     expect(store.listSessionInbox(v1Session.id, true)).toHaveLength(1);
     expect(store.listRuns(v1Session.id)).toHaveLength(1);
+  });
+
+  it("freezes the selected Gate profile into Inbox, TaskRun, and canonical replay", async () => {
+    const { app, store } = await fixture();
+    const session = store.createSession();
+    const headers = { "idempotency-key": "gate-profile-submission" };
+    const first = await app.inject({
+      method: "POST", url: `/api/v1/sessions/${session.id}/submissions`, headers,
+      payload: { content: "Research an open market", gateProfile: "relaxed" },
+    });
+    expect(first.statusCode).toBe(200);
+    const receipt = decodeAbi(SubmissionResponseSchema, first.json()).data.receipt;
+    expect(store.getSessionInboxItem(receipt.submissionId)?.analysis.executionPolicy?.gateProfile).toBe("relaxed");
+    expect(store.getRun(receipt.taskRunId!)?.contract?.executionPolicy?.gateProfile).toBe("relaxed");
+    expect(store.getRun(receipt.taskRunId!)?.gateRequired).toBe(true);
+    const conflict = await app.inject({
+      method: "POST", url: `/api/v1/sessions/${session.id}/submissions`, headers,
+      payload: { content: "Research an open market", gateProfile: "strict" },
+    });
+    expect(conflict.statusCode).toBe(409);
   });
 
   it("persists channel-neutral Submission provenance and returns the original audit chain", async () => {

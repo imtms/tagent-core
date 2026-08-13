@@ -88,7 +88,7 @@ export function registerSubmissionV1Routes(app: FastifyInstance, dependencies: C
       principalId: principalOf(request).subjectId,
       canonicalPayload,
       provenance: body.origin,
-    });
+    }, body.gateProfile);
     const recordedCanonicalPayload = submissions.getSubmissionAudit(sessionId, idempotencyKey)?.canonicalPayload
       ?? canonicalizeSubmissionRequest({ content: result.item.content });
     if (recordedCanonicalPayload !== canonicalPayload) {

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.2] - 2026-08-13
+
+### Configurable completion Gate
+
+- Added user-selectable `Off`, `Relaxed`, and `Strict` completion Gate profiles before TaskRun creation, with a prominent responsive selector above the Web composer and per-Workspace persistence.
+- `Off` delivers the runtime result without completion review; `Relaxed` performs one outcome-focused semantic review without deterministic plan/check ceremony; `Strict` preserves full plan, trusted-check, and criterion-level enforcement.
+- Froze the selected profile at Admission, carried it through Channel and Console contracts, and included it in Submission idempotency identity while retaining `Strict` as the compatibility default for older clients and persisted TaskRuns.
+- Preserved explicit external-action approval, Workspace Goal authority, and mutation-capable tool safety across every Gate profile.
+
+### Supervisor accuracy and execution reliability
+
+- Fixed deterministic Router fallback normalization so compatible fallback classifications no longer surface as an inconsistent execution policy profile.
+- Stopped deferred semantic-contract prerequisites from being rendered as repeated `unsupported` failures, and bounded multi-artifact and CSV evidence supplied to semantic review.
+- Improved read-only Bash classification, open-task artifact assessment, continuation scheduling, and relaxed review handling of explicit uncertainty so exploratory research does not loop on strict closed-task criteria.
+- Updated the Channel/Console ABI, Web Console, Supervisor/finalization documentation, release guidance, and regression coverage for the new behavior.
+
 ## [0.6.1] - 2026-08-13
 
 ### Cross-Workspace Skills center

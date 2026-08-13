@@ -8,6 +8,7 @@ export type {
 } from "./session-input.js";
 export type { TaskRunContract } from "./task-run-contract.js";
 export type {
+  GateProfile,
   TaskEvidencePolicy,
   TaskExecutionMode,
   TaskExecutionPolicy,

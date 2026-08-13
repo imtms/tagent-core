@@ -206,7 +206,7 @@ describe("workspace tools", () => {
     const replay = await write.execute("stable-call", params, undefined);
     expect(replay).toEqual(first);
     expect(await readFile(path.join(workspace, "result.txt"), "utf8")).toBe("tampered");
-    expect(store.listOperations(run.id)[0]).toMatchObject({ status: "succeeded", effects: [{ kind: "checks", action: "stale", count: 1 }] });
+    expect(store.listOperations(run.id)[0]).toMatchObject({ status: "succeeded", effects: expect.arrayContaining([{ kind: "checks", action: "stale", count: 1 }]) });
     await expect(write.execute("stable-call", { path: "result.txt", content: "different" }, undefined)).rejects.toThrow("different payload");
     store.close();
   });
@@ -308,9 +308,15 @@ describe("workspace tools", () => {
 
     await bash.execute("observe", { command: "ls", timeoutSeconds: 5 }, undefined);
     expect(store.getRun(run.id)?.checks[0].stale).toBe(false);
+    expect(store.getOperation(`${run.id}:${run.attempt}:observe`)?.effects).toEqual(expect.arrayContaining([
+      { kind: "workspace", action: "read_only" },
+    ]));
     expect(bashInvalidatesChecks(`cd ${workspace} && npm run lint && npx vitest run tests/tools.test.ts`)).toBe(false);
     await bash.execute("mutate", { command: "touch changed.txt", timeoutSeconds: 5 }, undefined);
     expect(store.getRun(run.id)?.checks[0].stale).toBe(true);
+    expect(store.getOperation(`${run.id}:${run.attempt}:mutate`)?.effects).toEqual(expect.arrayContaining([
+      { kind: "workspace", action: "mutation" },
+    ]));
     store.close();
   });
 

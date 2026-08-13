@@ -6,7 +6,7 @@ import type {
   SupervisorAction,
   SupervisorDecision,
 } from "@tagent/governance/domain";
-import { deriveSupervisorAction, effectiveTaskExecutionPolicy } from "@tagent/governance/domain";
+import { deriveSupervisorAction, effectiveGateProfile, effectiveTaskExecutionPolicy } from "@tagent/governance/domain";
 import type {
   GovernanceRunEventView,
   GovernanceTaskRunView,
@@ -60,23 +60,36 @@ export class TaskRunSupervisor {
     if (pendingControl.length) {
       return { gates: [], decision: this.createDecision(run, checkpointSeq, "settled", "wait_for_runtime", "pending_control_delivery", `${pendingControl.length} durable control message(s) are still pending delivery.`, 1, response) };
     }
+    const gateProfile = effectiveGateProfile(run.contract);
+    if (gateProfile === "off") {
+      return {
+        gates: [],
+        decision: this.createDecision(
+          run, checkpointSeq, "settled", "complete_taskrun", "gate_disabled",
+          "Completion acceptance was disabled for this TaskRun; the candidate was delivered without a Gate audit.",
+          1, response, "system", "gate-disabled-v1",
+        ),
+      };
+    }
     // Do not spend a model round-trip proving facts already authoritatively known by the local gate.
     // Semantic review still runs whenever deterministic prerequisites pass.
-    const prerequisiteAudit = this.reviewDeterministicPrerequisites(run);
+    const prerequisiteAudit = gateProfile === "strict" ? this.reviewDeterministicPrerequisites(run) : undefined;
     const operations = prerequisiteAudit ? [] : this.store.listOperations(run.id, {
       limit: 16,
       ids: run.checks.flatMap((check) => check.sourceOperationId ? [check.sourceOperationId] : []),
     });
     const executionPolicy = effectiveTaskExecutionPolicy(run.contract, operations, run.attempt);
-    const exactAudit = prerequisiteAudit ? undefined : this.reviewExactCompletion(run, response, operations, options, executionPolicy);
+    const exactAudit = prerequisiteAudit || gateProfile !== "strict" ? undefined : this.reviewExactCompletion(run, response, operations, options, executionPolicy);
     const deterministicAudit = prerequisiteAudit ?? exactAudit;
     const progress = deterministicAudit ? undefined : this.store.getProgressSnapshot(run.id);
     const contextManifest = deterministicAudit ? undefined : this.store.getLatestContextManifest(run.id);
     const reviewInput = { run, response, modelOutputTruncated: options.modelOutputTruncated, operations, progress, contextManifest };
-    const reviewedAudit = deterministicAudit ?? (executionPolicy.reviewPolicy === "semantic_lite" && this.reviewer.reviewSemanticLite
+    const reviewedAudit = deterministicAudit ?? (gateProfile === "relaxed" && this.reviewer.reviewRelaxed
+      ? await this.reviewer.reviewRelaxed(reviewInput)
+      : executionPolicy.reviewPolicy === "semantic_lite" && this.reviewer.reviewSemanticLite
       ? await this.reviewer.reviewSemanticLite(reviewInput)
       : await this.reviewer.reviewSettled(reviewInput));
-    const audit = this.enforceAuditAlgebra(this.requireExternalContinuationApproval(reviewedAudit, executionPolicy));
+    const audit = this.enforceAuditAlgebra(this.requireExternalContinuationApproval(reviewedAudit, executionPolicy), gateProfile);
     const evaluator = deterministicAudit ? "system" as const : audit.evaluator ?? this.reviewer.evaluator;
     const evaluatorModel = prerequisiteAudit ? "deterministic-prerequisite-gate" : exactAudit ? "deterministic-exact-delivery-v1" : audit.evaluatorModel ?? this.reviewer.model;
     const createdAt = Date.now();
@@ -153,18 +166,7 @@ export class TaskRunSupervisor {
     // Unknown local failure kinds must still go through semantic review instead of being guessed here.
     if (planFailures.length + checkFailures.length !== localFailures.length) return undefined;
     const criteria = run.contract?.acceptanceCriteria ?? [];
-    const coverage: CriterionCoverage[] = criteria.map((criterion) => ({
-      criterion,
-      status: "unsupported",
-      evidenceRefs: [],
-      reason: "Semantic contract audit deferred until deterministic plan and check prerequisites pass.",
-    }));
-    const contractFailures: GateFailure[] = criteria.length ? [{
-      kind: "contract", key: "semantic_review_deferred",
-      reason: "Acceptance criteria cannot be approved until deterministic plan and check prerequisites pass.",
-      disposition: "auto_fixable",
-    }] : [];
-    const completionFailures = [...planFailures, ...checkFailures, ...contractFailures];
+    const completionFailures = [...planFailures, ...checkFailures];
     const gate = (failures: GateFailure[], summary: string, criterionCoverage?: CriterionCoverage[]) => ({
       passed: failures.length === 0, failures, summary, criterionCoverage,
     });
@@ -176,21 +178,25 @@ export class TaskRunSupervisor {
       gates: {
         progress: gate(planFailures, planFailures.length ? "Required plan work is incomplete." : "Required plan work is complete."),
         evidence: gate(checkFailures, checkFailures.length ? "Required check evidence is missing, failed, or stale." : "Required check evidence prerequisites pass."),
-        contract: gate(contractFailures, contractFailures.length ? "Semantic contract review was deferred." : "No acceptance criteria require semantic coverage.", coverage),
+        contract: criteria.length ? {
+          passed: false,
+          failures: [],
+          summary: "Not evaluated yet; semantic contract review runs after deterministic plan and check prerequisites pass.",
+        } : gate([], "No acceptance criteria require semantic coverage."),
         completion: gate(completionFailures, "Completion is blocked by authoritative deterministic prerequisites."),
         continuation: gate([], "The prerequisite failures are automatically repairable."),
       },
     };
   }
 
-  private enforceAuditAlgebra(source: SupervisorAudit): SupervisorAudit {
+  private enforceAuditAlgebra(source: SupervisorAudit, gateProfile: "relaxed" | "strict" = "strict"): SupervisorAudit {
     const gates = Object.fromEntries(Object.entries(source.gates).map(([type, gate]) => [type, {
       ...gate,
       failures: [...gate.failures],
       criterionCoverage: gate.criterionCoverage?.map((coverage) => ({ ...coverage, evidenceRefs: [...coverage.evidenceRefs] })),
     }])) as SupervisorAudit["gates"];
     const contractCoverageFailures: GateFailure[] = (gates.contract.criterionCoverage ?? []).flatMap((coverage, index) =>
-      coverage.status === "covered" ? [] : [{
+      coverage.status === "covered" || (gateProfile === "relaxed" && coverage.status === "unsupported") ? [] : [{
         kind: "contract",
         key: `acceptance_criterion_${index + 1}`,
         reason: `Acceptance criterion is ${coverage.status}: ${coverage.reason}`,
@@ -198,7 +204,7 @@ export class TaskRunSupervisor {
       }]);
     gates.contract.failures = this.uniqueFailures([...gates.contract.failures, ...contractCoverageFailures]);
     gates.contract.passed = gates.contract.passed && gates.contract.failures.length === 0
-      && (gates.contract.criterionCoverage?.every((coverage) => coverage.status === "covered") ?? true);
+      && (gates.contract.criterionCoverage?.every((coverage) => coverage.status === "covered" || (gateProfile === "relaxed" && coverage.status === "unsupported")) ?? true);
     gates.completion.failures = this.uniqueFailures([
       ...gates.completion.failures,
       ...gates.progress.failures,

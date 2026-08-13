@@ -6,7 +6,7 @@ function run(overrides: Partial<TaskRun> = {}): TaskRun {
   const base: TaskRun = {
     id: "run-1", sessionId: "session-1", requestId: "request-1", status: "running", phase: "implement", goal: "test",
     modelId: "gpt-5.6-sol", reasoningEffort: "high",
-    contract: null,
+    contract: null, gateRequired: true,
     blockedReason: "", lastEventSeq: 2, attempt: 1, resumedAt: null, createdAt: 1_000, updatedAt: 2_000, completedAt: null,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 }, transcriptCount: 0,
     checkpoint: { runId: "run-1", attempt: 1, active: true, assistantPartial: "", currentTool: null, lastEventSeq: 2, lastTranscriptSeq: 0, updatedAt: 2_000 },

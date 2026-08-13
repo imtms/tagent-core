@@ -5,6 +5,7 @@ import type {
   TaskObjective,
   TaskRunContract,
 } from "../domain/index.js";
+import { effectiveTaskExecutionPolicy } from "@tagent/governance";
 
 const RULE_ROUTER_VERSION = "semantic-rules-v3";
 const LLM_ROUTER_VERSION = "llm-semantic-v1";
@@ -34,6 +35,7 @@ const WORKSPACE_MUTATION = /(修复|实现|完善|改造|更新|修改|删除|�
 const EXECUTION_AS_TOPIC = /^(?:(?:请|麻烦|帮我|请你|please|could you|would you)\s*)?(?:解释|介绍|说明|讲解|讨论|比较|分析|评估|描述|列出|告诉我|给出|explain|describe|discuss|compare|analy[sz]e|evaluate|list)(?:\s+|[:：])?.*(?:如何|为什么|流程|方法|步骤|含义|区别|优缺点|风险|how|why|process|method|steps?|meaning|difference|trade-?offs?|risks?)/i;
 const COMBINED_REAL_ACTION = /(?:并|并且|然后|随后|接着|同时|再|and|then|also).*(?:部署到|发布到|上线到|发送(?:邮件|消息)|删除(?:数据|账号|资源)|(?:忘记|删除|清除).{0,80}(?:长期)?记忆|修改权限|授予权限|修复|实现|更新|修改|写入|创建文件|deploy to|publish to|send (?:an? )?(?:email|message)|delete (?:data|account|resource)|(?:forget|delete|remove|erase)\b.{0,80}\bmemor(?:y|ies)|grant permission|fix|implement|update|modify|write (?:the )?file|create (?:a )?file)/i;
 const AMBIGUOUS_IMPERATIVE = /^(?:(?:请|麻烦|帮我|请你|please|could you|would you)\s*)?(?:(?:把|将|给|对|为|合并|同步|交付|推送|发送|通知|忘记|删除|清除|清空|撤掉|设置|设为|开启|关闭|执行|运行)|(?:apply|merge|sync|deliver|push|send|notify|forget|delete|clear|remove|erase|set|enable|disable|run|execute)\b)/i;
+const LOCAL_ARTIFACT_DELIVERY = /(?:交付|输出|提供|deliver|produce|provide).{0,160}(?:[\w.-]+\.(?:csv|md|json|txt|xlsx|pdf|docx)\b|(?:文件|文档|报告|交付物)|\b(?:files?|documents?|reports?|artifacts?)\b)/i;
 
 function hasSemanticRiskAmbiguity(source: string) {
   const riskLanguage = EXTERNAL_ACTION.test(source) || WORKSPACE_MUTATION.test(source);
@@ -108,7 +110,7 @@ function objectiveKind(text: string): TaskObjective["kind"] {
   if (/(测试|验证|检查|确认|test|verify|check)/i.test(text)) return "verify";
   if (/(文档|说明|readme|document)/i.test(text)) return "document";
   if (/(发布|发版|release|deploy)/i.test(text)) return "release";
-  if (/(审计|调查|分析|定位|排查|audit|investigate|analy[sz]e|debug)/i.test(text)) return "investigate";
+  if (/(审计|调查|研究|调研|分析|定位|排查|audit|research|investigate|analy[sz]e|debug)/i.test(text)) return "investigate";
   if (/(修复|实现|完善|改造|更新|删除|迁移|部署|重启|启动|停止|拉取|fix|implement|improve|update|remove|migrate|refactor|deploy|restart|start|stop|pull)/i.test(text)) return "change";
   if (DISCUSSION.test(text)) return "answer";
   return "other";
@@ -170,6 +172,7 @@ export class SessionInputRouter {
 
   private conservativeFallback(content: string, fallback: SessionInputAnalysis, detail: string): SessionInputAnalysis {
     const policy = AMBIGUOUS_IMPERATIVE.test(normalize(content))
+      && !LOCAL_ARTIFACT_DELIVERY.test(normalize(content))
       && !["external_action", "workspace_mutation"].includes(fallback.executionPolicy?.mode ?? "")
       ? { mode: "external_action" as const, ...canonicalPolicyProfile("external_action"), policyVersion: "task-policy-conservative-fallback-v1", confidence: .55, reason: "Core conservatively classified an unresolved imperative as external action because semantic routing was unavailable." }
       : fallback.executionPolicy;
@@ -254,13 +257,17 @@ Preserve genuine corrections, constraints, sequencing, and explicit parallel tas
     const reviewPolicy = proposed.reviewPolicy as TaskExecutionPolicy["reviewPolicy"];
     if (!taskModes.has(mode) || !sideEffectRisks.has(sideEffectRisk) || !evidencePolicies.has(evidencePolicy) || !reviewPolicies.has(reviewPolicy)) throw new Error("invalid execution policy classification");
     if (typeof proposed.confidence !== "number" || proposed.confidence < 0 || proposed.confidence > 1) throw new Error("invalid execution policy confidence");
-    const canonicalProfile = canonicalPolicyProfile(mode);
-    if (sideEffectRisk !== canonicalProfile.sideEffectRisk || evidencePolicy !== canonicalProfile.evidencePolicy || reviewPolicy !== canonicalProfile.reviewPolicy) {
-      throw new Error("inconsistent execution policy profile");
-    }
-    const policy: TaskExecutionPolicy = { mode, ...canonicalProfile, policyVersion: "task-policy-llm-v1", confidence: proposed.confidence, reason: text(proposed.reason, "execution policy reason", 500) };
-    if (mode === "exact_delivery") policy.exactOutput = text(proposed.exactOutput, "exact output", 2_000);
-    if (mode === "exact_delivery" && fallbackPolicy.mode !== "exact_delivery") Object.assign(policy, { mode: "semantic_delivery", ...canonicalPolicyProfile("semantic_delivery"), exactOutput: undefined, reason: `${policy.reason} Core rejected local exact validation because the user did not request one literal response.` });
+    const rawPolicy: TaskExecutionPolicy = { mode, sideEffectRisk, evidencePolicy, reviewPolicy, policyVersion: "task-policy-llm-v1", confidence: proposed.confidence, reason: text(proposed.reason, "execution policy reason", 500) };
+    if (mode === "exact_delivery") rawPolicy.exactOutput = text(proposed.exactOutput, "exact output", 2_000);
+    if (mode === "exact_delivery" && fallbackPolicy.mode !== "exact_delivery") Object.assign(rawPolicy, {
+      mode: "semantic_delivery",
+      exactOutput: undefined,
+      reason: `${rawPolicy.reason} Core rejected local exact validation because the user did not request one literal response.`,
+    });
+    // The mode and its three derived profile fields are intentionally redundant at
+    // the model boundary. Normalize a structurally valid disagreement to its strongest
+    // safety implication instead of discarding the entire semantic contract.
+    const policy = effectiveTaskExecutionPolicy({ objectives: parsedObjectives, executionPolicy: rawPolicy });
     // A model may raise risk, but cannot lower a locally unambiguous mutation/external floor.
     const semanticallyAmbiguousRisk = hasSemanticRiskAmbiguity(sourceInput);
     if (fallbackPolicy.mode === "external_action" && !semanticallyAmbiguousRisk) Object.assign(policy, fallbackPolicy, { policyVersion: "task-policy-llm-v1", confidence: Math.max(policy.confidence, fallbackPolicy.confidence), reason: `${policy.reason} Core applied the external-action safety floor.` });

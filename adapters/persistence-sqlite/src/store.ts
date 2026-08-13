@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
 import {
   LEGACY_RUN_APPROVAL_DEFAULTS,
+  effectiveGateProfile,
   effectiveTaskExecutionPolicy,
   type ApprovalRequest,
   type Artifact,
@@ -1856,7 +1857,11 @@ export class Store {
   findMergeCandidate(sessionId: SessionId, analysis: SessionInputAnalysis) {
     const normalized = analysis.summary.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
     if (!normalized) return undefined;
-    return this.listSessionInbox(sessionId).find((item) => item.status === "queued" && item.decision === "pending" && item.analysis.intent === analysis.intent && item.analysis.summary.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "") === normalized);
+    const gateProfile = analysis.executionPolicy?.gateProfile ?? "strict";
+    return this.listSessionInbox(sessionId).find((item) => item.status === "queued" && item.decision === "pending"
+      && (item.analysis.executionPolicy?.gateProfile ?? "strict") === gateProfile
+      && item.analysis.intent === analysis.intent
+      && item.analysis.summary.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "") === normalized);
   }
 
   markSessionInboxDuplicate(sourceId: string, targetId: string, sessionId: SessionId) {
@@ -2052,9 +2057,9 @@ ${source.content}`;
         skill: undefined,
       } : contract;
       this.db.prepare(`
-        INSERT INTO runs (id, session_id, request_id, status, phase, goal, model_id, reasoning_effort, created_at, updated_at, contract_json)
-        VALUES (?, ?, ?, 'running', 'discover', ?, ?, ?, ?, ?, ?)
-      `).run(id, sessionId, requestId, goal, session.modelId, session.reasoningEffort, timestamp, timestamp, frozenContract ? JSON.stringify(frozenContract) : "");
+        INSERT INTO runs (id, session_id, request_id, status, phase, goal, model_id, reasoning_effort, gate_required, created_at, updated_at, contract_json)
+        VALUES (?, ?, ?, 'running', 'discover', ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, sessionId, requestId, goal, session.modelId, session.reasoningEffort, effectiveGateProfile(frozenContract) === "off" ? 0 : 1, timestamp, timestamp, frozenContract ? JSON.stringify(frozenContract) : "");
       this.projectAttempt({
         runId: id, ordinal: 1, trigger: "initial", status: "running", scenario: "initial",
         legacyEventSeq: 0, timestamp,
@@ -3495,12 +3500,17 @@ ${source.content}`;
 
   evaluateGate(run: GovernanceCompletionRunView): CompletionGate {
     if (!run.gateRequired) return { passed: true, failures: [] };
+    if (effectiveGateProfile(run.contract) === "relaxed") return { passed: true, failures: [] };
     const failures: CompletionGate["failures"] = [];
     const requiredPlan = run.plan.filter((item) => item.required);
     const requiredChecks = run.checks.filter((item) => item.required);
     const mutationObserved = Boolean(this.db.prepare(`SELECT 1 FROM operations
-      WHERE run_id=? AND attempt=? AND operation_type IN ('tool.write','tool.edit','tool.patch','tool.bash','tool.memory_forget')
-        AND status <> 'pre_effect_rejected' LIMIT 1`).get(run.id, run.attempt));
+      WHERE run_id=? AND attempt=? AND status <> 'pre_effect_rejected'
+        AND (operation_type IN ('tool.write','tool.edit','tool.patch','tool.memory_forget')
+          OR (operation_type='tool.bash' AND NOT EXISTS (
+            SELECT 1 FROM json_each(operations.effects_json)
+            WHERE json_extract(value,'$.kind')='workspace' AND json_extract(value,'$.action')='read_only'
+          ))) LIMIT 1`).get(run.id, run.attempt));
     const executionPolicy = effectiveTaskExecutionPolicy(run.contract, mutationObserved ? [{ operationType: "tool.write", status: "succeeded", attempt: run.attempt }] : [], run.attempt);
     let operations: Map<string, OperationRecord> | undefined;
     const operationById = (id: string) => {

@@ -12,6 +12,7 @@ import { createSkillApi } from "./skill-api";
 export type { SkillRevision, SkillSummary } from "./skill-api";
 export type { WorkspaceGoal, WorkspaceGoalSummary, WorkspaceGoalDefinition, WorkspaceGoalRoadmap, WorkspaceGoalRoadmapItem, WorkspaceGoalDecision, WorkspaceGoalTaskRunStart } from "./goal-api";
 export type Session = ConsoleV1.ConsoleSession;
+export type GateProfile = "off" | "relaxed" | "strict";
 export type SessionInputAnalysis = ConsoleV1.ConsoleSessionInputAnalysis;
 export type TaskRunContract = ConsoleV1.ConsoleTaskRunContract;
 export type SessionInboxItem = ConsoleV1.ConsoleSessionInboxItem;
@@ -177,7 +178,7 @@ export const api = {
   transcriptView: (runId: string, after?: number, limit = 200) => request(`/api/v1/console/task-runs/${runId}/transcript?limit=${limit}${after === undefined ? "" : `&after=${after}`}`, undefined, ConsoleDecode.transcriptItems),
   artifactContent: (runId: string, artifactId: string) => request(`/api/v1/console/task-runs/${runId}/artifacts/${encodeURIComponent(artifactId)}/content`, undefined, ConsoleDecode.artifactContent),
   downloadArtifact: (runId: string, artifactId: string, filename: string) => downloadArtifact(runId, artifactId, filename),
-  send: (sessionId: string, content: string) => request(`/api/v1/console/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId() }) }, ConsoleDecode.submissionResult),
+  send: (sessionId: string, content: string, gateProfile: GateProfile) => request(`/api/v1/console/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId(), gateProfile }) }, ConsoleDecode.submissionResult),
   inbox: (sessionId: string) => request(`/api/v1/console/sessions/${sessionId}/inbox`, undefined, ConsoleDecode.inboxItems),
   updateInbox: (sessionId: string, itemId: string, content: string) => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}`, { method: "PATCH", body: JSON.stringify({ content }) }, ConsoleDecode.inboxItem),
   reorderInbox: (sessionId: string, itemIds: string[]) => request(`/api/v1/console/sessions/${sessionId}/inbox/order`, { method: "PUT", body: JSON.stringify({ itemIds }) }, ConsoleDecode.inboxItems),

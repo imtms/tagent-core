@@ -1000,6 +1000,32 @@ describe("Store", () => {
     expect(store.getRun(run.id)?.completionGate).toEqual({ passed: true, failures: [] }); store.close();
   });
 
+  it("keeps explicit read-only Bash receipts from raising analysis to mutation governance", () => {
+    const store = new Store(":memory:"); const session = store.createSession();
+    const policy = { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "research" } as const;
+    const contract = { sourceInput: "research", summary: "research", objectives: [{ id: "o1", summary: "research", timing: "current" as const, kind: "investigate" as const }], acceptanceCriteria: ["Report findings"], scope: "public evidence", nonGoals: ["No mutation"], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
+    const run = store.createRun(session.id, "research", undefined, contract);
+    store.upsertPlanItem(run.id, { key: "research", title: "Research evidence", status: "done", required: true, position: 1 });
+    const operation = store.claimOperation("readonly-bash", run.id, run.attempt, "tool.bash", { command: "rg evidence" });
+    store.updateOperation(operation.id, { status: "succeeded", effects: [{ kind: "workspace", action: "read_only" }], result: { details: { exitCode: 0 } } });
+    expect(store.getRun(run.id)?.completionGate).toEqual({ passed: true, failures: [] });
+    store.close();
+  });
+
+  it("treats legacy Bash receipts without an explicit effect as mutation-capable", () => {
+    const store = new Store(":memory:"); const session = store.createSession();
+    const policy = { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "research" } as const;
+    const contract = { sourceInput: "research", summary: "research", objectives: [{ id: "o1", summary: "research", timing: "current" as const, kind: "investigate" as const }], acceptanceCriteria: ["Report findings"], scope: "public evidence", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
+    const run = store.createRun(session.id, "research", undefined, contract);
+    store.upsertPlanItem(run.id, { key: "research", title: "Research evidence", status: "done", required: true, position: 1 });
+    const operation = store.claimOperation("legacy-bash", run.id, run.attempt, "tool.bash", { command: "unknown-command" });
+    store.updateOperation(operation.id, { status: "succeeded", result: { details: { exitCode: 0 } } });
+    expect(store.getRun(run.id)?.completionGate.failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "trusted_evidence", kind: "check" }),
+    ]));
+    store.close();
+  });
+
   it("raises a low-risk policy after an observed workspace mutation", () => {
     const store = new Store(":memory:"); const session = store.createSession();
     const policy = { mode: "semantic_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "test", confidence: 1, reason: "model proposal" } as const;

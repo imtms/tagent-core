@@ -190,6 +190,23 @@ describe("Web workbench state model", () => {
     expect(styles).toContain("var(--warning-soft)");
   });
 
+  it("offers a persistent three-level Gate selector before TaskRun creation", async () => {
+    const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    const api = await readFile(new URL("../apps/web-console/src/api.ts", import.meta.url), "utf8");
+    const styles = await readFile(new URL("../apps/web-console/src/styles.css", import.meta.url), "utf8");
+    const footerStart = app.indexOf('<footer className="composer-wrap">');
+    const footer = app.slice(footerStart, app.indexOf("</footer>", footerStart));
+    expect(app).toContain('storedStringRecord("tagent.gate-profiles")');
+    expect(app).toContain('role="radiogroup" aria-label="Gate acceptance style"');
+    expect(app).toContain('{ value: "off", label: "Off", description: "Direct delivery" }');
+    expect(app).toContain('{ value: "relaxed", label: "Relaxed", description: "Open research" }');
+    expect(app).toContain('{ value: "strict", label: "Strict", description: "Code & closed work" }');
+    expect(footer).toMatch(/gate-profile-control[\s\S]*className="composer"/);
+    expect(app).toContain('api.send(targetSessionId, content, gateProfile)');
+    expect(api).toContain('gateProfile: GateProfile');
+    expect(styles).toContain(".gate-profile-options");
+  });
+
   it("opens text and Markdown artifacts in the Web UI without removing downloads", async () => {
     const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
     const api = await readFile(new URL("../apps/web-console/src/api.ts", import.meta.url), "utf8");
@@ -254,6 +271,12 @@ describe("Web workbench state model", () => {
     expect(source).toContain('operation.toolName || "agent"');
     expect(source).not.toContain('operation.progressSummary');
     expect(source).not.toContain('operation.summary');
+  });
+
+  it("renders prerequisite-deferred contract review without calling it a failure", async () => {
+    const source = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain('gate.failures.length ? "failed" : "deferred"');
+    expect(source).toContain('gate.failures.length ? `${gate.failures.length} failure(s)` : "deferred"');
   });
 
   it("supports renaming workspaces from the session rail", async () => {

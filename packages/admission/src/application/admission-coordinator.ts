@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  GateProfile,
   SessionId,
   SessionInboxItem,
   SessionInputAnalysis,
@@ -76,17 +77,25 @@ export class AdmissionCoordinator {
     content: string,
     requestId: string = randomUUID(),
     audit?: SubmissionAuditInput,
+    gateProfile?: GateProfile,
   ) {
     if (this.state.closing) throw new Error("Service is shutting down");
     assertSubmissionContent(content);
     const existing = this.state.persistence.submissions.getSessionSubmission(sessionId, requestId);
     if (existing) {
-      if (existing.content !== content) throw new Error("Session Inbox request idempotency conflict");
+      if (existing.content !== content || (existing.analysis.executionPolicy?.gateProfile ?? "strict") !== (gateProfile ?? "strict")) {
+        throw new Error("Session Inbox request idempotency conflict");
+      }
       if (audit) this.state.persistence.submissions.recordSubmissionAudit(existing, audit);
       return { item: existing, run: existing.runId ? this.state.persistence.taskRuns.getRun(existing.runId) ?? null : null };
     }
     const activeRun = this.state.persistence.taskRuns.getActiveRun(sessionId);
-    const analysis = await this.dependencies.router.analyze(content, activeRun, this.sessionRouterContext(sessionId));
+    const routedAnalysis = await this.dependencies.router.analyze(content, activeRun, this.sessionRouterContext(sessionId));
+    // Gate acceptance style is a user choice, not a semantic Router decision.
+    // Freeze it after routing so model output cannot override or omit the selection.
+    const analysis: SessionInputAnalysis = gateProfile
+      ? { ...routedAnalysis, executionPolicy: { ...effectiveTaskExecutionPolicy(routedAnalysis), gateProfile } }
+      : routedAnalysis;
     const routerUsage = this.dependencies.router.takeUsage(analysis);
     if (activeRun) for (const observed of routerUsage) this.state.persistence.taskRuns.recordModelUsage(activeRun.id, "router", observed.model, observed.usage);
     const duplicate = !activeRun ? this.state.persistence.submissions.findMergeCandidate(sessionId, analysis) : undefined;
@@ -231,7 +240,12 @@ export class AdmissionCoordinator {
     const item = this.state.persistence.submissions.getSessionInboxItem(itemId);
     if (!item || item.sessionId !== sessionId || item.status !== "queued") return undefined;
     const activeRun = this.state.persistence.taskRuns.getActiveRun(sessionId);
-    return this.state.persistence.submissions.updateSessionInboxItem(itemId, sessionId, content, await this.dependencies.router.analyze(content, activeRun, this.sessionRouterContext(sessionId)));
+    const routed = await this.dependencies.router.analyze(content, activeRun, this.sessionRouterContext(sessionId));
+    const selectedGateProfile = item.analysis.executionPolicy?.gateProfile;
+    const analysis = selectedGateProfile
+      ? { ...routed, executionPolicy: { ...effectiveTaskExecutionPolicy(routed), gateProfile: selectedGateProfile } }
+      : routed;
+    return this.state.persistence.submissions.updateSessionInboxItem(itemId, sessionId, content, analysis);
   }
 
   reorderSessionInputs(sessionId: SessionId, itemIds: string[]) {

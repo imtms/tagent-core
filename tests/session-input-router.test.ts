@@ -134,7 +134,7 @@ describe("SessionInputRouter", async () => {
     expect((await semantic.analyze("解释如何删除长期记忆。")).executionPolicy).toMatchObject({ mode: "semantic_delivery", reviewPolicy: "semantic_lite" });
     expect(calls).toBe(1);
   });
-  it("fails closed when the LLM returns an internally inconsistent policy", async () => {
+  it("normalizes an internally inconsistent LLM policy without discarding the semantic contract", async () => {
     const router = new SessionInputRouter({ model: modelPort(async () => ({
       summary: "解释生产部署流程", objectives: [{ summary: "解释如何部署到生产环境", timing: "current", kind: "answer" }],
       intent: "discussion", targetActiveRun: false, priority: 350, urgency: "normal", relation: "independent",
@@ -142,8 +142,44 @@ describe("SessionInputRouter", async () => {
       executionPolicy: { mode: "semantic_delivery", sideEffectRisk: "external_high", evidencePolicy: "trusted_check", reviewPolicy: "full", confidence: .98, reason: "inconsistent" },
     })) });
     const result = await router.analyze("结合以上说明解释如何部署到生产环境。");
-    expect(result).toMatchObject({ routerVersion: "semantic-rules-v3", executionPolicy: { mode: "external_action", reviewPolicy: "full" } });
-    expect(result.reason).toContain("inconsistent execution policy profile");
+    expect(result).toMatchObject({
+      routerVersion: "llm-semantic-v1",
+      summary: "解释生产部署流程",
+      intent: "discussion",
+      executionPolicy: { mode: "external_action", sideEffectRisk: "external_high", evidencePolicy: "trusted_check", reviewPolicy: "full" },
+    });
+    expect(result.executionPolicy?.reason).toContain("Core normalized an inconsistent execution-policy profile");
+    expect(result.reason).not.toContain("Semantic routing unavailable");
+  });
+  it("preserves an open-ended research contract when redundant policy fields disagree", async () => {
+    const router = new SessionInputRouter({ model: modelPort(async () => ({
+      summary: "研究公开社区中的真实用户痛点并交付多文件分析",
+      objectives: [{ summary: "收集原始发言、聚类痛点并在样本达标后反推 ICP", timing: "current", kind: "investigate" }],
+      intent: "new_task", targetActiveRun: false, priority: 500, urgency: "normal", relation: "independent",
+      acceptanceCriteria: [
+        "交付 raw_findings.csv、pain_clusters.md、icp_candidates.md、communities.md 和 surprises.md",
+        "raw_findings.csv 包含 150–300 条可追溯记录并覆盖指定社区",
+      ],
+      scope: "公开的一手用户表达", nonGoals: ["不进行跨平台身份关联"], confidence: .94, reason: "open research",
+      executionPolicy: { mode: "read_only_analysis", sideEffectRisk: "none", evidencePolicy: "operation_receipt", reviewPolicy: "full", confidence: .91, reason: "research from public evidence" },
+    })) });
+    const result = await router.analyze("结合以上约束，完成一项开放式社区研究，先宽泛收集可追溯原始记录，再聚类痛点，在样本达到至少 150 条后反推 ICP，最后独立检索反证，并交付五个指定文件。");
+    expect(result).toMatchObject({
+      routerVersion: "llm-semantic-v1",
+      executionPolicy: { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full" },
+      acceptanceCriteria: [
+        "交付 raw_findings.csv、pain_clusters.md、icp_candidates.md、communities.md 和 surprises.md",
+        "raw_findings.csv 包含 150–300 条可追溯记录并覆盖指定社区",
+      ],
+    });
+    expect(result.reason).not.toContain("Semantic routing unavailable");
+  });
+  it("does not turn local research-file delivery into an external action when semantic routing is unavailable", async () => {
+    const router = new SessionInputRouter({ model: modelPort(async () => { throw new Error("provider unavailable"); }) });
+    const result = await router.analyze("交付 raw_findings.csv、pain_clusters.md、icp_candidates.md、communities.md 和 surprises.md 五个文件，并基于公开社区完成研究。");
+    expect(result.executionPolicy).toMatchObject({ mode: "read_only_analysis", sideEffectRisk: "read_only" });
+    expect(result.executionPolicy?.mode).not.toBe("external_action");
+    expect(result.reason).toContain("Semantic routing unavailable; deterministic fallback used: provider unavailable");
   });
   it("rejects model-proposed exact validation without an explicit literal request", async () => {
     const router = new SessionInputRouter({ model: modelPort(async () => ({
@@ -153,6 +189,15 @@ describe("SessionInputRouter", async () => {
       executionPolicy: { mode: "exact_delivery", sideEffectRisk: "none", evidencePolicy: "none", reviewPolicy: "local", exactOutput: "OK", confidence: .9, reason: "incorrect literal proposal" },
     })) });
     expect((await router.analyze("结合以上说明解释 OK 的含义。")).executionPolicy).toMatchObject({ mode: "semantic_delivery", reviewPolicy: "semantic_lite", exactOutput: undefined });
+  });
+  it("preserves the strongest risk implication when rejecting an invalid exact-delivery proposal", async () => {
+    const router = new SessionInputRouter({ model: modelPort(async () => ({
+      summary: "解释部署流程", objectives: [{ summary: "解释部署流程", timing: "current", kind: "answer" }],
+      intent: "discussion", targetActiveRun: false, priority: 350, urgency: "normal", relation: "independent",
+      acceptanceCriteria: ["解释部署流程"], scope: "流程说明", nonGoals: ["不部署"], confidence: .96, reason: "answer",
+      executionPolicy: { mode: "exact_delivery", sideEffectRisk: "external_high", evidencePolicy: "trusted_check", reviewPolicy: "full", exactOutput: "OK", confidence: .9, reason: "inconsistent exact proposal" },
+    })) });
+    expect((await router.analyze("结合以上说明解释部署到生产环境的流程。")).executionPolicy).toMatchObject({ mode: "external_action", sideEffectRisk: "external_high", reviewPolicy: "full", exactOutput: undefined });
   });
   it("persists explicit postponement as deferred work", async () => {
     expect(await router.analyze("暂时不做")).toMatchObject({ intent: "defer", priority: 100, acceptanceCriteria: [] });

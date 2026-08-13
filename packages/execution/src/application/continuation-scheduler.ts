@@ -98,11 +98,15 @@ export class ContinuationScheduler {
 
   public buildContinuationPrompt(run: TaskRun, ordinal: number) {
     const policyInstructions = taskPolicyResumeInstructions(effectiveTaskExecutionPolicy(run.contract));
+    const prerequisiteOnly = ["deterministic_plan_incomplete", "deterministic_check_incomplete"].includes(run.supervision.latestDecision?.reasonCode ?? "");
     return [
       `Automatic continuation ${ordinal} is running because the completion gate blocked the previous attempt.`,
       `Gate failures: ${(run.supervision.latestGates.find((gate) => gate.gateType === "completion")?.failures ?? run.completionGate.failures).map((failure) => `${failure.key}: ${failure.reason}`).join("; ")}`,
       "The previous candidate response was rejected by Supervisor and was not delivered as the final chat answer. Do not merely acknowledge this continuation or repeat a short conclusion.",
       "Use the persisted transcript and TaskRun state. Resolve only the remaining gate failures, then provide a complete standalone final response that directly addresses the original contract.",
+      prerequisiteOnly
+        ? "Semantic contract coverage has not been evaluated yet. Do not interpret unevaluated acceptance criteria as unsupported, restart completed research, or rewrite existing deliverables; repair only the listed plan/check prerequisites, then submit the complete candidate for semantic review."
+        : "",
       ...policyInstructions,
       `Original goal: ${run.goal}`,
     ].join("\n\n");

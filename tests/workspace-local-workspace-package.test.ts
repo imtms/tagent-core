@@ -80,13 +80,13 @@ describe("Local workspace adapter package", () => {
   it("publishes a private minimal ABI with exact approved dependencies", () => {
     const root = readJson<{ devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const manifest = readJson<PackageManifest>(`${packageRoot}/package.json`);
-    expect(manifest).toMatchObject({ name: "@tagent/workspace-local", version: "0.6.1", private: true });
+    expect(manifest).toMatchObject({ name: "@tagent/workspace-local", version: "0.6.2", private: true });
     expect(root.devDependencies[manifest.name]).toBe(manifest.version);
     expect(Object.keys(manifest.exports).sort()).toEqual([
       ".", "./artifact-file-sink", "./project-context", "./snapshot-edit", "./tools", "./workspace-path",
     ]);
     expect(manifest.dependencies).toEqual({
-      "@tagent/execution": "0.6.1",
+      "@tagent/execution": "0.6.2",
       typebox: "^1.1.24",
     });
     for (const target of Object.values(manifest.exports)) {
@@ -197,7 +197,8 @@ describe("Local workspace adapter package", () => {
     expect(source).toContain("options.invalidatesChecks === false ? 0 : capabilities.markChecksStale()");
     expect(source).toContain('status: "succeeded"');
     expect(source).toContain('stage: "completed"');
-    expect(source).toContain('status: "failed", stage: "execution_failed"');
+    expect(source).toContain('status: "failed"');
+    expect(source).toContain('stage: "execution_failed"');
     expect(source).toContain('name: "task_run"');
     expect(source).toContain('Type.Literal("request_user_input")');
     expect(source).toContain('capabilities.publish("run.updated"');

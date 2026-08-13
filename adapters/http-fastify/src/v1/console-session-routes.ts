@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import {
-  ConsoleContentRequestSchema,
+  ConsoleSubmissionRequestSchema,
   ConsoleInboxContentRequestSchema,
   canonicalizeSessionCreateRequest,
   canonicalizeSubmissionRequest,
@@ -97,9 +97,9 @@ export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencie
   app.get("/api/v1/console/sessions/:id/task-run", { onRequest: read }, async (request) =>
     successEnvelope(request, taskRuns.getLatestRun((request.params as { id: string }).id) ?? null));
 
-  app.post("/api/v1/console/sessions/:id/messages", { onRequest: write, schema: { body: ConsoleContentRequestSchema } }, async (request) => {
+  app.post("/api/v1/console/sessions/:id/messages", { onRequest: write, schema: { body: ConsoleSubmissionRequestSchema } }, async (request) => {
     const { id } = request.params as { id: string };
-    const body = request.body as { content?: string; requestId?: string };
+    const body = request.body as { content?: string; requestId?: string; gateProfile?: "off" | "relaxed" | "strict" };
     const content = body?.content?.trim();
     if (!content) throw consoleError(400, "submission.content_required", "content is required");
     if (opaqueAutomationMarker(content)) throw consoleError(422, "submission.non_actionable", "opaque automation marker is not executable");
@@ -107,9 +107,9 @@ export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencie
     try {
       const result = await service.enqueueSessionInput(id, content, body.requestId, {
         principalId: principalOf(request).subjectId,
-        canonicalPayload: canonicalizeSubmissionRequest({ content }),
+        canonicalPayload: canonicalizeSubmissionRequest({ content, gateProfile: body.gateProfile }),
         provenance: { surface: "web_console" },
-      });
+      }, body.gateProfile);
       return successEnvelope(request, result);
     } catch (error) {
       if (error instanceof Error && error.message.toLowerCase().includes("idempotency conflict")) {

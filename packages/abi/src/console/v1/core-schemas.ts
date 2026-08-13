@@ -1,11 +1,12 @@
 import { Type, type Static } from "typebox";
 import { JsonObjectSchema, TimestampMillisecondsSchema } from "../../shared/primitives.js";
-import { MAX_SUBMISSION_CONTENT_CHARS } from "../../channel/v1/submission-schemas.js";
+import { GateProfileSchema, MAX_SUBMISSION_CONTENT_CHARS } from "../../channel/v1/submission-schemas.js";
 
 const ConsoleNullableTimestampSchema = Type.Union([TimestampMillisecondsSchema, Type.Null()]);
 const ConsoleTaskExecutionPolicySchema = Type.Object({
   mode: Type.String(), sideEffectRisk: Type.String(), evidencePolicy: Type.String(), reviewPolicy: Type.String(),
   policyVersion: Type.String(), confidence: Type.Number(), reason: Type.String(), exactOutput: Type.Optional(Type.String()),
+  gateProfile: Type.Optional(GateProfileSchema),
 });
 export const ConsoleReasoningEffortSchema = Type.Union([
   Type.Literal("minimal"), Type.Literal("low"), Type.Literal("medium"),
@@ -17,6 +18,13 @@ export const ConsoleContentRequestSchema = Type.Object({
   requestId: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })),
 }, { additionalProperties: false });
 export type ConsoleContentRequest = Static<typeof ConsoleContentRequestSchema>;
+
+export const ConsoleSubmissionRequestSchema = Type.Object({
+  content: Type.String({ minLength: 1, maxLength: MAX_SUBMISSION_CONTENT_CHARS }),
+  requestId: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })),
+  gateProfile: Type.Optional(GateProfileSchema),
+}, { additionalProperties: false });
+export type ConsoleSubmissionRequest = Static<typeof ConsoleSubmissionRequestSchema>;
 
 export const ConsoleInboxContentRequestSchema = Type.Object({
   content: Type.String({ minLength: 1, maxLength: MAX_SUBMISSION_CONTENT_CHARS }),
@@ -230,6 +238,7 @@ export const ConsoleTaskRunSchema = Type.Object({
   id: Type.String(), sessionId: Type.String(), requestId: Type.String(), status: Type.String(), phase: Type.String(),
   goal: Type.String(), modelId: Type.String({ minLength: 1 }), reasoningEffort: ConsoleReasoningEffortSchema,
   contract: Type.Union([ConsoleTaskRunContractSchema, Type.Null()]),
+  gateRequired: Type.Boolean(),
   blockedReason: Type.String(), lastEventSeq: Type.Number(), attempt: Type.Number(), resumedAt: ConsoleNullableTimestampSchema,
   createdAt: TimestampMillisecondsSchema, updatedAt: TimestampMillisecondsSchema, completedAt: ConsoleNullableTimestampSchema,
   usage: Type.Object({

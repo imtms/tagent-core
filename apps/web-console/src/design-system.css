@@ -1072,6 +1072,36 @@ a:focus-visible {
   color: var(--accent);
 }
 
+.gate-profile-control {
+  border-color: var(--border);
+  background: color-mix(in oklab, var(--surface-muted) 72%, var(--surface));
+}
+
+.gate-profile-heading,
+.gate-profile-control > p,
+.gate-profile-options button small {
+  color: var(--foreground-muted);
+}
+
+.gate-profile-heading > span {
+  color: var(--foreground);
+}
+
+.gate-profile-options button {
+  color: var(--foreground-muted);
+}
+
+.gate-profile-options button:hover {
+  background: var(--surface-hover);
+}
+
+.gate-profile-options button.selected {
+  color: var(--foreground-strong);
+  border-color: color-mix(in oklab, var(--accent) 32%, var(--border));
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-xs);
+}
+
 .composer {
   min-height: 56px;
   padding: 8px 8px 8px 16px;

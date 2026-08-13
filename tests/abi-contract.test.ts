@@ -193,6 +193,16 @@ describe("channel v1 submission idempotency", () => {
     });
     expect(canonicalizeSubmissionRequest(normalized)).toBe(JSON.stringify({ content: "Build the ABI" }));
   });
+
+  it("freezes Gate style into execution and idempotency semantics", () => {
+    const relaxed = normalizeSubmissionRequest({ content: " Research the market ", gateProfile: "relaxed" });
+    const strict = normalizeSubmissionRequest({ content: " Research the market ", gateProfile: "strict" });
+    expect(relaxed).toEqual({ content: "Research the market", gateProfile: "relaxed" });
+    expect(mapSubmissionToExecutionRequest({ idempotencyKey: "gate-profile-1", ...relaxed })).toEqual({
+      content: "Research the market", requestId: "gate-profile-1", gateProfile: "relaxed",
+    });
+    expect(canonicalizeSubmissionRequest(relaxed)).not.toBe(canonicalizeSubmissionRequest(strict));
+  });
 });
 
 describe("channel v1 route parameters", () => {

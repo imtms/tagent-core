@@ -161,12 +161,12 @@ curl -fsS -X POST http://127.0.0.1:3100/api/v1/sessions \
 curl -fsS -X POST http://127.0.0.1:3100/api/v1/sessions/SESSION_ID/submissions \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: example-submission-001' \
-  -d '{"content":"Inspect the repository and report its test status."}'
+  -d '{"content":"Inspect the repository and report its test status.","gateProfile":"relaxed"}'
 ```
 
 Session creation scopes the key to the authenticated Core principal. Its canonical body trims `title`, maps an omitted/blank title to `New workspace`, and includes `origin` when supplied. The same key and canonical body returns the original Session after retries or restart; a changed body returns `session.idempotency_conflict`. `GET /api/v1/sessions/:sessionId` validates a recovered Gateway binding.
 
-Submission reuse with the same canonical content and `origin` returns the existing submission state and its first audit chain. Different canonical content or provenance returns `submission.idempotency_conflict`. The optional `modelId` is advisory and excluded from idempotency semantics.
+Submission reuse with the same canonical content, optional `gateProfile` (`off`, `relaxed`, or `strict`) and `origin` returns the existing submission state and its first audit chain. Different canonical content, Gate profile or provenance returns `submission.idempotency_conflict`, because the Gate profile changes execution semantics. An omitted profile defaults conservatively to `strict`. The optional `modelId` is advisory and excluded from idempotency semantics.
 
 ### Gateway provenance
 

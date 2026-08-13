@@ -528,6 +528,19 @@ describe("AgentService runtime boundary", () => {
     store.close();
   });
 
+  it("keeps external-action approval mandatory when completion Gate is off", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let launched = false;
+    const service = new AgentService(agentPersistence(store), "/tmp", () => { launched = true; return new DeferredRuntime(); });
+    const admitted = await service.enqueueSessionInput(session.id, "请部署到生产环境。", "external-gate-off", undefined, "off");
+    const run = store.getRun(admitted.run!.id)!;
+    expect(run).toMatchObject({ status: "blocked", gateRequired: false, contract: { executionPolicy: { mode: "external_action", gateProfile: "off" } } });
+    expect(launched).toBe(false);
+    expect(store.listApprovalRequests(run.id)[0]).toMatchObject({ actionType: "execute_external_action", status: "pending" });
+    await service.closeRuntimes(); store.close();
+  });
+
   it("normalizes a persisted external-risk policy before runtime admission", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
@@ -1004,6 +1017,25 @@ describe("AgentService runtime boundary", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(prompt).toContain("no-side-effect semantic delivery");
     expect(prompt).not.toMatch(/rerun.*Bash|verification command|rebind every required check/i);
+    await service.closeRuntimes(); store.close();
+  });
+
+  it("tells prerequisite continuations that semantic criteria are unevaluated", async () => {
+    const store = new Store(":memory:"); const session = store.createSession();
+    const policy = { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "research" } as const;
+    const contract = { sourceInput: "research", summary: "research", objectives: [{ id: "o1", summary: "research", timing: "current" as const, kind: "investigate" as const }], acceptanceCriteria: ["Deliver the final research report"], scope: "public evidence", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
+    const run = store.createRun(session.id, "research", undefined, contract);
+    store.upsertPlanItem(run.id, { key: "research", title: "Research evidence", status: "pending", required: true, position: 1 });
+    let prompt = "";
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new CallbackRuntime(assistantMessage("done"), (value) => { prompt = value; }), { maxContinuations: 0 });
+    const supervisor = new TaskRunSupervisor(store, new TestSupervisorReviewer());
+    await supervisor.reviewSettled(store.getRun(run.id)!, 1, "partial candidate");
+    store.blockRun(run.id, "research: Required plan item is pending");
+    store.queueContinuation(run.id, "research: Required plan item is pending");
+    service.recoverContinuations();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(prompt).toContain("Semantic contract coverage has not been evaluated yet");
+    expect(prompt).toContain("repair only the listed plan/check prerequisites");
     await service.closeRuntimes(); store.close();
   });
 

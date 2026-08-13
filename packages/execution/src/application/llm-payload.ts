@@ -57,6 +57,9 @@ export function projectUtf8HeadTail(value: string, maxBytes: number, headBytes =
 }
 
 export function taskPolicySystemInstruction(policy: TaskExecutionPolicy): string {
+  const gateProfile = policy.gateProfile ?? "strict";
+  if (gateProfile === "off") return "Completion Gate is disabled for this TaskRun. Focus on the requested outcome and return the best final response directly; do not create plans, checks, Bash receipts, or Artifacts solely for settlement. Safety approvals and tool policies still apply.";
+  if (gateProfile === "relaxed") return "This TaskRun uses result-oriented completion review. Focus on delivering the core outcome. Plans, checks, Bash receipts, and Artifacts are optional unless they genuinely help the work; do not create them solely for settlement. State meaningful uncertainty or blockers honestly.";
   if (["workspace_mutation", "external_action"].includes(policy.mode)) return "Use the task_run tool for substantial work. Maintain a plan and checks before claiming completion. A passed required check must follow a successful Bash verification in the current Attempt; task_run will bind it by exact command or the latest successful Bash receipt and Core will derive the evidence. Batch independent TaskRun mutations in one task_run action=batch call instead of spending a model round-trip per item.";
   if (policy.mode === "exact_delivery") return `Return exactly the requested literal output${policy.exactOutput ? `: ${JSON.stringify(policy.exactOutput)}` : ""}. Do not create plans, checks, Artifacts, or tool operations.`;
   if (policy.mode === "semantic_delivery") return "This is a no-side-effect semantic delivery. Do not create artificial plans, checks, Bash receipts, or workspace Artifacts. Produce one relevant, complete, standalone response; if you use a mutation-capable tool, Core will automatically raise the Run to full governance.";
@@ -64,6 +67,15 @@ export function taskPolicySystemInstruction(policy: TaskExecutionPolicy): string
 }
 
 export function taskPolicyResumeInstructions(policy: TaskExecutionPolicy): [string, string] {
+  const gateProfile = policy.gateProfile ?? "strict";
+  if (gateProfile === "off") return [
+    "Completion Gate is disabled for this TaskRun; do not manufacture plan, check, receipt, or Artifact records for settlement.",
+    "Address the remaining user request directly. Safety approvals and tool policies remain mandatory.",
+  ];
+  if (gateProfile === "relaxed") return [
+    "This TaskRun uses result-oriented completion review; formal plans, trusted checks, and criterion-by-criterion evidence are not prerequisites.",
+    "Repair only the missing or contradicted core outcome, then provide a relevant, coherent final delivery with uncertainty stated honestly.",
+  ];
   if (["workspace_mutation", "external_action"].includes(policy.mode)) return [
     "Completion-gate requirements override conflicting instructions in the original goal, including instructions not to use task_run or not to create plan/check records.",
     "Before producing a final answer, run the actual verification command, then use one task_run action=batch call when possible to ensure at least one required plan item is done and every required check is bound to that successful Bash receipt. Agent-authored evidence text alone cannot pass the gate.",

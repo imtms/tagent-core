@@ -290,7 +290,13 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
   linkRun(input: LinkWorkspaceGoalRunInput): WorkspaceGoal {
     const run = this.runRow(input.runId);
     if (!run) throw new Error("TaskRun not found");
-    const priorMutation = this.db.prepare(`SELECT 1 FROM operations WHERE run_id=? AND operation_type IN ('tool.write','tool.edit','tool.patch','tool.bash','tool.memory_forget') LIMIT 1`).get(input.runId);
+    const priorMutation = this.db.prepare(`SELECT 1 FROM operations
+      WHERE run_id=? AND status <> 'pre_effect_rejected'
+        AND (operation_type IN ('tool.write','tool.edit','tool.patch','tool.memory_forget')
+          OR (operation_type='tool.bash' AND NOT EXISTS (
+            SELECT 1 FROM json_each(operations.effects_json)
+            WHERE json_extract(value,'$.kind')='workspace' AND json_extract(value,'$.action')='read_only'
+          ))) LIMIT 1`).get(input.runId);
     if (priorMutation) throw new Error("TaskRun cannot be linked to a workspace Goal after mutation has started");
     if (this.runLinkForRun(input.runId)) throw new Error("TaskRun is already linked to a workspace Goal");
     const spec = this.resolveLinkSpec({ ...input, mode: input.mode ?? "workspace" });

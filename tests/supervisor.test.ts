@@ -31,6 +31,48 @@ function semanticVerdict(options: {
 }
 
 describe("TaskRunSupervisor LLM audit", () => {
+  it("skips every Gate reviewer and emits no evaluations when Gate is off", async () => {
+    const store = new Store(":memory:"); const session = store.createSession();
+    const executionPolicy = { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", gateProfile: "off", policyVersion: "test", confidence: 1, reason: "user selection" } as const;
+    const contract = { sourceInput: "research", summary: "research", objectives: [{ id: "o1", summary: "research", timing: "current" as const, kind: "investigate" as const }], acceptanceCriteria: ["Deliver findings"], scope: "public sources", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy };
+    const run = store.createRun(session.id, "research", "gate-off", contract);
+    let calls = 0;
+    const reviewer = { evaluator: "llm" as const, model: "must-not-run", async reviewSettled() { calls += 1; return passingTestAudit(); }, async reviewAttemptFailure() { throw new Error("unused"); } };
+    const review = await new TaskRunSupervisor(store, reviewer).reviewSettled(run, 1, "Candidate result");
+    expect(run.gateRequired).toBe(false);
+    expect(calls).toBe(0);
+    expect(review.gates).toEqual([]);
+    expect(review.decision).toMatchObject({ action: "complete_taskrun", evaluator: "system", evaluatorModel: "gate-disabled-v1", reasonCode: "gate_disabled" });
+    expect(store.getRun(run.id)?.supervision.latestGates).toEqual([]);
+    store.close();
+  });
+
+  it("uses one relaxed review without plan/check prerequisites and tolerates unsupported secondary criteria", async () => {
+    const store = new Store(":memory:"); const session = store.createSession();
+    const executionPolicy = { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", gateProfile: "relaxed", policyVersion: "test", confidence: 1, reason: "user selection" } as const;
+    const criteria = ["Deliver core findings", "Estimate an uncertain secondary metric"];
+    const contract = { sourceInput: "research", summary: "research", objectives: [{ id: "o1", summary: "research", timing: "current" as const, kind: "investigate" as const }], acceptanceCriteria: criteria, scope: "public sources", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy };
+    const run = store.createRun(session.id, "research", "gate-relaxed", contract);
+    let relaxedCalls = 0; let fullCalls = 0;
+    const coverage = [
+      { criterion: criteria[0], status: "covered" as const, evidenceRefs: [], reason: "Core findings are present." },
+      { criterion: criteria[1], status: "unsupported" as const, evidenceRefs: [], reason: "The public sample cannot support a precise estimate." },
+    ];
+    const reviewer = {
+      evaluator: "llm" as const, model: "relaxed-test",
+      async reviewSettled() { fullCalls += 1; return passingTestAudit(); },
+      async reviewRelaxed() { relaxedCalls += 1; return { ...passingTestAudit(), evaluatorModel: "relaxed-test", gates: { ...passingTestAudit().gates, contract: { passed: true, failures: [], summary: "Core outcome delivered.", criterionCoverage: coverage } } }; },
+      async reviewAttemptFailure() { throw new Error("unused"); },
+    };
+    const current = store.getRun(run.id)!;
+    expect(current.completionGate.passed).toBe(true);
+    const review = await new TaskRunSupervisor(store, reviewer).reviewSettled(current, 1, "Core findings with explicit uncertainty.");
+    expect(relaxedCalls).toBe(1); expect(fullCalls).toBe(0);
+    expect(review.decision.action).toBe("complete_taskrun");
+    expect(review.gates.find((gate) => gate.gateType === "contract")).toMatchObject({ passed: true, criterionCoverage: coverage });
+    store.close();
+  });
+
   it("keeps deterministic checkpoint loop protection while completion quality is LLM-reviewed", () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "recover");
     const supervisor = new TaskRunSupervisor(store, new TestSupervisorReviewer(), { repeatedFailureThreshold: 3, maxSteersPerAttempt: 1, minEventsBetweenInterventions: 1 });
@@ -68,6 +110,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     expect(latencyMs).toBeLessThan(100);
     expect(review.decision).toMatchObject({ action: "start_continuation", evaluator: "system", evaluatorModel: "deterministic-prerequisite-gate", reasonCode: "deterministic_plan_incomplete" });
     expect(review.gates.find((gate) => gate.gateType === "completion")).toMatchObject({ passed: false, evaluator: "system" });
+    expect(review.gates.find((gate) => gate.gateType === "contract")).toMatchObject({ passed: true, failures: [], criterionCoverage: undefined });
     store.close();
   });
 
@@ -87,7 +130,15 @@ describe("TaskRunSupervisor LLM audit", () => {
     expect(calls).toBe(0);
     expect(review.decision).toMatchObject({ action: "start_continuation", evaluator: "system", reasonCode: "deterministic_check_incomplete" });
     expect(review.gates.find((gate) => gate.gateType === "evidence")?.failures[0]).toMatchObject({ key: "verify", disposition: "auto_fixable" });
-    expect(review.gates.find((gate) => gate.gateType === "contract")?.criterionCoverage).toEqual([expect.objectContaining({ status: "unsupported" })]);
+    expect(review.gates.find((gate) => gate.gateType === "contract")).toMatchObject({
+      passed: false,
+      failures: [],
+      criterionCoverage: undefined,
+      summary: expect.stringContaining("Not evaluated yet"),
+    });
+    expect(review.gates.find((gate) => gate.gateType === "completion")?.failures).toEqual([
+      expect.objectContaining({ key: "verify", kind: "check" }),
+    ]);
     store.close();
   });
 
@@ -474,6 +525,55 @@ describe("TaskRunSupervisor LLM audit", () => {
       expect(prompt).not.toContain("decisionReason");
       expect(prompt).toContain('"key":"verify"');
       expect(prompt).toContain('"id":"large"');
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("frames open-ended research criteria as terminal conditions and includes the full deliverable set", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "research public pain evidence");
+    const criterion = "Deliver five files and reach 150–300 traceable raw findings before final ICP synthesis";
+    const executionPolicy = { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "research" } as const;
+    const contract = { sourceInput: run.goal, summary: run.goal, objectives: [{ id: "objective-1", summary: run.goal, timing: "current" as const, kind: "investigate" as const }], acceptanceCriteria: [criterion], scope: "public evidence", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy };
+    store.db.prepare("UPDATE runs SET contract_json=? WHERE id=?").run(JSON.stringify(contract), run.id);
+    store.upsertPlanItem(run.id, { key: "research", title: "Complete research", status: "done", required: true, position: 1 });
+    for (let index = 1; index <= 20; index += 1) store.addArtifact(run.id, { id: `artifact-${index}`, title: `Deliverable ${index}`, kind: "research", content: `evidence ${index}`, uri: `artifact://${index}` });
+    let prompt = "";
+    const original = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => {
+      prompt = (JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> }).messages[0].content;
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(semanticVerdict({ criterionCoverage: [{ criterionId: "ac-1", status: "covered", evidenceRefs: ["artifact:artifact-1"], reason: "The settled deliverables satisfy the terminal condition." }] })) } }] }), { status: 200 });
+    };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "Research complete.", operations: [], progress: undefined });
+      expect(prompt).toContain("Acceptance criteria describe final settlement, not intermediate milestones");
+      expect(prompt).toContain('"id":"artifact-1"');
+      expect(prompt).toContain('"id":"artifact-20"');
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("projects deterministic CSV structure and row counts for open research audit", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "audit raw findings");
+    const criterion = "raw_findings.csv contains 150–300 traceable records with every required field";
+    const executionPolicy = { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "research" } as const;
+    const contract = { sourceInput: run.goal, summary: run.goal, objectives: [{ id: "objective-1", summary: run.goal, timing: "current" as const, kind: "investigate" as const }], acceptanceCriteria: [criterion], scope: "public evidence", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy };
+    store.db.prepare("UPDATE runs SET contract_json=? WHERE id=?").run(JSON.stringify(contract), run.id);
+    store.upsertPlanItem(run.id, { key: "research", title: "Complete research", status: "done", required: true, position: 1 });
+    const header = "source_url,platform,date,author_context,raw_quote,pain_category,current_workaround,team_or_solo,willingness_to_pay_signal,severity";
+    const rows = Array.from({ length: 150 }, (_, index) => `https://example.test/${index},forum,2026-01-01,public context,"pain ${index}, with detail",workflow,manual,team,stated,high`);
+    store.addArtifact(run.id, { id: "raw_findings.csv", title: "raw_findings.csv", kind: "text/csv", content: [header, ...rows].join("\n"), uri: "artifact://raw_findings.csv" });
+    let prompt = "";
+    const original = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => {
+      prompt = (JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> }).messages[0].content;
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(semanticVerdict({ criterionCoverage: [{ criterionId: "ac-1", status: "covered", evidenceRefs: ["artifact:raw_findings.csv"], reason: "The CSV structure and row count satisfy the criterion." }] })) } }] }), { status: 200 });
+    };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "Research complete.", operations: [], progress: undefined });
+      expect(prompt).toContain('"dataRows":150');
+      expect(prompt).toContain('"quoteBalanced":true');
+      expect(prompt).toContain('"source_url","platform","date","author_context","raw_quote"');
+      expect(prompt).toContain('"contentSha256"');
     } finally { globalThis.fetch = original; store.close(); }
   });
 

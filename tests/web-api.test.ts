@@ -10,7 +10,7 @@ const success = (data: unknown) => ({ data, requestId: "web-test-request" });
 function consoleRun(id = "run", attempt = 1) {
   return {
     id, sessionId: "session", requestId: "request", status: "running", phase: "implement", goal: "test",
-    modelId: "gpt-5.6-sol", reasoningEffort: "high", contract: null,
+    modelId: "gpt-5.6-sol", reasoningEffort: "high", contract: null, gateRequired: true,
     blockedReason: "", lastEventSeq: 0, attempt, resumedAt: null, createdAt: 1, updatedAt: 1, completedAt: null,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
     transcriptCount: 0, checkpoint: null, continuations: [], plan: [], checks: [], userInputRequests: [], pendingUserInput: null,

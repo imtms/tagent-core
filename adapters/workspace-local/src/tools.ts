@@ -118,7 +118,7 @@ async function executeMutation(
   operationType: string,
   payload: unknown,
   effect: () => Promise<RuntimeToolResult<Record<string, unknown>>>,
-  options: { invalidatesChecks?: boolean } = {},
+  options: { invalidatesChecks?: boolean; workspaceAction?: "read_only" | "mutation" } = {},
 ) {
   const { runId } = capabilities;
   const attempt = currentAttemptOrdinal(capabilities);
@@ -146,12 +146,20 @@ async function executeMutation(
     capabilities.updateOperation(id, {
       status: "succeeded",
       stage: "completed",
-      effects: [{ kind: "checks", action: staleChecks ? "stale" : "preserved", count: staleChecks }],
+      effects: [
+        { kind: "workspace", action: options.workspaceAction ?? "mutation" },
+        { kind: "checks", action: staleChecks ? "stale" : "preserved", count: staleChecks },
+      ],
       result: evidencedResult,
     });
     return evidencedResult;
   } catch (error) {
-    capabilities.updateOperation(id, { status: "failed", stage: "execution_failed", error: error instanceof Error ? error.message : String(error) });
+    capabilities.updateOperation(id, {
+      status: "failed",
+      stage: "execution_failed",
+      effects: [{ kind: "workspace", action: options.workspaceAction ?? "mutation" }],
+      error: error instanceof Error ? error.message : String(error),
+    });
     throw error;
   }
 }
@@ -285,6 +293,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
     name: "bash", label: "Run command", description: "Run a non-interactive shell command in the workspace. Destructive commands are blocked.", parameters: BashSchema, executionMode: "sequential",
     async execute(id, params: Static<typeof BashSchema>, signal, onUpdate) {
       requireWorkspaceMutationAuthorization();
+      const invalidatesChecks = bashInvalidatesChecks(params.command);
       return executeMutation(capabilities, id, "tool.bash", params, async () => {
         if (/\b(rm\s+-rf|mkfs|shutdown|reboot|poweroff|git\s+reset\s+--hard|git\s+clean\s+-[a-z]*f)\b/i.test(params.command)) throw new Error("Command blocked by the minimal safety policy");
         const chainedStages = (params.command.match(/(?:&&|;|\|\||\n)/g) ?? []).length + 1;
@@ -380,7 +389,7 @@ export function createTools(capabilities: ToolCapabilityApplicationPort, workspa
           resolve(result);
         })().catch(reject); });
         });
-      }, { invalidatesChecks: bashInvalidatesChecks(params.command) });
+      }, { invalidatesChecks, workspaceAction: invalidatesChecks ? "mutation" : "read_only" });
     },
   };
 

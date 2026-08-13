@@ -59,7 +59,10 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] Restart recovery produces `outcome_unknown` for effects/deliveries whose outcome cannot be proven and `restart_before_effect` cancellation only before effect start.
 - [ ] An interrupted TaskRun command or Goal operation becomes `outcome_unknown`; a Session and its create receipt remain atomic across restart.
 - [ ] A required passed check rejects self-reported, failed, stale, wrong-Run and wrong-Attempt evidence, and accepts only the matching successful Bash receipt.
-- [ ] Semantic delivery uses the compact judge; substantial settlement sends actual bounded receipts to one full Supervisor call; deterministic failures/exact delivery skip it and malformed output does not trigger a schema-repair call.
+- [ ] TaskRun completion Gate profiles are frozen at Admission: `off` skips completion review, `relaxed` performs at most one outcome-focused semantic review without plan/check prerequisites, and `strict` retains the full deterministic and semantic audit.
+- [ ] Older clients and persisted TaskRuns without a profile remain `strict`; Web defaults new Workspace selections to `relaxed`; Submission idempotency conflicts when the same key is reused with a different profile.
+- [ ] Semantic delivery uses the compact judge; substantial strict settlement sends actual bounded receipts to one full Supervisor call; relaxed settlement uses one bounded outcome review; deterministic failures, exact delivery, and disabled Gate skip unnecessary calls; malformed output does not trigger a schema-repair call.
+- [ ] External-action approval, Workspace Goal authority, and mutation-capable tool policy remain enforced identically under `off`, `relaxed`, and `strict`.
 - [ ] Restoring the pre-upgrade backup with the old artifact was tested as the 0.1.x rollback path.
 
 ## API, Web, and Gateway gate
@@ -80,6 +83,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] `scripts/gateway-readiness-probe.mjs` exits 0 with `ready=true` and no reasons.
 - [ ] Web is served from its independent artifact and targets the Gateway/Core origin; Core serves no static Web content.
 - [ ] Web Skills center upload/drag-and-drop, edit/delete, multi-select Workspace references, empty/loading/error states, keyboard focus, light/dark theme, and mobile-width states were rendered and checked.
+- [ ] The Gate selector is visible above the composer, retains its per-Workspace setting, and renders correctly in light/dark themes and mobile widths; Run detail explains the frozen profile.
 
 ## Artifact gate
 

@@ -13,6 +13,7 @@ function taskRun(overrides: Partial<TaskRun> = {}): TaskRun {
     modelId: "gpt-5.6-sol",
     reasoningEffort: "high",
     contract: null,
+    gateRequired: true,
     blockedReason: "Core restarted",
     lastEventSeq: 12,
     attempt: 1,

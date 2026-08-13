@@ -8,6 +8,7 @@ export type TaskExecutionMode =
 export type TaskSideEffectRisk = "none" | "read_only" | "workspace" | "external_high";
 export type TaskEvidencePolicy = "none" | "semantic" | "operation_receipt" | "trusted_check";
 export type TaskReviewPolicy = "local" | "semantic_lite" | "full";
+export type GateProfile = "off" | "relaxed" | "strict";
 
 /** Semantic policy proposed at Admission. Core may only preserve or raise it. */
 export interface TaskExecutionPolicy {
@@ -18,8 +19,18 @@ export interface TaskExecutionPolicy {
   policyVersion: string;
   confidence: number;
   reason: string;
+  /** User-selected completion acceptance style. Missing legacy values remain strict. */
+  gateProfile?: GateProfile;
   /** Present only when the user requested one literal response. */
   exactOutput?: string;
+}
+
+export function gateProfileOf(policy: Pick<TaskExecutionPolicy, "gateProfile"> | null | undefined): GateProfile {
+  return policy?.gateProfile ?? "strict";
+}
+
+export function effectiveGateProfile(contract: TaskPolicyContractView | null | undefined): GateProfile {
+  return gateProfileOf(contract?.executionPolicy);
 }
 
 export interface TaskPolicyContractView {
@@ -32,6 +43,7 @@ export interface TaskPolicyOperationView {
   operationType: string;
   status: string;
   attempt: number;
+  effects?: unknown[];
 }
 
 const riskRank: Record<TaskSideEffectRisk, number> = { none: 0, read_only: 1, workspace: 2, external_high: 3 };
@@ -40,6 +52,21 @@ const reviewRank: Record<TaskReviewPolicy, number> = { local: 0, semantic_lite: 
 
 function maxByRank<T extends string>(left: T, right: T, rank: Record<T, number>) {
   return rank[left] >= rank[right] ? left : right;
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function operationMayMutate(operation: TaskPolicyOperationView) {
+  if (operation.status === "pre_effect_rejected") return false;
+  if (["tool.write", "tool.edit", "tool.patch", "tool.memory_forget"].includes(operation.operationType)) return true;
+  if (operation.operationType !== "tool.bash") return false;
+  // Old Bash receipts have no workspace-effect marker. They remain mutation-capable
+  // by default; only a current explicit read-only receipt lowers this observation.
+  const workspaceEffects = (operation.effects ?? []).map(record).filter((effect): effect is Record<string, unknown> => effect?.kind === "workspace");
+  return !workspaceEffects.some((effect) => effect.action === "read_only")
+    || workspaceEffects.some((effect) => effect.action !== "read_only");
 }
 
 export function legacyTaskExecutionPolicy(contract: TaskPolicyContractView | null): TaskExecutionPolicy {
@@ -98,9 +125,7 @@ export function effectiveTaskExecutionPolicy(
     reasons.push("Core normalized an inconsistent execution-policy profile to its strongest safety implication.");
   }
   const currentOperations = currentAttempt === undefined ? operations : operations.filter((item) => item.attempt === currentAttempt);
-  const mutationObserved = currentOperations.some((item) =>
-    ["tool.write", "tool.edit", "tool.patch", "tool.bash", "tool.memory_forget"].includes(item.operationType)
-    && item.status !== "pre_effect_rejected");
+  const mutationObserved = currentOperations.some(operationMayMutate);
   if (contract?.workspaceGoal || mutationObserved) {
     mode = mode === "external_action" ? mode : "workspace_mutation";
     sideEffectRisk = maxByRank(sideEffectRisk, "workspace", riskRank);

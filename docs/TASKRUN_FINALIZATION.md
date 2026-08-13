@@ -1,6 +1,6 @@
 # TaskRun delivery and finalization workflow
 
-Use this workflow for every substantial development TaskRun. It prevents a change that is implemented, merged, or deployed successfully from being blocked by duplicate plan items or stale completion evidence.
+Use this workflow for every substantial development TaskRun using the `strict` Gate profile. `relaxed` open-ended work does not require this plan/check ceremony, and `off` skips completion acceptance entirely. Safety approvals and tool policies remain mandatory in every profile.
 
 ## Invariants
 

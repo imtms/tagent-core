@@ -1,7 +1,7 @@
 import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { createPortal } from "react-dom";
 import { Activity, ArrowDown, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Keyboard, Menu, Moon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Search, Send, Settings2, ShieldAlert, ShieldCheck, Sparkles, Square, Sun, Target, Terminal, Trash2, Upload, WandSparkles, X } from "lucide-react";
-import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type SkillRevision, type SkillSummary, type ContextManifest, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
+import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type GateProfile, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type SkillRevision, type SkillSummary, type ContextManifest, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
 import { Markdown, preloadMarkdown } from "./LazyMarkdown";
 import { LiveText } from "./LiveText";
 import { createRequestId } from "./id";
@@ -73,6 +73,11 @@ function storedStringRecord(key: string): Record<string, string> {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
   } catch { return {}; }
+}
+
+function storedGateProfiles(): Record<string, GateProfile> {
+  const stored = storedStringRecord("tagent.gate-profiles");
+  return Object.fromEntries(Object.entries(stored).filter((entry): entry is [string, GateProfile] => ["off", "relaxed", "strict"].includes(entry[1])));
 }
 
 function storedNumberRecord(key: string): Record<string, number> {
@@ -217,25 +222,37 @@ function ToolActivityPanel({ transcriptItems, events }: { transcriptItems: Extra
 }
 
 function GateAuditPanel({ run }: { run: TaskRun }) {
+  const gateProfile = run.contract?.executionPolicy?.gateProfile ?? "strict";
+  if (gateProfile === "off") return <section className="panel-section gate-audit-section gate-disabled">
+    <div className="section-title"><span>Gate audit</span><small>disabled</small></div>
+    <div className="completion-verdict passed"><strong>Direct delivery</strong><span>This TaskRun skips completion acceptance. Safety approvals and tool policies still apply.</span></div>
+  </section>;
   const gates = run.supervision.latestGates;
-  const failedGates = gates.filter((gate) => !gate.passed);
+  const failedGates = gates.filter((gate) => !gate.passed && gate.failures.length > 0);
   const settledCompletion = gates.find((gate) => gate.gateType === "completion");
   const completionPassed = settledCompletion?.passed ?? run.completionGate.passed;
   const completionFailures = settledCompletion?.failures ?? run.completionGate.failures.map((failure) => ({ ...failure, disposition: "auto_fixable" }));
-  const verdictLabel = settledCompletion ? (completionPassed ? "accepted" : `${completionFailures.length} blocker(s)`) : (completionPassed ? "structurally ready" : `${completionFailures.length} blocker(s)`);
+  const verdictLabel = settledCompletion ? (completionPassed ? "accepted" : `${completionFailures.length} blocker(s)`) : (completionPassed ? (gateProfile === "relaxed" ? "ready for review" : "structurally ready") : `${completionFailures.length} blocker(s)`);
   return <section className="panel-section gate-audit-section">
-    <div className="section-title"><span>Gate audit</span><small className={completionPassed ? "audit-pass" : "audit-warn"}>{verdictLabel}</small></div>
+    <div className="section-title"><span>Gate audit · {gateProfile}</span><small className={completionPassed ? "audit-pass" : "audit-warn"}>{verdictLabel}</small></div>
     <div className="gate-standard-grid" aria-label="Supervisor gate standards">
-      <div><ShieldCheck size={14} /><strong>Progress</strong><small>No terminal failure loop</small></div>
-      <div><ShieldCheck size={14} /><strong>Evidence</strong><small>Required checks need independent, current evidence</small></div>
-      <div><ShieldCheck size={14} /><strong>Contract</strong><small>Each acceptance criterion must be covered</small></div>
-      <div><ShieldCheck size={14} /><strong>Claims</strong><small>Completion claims require a check, receipt, or artifact</small></div>
-      <div><ShieldCheck size={14} /><strong>Approval</strong><small>Approval boundaries cannot be auto-resumed</small></div>
-      <div><ShieldCheck size={14} /><strong>Delivery</strong><small>Final response must be substantive and non-empty</small></div>
+      {gateProfile === "relaxed" ? <>
+        <div><ShieldCheck size={14} /><strong>Core outcome</strong><small>Required deliverables must be materially present</small></div>
+        <div><ShieldCheck size={14} /><strong>Relevance</strong><small>The result must directly address the task</small></div>
+        <div><ShieldCheck size={14} /><strong>Coherence</strong><small>No material contradiction or unresolved blocker</small></div>
+        <div><ShieldCheck size={14} /><strong>Uncertainty</strong><small>Secondary unknowns may remain explicit</small></div>
+      </> : <>
+        <div><ShieldCheck size={14} /><strong>Progress</strong><small>No terminal failure loop</small></div>
+        <div><ShieldCheck size={14} /><strong>Evidence</strong><small>Required checks need independent, current evidence</small></div>
+        <div><ShieldCheck size={14} /><strong>Contract</strong><small>Each acceptance criterion must be covered</small></div>
+        <div><ShieldCheck size={14} /><strong>Claims</strong><small>Completion claims require a check, receipt, or artifact</small></div>
+        <div><ShieldCheck size={14} /><strong>Approval</strong><small>Approval boundaries cannot be auto-resumed</small></div>
+        <div><ShieldCheck size={14} /><strong>Delivery</strong><small>Final response must be substantive and non-empty</small></div>
+      </>}
     </div>
-    <div className={`completion-verdict ${completionPassed ? "passed" : "pending"}`}><strong>{settledCompletion ? (completionPassed ? "Settled candidate accepted" : "Settled candidate rejected") : (completionPassed ? "Structural prerequisites ready" : "Structural prerequisites incomplete")}</strong><span>{settledCompletion ? (completionPassed ? "The latest persisted Supervisor evaluation accepted progress, evidence, contract coverage, claims, and delivery." : "Supervisor must continue, request evidence, block, or seek approval before accepting delivery.") : (completionPassed ? "Plan and checks are ready; final semantic review still occurs after the candidate response settles." : "Plan or check prerequisites must be satisfied before final semantic review.")}</span></div>
+    <div className={`completion-verdict ${completionPassed ? "passed" : "pending"}`}><strong>{settledCompletion ? (completionPassed ? "Settled candidate accepted" : "Settled candidate rejected") : gateProfile === "relaxed" ? "Ready for outcome review" : (completionPassed ? "Structural prerequisites ready" : "Structural prerequisites incomplete")}</strong><span>{settledCompletion ? (completionPassed ? (gateProfile === "relaxed" ? "The result-oriented review accepted the core outcome; explicit secondary uncertainty did not force continuation." : "The latest persisted Supervisor evaluation accepted progress, evidence, contract coverage, claims, and delivery.") : "Supervisor must continue, request evidence, block, or seek approval before accepting delivery.") : gateProfile === "relaxed" ? "No plan or trusted-check prerequisite applies; one semantic review runs after the candidate settles." : (completionPassed ? "Plan and checks are ready; final semantic review still occurs after the candidate response settles." : "Plan or check prerequisites must be satisfied before final semantic review.")}</span></div>
     {completionFailures.length > 0 && <div className="gate-failure-list">{completionFailures.map((failure) => <div key={`${failure.kind}:${failure.key}`}><span>{failure.kind}</span><strong>{failure.key}</strong><p>{failure.reason}</p></div>)}</div>}
-    {gates.length > 0 ? <div className="gate-evaluation-list">{gates.map((gate) => <details className={`gate-evaluation ${gate.passed ? "passed" : "failed"}`} key={gate.id}><summary><span>{gate.passed ? <Check size={13} /> : <X size={13} />}{gate.gateType}</span><small>{gate.passed ? "passed" : `${gate.failures.length} failure(s)`}</small><ChevronRight className="tool-chevron" size={13} /></summary><div><p className="gate-evaluator">{gate.evaluator === "llm" ? `LLM evaluation · ${gate.evaluatorModel}` : "System invariant"} · {gate.summary}</p>{gate.criterionCoverage?.length ? <div className="criterion-list">{gate.criterionCoverage.map((criterion) => <div className={`criterion-row ${criterion.status}`} key={criterion.criterion}><strong>{criterion.status}</strong><p>{criterion.criterion}</p><small>{criterion.reason}{criterion.evidenceRefs.length ? ` · ${criterion.evidenceRefs.join(", ")}` : ""}</small></div>)}</div> : null}{gate.failures.map((failure) => <div className="gate-detail" key={`${failure.kind}:${failure.key}`}><span>{failure.disposition.replaceAll("_", " ")}</span><strong>{failure.key}</strong><p>{failure.reason}</p></div>)}</div></details>)}</div> : <p className="muted">No settled gate evaluation yet. Standards above show what the Supervisor will review.</p>}
+    {gates.length > 0 ? <div className="gate-evaluation-list">{gates.map((gate) => <details className={`gate-evaluation ${gate.passed ? "passed" : gate.failures.length ? "failed" : "deferred"}`} key={gate.id}><summary><span>{gate.passed ? <Check size={13} /> : gate.failures.length ? <X size={13} /> : <Circle size={13} />}{gate.gateType}</span><small>{gate.passed ? "passed" : gate.failures.length ? `${gate.failures.length} failure(s)` : "deferred"}</small><ChevronRight className="tool-chevron" size={13} /></summary><div><p className="gate-evaluator">{gate.evaluator === "llm" ? `LLM evaluation · ${gate.evaluatorModel}` : "System invariant"} · {gate.summary}</p>{gate.criterionCoverage?.length ? <div className="criterion-list">{gate.criterionCoverage.map((criterion) => <div className={`criterion-row ${criterion.status}`} key={criterion.criterion}><strong>{criterion.status}</strong><p>{criterion.criterion}</p><small>{criterion.reason}{criterion.evidenceRefs.length ? ` · ${criterion.evidenceRefs.join(", ")}` : ""}</small></div>)}</div> : null}{gate.failures.map((failure) => <div className="gate-detail" key={`${failure.kind}:${failure.key}`}><span>{failure.disposition.replaceAll("_", " ")}</span><strong>{failure.key}</strong><p>{failure.reason}</p></div>)}</div></details>)}</div> : <p className="muted">No settled gate evaluation yet. Standards above show what the Supervisor will review.</p>}
     {failedGates.length > 0 && <small className="audit-footnote">Latest evaluation contains {failedGates.length} failed gate{failedGates.length === 1 ? "" : "s"}; the latest Supervisor decision determines the next action.</small>}
   </section>;
 }
@@ -439,6 +456,7 @@ export function App() {
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [draft, setDraft] = useState("");
   const [draftBySession, setDraftBySession] = useState<Record<string, string>>(() => storedStringRecord("tagent.composer-drafts"));
+  const [gateProfileBySession, setGateProfileBySession] = useState<Record<string, GateProfile>>(storedGateProfiles);
   const [inputHistoryBySession, setInputHistoryBySession] = useState<Record<string, string[]>>(() => storedStringLists("tagent.composer-history"));
   const [historyCursor, setHistoryCursor] = useState<number | null>(null);
   const [inbox, setInbox] = useState<SessionInboxItem[]>([]);
@@ -607,6 +625,9 @@ export function App() {
   useEffect(() => {
     try { globalThis.localStorage?.setItem("tagent.composer-drafts", JSON.stringify(draftBySession)); } catch { /* Browser storage is optional. */ }
   }, [draftBySession]);
+  useEffect(() => {
+    try { globalThis.localStorage?.setItem("tagent.gate-profiles", JSON.stringify(gateProfileBySession)); } catch { /* Browser storage is optional. */ }
+  }, [gateProfileBySession]);
   useEffect(() => {
     try { globalThis.localStorage?.setItem("tagent.composer-history", JSON.stringify(inputHistoryBySession)); } catch { /* Browser storage is optional. */ }
   }, [inputHistoryBySession]);
@@ -1042,6 +1063,7 @@ export function App() {
   async function submit() {
     const content = draft.trim();
     const targetSessionId = sessionId;
+    const gateProfile = gateProfileBySession[targetSessionId] ?? "relaxed";
     if (!content || !targetSessionId || submitting) return;
     void preloadMarkdown().catch(() => undefined);
     const optimistic = { sessionId: targetSessionId, content, createdAt: Date.now() };
@@ -1052,7 +1074,7 @@ export function App() {
       return { ...current, [targetSessionId]: [...deduplicated, content].slice(-50) };
     });
     try {
-      const admission = await api.send(targetSessionId, content);
+      const admission = await api.send(targetSessionId, content, gateProfile);
       if (sessionIdRef.current !== targetSessionId) return;
       if (admission.run) setPendingUserMessage(optimistic);
       const [queued, history] = await Promise.all([api.inbox(targetSessionId), api.messages(targetSessionId)]);
@@ -1293,6 +1315,22 @@ export function App() {
         {notice && <div className="success-banner">{notice}</div>}
         {activeRun && pendingApprovals.length > 0 && <ApprovalDock run={activeRun} approvals={pendingApprovals} resolvingId={resolvingApprovalId} resolvingDecision={resolvingApprovalDecision} onResolve={resolveRunApproval} />}
         <div className="composer-mode"><span><Activity size={13} />{activeRun ? "Steer or queue" : "Supervisor inbox"}</span><span>{activeRun ? "New input is classified as steer, context, follow-up, parallel work, or a new TaskRun" : "Supervisor summarizes, prioritizes, and starts the next eligible contract"}</span><kbd>/</kbd></div>
+        <div className="gate-profile-control">
+          <div className="gate-profile-heading"><span><ShieldCheck size={13} />Gate acceptance</span><small>{activeRun ? "Applies only if this input creates a new TaskRun" : "Choose before this TaskRun starts"}</small></div>
+          <div className="gate-profile-options" role="radiogroup" aria-label="Gate acceptance style">
+            {([
+              { value: "off", label: "Off", description: "Direct delivery" },
+              { value: "relaxed", label: "Relaxed", description: "Open research" },
+              { value: "strict", label: "Strict", description: "Code & closed work" },
+            ] as const).map((option) => {
+              const selected = (gateProfileBySession[sessionId] ?? "relaxed") === option.value;
+              return <button key={option.value} type="button" role="radio" aria-checked={selected} className={selected ? "selected" : ""} onClick={() => setGateProfileBySession((current) => ({ ...current, [sessionId]: option.value }))}>
+                <span>{option.label}</span><small>{option.description}</small>
+              </button>;
+            })}
+          </div>
+          <p>{(gateProfileBySession[sessionId] ?? "relaxed") === "off" ? "No completion review. External-action approvals and safety policies remain active." : (gateProfileBySession[sessionId] ?? "relaxed") === "relaxed" ? "One result-oriented review; missing core outcomes still block, secondary uncertainty does not." : "Requires plan, current trusted checks, and criterion-level coverage."}</p>
+        </div>
         <div className="composer"><textarea ref={composerTextareaRef} value={draft} onChange={(event) => updateComposerDraft(event.target.value)} onCompositionStart={() => { composerIsComposingRef.current = true; }} onCompositionEnd={() => { composerIsComposingRef.current = false; }} onKeyDown={(event) => {
           if (event.key === "Enter" && enterSubmits && !event.shiftKey && !composerIsComposingRef.current && !event.nativeEvent.isComposing) { event.preventDefault(); if (draft.trim() && !submitting) void submit(); return; }
           const caretAtStart = event.currentTarget.selectionStart === 0 && event.currentTarget.selectionEnd === 0;
