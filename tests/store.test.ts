@@ -707,16 +707,16 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(42);
+    expect(store.getSchemaVersion()).toBe(43);
   });
 
-  it("migrates an older database to schema version 42", () => {
+  it("migrates an older database to schema version 43", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE core_writer_lease; DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(42);
+    expect(migrated.getSchemaVersion()).toBe(43);
     expect((migrated.db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
     expect((migrated.db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
     expect((migrated.db.prepare("PRAGMA table_info(operations)").all() as Array<{ name: string }>).map((column) => column.name)).toContain("payload_json");
@@ -758,7 +758,7 @@ describe("Store", () => {
     initial.close();
 
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(42);
+    expect(migrated.getSchemaVersion()).toBe(43);
     expect((migrated.db.prepare("PRAGMA table_info(run_checks)").all() as Array<{ name: string }>).map((column) => column.name))
       .toEqual(expect.arrayContaining(["source_operation_id", "observed_at"]));
     expect(migrated.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_run_checks_source_operation'").get())

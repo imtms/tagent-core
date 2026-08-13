@@ -4,7 +4,7 @@
 
 TAgent Core is a durable, self-hosted control plane for a single agent instance. It turns routed user intent into a persistent `TaskRun`, supervises bounded `Attempt`s, owns authoritative state, evidence, approvals, recovery, Memory, and Learning, and produces verifiable delivery results.
 
-The current 0.5 line provides governed Workspace Goals, trusted execution receipts, durable Gateway contracts, optional Memory and Learning, and a contained `pi-agent-core` runtime on the established modular boundary. Core remains API-only and `TaskRun` remains the only execution runtime.
+The current 0.6 line adds Core-managed Skills to governed Workspace Goals, trusted execution receipts, durable Gateway contracts, optional Memory and Learning, and the contained `pi-agent-core` runtime. Core remains API-only and `TaskRun` remains the only execution runtime.
 
 ## Supported boundary
 
@@ -33,7 +33,7 @@ The repository contains 13 workspaces in one acyclic dependency graph:
 | Domain | `@tagent/memory` | Optional Hot/Warm/Cold long-term Memory |
 | Domain | `@tagent/learning` | Optional governed Learning projections and workflows |
 | Adapter | `@tagent/http-fastify` | API-only Fastify adapter for `/api/v1` |
-| Adapter | `@tagent/persistence-sqlite` | Schema 41, repositories, migrations, writer fencing, and Unit of Work |
+| Adapter | `@tagent/persistence-sqlite` | Schema 43, repositories, migrations, writer fencing, and Unit of Work |
 | Adapter | `@tagent/runtime-pi` | In-process Pi runtime integration |
 | Adapter | `@tagent/workspace-local` | Workspace-contained tools and path enforcement |
 | Application | `@tagent/core-service` | Core composition root and lifecycle |
@@ -93,15 +93,21 @@ Core does not validate browser OIDC/JWT tokens. In production, a Gateway validat
 
 ## Persistence and recovery
 
-Core owns a schema 42 SQLite database. Startup acquires an OS instance lock, applies migrations, claims a writer lease and fence, installs connection-level mutation guards, performs guarded recovery, starts services and workers, then reports the writer ready.
+Core owns a schema 43 SQLite database. Startup acquires an OS instance lock, applies migrations, claims a writer lease and fence, installs connection-level mutation guards, performs guarded recovery, starts services and workers, then reports the writer ready.
 
-Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Back up the SQLite database together with its WAL/SHM files before an upgrade. Binaries that only understand schema 41 cannot open schema 42; rollback requires the matching pre-upgrade database backup. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md) and [docs/UPGRADING.md](docs/UPGRADING.md).
+Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Back up the SQLite database together with its WAL/SHM files before an upgrade. Binaries that only understand schema 42 cannot open schema 43; rollback requires the matching pre-upgrade database backup. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md) and [docs/UPGRADING.md](docs/UPGRADING.md).
 
 ## Completion evidence and model calls
 
 A passed required check is trusted only when Core binds it to a successful `tool.bash` operation from the current Attempt. Core derives the command, exit code, output projection, completion time, digest and Artifact reference from the operation receipt; Agent-authored evidence text is not proof. Change, verification and release work requires at least one such trusted required check, after which the Supervisor performs one semantic review against the actual receipts and acceptance criteria.
 
 Deterministic prerequisite failures and exact literal deliveries do not call the Supervisor LLM. Translation, rewriting, summarization, drafting, prose review and ordinary answers use one compact semantic judge; mutation and high-impact work use one full evidence review. Malformed output is repaired or rejected locally without a second model call, and retryable transport failure is retried only against a separately hosted fallback. See [docs/SUPERVISOR.md](docs/SUPERVISOR.md) and [docs/EXECUTION_EFFICIENCY.md](docs/EXECUTION_EFFICIENCY.md).
+
+## Workspace Skills
+
+The Web Console can load a `SKILL.md` or ZIP bundle from the Skill control in the conversation header. Core validates and stores immutable, content-addressed revisions, binds one revision to the Workspace, and freezes that revision into every newly admitted `TaskRun`. Switching or disabling a Skill never changes running work or its continuations.
+
+Execution uses the native Pi Skill path: `@tagent/runtime-pi` registers the frozen projection in `AgentHarness.resources.skills` and invokes `AgentHarness.skill()`. Core does not flatten the Skill into an ordinary prompt, and a Skill cannot add tools or bypass approvals, receipts, path containment, or settlement policy. See [docs/SKILLS.md](docs/SKILLS.md).
 
 ## Optional Memory and Learning
 
@@ -138,6 +144,7 @@ See [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
 - [Architecture](docs/MODULAR_MONOLITH.md)
 - [API v1](docs/API_V1.md)
 - [Workspace Goals](docs/WORKSPACE_GOALS.md)
+- [Workspace Skills](docs/SKILLS.md)
 - [Execution reliability and efficiency](docs/EXECUTION_EFFICIENCY.md)
 - [Deployment and Gateway](docs/DEPLOYMENT_AND_GATEWAY.md)
 - [Upgrade and rollback](docs/UPGRADING.md)

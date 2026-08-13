@@ -6,8 +6,8 @@ import { settleRuntimeInitializationFailure } from "./runtime-initialization-fai
 import { settleRuntimeFactoryFailure } from "./runtime-factory-failure.js";
 import { settleAttemptExecutionFailure } from "./attempt-execution-failure.js";
 import { selectRuntimeModel } from "./runtime-model-selection.js";
-import type {
-  AttemptSettlementPort,
+import { runtimeSkillFor } from "./runtime-skill.js";
+import type { AttemptSettlementPort,
   ContinuationControlPort,
   ControlCommandPort,
   PostAttemptPort,
@@ -171,6 +171,7 @@ export class AttemptExecutor {
     });
     try {
       const executionProfile = selectRuntimeModel(run, this.state.runtimeDefaults.model, this.state.runtimeDefaults.fallbackModels);
+      const selectedSkill = runtimeSkillFor(run);
       runtime = this.state.runtimeFactory({
         token,
         workspace: this.state.workspace,
@@ -178,6 +179,8 @@ export class AttemptExecutor {
         capabilities: runtimeHost.capabilities,
         eventSink: runtimeHost.eventSink,
         initialMessages,
+        skills: selectedSkill ? [selectedSkill] : undefined,
+        selectedSkillName: selectedSkill?.name,
         model: executionProfile.model,
         fallbackModels: executionProfile.fallbackModels,
         reasoningEffort: executionProfile.reasoningEffort,

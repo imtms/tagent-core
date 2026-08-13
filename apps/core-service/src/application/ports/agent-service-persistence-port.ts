@@ -1,4 +1,4 @@
-import type { SessionRepository, SubmissionQueue } from "@tagent/admission/ports";
+import type { SessionRepository, SkillRepository, SubmissionQueue } from "@tagent/admission/ports";
 import type {
   CheckpointRepository,
   ContinuationQueue,
@@ -31,6 +31,7 @@ export interface AgentServicePersistencePort {
   readonly attemptAuthority: AttemptAuthorityRepository;
   readonly runtimeMutations: FencedRuntimeMutationPort;
   readonly sessions: SessionRepository;
+  readonly skills: SkillRepository;
   readonly submissions: SubmissionQueue;
   readonly taskRuns: TaskRunRepository;
   readonly taskRunTransitions: TaskRunTransitionPort;

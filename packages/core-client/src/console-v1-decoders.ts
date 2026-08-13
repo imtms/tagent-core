@@ -17,6 +17,8 @@ import type {
   ConsoleRuntimeStatus,
   ConsoleSession,
   ConsoleSessionInboxItem,
+  ConsoleSkillRevision,
+  ConsoleSkillSummary,
   ConsoleTaskRun,
   ConsoleTaskRunSummary,
   ConsoleTranscriptItem,
@@ -52,6 +54,20 @@ async function session(payload: unknown): Promise<ConsoleSession> {
 async function sessions(payload: unknown): Promise<ConsoleSession[]> {
   const abi = await loadCoreAbi();
   return arrayPayload(payload).map((item) => abi.decodeAbi(abi.ConsoleSessionSchema, item));
+}
+
+async function skillRevision(payload: unknown): Promise<ConsoleSkillRevision> {
+  const abi = await loadCoreAbi();
+  return abi.decodeAbi(abi.ConsoleSkillRevisionSchema, payload);
+}
+
+async function skillRevisionOrNull(payload: unknown): Promise<ConsoleSkillRevision | null> {
+  return payload === null ? null : skillRevision(payload);
+}
+
+async function skills(payload: unknown): Promise<ConsoleSkillSummary[]> {
+  const abi = await loadCoreAbi();
+  return arrayPayload(payload).map((item) => abi.decodeAbi(abi.ConsoleSkillSummarySchema, item));
 }
 
 async function messages(payload: unknown): Promise<ConsoleMessage[]> {
@@ -238,6 +254,9 @@ export const ConsoleDecode = {
   runtimeStatus,
   session,
   sessions,
+  skillRevision,
+  skillRevisionOrNull,
+  skills,
   startedRun,
   submissionResult,
   taskRun,

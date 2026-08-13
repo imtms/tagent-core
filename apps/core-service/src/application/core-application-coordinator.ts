@@ -34,6 +34,11 @@ export class CoreApplicationCoordinator {
   start(...args: Parameters<CoreApplicationServices["admission"]["start"]>) { return this.services.admission.start(...args); }
   generateWorkspaceGoalRoadmap(...args: Parameters<CoreApplicationServices["workspaceGoals"]["generateWorkspaceGoalRoadmap"]>) { return this.services.workspaceGoals.generateWorkspaceGoalRoadmap(...args); }
   startWorkspaceGoalRoadmapItem(...args: Parameters<CoreApplicationServices["workspaceGoals"]["startWorkspaceGoalRoadmapItem"]>) { return this.services.workspaceGoals.startWorkspaceGoalRoadmapItem(...args); }
+  listSkills(...args: Parameters<CoreApplicationServices["skills"]["listSkills"]>) { return this.services.skills.listSkills(...args); }
+  getSessionSkill(...args: Parameters<CoreApplicationServices["skills"]["getSessionSkill"]>) { return this.services.skills.getSessionSkill(...args); }
+  uploadSkill(...args: Parameters<CoreApplicationServices["skills"]["uploadSkill"]>) { return this.services.skills.uploadSkill(...args); }
+  bindSessionSkill(...args: Parameters<CoreApplicationServices["skills"]["bindSessionSkill"]>) { return this.services.skills.bindSessionSkill(...args); }
+  unbindSessionSkill(...args: Parameters<CoreApplicationServices["skills"]["unbindSessionSkill"]>) { return this.services.skills.unbindSessionSkill(...args); }
   teachWorkflow(...args: Parameters<CoreApplicationServices["learning"]["teachWorkflow"]>) { return this.services.learning.teachWorkflow(...args); }
   listWorkflows(...args: Parameters<CoreApplicationServices["learning"]["listWorkflows"]>) { return this.services.learning.listWorkflows(...args); }
   getWorkflow(...args: Parameters<CoreApplicationServices["learning"]["getWorkflow"]>) { return this.services.learning.getWorkflow(...args); }

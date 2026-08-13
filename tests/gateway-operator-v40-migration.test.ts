@@ -18,7 +18,7 @@ describe("gateway operator schema v40", () => {
     seed.close();
 
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(42);
+    expect(migrated.getSchemaVersion()).toBe(43);
     expect(migrated.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='submission_audit_receipts'").pluck().get())
       .toBe("submission_audit_receipts");
     migrated.close();

@@ -58,10 +58,15 @@ export type WorkflowGovernanceApplicationPort = Pick<CoreApplicationCoordinator,
   | "executeAutonomyApproval" | "updateLearningSettings"
 >;
 
+export type SkillApplicationPort = Pick<CoreApplicationCoordinator,
+  "listSkills" | "getSessionSkill" | "uploadSkill" | "bindSessionSkill" | "unbindSessionSkill"
+>;
+
 export type CoreApplicationPort = AdmissionApplicationPort
   & ExecutionApplicationPort
   & LearningApplicationPort
-  & WorkflowGovernanceApplicationPort;
+  & WorkflowGovernanceApplicationPort
+  & SkillApplicationPort;
 
 export function createAgentServiceApplications(
   ...args: AgentServiceConstructorArguments

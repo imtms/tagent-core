@@ -59,6 +59,7 @@ import { CoreApplicationCoordinator } from "../application/core-application-coor
 import { CoreWorkflowGovernanceApplication } from "../application/workflow-governance-application.js";
 import { CoreWorkspaceGoalApplication, type WorkspaceGoalRoadmapGenerator } from "../application/workspace-goal-application.js";
 import { OpenAiWorkspaceGoalRoadmapGenerator } from "./workspace-goal-roadmap-generator.js";
+import { CoreSkillApplication } from "../application/skill-application.js";
 
 export type CoreRuntimeDefaults = ExecutionRuntimeDefaults & {
   routerModel?: RuntimeModelSpec;
@@ -283,6 +284,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
   const roadmapGenerator = runtimeDefaults.workspaceGoalRoadmapGenerator
     ?? (routerModel && runtimeDefaults.apiKey ? new OpenAiWorkspaceGoalRoadmapGenerator({ model: routerModel, apiKey: runtimeDefaults.apiKey, timeoutMs: routerTimeoutMs }) : undefined);
   const workspaceGoals = new CoreWorkspaceGoalApplication(options.persistence.workspaceGoals, admission, roadmapGenerator);
+  const skills = new CoreSkillApplication(options.persistence.skills, options.persistence.sessions, options.workspace);
   const learning = new LearningApplication(workflowService, learningService);
   const workflowGovernance = new WorkflowGovernanceApplication(
     options.persistence.workflowGovernance,
@@ -315,6 +317,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     governance,
     learning,
     workspaceGoals,
+    skills,
   }));
   if ((options.startupOptions?.startupMode ?? "automatic") === "automatic") {
     coordinator.initialize();

@@ -18,7 +18,7 @@ The system deploys as one Core process but is developed as an acyclic npm-worksp
 | Domain | `@tagent/memory` | recall, capture, lifecycle, Hot/Warm/Cold storage ports |
 | Domain | `@tagent/learning` | observations, projections, workflow evolution and authority |
 | Adapter | `@tagent/http-fastify` | `/api/v1`, auth, CORS, media protocols |
-| Adapter | `@tagent/persistence-sqlite` | schema 42, repositories, migrations, UOW, writer fence |
+| Adapter | `@tagent/persistence-sqlite` | schema 43, repositories, migrations, UOW, writer fence |
 | Adapter | `@tagent/runtime-pi` | `pi-agent-core.AgentHarness` session policy and `pi-ai` provider normalization |
 | Adapter | `@tagent/workspace-local` | contained filesystem and shell tools |
 | App | `@tagent/core-service` | configuration, composition, startup, recovery, shutdown |

@@ -1,4 +1,4 @@
-import type { MessageSourceRepository, SessionRepository, SubmissionQueue } from "@tagent/admission/ports";
+import type { MessageSourceRepository, SessionRepository, SkillRepository, SubmissionQueue } from "@tagent/admission/ports";
 import type {
   AttemptAuthorityRepository,
   AttemptRepository,
@@ -88,6 +88,7 @@ export class GuardedStoreUnitOfWork implements MutationUnitOfWork {
  */
 export class LegacyStoreAdapter {
   readonly sessions: SessionRepository;
+  readonly skills: SkillRepository;
   readonly messageSources: MessageSourceRepository;
   readonly submissions: SubmissionQueue;
   readonly taskRuns: TaskRunRepository;
@@ -273,6 +274,15 @@ export class LegacyStoreAdapter {
       listMessages: query(store.listMessages.bind(store)),
       listRecentMessages: query(store.listRecentMessages.bind(store)),
       appendMessage: mutate(store.appendMessage.bind(store)),
+    });
+
+    this.skills = Object.freeze({
+      createRevision: mutate(store.createSkillRevision.bind(store)),
+      listSkills: query(store.listSkills.bind(store)),
+      getRevision: query(store.getSkillRevision.bind(store)),
+      getSessionSkill: query(store.getSessionSkill.bind(store)),
+      bindSessionSkill: mutate(store.bindSessionSkill.bind(store)),
+      unbindSessionSkill: mutate(store.unbindSessionSkill.bind(store)),
     });
 
     this.operatorRead = Object.freeze({

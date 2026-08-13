@@ -4,7 +4,7 @@
 
 `@tagent/persistence-sqlite` owns the control-plane SQLite schema, repositories, migrations, transaction boundary, writer authority, and restart recovery primitives. Domains depend on its ports through the Core composition root; they do not issue uncontrolled SQL.
 
-The current schema version is 42:
+The current schema version is 43:
 
 | Version | Authority introduced |
 | --- | --- |
@@ -21,6 +21,7 @@ The current schema version is 42:
 | 40 | Submission principal/provenance audit receipts and canonical-payload recovery |
 | 41 | ordered Session/TaskRun indexes for bounded Operator Read keyset pagination |
 | 42 | durable Session Inbox execution-policy snapshots for effect-before-approval enforcement |
+| 43 | Core-managed Skill revisions and per-Session Skill bindings |
 
 Schema 37 added `operations.payload_json`, `run_checks.source_operation_id`, `run_checks.observed_at`, and the partial source-operation index. Legacy operations are not retroactively promoted to trusted evidence.
 
@@ -34,7 +35,9 @@ Schema 41 adds `idx_sessions_operator_created`, `idx_runs_operator_session_creat
 
 Schema 42 adds `session_supervisor_inbox.execution_policy_json`. The Router decision now survives queueing and is copied into the immutable TaskRun contract, so external-action approval cannot be bypassed by the Inbox persistence boundary. Existing rows remain readable and use conservative legacy normalization.
 
-Migrations are forward-only for a running release. A binary that only understands schema 41 must never open a schema 42 database.
+Schema 43 adds `skills`, immutable `skill_revisions`, and `session_skill_bindings`. A Session binding affects only newly admitted TaskRuns; each TaskRun contract freezes the selected Skill revision, hash, content, and model-visible workspace-relative path.
+
+Migrations are forward-only for a running release. A binary that only understands schema 42 must never open a schema 43 database.
 
 ## Startup order
 

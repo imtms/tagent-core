@@ -106,6 +106,12 @@ class CallbackRuntime implements AgentRuntime {
   getError() { return undefined; }
 }
 
+class SkillRuntime extends CallbackRuntime {
+  invoked: Array<{ name: string; query: string }> = [];
+  override async prompt(): Promise<void> { throw new Error("Selected Skill must use explicit runtime invocation"); }
+  async invokeSkill(name: string, query: string) { this.invoked.push({ name, query }); }
+}
+
 class DeferredRuntime implements AgentRuntime {
   aborted = false;
   private rejectPrompt?: (error: Error) => void;
@@ -143,6 +149,32 @@ class ActiveDeferredRuntime extends DeferredRuntime {
 }
 
 describe("AgentService runtime boundary", () => {
+  it("carries a Core-managed Skill from Session binding through the frozen TaskRun into explicit runtime invocation", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const skill = store.createSkillRevision({
+      name: "release-check", description: "Verify the selected release", content: "Follow the frozen release checklist.",
+      filePath: ".tagent/skills/release-check/hash/SKILL.md", sha256: "a".repeat(64), sourceFilename: "SKILL.md",
+    });
+    store.bindSessionSkill(session.id, skill.id);
+    let captured: Parameters<RuntimeFactory>[0] | undefined;
+    let runtime: SkillRuntime | undefined;
+    const service = new AgentService(agentPersistence(store), "/tmp", (options) => {
+      captured = options;
+      runtime = new SkillRuntime(assistantMessage("skill executed"));
+      return runtime;
+    }, { supervisorReviewer: reviewer(passingTestAudit()) });
+
+    const run = await service.start(session.id, "Check release 1.2.3");
+    await vi.waitFor(() => expect(runtime?.invoked).toHaveLength(1));
+    expect(store.getRun(run.id)?.contract?.skill).toMatchObject({ revisionId: skill.id, sha256: "a".repeat(64), content: "Follow the frozen release checklist." });
+    expect(captured?.skills).toEqual([expect.objectContaining({ name: "release-check", sha256: "a".repeat(64), content: "Follow the frozen release checklist." })]);
+    expect(runtime?.invoked[0]).toMatchObject({ name: "release-check" });
+    expect(runtime?.invoked[0].query).toContain("Check release 1.2.3");
+    await service.closeRuntimes();
+    store.close();
+  });
+
   it("persists an admitted user message before asynchronous memory recall completes", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();

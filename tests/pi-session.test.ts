@@ -59,6 +59,36 @@ describe("Pi AgentHarness integration", () => {
     store.close();
   });
 
+  it("registers and explicitly invokes a Core-selected Skill through AgentHarness.skill", async () => {
+    let observedUserPrompt = "";
+    const faux = fauxProvider({ models: [{ id: "faux-skill", contextWindow: 32_000, maxTokens: 2_000 }] });
+    faux.setResponses([(context) => {
+      const user = [...context.messages].reverse().find((message) => message.role === "user");
+      observedUserPrompt = user?.role === "user"
+        ? typeof user.content === "string" ? user.content : user.content.filter((part) => part.type === "text").map((part) => part.text).join("")
+        : "";
+      return fauxAssistantMessage("skill complete");
+    }]);
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "invoke selected skill");
+    const runtime = new PiRuntime(runtimeSpec(store, run, {
+      workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux),
+      initialMessages: [], providerMaxRetries: 0,
+      skills: [{ name: "release-check", description: "Verify a release", content: "Follow the release checklist exactly.", filePath: ".tagent/skills/release-check/abc/SKILL.md", sha256: "a".repeat(64) }],
+      selectedSkillName: "release-check",
+    }));
+    await runtime.invokeSkill("release-check", "Check version 1.2.3");
+    expect(observedUserPrompt).toContain('<skill name="release-check" location=".tagent/skills/release-check/abc/SKILL.md">');
+    expect(observedUserPrompt).toContain("Follow the release checklist exactly.");
+    expect(observedUserPrompt).toContain("Check version 1.2.3");
+    expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "skill.invoked", data: expect.objectContaining({ name: "release-check", sha256: "a".repeat(64) }) }),
+    ]));
+    runtime.dispose();
+    store.close();
+  });
+
   it("streams and persists model thinking separately from visible answer text", async () => {
     const { store, run, runtime } = await setup([fauxAssistantMessage([fauxThinking("inspect, compare, verify"), { type: "text", text: "done" }])]);
     await runtime.prompt("reason");

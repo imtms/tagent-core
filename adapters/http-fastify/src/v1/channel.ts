@@ -8,6 +8,7 @@ import { registerConsoleRunV1Routes } from "./console-run-routes.js";
 import { registerConsoleGoalV1Routes } from "./console-goal-routes.js";
 import { registerCapabilityV1Routes } from "./capability-routes.js";
 import { registerOperatorReadV1Routes } from "./operator-read-routes.js";
+import { registerConsoleSkillV1Routes } from "./console-skill-routes.js";
 
 export type { ChannelV1Dependencies } from "./dependencies.js";
 
@@ -18,6 +19,7 @@ export async function registerChannelV1Routes(app: FastifyInstance, dependencies
   registerTaskRunV1Routes(app, dependencies);
   registerEventV1Routes(app, dependencies);
   registerConsoleSessionV1Routes(app, dependencies);
+  registerConsoleSkillV1Routes(app, dependencies);
   registerConsoleRunV1Routes(app, dependencies);
   registerConsoleGoalV1Routes(app, dependencies);
 }

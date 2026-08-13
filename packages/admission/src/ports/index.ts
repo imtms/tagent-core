@@ -4,6 +4,7 @@ export type {
   MessageSourceRepository,
 } from "./message-source-repository.js";
 export type { SessionRepository } from "./session-repository.js";
+export type { SkillRepository } from "./skill-repository.js";
 export type {
   ClaimedSubmission,
   SubmissionQueue,

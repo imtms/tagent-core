@@ -366,11 +366,11 @@ describe("Learning integration schema v33 migration", () => {
     expect(db.prepare("SELECT version FROM schema_meta WHERE id=1").get()).toEqual({ version: 32 });
   });
 
-  it("opens a production Store at schema version 42 with the complete v33 foundation", () => {
+  it("opens a production Store at schema version 43 with the complete v33 foundation", () => {
     const store = new Store(":memory:", { deferPostMigrationRecovery: true });
     databases.push(store.db);
 
-    expect(store.getSchemaVersion()).toBe(42);
+    expect(store.getSchemaVersion()).toBe(43);
     assertLearningIntegrationV33Schema(store.db);
     expect(dbObjectNames(store.db)).toEqual(expect.arrayContaining([
       "integration_stream_sequence",

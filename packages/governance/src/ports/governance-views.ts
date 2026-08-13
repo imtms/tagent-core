@@ -73,6 +73,7 @@ export interface GovernanceContextManifestView {
       | "system_prompt"
       | "taskrun_contract"
       | "workspace_goal"
+      | "skill"
       | "session_message"
       | "transcript_message"
       | "core_memory"

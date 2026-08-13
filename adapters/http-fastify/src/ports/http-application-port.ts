@@ -109,4 +109,11 @@ export type HttpApplicationPort = HttpAdmissionApplicationPort
   & HttpExecutionApplicationPort
   & HttpLearningApplicationPort
   & HttpWorkflowGovernanceApplicationPort
-  & HttpWorkspaceGoalApplicationPort;
+  & HttpWorkspaceGoalApplicationPort
+  & {
+    listSkills(): unknown;
+    getSessionSkill(sessionId: string): unknown;
+    uploadSkill(sessionId: string, input: { filename: string; contentBase64: string }): unknown;
+    bindSessionSkill(sessionId: string, revisionId: string): unknown;
+    unbindSessionSkill(sessionId: string): unknown;
+  };

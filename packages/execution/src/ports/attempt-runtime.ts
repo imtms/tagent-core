@@ -113,6 +113,8 @@ export type RuntimeQueueResult = "accepted" | "settled";
 export interface AttemptRuntimePort {
   initialize?(): Promise<unknown>;
   prompt(query: string): Promise<void>;
+  /** Explicitly invoke one Core-selected Skill; never inferred from prompt text. */
+  invokeSkill?(name: string, query: string): Promise<void>;
   steer(instruction: string): Promise<RuntimeQueueResult>;
   followUp?(instruction: string): Promise<RuntimeQueueResult>;
   compact?(instructions?: string): Promise<void>;
@@ -133,6 +135,16 @@ export interface RuntimeModelSpec {
   maxTokens: number;
 }
 
+/** Runtime-neutral projection of one immutable Core-managed Skill revision. */
+export interface RuntimeSkill {
+  name: string;
+  description: string;
+  content: string;
+  filePath: string;
+  sha256: string;
+  disableModelInvocation?: boolean;
+}
+
 export type RuntimeReasoningEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface AttemptRuntimeSpec {
@@ -146,6 +158,8 @@ export interface AttemptRuntimeSpec {
   reasoningEffort?: RuntimeReasoningEffort;
   apiKey?: string;
   initialMessages?: RuntimeMessage[];
+  skills?: readonly RuntimeSkill[];
+  selectedSkillName?: string;
   providerTimeoutMs?: number;
   providerMaxRetries?: number;
   runTimeoutMs?: number;

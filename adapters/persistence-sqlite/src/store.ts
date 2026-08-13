@@ -47,6 +47,9 @@ import type {
   SessionInputAnalysis,
   SessionSettingsUpdate,
   TaskObjective,
+  CreateSkillRevisionInput,
+  SkillRevision,
+  SkillSummary,
 } from "@tagent/admission/domain";
 import { assertControlContent } from "@tagent/execution/domain";
 import type { SubmissionAuditInput, SubmissionAuditReceipt } from "@tagent/admission/ports";
@@ -96,12 +99,13 @@ import {
   migrateOperatorReadV41,
 } from "./migrations/v41-operator-read.js";
 import { assertExecutionPolicyV42Schema, migrateExecutionPolicyV42 } from "./migrations/v42-execution-policy.js";
+import { assertSkillsV43Schema, migrateSkillsV43 } from "./migrations/v43-skills.js";
 import { mapLegacyRunApprovalOperation } from "./sqlite/canonical-approval-mapper.js";
 import { appendProjectionPair, finalizeProjectionCheckpoint } from "./sqlite/canonical-integration-event.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 42;
+const SCHEMA_VERSION = 43;
 const MAX_SUBMISSION_CONTENT_CHARS = 200_000;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -1181,10 +1185,17 @@ export class Store {
     assertOperatorReadV41Schema(this.db);
     const executionPolicyMigration = this.db.transaction(() => {
       migrateExecutionPolicyV42(this.db, previousVersion !== undefined && previousVersion >= 42 ? 42 : 41);
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`)
+        .run(previousVersion !== undefined && previousVersion >= 43 ? 43 : 42, now());
     });
     executionPolicyMigration();
     assertExecutionPolicyV42Schema(this.db);
+    const skillsMigration = this.db.transaction(() => {
+      migrateSkillsV43(this.db, previousVersion !== undefined && previousVersion >= 43 ? 43 : 42);
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+    });
+    skillsMigration();
+    assertSkillsV43Schema(this.db);
     // A process restart loses the in-memory executor for receipts that had only
     // reached "started". Surface uncertainty explicitly; never replay an effect
     // whose outcome may already have escaped Core.
@@ -1605,6 +1616,71 @@ export class Store {
     return this.updateSession(id, { title });
   }
 
+  createSkillRevision(input: CreateSkillRevisionInput): SkillRevision {
+    return this.db.transaction(() => {
+      const timestamp = now();
+      let skill = this.db.prepare("SELECT id FROM skills WHERE name=?").get(input.name) as { id: string } | undefined;
+      if (!skill) {
+        skill = { id: randomUUID() };
+        this.db.prepare("INSERT INTO skills (id,name,created_at,updated_at) VALUES (?,?,?,?)")
+          .run(skill.id, input.name, timestamp, timestamp);
+      }
+      const duplicate = this.db.prepare("SELECT id FROM skill_revisions WHERE skill_id=? AND sha256=?")
+        .get(skill.id, input.sha256) as { id: string } | undefined;
+      if (duplicate) return this.getSkillRevision(duplicate.id)!;
+      const revision = (this.db.prepare("SELECT COALESCE(MAX(revision),0)+1 AS revision FROM skill_revisions WHERE skill_id=?")
+        .get(skill.id) as { revision: number }).revision;
+      const id = randomUUID();
+      this.db.prepare(`INSERT INTO skill_revisions
+        (id,skill_id,revision,description,content,file_path,sha256,disable_model_invocation,source_filename,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+        id, skill.id, revision, input.description, input.content, input.filePath, input.sha256,
+        Number(input.disableModelInvocation ?? false), input.sourceFilename, timestamp,
+      );
+      this.db.prepare("UPDATE skills SET updated_at=? WHERE id=?").run(timestamp, skill.id);
+      return this.getSkillRevision(id)!;
+    })();
+  }
+
+  getSkillRevision(revisionId: string): SkillRevision | undefined {
+    const row = this.db.prepare(`SELECT r.id,r.skill_id AS skillId,r.revision,s.name,r.description,r.content,
+      r.file_path AS filePath,r.sha256,r.disable_model_invocation AS disableModelInvocation,
+      r.source_filename AS sourceFilename,r.created_at AS createdAt
+      FROM skill_revisions r JOIN skills s ON s.id=r.skill_id WHERE r.id=?`).get(revisionId) as
+      (Omit<SkillRevision, "disableModelInvocation"> & { disableModelInvocation: number }) | undefined;
+    return row ? { ...row, disableModelInvocation: Boolean(row.disableModelInvocation) } : undefined;
+  }
+
+  listSkills(): SkillSummary[] {
+    return this.db.prepare(`SELECT s.id,s.name,r.revision AS latestRevision,r.id AS latestRevisionId,
+      r.description,r.sha256,s.updated_at AS updatedAt FROM skills s JOIN skill_revisions r ON r.skill_id=s.id
+      WHERE r.revision=(SELECT MAX(latest.revision) FROM skill_revisions latest WHERE latest.skill_id=s.id)
+      ORDER BY s.updated_at DESC,s.name`).all() as SkillSummary[];
+  }
+
+  getSessionSkill(sessionId: string): SkillRevision | undefined {
+    const row = this.db.prepare("SELECT skill_revision_id AS revisionId FROM session_skill_bindings WHERE session_id=?")
+      .get(sessionId) as { revisionId: string } | undefined;
+    return row ? this.getSkillRevision(row.revisionId) : undefined;
+  }
+
+  bindSessionSkill(sessionId: string, revisionId: string): SkillRevision | undefined {
+    if (!this.getSession(sessionId)) return undefined;
+    const revision = this.getSkillRevision(revisionId);
+    if (!revision) return undefined;
+    this.db.prepare(`INSERT INTO session_skill_bindings (session_id,skill_revision_id,bound_at) VALUES (?,?,?)
+      ON CONFLICT(session_id) DO UPDATE SET skill_revision_id=excluded.skill_revision_id,bound_at=excluded.bound_at`)
+      .run(sessionId, revisionId, now());
+    this.touchSession(sessionId);
+    return revision;
+  }
+
+  unbindSessionSkill(sessionId: string): boolean {
+    const changed = this.db.prepare("DELETE FROM session_skill_bindings WHERE session_id=?").run(sessionId).changes === 1;
+    if (changed) this.touchSession(sessionId);
+    return changed;
+  }
+
   private touchSession(id: SessionId) {
     this.db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(now(), id);
   }
@@ -1923,10 +1999,25 @@ ${source.content}`;
       const timestamp = now();
       const session = this.getSession(sessionId);
       if (!session) throw new Error(`Session ${sessionId} not found`);
+      const selectedSkill = this.getSessionSkill(sessionId);
+      const frozenContract = contract && selectedSkill ? {
+        ...contract,
+        skill: {
+          skillId: selectedSkill.skillId,
+          revisionId: selectedSkill.id,
+          revision: selectedSkill.revision,
+          name: selectedSkill.name,
+          description: selectedSkill.description,
+          content: selectedSkill.content,
+          filePath: selectedSkill.filePath,
+          sha256: selectedSkill.sha256,
+          disableModelInvocation: selectedSkill.disableModelInvocation,
+        },
+      } : contract;
       this.db.prepare(`
         INSERT INTO runs (id, session_id, request_id, status, phase, goal, model_id, reasoning_effort, created_at, updated_at, contract_json)
         VALUES (?, ?, ?, 'running', 'discover', ?, ?, ?, ?, ?, ?)
-      `).run(id, sessionId, requestId, goal, session.modelId, session.reasoningEffort, timestamp, timestamp, contract ? JSON.stringify(contract) : "");
+      `).run(id, sessionId, requestId, goal, session.modelId, session.reasoningEffort, timestamp, timestamp, frozenContract ? JSON.stringify(frozenContract) : "");
       this.projectAttempt({
         runId: id, ordinal: 1, trigger: "initial", status: "running", scenario: "initial",
         legacyEventSeq: 0, timestamp,

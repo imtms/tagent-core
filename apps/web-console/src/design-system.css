@@ -350,6 +350,7 @@ a:focus-visible {
 }
 
 .workspace-menu-toggle,
+.skill-menu-toggle,
 .run-status-control {
   min-height: 34px;
   padding: 0 10px;
@@ -368,10 +369,27 @@ a:focus-visible {
 }
 
 .workspace-menu-toggle:hover,
+.skill-menu-toggle:hover,
 .workspace-menu-toggle.active,
+.skill-menu-toggle.active,
 .run-status-control:hover { border-color: var(--border-strong); color: var(--foreground-strong); background: var(--surface-hover); }
+.skill-menu-toggle.active { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 40%, var(--border)); background: var(--accent-soft); }
+.skill-menu-toggle.drag-active { outline: 2px solid var(--accent); outline-offset: 2px; }
 .workspace-menu-toggle:active,
+.skill-menu-toggle:active,
 .run-status-control:active { transform: translateY(1px); }
+.skill-revision-badge {
+  min-width: 20px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 10%, var(--surface-raised));
+  font: 720 8px/1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
 .run-status-control > span { width: 6px; height: 6px; border-radius: 50%; background: var(--foreground-subtle); }
 .run-status-control.running > span { background: var(--accent); animation: breathe 1.4s ease-in-out infinite; }
 .run-status-control.waiting_input > span,
@@ -396,6 +414,53 @@ a:focus-visible {
   transform-origin: top right;
   animation: workspace-menu-in var(--motion-fast) var(--ease-out) both;
 }
+.skill-control { position: relative; display: flex; }
+.skill-loader-menu {
+  position: absolute; z-index: 50; top: calc(100% + 8px); right: 0; width: 344px; padding: 8px;
+  border: 1px solid var(--border); border-radius: var(--radius-xl); display: grid; gap: 8px;
+  color: var(--foreground); background: color-mix(in oklab, var(--surface-raised) 97%, transparent);
+  box-shadow: var(--shadow-lg); backdrop-filter: blur(18px); transform-origin: top right; animation: workspace-menu-in var(--motion-fast) var(--ease-out) both;
+}
+.skill-loader-menu.drag-active { border-color: color-mix(in oklab, var(--accent) 58%, var(--border)); }
+.skill-loader-heading { min-height: 52px; padding: 7px 8px 9px; display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 9px; }
+.skill-loader-heading > span:nth-child(2) { min-width: 0; display: grid; gap: 3px; }
+.skill-loader-heading strong { color: var(--foreground-strong); font-size: 11px; font-weight: 740; }
+.skill-loader-heading small { overflow: hidden; color: var(--foreground-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.skill-loader-heading > em { padding: 4px 7px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font: 720 8px/1 var(--font-mono); font-style: normal; font-variant-numeric: tabular-nums; }
+.skill-heading-icon,.skill-upload-icon { display: grid; place-items: center; color: var(--accent); background: var(--accent-soft); }
+.skill-heading-icon { width: 32px; height: 32px; border-radius: var(--radius-md); }
+.skill-current { min-height: 58px; padding: 9px 10px; border: 1px solid color-mix(in oklab, var(--accent) 24%, var(--border)); border-radius: var(--radius-lg); display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; align-items: center; gap: 9px; background: color-mix(in oklab, var(--accent-soft) 56%, var(--surface-raised)); }
+.skill-current-status { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 11%, transparent); }
+.skill-current > span:nth-child(2) { min-width: 0; display: grid; gap: 3px; }
+.skill-current strong,.skill-current small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-current strong { color: var(--foreground-strong); font-size: 10px; }.skill-current small { color: var(--foreground-muted); font-size: 8px; }
+.skill-current > em { color: var(--accent); font-size: 8px; font-weight: 720; font-style: normal; text-transform: uppercase; letter-spacing: .07em; }
+.skill-drop-target { width: 100%; min-height: 76px; padding: 12px; border: 1px dashed color-mix(in oklab, var(--accent) 42%, var(--border)); border-radius: var(--radius-lg); display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--accent); background: color-mix(in oklab, var(--accent-soft) 65%, var(--surface-raised)); cursor: pointer; transition: color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
+.skill-drop-target:hover,.skill-loader-menu.drag-active .skill-drop-target { border-color: color-mix(in oklab, var(--accent) 72%, var(--border)); background: var(--accent-soft); }
+.skill-drop-target:active { transform: translateY(1px); }
+.skill-drop-target:disabled { opacity: .62; cursor: wait; }
+.skill-upload-icon { width: 36px; height: 36px; flex: none; border-radius: var(--radius-md); background: var(--surface-raised); box-shadow: var(--shadow-xs); }
+.skill-drop-target > span { display: grid; gap: 3px; text-align: left; }
+.skill-drop-target strong { color: var(--foreground-strong); font-size: 10px; }
+.skill-drop-target small { color: var(--foreground-muted); font-size: 9px; }
+.skill-catalog { display: grid; gap: 3px; padding-top: 3px; border-top: 1px solid var(--border); }
+.skill-catalog > span { padding: 5px 8px 2px; color: var(--foreground-muted); font-size: 8px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.skill-catalog > button { width: 100%; min-height: 50px; padding: 8px; border: 0; border-radius: var(--radius-md); display: grid; grid-template-columns: 18px minmax(0,1fr) auto 14px; align-items: center; gap: 7px; color: var(--foreground); background: transparent; cursor: pointer; text-align: left; transition: color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
+.skill-catalog > button:hover,.skill-catalog > button.selected { background: var(--surface-hover); }
+.skill-catalog > button.selected { color: var(--accent); }
+.skill-catalog > button:active { transform: translateY(1px); }
+.skill-catalog > button:disabled { opacity: .52; cursor: wait; }
+.skill-catalog button > span { min-width: 0; display: grid; gap: 2px; }
+.skill-catalog strong,.skill-catalog small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-catalog strong { font-size: 10px; }.skill-catalog small { color: var(--foreground-muted); font-size: 8px; }
+.skill-catalog em { font-style: normal; color: var(--foreground-muted); font: 650 8px/1 var(--font-mono); font-variant-numeric: tabular-nums; }
+.skill-empty { min-height: 54px; padding: 9px 10px; border-top: 1px solid var(--border); display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--foreground-muted); }
+.skill-empty > span { display: grid; gap: 2px; }.skill-empty strong { color: var(--foreground); font-size: 9px; }.skill-empty small { font-size: 8px; }
+.skill-disable { min-height: 36px; padding: 0 9px; border: 0; border-radius: var(--radius-md); display: flex; align-items: center; gap: 7px; color: var(--danger); background: transparent; cursor: pointer; font-size: 9px; transition: color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
+.skill-disable:hover { background: var(--danger-soft); }
+.skill-disable:active { transform: translateY(1px); }
+.skill-snapshot-note { margin: 0; padding: 7px 8px 6px; border-top: 1px solid var(--border); display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 6px; color: var(--foreground-muted); font-size: 8px; line-height: 1.45; }
+.skill-snapshot-note svg { margin-top: 1px; color: var(--accent); }
 @keyframes workspace-menu-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
 .workspace-actions-heading { padding: 8px 9px 9px; display: grid; gap: 2px; }
 .workspace-actions-heading span { color: var(--foreground); font-size: 10px; font-weight: 720; }
@@ -2090,9 +2155,10 @@ a:focus-visible {
     width: min(380px, 92vw);
   }
 
-  .workspace-menu-toggle { width: 40px; height: 40px; padding: 0; justify-content: center; }
+  .workspace-menu-toggle,.skill-menu-toggle { width: 40px; height: 40px; padding: 0; justify-content: center; }
+  .skill-menu-toggle .skill-revision-badge { position: absolute; top: -4px; right: -4px; min-width: 17px; height: 17px; padding: 0 4px; border: 2px solid var(--surface); }
   .run-status-control { min-height: 40px; padding: 0 9px; }
-  .workspace-actions-menu { position: fixed; top: calc(58px + env(safe-area-inset-top)); right: 10px; width: min(300px, calc(100vw - 20px)); }
+  .workspace-actions-menu,.skill-loader-menu { position: fixed; top: calc(58px + env(safe-area-inset-top)); right: 10px; width: min(344px, calc(100vw - 20px)); max-height: calc(100dvh - 78px - env(safe-area-inset-top)); overflow-y: auto; }
   .session-more { opacity: 1; }
 }
 

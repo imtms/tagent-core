@@ -115,6 +115,7 @@ function assembleAgentServicePersistence(
     attemptAuthority: persistence.attemptAuthority,
     runtimeMutations: persistence.runtimeMutations,
     sessions: persistence.sessions,
+    skills: persistence.skills,
     submissions: persistence.submissions,
     taskRuns: persistence.taskRuns,
     taskRunTransitions: persistence.taskRunTransitions,

@@ -8,6 +8,8 @@ import {
   type ConsoleV1,
 } from "@tagent/abi";
 import { createGoalApi } from "./goal-api";
+import { createSkillApi } from "./skill-api";
+export type { SkillRevision, SkillSummary } from "./skill-api";
 export type { WorkspaceGoal, WorkspaceGoalSummary, WorkspaceGoalDefinition, WorkspaceGoalRoadmap, WorkspaceGoalRoadmapItem, WorkspaceGoalDecision, WorkspaceGoalTaskRunStart } from "./goal-api";
 export type Session = ConsoleV1.ConsoleSession;
 export type SessionInputAnalysis = ConsoleV1.ConsoleSessionInputAnalysis;
@@ -181,6 +183,7 @@ export const api = {
   reorderInbox: (sessionId: string, itemIds: string[]) => request(`/api/v1/console/sessions/${sessionId}/inbox/order`, { method: "PUT", body: JSON.stringify({ itemIds }) }, ConsoleDecode.inboxItems),
   startInbox: (sessionId: string, itemId: string) => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}/start`, { method: "POST" }, ConsoleDecode.startedRun),
   ...createGoalApi(request),
+  ...createSkillApi(request),
   deleteInbox: (sessionId: string, itemId: string) => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}`, { method: "DELETE" }, ConsoleDecode.ok),
   decideInbox: (sessionId: string, itemId: string, decision: "pending" | "defer") => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}/decision`, { method: "POST", body: JSON.stringify({ decision }) }, ConsoleDecode.ok),
   mergeInbox: (sessionId: string, itemId: string, targetId: string) => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}/merge`, { method: "POST", body: JSON.stringify({ targetId }) }, ConsoleDecode.ok),

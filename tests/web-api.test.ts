@@ -71,6 +71,29 @@ describe("Web API request headers", () => {
     expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
   });
 
+  it("uploads a Skill file as bounded base64 and exposes the right-corner drag/drop loader", async () => {
+    const revision = {
+      id: "revision", skillId: "skill", revision: 1, name: "release-check", description: "Verify a release",
+      content: "Follow the release checklist.", filePath: ".tagent/skills/release-check/hash/SKILL.md",
+      sha256: "a".repeat(64), disableModelInvocation: false, sourceFilename: "SKILL.md", createdAt: 1,
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(success(revision)), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const file = new File(["skill body"], "SKILL.md", { type: "text/markdown" });
+    await expect(api.uploadSkill("session", file)).resolves.toEqual(revision);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/console/sessions/session/skill/upload", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ filename: "SKILL.md", contentBase64: Buffer.from("skill body").toString("base64") }),
+    }));
+    const source = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
+    expect(source).toContain('className="skill-control"');
+    expect(source).toContain('accept=".md,.zip,text/markdown,application/zip"');
+    expect(source).toContain("const dropSkill = (event: DragEvent<HTMLElement>)");
+    expect(source).toContain("onDrop={dropSkill}");
+    expect(source).toContain("TaskRuns freeze the selected revision.");
+    expect(source).toContain('aria-pressed={sessionSkill?.id === skill.latestRevisionId}');
+  });
+
   it("decodes lightweight Run summaries and requests only incremental transcript rows", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(success([consoleRunSummary()])), { status: 200, headers: { "Content-Type": "application/json" } }))

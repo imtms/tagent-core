@@ -5,6 +5,7 @@ import type { CandidateResult } from "../domain/index.js";
 import type { ExecutionStateView } from "./execution-state.js";
 import { ensureSettlementApproval } from "./settlement-approval.js";
 import { blockRuntimeTaskRun, canonicalGateEvaluations, completeRuntimeTaskRun, publishTransitionOutcome } from "./task-run-transition-helpers.js";
+import { executeRuntimePrompt } from "./runtime-skill.js";
 import type {
   AttemptProjectionPort,
   RecoveryControlPort,
@@ -49,7 +50,7 @@ export class AttemptSettlementService {
     let canaryCandidate: CandidateResult | undefined;
     try {
       try {
-        await runtime.prompt(prompt);
+        await executeRuntimePrompt(runtime, prompt, this.state.persistence.taskRuns.getRun(runId)?.contract?.skill?.name);
       } finally {
         // The Run idle watchdog covers active Agent/runtime work only. Supervisor
         // review has its own bounded SSE idle timeout and must not be raced by it.

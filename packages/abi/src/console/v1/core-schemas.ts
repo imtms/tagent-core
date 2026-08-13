@@ -80,6 +80,26 @@ export const ConsoleTaskRunWorkspaceGoalSchema = Type.Object({
 });
 export type ConsoleTaskRunWorkspaceGoal = Static<typeof ConsoleTaskRunWorkspaceGoalSchema>;
 
+export const ConsoleSkillRevisionSchema = Type.Object({
+  id: Type.String(), skillId: Type.String(), revision: Type.Number(), name: Type.String(),
+  description: Type.String(), content: Type.String(), filePath: Type.String(), sha256: Type.String(),
+  disableModelInvocation: Type.Boolean(), sourceFilename: Type.String(), createdAt: TimestampMillisecondsSchema,
+});
+export type ConsoleSkillRevision = Static<typeof ConsoleSkillRevisionSchema>;
+
+export const ConsoleSkillSummarySchema = Type.Object({
+  id: Type.String(), name: Type.String(), latestRevision: Type.Number(), latestRevisionId: Type.String(),
+  description: Type.String(), sha256: Type.String(), updatedAt: TimestampMillisecondsSchema,
+});
+export type ConsoleSkillSummary = Static<typeof ConsoleSkillSummarySchema>;
+
+export const ConsoleTaskRunSkillSchema = Type.Object({
+  skillId: Type.String(), revisionId: Type.String(), revision: Type.Number(), name: Type.String(),
+  description: Type.String(), content: Type.String(), filePath: Type.String(), sha256: Type.String(),
+  disableModelInvocation: Type.Boolean(),
+});
+export type ConsoleTaskRunSkill = Static<typeof ConsoleTaskRunSkillSchema>;
+
 export const ConsoleTaskRunContractSchema = Type.Object({
   sourceInput: Type.String(),
   summary: Type.String(),
@@ -94,6 +114,7 @@ export const ConsoleTaskRunContractSchema = Type.Object({
   routerVersion: Type.String(),
   executionPolicy: Type.Optional(Type.Union([ConsoleTaskExecutionPolicySchema, Type.Null()])),
   workspaceGoal: Type.Optional(Type.Union([ConsoleTaskRunWorkspaceGoalSchema, Type.Null()])),
+  skill: Type.Optional(Type.Union([ConsoleTaskRunSkillSchema, Type.Null()])),
 });
 export type ConsoleTaskRunContract = Static<typeof ConsoleTaskRunContractSchema>;
 
@@ -135,6 +156,7 @@ export type ConsoleMessage = Static<typeof ConsoleMessageSchema>;
 export const ConsoleContextManifestItemSchema = Type.Object({
   kind: Type.Union([
     Type.Literal("system_prompt"), Type.Literal("taskrun_contract"), Type.Literal("workspace_goal"),
+    Type.Literal("skill"),
     Type.Literal("session_message"), Type.Literal("transcript_message"), Type.Literal("core_memory"),
     Type.Literal("memory_card"), Type.Literal("cold_topic"), Type.Literal("workflow_revision"),
     Type.Literal("communication_profile"), Type.Literal("project_rule"), Type.Literal("user_prompt"),

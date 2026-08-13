@@ -32,6 +32,8 @@ Exact-origin CORS is a browser transport boundary, not authentication. A non-emp
 
 Use a dedicated workspace without SSH keys, provider credentials, cloud config, production secrets, or unrelated files. Apply OS/container controls for filesystem, network, process, and resource isolation when stronger containment is required.
 
+Uploaded Skills are untrusted instructions, not capabilities. Core accepts a bounded UTF-8 `SKILL.md` or ZIP bundle, validates frontmatter, rejects absolute/traversal paths and ZIP symlinks, bounds entry count and expanded size, and stores an immutable revision below `.tagent/skills`. A Skill cannot add tools or weaken the existing approval, receipt, path, and settlement boundaries. ZIP validation is an ingestion boundary; `bash` remains subject to the process-level limitation above.
+
 ## Durable authority
 
 The following are server-owned and cannot be asserted by a caller:

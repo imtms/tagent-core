@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.0] - 2026-08-13
+
+### Core-managed Workspace Skills
+
+- Added validated `SKILL.md` and ZIP ingestion, immutable content-addressed revisions, a saved Skill catalog, and one active revision binding per Workspace Session.
+- Frozen the selected revision into each newly admitted `TaskRun`, Context Manifest, and continuation contract so later uploads, switches, or disable actions never alter running work.
+- Added first-party Console ABI, typed client decoding, authenticated list/read/upload/select/disable routes, SQLite schema 43 persistence, and `skill.invoked` audit evidence.
+
+### Native Pi execution and Web Console
+
+- Registered frozen Skill projections through `AgentHarness.resources.skills` and invoked them through `AgentHarness.skill(name, prompt)`; Core does not flatten Skill instructions into an ordinary user prompt and does not modify `pi-agent-core`.
+- Added a conversation-header Skill control with file selection, drag and drop, active revision state, saved Skill selection, disable action, validation feedback, keyboard focus containment, responsive layout, and light/dark presentation.
+- Documented the Skill format, lifecycle, snapshot semantics, Console API, upload bounds, and runtime/security boundary.
+
+### Security, compatibility, and upgrade
+
+- Rejects invalid UTF-8/frontmatter, traversal and absolute paths, duplicate ZIP paths, symlinks, ZIP64/multi-disk/inconsistent archives, oversize content, out-of-root files, and tampered content-addressed revisions.
+- SQLite advances from schema 42 to 43 with `skills`, immutable `skill_revisions`, and `session_skill_bindings`. Back up SQLite/WAL/SHM before upgrade; schema-42-only binaries must not open the migrated database.
+- Synchronized Core, Web Console, all 13 private workspace manifests, internal dependency pins, capability metadata, release fixtures, documentation, tests, and the lockfile at 0.6.0. Deploy matching Core and Web Console 0.6.0 artifacts.
+
 ## [0.5.6] - 2026-08-13
 
 ### Workspace navigation and interaction

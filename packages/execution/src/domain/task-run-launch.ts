@@ -49,6 +49,20 @@ export interface TaskRunWorkspaceGoalSnapshot {
   attachedAt: number;
 }
 
+/** Immutable Skill revision selected when the TaskRun is admitted. */
+export interface TaskRunSkillSnapshot {
+  skillId: string;
+  revisionId: string;
+  revision: number;
+  name: string;
+  description: string;
+  content: string;
+  /** Model-visible workspace-relative path to SKILL.md. */
+  filePath: string;
+  sha256: string;
+  disableModelInvocation: boolean;
+}
+
 /** Immutable Admission decision copied into the durable Execution aggregate. */
 export interface TaskRunContractSnapshot {
   sourceInput: string;
@@ -65,6 +79,7 @@ export interface TaskRunContractSnapshot {
   routerVersion: string;
   executionPolicy?: TaskExecutionPolicy;
   workspaceGoal?: TaskRunWorkspaceGoalSnapshot | null;
+  skill?: TaskRunSkillSnapshot | null;
 }
 
 /** Admission-facing command contract. Execution owns this persisted launch representation. */

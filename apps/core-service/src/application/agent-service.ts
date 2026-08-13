@@ -30,6 +30,7 @@ const delegatedMethods = [
   "decideSessionInput", "mergeSessionInputs", "startSessionInputNow",
   "requestParallelSessionInputApproval", "retryInboxLaunch", "recoverSessionInbox", "start",
   "generateWorkspaceGoalRoadmap", "startWorkspaceGoalRoadmapItem",
+  "listSkills", "getSessionSkill", "uploadSkill", "bindSessionSkill", "unbindSessionSkill",
   "teachWorkflow", "listWorkflows", "getWorkflow", "requestWorkflowActivation", "activateWorkflow",
   "suspendWorkflow", "rollbackWorkflow", "forgetWorkflow", "restoreWorkflow", "setWorkflowBindingMode",
   "recordWorkflowApplication", "getLearningCenter", "decideWorkflowProposal",

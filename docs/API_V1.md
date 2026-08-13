@@ -74,6 +74,20 @@ These routes are the Workspace Goal subset of Operator profile 1.0. They use `se
 
 `@tagent/core-client` covers Goal list/get/create, definition revision, Roadmap revision/generation, operation lookup, decisions and TaskRun start. The exact stable set is returned by `GET /api/v1/capabilities`; broader Console routes are not implicitly promoted. See [WORKSPACE_GOALS.md](WORKSPACE_GOALS.md) and [GATEWAY_HANDOFF_STATUS.md](GATEWAY_HANDOFF_STATUS.md).
 
+### Skill Console routes
+
+The first-party Web Console may upload a `SKILL.md` or bounded ZIP bundle and select one immutable Skill revision for newly admitted TaskRuns in a Workspace:
+
+```text
+GET    /api/v1/console/skills
+GET    /api/v1/console/sessions/:id/skill
+POST   /api/v1/console/sessions/:id/skill/upload
+PUT    /api/v1/console/sessions/:id/skill
+DELETE /api/v1/console/sessions/:id/skill
+```
+
+Reads require `sessions:read`; upload, selection, and disable require `sessions:write`. Upload uses bounded JSON `{ filename, contentBase64 }` with a 12 MiB HTTP body limit and an 8 MiB decoded source-archive limit. A successful upload validates and persists a revision, then selects it for the Session. Selection changes only future TaskRuns; existing TaskRun contracts and continuations keep their frozen revision. These Console routes are first-party and are not part of the stable Gateway Operator profile. See [SKILLS.md](SKILLS.md) for the file format, snapshot semantics, validation, and all expansion limits.
+
 ### Memory provenance
 
 Memory source references use one Admin v1 ABI vocabulary across the Memory domain and Console projections:

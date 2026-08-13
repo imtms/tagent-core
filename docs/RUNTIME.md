@@ -13,6 +13,7 @@ Pi owns the ephemeral model/tool loop within one bounded `Attempt`. TAgent Core 
 - input admission, continuation limits, timeouts, cancellation, steering, and follow-up delivery;
 - operation idempotency and effect receipts;
 - workspace/capability policy, approvals, evidence, and final settlement.
+- Skill upload, validation, immutable revisions, Session selection, and TaskRun snapshots.
 
 The runtime cannot mark a TaskRun complete or grant itself capability.
 
@@ -42,6 +43,8 @@ submission -> TaskRun -> execution lease -> Attempt -> AgentHarness model/tool l
 ```
 
 Each resume, retry, or automatic continuation creates/uses the next bounded Attempt under durable authority. Continuations retain the TaskRun contract and selected durable context; they are not independent tasks.
+
+When a TaskRun has a selected Skill, Execution passes one runtime-neutral Skill projection to `@tagent/runtime-pi`. The adapter registers it in `AgentHarness.resources.skills` and invokes `AgentHarness.skill(name, prompt)` explicitly. Skill instructions are not converted into an ordinary user prompt by Core, and they do not grant tools or bypass approval, receipts, path guards, or settlement policy.
 
 ## Context and compaction
 

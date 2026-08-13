@@ -1,6 +1,6 @@
 import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { Activity, ArrowDown, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Keyboard, Menu, Moon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Search, Send, Settings2, ShieldAlert, ShieldCheck, Sparkles, Square, Sun, Target, Terminal, X } from "lucide-react";
-import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type ContextManifest, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
+import { Activity, ArrowDown, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Keyboard, Menu, Moon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Search, Send, Settings2, ShieldAlert, ShieldCheck, Sparkles, Square, Sun, Target, Terminal, Upload, WandSparkles, X } from "lucide-react";
+import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type SkillRevision, type SkillSummary, type ContextManifest, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
 import { Markdown, preloadMarkdown } from "./LazyMarkdown";
 import { LiveText } from "./LiveText";
 import { createRequestId } from "./id";
@@ -468,6 +468,11 @@ export function App() {
   const [sessionMenuId, setSessionMenuId] = useState("");
   const [sessionMenuPosition, setSessionMenuPosition] = useState({ top: 0, left: 0 });
   const [savingExecutionProfile, setSavingExecutionProfile] = useState(false);
+  const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [sessionSkill, setSessionSkill] = useState<SkillRevision | null>(null);
+  const [skillMenuOpen, setSkillMenuOpen] = useState(false);
+  const [skillUploading, setSkillUploading] = useState(false);
+  const [skillDragActive, setSkillDragActive] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [learningOpen, setLearningOpen] = useState(false);
   const [goalsOpen, setGoalsOpen] = useState(false);
@@ -478,6 +483,8 @@ export function App() {
   const runPanelRef = useRef<HTMLElement>(null);
   const mobileBackdropRef = useRef<HTMLButtonElement>(null);
   const workspaceMenuRef = useRef<HTMLDivElement>(null);
+  const skillMenuRef = useRef<HTMLDivElement>(null);
+  const skillFileRef = useRef<HTMLInputElement>(null);
   const cancelRenameRef = useRef(false);
   const renameSubmittingRef = useRef(false);
   const activeRunIdRef = useRef("");
@@ -521,6 +528,7 @@ export function App() {
     onOpenChange: setLeftOpen,
   });
   usePopoverFocus(workspaceMenuOpen, workspaceMenuRef, useCallback(() => setWorkspaceMenuOpen(false), []));
+  usePopoverFocus(skillMenuOpen, skillMenuRef, useCallback(() => setSkillMenuOpen(false), []));
 
   function openSessionMenu(session: Session, anchor: DOMRect | { top: number; bottom: number; left: number }, x?: number, y?: number) {
     const menuWidth = 208;
@@ -552,7 +560,7 @@ export function App() {
   useEffect(() => {
     const handleGlobalKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setWorkspaceMenuOpen(false); setWorkspaceSwitcherOpen(false); setShortcutHelpOpen(false); setSessionMenuId(""); setLeftOpen(false); setRightOpen(false);
+        setWorkspaceMenuOpen(false); setSkillMenuOpen(false); setWorkspaceSwitcherOpen(false); setShortcutHelpOpen(false); setSessionMenuId(""); setLeftOpen(false); setRightOpen(false);
         return;
       }
       const target = event.target as HTMLElement | null;
@@ -628,6 +636,53 @@ export function App() {
   }, []);
 
   useEffect(() => { void loadSessions(); void api.status().then(setRuntimeStatus); void api.learningSettings().then(setLearningSettings); }, [loadSessions]);
+  useEffect(() => {
+    if (!sessionId) { setSessionSkill(null); return; }
+    let closed = false;
+    void Promise.all([api.skills(), api.sessionSkill(sessionId)]).then(([catalog, selected]) => {
+      if (!closed) { setSkills(catalog); setSessionSkill(selected); }
+    }).catch((cause) => { if (!closed) setError(cause instanceof Error ? cause.message : String(cause)); });
+    return () => { closed = true; };
+  }, [sessionId]);
+
+  const uploadSkill = async (file: File) => {
+    if (!sessionId || skillUploading) return;
+    setSkillUploading(true); setError(""); setNotice("");
+    try {
+      const selected = await api.uploadSkill(sessionId, file);
+      setSessionSkill(selected);
+      setSkills(await api.skills());
+      setNotice(`Skill ${selected.name} v${selected.revision} loaded for new tasks in this workspace.`);
+      setSkillMenuOpen(false);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setSkillUploading(false); setSkillDragActive(false); if (skillFileRef.current) skillFileRef.current.value = ""; }
+  };
+
+  const chooseSkill = async (revisionId: string) => {
+    if (!sessionId || skillUploading) return;
+    setSkillUploading(true); setError("");
+    try { const selected = await api.bindSkill(sessionId, revisionId); setSessionSkill(selected); setNotice(`Skill ${selected.name} selected for new tasks.`); setSkillMenuOpen(false); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setSkillUploading(false); }
+  };
+
+  const clearSkill = async () => {
+    if (!sessionId || skillUploading) return;
+    setSkillUploading(true); setError("");
+    try { await api.unbindSkill(sessionId); setSessionSkill(null); setNotice("Skill disabled for new tasks in this workspace."); setSkillMenuOpen(false); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setSkillUploading(false); }
+  };
+  const openSkillPicker = () => {
+    setSkillDragActive(false);
+    skillFileRef.current?.click();
+  };
+  const dropSkill = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    const file = event.dataTransfer.files[0];
+    if (file) void uploadSkill(file);
+    else setSkillDragActive(false);
+  };
   const toggleLearningAutoExecution = async () => {
     if (!learningSettings || learningToggleBusy) return;
     setLearningToggleBusy(true); setError(""); setNotice("");
@@ -1165,6 +1220,18 @@ export function App() {
           {auditAvailable && selectedRunStatus && <button className={`run-status-control ${selectedRunStatus}`} onClick={() => { setWorkspaceMenuOpen(false); setRightCollapsed(false); setRightOpen(true); }} aria-label={`Open audit panel. Task status: ${selectedRunStatus}`}><span /><strong>{selectedRunStatus === "waiting_input" ? "Needs input" : selectedRunStatus.replaceAll("_", " ")}</strong></button>}
           {canResumeRun(selectedRun, activeRun) && <button className="resume-button desktop-only" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={15} />Resume</button>}
           {activeRun?.status === "running" && <button className="icon-button danger desktop-only" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={17} /></button>}
+          {sessionId && <div className="skill-control">
+            <input ref={skillFileRef} type="file" accept=".md,.zip,text/markdown,application/zip" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadSkill(file); }} />
+            <button className={`skill-menu-toggle ${sessionSkill ? "active" : ""} ${skillDragActive ? "drag-active" : ""}`} type="button" aria-label={sessionSkill ? `Workspace Skill: ${sessionSkill.name}, revision ${sessionSkill.revision}` : "Load a Workspace Skill"} aria-haspopup="dialog" aria-controls="workspace-skill-menu" aria-expanded={skillMenuOpen} onClick={() => { setWorkspaceMenuOpen(false); setSkillMenuOpen((current) => !current); }} onDragEnter={(event) => { event.preventDefault(); setSkillDragActive(true); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDragLeave={() => setSkillDragActive(false)} onDrop={dropSkill}><WandSparkles size={15} /><span className="desktop-only">{skillUploading ? "Loading…" : sessionSkill?.name ?? "Skill"}</span>{sessionSkill && <span className="skill-revision-badge">v{sessionSkill.revision}</span>}<ChevronDown className="desktop-only" size={12} /></button>
+            {skillMenuOpen && <><button className="workspace-menu-scrim" type="button" aria-label="Close Skill loader" onClick={() => setSkillMenuOpen(false)} /><div id="workspace-skill-menu" ref={skillMenuRef} className={`skill-loader-menu ${skillDragActive ? "drag-active" : ""}`} role="dialog" aria-modal="false" aria-labelledby="workspace-skill-heading" onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSkillDragActive(false); }} onDrop={dropSkill}>
+              <div className="skill-loader-heading"><span className="skill-heading-icon"><WandSparkles size={15} /></span><span><strong id="workspace-skill-heading">Workspace Skill</strong><small>{sessionSkill ? "Used by newly admitted TaskRuns" : "Add focused instructions to new tasks"}</small></span>{sessionSkill && <em>v{sessionSkill.revision}</em>}</div>
+              {sessionSkill && <div className="skill-current" aria-label={`Current Skill ${sessionSkill.name}, revision ${sessionSkill.revision}`}><span className="skill-current-status" /><span><strong>{sessionSkill.name}</strong><small>{sessionSkill.description}</small></span><em>Active</em></div>}
+              <button className="skill-drop-target" type="button" disabled={skillUploading} onClick={openSkillPicker} onDragEnter={(event) => { event.preventDefault(); setSkillDragActive(true); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}><span className="skill-upload-icon">{skillUploading ? <Activity className="spin" size={18} /> : <Upload size={18} />}</span><span><strong>{skillUploading ? "Validating Skill…" : sessionSkill ? "Upload a new revision" : "Upload or drop a Skill"}</strong><small>SKILL.md or ZIP · validated before activation</small></span></button>
+              {skills.length > 0 ? <div className="skill-catalog"><span>Saved Skills</span>{skills.map((skill) => <button type="button" key={skill.latestRevisionId} className={sessionSkill?.id === skill.latestRevisionId ? "selected" : ""} aria-pressed={sessionSkill?.id === skill.latestRevisionId} disabled={skillUploading} onClick={() => void chooseSkill(skill.latestRevisionId)}><WandSparkles size={14} /><span><strong>{skill.name}</strong><small>{skill.description}</small></span><em>v{skill.latestRevision}</em>{sessionSkill?.id === skill.latestRevisionId && <Check size={13} />}</button>)}</div> : <div className="skill-empty"><WandSparkles size={14} /><span><strong>No saved Skills yet</strong><small>Your first validated upload will appear here.</small></span></div>}
+              {sessionSkill && <button className="skill-disable" type="button" disabled={skillUploading} onClick={() => void clearSkill()}><X size={14} /><span>Disable Skill for new tasks</span></button>}
+              <p className="skill-snapshot-note"><ShieldCheck size={13} /><span>TaskRuns freeze the selected revision. Running work never changes when you switch Skills.</span></p>
+            </div></>}
+          </div>}
           <button className={`workspace-menu-toggle ${workspaceMenuOpen ? "active" : ""}`} type="button" aria-label="More workspace actions" aria-haspopup="dialog" aria-expanded={workspaceMenuOpen} onClick={() => setWorkspaceMenuOpen((current) => !current)}><Settings2 size={16} /><span className="desktop-only">Workspace</span><ChevronDown className="desktop-only" size={12} /></button>
           {workspaceMenuOpen && <><button className="workspace-menu-scrim" type="button" aria-label="Close workspace actions" onClick={() => setWorkspaceMenuOpen(false)} /><div ref={workspaceMenuRef} className="workspace-actions-menu" role="dialog" aria-label="Workspace settings">
             <div className="workspace-actions-heading"><span>Workspace settings</span><small>{selectedSession?.title ?? "TAgent Core"}</small></div>

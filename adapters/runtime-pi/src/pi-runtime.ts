@@ -254,6 +254,7 @@ export class PiRuntime implements AttemptRuntimePort {
       model: primary,
       systemPrompt: this.options.systemPrompt,
       tools: this.options.capabilities.tools.map(toPiTool),
+      resources: { skills: this.options.skills?.map((skill) => ({ ...skill })) },
       thinkingLevel: primary.reasoning ? (this.options.reasoningEffort ?? "high") : "off",
       steeringMode: "one-at-a-time",
       followUpMode: "one-at-a-time",
@@ -338,14 +339,16 @@ export class PiRuntime implements AttemptRuntimePort {
     if (event.type === "retry_finished") this.emit("context.summarization.retry.finished", { source: event.operation });
   }
 
-  async prompt(query: string) {
+  private async executeQuery(query: string, skillName?: string) {
     const harness = await this.initialize();
     if (this.disposed) throw new Error("Runtime disposed");
     if (this.abortRequested) throw new Error("Runtime aborted");
     this.streaming = true;
     try {
       await this.compactIfNeeded();
-      let assistant = await this.runHarnessPrompt(harness, query, false);
+      let assistant = skillName
+        ? await this.runHarnessSkill(harness, skillName, query)
+        : await this.runHarnessPrompt(harness, query, false);
       let retryAttempt = 0;
       const maxRetries = this.options.providerMaxRetries ?? 1;
       let overflowRecoveryAttempted = false;
@@ -433,6 +436,15 @@ export class PiRuntime implements AttemptRuntimePort {
       }
       this.emit("runtime.settled", { pendingMessageCount: this.harnessPendingMessageCount + this.deferredControls.length });
     }
+  }
+
+  async prompt(query: string) { return this.executeQuery(query); }
+  async invokeSkill(name: string, query: string) {
+    this.emit("skill.invoked", {
+      name,
+      sha256: this.options.skills?.find((skill) => skill.name === name)?.sha256 ?? "",
+    });
+    return this.executeQuery(query, name);
   }
 
   async steer(instruction: string) { return this.queueControl("steer", instruction); }
@@ -564,6 +576,16 @@ export class PiRuntime implements AttemptRuntimePort {
     } finally {
       this.harnessTurnActive = false;
       if (internal) this.internalPrompts.delete(text);
+    }
+  }
+  private async runHarnessSkill(harness: AgentHarness<undefined>, name: string, instructions: string) {
+    this.harnessTurnActive = true;
+    const run = harness.skill(name, instructions);
+    try {
+      await this.flushDeferredControls(harness);
+      return await run;
+    } finally {
+      this.harnessTurnActive = false;
     }
   }
   private continueHarness(harness: AgentHarness<undefined>) {

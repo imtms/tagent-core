@@ -39,7 +39,7 @@ The command must exit `0` and return one credential with all required scopes and
 
 ## Schema migration gate
 
-Migration v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 → v40 → v41 is performed by the production `Store` opener. Back up the database and its WAL/SHM files, then run this command twice:
+Migration v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 → v40 → v41 → v42 → v43 is performed by the production `Store` opener. Back up the database and its WAL/SHM files, then run this command twice:
 
 ```sh
 TAGENT_DB=/var/lib/tagent/core.sqlite \
@@ -53,7 +53,8 @@ const objects = store.db.prepare(`SELECT name FROM sqlite_master
     'idx_runs_operator_session_created','idx_runs_operator_session_updated',
     'integration_outbox','learning_projection_authority_state',
     'workspace_goal_inbox_links','workspace_goal_roadmap_item_progress','session_create_receipts',
-    'task_run_command_receipts','workspace_goal_operation_receipts','submission_audit_receipts') ORDER BY name`)
+    'task_run_command_receipts','workspace_goal_operation_receipts','submission_audit_receipts',
+    'skills','skill_revisions','session_skill_bindings') ORDER BY name`)
   .all().map((row) => row.name);
 const goalRunLinkColumns = store.db.prepare("PRAGMA table_info(workspace_goal_run_links)").all().map((row) => row.name);
 store.close();
@@ -64,7 +65,7 @@ NODE
 Both runs must exit `0` and return exactly:
 
 ```json
-{"schemaVersion":41,"objects":["approval_receipts","attempts","idx_operations_attempt_created","idx_run_checks_source_operation","idx_runs_operator_session_created","idx_runs_operator_session_updated","idx_sessions_operator_created","integration_outbox","learning_projection_authority_state","session_create_receipts","submission_audit_receipts","task_run_command_receipts","workspace_goal_inbox_links","workspace_goal_operation_receipts","workspace_goal_roadmap_item_progress"],"hasGoalLinkMode":true}
+{"schemaVersion":43,"objects":["approval_receipts","attempts","idx_operations_attempt_created","idx_run_checks_source_operation","idx_runs_operator_session_created","idx_runs_operator_session_updated","idx_sessions_operator_created","integration_outbox","learning_projection_authority_state","session_create_receipts","session_skill_bindings","skill_revisions","skills","submission_audit_receipts","task_run_command_receipts","workspace_goal_inbox_links","workspace_goal_operation_receipts","workspace_goal_roadmap_item_progress"],"hasGoalLinkMode":true}
 ```
 
 The second open is the idempotence proof. A different version or object inventory blocks deployment.
@@ -131,7 +132,7 @@ These are embedded in the probe output under `thresholds`:
 | `writerLeaseFresh` | `true` | Not applicable | `false` |
 | `migrationOpenIssues` | `0` | Not applicable | Missing table or any open issue |
 | `authorityReady` | `true` | Transition state `switching` or `rollback` | Missing authority state |
-| `schemaVersion` | `41` | Not applicable | Missing or not `41` |
+| `schemaVersion` | `43` | Not applicable | Missing or not `43` |
 | `capabilities.compatible` | `true` | Not applicable | Missing endpoint/catalog/profile or wrong schema |
 | `operatorReadCapabilities.compatible` | `true` | Not applicable | Missing endpoint, pagination/retention guarantee or wrong profile |
 
@@ -217,7 +218,7 @@ Use **Core before Gateway** order:
 
 ## Rollback point
 
-The rollback point is the last verified prior compatible Gateway source plus the recorded Core consumer and Learning watermarks. Schema v42 is forward-only during application rollback.
+The rollback point is the last verified prior compatible Gateway source plus the recorded Core consumer and Learning watermarks. Schema v43 is forward-only during application rollback.
 
 Rollback steps:
 
@@ -227,7 +228,7 @@ Rollback steps:
 4. Activate the prior compatible Gateway source through the production learning authority rollback API.
 5. Reclaim the Core event consumer, receiving a new generation.
 6. Resume after the durable ACK watermark; replay persisted-but-unacked events and persist the new-generation exact receipt before ACK.
-7. Keep schema version `42`. Do not restore an older database over it.
+7. Keep schema version `43`. Do not restore an older database over it.
 8. Run the release-local readiness probe again and reopen traffic only after exit `0`.
 
-If the prior deployment cannot coexist with schema v42 or honor the current receipt/ACK contract, keep traffic stopped and deploy a forward-compatible build. Do not perform a destructive schema downgrade.
+If the prior deployment cannot coexist with schema v43 or honor the current receipt/ACK contract, keep traffic stopped and deploy a forward-compatible build. Do not perform a destructive schema downgrade.
