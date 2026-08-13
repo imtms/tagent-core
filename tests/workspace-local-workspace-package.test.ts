@@ -5,12 +5,12 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
   WorkspacePathError,
-  createTools,
+  composeWorkspaceTools,
   listWorkspaceDirectory,
   readWorkspaceFile,
   writeWorkspaceFile,
 } from "@tagent/workspace-local";
-import { createTools as ToolsCreateTools } from "@tagent/workspace-local/tools";
+import { composeWorkspaceTools as ToolsComposeWorkspaceTools } from "@tagent/workspace-local/tools";
 import {
   WorkspacePathError as PathWorkspacePathError,
   listWorkspaceDirectory as PathListWorkspaceDirectory,
@@ -80,13 +80,13 @@ describe("Local workspace adapter package", () => {
   it("publishes a private minimal ABI with exact approved dependencies", () => {
     const root = readJson<{ devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const manifest = readJson<PackageManifest>(`${packageRoot}/package.json`);
-    expect(manifest).toMatchObject({ name: "@tagent/workspace-local", version: "0.6.2", private: true });
+    expect(manifest).toMatchObject({ name: "@tagent/workspace-local", version: "0.6.3", private: true });
     expect(root.devDependencies[manifest.name]).toBe(manifest.version);
     expect(Object.keys(manifest.exports).sort()).toEqual([
-      ".", "./artifact-file-sink", "./project-context", "./snapshot-edit", "./tools", "./workspace-path",
+      ".", "./artifact-file-sink", "./local-subprocess", "./project-context", "./snapshot-edit", "./tools", "./workspace-path",
     ]);
     expect(manifest.dependencies).toEqual({
-      "@tagent/execution": "0.6.2",
+      "@tagent/execution": "0.6.3",
       typebox: "^1.1.24",
     });
     for (const target of Object.values(manifest.exports)) {
@@ -107,12 +107,12 @@ describe("Local workspace adapter package", () => {
     expect(declarations).toEqual(["packages/execution/src/ports/tool-capability-application-port.ts"]);
     const executionPorts = readFileSync(path.join(repoRoot, "packages/execution/src/ports/index.ts"), "utf8");
     expect(executionPorts).toContain('from "./tool-capability-application-port.js"');
-    expect(readFileSync(path.join(repoRoot, `${sourceRoot}/tools.ts`), "utf8"))
+    expect(readFileSync(path.join(repoRoot, `${sourceRoot}/tools/index.ts`), "utf8"))
       .toContain('from "@tagent/execution/ports"');
   });
 
   it("preserves identity across the adapter's explicit public subpaths", () => {
-    expect(ToolsCreateTools).toBe(createTools);
+    expect(ToolsComposeWorkspaceTools).toBe(composeWorkspaceTools);
     expect(PathWorkspacePathError).toBe(WorkspacePathError);
     expect(PathListWorkspaceDirectory).toBe(listWorkspaceDirectory);
     expect(PathReadWorkspaceFile).toBe(readWorkspaceFile);
@@ -191,17 +191,18 @@ describe("Local workspace adapter package", () => {
   });
 
   it("preserves operation receipts, phases, stale checks, and durable tool result semantics", () => {
-    const source = readFileSync(path.join(repoRoot, `${sourceRoot}/tools.ts`), "utf8");
-    expect(source).toContain("`${runId}:${attempt}:${toolCallId}`");
-    expect(source).toContain('capabilities.advanceRunPhase("implement")');
-    expect(source).toContain("options.invalidatesChecks === false ? 0 : capabilities.markChecksStale()");
-    expect(source).toContain('status: "succeeded"');
-    expect(source).toContain('stage: "completed"');
-    expect(source).toContain('status: "failed"');
-    expect(source).toContain('stage: "execution_failed"');
+    const pipeline = readFileSync(path.join(repoRoot, "packages/execution/src/application/tool-execution-pipeline.ts"), "utf8");
+    const source = sourceFiles(`${sourceRoot}/tools`).map((relativePath) => readFileSync(path.join(repoRoot, relativePath), "utf8")).join("\n");
+    expect(pipeline).toContain("`${capabilities.runId}:${attempt}:${toolCallId}`");
+    expect(pipeline).toContain('this.capabilities.advanceRunPhase("implement")');
+    expect(pipeline).toContain("this.capabilities.markChecksStale()");
+    expect(pipeline).toContain('status: "succeeded"');
+    expect(pipeline).toContain('stage: "completed"');
+    expect(pipeline).toContain('status: "failed"');
+    expect(pipeline).toContain('stage: "execution_failed"');
     expect(source).toContain('name: "task_run"');
     expect(source).toContain('Type.Literal("request_user_input")');
-    expect(source).toContain('capabilities.publish("run.updated"');
+    expect(source).toContain('c.publish("run.updated"');
   });
 
   it("resolves every compiled export through Node ESM", () => {
@@ -211,6 +212,7 @@ describe("Local workspace adapter package", () => {
       [
         'await import("@tagent/workspace-local");',
         'await import("@tagent/workspace-local/tools");',
+        'await import("@tagent/workspace-local/local-subprocess");',
         'await import("@tagent/workspace-local/workspace-path");',
       ].join("\n"),
     ], { cwd: repoRoot, stdio: "pipe" });

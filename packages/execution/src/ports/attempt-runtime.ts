@@ -83,6 +83,15 @@ export interface RuntimeTool<TParameters = unknown, TDetails = unknown> {
     onUpdate?: RuntimeToolUpdateCallback<TDetails>,
   ): Promise<RuntimeToolResult<TDetails>>;
   executionMode?: RuntimeToolExecutionMode;
+  /** Core-enforced execution policy. Providers describe effects; they cannot settle their own guard. */
+  policy?: RuntimeToolPolicy;
+}
+
+export interface RuntimeToolPolicy {
+  operationType?: string;
+  workspaceAccess?: "none" | "read_only" | "mutation" | ((parameters: unknown) => "none" | "read_only" | "mutation");
+  invalidatesChecks?: boolean | ((parameters: unknown) => boolean);
+  externalAction?: boolean;
 }
 
 export interface RuntimeCapabilityCatalog {
@@ -91,7 +100,7 @@ export interface RuntimeCapabilityCatalog {
 
 export interface RuntimeEventSink {
   activity(): void;
-  publish(type: string, data: Record<string, unknown>): void;
+  publish<TType extends import("../domain/task-run.js").RunEventType>(type: TType, data: import("../domain/task-run.js").RunEventMap[TType]): void;
   appendTranscript(message: RuntimeMessage): number | undefined;
   isRunning(): boolean;
   isWaitingForInput(): boolean;
@@ -156,7 +165,10 @@ export interface AttemptRuntimeSpec {
   model?: RuntimeModelSpec;
   fallbackModels?: RuntimeModelSpec[];
   reasoningEffort?: RuntimeReasoningEffort;
-  apiKey?: string;
+  credential?: {
+    reference: import("./credential-resolver-port.js").CredentialReference;
+    resolver: import("./credential-resolver-port.js").CredentialResolverPort;
+  };
   initialMessages?: RuntimeMessage[];
   skills?: readonly RuntimeSkill[];
   selectedSkillName?: string;
@@ -166,6 +178,7 @@ export interface AttemptRuntimeSpec {
   runHardTimeoutMs?: number;
   historicalToolResultChars?: number;
   historicalTaskRunReceiptChars?: number;
+  requestEnvelopes?: import("./attempt-request-envelope-repository.js").AttemptRequestEnvelopeRepository;
 }
 
 export type AttemptRuntimeFactory = (spec: AttemptRuntimeSpec) => AttemptRuntimePort;

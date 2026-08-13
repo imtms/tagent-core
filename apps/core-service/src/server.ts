@@ -45,6 +45,7 @@ import {
   type LegacyStoreAdapter,
 } from "@tagent/persistence-sqlite";
 import { resolveRuntimeFactory } from "@tagent/runtime-pi/factory";
+import { createEnvironmentCredentialResolver } from "@tagent/execution/ports";
 
 type HttpServer = ReturnType<typeof createApp>;
 
@@ -126,6 +127,7 @@ function assembleAgentServicePersistence(
     checkpoints: persistence.checkpoints,
     approvals: persistence.approvals,
     contextManifests: persistence.contextManifests,
+    requestEnvelopes: persistence.requestEnvelopes,
     supervisorDecisions: persistence.supervisorDecisions,
     runtime: persistence.runtime,
     supervisor: persistence.supervisor,
@@ -255,18 +257,19 @@ export async function bootstrapCore(
     await lifecycle.start();
     store.runPostMigrationRecovery(writerConnection.writerGuard);
 
+    const credentialResolver = createEnvironmentCredentialResolver(process.env);
     const learningControl = new LearningFeatureControl(persistence.settings, config.memory.enabled, {
       learningEnabled: config.learning.enabledByDefault,
       autoExecutionEnabled: config.learning.autoExecutionEnabledByDefault,
     });
     const semanticJudge = config.learning.semanticJudgeEnabled
       && config.learning.semanticJudgeBaseUrl
-      && config.learning.semanticJudgeApiKey
+      && config.learning.semanticJudgeCredentialReference
       && config.learning.semanticJudgeModel
       ? new SemanticJudge({
         model: new OpenAiSemanticJudgeModelAdapter({
           baseUrl: config.learning.semanticJudgeBaseUrl,
-          apiKey: config.learning.semanticJudgeApiKey,
+          resolveApiKey: async () => credentialResolver.resolve(config.learning.semanticJudgeCredentialReference!),
           modelId: config.learning.semanticJudgeModel,
           timeoutMs: config.learning.semanticJudgeTimeoutMs,
         }),
@@ -279,7 +282,17 @@ export async function bootstrapCore(
 
     if (config.memory.enabled) {
       const { createMemoryRuntime } = await import("@tagent/memory/composition");
-      memoryRuntime = await createMemoryRuntime(config.memory, persistence.memory, semanticJudge);
+      const embeddingCredentialReference = config.memory.embeddingCredentialReference;
+      const extractorCredentialReference = config.memory.extractorCredentialReference;
+      memoryRuntime = await createMemoryRuntime({
+        ...config.memory,
+        resolveEmbeddingApiKey: embeddingCredentialReference
+          ? async () => credentialResolver.resolve(embeddingCredentialReference)
+          : undefined,
+        resolveExtractorApiKey: extractorCredentialReference
+          ? async () => credentialResolver.resolve(extractorCredentialReference)
+          : undefined,
+      }, persistence.memory, semanticJudge);
     }
 
     service = new AgentService(
@@ -291,7 +304,7 @@ export async function bootstrapCore(
         fallbackModels: config.fallbackModels.map(createModel),
         routerModel: createModel(config.routerModel),
         supervisorModel: createModel(config.supervisorModel),
-        apiKey: config.apiKey,
+        credential: { reference: config.apiCredentialReference, resolver: credentialResolver },
         providerTimeoutMs: config.providerTimeoutMs,
         routerTimeoutMs: config.routerTimeoutMs,
         supervisorTimeoutMs: config.supervisorTimeoutMs,

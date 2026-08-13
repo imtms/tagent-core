@@ -1,4 +1,5 @@
-export { bashInvalidatesChecks, createTools, ensureWorkspace } from "./tools.js";
+export { bashInvalidatesChecks, composeWorkspaceTools, ensureWorkspace } from "./tools.js";
+export { childEnvironment, createLocalSubprocessPort, LocalSubprocessPort } from "./local-subprocess.js";
 export {
   WorkspacePathError,
   commitWorkspaceFiles,

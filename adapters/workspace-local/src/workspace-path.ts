@@ -1,6 +1,7 @@
-import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { SubprocessHandle } from "@tagent/execution/ports";
+import { createLocalSubprocessPort } from "./local-subprocess.js";
 
 export class WorkspacePathError extends Error {
   readonly code: string;
@@ -21,34 +22,47 @@ type HelperOptions = { input?: string | Buffer; env?: NodeJS.ProcessEnv };
 
 async function runHelper(operation: "read" | "write" | "list" | "commit-batch", root: string, target: string, options: HelperOptions = {}) {
   const normalized = validateTarget(target);
-  return new Promise<Buffer>((resolve, reject) => {
-    const child = spawn("python3", [helper, operation, root, normalized], { stdio: ["pipe", "pipe", "pipe"], env: options.env ?? process.env });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    const maxOutput = operation === "list" ? 8 * 1024 * 1024 : 50 * 1024 * 1024;
-    let outputBytes = 0;
-    let overflow = false;
-    child.stdout.on("data", (chunk: Buffer) => {
-      outputBytes += chunk.length;
-      if (outputBytes > maxOutput) { overflow = true; child.kill("SIGKILL"); return; }
-      stdout.push(chunk);
+  const subprocess = createLocalSubprocessPort();
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  const maxOutput = operation === "list" ? 8 * 1024 * 1024 : 50 * 1024 * 1024;
+  let outputBytes = 0;
+  let overflow = false;
+  let handle: SubprocessHandle | undefined;
+  const capture = (target: Buffer[], bytes: Uint8Array) => {
+    const chunk = Buffer.from(bytes);
+    outputBytes += chunk.length;
+    if (outputBytes > maxOutput) {
+      overflow = true;
+      handle?.terminate();
+      return;
+    }
+    target.push(chunk);
+  };
+  try {
+    handle = subprocess.spawn({
+      argv: ["python3", helper, operation, root, normalized],
+      cwd: root,
+      env: options.env,
+      stdin: options.input,
+      terminationGraceMs: 100,
+      onStdout: (chunk) => capture(stdout, chunk),
+      onStderr: (chunk) => capture(stderr, chunk),
     });
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.once("error", reject);
-    child.once("close", (status) => {
-      if (overflow) return reject(new WorkspacePathError("Workspace operation output is too large", "WORKSPACE_OUTPUT_TOO_LARGE"));
-      if (status === 0) return resolve(Buffer.concat(stdout));
-      const message = Buffer.concat(stderr).toString("utf8").trim();
-      try {
-        const result = JSON.parse(message) as { error?: string; code?: string };
-        reject(new WorkspacePathError(result.error ?? "Workspace operation failed", result.code));
-      } catch {
-        reject(new WorkspacePathError(message || `Workspace helper exited with status ${status}`, "WORKSPACE_IO_ERROR"));
-      }
-    });
-    if (options.input === undefined) child.stdin.end();
-    else child.stdin.end(options.input);
-  });
+    const outcome = await handle.done;
+    if (overflow) throw new WorkspacePathError("Workspace operation output is too large", "WORKSPACE_OUTPUT_TOO_LARGE");
+    if (outcome.exitCode === 0) return Buffer.concat(stdout);
+    const message = Buffer.concat(stderr).toString("utf8").trim();
+    try {
+      const result = JSON.parse(message) as { error?: string; code?: string };
+      throw new WorkspacePathError(result.error ?? "Workspace operation failed", result.code);
+    } catch (error) {
+      if (error instanceof WorkspacePathError) throw error;
+      throw new WorkspacePathError(message || `Workspace helper exited with status ${outcome.exitCode}`, "WORKSPACE_IO_ERROR");
+    }
+  } finally {
+    await subprocess.dispose?.();
+  }
 }
 
 /** Existing-path compatibility result; actual I/O must use the descriptor-relative helpers below. */

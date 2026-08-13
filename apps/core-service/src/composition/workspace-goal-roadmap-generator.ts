@@ -5,7 +5,7 @@ import { OpenAiSseIdleTimeoutError, readOpenAiChatContent } from "./openai-sse.j
 export class OpenAiWorkspaceGoalRoadmapGenerator implements WorkspaceGoalRoadmapGenerator {
   readonly model: string;
 
-  constructor(private readonly options: { model: RuntimeModelSpec; apiKey: string; timeoutMs?: number }) {
+  constructor(private readonly options: { model: RuntimeModelSpec; credential: NonNullable<import("@tagent/execution/ports").AttemptRuntimeSpec["credential"]>; timeoutMs?: number }) {
     this.model = options.model.id;
   }
 
@@ -18,7 +18,7 @@ export class OpenAiWorkspaceGoalRoadmapGenerator implements WorkspaceGoalRoadmap
     try {
       const response = await fetch(`${this.options.model.baseUrl.replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${this.options.apiKey}` },
+        headers: { "content-type": "application/json", authorization: `Bearer ${await this.resolveApiKey()}` },
         body: JSON.stringify({
           model: this.options.model.id,
           messages: [
@@ -42,5 +42,11 @@ export class OpenAiWorkspaceGoalRoadmapGenerator implements WorkspaceGoalRoadmap
     } finally {
       clearTimeout(headerTimer);
     }
+  }
+
+  private async resolveApiKey() {
+    const value = await this.options.credential.resolver.resolve(this.options.credential.reference);
+    if (!value) throw new Error(`Missing configured credential: ${this.options.credential.reference}`);
+    return value;
   }
 }

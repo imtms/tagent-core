@@ -5,7 +5,8 @@ describe("Core service configuration", () => {
   it("uses the TAgent OpenAI-compatible defaults", () => {
     const config = loadConfig({});
     expect(config.runtime).toBe("in-process");
-    expect(config.apiKey).toBeUndefined();
+    expect(config.apiCredentialReference).toBe("OPENAI_API_KEY");
+    expect(config.apiCredentialConfigured).toBe(false);
     expect(config).toMatchObject({
       providerTimeoutMs: 15_000,
       providerMaxRetries: 1,
@@ -108,7 +109,7 @@ describe("Core service configuration", () => {
 
   it("exposes runtime status without exposing credentials", () => {
     const status = publicRuntimeConfig(loadConfig({ OPENAI_API_KEY: "secret" }));
-    expect(status.releaseVersion).toBe("0.6.2");
+    expect(status.releaseVersion).toBe("0.6.3");
     expect(status.credentialConfigured).toBe(true);
     expect(status).not.toHaveProperty("apiKey");
     expect(JSON.stringify(status)).not.toContain("secret");
@@ -164,8 +165,9 @@ describe("Core service configuration", () => {
       enabled: true,
       extractorBaseUrl: "https://example.test/v1",
       extractorModel: "semantic-model",
-      extractorApiKey: "secret",
+      extractorCredentialReference: "OPENAI_API_KEY",
     });
+    expect(JSON.stringify(config.memory)).not.toContain("secret");
   });
 
   it("configures scoped service credentials without exposing tokens", () => {

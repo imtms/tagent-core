@@ -103,7 +103,7 @@ Every write requires a stable request ID. Definition/Roadmap revision and genera
 
 ## Persistence and upgrade
 
-SQLite schema 44 retains the Goal tables, schema-38 execution linkage and schema-39 Gateway operation receipts:
+SQLite schema 45 retains the Goal tables, schema-38 execution linkage and schema-39 Gateway operation receipts:
 
 ```text
 workspace_goal_run_links.link_mode
@@ -112,9 +112,9 @@ workspace_goal_roadmap_item_progress
 workspace_goal_operation_receipts
 ```
 
-The v38 → v39 migration adds Goal operation payload hashes, result/error receipts and restart recovery state. Schema 40 adds Submission audit receipts, schema 41 adds Operator Read indexes, and schema 42 durably carries the Admission execution policy through the Inbox. Schema 43 adds the Skill catalog and revisions; schema 44 replaces the original single binding with multi-Skill Workspace references. Neither changes Goal semantics. Some internal SQLite columns and values retain `plan` names for forward-compatible migration of existing databases; they are not public domain or API terminology.
+The v38 → v39 migration adds Goal operation payload hashes, result/error receipts and restart recovery state. Schema 40 adds Submission audit receipts, schema 41 adds Operator Read indexes, and schema 42 durably carries the Admission execution policy through the Inbox. Schema 43 adds the Skill catalog and revisions; schema 44 replaces the original single binding with multi-Skill Workspace references; schema 45 adds Attempt request envelopes. None changes Goal semantics. Some internal SQLite columns and values retain `plan` names for forward-compatible migration of existing databases; they are not public domain or API terminology.
 
-Migrations are forward-only. Stop Core and back up SQLite together with WAL/SHM before upgrading. A schema-43-only binary must never open a schema-44 database; rollback across this boundary requires the matching pre-upgrade database backup. See [UPGRADING.md](UPGRADING.md).
+Migrations are forward-only. Stop Core and back up SQLite together with WAL/SHM before upgrading. A schema-44-only binary must never open a schema-45 database; rollback across this boundary requires the matching pre-upgrade database backup. See [UPGRADING.md](UPGRADING.md).
 
 ## Explicit non-goals
 

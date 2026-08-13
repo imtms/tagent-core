@@ -25,10 +25,25 @@ export type {
   RuntimeSkill,
   RuntimeQueueResult,
   RuntimeTool,
+  RuntimeToolPolicy,
   RuntimeToolExecutionMode,
   RuntimeToolResult,
   RuntimeToolUpdateCallback,
 } from "./attempt-runtime.js";
+export {
+  createEnvironmentCredentialResolver,
+  credentialReference,
+  type CredentialReference,
+  type CredentialResolverPort,
+} from "./credential-resolver-port.js";
+export {
+  SENSITIVE_ENVIRONMENT_NAME,
+  scrubbedParentEnvironment,
+  type SubprocessHandle,
+  type SubprocessOutcome,
+  type SubprocessPort,
+  type SubprocessSpawnSpec,
+} from "./subprocess-port.js";
 export type {
   AttemptAuthorityRepository,
   AttemptRepository,
@@ -72,3 +87,10 @@ export type {
 export type { TranscriptEntry, TranscriptRepository, TranscriptViewItem } from "./transcript-repository.js";
 
 export type { WorkspaceEditPort, WorkspacePatchFile, WorkspacePatchHunk, WorkspacePatchRequest, WorkspacePatchResult, WorkspaceReadSnapshot } from "./workspace-edit-port.js";
+export type { RunEventMap, RunEventType } from "../domain/task-run.js";
+export {
+  createAttemptRequestEnvelope,
+  requestHash,
+  type AttemptRequestEnvelope,
+  type AttemptRequestEnvelopeRepository,
+} from "./attempt-request-envelope-repository.js";

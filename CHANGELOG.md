@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.3] - 2026-08-14
+
+### Durable provider dispatch and credential boundaries
+
+- Added schema 45 Attempt request envelopes, persisting and reading back the exact provider-dialect request body with canonical payload/envelope hashes before network dispatch; malformed, mismatched, or relationally inconsistent rows fail closed.
+- Replaced plaintext runtime credential options with opaque `CredentialReference` plus per-request resolution across Pi, Router, Supervisor, Roadmap, Semantic Judge, embeddings, extraction, and consolidation so rotation is visible without storing secrets in durable configuration.
+- Added a runtime-neutral `SubprocessPort`; every Workspace child process now receives a credential-scrubbed environment, bounded stdin, process-group TERM-to-KILL cancellation, and disposal-aware lifecycle handling.
+
+### Tool composition and execution authority
+
+- Split the former monolithic Workspace tool implementation into Bash, filesystem, Memory, and TaskRun providers registered through an immutable `ToolRegistry`.
+- Added an Execution-owned `ToolExecutionPipeline` that binds one catalog, enforces Core authorization, binds call identity to tool name and arguments, and safely replays durable mutation receipts without repeating provider effects or settlement.
+- Removed the legacy `createTools` and static API-key compatibility paths; composition now supplies an explicit subprocess port and retains the registry/pipeline lifecycle.
+
+### Compatibility and upgrade
+
+- Updated security, runtime, persistence, Gateway readiness, upgrade, and release documentation for the schema-45 and exact-dispatch boundaries.
+- Synchronized Core, Web Console, all 13 private workspace manifests, internal dependency pins, capability metadata, fixtures, tests, and the lockfile at 0.6.3. Deploy matching Core and Web Console 0.6.3 artifacts.
+
 ## [0.6.2] - 2026-08-13
 
 ### Configurable completion Gate

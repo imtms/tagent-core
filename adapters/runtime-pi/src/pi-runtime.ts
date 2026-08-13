@@ -23,12 +23,16 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import { randomUUID } from "node:crypto";
 import { classifyProviderFailure, isRetryableProviderFailure } from "./provider-errors.js";
 import { withProviderIdleTimeout } from "./provider-transport.js";
-import type {
-  AttemptRuntimePort,
-  AttemptRuntimeSpec,
-  RuntimeMessage,
-  RuntimeModelSpec,
-  RuntimeTool,
+import {
+  createAttemptRequestEnvelope,
+  requestHash,
+  type RunEventMap,
+  type RunEventType,
+  type AttemptRuntimePort,
+  type AttemptRuntimeSpec,
+  type RuntimeMessage,
+  type RuntimeModelSpec,
+  type RuntimeTool,
 } from "@tagent/execution/ports";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -93,7 +97,12 @@ function buildModels(options: PiRuntimeOptions, models: Model<Api>[], lifetimeSi
       auth: {
         apiKey: {
           name: `${providerId} API key`,
-          resolve: async () => options.apiKey ? { auth: { apiKey: options.apiKey } } : undefined,
+          resolve: async () => {
+            const apiKey = options.credential
+              ? await options.credential.resolver.resolve(options.credential.reference)
+              : undefined;
+            return apiKey ? { auth: { apiKey } } : undefined;
+          },
         },
       },
       api,
@@ -218,6 +227,7 @@ export class PiRuntime implements AttemptRuntimePort {
   private harnessTurnActive = false;
   private internalPromptOrdinal = 0;
   private readonly internalPrompts = new Set<string>();
+  private providerRequestOrdinal = 0;
   private deferredControls: Array<{ mode: "steer" | "followUp"; instruction: string }> = [];
   private harnessPendingMessageCount = 0;
   private retryDelayAbort?: AbortController;
@@ -272,6 +282,34 @@ export class PiRuntime implements AttemptRuntimePort {
       this.options.historicalTaskRunReceiptChars ?? 600,
       (message) => this.isInternalMessage(message),
     ) }));
+    harness.on("before_provider_payload", ({ model, payload }) => {
+      if (!this.options.requestEnvelopes) return undefined;
+      const requestOrdinal = ++this.providerRequestOrdinal;
+      const envelope = createAttemptRequestEnvelope({
+        runId: this.options.token.runId,
+        attemptId: this.options.token.attemptId,
+        attempt: this.options.token.ordinal,
+        requestOrdinal,
+        model: {
+          id: model.id, provider: model.provider, api: model.api, baseUrl: model.baseUrl,
+          reasoning: model.reasoning, contextWindow: model.contextWindow, maxTokens: model.maxTokens,
+        },
+        providerPayload: payload,
+        createdAt: Date.now(),
+      });
+      this.options.requestEnvelopes.record(envelope);
+      const durable = this.options.requestEnvelopes.get(envelope.id);
+      if (!durable || durable.envelopeHash !== envelope.envelopeHash
+        || requestHash(payload) !== durable.providerPayloadHash
+        || requestHash(durable.providerPayload) !== durable.providerPayloadHash) {
+        throw new Error(`Provider request does not match durable envelope ${envelope.id}`);
+      }
+      this.emit("request.envelope.persisted", {
+        envelopeId: durable.id, requestOrdinal, envelopeHash: durable.envelopeHash,
+        providerPayloadHash: durable.providerPayloadHash, model: durable.model.id,
+      });
+      return { payload: durable.providerPayload };
+    });
     harness.on("tool_call", ({ toolCallId, toolName, input }) => {
       const guard = this.options.eventSink.beforeToolCall({ toolCallId, toolName, args: input });
       if (!guard.blocked) return undefined;
@@ -653,5 +691,5 @@ export class PiRuntime implements AttemptRuntimePort {
   private flushDelta() { if (this.deltaTimer) clearTimeout(this.deltaTimer); this.deltaTimer = undefined; if (!this.pendingDelta) return; const delta = this.pendingDelta; this.pendingDelta = ""; this.emit("message.delta", { delta, ordinal: this.assistantMessageOrdinal }); }
   private queueThinkingDelta(delta: string) { this.pendingThinkingDelta += delta; if (this.pendingThinkingDelta.length >= 1024) return this.flushThinkingDelta(); if (!this.thinkingDeltaTimer) { this.thinkingDeltaTimer = setTimeout(() => this.flushThinkingDelta(), 150); this.thinkingDeltaTimer.unref?.(); } }
   private flushThinkingDelta() { if (this.thinkingDeltaTimer) clearTimeout(this.thinkingDeltaTimer); this.thinkingDeltaTimer = undefined; if (!this.pendingThinkingDelta) return; const delta = this.pendingThinkingDelta; this.pendingThinkingDelta = ""; this.emit("message.thinking.delta", { delta, ordinal: this.assistantMessageOrdinal }); }
-  private emit(type: string, data: Record<string, unknown>) { this.options.eventSink.publish(type, data); }
+  private emit<TType extends RunEventType>(type: TType, data: RunEventMap[TType]) { this.options.eventSink.publish(type, data); }
 }

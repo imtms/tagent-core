@@ -44,7 +44,7 @@ import {
   type RunContextPort,
   type SupervisorPort,
 } from "@tagent/execution/composition";
-import type { AttemptRuntimeFactory, RuntimeModelSpec } from "@tagent/execution/ports";
+import type { AttemptRuntimeFactory, CredentialResolverPort, CredentialReference, RuntimeModelSpec } from "@tagent/execution/ports";
 import { createRuntimeHost } from "./runtime-host-adapter.js";
 import { createProjectContextSource } from "@tagent/workspace-local/project-context";
 import { createWorkspaceArtifactSink } from "@tagent/workspace-local/artifact-file-sink";
@@ -84,8 +84,12 @@ export interface ExecutionCompositionOptions {
   startupOptions?: ExecutionCoordinatorStartupOptions;
 }
 
-function createSessionInputModelPort(model: RuntimeModelSpec, apiKey: string, timeoutMs: number): SessionInputModelPort {
+type CredentialBinding = { reference: CredentialReference; resolver: CredentialResolverPort };
+
+function createSessionInputModelPort(model: RuntimeModelSpec, credential: CredentialBinding, timeoutMs: number): SessionInputModelPort {
   return { request: async ({ prompt }) => {
+    const apiKey = await credential.resolver.resolve(credential.reference);
+    if (!apiKey) throw new Error(`Missing configured credential: ${credential.reference}`);
     const controller = new AbortController();
     const usage: OpenAiUsage[] = [];
     const headerTimer = setTimeout(() => controller.abort(new OpenAiSseIdleTimeoutError(timeoutMs)), timeoutMs);
@@ -133,11 +137,11 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
   if (runtimeDefaults.supervisorModel && runtimeDefaults.supervisorModel.api !== "openai-completions") {
     throw new Error("Supervisor supports only openai-completions; configure TAGENT_SUPERVISOR_API=openai-completions and an explicit TAGENT_SUPERVISOR_API_BASE");
   }
-  const reviewer = runtimeDefaults.supervisorReviewer ?? (runtimeDefaults.model && runtimeDefaults.apiKey
+  const reviewer = runtimeDefaults.supervisorReviewer ?? (runtimeDefaults.model && runtimeDefaults.credential
     ? new OpenAiSupervisorReviewer({
         model: runtimeDefaults.supervisorModel ?? runtimeDefaults.model as RuntimeModelSpec,
         fallbackModel: runtimeDefaults.supervisorModel ? runtimeDefaults.model as RuntimeModelSpec : undefined,
-        apiKey: runtimeDefaults.apiKey,
+        credential: runtimeDefaults.credential,
         timeoutMs: runtimeDefaults.supervisorTimeoutMs ?? runtimeDefaults.providerTimeoutMs,
         onUsage: (runId, model, usage) => options.persistence.taskRuns.recordModelUsage(runId, "supervisor", model, usage),
       })
@@ -156,8 +160,8 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     ?? runtimeDefaults.model as RuntimeModelSpec | undefined;
   const routerTimeoutMs = runtimeDefaults.routerTimeoutMs ?? 5_000;
   const sessionRouter = new SessionInputRouter({
-    model: routerModel && runtimeDefaults.apiKey
-      ? createSessionInputModelPort(routerModel, runtimeDefaults.apiKey, routerTimeoutMs)
+    model: routerModel && runtimeDefaults.credential
+      ? createSessionInputModelPort(routerModel, runtimeDefaults.credential, routerTimeoutMs)
       : undefined,
   });
   const workflowService = new WorkflowService(options.persistence.workflow, undefined, options.learningControl, options.semanticJudge);
@@ -231,6 +235,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
         admissionRef.port.dispatchSessionInbox(run.sessionId);
       },
     },
+    requestEnvelopes: options.persistence.requestEnvelopes,
     recovery: recoveryRef.port,
     runtimeHost: {
       create: (input) => {
@@ -282,7 +287,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
   });
   admissionRef.bind(admission);
   const roadmapGenerator = runtimeDefaults.workspaceGoalRoadmapGenerator
-    ?? (routerModel && runtimeDefaults.apiKey ? new OpenAiWorkspaceGoalRoadmapGenerator({ model: routerModel, apiKey: runtimeDefaults.apiKey, timeoutMs: routerTimeoutMs }) : undefined);
+    ?? (routerModel && runtimeDefaults.credential ? new OpenAiWorkspaceGoalRoadmapGenerator({ model: routerModel, credential: runtimeDefaults.credential, timeoutMs: routerTimeoutMs }) : undefined);
   const workspaceGoals = new CoreWorkspaceGoalApplication(options.persistence.workspaceGoals, admission, roadmapGenerator);
   const skills = new CoreSkillApplication(options.persistence.skills, options.persistence.sessions, options.workspace);
   const learning = new LearningApplication(workflowService, learningService);

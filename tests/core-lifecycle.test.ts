@@ -22,6 +22,7 @@ import {
 } from "@tagent/core-service";
 import { Store } from "@tagent/persistence-sqlite/store";
 import { agentPersistence, httpPersistence } from "./support/test-persistence.js";
+import { credentialReference } from "@tagent/execution/ports";
 
 const temporaryDirectories: string[] = [];
 const cores: BootstrappedCore[] = [];
@@ -46,7 +47,8 @@ async function temporaryConfig(overrides: Partial<AppConfig> = {}) {
     port: 0,
     database: path.join(directory, "core.sqlite"),
     workspace: path.join(directory, "workspace"),
-    apiKey: "lifecycle-test-key",
+    apiCredentialReference: credentialReference("PATH"),
+    apiCredentialConfigured: true,
     memory: { enabled: false },
     learning: {
       ...defaults.learning,

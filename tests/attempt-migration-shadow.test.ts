@@ -47,6 +47,10 @@ function removeV33LearningIntegration(store: Store): void {
   `);
 }
 
+function removeV45AttemptRequestEnvelopes(store: Store): void {
+  store.db.exec("DROP TABLE attempt_request_envelopes;");
+}
+
 describe("Attempt schema v30 migration", () => {
   it("reentrantly backfills v29 runs without changing legacy Run state or event sequence", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-attempt-migration-")), "legacy-v29.db");
@@ -55,9 +59,10 @@ describe("Attempt schema v30 migration", () => {
     const run = seed.createRun(session.id, "legacy run");
     seed.blockRun(run.id, "resume");
     seed.resumeRun(run.id);
-    seed.appendEvent(run.id, "legacy.marker", { stable: true });
+    seed.appendEvent(run.id, "run.updated", { stable: true });
     const legacyBefore = seed.db.prepare("SELECT status,attempt,last_event_seq AS lastEventSeq FROM runs WHERE id=?").get(run.id);
     removeV33LearningIntegration(seed);
+    removeV45AttemptRequestEnvelopes(seed);
     seed.db.exec(`
       DROP TABLE attempt_authority_state;
       DROP TABLE attempt_authority_receipts;
@@ -71,7 +76,7 @@ describe("Attempt schema v30 migration", () => {
     seed.close();
 
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(44);
+    expect(migrated.getSchemaVersion()).toBe(45);
     expect(migrated.db.prepare("SELECT status,attempt,last_event_seq AS lastEventSeq FROM runs WHERE id=?").get(run.id)).toEqual(legacyBefore);
     expect(migrated.db.prepare("SELECT id,ordinal FROM attempts WHERE run_id=? ORDER BY ordinal").all(run.id)).toEqual([
       { id: attemptIdFor(run.id, 1), ordinal: 1 },
@@ -130,6 +135,7 @@ describe("Attempt schema v30 migration", () => {
         fixture === "orphan" ? 2 : 1,
         fixture === "orphan" ? null : "attempt:wrong:1",
       );
+      removeV45AttemptRequestEnvelopes(store);
       store.db.exec(`
         DROP TABLE attempt_authority_state;
         DROP TABLE attempt_authority_receipts;

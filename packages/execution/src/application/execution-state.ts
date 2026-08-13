@@ -11,7 +11,7 @@ export type ExecutionRuntimeDefaults = Pick<
   Parameters<AttemptRuntimeFactory>[0],
   | "model"
   | "fallbackModels"
-  | "apiKey"
+  | "credential"
   | "providerTimeoutMs"
   | "providerMaxRetries"
   | "runTimeoutMs"

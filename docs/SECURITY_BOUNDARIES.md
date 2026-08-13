@@ -28,7 +28,7 @@ Exact-origin CORS is a browser transport boundary, not authentication. A non-emp
 
 ## Workspace and process boundary
 
-`@tagent/workspace-local` normalizes and contains filesystem paths, and command policy rejects known unsafe operations. These checks do not isolate the process from the host. A permitted `bash` command runs with the Core OS account's privileges.
+`@tagent/workspace-local` normalizes and contains filesystem paths, and command policy rejects known unsafe operations. These checks do not isolate the process from the host. Every local child process, including the descriptor-relative filesystem helper and permitted `bash` commands, crosses `SubprocessPort`; it does not inherit Core's ambient credential or `TAGENT_*` environment. The local port constructs a scrubbed environment and terminates the process group on abort, timeout, or Attempt disposal. Explicit environment overrides are a trusted composition capability and are never derived from model tool arguments.
 
 Use a dedicated workspace without SSH keys, provider credentials, cloud config, production secrets, or unrelated files. Apply OS/container controls for filesystem, network, process, and resource isolation when stronger containment is required.
 
@@ -39,10 +39,12 @@ Uploaded Skills are untrusted instructions, not capabilities. Core accepts a bou
 The following are server-owned and cannot be asserted by a caller:
 
 - OS instance lock, writer lease, fence, and connection mutation guard;
-- canonical TaskRun/Attempt transition authority;
+- canonical TaskRun/Attempt transition authority and the closed `RunEventMap` event vocabulary;
 - approval and capability authorization receipts;
 - Attempt-bound external-action approval consumption before mutation-capable tools, with fresh approval required before any later Attempt retries the action;
 - current-Attempt Bash bindings and Core-derived check evidence;
+- immutable ToolRegistry snapshots and the Core-owned ToolExecutionPipeline guard/receipt/settlement path;
+- hash-verified Attempt request envelopes persisted before provider network dispatch;
 - event-consumer generation and acknowledged sequence;
 - internal evaluation receipt verification;
 - Learning projection authority and migration issue state.
@@ -51,7 +53,7 @@ State-changing handlers persist through guarded repositories and a synchronous U
 
 ## Secrets and data
 
-Provider credentials are read from runtime configuration and must not enter source control, browser bundles, transcripts, or Pi auth files. Protect SQLite/WAL/SHM, PostgreSQL, Cold Memory, logs, artifacts, release manifests, and backups according to their data sensitivity.
+Provider credentials are named in configuration by `CredentialReference` and resolved only inside trusted adapters for an outbound operation. Plaintext values must not enter `AppConfig`, TaskRun contracts, SQLite request envelopes, events, transcripts, tool payloads, browser bundles, source control, or Pi auth files. Rotation takes effect on the next resolution without rebuilding durable state. Protect SQLite/WAL/SHM, PostgreSQL, Cold Memory, logs, artifacts, release manifests, and backups according to their data sensitivity.
 
 Memory capture and Learning policy reduce accidental persistence and promotion; they do not replace encryption, authorization, data retention review, or human approval.
 

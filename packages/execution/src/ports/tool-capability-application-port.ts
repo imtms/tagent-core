@@ -18,7 +18,9 @@ export interface ToolCapabilityApplicationPort {
   readonly workspaceEdit?: WorkspaceEditPort;
   getRun(): TaskRun | undefined;
   getRunExecutionState?(): TaskRunExecutionState | undefined;
+  isCurrentAttempt(): boolean;
   authorizeWorkspaceMutation(): { allowed: boolean; reason: string };
+  authorizeExternalAction(): { allowed: boolean; reason: string };
   advanceRunPhase(phase: "implement"): boolean;
   setRunPhase(phase: "discover" | "plan" | "implement" | "verify" | "review"): boolean;
   claimOperation(id: string, operationType: string, payload: unknown): {
@@ -56,6 +58,13 @@ export interface ToolCapabilityApplicationPort {
   applyTaskRunBatch(mutations: TaskRunStateMutation[]): void;
   addArtifact(artifact: { id: string; title: string; kind: string; content: string; uri: string }): unknown;
   requestUserInput(toolCallId: string, prompt: string, fields: UserInputField[]): UserInputRequest;
-  publish(type: string, data: Record<string, unknown>): RunEvent | undefined;
+  recordToolAttempt(toolCallId: string, toolName: string, args: unknown): {
+    created: boolean;
+    status: "running" | "succeeded" | "failed";
+    guard: { blocked: boolean; reason: string };
+  };
+  completeToolAttempt(toolCallId: string, success: boolean, error?: string): boolean;
+  consumeAtomicallySettledToolCall(toolCallId: string): boolean;
+  publish<TType extends import("../domain/task-run.js").RunEventType>(type: TType, data: import("../domain/task-run.js").RunEventMap[TType]): RunEvent<TType> | undefined;
   readonly memory?: MemoryToolCapabilities;
 }

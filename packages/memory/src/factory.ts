@@ -46,14 +46,14 @@ export interface MemoryRuntimeConfig {
   retentionProcedureDeleteMs: number;
   embeddingProvider: "hash" | "openai" | "none";
   embeddingBaseUrl?: string;
-  embeddingApiKey?: string;
+  resolveEmbeddingApiKey?: () => Promise<string | undefined>;
   embeddingModel?: string;
   embeddingDimensions?: number;
   embeddingBatchSize: number;
   embeddingExtraBody?: Record<string, unknown>;
   extractorProvider: "rule" | "hybrid";
   extractorBaseUrl?: string;
-  extractorApiKey?: string;
+  resolveExtractorApiKey?: () => Promise<string | undefined>;
   extractorModel?: string;
   recallThresholds: MemoryRecallThresholds;
 }
@@ -84,16 +84,16 @@ export async function createMemoryRuntime(config:MemoryRuntimeConfig,source:Memo
     : new LocalBlobStore(path.resolve(config.coldPath));
   const policy=new DefaultPolicyEngine(adapter);
   const access:AccessContext={subjectId:"memory-maintenance",scopes:[{type:"workspace",id:config.workspaceScopeId}],purpose:"capture"};
-  const embeddings = config.embeddingProvider === "openai" ? new OpenAIEmbeddingAdapter({baseUrl:config.embeddingBaseUrl!,apiKey:config.embeddingApiKey!,model:config.embeddingModel!,dimensions:config.embeddingDimensions,batchSize:config.embeddingBatchSize,extraBody:config.embeddingExtraBody,maxRetries:2}) : config.embeddingProvider === "hash" ? new HashEmbeddingAdapter() : undefined;
+  const embeddings = config.embeddingProvider === "openai" ? new OpenAIEmbeddingAdapter({baseUrl:config.embeddingBaseUrl!,resolveApiKey:config.resolveEmbeddingApiKey!,model:config.embeddingModel!,dimensions:config.embeddingDimensions,batchSize:config.embeddingBatchSize,extraBody:config.embeddingExtraBody,maxRetries:2}) : config.embeddingProvider === "hash" ? new HashEmbeddingAdapter() : undefined;
   const probe=embeddings?{probe:async()=>{const started=Date.now();try{await embeddings.embed(["readiness probe"]);return{ok:true,latencyMs:Date.now()-started};}catch(error){return{ok:false,latencyMs:Date.now()-started,error:String(error)}}}}:undefined;
   let extractorProbe:import("./ports.js").ProbePort|undefined;
   const core=new CoreMemorySnapshotService(adapter,adapter);
   const service=new MemoryService({records:adapter,vectors:adapter,graph:adapter,topics:adapter,blobs,embeddings,jobs:adapter,policy,reindex:adapter,operations:adapter,embeddingProbe:probe,coreSnapshots:{get:a=>core.get(a),generate:(a,o)=>core.generate(a,o),update:(a,m)=>core.update(a,m)}},config.recallThresholds);
   const lifecycle=new MemoryLifecycle(adapter,adapter,adapter,adapter,{warmAfterMs:config.warmAfterMs,hotTtlMs:config.hotTtlMs,coldMinimumRecords:config.coldMinimumRecords,candidateTtlMs:config.candidateTtlMs,deletedGracePeriodMs:config.deletedGracePeriodMs,retention:{fact:{staleAfterMs:config.retentionFactStaleMs,deleteAfterMs:config.retentionFactDeleteMs},preference:{staleAfterMs:config.retentionPreferenceStaleMs,deleteAfterMs:config.retentionPreferenceDeleteMs},episode:{staleAfterMs:config.retentionEpisodeStaleMs,deleteAfterMs:config.retentionEpisodeDeleteMs},procedure:{staleAfterMs:config.retentionProcedureStaleMs,deleteAfterMs:config.retentionProcedureDeleteMs}}});
   const ruleExtractor=new RuleBasedExtractor();
-  const llmExtractor=config.extractorProvider === "hybrid"?new LlmExtractor({baseUrl:config.extractorBaseUrl!,apiKey:config.extractorApiKey!,model:config.extractorModel!,maxRetries:1}):undefined; const extractor=new HybridExtractor(ruleExtractor,llmExtractor); extractorProbe=llmExtractor?{probe:async()=>{const started=Date.now();try{await llmExtractor.extract("user: readiness probe, do not persist",[],access.scopes[0]);return{ok:true,latencyMs:Date.now()-started};}catch(error){return{ok:false,latencyMs:Date.now()-started,error:String(error)}}}}:undefined; (service as any).deps.extractorProbe=extractorProbe;
+  const llmExtractor=config.extractorProvider === "hybrid"?new LlmExtractor({baseUrl:config.extractorBaseUrl!,resolveApiKey:config.resolveExtractorApiKey!,model:config.extractorModel!,maxRetries:1}):undefined; const extractor=new HybridExtractor(ruleExtractor,llmExtractor); extractorProbe=llmExtractor?{probe:async()=>{const started=Date.now();try{await llmExtractor.extract("user: readiness probe, do not persist",[],access.scopes[0]);return{ok:true,latencyMs:Date.now()-started};}catch(error){return{ok:false,latencyMs:Date.now()-started,error:String(error)}}}}:undefined; (service as any).deps.extractorProbe=extractorProbe;
   const capture=new MemoryCaptureWorker(adapter,new PersistenceMemorySourceLoader(source),extractor,policy,service,lifecycle,undefined,(event)=>{for(const ref of event.sourceRefs.filter((x)=>x.sourceType==="run"))if(source.getRun(ref.sourceId))source.appendEvent(ref.sourceId,event.type,event.data);},semanticJudge);
-  const semanticConsolidator=config.extractorProvider==="hybrid"?new LlmSemanticConsolidator({baseUrl:config.extractorBaseUrl!,apiKey:config.extractorApiKey!,model:config.extractorModel!}):undefined;
+  const semanticConsolidator=config.extractorProvider==="hybrid"?new LlmSemanticConsolidator({baseUrl:config.extractorBaseUrl!,resolveApiKey:config.resolveExtractorApiKey!,model:config.extractorModel!}):undefined;
   const consolidator=new MemoryConsolidator(adapter,adapter,service,{minimumRecords:config.coldMinimumRecords},semanticConsolidator); const reconciler=new ColdStorageReconciler(adapter,blobs);
   // Backfill durable user messages with the same idempotency key used by live capture.
   // This repairs upgrades from pre-memory installations without making raw chat the recall source.

@@ -2,7 +2,8 @@ import type { EmbeddingPort, EmbeddingRequestOptions } from "../ports.js";
 
 export interface OpenAIEmbeddingOptions {
   baseUrl: string;
-  apiKey: string;
+  /** Resolved immediately before each outbound request. */
+  resolveApiKey: () => Promise<string | undefined>;
   model: string;
   dimensions?: number;
   batchSize?: number;
@@ -45,7 +46,8 @@ export class OpenAIEmbeddingAdapter implements EmbeddingPort {
       if(requestOptions.signal?.aborted)abort();else requestOptions.signal?.addEventListener("abort",abort,{once:true});
       const timer=setTimeout(()=>controller.abort(),requestOptions.timeoutMs??this.options.timeoutMs??30_000);
       try{
-        const response=await fetch(`${this.baseUrl}/embeddings`,{method:"POST",headers:{"content-type":"application/json",authorization:`Bearer ${this.options.apiKey}`,...this.options.extraHeaders},body:JSON.stringify(body),signal:controller.signal});
+        const apiKey=await this.options.resolveApiKey();if(!apiKey)throw new Error("Embedding API credential is unavailable");
+        const response=await fetch(`${this.baseUrl}/embeddings`,{method:"POST",headers:{"content-type":"application/json",authorization:`Bearer ${apiKey}`,...this.options.extraHeaders},body:JSON.stringify(body),signal:controller.signal});
         const text=await response.text();
         if(response.ok)return JSON.parse(text);
         const error=new Error(`Embedding API ${response.status}: ${text.slice(0,500)}`);

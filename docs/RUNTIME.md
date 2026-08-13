@@ -24,6 +24,8 @@ Production imports of `pi-agent-core` and `pi-ai` are confined to `@tagent/runti
 - constructs an in-memory Harness Session for each Attempt;
 - converts `RuntimeTool` and `RuntimeModelSpec` only at the adapter edge;
 - keeps retry, fallback, compaction and accepted control delivery transcript-safe;
+- resolves provider credentials by opaque reference for each outbound operation instead of retaining a plaintext key in Core configuration;
+- persists the final provider-dialect request payload as a hash-verified Attempt request envelope before transport dispatch;
 - retains failed provider messages in durable audit while removing them from the active continuation branch;
 - enforces response-header and body-chunk idle timeouts, including zero-as-disabled mode and compaction cancellation;
 - omits the optional OpenAI `store` field while preserving `pi-ai` dialect detection;
@@ -35,6 +37,9 @@ Architecture, package and runtime contract tests enforce this dependency boundar
 
 ```text
 submission -> TaskRun -> execution lease -> Attempt -> AgentHarness model/tool loop
+                                            |
+                                            v
+                 durable request envelope -> provider dispatch
                                             |
                                             v
                              candidate -> Supervisor settlement
@@ -53,6 +58,10 @@ Before an Attempt starts, Core persists an immutable Context Manifest describing
 The adapter imports that bounded transcript into an in-memory Harness Session. It projects historical tool output and TaskRun receipts before provider calls, supports explicit compaction, performs threshold compaction after successful turns, and performs one compaction-and-retry cycle after a provider context-overflow response. Compaction is session-local; the durable transcript and Context Manifest remain Core-owned.
 
 ## Provider configuration
+
+Core configuration stores only `apiCredentialReference` and a non-sensitive configured flag. The trusted composition root resolves that reference when Router, Supervisor, Roadmap, or the Pi provider performs an outbound request; the resolved value is not placed in TaskRun state, events, transcripts, request envelopes, or public runtime configuration. `TAGENT_API_KEY_ENV` may select a different environment-variable name without copying its value into `AppConfig`.
+
+Immediately before each Pi provider call, after provider dialect conversion and every model-visible transform are complete, Runtime persists an Attempt request envelope. The exact provider request body is the single replay truth; the envelope adds only Attempt/request identity, model metadata, schema version, timestamp, and hashes rather than maintaining duplicate prompt, message, tool, Skill, or reasoning projections that could drift from the transmitted body. SQLite reads the row back and verifies both the provider-payload hash and complete envelope hash; any missing, changed, or corrupt read aborts before network dispatch. `request.envelope.persisted` exposes hashes and identity only, never authorization material.
 
 The main runtime accepts an ordered comma-separated `TAGENT_MODEL` chain. The Web Console may select the primary model only from that configured allowlist and may set `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` reasoning; new Workspaces default to the configured primary model and `medium`. Core snapshots both values onto the TaskRun before launching its first Attempt, so recovery and continuations retain the same execution profile. Non-reasoning models are forced to `off`. A rate-limit response may switch to another configured model without restarting the Attempt.
 
@@ -74,7 +83,9 @@ Steer and follow-up controls enter a bounded durable inbox. They are delivered t
 
 ## Tools
 
-`@tagent/workspace-local` provides contained `ls`, `read`, `write`, snapshot-bound `edit`, atomic multi-file `patch`, and `bash` behavior plus TaskRun control integration through the Execution-owned `RuntimeTool` ABI. `runtime-pi` converts those tools to `AgentHarnessTool` at the adapter edge.
+`@tagent/workspace-local` provides contained `ls`, `read`, `write`, snapshot-bound `edit`, atomic multi-file `patch`, and `bash` behavior plus TaskRun control integration through the Execution-owned `RuntimeTool` ABI. Concrete tools are grouped into independent Tool Providers. `ToolRegistry` rejects duplicate names and freezes an Attempt-local catalog snapshot; `ToolExecutionPipeline` is the non-bypassable path for current-Attempt fencing, external-action and Workspace Goal guards, tool-attempt records, operation receipts, idempotent replay, check invalidation, and single settlement. `runtime-pi` converts the already wrapped catalog to `AgentHarnessTool` at the adapter edge.
+
+`bash` delegates process creation to `SubprocessPort`. The local adapter builds a new child environment by removing all `TAGENT_*` variables and credential-shaped names (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL`, authorization, and cookies), then applies only explicit trusted overrides. POSIX children run in their own process group; abort, timeout, Attempt finalization, and host disposal terminate the whole group with TERM-to-KILL escalation. This is lifecycle and secret containment, not an OS sandbox.
 
 Large output may spill to a durable Artifact with a bounded preview. Successful Bash results carry a Core operation ID and digest that can bind a TaskRun check; a model-authored success claim cannot replace that receipt. Failed or timed-out identical Bash commands are fenced from blind re-execution, and composite commands receive split-stage guidance. Path containment and command policy are guardrails, not an OS sandbox. Operation receipts and approval policy remain Core-owned even when Pi initiated the tool call.
 

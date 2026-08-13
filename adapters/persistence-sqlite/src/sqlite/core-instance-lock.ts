@@ -4,6 +4,7 @@ import { open, readFile, realpath, stat, statfs, unlink, type FileHandle } from 
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { scrubbedParentEnvironment } from "@tagent/execution/ports";
 import { WriterAuthorityLostError, WriterAuthorityUnavailableError } from "../writer-authority.js";
 
 const execFileAsync = promisify(execFile);
@@ -74,7 +75,7 @@ async function posixProcessIdentity(pid: number): Promise<ProcessIdentityProbeRe
   try {
     const result = await execFileAsync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
       encoding: "utf8",
-      env: { ...process.env, LC_ALL: "C" },
+      env: { ...scrubbedParentEnvironment(), LC_ALL: "C" },
     });
     const processStart = result.stdout.trim().replace(/\s+/g, " ");
     return processStart ? { status: "alive", processStart: `posix:${processStart}` } : { status: "dead" };
@@ -87,7 +88,9 @@ async function posixProcessIdentity(pid: number): Promise<ProcessIdentityProbeRe
 async function windowsProcessIdentity(pid: number): Promise<ProcessIdentityProbeResult> {
   const script = `$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { $p.StartTime.ToUniversalTime().Ticks }`;
   try {
-    const result = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8" });
+    const result = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+      encoding: "utf8", env: scrubbedParentEnvironment(),
+    });
     const processStart = result.stdout.trim();
     return processStart ? { status: "alive", processStart: `windows:${processStart}` } : { status: "dead" };
   } catch (error) {
@@ -111,7 +114,9 @@ async function windowsFilesystemClassification(directory: string): Promise<Files
   const drive = root.slice(0, 2).replace(/'/g, "''");
   const script = `(Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='${drive}'").DriveType`;
   try {
-    const result = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8" });
+    const result = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+      encoding: "utf8", env: scrubbedParentEnvironment(),
+    });
     const driveType = Number(result.stdout.trim());
     if (driveType === 3) return "local";
     if (driveType === 4) return "remote";

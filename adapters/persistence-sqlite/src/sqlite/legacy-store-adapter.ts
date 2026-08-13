@@ -14,6 +14,7 @@ import type {
   TaskRunCommandReceiptRepository,
   ToolPersistencePort,
   TranscriptRepository,
+  AttemptRequestEnvelopeRepository,
 } from "@tagent/execution/ports";
 import type {
   ApprovalRepository,
@@ -55,6 +56,7 @@ import { SqliteLearningProjectionAuthorityRepository } from "./sqlite-learning-p
 import { SqliteLearningProjectionDeliveryRepository } from "./sqlite-learning-projection-delivery-repository.js";
 import { SqliteLearningProjectionReconciliationRepository } from "./sqlite-learning-projection-reconciliation-repository.js";
 import { SqliteWorkspaceGoalRepository } from "./workspace-goal-repository.js";
+import { SqliteAttemptRequestEnvelopeRepository } from "./attempt-request-envelope-repository.js";
 
 type Operation<Args extends unknown[], Result> = (...args: Args) => Result;
 type SynchronousOperation<Args extends unknown[], Result> = (...args: Args) => Result & SynchronousResult<Result>;
@@ -103,6 +105,7 @@ export class LegacyStoreAdapter {
   readonly gates: GateEvaluationRepository;
   readonly progress: ProgressRepository;
   readonly contextManifests: ContextManifestRepository;
+  readonly requestEnvelopes: AttemptRequestEnvelopeRepository;
   readonly approvals: ApprovalRepository;
   readonly supervisorDecisions: SupervisorDecisionJournal;
   readonly learningProjections: LearningProjectionQueue;
@@ -145,6 +148,7 @@ export class LegacyStoreAdapter {
     const sqliteLearningProjectionDelivery = new SqliteLearningProjectionDeliveryRepository(store.db);
     const sqliteLearningProjectionReconciliation = new SqliteLearningProjectionReconciliationRepository(store.db);
     const sqliteWorkspaceGoals = new SqliteWorkspaceGoalRepository(store.db);
+    const sqliteRequestEnvelopes = new SqliteAttemptRequestEnvelopeRepository(store.db);
 
     this.workspaceGoals = Object.freeze({
       createGoal: mutate(sqliteWorkspaceGoals.createGoal.bind(sqliteWorkspaceGoals)),
@@ -223,7 +227,7 @@ export class LegacyStoreAdapter {
     });
 
     this.runtimeMutations = Object.freeze({
-      appendEvent: mutate(sqliteRuntimeMutations.appendEvent.bind(sqliteRuntimeMutations)),
+      appendEvent: ((context, type, data) => mutationUnitOfWork.run(() => sqliteRuntimeMutations.appendEvent(context, type, data))) as FencedRuntimeMutationPort["appendEvent"],
       appendTranscript: mutate(sqliteRuntimeMutations.appendTranscript.bind(sqliteRuntimeMutations)),
       setRunPhase: mutate(sqliteRuntimeMutations.setRunPhase.bind(sqliteRuntimeMutations)),
       advanceRunPhase: mutate(sqliteRuntimeMutations.advanceRunPhase.bind(sqliteRuntimeMutations)),
@@ -372,7 +376,7 @@ export class LegacyStoreAdapter {
     });
 
     this.events = Object.freeze({
-      appendEvent: mutate(store.appendEvent.bind(store)),
+      appendEvent: ((runId, type, data) => mutationUnitOfWork.run(() => store.appendEvent(runId, type, data))) as RunEventJournal["appendEvent"],
       listEvents: query(store.listEvents.bind(store)),
     });
 
@@ -431,6 +435,11 @@ export class LegacyStoreAdapter {
       listContextManifests: query(store.listContextManifests.bind(store)),
       getLatestContextManifest: query(store.getLatestContextManifest.bind(store)),
       getContextManifestForAttempt: query(store.getContextManifestForAttempt.bind(store)),
+    });
+    this.requestEnvelopes = Object.freeze({
+      record: mutate(sqliteRequestEnvelopes.record.bind(sqliteRequestEnvelopes)),
+      get: query(sqliteRequestEnvelopes.get.bind(sqliteRequestEnvelopes)),
+      listForAttempt: query(sqliteRequestEnvelopes.listForAttempt.bind(sqliteRequestEnvelopes)),
     });
 
     this.approvals = Object.freeze({

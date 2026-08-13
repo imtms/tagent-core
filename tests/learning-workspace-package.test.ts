@@ -142,7 +142,7 @@ describe("Learning workspace package", () => {
     expect(semanticSource).not.toMatch(/baseUrl|apiKey|timeoutMs|maxRetries|\bfetch\s*\(/);
     expect(semanticSource).toContain("SemanticJudgeModelPort");
     expect(readFileSync(path.join(repoRoot, "apps/core-service/src/composition/semantic-judge-model-adapter.ts"), "utf8"))
-      .toMatch(/baseUrl[\s\S]*apiKey[\s\S]*timeoutMs[\s\S]*maxAttempts/);
+      .toMatch(/baseUrl[\s\S]*resolveApiKey[\s\S]*timeoutMs[\s\S]*maxAttempts/);
   });
 
   it("keeps SQLite implementations outside Learning and pointed at its ports", () => {

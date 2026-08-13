@@ -188,8 +188,8 @@ describe("LegacyStoreAdapter", () => {
     stores.push(store);
     const adapter = createAdapter(store);
     const run = adapter.taskRuns.createRun(adapter.sessions.createSession().id, "consumer ACKs");
-    adapter.events.appendEvent(run.id, "message.delta", { delta: "first" });
-    adapter.events.appendEvent(run.id, "message.delta", { delta: "second" });
+    adapter.events.appendEvent(run.id, "message.delta", { delta: "first", ordinal: 1 });
+    adapter.events.appendEvent(run.id, "message.delta", { delta: "second", ordinal: 1 });
 
     const firstClaim = adapter.eventConsumers.claimEventConsumer(run.id, "gateway");
     expect(adapter.eventConsumers.ackEventConsumer(run.id, "gateway", firstClaim.generation, 1)).toBe("accepted");

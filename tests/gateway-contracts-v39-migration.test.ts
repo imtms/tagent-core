@@ -25,7 +25,7 @@ describe("gateway contracts schema v39", () => {
     seed.close();
 
     const migrated = new Store(filename);
-    expect(migrated.db.prepare("SELECT version FROM schema_meta WHERE id=1").pluck().get()).toBe(44);
+    expect(migrated.db.prepare("SELECT version FROM schema_meta WHERE id=1").pluck().get()).toBe(45);
     const columns = migrated.db.prepare("PRAGMA table_info(event_consumers)").all() as Array<{ name: string }>;
     expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining(["settled_acked_seq", "final_acked_seq"]));
     const created = migrated.createSessionIdempotent({

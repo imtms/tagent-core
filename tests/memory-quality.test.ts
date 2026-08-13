@@ -276,7 +276,7 @@ describe("memory semantic quality", () => {
     try {
       const adapter = new OpenAIEmbeddingAdapter({
         baseUrl: "https://embed.test/v1",
-        apiKey: "secret",
+        resolveApiKey: async () => "secret",
         model: "semantic",
         batchSize: 2,
         extraBody: { input_type: "passage" },
@@ -287,6 +287,28 @@ describe("memory semantic quality", () => {
       ]);
       expect(adapter.generation).toContain("semantic");
       expect(calls).toHaveLength(1);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+  it("resolves embedding credentials immediately before each provider request", async () => {
+    const original = globalThis.fetch;
+    let credential = "first";
+    const authorizations: string[] = [];
+    globalThis.fetch = async (_url, init) => {
+      authorizations.push((init?.headers as Record<string, string>).authorization);
+      return new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }), { status: 200 });
+    };
+    try {
+      const adapter = new OpenAIEmbeddingAdapter({
+        baseUrl: "https://embed.test/v1",
+        resolveApiKey: async () => credential,
+        model: "semantic",
+      });
+      await adapter.embed(["first"]);
+      credential = "second";
+      await adapter.embed(["second"]);
+      expect(authorizations).toEqual(["Bearer first", "Bearer second"]);
     } finally {
       globalThis.fetch = original;
     }
@@ -306,7 +328,7 @@ describe("memory semantic quality", () => {
     try {
       const adapter = new OpenAIEmbeddingAdapter({
         baseUrl: "https://embed.test/v1",
-        apiKey: "secret",
+        resolveApiKey: async () => "secret",
         model: "semantic",
         maxRetries: 5,
         timeoutMs: 30_000,
@@ -324,7 +346,7 @@ describe("memory semantic quality", () => {
     async () => {
       const extractor = new LlmExtractor({
         baseUrl: process.env.TAGENT_TEST_LLM_BASE_URL!,
-        apiKey: process.env.TAGENT_TEST_LLM_API_KEY!,
+        resolveApiKey: async () => process.env.TAGENT_TEST_LLM_API_KEY,
         model: process.env.TAGENT_TEST_LLM_MODEL!,
       });
       const result = await extractor.extract(
@@ -544,7 +566,7 @@ describe("memory pollution prevention", () => {
     try {
       const result = await new LlmExtractor({
         baseUrl: "https://extract.test/v1",
-        apiKey: "x",
+        resolveApiKey: async () => "x",
         model: "x",
       }).extract("<focus_user>记忆很混乱</focus_user>", [], scope);
       expect(result.records).toEqual([]);
@@ -601,7 +623,7 @@ describe("memory pollution prevention", () => {
     try {
       const result = await new LlmExtractor({
         baseUrl: "https://extract.test/v1",
-        apiKey: "x",
+        resolveApiKey: async () => "x",
         model: "x",
       }).extract(
         "<focus_user>某公司的组织架构如下：首席执行官管理运营总监，运营总监管理主管C</focus_user>",

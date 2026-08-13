@@ -7,7 +7,8 @@ import {
 
 export interface OpenAiSemanticJudgeModelOptions {
   baseUrl: string;
-  apiKey: string;
+  /** Resolved immediately before each outbound request so credential rotation is visible. */
+  resolveApiKey: () => Promise<string | undefined>;
   modelId: string;
   timeoutMs: number;
   fetch?: typeof globalThis.fetch;
@@ -44,13 +45,15 @@ export class OpenAiSemanticJudgeModelAdapter implements SemanticJudgeModelPort {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
       try {
+        const apiKey = await this.options.resolveApiKey();
+        if (!apiKey) throw new Error("Semantic judge API credential is unavailable");
         const response = await this.fetch(
           `${this.options.baseUrl.replace(/\/$/, "")}/chat/completions`,
           {
             method: "POST",
             headers: {
               "content-type": "application/json",
-              authorization: `Bearer ${this.options.apiKey}`,
+              authorization: `Bearer ${apiKey}`,
             },
             body: JSON.stringify({
               model: this.modelId,

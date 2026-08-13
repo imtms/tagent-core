@@ -11,6 +11,7 @@ import type {
   TaskRunRepository,
   TaskRunTransitionPort,
   TranscriptRepository,
+  AttemptRequestEnvelopeRepository,
 } from "@tagent/execution/ports";
 import type {
   ApprovalRepository,
@@ -42,6 +43,7 @@ export interface AgentServicePersistencePort {
   readonly checkpoints: CheckpointRepository;
   readonly approvals: ApprovalRepository;
   readonly contextManifests: ContextManifestRepository;
+  readonly requestEnvelopes: AttemptRequestEnvelopeRepository;
   readonly supervisorDecisions: SupervisorDecisionJournal;
   readonly runtime: RuntimePersistencePort;
   readonly supervisor: SupervisorPersistencePort;

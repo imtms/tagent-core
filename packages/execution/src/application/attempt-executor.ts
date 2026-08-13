@@ -1,4 +1,5 @@
 import type { AttemptRuntimePort, AttemptExecutionToken, RuntimeMessage as AgentMessage } from "../ports/attempt-runtime.js";
+import type { AttemptRequestEnvelopeRepository } from "../ports/attempt-request-envelope-repository.js";
 import type { TaskRun } from "../domain/task-run.js";
 import type { ExecutionStateView } from "./execution-state.js";
 import { failRuntimeTaskRun, publishTransitionOutcome } from "./task-run-transition-helpers.js";
@@ -7,26 +8,15 @@ import { settleRuntimeFactoryFailure } from "./runtime-factory-failure.js";
 import { settleAttemptExecutionFailure } from "./attempt-execution-failure.js";
 import { selectRuntimeModel } from "./runtime-model-selection.js";
 import { runtimeSkillsFor } from "./runtime-skill.js";
-import type { AttemptSettlementPort,
-  ContinuationControlPort,
-  ControlCommandPort,
-  PostAttemptPort,
-  RecoveryControlPort,
-  RunContextPort,
-  RunEventPublisherPort,
-  RuntimeControlPort,
-  RuntimeHostFactoryPort,
-  SupervisorPort,
+import type {
+  AttemptSettlementPort, ContinuationControlPort, ControlCommandPort, PostAttemptPort, RecoveryControlPort,
+  RunContextPort, RunEventPublisherPort, RuntimeControlPort, RuntimeHostFactoryPort, SupervisorPort,
 } from "./collaboration-ports.js";
-
 type AttemptExecutorState = ExecutionStateView<
-  | "checkpointDrafts" | "checkpointTimers" | "checkpointTokens" | "closing"
-  | "continuationOwner" | "executionOwner" | "executionTasks"
-  | "lastCheckpointTranscriptSeq" | "persistence"
-  | "recalledMemory" | "runtimeDefaults" | "runtimeFactory" | "runtimes"
-  | "workspace",
-  | "attempts" | "continuations" | "events" | "runtime" | "runtimeMutations"
-  | "sessions" | "taskRuns" | "taskRunTransitions" | "transcript"
+  | "checkpointDrafts" | "checkpointTimers" | "checkpointTokens" | "closing" | "continuationOwner" | "executionOwner"
+  | "executionTasks" | "lastCheckpointTranscriptSeq" | "persistence" | "recalledMemory" | "runtimeDefaults" | "runtimeFactory" | "runtimes" | "workspace",
+  | "attempts" | "continuations" | "events" | "runtime" | "runtimeMutations" | "sessions" | "taskRuns"
+  | "taskRunTransitions" | "transcript"
 >;
 export class AttemptExecutor {
   constructor(
@@ -37,6 +27,7 @@ export class AttemptExecutor {
       controlInbox: ControlCommandPort;
       eventHub: RunEventPublisherPort;
       postAttempt: PostAttemptPort;
+      requestEnvelopes: AttemptRequestEnvelopeRepository;
       recovery: RecoveryControlPort;
       runtimeHost: RuntimeHostFactoryPort;
       runtimeRegistry: RuntimeControlPort;
@@ -184,17 +175,23 @@ export class AttemptExecutor {
         model: executionProfile.model,
         fallbackModels: executionProfile.fallbackModels,
         reasoningEffort: executionProfile.reasoningEffort,
-        apiKey: this.state.runtimeDefaults.apiKey,
+        credential: this.state.runtimeDefaults.credential,
         providerTimeoutMs: this.state.runtimeDefaults.providerTimeoutMs,
         providerMaxRetries: this.state.runtimeDefaults.providerMaxRetries,
         runTimeoutMs: this.state.runtimeDefaults.runTimeoutMs,
         runHardTimeoutMs: this.state.runtimeDefaults.runHardTimeoutMs,
         historicalToolResultChars: this.state.runtimeDefaults.historicalToolResultChars,
         historicalTaskRunReceiptChars: this.state.runtimeDefaults.historicalTaskRunReceiptChars,
+        requestEnvelopes: this.dependencies.requestEnvelopes,
       });
     } catch (error) {
       settleRuntimeFactoryFailure({ state: this.state, run, token, continuationId, continuationOwner: this.state.continuationOwner, launchOptions, error,
         settlement: this.dependencies.settlement, postAttempt: this.dependencies.postAttempt, eventHub: this.dependencies.eventHub });
+      let failureTask!: Promise<void>;
+      failureTask = Promise.resolve(runtimeHost.dispose?.()).then(() => undefined, () => undefined).finally(() => {
+        if (this.state.executionTasks.get(run.id) === failureTask) this.state.executionTasks.delete(run.id);
+      });
+      this.state.executionTasks.set(run.id, failureTask);
       return;
     }
     this.state.runtimes.set(run.id, runtime);
@@ -264,13 +261,16 @@ export class AttemptExecutor {
       if (blocked) this.dependencies.continuation.queueContinuation(run.id);
     }).catch((error: unknown) => settleAttemptExecutionFailure({
       closing: this.state.closing, run, token, continuationId, continuationOwner: this.state.continuationOwner, error, persistence: this.state.persistence, settlement: this.dependencies.settlement, eventHub: this.dependencies.eventHub,
-    })).finally(() => {
+    })).finally(async () => {
       if (idleTimer) clearTimeout(idleTimer);
       if (hardTimer) clearTimeout(hardTimer);
       if (leaseTimer) clearInterval(leaseTimer);
       if (executionLeaseTimer) clearInterval(executionLeaseTimer);
       if (this.state.persistence.taskRuns.getRun(run.id)?.status === "cancelled") this.dependencies.recovery.repairTranscript(run.id, "cancelled");
       runtime.dispose?.();
+      try {
+        await runtimeHost.dispose?.();
+      } catch { /* Durable finalization must continue even if process cleanup reports an error. */ }
       this.state.runtimes.delete(run.id);
       this.state.recalledMemory.delete(run.id);
       const timer = this.state.checkpointTimers.get(run.id);

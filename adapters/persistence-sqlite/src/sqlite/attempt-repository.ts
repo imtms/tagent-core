@@ -503,7 +503,7 @@ export class SqliteAttemptRepository implements AttemptRepository {
       const recoveredAttempt = this.getAttempt(attempt.id)!;
       return {
         attempt: recoveredAttempt,
-        event: { runId: attempt.runId, seq: eventSeq, type: "run.interrupted", data, createdAt: timestamp },
+        event: { runId: attempt.runId, seq: eventSeq, type: "run.interrupted" as const, data, createdAt: timestamp },
         recovered: true,
       };
     })();
@@ -568,7 +568,7 @@ export class SqliteAttemptRepository implements AttemptRepository {
       const cancelledAttempt = this.getAttempt(attempt.id)!;
       return {
         attempt: cancelledAttempt,
-        event: { runId: attempt.runId, seq: eventSeq, type: "run.cancelled", data, createdAt: timestamp },
+        event: { runId: attempt.runId, seq: eventSeq, type: "run.cancelled" as const, data, createdAt: timestamp },
         cancelled: true,
       };
     })();

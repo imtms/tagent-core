@@ -10,12 +10,14 @@ function response(value: unknown, status = 200) {
   });
 }
 
+const resolveApiKey = async () => "secret";
+
 describe("OpenAI semantic judge model adapter", () => {
   it("owns provider request shape, authentication, and token extraction", async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     const adapter = new OpenAiSemanticJudgeModelAdapter({
       baseUrl: "https://semantic.test/v1/",
-      apiKey: "secret",
+      resolveApiKey,
       modelId: "semantic-model",
       timeoutMs: 1_000,
       fetch: (async (input, init) => {
@@ -47,11 +49,30 @@ describe("OpenAI semantic judge model adapter", () => {
     });
   });
 
+  it("resolves authentication immediately before every outbound request", async () => {
+    let credential = "first";
+    const headers: string[] = [];
+    const adapter = new OpenAiSemanticJudgeModelAdapter({
+      baseUrl: "https://semantic.test/v1",
+      resolveApiKey: async () => credential,
+      modelId: "semantic-model",
+      timeoutMs: 1_000,
+      fetch: (async (_input, init) => {
+        headers.push((init?.headers as Record<string, string>).authorization);
+        return response({ choices: [{ message: { content: "{\"similar\":true}" } }] });
+      }) as typeof globalThis.fetch,
+    });
+    await adapter.request({ prompt: "first", maxAttempts: 1 });
+    credential = "second";
+    await adapter.request({ prompt: "second", maxAttempts: 1 });
+    expect(headers).toEqual(["Bearer first", "Bearer second"]);
+  });
+
   it("retries provider failures inside the Core adapter", async () => {
     let calls = 0;
     const adapter = new OpenAiSemanticJudgeModelAdapter({
       baseUrl: "https://semantic.test/v1",
-      apiKey: "secret",
+      resolveApiKey,
       modelId: "semantic-model",
       timeoutMs: 1_000,
       fetch: (async () => {
@@ -73,7 +94,7 @@ describe("OpenAI semantic judge model adapter", () => {
   it("enforces provider timeout outside the Learning package", async () => {
     const adapter = new OpenAiSemanticJudgeModelAdapter({
       baseUrl: "https://semantic.test/v1",
-      apiKey: "secret",
+      resolveApiKey,
       modelId: "semantic-model",
       timeoutMs: 5,
       fetch: ((_input, init) => new Promise<Response>((_resolve, reject) => {
@@ -95,7 +116,7 @@ describe("OpenAI semantic judge model adapter", () => {
     let calls = 0;
     const adapter = new OpenAiSemanticJudgeModelAdapter({
       baseUrl: "https://semantic.test/v1",
-      apiKey: "secret",
+      resolveApiKey,
       modelId: "semantic-model",
       timeoutMs: 1_000,
       fetch: (async () => {
@@ -118,7 +139,7 @@ describe("OpenAI semantic judge model adapter", () => {
     let calls = 0;
     const adapter = new OpenAiSemanticJudgeModelAdapter({
       baseUrl: "https://semantic.test/v1",
-      apiKey: "secret",
+      resolveApiKey,
       modelId: "semantic-model",
       timeoutMs: 1_000,
       fetch: (async () => {
@@ -142,7 +163,7 @@ describe("OpenAI semantic judge model adapter", () => {
     let calls = 0;
     const adapter = new OpenAiSemanticJudgeModelAdapter({
       baseUrl: "https://semantic.test/v1",
-      apiKey: "secret",
+      resolveApiKey,
       modelId: "semantic-model",
       timeoutMs: 1_000,
       fetch: (async () => {
@@ -164,7 +185,7 @@ describe("OpenAI semantic judge model adapter", () => {
     let calls = 0;
     const adapter = new OpenAiSemanticJudgeModelAdapter({
       baseUrl: "https://semantic.test/v1",
-      apiKey: "secret",
+      resolveApiKey,
       modelId: "semantic-model",
       timeoutMs: 1_000,
       fetch: (async () => {
@@ -195,7 +216,7 @@ describe("OpenAI semantic judge model adapter", () => {
     let calls = 0;
     const adapter = new OpenAiSemanticJudgeModelAdapter({
       baseUrl: "https://semantic.test/v1",
-      apiKey: "secret",
+      resolveApiKey,
       modelId: "semantic-model",
       timeoutMs: 1_000,
       fetch: (async () => {
@@ -219,7 +240,7 @@ describe("OpenAI semantic judge model adapter", () => {
     let calls = 0;
     const adapter = new OpenAiSemanticJudgeModelAdapter({
       baseUrl: "https://semantic.test/v1",
-      apiKey: "secret",
+      resolveApiKey,
       modelId: "semantic-model",
       timeoutMs: 1_000,
       fetch: (async () => {

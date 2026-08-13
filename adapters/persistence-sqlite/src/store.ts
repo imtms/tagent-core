@@ -102,12 +102,13 @@ import {
 import { assertExecutionPolicyV42Schema, migrateExecutionPolicyV42 } from "./migrations/v42-execution-policy.js";
 import { assertSkillsV43Schema, migrateSkillsV43 } from "./migrations/v43-skills.js";
 import { assertSkillCenterV44Schema, migrateSkillCenterV44 } from "./migrations/v44-skill-center.js";
+import { assertAttemptRequestEnvelopesV45Schema, migrateAttemptRequestEnvelopesV45 } from "./migrations/v45-attempt-request-envelopes.js";
 import { mapLegacyRunApprovalOperation } from "./sqlite/canonical-approval-mapper.js";
 import { appendProjectionPair, finalizeProjectionCheckpoint } from "./sqlite/canonical-integration-event.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 44;
+const SCHEMA_VERSION = 45;
 const MAX_SUBMISSION_CONTENT_CHARS = 200_000;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -1203,10 +1204,16 @@ export class Store {
     if (previousVersion === undefined || previousVersion < 44) assertSkillsV43Schema(this.db);
     const skillCenterMigration = this.db.transaction(() => {
       migrateSkillCenterV44(this.db, previousVersion !== undefined && previousVersion >= 44 ? 44 : 43);
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+      this.db.prepare(`UPDATE schema_meta SET version=44,updated_at=? WHERE id=1`).run(now());
     });
     skillCenterMigration();
     assertSkillCenterV44Schema(this.db);
+    const requestEnvelopeMigration = this.db.transaction(() => {
+      migrateAttemptRequestEnvelopesV45(this.db, previousVersion !== undefined && previousVersion >= 45 ? 45 : 44);
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+    });
+    requestEnvelopeMigration();
+    assertAttemptRequestEnvelopesV45Schema(this.db);
     // A process restart loses the in-memory executor for receipts that had only
     // reached "started". Surface uncertainty explicitly; never replay an effect
     // whose outcome may already have escaped Core.
@@ -2750,17 +2757,27 @@ ${source.content}`;
   recordToolAttempt(runId: RunId, attempt: number, toolCallId: string, toolName: string, args: unknown) {
     const argsHash = this.canonicalHash(args);
     const timestamp = now();
-    this.db.prepare(`INSERT OR IGNORE INTO tool_attempts
+    const inserted = this.db.prepare(`INSERT OR IGNORE INTO tool_attempts
       (run_id, attempt, attempt_id, tool_call_id, tool_name, args_hash, status, created_at)
       VALUES (?, ?, ?, ?, ?, ?, 'running', ?)`).run(
       runId, attempt, this.attemptId(runId, attempt), toolCallId, toolName, argsHash, timestamp,
     );
-    return { argsHash, guard: this.evaluateToolGuard(runId, toolName, argsHash) };
+    const row = this.db.prepare(`SELECT tool_name AS toolName,args_hash AS argsHash,status FROM tool_attempts
+      WHERE run_id=? AND attempt=? AND tool_call_id=?`).get(runId, attempt, toolCallId) as {
+        toolName: string;
+        argsHash: string;
+        status: "running" | "succeeded" | "failed";
+      };
+    if (row.toolName !== toolName || row.argsHash !== argsHash) {
+      throw new Error(`Tool attempt ${toolCallId} already exists with different content`);
+    }
+    return { argsHash, created: inserted.changes === 1, status: row.status, guard: this.evaluateToolGuard(runId, toolName, argsHash) };
   }
 
   completeToolAttempt(runId: RunId, attempt: number, toolCallId: string, success: boolean, error = "") {
-    this.db.prepare("UPDATE tool_attempts SET status = ?, error = ?, completed_at = ? WHERE run_id = ? AND attempt = ? AND tool_call_id = ?")
-      .run(success ? "succeeded" : "failed", error, now(), runId, attempt, toolCallId);
+    return this.db.prepare(`UPDATE tool_attempts SET status=?,error=?,completed_at=?
+      WHERE run_id=? AND attempt=? AND tool_call_id=? AND status='running'`)
+      .run(success ? "succeeded" : "failed", error, now(), runId, attempt, toolCallId).changes === 1;
   }
 
   private evaluateToolGuard(runId: RunId, toolName: string, argsHash: string) {
@@ -2889,7 +2906,7 @@ ${source.content}`;
     return { ...artifact, runId, createdAt };
   }
 
-  appendEvent(runId: RunId, type: string, data: Record<string, unknown>): RunEvent {
+  appendEvent<TType extends import("@tagent/execution/domain").RunEventType>(runId: RunId, type: TType, data: import("@tagent/execution/domain").RunEventMap[TType]): RunEvent<TType> {
     const transaction = this.db.transaction(() => {
       const run = this.db.prepare("SELECT attempt,last_event_seq as seq FROM runs WHERE id = ?").get(runId) as { attempt: number; seq: number } | undefined;
       if (!run) throw new Error(`Unknown run ${runId}`);
@@ -2898,7 +2915,7 @@ ${source.content}`;
       this.db.prepare("INSERT INTO run_events (run_id, seq, attempt_id, type, data, created_at) VALUES (?, ?, ?, ?, ?, ?)")
         .run(runId, seq, this.attemptId(runId, run.attempt), type, JSON.stringify(data), createdAt);
       this.db.prepare("UPDATE runs SET last_event_seq = ?, updated_at = ? WHERE id = ?").run(seq, createdAt, runId);
-      return { runId, seq, type, data, createdAt } satisfies RunEvent;
+      return { runId, seq, type, data, createdAt } as RunEvent<TType>;
     });
     return transaction();
   }
@@ -3220,11 +3237,11 @@ ${source.content}`;
   listEvents(runId: RunId, after = 0, limit?: number): RunEvent[] {
     const rows = (limit === undefined
       ? this.db.prepare(`SELECT run_id as runId, seq, type, data, created_at as createdAt FROM run_events WHERE run_id = ? AND seq > ? ORDER BY seq`).all(runId, after)
-      : this.db.prepare(`SELECT run_id as runId, seq, type, data, created_at as createdAt FROM run_events WHERE run_id = ? AND seq > ? ORDER BY seq LIMIT ?`).all(runId, after, Math.max(1, Math.floor(limit)))) as Array<Omit<RunEvent, "data"> & { data: string }>;
-    return rows.map((row) => ({ ...row, data: JSON.parse(row.data) as Record<string, unknown> }));
+      : this.db.prepare(`SELECT run_id as runId, seq, type, data, created_at as createdAt FROM run_events WHERE run_id = ? AND seq > ? ORDER BY seq LIMIT ?`).all(runId, after, Math.max(1, Math.floor(limit)))) as Array<{ runId: RunId; seq: number; type: import("@tagent/execution/domain").RunEventType; data: string; createdAt: number }>;
+    return rows.map((row) => ({ ...row, data: JSON.parse(row.data) as Record<string, unknown> })) as RunEvent[];
   }
 
-  transitionRun(runId: RunId, expected: RunStatus[], nextStatus: RunStatus, type: string, data: Record<string, unknown>, reason = "", expectedAttempt?: number) {
+  transitionRun(runId: RunId, expected: RunStatus[], nextStatus: RunStatus, type: import("@tagent/execution/domain").RunEventType, data: Record<string, unknown>, reason = "", expectedAttempt?: number) {
     const transaction = this.db.transaction(() => {
       const row = this.db.prepare("SELECT status, attempt, last_event_seq as seq FROM runs WHERE id = ?").get(runId) as { status: RunStatus; attempt: number; seq: number } | undefined;
       if (!row || !expected.includes(row.status) || (expectedAttempt !== undefined && row.attempt !== expectedAttempt)) return undefined;
@@ -3250,7 +3267,7 @@ ${source.content}`;
       });
       finalizeProjectionCheckpoint(this.db, { runId, attemptId: this.attemptId(runId, row.attempt), attemptOrdinal: row.attempt, eventSeq: seq, timestamp: createdAt });
       this.enqueueLearningProjection(runId, row.attempt, type, nextStatus, seq, { ...data, reason }, createdAt);
-      return { runId, seq, type, data, createdAt } satisfies RunEvent;
+      return { runId, seq, type, data, createdAt } as RunEvent;
     });
     return transaction();
   }

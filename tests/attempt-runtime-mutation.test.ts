@@ -44,7 +44,7 @@ describe("Fenced RuntimeMutationPort", () => {
   it("validates the complete Attempt, lease, and TaskRun projection before mutation", () => {
     const { store, adapter, run, attempt, context } = fixture();
     const append = (candidate: FencedRuntimeMutationContext = context) =>
-      adapter.runtimeMutations.appendEvent(candidate, "runtime.fenced", {});
+      adapter.runtimeMutations.appendEvent(candidate, "runtime.queue", {});
     const eventCount = () => (store.db.prepare("SELECT COUNT(*) count FROM run_events").get() as { count: number }).count;
     const rejected = (mutation: () => void, restore?: () => void) => {
       expect(mutation).toThrow();
@@ -96,7 +96,7 @@ describe("Fenced RuntimeMutationPort", () => {
       () => store.db.prepare("UPDATE runs SET status='running' WHERE id=?").run(run.id),
     );
 
-    expect(append()).toMatchObject({ runId: run.id, seq: 1, type: "runtime.fenced" });
+    expect(append()).toMatchObject({ runId: run.id, seq: 1, type: "runtime.queue" });
   });
 
   it("rejects stale tokens before every runtime-owned mutation has side effects", () => {
@@ -115,7 +115,7 @@ describe("Fenced RuntimeMutationPort", () => {
       (SELECT phase FROM runs LIMIT 1) phase`).get();
     const baseline = snapshot();
     const attempts = [
-      () => adapter.runtimeMutations.appendEvent(stale, "runtime.event", {}),
+      () => adapter.runtimeMutations.appendEvent(stale, "runtime.queue", {}),
       () => adapter.runtimeMutations.appendTranscript(stale, {} as never),
       () => adapter.runtimeMutations.setRunPhase(stale, "plan"),
       () => adapter.runtimeMutations.advanceRunPhase(stale, "implement"),
@@ -151,7 +151,7 @@ describe("Fenced RuntimeMutationPort", () => {
       expect(snapshot()).toEqual(baseline);
     }
 
-    expect(adapter.runtimeMutations.appendEvent(context, "runtime.event", {})).toMatchObject({ seq: 1 });
+    expect(adapter.runtimeMutations.appendEvent(context, "runtime.queue", {})).toMatchObject({ seq: 1 });
   });
 
   it("applies a task_run batch atomically behind one execution-fence validation", () => {
@@ -193,7 +193,7 @@ describe("Fenced RuntimeMutationPort", () => {
     });
     expect(store.db.prepare("SELECT status FROM tool_attempts WHERE tool_call_id='tool-input'").get())
       .toEqual({ status: "succeeded" });
-    expect(() => adapter.runtimeMutations.appendEvent(context, "stale.callback", {})).toThrow(/version|running/);
+    expect(() => adapter.runtimeMutations.appendEvent(context, "runtime.queue", {})).toThrow(/version|running/);
     expect(store.listEvents(run.id)).toHaveLength(1);
   });
 });

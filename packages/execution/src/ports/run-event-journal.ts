@@ -1,6 +1,6 @@
-import type { RunEvent, RunId } from "../domain/task-run.js";
+import type { RunEvent, RunEventMap, RunEventType, RunId } from "../domain/task-run.js";
 
 export interface RunEventJournal {
-  appendEvent(runId: RunId, type: string, data: Record<string, unknown>): RunEvent;
+  appendEvent<TType extends RunEventType>(runId: RunId, type: TType, data: RunEventMap[TType]): RunEvent<TType>;
   listEvents(runId: RunId, after?: number, limit?: number): RunEvent[];
 }

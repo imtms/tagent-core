@@ -1,5 +1,5 @@
 import type { AgentServicePersistencePort } from "../application/ports/index.js";
-import type { RunEvent, TaskRun } from "@tagent/execution/domain";
+import type { RunEvent, RunEventMap, RunEventType, TaskRun } from "@tagent/execution/domain";
 import type {
   ArtifactSinkPort,
   AttemptExecutionToken,
@@ -12,7 +12,8 @@ import type {
 } from "@tagent/execution/ports";
 import type { AccessContext, MemoryFacade, MemoryKind } from "@tagent/memory";
 import { effectiveTaskExecutionPolicy } from "@tagent/governance/domain";
-import { createTools } from "@tagent/workspace-local/tools";
+import { composeWorkspaceTools } from "@tagent/workspace-local/tools";
+import { createLocalSubprocessPort } from "@tagent/workspace-local/local-subprocess";
 
 export interface RuntimeHostOptions {
   persistence: Pick<
@@ -34,6 +35,7 @@ export interface RuntimeHostOptions {
 export interface RuntimeHost {
   capabilities: RuntimeCapabilityCatalog;
   eventSink: RuntimeEventSink;
+  dispose(): Promise<void> | void;
 }
 
 export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
@@ -78,11 +80,11 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     const run = persistence.taskRuns.getRun(token.runId);
     return run?.attempt === token.ordinal && run.status === "waiting_input" ? run : undefined;
   };
-  const publish = (type: string, data: Record<string, unknown>): RunEvent | undefined => {
+  const publish = <TType extends RunEventType>(type: TType, data: RunEventMap[TType]): RunEvent<TType> | undefined => {
     if (!currentAttempt()) return undefined;
     const event = persistence.runtimeMutations.appendEvent(mutationContext, type, data);
     options.onEvent(event);
-    return event;
+    return event as RunEvent<TType>;
   };
   const memorySessionId = currentRun()?.sessionId;
   const memoryAccess: AccessContext = {
@@ -100,7 +102,11 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     workspaceEdit: options.workspaceEdit,
     getRun: currentRun,
     getRunExecutionState: currentRunExecutionState,
+    isCurrentAttempt: () => Boolean(currentAttempt()),
     authorizeWorkspaceMutation: () => persistence.workspaceGoals.authorizeRunMutation(token.runId),
+    authorizeExternalAction: () => effectiveTaskExecutionPolicy(currentRun()?.contract ?? null).mode === "external_action"
+      ? persistence.approvals.authorizeExternalAction(token.runId, token.ordinal)
+      : { allowed: true, reason: "TaskRun does not require external-action approval" },
     advanceRunPhase: (phase) => persistence.runtimeMutations.advanceRunPhase(mutationContext, phase),
     setRunPhase: (phase) => persistence.runtimeMutations.setRunPhase(mutationContext, phase),
     claimOperation: (id, operationType, payload) => persistence.runtimeMutations.claimOperation(mutationContext, id, operationType, payload),
@@ -122,6 +128,13 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
       options.onEvent(event);
       return request;
     },
+    recordToolAttempt: (toolCallId, toolName, args) => persistence.runtimeMutations.recordToolAttempt(
+      mutationContext, toolCallId, toolName, args,
+    ),
+    completeToolAttempt: (toolCallId, success, error) => persistence.runtimeMutations.completeToolAttempt(
+      mutationContext, toolCallId, success, error,
+    ),
+    consumeAtomicallySettledToolCall: (toolCallId) => atomicallySettledToolCalls.delete(toolCallId),
     publish,
     memory: options.memory ? {
       search: async (query, kinds, maxResults) => {
@@ -150,6 +163,8 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
       }),
     } : undefined,
   };
+  const subprocess = createLocalSubprocessPort();
+  const toolComposition = composeWorkspaceTools(toolCapabilities, options.workspace, subprocess);
   const eventSink: RuntimeEventSink = {
     activity: options.onActivity,
     publish,
@@ -158,41 +173,12 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
       : undefined,
     isRunning: () => Boolean(currentAttempt()),
     isWaitingForInput: () => Boolean(waitingRun()),
-    beforeToolCall(input) {
-      if (!currentAttempt()) return { blocked: true, reason: "Attempt is no longer current" };
-      if (["write", "edit", "patch", "bash", "memory_forget"].includes(input.toolName)) {
-        const run = currentRun();
-        if (effectiveTaskExecutionPolicy(run?.contract ?? null).mode === "external_action") {
-          const approval = persistence.approvals.authorizeExternalAction(token.runId, token.ordinal);
-          if (!approval.allowed) return { blocked: true, reason: `External action approval guard: ${approval.reason}` };
-        }
-        const goalGuard = persistence.workspaceGoals.authorizeRunMutation(token.runId);
-        if (!goalGuard.allowed) return { blocked: true, reason: `Workspace Goal mutation guard: ${goalGuard.reason}` };
-        persistence.runtimeMutations.advanceRunPhase(mutationContext, "implement");
-      }
-      const attempt = persistence.runtimeMutations.recordToolAttempt(
-        mutationContext,
-        input.toolCallId,
-        input.toolName,
-        input.args,
-      );
-      if (!attempt.guard.blocked) return { blocked: false };
-      persistence.runtimeMutations.completeToolAttempt(mutationContext, input.toolCallId, false, attempt.guard.reason);
-      return { blocked: true, reason: attempt.guard.reason };
-    },
-    afterToolCall(input) {
-      if (atomicallySettledToolCalls.delete(input.toolCallId)) return;
-      if (!currentAttempt()) return;
-      persistence.runtimeMutations.completeToolAttempt(
-        mutationContext,
-        input.toolCallId,
-        input.success,
-        input.error,
-      );
-    },
+    beforeToolCall: ({ toolCallId, toolName, args }) => toolComposition.pipeline.beforeToolCall(toolCallId, toolName, args),
+    afterToolCall: ({ toolCallId, success, error }) => toolComposition.pipeline.afterToolCall(toolCallId, success, error),
   };
   return {
-    capabilities: Object.freeze({ tools: Object.freeze(createTools(toolCapabilities, options.workspace)) }),
+    capabilities: toolComposition.catalog,
     eventSink,
+    dispose: () => subprocess.dispose?.(),
   };
 }

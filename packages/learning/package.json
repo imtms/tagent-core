@@ -1,6 +1,6 @@
 {
   "name": "@tagent/learning",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "type": "module",
   "sideEffects": false,
@@ -31,10 +31,10 @@
     "clean": "tsc -b --clean && rm -rf dist"
   },
   "dependencies": {
-    "@tagent/admission": "0.6.2",
-    "@tagent/execution": "0.6.2",
-    "@tagent/governance": "0.6.2",
-    "@tagent/memory": "0.6.2"
+    "@tagent/admission": "0.6.3",
+    "@tagent/execution": "0.6.3",
+    "@tagent/governance": "0.6.3",
+    "@tagent/memory": "0.6.3"
   },
   "engines": {
     "node": ">=24.18.1",

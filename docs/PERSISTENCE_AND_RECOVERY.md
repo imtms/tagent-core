@@ -4,7 +4,7 @@
 
 `@tagent/persistence-sqlite` owns the control-plane SQLite schema, repositories, migrations, transaction boundary, writer authority, and restart recovery primitives. Domains depend on its ports through the Core composition root; they do not issue uncontrolled SQL.
 
-The current schema version is 44:
+The current schema version is 45:
 
 | Version | Authority introduced |
 | --- | --- |
@@ -23,6 +23,7 @@ The current schema version is 44:
 | 42 | durable Session Inbox execution-policy snapshots for effect-before-approval enforcement |
 | 43 | Core-managed Skill revisions and per-Session Skill bindings |
 | 44 | shared catalog references from each Workspace to multiple Skill identities |
+| 45 | exact, hash-verified Attempt request envelopes persisted before provider dispatch |
 
 Schema 37 added `operations.payload_json`, `run_checks.source_operation_id`, `run_checks.observed_at`, and the partial source-operation index. Legacy operations are not retroactively promoted to trusted evidence.
 
@@ -38,7 +39,9 @@ Schema 42 adds `session_supervisor_inbox.execution_policy_json`. The Router deci
 
 Schema 43 adds `skills`, immutable `skill_revisions`, and the original single-revision Session binding. Schema 44 migrates that binding to `workspace_skill_bindings(session_id, skill_id)`, allowing multiple references per Workspace. Admission resolves the latest revision of every reference and freezes the complete array, including content and hashes, into a new TaskRun. Catalog deletion removes references but does not erase content-addressed bundle files or self-contained historical snapshots.
 
-Migrations are forward-only for a running release. A binary that only understands schema 43 must never open a schema 44 database.
+Schema 45 adds `attempt_request_envelopes`, uniquely keyed by `(attempt_id, request_ordinal)`. Each row stores canonical JSON, the exact final provider payload, its SHA-256 digest, and a digest of the complete replay envelope. Runtime writes the envelope, reads it through the repository, and validates both hashes before returning the payload to the transport hook. Re-entry validates the exact columns, unique Attempt/ordinal index, and foreign keys.
+
+Migrations are forward-only for a running release. A binary that only understands schema 44 must never open a schema 45 database.
 
 ## Startup order
 

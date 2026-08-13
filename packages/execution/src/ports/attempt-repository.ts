@@ -131,7 +131,7 @@ export type TaskRunStateMutation =
 
 /** Runtime-originated writes that validate the execution fence in the same SQLite transaction as the mutation. */
 export interface FencedRuntimeMutationPort {
-  appendEvent(context: FencedRuntimeMutationContext, type: string, data: Record<string, unknown>): RunEvent;
+  appendEvent<TType extends import("../domain/task-run.js").RunEventType>(context: FencedRuntimeMutationContext, type: TType, data: import("../domain/task-run.js").RunEventMap[TType]): RunEvent<TType>;
   appendTranscript(context: FencedRuntimeMutationContext, message: RuntimeMessage): number;
   setRunPhase(context: FencedRuntimeMutationContext, phase: RunPhase): boolean;
   advanceRunPhase(
@@ -160,13 +160,18 @@ export interface FencedRuntimeMutationPort {
     toolCallId: string,
     toolName: string,
     args: unknown,
-  ): { argsHash: string; guard: { blocked: boolean; reason: string } };
+  ): {
+    argsHash: string;
+    created: boolean;
+    status: "running" | "succeeded" | "failed";
+    guard: { blocked: boolean; reason: string };
+  };
   completeToolAttempt(
     context: FencedRuntimeMutationContext,
     toolCallId: string,
     success: boolean,
     error?: string,
-  ): void;
+  ): boolean;
   completeControlDelivery(
     context: FencedRuntimeMutationContext,
     itemId: string,

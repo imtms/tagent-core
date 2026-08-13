@@ -4,6 +4,8 @@ import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
 import { AgentService } from "@tagent/core-service/application";
 import { loadConfig } from "@tagent/core-service/config";
 import { Store } from "@tagent/persistence-sqlite/store";
+import type { RunEventMap, RunEventType } from "@tagent/execution/domain";
+import { createEnvironmentCredentialResolver, credentialReference } from "@tagent/execution/ports";
 import { TaskRunSupervisor, SupervisorReviewError, TestSupervisorReviewer, passingTestAudit, type SupervisorAudit, type SupervisorReviewer } from "@tagent/core-service/composition";
 import type {
   AttemptRuntimeFactory as RuntimeFactory,
@@ -33,7 +35,7 @@ class CheckpointRuntime implements AgentRuntime {
   abort() { this.resolvePrompt?.(); }
   getMessages(): AgentMessage[] { return []; }
   getError() { return undefined; }
-  emit(type: string, data: Record<string, unknown>) {
+  emit<TType extends RunEventType>(type: TType, data: RunEventMap[TType]) {
     this.options.eventSink.publish(type, data);
   }
 }
@@ -91,7 +93,7 @@ class BlockingControlRuntime implements AgentRuntime {
 
 class BlockingSupervisorSteerRuntime extends BlockingControlRuntime {
   constructor(private readonly options: Parameters<RuntimeFactory>[0]) { super(); }
-  emit(type: string, data: Record<string, unknown>) {
+  emit<TType extends RunEventType>(type: TType, data: RunEventMap[TType]) {
     this.options.eventSink.publish(type, data);
   }
 }
@@ -271,7 +273,7 @@ describe("AgentService runtime boundary", () => {
     });
     const service = new AgentService(agentPersistence(store), "/tmp", () => new DeferredRuntime(), {
       routerModel: { id: "router-test", api: "openai-completions", baseUrl: "https://router.test/v1", maxTokens: 321 } as never,
-      apiKey: "test-key",
+      credential: { reference: credentialReference("TEST_API_KEY"), resolver: createEnvironmentCredentialResolver({ TEST_API_KEY: "test-key" }) },
     });
     try {
       await service.enqueueSessionInput(session.id, "Analyze and optimize this runtime end to end, including all performance-sensitive paths and verification evidence. ".repeat(5), "router-budget");
@@ -521,7 +523,7 @@ describe("AgentService runtime boundary", () => {
     expect(runtimeOptions).toBeDefined();
     expect(runtimeOptions!.eventSink.beforeToolCall({ toolCallId: "external-read", toolName: "read", args: { path: "README.md" } })).toEqual({ blocked: false });
     expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "approved" });
-    expect(runtimeOptions!.eventSink.beforeToolCall({ toolCallId: "external-call", toolName: "memory_forget", args: { ids: ["memory-1"] } })).toEqual({ blocked: false });
+    expect(runtimeOptions!.eventSink.beforeToolCall({ toolCallId: "external-call", toolName: "write", args: { path: "approved.txt", content: "approved" } })).toEqual({ blocked: false });
     expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "consumed" });
     expect(store.authorizeExternalAction(runId, 3)).toMatchObject({ allowed: false });
     await service.closeRuntimes();
@@ -591,8 +593,8 @@ describe("AgentService runtime boundary", () => {
     runtime.emit("runtime.queue", { pendingMessageCount: 0 });
     await new Promise((resolve) => setTimeout(resolve, 550));
     expect(writes).toHaveBeenCalledTimes(1);
-    runtime.emit("message.delta", { delta: "A" });
-    runtime.emit("message.delta", { delta: "B" });
+    runtime.emit("message.delta", { delta: "A", ordinal: 1 });
+    runtime.emit("message.delta", { delta: "B", ordinal: 1 });
     expect(store.getCheckpoint(run.id)).toMatchObject({ active: true, assistantPartial: "", lastEventSeq: 2 });
     expect(writes).toHaveBeenCalledTimes(1);
     await new Promise((resolve) => setTimeout(resolve, 550));
@@ -651,11 +653,11 @@ describe("AgentService runtime boundary", () => {
     const service = new AgentService(agentPersistence(store), "/tmp", (options) => runtime = new CheckpointRuntime(options));
     const run = await service.start(session.id, "multi-message stream");
     runtime.emit("message.started", { ordinal: 1 });
-    runtime.emit("message.delta", { delta: "first answer" });
+    runtime.emit("message.delta", { delta: "first answer", ordinal: 1 });
     await new Promise((resolve) => setTimeout(resolve, 550));
     expect(store.getCheckpoint(run.id)?.assistantPartial).toBe("first answer");
     runtime.emit("message.started", { ordinal: 2 });
-    runtime.emit("message.delta", { delta: "replacement" });
+    runtime.emit("message.delta", { delta: "replacement", ordinal: 2 });
     await new Promise((resolve) => setTimeout(resolve, 550));
     expect(store.getCheckpoint(run.id)?.assistantPartial).toBe("replacement");
     await service.closeRuntimes();

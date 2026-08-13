@@ -7,10 +7,16 @@ import { fauxAssistantMessage, fauxProvider, fauxThinking } from "@earendil-work
 import { PiRuntime, providerRetryDelayMs, type PiRuntimeOptions } from "@tagent/runtime-pi";
 import { Store } from "@tagent/persistence-sqlite/store";
 import { createRuntimeHost } from "@tagent/core-service/composition";
-import { attemptIdFor } from "@tagent/execution/domain";
+import { attemptIdFor, canonicalRequestJson, requestHash, type AttemptRequestEnvelope } from "@tagent/execution/domain";
+import { credentialReference, type AttemptRequestEnvelopeRepository } from "@tagent/execution/ports";
 import { agentPersistence } from "./support/test-persistence.js";
 
 describe("Pi AgentHarness integration", () => {
+  const testCredential = (value: string) => ({
+    reference: credentialReference("TEST_API_KEY"),
+    resolver: { resolve: () => value, configured: () => Boolean(value) },
+  });
+
   it("bounds provider retry backoff by watchdog budgets and Node timer limits", () => {
     expect(providerRetryDelayMs(1, 1_200_000, 86_400_000)).toBe(1_000);
     expect(providerRetryDelayMs(12, 1_200_000, 86_400_000)).toBe(1_199_999);
@@ -35,7 +41,14 @@ describe("Pi AgentHarness integration", () => {
       onActivity: () => undefined, onEvent: () => undefined,
       memoryScopeId: "test", memorySubjectId: `session:${run.sessionId}`,
     });
-    return { ...options, token, ...host };
+    const eventSink = {
+      ...host.eventSink,
+      afterToolCall(input: Parameters<typeof host.eventSink.afterToolCall>[0]) {
+        host.eventSink.afterToolCall(input);
+        if (input.toolName === "bash") void host.dispose();
+      },
+    };
+    return { ...options, token, capabilities: host.capabilities, eventSink, requestEnvelopes: agentPersistence(store).requestEnvelopes };
   }
 
   async function setup(responses: Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0], tokensPerSecond = 10_000) {
@@ -620,7 +633,7 @@ describe("Pi AgentHarness integration", () => {
       baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
     };
-    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, apiKey: "test-runtime-key", initialMessages: [], providerMaxRetries: 0, providerTimeoutMs: 1_000 }));
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, credential: testCredential("test-runtime-key"), initialMessages: [], providerMaxRetries: 0, providerTimeoutMs: 1_000 }));
     try {
       await runtime.prompt("oversized input ".repeat(10_000));
       expect(callCount).toBe(2);
@@ -675,12 +688,104 @@ describe("Pi AgentHarness integration", () => {
       baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
     };
-    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, apiKey: "test-runtime-key", initialMessages: [], providerMaxRetries: 0 }));
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, credential: testCredential("test-runtime-key"), initialMessages: [], providerMaxRetries: 0 }));
     try {
       await runtime.prompt("hello");
       expect(authorization).toBe("Bearer test-runtime-key");
       expect(payload).not.toHaveProperty("store");
       expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "custom ready" }] });
+    } finally {
+      runtime.dispose();
+      store.close();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+  it("persists and verifies the exact provider request before network dispatch", async () => {
+    let requestCount = 0;
+    let receivedBody: unknown;
+    let durableBeforeHandler: AttemptRequestEnvelope | undefined;
+    const server = createServer((request, response) => {
+      requestCount += 1;
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        receivedBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        durableBeforeHandler = persistence.requestEnvelopes.listForAttempt(attemptIdFor(run.id, 1))[0];
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end([
+          'data: {"id":"chatcmpl-envelope","object":"chat.completion.chunk","created":1,"model":"envelope-model","choices":[{"index":0,"delta":{"role":"assistant","content":"enveloped"},"finish_reason":null}]}',
+          'data: {"id":"chatcmpl-envelope","object":"chat.completion.chunk","created":1,"model":"envelope-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("HTTP test server did not bind");
+    const store = new Store(":memory:");
+    const persistence = agentPersistence(store);
+    const run = store.createRun(store.createSession().id, "durable envelope");
+    const model: Model<"openai-completions"> = {
+      id: "envelope-model", name: "envelope-model", api: "openai-completions", provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
+    };
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Envelope system", model, credential: testCredential("test-runtime-key"), initialMessages: [], providerMaxRetries: 0 }));
+    try {
+      await runtime.prompt("persist me");
+      const durable = persistence.requestEnvelopes.listForAttempt(attemptIdFor(run.id, 1));
+      expect(requestCount).toBe(1);
+      expect(durableBeforeHandler).toBeDefined();
+      expect(durable).toHaveLength(1);
+      expect(canonicalRequestJson(durable[0].providerPayload)).toBe(canonicalRequestJson(receivedBody));
+      expect(durable[0]).toMatchObject({
+        providerPayloadHash: requestHash(receivedBody),
+        providerPayload: expect.objectContaining({ messages: expect.arrayContaining([
+            expect.objectContaining({ role: "system", content: "Envelope system" }),
+            expect.objectContaining({ role: "user", content: [expect.objectContaining({ type: "text", text: "persist me" })] }),
+          ]) }),
+      });
+      expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "request.envelope.persisted", data: expect.objectContaining({ envelopeId: durable[0].id }) }),
+      ]));
+    } finally {
+      runtime.dispose();
+      store.close();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("aborts before network dispatch when durable request verification mismatches", async () => {
+    let requestCount = 0;
+    const server = createServer((_request, response) => { requestCount += 1; response.end(); });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("HTTP test server did not bind");
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "mismatched envelope");
+    const persisted = agentPersistence(store).requestEnvelopes;
+    const tamperingRepository: AttemptRequestEnvelopeRepository = {
+      record: (envelope) => persisted.record(envelope),
+      get: (id) => {
+        const value = persisted.get(id);
+        return value ? { ...value, envelopeHash: "0".repeat(64) } : undefined;
+      },
+      listForAttempt: (attemptId) => persisted.listForAttempt(attemptId),
+    };
+    const model: Model<"openai-completions"> = {
+      id: "mismatch-model", name: "mismatch-model", api: "openai-completions", provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
+    };
+    const runtime = new PiRuntime({
+      ...runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Mismatch", model, credential: testCredential("test-runtime-key"), initialMessages: [], providerMaxRetries: 0 }),
+      requestEnvelopes: tamperingRepository,
+    });
+    try {
+      await runtime.prompt("must not send");
+      expect(requestCount).toBe(0);
+      expect(runtime.getError()).toContain("does not match durable envelope");
     } finally {
       runtime.dispose();
       store.close();
@@ -720,7 +825,7 @@ describe("Pi AgentHarness integration", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
     };
     const runtime = new PiRuntime(runtimeSpec(store, run, {
-      workspace: process.cwd(), systemPrompt: "Controlled prompt", model, apiKey: "test-runtime-key", providerMaxRetries: 0,
+      workspace: process.cwd(), systemPrompt: "Controlled prompt", model, credential: testCredential("test-runtime-key"), providerMaxRetries: 0,
       initialMessages: [{ role: "user", content: "historical request", timestamp: 1 }, fauxAssistantMessage("historical answer")],
     }));
     try {
@@ -761,7 +866,7 @@ describe("Pi AgentHarness integration", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
     };
     const runtime = new PiRuntime(runtimeSpec(store, run, {
-      workspace: process.cwd(), systemPrompt: "Controlled prompt", model, apiKey: "test-runtime-key",
+      workspace: process.cwd(), systemPrompt: "Controlled prompt", model, credential: testCredential("test-runtime-key"),
       initialMessages: [], providerMaxRetries: 0, providerTimeoutMs: 0,
     }));
     try {
@@ -791,7 +896,7 @@ describe("Pi AgentHarness integration", () => {
       baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
     };
-    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, apiKey: "test-runtime-key", initialMessages: [], providerMaxRetries: 0, providerTimeoutMs: 30 }));
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, credential: testCredential("test-runtime-key"), initialMessages: [], providerMaxRetries: 0, providerTimeoutMs: 30 }));
     const startedAt = Date.now();
     try {
       await runtime.prompt("wait for stalled body");
@@ -835,7 +940,7 @@ describe("Pi AgentHarness integration", () => {
       baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
     };
-    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, apiKey: "test-runtime-key", initialMessages: [], providerMaxRetries: 0, providerTimeoutMs: 500 }));
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, credential: testCredential("test-runtime-key"), initialMessages: [], providerMaxRetries: 0, providerTimeoutMs: 500 }));
     const startedAt = Date.now();
     try {
       await runtime.prompt("read the active stream");
@@ -867,7 +972,7 @@ describe("Pi AgentHarness integration", () => {
       baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
     };
-    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, apiKey: "test-runtime-key", initialMessages: [], providerMaxRetries: 0, providerTimeoutMs: 30 }));
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, credential: testCredential("test-runtime-key"), initialMessages: [], providerMaxRetries: 0, providerTimeoutMs: 30 }));
     const startedAt = Date.now();
     try {
       await runtime.prompt("wait for stalled headers");
@@ -900,7 +1005,7 @@ describe("Pi AgentHarness integration", () => {
     const historical = fauxAssistantMessage("historical response".repeat(12_000));
     historical.usage = { ...historical.usage, input: 20_000, output: 10_000, totalTokens: 30_000 };
     const runtime = new PiRuntime(runtimeSpec(store, run, {
-      workspace: process.cwd(), systemPrompt: "Controlled prompt", model, apiKey: "test-runtime-key", providerTimeoutMs: 5_000, providerMaxRetries: 0,
+      workspace: process.cwd(), systemPrompt: "Controlled prompt", model, credential: testCredential("test-runtime-key"), providerTimeoutMs: 5_000, providerMaxRetries: 0,
       initialMessages: [{ role: "user", content: "historical request", timestamp: 1 }, historical],
     }));
     const compaction = runtime.compact("Preserve unresolved work.");

@@ -267,7 +267,7 @@ function repairJsonSyntax(raw: string): unknown {
 export class OpenAiSupervisorReviewer implements SupervisorReviewer {
   readonly evaluator = "llm" as const;
   readonly model: string;
-  constructor(private readonly options: { model: RuntimeModelSpec; fallbackModel?: RuntimeModelSpec; apiKey: string; timeoutMs?: number; onUsage?: (runId: string, model: string, usage: import("./openai-sse.js").OpenAiUsage) => void }) { this.model = options.model.id; }
+  constructor(private readonly options: { model: RuntimeModelSpec; fallbackModel?: RuntimeModelSpec; credential: NonNullable<import("@tagent/execution/ports").AttemptRuntimeSpec["credential"]>; timeoutMs?: number; onUsage?: (runId: string, model: string, usage: import("./openai-sse.js").OpenAiUsage) => void }) { this.model = options.model.id; }
 
   async reviewRelaxed(input: SupervisorSettledReviewInput): Promise<SupervisorAudit> {
     const criteria = input.run.contract?.acceptanceCriteria ?? [];
@@ -671,7 +671,9 @@ TASKRUN_DATA=${JSON.stringify(payload)}`;
     const idleTimeoutMs = this.options.timeoutMs ?? 5_000;
     const headerTimer = setTimeout(() => controller.abort(new OpenAiSseIdleTimeoutError(idleTimeoutMs)), idleTimeoutMs);
     try {
-      const response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${this.options.apiKey}` }, body: JSON.stringify({ model: model.id, messages: [{ role: "user", content: prompt }], temperature: 0, max_completion_tokens: model.maxTokens, response_format: { type: "json_object" }, stream: true }), signal: controller.signal });
+      const apiKey = await this.options.credential.resolver.resolve(this.options.credential.reference);
+      if (!apiKey) throw new Error(`Missing configured credential: ${this.options.credential.reference}`);
+      const response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model: model.id, messages: [{ role: "user", content: prompt }], temperature: 0, max_completion_tokens: model.maxTokens, response_format: { type: "json_object" }, stream: true }), signal: controller.signal });
       clearTimeout(headerTimer);
       if (!response.ok) {
         const body = await response.text();

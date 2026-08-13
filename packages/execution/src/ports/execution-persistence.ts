@@ -9,6 +9,7 @@ import type { RuntimePersistencePort } from "./runtime-persistence-port.js";
 import type { TaskRunRepository } from "./task-run-repository.js";
 import type { TaskRunTransitionPort } from "./task-run-transition-port.js";
 import type { TranscriptRepository } from "./transcript-repository.js";
+import type { AttemptRequestEnvelopeRepository } from "./attempt-request-envelope-repository.js";
 
 export interface ExecutionMessage {
   id: number;
@@ -55,6 +56,7 @@ export interface ExecutionPersistencePort {
   readonly sessions: ExecutionConversationPort;
   readonly approvals: ExecutionApprovalPort;
   readonly contextManifests: ExecutionContextManifestPort;
+  readonly requestEnvelopes: AttemptRequestEnvelopeRepository;
   readonly supervisorDecisions: ExecutionSupervisorDecisionPort;
   readonly workspaceGoals: Pick<WorkspaceGoalRepository, "authorizeRunMutation">;
 }

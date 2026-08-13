@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Store } from "@tagent/persistence-sqlite/store";
 import type { ToolCapabilityApplicationPort } from "@tagent/execution/ports";
-import { createTools, createWorkspaceArtifactSink, createWorkspaceEditPort, WorkspaceProjectContextSource } from "@tagent/workspace-local";
+import { composeWorkspaceTools, createLocalSubprocessPort, createWorkspaceArtifactSink, createWorkspaceEditPort, WorkspaceProjectContextSource } from "@tagent/workspace-local";
 
 function applyTaskRunBatch(store: Store, runId: string, mutations: Parameters<ToolCapabilityApplicationPort["applyTaskRunBatch"]>[0]) {
   store.db.transaction(() => {
@@ -24,7 +24,9 @@ function tools(store: Store, runId: string, workspace: string) {
     artifactSink: createWorkspaceArtifactSink(workspace),
     workspaceEdit: createWorkspaceEditPort(workspace),
     getRun: () => store.getRun(runId),
+    isCurrentAttempt: () => true,
     authorizeWorkspaceMutation: () => ({ allowed: true, reason: "ordinary TaskRun" }),
+    authorizeExternalAction: () => ({ allowed: true, reason: "ordinary TaskRun" }),
     advanceRunPhase: (phase) => store.advanceRunPhase(runId, phase),
     setRunPhase: (phase) => store.setRunPhase(runId, phase),
     claimOperation: (id, operationType, payload) => store.claimOperation(id, runId, store.getRun(runId)!.attempt, operationType, payload),
@@ -36,12 +38,15 @@ function tools(store: Store, runId: string, workspace: string) {
     applyTaskRunBatch: (mutations) => applyTaskRunBatch(store, runId, mutations),
     addArtifact: (artifact) => store.addArtifact(runId, artifact),
     requestUserInput: (_toolCallId, prompt, fields) => store.requestUserInput(runId, prompt, fields),
+    recordToolAttempt: (toolCallId, toolName, args) => store.recordToolAttempt(runId, store.getRun(runId)!.attempt, toolCallId, toolName, args),
+    completeToolAttempt: (toolCallId, success, error) => store.completeToolAttempt(runId, store.getRun(runId)!.attempt, toolCallId, success, error),
+    consumeAtomicallySettledToolCall: () => false,
     publish: (type, data) => store.appendEvent(runId, type, data),
   };
-  return createTools(capabilities, workspace);
+  return [...composeWorkspaceTools(capabilities, workspace, createLocalSubprocessPort()).catalog.tools];
 }
 
-async function snapshot(read: ReturnType<typeof createTools>[number], file: string) {
+async function snapshot(read: ReturnType<typeof tools>[number], file: string) {
   const result = await read.execute(`read-${file}`, { path: file }, undefined);
   return result.details as { snapshotId: string; contentHash: string };
 }
@@ -105,11 +110,11 @@ describe("P0 reliable execution primitives", () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "cap");
     const capabilities: ToolCapabilityApplicationPort = {
       runId: run.id, artifactSink: createWorkspaceArtifactSink(workspace, 64_000), workspaceEdit: createWorkspaceEditPort(workspace),
-      getRun: () => store.getRun(run.id), authorizeWorkspaceMutation: () => ({ allowed: true, reason: "ordinary TaskRun" }), advanceRunPhase: (phase) => store.advanceRunPhase(run.id, phase), setRunPhase: (phase) => store.setRunPhase(run.id, phase),
+      getRun: () => store.getRun(run.id), isCurrentAttempt: () => true, authorizeWorkspaceMutation: () => ({ allowed: true, reason: "ordinary TaskRun" }), authorizeExternalAction: () => ({ allowed: true, reason: "ordinary TaskRun" }), advanceRunPhase: (phase) => store.advanceRunPhase(run.id, phase), setRunPhase: (phase) => store.setRunPhase(run.id, phase),
       claimOperation: (id, operationType, payload) => store.claimOperation(id, run.id, store.getRun(run.id)!.attempt, operationType, payload), updateOperation: (id, update) => store.updateOperation(id, update), listOperations: (options) => store.listOperations(run.id, options),
-      upsertPlanItem: (item) => store.upsertPlanItem(run.id, item), markChecksStale: () => store.markChecksStale(run.id), upsertCheck: (check) => store.upsertCheck(run.id, check), applyTaskRunBatch: (mutations) => applyTaskRunBatch(store, run.id, mutations), addArtifact: (artifact) => store.addArtifact(run.id, artifact), requestUserInput: (_id, prompt, fields) => store.requestUserInput(run.id, prompt, fields), publish: (type, data) => store.appendEvent(run.id, type, data),
+      upsertPlanItem: (item) => store.upsertPlanItem(run.id, item), markChecksStale: () => store.markChecksStale(run.id), upsertCheck: (check) => store.upsertCheck(run.id, check), applyTaskRunBatch: (mutations) => applyTaskRunBatch(store, run.id, mutations), addArtifact: (artifact) => store.addArtifact(run.id, artifact), requestUserInput: (_id, prompt, fields) => store.requestUserInput(run.id, prompt, fields), recordToolAttempt: (toolCallId, toolName, args) => store.recordToolAttempt(run.id, store.getRun(run.id)!.attempt, toolCallId, toolName, args), completeToolAttempt: (toolCallId, success, error) => store.completeToolAttempt(run.id, store.getRun(run.id)!.attempt, toolCallId, success, error), consumeAtomicallySettledToolCall: () => false, publish: (type, data) => store.appendEvent(run.id, type, data),
     };
-    const bash = createTools(capabilities, workspace).find((tool) => tool.name === "bash")!;
+    const bash = composeWorkspaceTools(capabilities, workspace, createLocalSubprocessPort()).catalog.tools.find((tool) => tool.name === "bash")!;
     const result = await bash.execute("capped", { command: "python3 -c 'print(\"z\" * 100000, end=\"\")'", timeoutSeconds: 10 }, undefined);
     expect(result.details).toMatchObject({ totalBytes: 100_000, storedBytes: 64_000, truncatedAtSource: true, outputDiscardedBytes: 36_000 });
     const artifact = store.getRun(run.id)!.artifacts[0];

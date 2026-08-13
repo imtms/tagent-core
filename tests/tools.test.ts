@@ -5,7 +5,7 @@ import path from "node:path";
 import { Store } from "@tagent/persistence-sqlite/store";
 import type { RunEvent, RunId } from "@tagent/execution/domain";
 import type { ToolCapabilityApplicationPort } from "@tagent/execution/ports";
-import { bashInvalidatesChecks, createTools, createWorkspaceArtifactSink, createWorkspaceEditPort, listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "@tagent/workspace-local";
+import { bashInvalidatesChecks, composeWorkspaceTools, createLocalSubprocessPort, createWorkspaceArtifactSink, createWorkspaceEditPort, listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "@tagent/workspace-local";
 
 async function waitForFile(filename: string) {
   for (let index = 0; index < 1_000; index += 1) {
@@ -26,7 +26,9 @@ function createTestTools(
     workspaceEdit: createWorkspaceEditPort(workspace),
     getRun: () => store.getRun(runId),
     getRunExecutionState: () => store.getRunExecutionState(runId),
+    isCurrentAttempt: () => true,
     authorizeWorkspaceMutation: () => ({ allowed: true, reason: "ordinary TaskRun" }),
+    authorizeExternalAction: () => ({ allowed: true, reason: "ordinary TaskRun" }),
     advanceRunPhase: (phase) => store.advanceRunPhase(runId, phase),
     setRunPhase: (phase) => store.setRunPhase(runId, phase),
     claimOperation: (id, operationType, payload) =>
@@ -47,13 +49,16 @@ function createTestTools(
     })(),
     addArtifact: (artifact) => store.addArtifact(runId, artifact),
     requestUserInput: (_toolCallId, prompt, fields) => store.requestUserInput(runId, prompt, fields),
+    recordToolAttempt: (toolCallId, toolName, args) => store.recordToolAttempt(runId, store.getRun(runId)!.attempt, toolCallId, toolName, args),
+    completeToolAttempt: (toolCallId, success, error) => store.completeToolAttempt(runId, store.getRun(runId)!.attempt, toolCallId, success, error),
+    consumeAtomicallySettledToolCall: () => false,
     publish: (type, data) => {
       const event = store.appendEvent(runId, type, data);
       onEvent(event);
       return event;
     },
   };
-  return createTools(capabilities, workspace);
+  return [...composeWorkspaceTools(capabilities, workspace, createLocalSubprocessPort()).catalog.tools];
 }
 
 describe("workspace tools", () => {
@@ -116,7 +121,7 @@ describe("workspace tools", () => {
     await writeFile(path.join(outside, "inside.txt"), "outside", "utf8");
     const ready = path.join(workspace, ".ready");
     const release = path.join(workspace, ".release");
-    const env = { ...process.env, TAGENT_FD_HELPER_READY: ready, TAGENT_FD_HELPER_RELEASE: release };
+    const env = { TAGENT_FD_HELPER_READY: ready, TAGENT_FD_HELPER_RELEASE: release };
 
     const readPromise = readWorkspaceFile(workspace, "parent/inside.txt", { ...env, TAGENT_FD_HELPER_STAGE: "before_open" });
     await waitForFile(ready);
@@ -218,9 +223,7 @@ describe("workspace tools", () => {
     const tools = createTestTools(store, run.id, workspace);
     const bash = tools.find((tool) => tool.name === "bash")!;
     const firstId = "bash-first";
-    store.recordToolAttempt(run.id, run.attempt, firstId, "bash", { command: "false", timeoutSeconds: 2 });
     await expect(bash.execute(firstId, { command: "false", timeoutSeconds: 2 }, undefined)).rejects.toThrow("code 1");
-    store.completeToolAttempt(run.id, run.attempt, firstId, false, "failed");
     const next = store.recordToolAttempt(run.id, run.attempt, "bash-second", "bash", { command: "false", timeoutSeconds: 2 });
     expect(next.guard).toMatchObject({ blocked: true, reason: expect.stringContaining("already failed or timed out") });
     expect(store.listOperations(run.id)).toHaveLength(1);

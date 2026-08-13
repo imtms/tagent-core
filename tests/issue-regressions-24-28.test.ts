@@ -10,7 +10,7 @@ import { HashEmbeddingAdapter } from "../packages/memory/src/adapters/hash-embed
 import { LocalBlobStore } from "../packages/memory/src/storage/local-blob-store.js";
 import { DefaultPolicyEngine } from "../packages/memory/src/policy/policy-engine.js";
 import { MemoryService } from "../packages/memory/src/memory-service.js";
-import { createTools } from "@tagent/workspace-local";
+import { composeWorkspaceTools, createLocalSubprocessPort } from "@tagent/workspace-local";
 import type { ToolCapabilityApplicationPort } from "@tagent/execution/ports";
 import { agentPersistence, httpTestResources } from "./support/test-persistence.js";
 
@@ -54,12 +54,14 @@ describe("GitHub issue regressions #24-#28", () => {
     await app.close();
 
     const capabilities = {
-      runId: "00000000-0000-4000-8000-000000000024", getRun: () => undefined,
+      runId: "00000000-0000-4000-8000-000000000024", getRun: () => ({ attempt: 1 }),
+      isCurrentAttempt: () => true, authorizeExternalAction: () => ({ allowed: true, reason: "test" }),
       authorizeWorkspaceMutation: () => ({ allowed: true, reason: "test" }), advanceRunPhase: () => true, setRunPhase: () => true,
       claimOperation: () => ({ claimed: true, status: "running" }), updateOperation: () => ({}), listOperations: () => [], upsertPlanItem: () => ({}), markChecksStale: () => 0, upsertCheck: () => ({}), applyTaskRunBatch: () => undefined, addArtifact: () => ({}), requestUserInput: () => { throw new Error("unused"); }, publish: () => undefined,
+      recordToolAttempt: () => ({ created: true, status: "running", guard: { blocked: false, reason: "" } }), completeToolAttempt: () => true, consumeAtomicallySettledToolCall: () => false,
       memory: { search: async () => [], getTopic: async () => undefined, getRecord: async () => undefined, forget: vi.fn(async () => ({})) },
     } as unknown as ToolCapabilityApplicationPort;
-    const tool = createTools(capabilities, await mkdtemp(path.join(tmpdir(), "tagent-issues-tools-"))).find((item) => item.name === "memory_forget")!;
+    const tool = composeWorkspaceTools(capabilities, await mkdtemp(path.join(tmpdir(), "tagent-issues-tools-")), createLocalSubprocessPort()).catalog.tools.find((item) => item.name === "memory_forget")!;
     await expect(tool.execute("empty-forget", {} as never, undefined)).rejects.toThrow("requires at least one");
     expect(capabilities.memory!.forget).not.toHaveBeenCalled();
   });

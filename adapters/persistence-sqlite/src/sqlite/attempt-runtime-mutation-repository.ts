@@ -44,7 +44,7 @@ export class SqliteFencedRuntimeMutationRepository implements FencedRuntimeMutat
         WHERE run_id=? AND attempt=? AND tool_call_id=? AND status='running'`)
         .get(runId, ordinal, toolCallId);
       if (!toolAttempt) throw new Error(`Tool attempt ${toolCallId} is not running for fenced Attempt`);
-      let capturedEvent: { runId: string; seq: number; type: string; data: Record<string, unknown>; createdAt: number } | undefined;
+      let capturedEvent: import("@tagent/execution/domain").RunEvent<"run.waiting_for_input"> | undefined;
       const request = requestUserInputWithInternalHook(this.store, runId, prompt, fields, ({ request: hookedRequest, event: hookedEvent }) => {
         const eventData = hookedEvent.data as { requestId?: string };
         if (eventData.requestId !== hookedRequest.id) throw new Error("Store waiting event request identity mismatch");
@@ -62,7 +62,7 @@ export class SqliteFencedRuntimeMutationRepository implements FencedRuntimeMutat
       }
       const eventData = JSON.parse(eventRow.data) as { requestId?: string };
       if (eventData.requestId !== request.id) throw new Error("Store waiting event request identity mismatch");
-      const event = { ...eventRow, data: eventData };
+      const event = { ...eventRow, type: "run.waiting_for_input" as const, data: eventData };
       return { request, event, toolAttemptCompleted: true as const };
     });
 

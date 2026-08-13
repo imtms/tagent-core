@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import { performance } from "node:perf_hooks";
 import { Store } from "@tagent/persistence-sqlite/store";
 import { TaskRunSupervisor, OpenAiSupervisorReviewer, TestSupervisorReviewer, passingTestAudit, type SupervisorAudit } from "@tagent/core-service/composition";
+import { createEnvironmentCredentialResolver, credentialReference } from "@tagent/execution/ports";
 import { upsertTrustedCheck } from "./support/trusted-evidence.js";
+
+const TEST_CREDENTIAL = {
+  reference: credentialReference("TEST_API_KEY"),
+  resolver: createEnvironmentCredentialResolver({ TEST_API_KEY: "secret" }),
+};
 
 function failingEvent(runId: string, seq: number) { return { runId, seq, type: "tool.completed", data: { toolName: "bash", isError: true }, createdAt: Date.now() }; }
 function failedAudit(action: SupervisorAudit["action"], reasonCode: string, failure: { kind: string; key: string; reason: string; disposition: "auto_fixable" | "needs_user_input" | "needs_approval" | "external_dependency" | "runtime_transient" | "non_recoverable" }, criteria: string[] = []): SupervisorAudit {
@@ -220,7 +226,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSemanticLite({ run: store.getRun(run.id)!, response: "Hello.", operations: [], progress: undefined });
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSemanticLite({ run: store.getRun(run.id)!, response: "Hello.", operations: [], progress: undefined });
       expect(prompt).toContain('"evidenceRefs":[]');
       expect(audit).toMatchObject({ action: "complete_taskrun", gates: { contract: { passed: true }, completion: { passed: true } } });
     } finally { globalThis.fetch = original; store.close(); }
@@ -337,7 +343,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "Everything passed.", operations: store.listOperations(run.id), progress: undefined });
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(run.id)!, response: "Everything passed.", operations: store.listOperations(run.id), progress: undefined });
       expect(prompt).toContain("FAIL 1 test");
       expect(prompt).toContain('"trusted":true');
       expect(prompt).toContain(operation.id);
@@ -355,7 +361,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(payload) } }] }), { status: 200 });
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "done", operations: [], progress: undefined })).rejects.toThrow("unknown evidence reference");
+      await expect(new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(run.id)!, response: "done", operations: [], progress: undefined })).rejects.toThrow("unknown evidence reference");
     } finally { globalThis.fetch = original; store.close(); }
   });
 
@@ -368,7 +374,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(payload) } }] }), { status: 200 });
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "explanation", operations: [], progress: undefined });
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(run.id)!, response: "explanation", operations: [], progress: undefined });
       expect(audit.action).toBe("complete_taskrun");
       expect(audit.gates.contract.criterionCoverage).toHaveLength(1);
       expect(audit.gates.completion.criterionCoverage).toBeUndefined();
@@ -385,7 +391,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(compact) } }] }), { status: 200 });
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "Partial answer", operations: [], progress: undefined });
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(run.id)!, response: "Partial answer", operations: [], progress: undefined });
       expect(audit).toMatchObject({ action: "start_continuation", reasonCode: "authoritative_start_continuation", gates: { progress: { passed: true }, evidence: { passed: true }, contract: { passed: false }, completion: { passed: false }, continuation: { passed: true } } });
     } finally { globalThis.fetch = original; store.close(); }
   });
@@ -401,7 +407,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("no repair LLM was called");
+      await expect(new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("no repair LLM was called");
       expect(requests).toBe(1);
       expect(store.getRun(run.id)?.attempt).toBe(1);
       expect(store.getRun(run.id)?.continuations).toHaveLength(0);
@@ -421,7 +427,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     globalThis.fetch = async () => { requests += 1; return new Response("upstream unavailable", { status: 503 }); };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
       expect(audit).toMatchObject({ action: "block_taskrun", reasonCode: "supervisor_transport_unavailable", evaluator: "system", evaluatorModel: "deterministic-transport-recovery-v1", gates: { completion: { passed: false }, continuation: { passed: false } } });
       expect(requests).toBe(1);
     } finally { globalThis.fetch = original; store.close(); }
@@ -438,7 +444,7 @@ describe("TaskRunSupervisor LLM audit", () => {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
       const current = store.getRun(run.id)!;
       expect(current.completionGate.passed).toBe(true);
-      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: current, response: "A complete standalone delivery with root cause, implementation details, deployment evidence, and verification results.".repeat(3), operations: store.listOperations(run.id), progress: undefined });
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: current, response: "A complete standalone delivery with root cause, implementation details, deployment evidence, and verification results.".repeat(3), operations: store.listOperations(run.id), progress: undefined });
       expect(audit).toMatchObject({ action: "block_taskrun", reasonCode: "supervisor_transport_unavailable", gates: { completion: { passed: false }, contract: { passed: false } } });
       expect(audit.gates.contract.criterionCoverage?.every((item) => item.status === "blocked")).toBe(true);
       expect(requests).toBe(1);
@@ -453,7 +459,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     globalThis.fetch = async () => new Response("unavailable", { status: 503 });
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "candidate", operations: [], progress: undefined });
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(run.id)!, response: "candidate", operations: [], progress: undefined });
       expect(audit).toMatchObject({ action: "block_taskrun", reasonCode: "supervisor_transport_unavailable", evaluator: "system", evaluatorModel: "deterministic-transport-recovery-v1", gates: { completion: { passed: false }, continuation: { passed: false } } });
     } finally { globalThis.fetch = original; store.close(); }
   });
@@ -464,7 +470,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     globalThis.fetch = async () => new Response("unavailable", { status: 503 });
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      const supervisor = new TaskRunSupervisor(store, new OpenAiSupervisorReviewer({ model, apiKey: "secret" }));
+      const supervisor = new TaskRunSupervisor(store, new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }));
       const review = await supervisor.reviewSettled(store.getRun(run.id)!, 2, "candidate");
       expect(review.decision).toMatchObject({ evaluator: "system", evaluatorModel: "deterministic-transport-recovery-v1", reasonCode: "supervisor_transport_unavailable" });
       expect(review.gates.every((gate) => gate.evaluator === "system" && gate.evaluatorModel === "deterministic-transport-recovery-v1")).toBe(true);
@@ -479,7 +485,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     try {
       const light = { id: "gpt-5.6-luna", baseUrl: "https://audit.test/v1" } as never;
       const main = { id: "gpt-5.6-sol", baseUrl: "https://audit.test/v1" } as never;
-      const audit = await new OpenAiSupervisorReviewer({ model: light, fallbackModel: main, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
+      const audit = await new OpenAiSupervisorReviewer({ model: light, fallbackModel: main, credential: TEST_CREDENTIAL }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
       expect(audit.action).toBe("block_taskrun");
       expect(models).toEqual(["gpt-5.6-luna"]);
     } finally { globalThis.fetch = original; store.close(); }
@@ -498,7 +504,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     try {
       const light = { id: "gpt-5.6-luna", baseUrl: "https://light-audit.test/v1" } as never;
       const main = { id: "gpt-5.6-sol", baseUrl: "https://main-audit.test/v1" } as never;
-      const audit = await new OpenAiSupervisorReviewer({ model: light, fallbackModel: main, apiKey: "secret", timeoutMs: 1_000 }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
+      const audit = await new OpenAiSupervisorReviewer({ model: light, fallbackModel: main, credential: TEST_CREDENTIAL, timeoutMs: 1_000 }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
       expect(audit.action).toBe("complete_taskrun");
       expect(models).toEqual(["gpt-5.6-luna", "gpt-5.6-sol"]);
     } finally { globalThis.fetch = original; store.close(); }
@@ -516,7 +522,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     globalThis.fetch = async (_url, init) => { requestBody = String(init?.body); return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(valid) } }] }), { status: 200 }); };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1", maxTokens: 2_048 } as never;
-      await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "R".repeat(40_000), operations: store.listOperations(run.id), progress: undefined });
+      await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(run.id)!, response: "R".repeat(40_000), operations: store.listOperations(run.id), progress: undefined });
       expect(new TextEncoder().encode(requestBody).byteLength).toBeLessThan(30_000);
       const parsedRequest = JSON.parse(requestBody) as { max_completion_tokens?: number; messages: Array<{ content: string }> };
       expect(parsedRequest.max_completion_tokens).toBe(2_048);
@@ -544,7 +550,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "Research complete.", operations: [], progress: undefined });
+      await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(run.id)!, response: "Research complete.", operations: [], progress: undefined });
       expect(prompt).toContain("Acceptance criteria describe final settlement, not intermediate milestones");
       expect(prompt).toContain('"id":"artifact-1"');
       expect(prompt).toContain('"id":"artifact-20"');
@@ -569,7 +575,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "Research complete.", operations: [], progress: undefined });
+      await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(run.id)!, response: "Research complete.", operations: [], progress: undefined });
       expect(prompt).toContain('"dataRows":150');
       expect(prompt).toContain('"quoteBalanced":true');
       expect(prompt).toContain('"source_url","platform","date","author_context","raw_quote"');
@@ -587,7 +593,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     globalThis.fetch = async (_url, init) => { requestBody = String(init?.body); return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(valid) } }] }), { status: 200 }); };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1", maxTokens: 1_024 } as never;
-      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response, operations: [], progress: undefined });
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run, response, operations: [], progress: undefined });
       expect(audit.action).toBe("complete_taskrun");
       expect(new TextEncoder().encode(requestBody).byteLength).toBeLessThan(25_000);
       const prompt = (JSON.parse(requestBody) as { messages: Array<{ content: string }> }).messages[0].content;
@@ -610,7 +616,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
       const response = `${"long middle\n".repeat(1_000)}\nFINAL: complete and verified.`;
-      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response, operations: [], progress: undefined });
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run, response, operations: [], progress: undefined });
       expect(audit.action).toBe("complete_taskrun");
       expect(audit.reasonCode).toBe("projection_artifact_ignored");
       expect(requests).toBe(1);
@@ -628,7 +634,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     globalThis.fetch = async () => { requests += 1; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(invalid) } }] }), { status: 200 }); };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: `${"detail".repeat(2_000)}\nFINAL complete.`, operations: [], progress: undefined });
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run, response: `${"detail".repeat(2_000)}\nFINAL complete.`, operations: [], progress: undefined });
       expect(audit).toMatchObject({ action: "complete_taskrun", reasonCode: "projection_artifact_ignored" });
       expect(requests).toBe(1);
       expect(store.getRun(run.id)?.continuations).toHaveLength(0);
@@ -644,7 +650,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     globalThis.fetch = async () => { requests += 1; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(auditPayload) } }] }), { status: 200 }); };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "unfinished ".repeat(1_000), modelOutputTruncated: true, operations: [], progress: undefined });
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run, response: "unfinished ".repeat(1_000), modelOutputTruncated: true, operations: [], progress: undefined });
       expect(audit.action).toBe("start_continuation");
       expect(requests).toBe(1);
     } finally { globalThis.fetch = original; store.close(); }
@@ -658,7 +664,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     try {
       const light = { id: "gpt-5.6-luna", baseUrl: "https://audit.test/v1" } as never;
       const main = { id: "gpt-5.6-sol", baseUrl: "https://audit.test/v1" } as never;
-      await expect(new OpenAiSupervisorReviewer({ model: light, fallbackModel: main, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("API 413");
+      await expect(new OpenAiSupervisorReviewer({ model: light, fallbackModel: main, credential: TEST_CREDENTIAL }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("API 413");
       expect(models).toEqual(["gpt-5.6-luna"]);
     } finally { globalThis.fetch = original; store.close(); }
   });
@@ -672,7 +678,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(valid) } }] }), { status: 200 });
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "done", operations: [], progress: undefined });
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(run.id)!, response: "done", operations: [], progress: undefined });
       expect(audit.gates.contract.criterionCoverage?.map((item) => item.criterion)).toEqual(criteria);
       expect(audit.gates.contract.criterionCoverage?.map((item) => item.reason)).toEqual(["First is covered.", "Second is covered."]);
     } finally { globalThis.fetch = original; store.close(); }
@@ -691,7 +697,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "done", operations: [], progress: undefined })).rejects.toThrow("missing: ac-2");
+      await expect(new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(run.id)!, response: "done", operations: [], progress: undefined })).rejects.toThrow("missing: ac-2");
       expect(requests).toBe(1);
       expect(store.getRun(run.id)?.attempt).toBe(1);
       expect(store.getRun(run.id)?.continuations).toHaveLength(0);
@@ -712,7 +718,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run: store.getRun(run.id)!, response: "A complete standalone explanation.", operations: [], progress: undefined })).rejects.toThrow("no repair LLM was called");
+      await expect(new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(run.id)!, response: "A complete standalone explanation.", operations: [], progress: undefined })).rejects.toThrow("no repair LLM was called");
       expect(prompts).toHaveLength(1);
       expect(prompts[0]).toContain("TASKRUN_DATA=");
     } finally { globalThis.fetch = original; store.close(); }
@@ -726,7 +732,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     globalThis.fetch = async () => { requests += 1; return new Response(JSON.stringify({ choices: [{ message: { content: malformed } }] }), { status: 200 }); };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      const audit = await new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
       expect(audit.action).toBe("complete_taskrun");
       expect(requests).toBe(1);
       expect(store.getRun(run.id)?.attempt).toBe(1);
@@ -741,7 +747,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     globalThis.fetch = async () => { requests += 1; return new Response(JSON.stringify({ choices: [{ message: { content: '{"action":"complete_taskrun","rationale":"unterminated}' } }] }), { status: 200 }); };
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      await expect(new OpenAiSupervisorReviewer({ model, apiKey: "secret" }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("no repair LLM was called");
+      await expect(new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run, response: "done", operations: [], progress: undefined })).rejects.toThrow("no repair LLM was called");
       expect(requests).toBe(1);
       expect(store.getRun(run.id)?.attempt).toBe(1);
       expect(store.getRun(run.id)?.continuations).toHaveLength(0);

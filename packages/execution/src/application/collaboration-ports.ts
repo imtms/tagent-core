@@ -66,7 +66,7 @@ export interface RuntimeHostFactoryPort {
     onActivity: () => void;
     onEvent: (event: RunEvent) => void;
     memorySubjectId: string;
-  }): { capabilities: RuntimeCapabilityCatalog; eventSink: RuntimeEventSink };
+  }): { capabilities: RuntimeCapabilityCatalog; eventSink: RuntimeEventSink; dispose?(): Promise<void> | void };
 }
 
 export interface ControlCommandPort {

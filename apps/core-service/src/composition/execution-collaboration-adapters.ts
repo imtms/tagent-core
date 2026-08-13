@@ -1,4 +1,4 @@
-import type { TaskRun } from "@tagent/execution/domain";
+import type { RunEventMap, RunEventType, TaskRun } from "@tagent/execution/domain";
 import type { AgentServicePersistencePort } from "../application/ports/index.js";
 import type {
   AttemptProjectionPort,
@@ -21,7 +21,7 @@ interface ExecutionCollaborationAdapterOptions {
   learningControl?: LearningFeatureControl;
   learningService: LearningService;
   workflowService: WorkflowService;
-  publish(runId: string, type: string, data: Record<string, unknown>): void;
+  publish<TType extends RunEventType>(runId: string, type: TType, data: RunEventMap[TType]): void;
 }
 
 export function resolveMemorySubjectId(

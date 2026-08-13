@@ -1,6 +1,6 @@
 # Upgrade and rollback
 
-This guide describes the current repository boundary: API v1, independently deployed Core and Web Console artifacts, one fenced SQLite writer, and control-plane schema 44. Release tags retain version-specific historical instructions.
+This guide describes the current repository boundary: API v1, independently deployed Core and Web Console artifacts, one fenced SQLite writer, and control-plane schema 45. Release tags retain version-specific historical instructions.
 
 ## Compatibility boundary
 
@@ -8,7 +8,7 @@ This guide describes the current repository boundary: API v1, independently depl
 - Core is API-only and does not serve the Web Console or an SPA fallback.
 - Durable submissions use the `Idempotency-Key` header and v1 receipt envelopes.
 - Production uses Node.js `24.18.1`, npm 12 or newer, and Linux x64/Node ABI 137 for the immutable Core artifact.
-- SQLite migrations are forward-only. A schema-43-only binary must not open schema 44.
+- SQLite migrations are forward-only. A schema-44-only binary must not open schema 45.
 - Core, Gateway and Web must honor generation-fenced event replay and durable persist-before-ACK behavior.
 
 ## Before upgrading
@@ -43,6 +43,7 @@ The production `Store` opener applies and revalidates the migration chain:
 | 42 | durable Session Inbox execution-policy snapshots |
 | 43 | immutable Skill revisions and per-Session Skill bindings |
 | 44 | shared Skills center and per-Workspace multi-Skill references |
+| 45 | exact, hash-verified Attempt request envelopes persisted before provider dispatch |
 
 Schema 37 added:
 
@@ -81,15 +82,17 @@ Schema 41 adds `idx_sessions_operator_created`, `idx_runs_operator_session_creat
 
 Schema 44 replaces the schema-43 single revision binding with `workspace_skill_bindings(session_id, skill_id)`. Existing bindings migrate to their owning Skill identity. Future edits therefore resolve automatically for newly admitted TaskRuns, while existing `contract.skill` snapshots stay readable and new Runs persist `contract.skills`.
 
+Schema 45 adds `attempt_request_envelopes` with a unique Attempt/request ordinal, exact provider-dialect payload, canonical envelope JSON, and separate payload/envelope hashes. Re-entry validates the full table and index shape. A mismatched durable read stops the provider call before transport dispatch.
+
 The schema 33 preflight may record ambiguous source rows in `migration_issues`. Any open issue blocks startup. Correct the underlying source data and rerun the migration; do not delete or bypass the ledger.
 
 ## Deployment order
 
 1. Verify the candidate Core archive and checksum.
 2. Open a restored database with the release-local `Store` twice.
-3. Require both opens to report `schema_meta.version=44`, zero open migration issues, the trusted-evidence/Goal execution shapes, all v39 receipt/ACK shapes, the v40 Submission audit shape, all v41 Operator Read indexes, the v42 Inbox execution-policy column, the v43 Skill catalog, and the v44 Workspace reference table.
+3. Require both opens to report `schema_meta.version=45`, zero open migration issues, the trusted-evidence/Goal execution shapes, all v39 receipt/ACK shapes, the v40 Submission audit shape, all v41 Operator Read indexes, the v42 Inbox execution-policy column, the v43 Skill catalog, the v44 Workspace reference table, and the v45 request-envelope table/index.
 4. Start exactly one Core writer and require `/api/v1/health` to report `data.ok=true` and `data.writer.ready=true`.
-5. Negotiate `GET /api/v1/capabilities`; require schema 44, the necessary commands/events, the versioned Operator allowlist, current Approval authority, receipt-recovery protocol, retention policy, documented limits and the `operator.read.v1` marker. Then validate `GET /api/v1/operator/capabilities` before enabling historical inventory.
+5. Negotiate `GET /api/v1/capabilities`; require schema 45, the necessary commands/events, the versioned Operator allowlist, current Approval authority, receipt-recovery protocol, retention policy, documented limits and the `operator.read.v1` marker. Then validate `GET /api/v1/operator/capabilities` before enabling historical inventory.
 6. Start one Gateway consumer, claim a new generation, replay from the durable ACK, persist each event, then ACK it.
 7. Run `scripts/gateway-readiness-probe.mjs`; require exit 0, `ready=true`, zero lag and no settled/final unacknowledged events.
 8. Deploy the matching independent Web Console artifact.
@@ -100,7 +103,7 @@ Use [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for the e
 ## Verification
 
 - `/api/v1/health` is ready and removed `/api/health` returns 404;
-- schema version is 44 and a second open is idempotent;
+- schema version is 45 and a second open is idempotent;
 - `migration_issues` has zero open rows;
 - only one fresh writer fence exists;
 - a passed required check is rejected unless it references a successful Bash operation from the current Attempt;
@@ -113,9 +116,9 @@ Use [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for the e
 
 There is no in-place schema downgrade.
 
-For a binary rollback that still understands schema 44 and the current ABI window, stop traffic and the current writer, switch the immutable release pointer, start one replacement writer and rerun readiness checks.
+For a binary rollback that still understands schema 45 and the current ABI window, stop traffic and the current writer, switch the immutable release pointer, start one replacement writer and rerun readiness checks.
 
-For any rollback to a schema-43-only or older binary:
+For any rollback to a schema-44-only or older binary:
 
 1. stop Gateway traffic and all writers;
 2. preserve the failed-upgrade database and readiness evidence for diagnosis;
@@ -124,4 +127,4 @@ For any rollback to a schema-43-only or older binary:
 5. restore the matching artifact and configuration;
 6. start exactly one old writer and validate it before reopening compatible traffic.
 
-Do not overwrite a live schema 44 database with old files, and do not run an incompatible binary merely to inspect it.
+Do not overwrite a live schema 45 database with old files, and do not run an incompatible binary merely to inspect it.

@@ -1,6 +1,6 @@
 import type { ServiceCredential, ServiceScope } from "@tagent/http-fastify";
 import type { GovernanceApprovalAuthority } from "@tagent/governance/domain";
-import type { RuntimeModelSpec } from "@tagent/execution/ports";
+import { credentialReference, type CredentialReference, type RuntimeModelSpec } from "@tagent/execution/ports";
 
 export interface ModelConfig {
   provider: string;
@@ -21,7 +21,8 @@ export interface AppConfig {
   toolArtifactMaxBytes: number;
   runtime: "in-process";
   governanceApprovalAuthority: GovernanceApprovalAuthority;
-  apiKey?: string;
+  apiCredentialReference: CredentialReference;
+  apiCredentialConfigured: boolean;
   providerTimeoutMs: number;
   providerMaxRetries: number;
   routerTimeoutMs: number;
@@ -45,7 +46,7 @@ export interface AppConfig {
     distillationWorkerIntervalMs: number;
     semanticJudgeEnabled: boolean;
     semanticJudgeBaseUrl?: string;
-    semanticJudgeApiKey?: string;
+    semanticJudgeCredentialReference?: CredentialReference;
     semanticJudgeModel?: string;
     semanticJudgeTimeoutMs: number;
     semanticJudgeMinimumConfidence: number;
@@ -85,14 +86,14 @@ export type MemoryConfig =
       retentionProcedureDeleteMs: number;
       embeddingProvider: "hash" | "openai" | "none";
       embeddingBaseUrl?: string;
-      embeddingApiKey?: string;
+      embeddingCredentialReference?: CredentialReference;
       embeddingModel?: string;
       embeddingDimensions?: number;
       embeddingBatchSize: number;
       embeddingExtraBody?: Record<string,unknown>;
       extractorProvider: "rule" | "hybrid";
       extractorBaseUrl?: string;
-      extractorApiKey?: string;
+      extractorCredentialReference?: CredentialReference;
       extractorModel?: string;
       recallThresholds: { lexicalMin: number; topicMin: number; vectorMin: number; vectorTopicMin: number; finalMin: number };
     };
@@ -140,6 +141,12 @@ function referencedEnvValue(env: NodeJS.ProcessEnv, name: string) {
   if (!raw) return undefined;
   const reference = /^\$\{([A-Z_][A-Z0-9_]*)\}$/.exec(raw)?.[1];
   return reference ? env[reference]?.trim() || undefined : raw;
+}
+function referencedCredential(env: NodeJS.ProcessEnv, name: string, fallback?: string) {
+  const raw = env[name]?.trim();
+  const referenced = raw ? /^\$\{([A-Z_][A-Z0-9_]*)\}$/.exec(raw)?.[1] : undefined;
+  const selected = referenced ?? (raw ? name : fallback);
+  return selected ? credentialReference(selected) : undefined;
 }
 function memoryExtractorProvider(env: NodeJS.ProcessEnv) {
   const value = env.TAGENT_MEMORY_EXTRACTOR_PROVIDER ?? "rule";
@@ -192,14 +199,14 @@ function loadMemoryConfig(env: NodeJS.ProcessEnv): MemoryConfig {
     retentionProcedureDeleteMs: positiveInteger(env.TAGENT_MEMORY_PROCEDURE_DELETE_MS, 31_536_000_000, "TAGENT_MEMORY_PROCEDURE_DELETE_MS"),
     embeddingProvider: memoryEmbeddingProvider(env),
     embeddingBaseUrl: env.TAGENT_MEMORY_EMBEDDING_BASE_URL?.trim() || undefined,
-    embeddingApiKey: env.TAGENT_MEMORY_EMBEDDING_API_KEY?.trim() || undefined,
+    embeddingCredentialReference: referencedCredential(env, "TAGENT_MEMORY_EMBEDDING_API_KEY"),
     embeddingModel: env.TAGENT_MEMORY_EMBEDDING_MODEL?.trim() || undefined,
     embeddingDimensions: env.TAGENT_MEMORY_EMBEDDING_DIMENSIONS ? positiveInteger(env.TAGENT_MEMORY_EMBEDDING_DIMENSIONS, 1024, "TAGENT_MEMORY_EMBEDDING_DIMENSIONS") : undefined,
     embeddingBatchSize: positiveInteger(env.TAGENT_MEMORY_EMBEDDING_BATCH_SIZE, 64, "TAGENT_MEMORY_EMBEDDING_BATCH_SIZE"),
     embeddingExtraBody: parseJsonObject(env.TAGENT_MEMORY_EMBEDDING_EXTRA_BODY, "TAGENT_MEMORY_EMBEDDING_EXTRA_BODY"),
     extractorProvider: memoryExtractorProvider(env),
     extractorBaseUrl: referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_BASE_URL") || env.TAGENT_API_BASE?.trim() || undefined,
-    extractorApiKey: referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_API_KEY") || env.OPENAI_API_KEY?.trim() || undefined,
+    extractorCredentialReference: referencedCredential(env, "TAGENT_MEMORY_EXTRACTOR_API_KEY", "OPENAI_API_KEY"),
     extractorModel: referencedEnvValue(env, "TAGENT_MEMORY_EXTRACTOR_MODEL") || env.TAGENT_MODEL?.trim() || undefined,
     recallThresholds: {
       lexicalMin: probability(env.TAGENT_MEMORY_LEXICAL_MIN, .04, "TAGENT_MEMORY_LEXICAL_MIN"),
@@ -296,7 +303,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     toolArtifactMaxBytes: positiveInteger(env.TAGENT_TOOL_ARTIFACT_MAX_BYTES, 16 * 1024 * 1024, "TAGENT_TOOL_ARTIFACT_MAX_BYTES"),
     runtime,
     governanceApprovalAuthority: governanceApprovalAuthority(env.TAGENT_GOVERNANCE_APPROVAL_AUTHORITY),
-    apiKey: env.OPENAI_API_KEY,
+    apiCredentialReference: credentialReference(env.TAGENT_API_KEY_ENV?.trim() || "OPENAI_API_KEY"),
+    apiCredentialConfigured: Boolean(env[env.TAGENT_API_KEY_ENV?.trim() || "OPENAI_API_KEY"]?.trim()),
     providerTimeoutMs: positiveInteger(env.TAGENT_PROVIDER_TIMEOUT_MS, 15_000, "TAGENT_PROVIDER_TIMEOUT_MS"),
     providerMaxRetries: nonNegativeInteger(env.TAGENT_PROVIDER_MAX_RETRIES, 1, "TAGENT_PROVIDER_MAX_RETRIES"),
     routerTimeoutMs: positiveInteger(env.TAGENT_ROUTER_TIMEOUT_MS, 5_000, "TAGENT_ROUTER_TIMEOUT_MS"),
@@ -316,7 +324,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       distillationWorkerIntervalMs: positiveInteger(env.TAGENT_DISTILLATION_WORKER_INTERVAL_MS, 1_000, "TAGENT_DISTILLATION_WORKER_INTERVAL_MS"),
       semanticJudgeEnabled: enabled(env.TAGENT_LEARNING_SEMANTIC_JUDGE_ENABLED, "TAGENT_LEARNING_SEMANTIC_JUDGE_ENABLED"),
       semanticJudgeBaseUrl: referencedEnvValue(env, "TAGENT_LEARNING_SEMANTIC_JUDGE_BASE_URL") || env.TAGENT_ROUTER_API_BASE?.trim() || env.TAGENT_API_BASE?.trim() || undefined,
-      semanticJudgeApiKey: referencedEnvValue(env, "TAGENT_LEARNING_SEMANTIC_JUDGE_API_KEY") || env.OPENAI_API_KEY?.trim() || undefined,
+      semanticJudgeCredentialReference: referencedCredential(env, "TAGENT_LEARNING_SEMANTIC_JUDGE_API_KEY", "OPENAI_API_KEY"),
       semanticJudgeModel: referencedEnvValue(env, "TAGENT_LEARNING_SEMANTIC_JUDGE_MODEL") || env.TAGENT_ROUTER_MODEL?.trim() || env.TAGENT_MODEL?.trim() || undefined,
       semanticJudgeTimeoutMs: positiveInteger(env.TAGENT_LEARNING_SEMANTIC_JUDGE_TIMEOUT_MS, 8_000, "TAGENT_LEARNING_SEMANTIC_JUDGE_TIMEOUT_MS"),
       semanticJudgeMinimumConfidence: probability(env.TAGENT_LEARNING_SEMANTIC_JUDGE_MIN_CONFIDENCE, .72, "TAGENT_LEARNING_SEMANTIC_JUDGE_MIN_CONFIDENCE"),
@@ -394,14 +402,14 @@ export interface PublicRuntimeConfig {
 
 export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): PublicRuntimeConfig {
   return {
-    releaseVersion: "0.6.2",
+    releaseVersion: "0.6.3",
     runtime: config.runtime,
     provider: config.model.provider,
     api: config.model.api,
     baseUrl: config.model.baseUrl,
     modelId: config.model.modelId,
     fallbackModelIds: config.fallbackModels.map((model) => model.modelId),
-    credentialConfigured: Boolean(config.apiKey),
+    credentialConfigured: config.apiCredentialConfigured,
     serviceAuthenticationConfigured: config.serviceCredentials.length > 0,
     providerTimeoutMs: config.providerTimeoutMs,
     providerMaxRetries: config.providerMaxRetries,

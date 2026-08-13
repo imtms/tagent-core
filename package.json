@@ -1,6 +1,6 @@
 {
   "name": "tagent-core",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "workspaces": [
     "packages/*",
@@ -31,30 +31,30 @@
     "clean": "rm -rf dist && npm run clean -w @tagent/web-console && npm run clean -w @tagent/core-service && npm run clean -w @tagent/http-fastify && npm run clean -w @tagent/workspace-local && npm run clean -w @tagent/persistence-sqlite && npm run clean -w @tagent/learning && npm run clean -w @tagent/memory && npm run clean -w @tagent/runtime-pi && npm run clean -w @tagent/admission && npm run clean -w @tagent/execution && npm run clean -w @tagent/governance && npm run clean -w @tagent/core-client && npm run clean -w @tagent/abi"
   },
   "dependencies": {
-    "@tagent/core-service": "0.6.2",
+    "@tagent/core-service": "0.6.3",
     "better-sqlite3": "12.4.1"
   },
   "overrides": {
     "minimatch": "10.2.6",
     "brace-expansion": "5.0.9",
     "undici": "8.9.0",
-    "nanoid": "3.3.17"
+    "nanoid": "3.3.18"
   },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "0.83.0",
     "@earendil-works/pi-ai": "0.83.0",
     "@eslint/js": "^10.0.1",
-    "@tagent/abi": "0.6.2",
-    "@tagent/admission": "0.6.2",
-    "@tagent/core-client": "0.6.2",
-    "@tagent/execution": "0.6.2",
-    "@tagent/governance": "0.6.2",
-    "@tagent/http-fastify": "0.6.2",
-    "@tagent/learning": "0.6.2",
-    "@tagent/memory": "0.6.2",
-    "@tagent/persistence-sqlite": "0.6.2",
-    "@tagent/runtime-pi": "0.6.2",
-    "@tagent/workspace-local": "0.6.2",
+    "@tagent/abi": "0.6.3",
+    "@tagent/admission": "0.6.3",
+    "@tagent/core-client": "0.6.3",
+    "@tagent/execution": "0.6.3",
+    "@tagent/governance": "0.6.3",
+    "@tagent/http-fastify": "0.6.3",
+    "@tagent/learning": "0.6.3",
+    "@tagent/memory": "0.6.3",
+    "@tagent/persistence-sqlite": "0.6.3",
+    "@tagent/runtime-pi": "0.6.3",
+    "@tagent/workspace-local": "0.6.3",
     "@types/better-sqlite3": "7.6.13",
     "@types/node": "24.10.1",
     "concurrently": "^9.2.4",
