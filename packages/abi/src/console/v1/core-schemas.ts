@@ -89,7 +89,7 @@ export type ConsoleSkillRevision = Static<typeof ConsoleSkillRevisionSchema>;
 
 export const ConsoleSkillSummarySchema = Type.Object({
   id: Type.String(), name: Type.String(), latestRevision: Type.Number(), latestRevisionId: Type.String(),
-  description: Type.String(), sha256: Type.String(), updatedAt: TimestampMillisecondsSchema,
+  description: Type.String(), sha256: Type.String(), workspaceCount: Type.Number(), updatedAt: TimestampMillisecondsSchema,
 });
 export type ConsoleSkillSummary = Static<typeof ConsoleSkillSummarySchema>;
 
@@ -114,6 +114,7 @@ export const ConsoleTaskRunContractSchema = Type.Object({
   routerVersion: Type.String(),
   executionPolicy: Type.Optional(Type.Union([ConsoleTaskExecutionPolicySchema, Type.Null()])),
   workspaceGoal: Type.Optional(Type.Union([ConsoleTaskRunWorkspaceGoalSchema, Type.Null()])),
+  skills: Type.Optional(Type.Array(ConsoleTaskRunSkillSchema)),
   skill: Type.Optional(Type.Union([ConsoleTaskRunSkillSchema, Type.Null()])),
 });
 export type ConsoleTaskRunContract = Static<typeof ConsoleTaskRunContractSchema>;

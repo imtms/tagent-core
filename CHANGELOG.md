@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.1] - 2026-08-13
+
+### Cross-Workspace Skills center
+
+- Replaced the conversation-owned single-Skill flow with one shared Skills center supporting independent upload, immutable in-browser edits, catalog deletion, revision history, usage counts, and up to 32 references per Workspace.
+- Workspace references now target Skill identities and resolve their latest revisions when a TaskRun is admitted. Every referenced revision is frozen in `contract.skills`, projected to Pi resources, and recorded separately in the Context Manifest.
+- Added SQLite schema 44 with `workspace_skill_bindings`, migrating every schema-43 single revision binding without changing the referenced Skill identity. Deleting a catalog entry removes its references but preserves content-addressed files and self-contained historical TaskRun snapshots.
+- Added typed Console routes and client decoders for catalog details, revisions, upload/edit/delete, and atomic Workspace reference replacement; redesigned the conversation-header control as a responsive shared-library picker and editor.
+- Synchronized Core, Web Console, all 13 private workspace manifests, internal dependency pins, capability metadata, release fixtures, documentation, tests, and the lockfile at 0.6.1. Deploy matching Core and Web Console 0.6.1 artifacts.
+
 ## [0.6.0] - 2026-08-13
 
 ### Core-managed Workspace Skills

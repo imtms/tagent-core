@@ -1,13 +1,13 @@
 import type { TaskRun } from "../domain/task-run.js";
 import type { AttemptRuntimePort, RuntimeSkill } from "../ports/attempt-runtime.js";
 
-export function runtimeSkillFor(run: TaskRun): RuntimeSkill | undefined {
-  const skill = run.contract?.skill;
-  return skill ? {
+export function runtimeSkillsFor(run: TaskRun): RuntimeSkill[] {
+  const skills = run.contract?.skills ?? (run.contract?.skill ? [run.contract.skill] : []);
+  return skills.map((skill) => ({
     name: skill.name, description: skill.description, content: skill.content,
     filePath: skill.filePath, sha256: skill.sha256,
     disableModelInvocation: skill.disableModelInvocation,
-  } : undefined;
+  }));
 }
 
 export async function executeRuntimePrompt(runtime: AttemptRuntimePort, prompt: string, skillName?: string): Promise<void> {

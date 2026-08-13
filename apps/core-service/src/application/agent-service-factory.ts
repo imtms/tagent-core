@@ -59,7 +59,8 @@ export type WorkflowGovernanceApplicationPort = Pick<CoreApplicationCoordinator,
 >;
 
 export type SkillApplicationPort = Pick<CoreApplicationCoordinator,
-  "listSkills" | "getSessionSkill" | "uploadSkill" | "bindSessionSkill" | "unbindSessionSkill"
+  "listSkills" | "getSkill" | "listSkillRevisions" | "uploadSkill" | "updateSkill" | "deleteSkill"
+  | "listWorkspaceSkills" | "replaceWorkspaceSkills"
 >;
 
 export type CoreApplicationPort = AdmissionApplicationPort

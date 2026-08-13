@@ -41,16 +41,15 @@ export class AttemptSettlementService {
       supervisor: SupervisorPort;
     },
   ) {}
-  public projectWorkflowExperience(runId: RunId) {
-    this.dependencies.projection.project(runId);
-  }
-
+  public projectWorkflowExperience(runId: RunId) { this.dependencies.projection.project(runId); }
   public async execute(runId: RunId, token: AttemptExecutionToken, runtime: AttemptRuntimePort, prompt: string, continuationId?: string, onRuntimeSettled: () => void = () => {}) {
     let candidateResponse = "";
     let canaryCandidate: CandidateResult | undefined;
     try {
       try {
-        await executeRuntimePrompt(runtime, prompt, this.state.persistence.taskRuns.getRun(runId)?.contract?.skill?.name);
+        const contract = this.state.persistence.taskRuns.getRun(runId)?.contract;
+        const skills = contract?.skills ?? (contract?.skill ? [contract.skill] : []);
+        await executeRuntimePrompt(runtime, prompt, skills.length === 1 ? skills[0].name : undefined);
       } finally {
         // The Run idle watchdog covers active Agent/runtime work only. Supervisor
         // review has its own bounded SSE idle timeout and must not be raced by it.

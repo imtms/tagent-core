@@ -79,6 +79,9 @@ export interface TaskRunContractSnapshot {
   routerVersion: string;
   executionPolicy?: TaskExecutionPolicy;
   workspaceGoal?: TaskRunWorkspaceGoalSnapshot | null;
+  /** All Skill revisions referenced by the Workspace when this Run was admitted. */
+  skills?: TaskRunSkillSnapshot[];
+  /** @deprecated v0.6 compatibility for Runs admitted before multi-Skill references. */
   skill?: TaskRunSkillSnapshot | null;
 }
 

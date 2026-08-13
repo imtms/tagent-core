@@ -156,7 +156,7 @@ describe("AgentService runtime boundary", () => {
       name: "release-check", description: "Verify the selected release", content: "Follow the frozen release checklist.",
       filePath: ".tagent/skills/release-check/hash/SKILL.md", sha256: "a".repeat(64), sourceFilename: "SKILL.md",
     });
-    store.bindSessionSkill(session.id, skill.id);
+    store.replaceWorkspaceSkills(session.id, [skill.skillId]);
     let captured: Parameters<RuntimeFactory>[0] | undefined;
     let runtime: SkillRuntime | undefined;
     const service = new AgentService(agentPersistence(store), "/tmp", (options) => {
@@ -167,7 +167,7 @@ describe("AgentService runtime boundary", () => {
 
     const run = await service.start(session.id, "Check release 1.2.3");
     await vi.waitFor(() => expect(runtime?.invoked).toHaveLength(1));
-    expect(store.getRun(run.id)?.contract?.skill).toMatchObject({ revisionId: skill.id, sha256: "a".repeat(64), content: "Follow the frozen release checklist." });
+    expect(store.getRun(run.id)?.contract?.skills).toEqual([expect.objectContaining({ revisionId: skill.id, sha256: "a".repeat(64), content: "Follow the frozen release checklist." })]);
     expect(captured?.skills).toEqual([expect.objectContaining({ name: "release-check", sha256: "a".repeat(64), content: "Follow the frozen release checklist." })]);
     expect(runtime?.invoked[0]).toMatchObject({ name: "release-check" });
     expect(runtime?.invoked[0].query).toContain("Check release 1.2.3");

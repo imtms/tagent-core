@@ -416,8 +416,9 @@ a:focus-visible {
 }
 .skill-control { position: relative; display: flex; }
 .skill-loader-menu {
-  position: absolute; z-index: 50; top: calc(100% + 8px); right: 0; width: 344px; padding: 8px;
+  position: absolute; z-index: 50; top: calc(100% + 8px); right: 0; width: 344px; max-height: min(720px, calc(100dvh - 100px)); padding: 8px;
   border: 1px solid var(--border); border-radius: var(--radius-xl); display: grid; gap: 8px;
+  overflow-y: auto; overscroll-behavior: contain;
   color: var(--foreground); background: color-mix(in oklab, var(--surface-raised) 97%, transparent);
   box-shadow: var(--shadow-lg); backdrop-filter: blur(18px); transform-origin: top right; animation: workspace-menu-in var(--motion-fast) var(--ease-out) both;
 }
@@ -445,11 +446,17 @@ a:focus-visible {
 .skill-drop-target small { color: var(--foreground-muted); font-size: 9px; }
 .skill-catalog { display: grid; gap: 3px; padding-top: 3px; border-top: 1px solid var(--border); }
 .skill-catalog > span { padding: 5px 8px 2px; color: var(--foreground-muted); font-size: 8px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
-.skill-catalog > button { width: 100%; min-height: 50px; padding: 8px; border: 0; border-radius: var(--radius-md); display: grid; grid-template-columns: 18px minmax(0,1fr) auto 14px; align-items: center; gap: 7px; color: var(--foreground); background: transparent; cursor: pointer; text-align: left; transition: color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
-.skill-catalog > button:hover,.skill-catalog > button.selected { background: var(--surface-hover); }
-.skill-catalog > button.selected { color: var(--accent); }
-.skill-catalog > button:active { transform: translateY(1px); }
-.skill-catalog > button:disabled { opacity: .52; cursor: wait; }
+.skill-catalog-row { min-width: 0; border-radius: var(--radius-md); display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; transition: background-color var(--motion-fast) var(--ease-out); }
+.skill-catalog-row:hover,.skill-catalog-row.selected { background: var(--surface-hover); }
+.skill-reference-toggle { min-width: 0; min-height: 50px; padding: 8px; border: 0; display: grid; grid-template-columns: 18px minmax(0,1fr) auto; align-items: center; gap: 7px; color: var(--foreground); background: transparent; cursor: pointer; text-align: left; }
+.skill-reference-toggle:disabled { opacity: .52; cursor: wait; }
+.skill-select-box { width: 15px; height: 15px; border: 1px solid var(--border-strong); border-radius: 5px; display: grid !important; place-items: center; color: white; }
+.skill-catalog-row.selected .skill-select-box { border-color: var(--accent); background: var(--accent); }
+.skill-row-actions { padding-right: 5px; display: flex; gap: 2px; opacity: 0; transition: opacity var(--motion-fast) var(--ease-out); }
+.skill-catalog-row:hover .skill-row-actions,.skill-catalog-row:focus-within .skill-row-actions { opacity: 1; }
+.skill-row-actions button { width: 27px; height: 27px; padding: 0; border: 0; border-radius: var(--radius-sm); display: grid; place-items: center; color: var(--foreground-muted); background: transparent; cursor: pointer; }
+.skill-row-actions button:hover { color: var(--foreground-strong); background: var(--surface-active); }
+.skill-row-actions button:last-child:hover { color: var(--danger); background: var(--danger-soft); }
 .skill-catalog button > span { min-width: 0; display: grid; gap: 2px; }
 .skill-catalog strong,.skill-catalog small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .skill-catalog strong { font-size: 10px; }.skill-catalog small { color: var(--foreground-muted); font-size: 8px; }
@@ -461,6 +468,18 @@ a:focus-visible {
 .skill-disable:active { transform: translateY(1px); }
 .skill-snapshot-note { margin: 0; padding: 7px 8px 6px; border-top: 1px solid var(--border); display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 6px; color: var(--foreground-muted); font-size: 8px; line-height: 1.45; }
 .skill-snapshot-note svg { margin-top: 1px; color: var(--accent); }
+.skill-editor-backdrop { position: fixed; inset: 0; z-index: 90; padding: 24px; display: grid; place-items: center; background: color-mix(in oklab, #000 34%, transparent); backdrop-filter: blur(6px); }
+.skill-editor-dialog { width: min(680px, 100%); max-height: min(760px, calc(100dvh - 48px)); border: 1px solid var(--border); border-radius: var(--radius-xl); display: grid; grid-template-rows: auto minmax(0,1fr) auto; overflow: hidden; color: var(--foreground); background: var(--surface-raised); box-shadow: var(--shadow-xl); }
+.skill-editor-dialog > header { min-height: 72px; padding: 16px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.skill-editor-dialog > header span { display: grid; gap: 3px; }.skill-editor-dialog > header small { color: var(--accent); font-size: 9px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }.skill-editor-dialog h2 { margin: 0; color: var(--foreground-strong); font-size: 17px; letter-spacing: -.02em; }
+.skill-editor-dialog > header button { width: 32px; height: 32px; border: 0; border-radius: var(--radius-md); display: grid; place-items: center; color: var(--foreground-muted); background: transparent; cursor: pointer; }.skill-editor-dialog > header button:hover { color: var(--foreground); background: var(--surface-hover); }
+.skill-editor-grid { min-height: 0; padding: 18px; display: grid; gap: 14px; overflow-y: auto; }
+.skill-editor-grid label:not(.skill-editor-option) { display: grid; gap: 6px; }.skill-editor-grid label > span:first-child { color: var(--foreground-muted); font-size: 9px; font-weight: 700; letter-spacing: .04em; }
+.skill-editor-grid input[type="text"],.skill-editor-grid input:not([type]),.skill-editor-grid textarea { width: 100%; border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--foreground-strong); background: var(--surface); outline: none; transition: border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out); }
+.skill-editor-grid input[type="text"],.skill-editor-grid input:not([type]) { height: 38px; padding: 0 11px; }.skill-editor-grid textarea { min-height: 300px; padding: 12px; resize: vertical; font: 11px/1.65 var(--font-mono); }
+.skill-editor-grid input:focus-visible,.skill-editor-grid textarea:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.skill-editor-option { padding: 11px; border: 1px solid var(--border); border-radius: var(--radius-md); display: grid; grid-template-columns: auto minmax(0,1fr); align-items: start; gap: 9px; background: var(--surface); }.skill-editor-option input { margin-top: 2px; accent-color: var(--accent); }.skill-editor-option > span { display: grid; gap: 3px; }.skill-editor-option strong { color: var(--foreground-strong); font-size: 10px; }.skill-editor-option small { color: var(--foreground-muted); font-size: 9px; }
+.skill-editor-dialog > footer { min-height: 62px; padding: 12px 18px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--foreground-muted); font-size: 9px; }.skill-editor-dialog > footer div { display: flex; gap: 7px; }.skill-editor-dialog > footer button { height: 34px; padding: 0 13px; border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--foreground); background: var(--surface); cursor: pointer; }.skill-editor-dialog > footer button.primary { border-color: var(--accent); color: white; background: var(--accent); }.skill-editor-dialog > footer button:disabled { opacity: .55; cursor: wait; }
 @keyframes workspace-menu-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
 .workspace-actions-heading { padding: 8px 9px 9px; display: grid; gap: 2px; }
 .workspace-actions-heading span { color: var(--foreground); font-size: 10px; font-weight: 720; }
@@ -2162,7 +2181,16 @@ a:focus-visible {
   .session-more { opacity: 1; }
 }
 
+@media (hover: none), (pointer: coarse) {
+  .skill-row-actions { opacity: 1; }
+}
+
 @media (max-width: 760px) {
+  .skill-editor-backdrop { padding: 0; align-items: end; }
+  .skill-editor-dialog { width: 100%; max-height: calc(100dvh - 24px); border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
+  .skill-editor-grid textarea { min-height: 240px; }
+  .skill-editor-dialog > footer { align-items: flex-end; }
+  .skill-editor-dialog > footer > span { max-width: 42%; }
   .memory-overlay {
     padding: 0;
   }

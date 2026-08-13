@@ -76,17 +76,20 @@ These routes are the Workspace Goal subset of Operator profile 1.0. They use `se
 
 ### Skill Console routes
 
-The first-party Web Console may upload a `SKILL.md` or bounded ZIP bundle and select one immutable Skill revision for newly admitted TaskRuns in a Workspace:
+The first-party Web Console manages a shared Skill catalog and replaces the Skill references for an individual Workspace:
 
 ```text
 GET    /api/v1/console/skills
-GET    /api/v1/console/sessions/:id/skill
-POST   /api/v1/console/sessions/:id/skill/upload
-PUT    /api/v1/console/sessions/:id/skill
-DELETE /api/v1/console/sessions/:id/skill
+POST   /api/v1/console/skills
+GET    /api/v1/console/skills/:id
+PATCH  /api/v1/console/skills/:id
+DELETE /api/v1/console/skills/:id
+GET    /api/v1/console/skills/:id/revisions
+GET    /api/v1/console/workspaces/:id/skills
+PUT    /api/v1/console/workspaces/:id/skills
 ```
 
-Reads require `sessions:read`; upload, selection, and disable require `sessions:write`. Upload uses bounded JSON `{ filename, contentBase64 }` with a 12 MiB HTTP body limit and an 8 MiB decoded source-archive limit. A successful upload validates and persists a revision, then selects it for the Session. Selection changes only future TaskRuns; existing TaskRun contracts and continuations keep their frozen revision. These Console routes are first-party and are not part of the stable Gateway Operator profile. See [SKILLS.md](SKILLS.md) for the file format, snapshot semantics, validation, and all expansion limits.
+Reads require `sessions:read`; catalog and reference mutations require `sessions:write`. Upload uses bounded JSON `{ filename, contentBase64 }` with a 12 MiB HTTP body limit and an 8 MiB decoded source-archive limit. `PATCH` creates a new immutable revision from `{ name, description, content, disableModelInvocation? }`; Workspace `PUT` atomically replaces its references from `{ skillIds }` (maximum 32). Edits automatically become the revision frozen by future TaskRuns in every referencing Workspace. Deletion removes catalog metadata and all references while existing TaskRun snapshots remain self-contained. These Console routes are first-party and are not part of the stable Gateway Operator profile.
 
 ### Memory provenance
 

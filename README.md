@@ -33,7 +33,7 @@ The repository contains 13 workspaces in one acyclic dependency graph:
 | Domain | `@tagent/memory` | Optional Hot/Warm/Cold long-term Memory |
 | Domain | `@tagent/learning` | Optional governed Learning projections and workflows |
 | Adapter | `@tagent/http-fastify` | API-only Fastify adapter for `/api/v1` |
-| Adapter | `@tagent/persistence-sqlite` | Schema 43, repositories, migrations, writer fencing, and Unit of Work |
+| Adapter | `@tagent/persistence-sqlite` | Schema 44, repositories, migrations, writer fencing, and Unit of Work |
 | Adapter | `@tagent/runtime-pi` | In-process Pi runtime integration |
 | Adapter | `@tagent/workspace-local` | Workspace-contained tools and path enforcement |
 | Application | `@tagent/core-service` | Core composition root and lifecycle |
@@ -93,9 +93,9 @@ Core does not validate browser OIDC/JWT tokens. In production, a Gateway validat
 
 ## Persistence and recovery
 
-Core owns a schema 43 SQLite database. Startup acquires an OS instance lock, applies migrations, claims a writer lease and fence, installs connection-level mutation guards, performs guarded recovery, starts services and workers, then reports the writer ready.
+Core owns a schema 44 SQLite database. Startup acquires an OS instance lock, applies migrations, claims a writer lease and fence, installs connection-level mutation guards, performs guarded recovery, starts services and workers, then reports the writer ready.
 
-Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Back up the SQLite database together with its WAL/SHM files before an upgrade. Binaries that only understand schema 42 cannot open schema 43; rollback requires the matching pre-upgrade database backup. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md) and [docs/UPGRADING.md](docs/UPGRADING.md).
+Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Back up the SQLite database together with its WAL/SHM files before an upgrade. Binaries that only understand schema 43 cannot open schema 44; rollback requires the matching pre-upgrade database backup. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md) and [docs/UPGRADING.md](docs/UPGRADING.md).
 
 ## Completion evidence and model calls
 
@@ -105,9 +105,9 @@ Deterministic prerequisite failures and exact literal deliveries do not call the
 
 ## Workspace Skills
 
-The Web Console can load a `SKILL.md` or ZIP bundle from the Skill control in the conversation header. Core validates and stores immutable, content-addressed revisions, binds one revision to the Workspace, and freezes that revision into every newly admitted `TaskRun`. Switching or disabling a Skill never changes running work or its continuations.
+The Web Console provides one Skills center shared across Workspaces. Upload or drop a `SKILL.md`/ZIP once, edit it through immutable revisions, delete it from the catalog, and select any number of entries for each Workspace. Core freezes the latest revision of every reference into each newly admitted `TaskRun`; later edits, reference changes, or deletion never alter running work or its continuations.
 
-Execution uses the native Pi Skill path: `@tagent/runtime-pi` registers the frozen projection in `AgentHarness.resources.skills` and invokes `AgentHarness.skill()`. Core does not flatten the Skill into an ordinary prompt, and a Skill cannot add tools or bypass approvals, receipts, path containment, or settlement policy. See [docs/SKILLS.md](docs/SKILLS.md).
+Execution uses the native Pi Skill path: `@tagent/runtime-pi` registers every frozen projection in `AgentHarness.resources.skills`; a one-Skill Workspace retains explicit `AgentHarness.skill()` invocation, while Pi selects among a multi-Skill set by its native matching behavior. Core does not flatten Skills into the system prompt, and a Skill cannot add tools or bypass approvals, receipts, path containment, or settlement policy. See [docs/SKILLS.md](docs/SKILLS.md).
 
 ## Optional Memory and Learning
 

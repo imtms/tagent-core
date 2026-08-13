@@ -100,12 +100,13 @@ import {
 } from "./migrations/v41-operator-read.js";
 import { assertExecutionPolicyV42Schema, migrateExecutionPolicyV42 } from "./migrations/v42-execution-policy.js";
 import { assertSkillsV43Schema, migrateSkillsV43 } from "./migrations/v43-skills.js";
+import { assertSkillCenterV44Schema, migrateSkillCenterV44 } from "./migrations/v44-skill-center.js";
 import { mapLegacyRunApprovalOperation } from "./sqlite/canonical-approval-mapper.js";
 import { appendProjectionPair, finalizeProjectionCheckpoint } from "./sqlite/canonical-integration-event.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 43;
+const SCHEMA_VERSION = 44;
 const MAX_SUBMISSION_CONTENT_CHARS = 200_000;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -1191,11 +1192,20 @@ export class Store {
     executionPolicyMigration();
     assertExecutionPolicyV42Schema(this.db);
     const skillsMigration = this.db.transaction(() => {
-      migrateSkillsV43(this.db, previousVersion !== undefined && previousVersion >= 43 ? 43 : 42);
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+      if (previousVersion === undefined || previousVersion < 44) {
+        migrateSkillsV43(this.db, previousVersion !== undefined && previousVersion >= 43 ? 43 : 42);
+      }
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`)
+        .run(previousVersion !== undefined && previousVersion >= 44 ? 44 : 43, now());
     });
     skillsMigration();
-    assertSkillsV43Schema(this.db);
+    if (previousVersion === undefined || previousVersion < 44) assertSkillsV43Schema(this.db);
+    const skillCenterMigration = this.db.transaction(() => {
+      migrateSkillCenterV44(this.db, previousVersion !== undefined && previousVersion >= 44 ? 44 : 43);
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+    });
+    skillCenterMigration();
+    assertSkillCenterV44Schema(this.db);
     // A process restart loses the in-memory executor for receipts that had only
     // reached "started". Surface uncertainty explicitly; never replay an effect
     // whose outcome may already have escaped Core.
@@ -1619,11 +1629,16 @@ export class Store {
   createSkillRevision(input: CreateSkillRevisionInput): SkillRevision {
     return this.db.transaction(() => {
       const timestamp = now();
-      let skill = this.db.prepare("SELECT id FROM skills WHERE name=?").get(input.name) as { id: string } | undefined;
+      let skill = input.skillId
+        ? this.db.prepare("SELECT id,name FROM skills WHERE id=?").get(input.skillId) as { id: string; name: string } | undefined
+        : this.db.prepare("SELECT id,name FROM skills WHERE name=?").get(input.name) as { id: string; name: string } | undefined;
+      if (input.skillId && !skill) throw new Error("Skill not found");
       if (!skill) {
-        skill = { id: randomUUID() };
+        skill = { id: randomUUID(), name: input.name };
         this.db.prepare("INSERT INTO skills (id,name,created_at,updated_at) VALUES (?,?,?,?)")
           .run(skill.id, input.name, timestamp, timestamp);
+      } else if (skill.name !== input.name) {
+        this.db.prepare("UPDATE skills SET name=?,updated_at=? WHERE id=?").run(input.name, timestamp, skill.id);
       }
       const duplicate = this.db.prepare("SELECT id FROM skill_revisions WHERE skill_id=? AND sha256=?")
         .get(skill.id, input.sha256) as { id: string } | undefined;
@@ -1653,32 +1668,59 @@ export class Store {
 
   listSkills(): SkillSummary[] {
     return this.db.prepare(`SELECT s.id,s.name,r.revision AS latestRevision,r.id AS latestRevisionId,
-      r.description,r.sha256,s.updated_at AS updatedAt FROM skills s JOIN skill_revisions r ON r.skill_id=s.id
+      r.description,r.sha256,(SELECT COUNT(*) FROM workspace_skill_bindings bindings WHERE bindings.skill_id=s.id) AS workspaceCount,
+      s.updated_at AS updatedAt FROM skills s JOIN skill_revisions r ON r.skill_id=s.id
       WHERE r.revision=(SELECT MAX(latest.revision) FROM skill_revisions latest WHERE latest.skill_id=s.id)
       ORDER BY s.updated_at DESC,s.name`).all() as SkillSummary[];
   }
 
-  getSessionSkill(sessionId: string): SkillRevision | undefined {
-    const row = this.db.prepare("SELECT skill_revision_id AS revisionId FROM session_skill_bindings WHERE session_id=?")
-      .get(sessionId) as { revisionId: string } | undefined;
-    return row ? this.getSkillRevision(row.revisionId) : undefined;
+  getSkill(skillId: string): SkillRevision | undefined {
+    const row = this.db.prepare("SELECT id FROM skill_revisions WHERE skill_id=? ORDER BY revision DESC LIMIT 1")
+      .get(skillId) as { id: string } | undefined;
+    return row ? this.getSkillRevision(row.id) : undefined;
   }
 
-  bindSessionSkill(sessionId: string, revisionId: string): SkillRevision | undefined {
-    if (!this.getSession(sessionId)) return undefined;
-    const revision = this.getSkillRevision(revisionId);
-    if (!revision) return undefined;
-    this.db.prepare(`INSERT INTO session_skill_bindings (session_id,skill_revision_id,bound_at) VALUES (?,?,?)
-      ON CONFLICT(session_id) DO UPDATE SET skill_revision_id=excluded.skill_revision_id,bound_at=excluded.bound_at`)
-      .run(sessionId, revisionId, now());
-    this.touchSession(sessionId);
-    return revision;
+  listSkillRevisions(skillId: string): SkillRevision[] {
+    const rows = this.db.prepare("SELECT id FROM skill_revisions WHERE skill_id=? ORDER BY revision DESC")
+      .all(skillId) as Array<{ id: string }>;
+    return rows.map((row) => this.getSkillRevision(row.id)!);
   }
 
-  unbindSessionSkill(sessionId: string): boolean {
-    const changed = this.db.prepare("DELETE FROM session_skill_bindings WHERE session_id=?").run(sessionId).changes === 1;
-    if (changed) this.touchSession(sessionId);
-    return changed;
+  listWorkspaceSkills(workspaceId: string): SkillRevision[] {
+    const rows = this.db.prepare(`SELECT revisions.id FROM workspace_skill_bindings bindings
+      JOIN skill_revisions revisions ON revisions.skill_id=bindings.skill_id
+      WHERE bindings.session_id=? AND revisions.revision=(
+        SELECT MAX(latest.revision) FROM skill_revisions latest WHERE latest.skill_id=bindings.skill_id
+      ) ORDER BY bindings.bound_at,bindings.skill_id`).all(workspaceId) as Array<{ id: string }>;
+    return rows.map((row) => this.getSkillRevision(row.id)!);
+  }
+
+  replaceWorkspaceSkills(workspaceId: string, skillIds: readonly string[]): SkillRevision[] | undefined {
+    return this.db.transaction(() => {
+      if (!this.getSession(workspaceId)) return undefined;
+      const uniqueIds = [...new Set(skillIds)];
+      for (const skillId of uniqueIds) if (!this.getSkill(skillId)) return undefined;
+      this.db.prepare("DELETE FROM workspace_skill_bindings WHERE session_id=?").run(workspaceId);
+      const insert = this.db.prepare("INSERT INTO workspace_skill_bindings (session_id,skill_id,bound_at) VALUES (?,?,?)");
+      const timestamp = now();
+      uniqueIds.forEach((skillId, index) => insert.run(workspaceId, skillId, timestamp + index));
+      this.touchSession(workspaceId);
+      return this.listWorkspaceSkills(workspaceId);
+    })();
+  }
+
+  deleteSkill(skillId: string): SkillRevision[] | undefined {
+    return this.db.transaction(() => {
+      const revisions = this.listSkillRevisions(skillId);
+      if (!revisions.length) return undefined;
+      const workspaceIds = (this.db.prepare("SELECT session_id AS workspaceId FROM workspace_skill_bindings WHERE skill_id=?")
+        .all(skillId) as Array<{ workspaceId: string }>).map((row) => row.workspaceId);
+      this.db.prepare("DELETE FROM workspace_skill_bindings WHERE skill_id=?").run(skillId);
+      this.db.prepare("DELETE FROM skill_revisions WHERE skill_id=?").run(skillId);
+      this.db.prepare("DELETE FROM skills WHERE id=?").run(skillId);
+      for (const workspaceId of workspaceIds) this.touchSession(workspaceId);
+      return revisions;
+    })();
   }
 
   private touchSession(id: SessionId) {
@@ -1999,20 +2041,15 @@ ${source.content}`;
       const timestamp = now();
       const session = this.getSession(sessionId);
       if (!session) throw new Error(`Session ${sessionId} not found`);
-      const selectedSkill = this.getSessionSkill(sessionId);
-      const frozenContract = contract && selectedSkill ? {
+      const selectedSkills = this.listWorkspaceSkills(sessionId);
+      const frozenContract = contract && selectedSkills.length ? {
         ...contract,
-        skill: {
-          skillId: selectedSkill.skillId,
-          revisionId: selectedSkill.id,
-          revision: selectedSkill.revision,
-          name: selectedSkill.name,
-          description: selectedSkill.description,
-          content: selectedSkill.content,
-          filePath: selectedSkill.filePath,
-          sha256: selectedSkill.sha256,
-          disableModelInvocation: selectedSkill.disableModelInvocation,
-        },
+        skills: selectedSkills.map((skill) => ({
+          skillId: skill.skillId, revisionId: skill.id, revision: skill.revision, name: skill.name,
+          description: skill.description, content: skill.content, filePath: skill.filePath,
+          sha256: skill.sha256, disableModelInvocation: skill.disableModelInvocation,
+        })),
+        skill: undefined,
       } : contract;
       this.db.prepare(`
         INSERT INTO runs (id, session_id, request_id, status, phase, goal, model_id, reasoning_effort, created_at, updated_at, contract_json)

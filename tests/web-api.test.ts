@@ -80,8 +80,8 @@ describe("Web API request headers", () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify(success(revision)), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
     const file = new File(["skill body"], "SKILL.md", { type: "text/markdown" });
-    await expect(api.uploadSkill("session", file)).resolves.toEqual(revision);
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/console/sessions/session/skill/upload", expect.objectContaining({
+    await expect(api.uploadSkill(file)).resolves.toEqual(revision);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/console/skills", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ filename: "SKILL.md", contentBase64: Buffer.from("skill body").toString("base64") }),
     }));
@@ -90,8 +90,8 @@ describe("Web API request headers", () => {
     expect(source).toContain('accept=".md,.zip,text/markdown,application/zip"');
     expect(source).toContain("const dropSkill = (event: DragEvent<HTMLElement>)");
     expect(source).toContain("onDrop={dropSkill}");
-    expect(source).toContain("TaskRuns freeze the selected revision.");
-    expect(source).toContain('aria-pressed={sessionSkill?.id === skill.latestRevisionId}');
+    expect(source).toContain("TaskRuns freeze every referenced revision.");
+    expect(source).toContain('aria-pressed={selected}');
   });
 
   it("decodes lightweight Run summaries and requests only incremental transcript rows", async () => {

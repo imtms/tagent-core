@@ -65,6 +65,11 @@ async function skillRevisionOrNull(payload: unknown): Promise<ConsoleSkillRevisi
   return payload === null ? null : skillRevision(payload);
 }
 
+async function skillRevisions(payload: unknown): Promise<ConsoleSkillRevision[]> {
+  const abi = await loadCoreAbi();
+  return arrayPayload(payload).map((item) => abi.decodeAbi(abi.ConsoleSkillRevisionSchema, item));
+}
+
 async function skills(payload: unknown): Promise<ConsoleSkillSummary[]> {
   const abi = await loadCoreAbi();
   return arrayPayload(payload).map((item) => abi.decodeAbi(abi.ConsoleSkillSummarySchema, item));
@@ -256,6 +261,7 @@ export const ConsoleDecode = {
   sessions,
   skillRevision,
   skillRevisionOrNull,
+  skillRevisions,
   skills,
   startedRun,
   submissionResult,

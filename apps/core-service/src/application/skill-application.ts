@@ -17,6 +17,13 @@ export interface SkillUploadInput {
   contentBase64: string;
 }
 
+export interface SkillUpdateInput {
+  name: string;
+  description: string;
+  content: string;
+  disableModelInvocation?: boolean;
+}
+
 interface ParsedSkill {
   name: string;
   description: string;
@@ -166,6 +173,16 @@ function bundleHash(files: BundleFile[]): string {
   return hash.digest("hex");
 }
 
+function editorSkillFile(input: SkillUpdateInput): BundleFile {
+  const name = input.name.trim();
+  const description = input.description.trim();
+  const content = input.content.replace(/\r\n?/g, "\n").trim();
+  const source = `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\ndisable-model-invocation: ${Boolean(input.disableModelInvocation)}\n---\n\n${content}\n`;
+  const data = new TextEncoder().encode(source);
+  parseSkill(data);
+  return { relativePath: "SKILL.md", data };
+}
+
 async function requireDirectory(pathname: string): Promise<void> {
   const info = await lstat(pathname);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`${pathname} must be a real directory, not a symlink`);
@@ -197,6 +214,33 @@ async function assertExistingBundle(target: string, managedRoot: string, files: 
   }
 }
 
+
+async function readManagedBundle(filePath: string, workspace: string, managedRoot: string): Promise<BundleFile[]> {
+  const root = path.dirname(path.join(workspace, ...filePath.split("/")));
+  await requireDirectory(root);
+  const canonicalRoot = await realpath(root);
+  const canonicalManagedRoot = await realpath(managedRoot);
+  if (!canonicalRoot.startsWith(`${canonicalManagedRoot}${path.sep}`)) throw new Error("Skill revision escapes managed storage");
+  const files: BundleFile[] = [];
+  const pending = [root];
+  while (pending.length) {
+    const directory = pending.pop()!;
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const pathname = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) throw new Error("Skill revision contains an unsafe symlink");
+      if (entry.isDirectory()) { pending.push(pathname); continue; }
+      if (!entry.isFile()) throw new Error("Skill revision contains an unsupported entry");
+      const data = new Uint8Array(await readFile(pathname));
+      if (data.byteLength > MAX_FILE_BYTES) throw new Error(`Skill file exceeds ${MAX_FILE_BYTES} bytes`);
+      files.push({ relativePath: path.relative(root, pathname).split(path.sep).join("/"), data });
+    }
+  }
+  if (files.length > MAX_FILES || files.reduce((total, file) => total + file.data.byteLength, 0) > MAX_EXPANDED_BYTES) {
+    throw new Error("Skill bundle exceeds the configured bounds");
+  }
+  return files;
+}
+
 export class CoreSkillApplication {
   private readonly workspace: string;
   constructor(
@@ -206,30 +250,28 @@ export class CoreSkillApplication {
   ) { this.workspace = path.resolve(workspace); }
 
   listSkills() { return this.skills.listSkills(); }
-  getSessionSkill(sessionId: string) { return this.skills.getSessionSkill(sessionId) ?? null; }
-
-  bindSessionSkill(sessionId: string, revisionId: string) {
-    if (!this.sessions.getSession(sessionId)) throw new Error("Session not found");
-    const revision = this.skills.bindSessionSkill(sessionId, revisionId);
-    if (!revision) throw new Error("Skill revision not found");
-    return revision;
+  getSkill(skillId: string) {
+    const skill = this.skills.getSkill(skillId);
+    if (!skill) throw new Error("Skill not found");
+    return skill;
+  }
+  listSkillRevisions(skillId: string) {
+    if (!this.skills.getSkill(skillId)) throw new Error("Skill not found");
+    return this.skills.listRevisions(skillId);
+  }
+  listWorkspaceSkills(workspaceId: string) {
+    if (!this.sessions.getSession(workspaceId)) throw new Error("Session not found");
+    return this.skills.listWorkspaceSkills(workspaceId);
+  }
+  replaceWorkspaceSkills(workspaceId: string, skillIds: readonly string[]) {
+    if (!this.sessions.getSession(workspaceId)) throw new Error("Session not found");
+    if (skillIds.length > 32) throw new Error("A Workspace can reference at most 32 Skills");
+    const selected = this.skills.replaceWorkspaceSkills(workspaceId, skillIds);
+    if (!selected) throw new Error("Skill not found");
+    return selected;
   }
 
-  unbindSessionSkill(sessionId: string) {
-    if (!this.sessions.getSession(sessionId)) throw new Error("Session not found");
-    this.skills.unbindSessionSkill(sessionId);
-    return { ok: true as const };
-  }
-
-  async uploadSkill(sessionId: string, input: SkillUploadInput) {
-    if (!this.sessions.getSession(sessionId)) throw new Error("Session not found");
-    const filename = path.basename(input.filename.trim());
-    if (!filename || filename.length > 255 || (!filename.toLowerCase().endsWith(".zip") && !filename.toLowerCase().endsWith(".md"))) {
-      throw new Error("Upload a SKILL.md or .zip Skill bundle");
-    }
-    const bundle = extractBundle(filename, decodeBase64(input.contentBase64));
-    const skillFile = bundle.files.find((file) => file.relativePath === bundle.skillPath)!;
-    const parsed = parseSkill(skillFile.data);
+  private async persistBundle(parsed: ParsedSkill, bundle: { files: BundleFile[] }, sourceFilename: string, skillId?: string) {
     const sha256 = bundleHash(bundle.files);
     const tagentRoot = path.join(this.workspace, ".tagent");
     const managedRoot = path.join(tagentRoot, "skills");
@@ -266,14 +308,42 @@ export class CoreSkillApplication {
     } finally {
       await rm(staging, { recursive: true, force: true });
     }
-    const revision = this.skills.createRevision({
+    return this.skills.createRevision({
+      skillId,
       ...parsed,
       filePath: path.posix.join(...relativeDirectory.split(path.sep), "SKILL.md"),
       sha256,
-      sourceFilename: filename,
+      sourceFilename,
     });
-    const selected = this.skills.bindSessionSkill(sessionId, revision.id);
-    if (!selected) throw new Error("Could not bind uploaded Skill to Session");
-    return selected;
+  }
+
+  async uploadSkill(input: SkillUploadInput) {
+    const filename = path.basename(input.filename.trim());
+    if (!filename || filename.length > 255 || (!filename.toLowerCase().endsWith(".zip") && !filename.toLowerCase().endsWith(".md"))) {
+      throw new Error("Upload a SKILL.md or .zip Skill bundle");
+    }
+    const bundle = extractBundle(filename, decodeBase64(input.contentBase64));
+    const parsed = parseSkill(bundle.files.find((file) => file.relativePath === bundle.skillPath)!.data);
+    return this.persistBundle(parsed, bundle, filename);
+  }
+
+  async updateSkill(skillId: string, input: SkillUpdateInput) {
+    const current = this.getSkill(skillId);
+    const edited = editorSkillFile(input);
+    const parsed = parseSkill(edited.data);
+    const duplicateName = this.skills.listSkills().find((skill) => skill.id !== skillId && skill.name === parsed.name);
+    if (duplicateName) throw new Error(`Skill name ${parsed.name} already exists`);
+    const managedRoot = path.join(this.workspace, ".tagent", "skills");
+    const files = await readManagedBundle(current.filePath, this.workspace, managedRoot);
+    const nextFiles = files.filter((file) => file.relativePath !== "SKILL.md");
+    nextFiles.push(edited);
+    return this.persistBundle(parsed, { files: nextFiles }, "web-editor", skillId);
+  }
+
+  deleteSkill(skillId: string) {
+    const deleted = this.skills.deleteSkill(skillId);
+    if (!deleted) throw new Error("Skill not found");
+    // Immutable content-addressed bundles remain available to historical and active TaskRuns.
+    return { ok: true as const };
   }
 }

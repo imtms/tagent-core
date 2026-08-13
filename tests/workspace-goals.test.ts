@@ -68,7 +68,7 @@ describe("Workspace Goal Roadmap execution", () => {
   it("opens schema v43 additively and leaves TaskRuns independent when no Goal exists", () => {
     const store = new Store(":memory:");
     try {
-      expect(store.getSchemaVersion()).toBe(43);
+      expect(store.getSchemaVersion()).toBe(44);
       expect(store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_goal_roadmap_item_progress'").get()).toBeTruthy();
       const workspace = store.createSession("No Goal workspace");
       const run = store.createRun(workspace.id, "ordinary task");

@@ -34,7 +34,7 @@ git diff --check
 - [ ] `pi-coding-agent` is absent from source, manifests, lockfile, release archive and `npm ls`; production `pi-agent-core`/`pi-ai` imports exist only in `adapters/runtime-pi`.
 - [ ] AgentHarness runtime contracts cover transcript-invisible retry/fallback, steering/follow-up during retry and compaction, abort queue audit, tool lifecycle, current-turn context preservation, provider idle timeout, threshold compaction and context-overflow recovery.
 - [ ] Differential API tests confirm removed unversioned routes return 404.
-- [ ] Core-managed Skill tests prove validated immutable revisions, Session binding, TaskRun snapshot isolation, native `resources.skills`/`AgentHarness.skill()` invocation, and upload rejection for traversal, symlink, malformed ZIP, size, and tampering cases.
+- [ ] Core-managed Skill tests prove shared catalog CRUD, immutable revisions, multi-Skill Workspace references, TaskRun snapshot isolation, native `resources.skills`/`AgentHarness.skill()` invocation, and upload rejection for traversal, symlink, malformed ZIP, size, and tampering cases.
 
 ## PostgreSQL Memory gate
 
@@ -52,8 +52,8 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 ## Migration and recovery gate
 
 - [ ] A representative 0.1.x database plus WAL/SHM was backed up and restored in isolation.
-- [ ] The candidate migrated v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 → v40 → v41 → v42 → v43 and reopened idempotently.
-- [ ] `schema_meta.version` is 43; trusted-evidence and Goal-execution drift checks pass; complete v39 receipt/ACK shapes, the v40 Submission audit shape, exact v41 Operator Read indexes, the v42 Inbox execution-policy column, and the v43 Skill tables/indexes/constraints pass fail-closed validation; `migration_issues` has zero open rows.
+- [ ] The candidate migrated v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 → v40 → v41 → v42 → v43 → v44 and reopened idempotently.
+- [ ] `schema_meta.version` is 44; trusted-evidence and Goal-execution drift checks pass; complete v39 receipt/ACK shapes, the v40 Submission audit shape, exact v41 Operator Read indexes, the v42 Inbox execution-policy column, the v43 Skill catalog and the v44 Workspace reference table/index/constraints pass fail-closed validation; `migration_issues` has zero open rows.
 - [ ] A second Core process is rejected by the OS lock/writer authority.
 - [ ] Writer lease/fence loss clears health readiness and closes Core.
 - [ ] Restart recovery produces `outcome_unknown` for effects/deliveries whose outcome cannot be proven and `restart_before_effect` cancellation only before effect start.
@@ -79,7 +79,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] Core-owned ABI fixtures and provider/consumer tests pass. Gateway separately proves its fake Core and current/previous-client matrix before its production cutover.
 - [ ] `scripts/gateway-readiness-probe.mjs` exits 0 with `ready=true` and no reasons.
 - [ ] Web is served from its independent artifact and targets the Gateway/Core origin; Core serves no static Web content.
-- [ ] Web Skill upload, drag/drop, saved selection, disable, active revision, empty/loading/error, keyboard focus, light/dark theme, and mobile-width states were rendered and checked.
+- [ ] Web Skills center upload/drag-and-drop, edit/delete, multi-select Workspace references, empty/loading/error states, keyboard focus, light/dark theme, and mobile-width states were rendered and checked.
 
 ## Artifact gate
 

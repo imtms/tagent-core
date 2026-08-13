@@ -400,7 +400,7 @@ describe("canonical Governance approval projection", () => {
 
   it("expands schema v31 while leaving legacy approval APIs authoritative", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(43);
+    expect(store.getSchemaVersion()).toBe(44);
     expect(store.db.prepare("PRAGMA table_info(approval_requests)").all())
       .toEqual(expect.arrayContaining([expect.objectContaining({ name: "operation_digest" })]));
     expect(store.db.prepare("PRAGMA table_info(autonomy_approval_requests)").all())

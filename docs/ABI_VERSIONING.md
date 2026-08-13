@@ -95,11 +95,11 @@ The next public API major should remove the v39 compatibility aliases rather tha
 
 Schema 41 introduces a separate `operator.read.v1` capability profile for Session inventory, per-Session TaskRun inventory and latest TaskRun. `GET /api/v1/capabilities` adds only the API-version marker; clients then decode `GET /api/v1/operator/capabilities` with the dedicated schema. This avoids adding unknown endpoint literals or fields to the strict, closed Operator 1.0 decoder introduced in v40.
 
-The profile freezes bounded public summaries, dual-scope enforcement for nested TaskRun reads, immutable keyset order, cursor bindings, snapshot-membership/read-committed-value consistency and current no-expiry/no-deletion retention. Schema 42 retains this profile while adding the private Inbox execution-policy column; schema 43 adds first-party Console Skill contracts without changing the Operator Read profile. The matching ABI export, fixtures, Core Client and provider must be deployed together.
+The profile freezes bounded public summaries, dual-scope enforcement for nested TaskRun reads, immutable keyset order, cursor bindings, snapshot-membership/read-committed-value consistency and current no-expiry/no-deletion retention. Schema 42 retains this profile while adding the private Inbox execution-policy column. Schema 43 adds first-party Console Skill contracts; schema 44 extends them with shared catalog CRUD and multi-Skill Workspace references. Neither changes the Operator Read profile. The matching ABI export, fixtures, Core Client and provider must be deployed together.
 
 | Core profile | Client behavior | Support |
 | --- | --- | --- |
-| schema 43 + `operator.read.v1` | negotiate current capabilities and use the matching 0.6.0 ABI/client | Supported current profile |
+| schema 44 + `operator.read.v1` | negotiate current capabilities and use the matching 0.6.1 ABI/client | Supported current profile |
 | schema 41 + `operator.read.v1` | negotiate API marker and dedicated capabilities, then use matching ABI/client | Supported |
 | schema 41 + legacy Operator 1.0 decoder | unchanged legacy object still decodes; deployment policy must separately accept schema 41 | Wire-compatible only |
 | schema 40 without `operator.read.v1` | Gateway disables only historical inventory/rebuild | Supported feature downgrade |

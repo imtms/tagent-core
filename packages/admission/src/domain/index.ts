@@ -29,4 +29,4 @@ export type {
   SessionRunPhaseView,
   SessionRunStatusView,
 } from "./session.js";
-export type { CreateSkillRevisionInput, SkillRevision, SkillSummary } from "./skill.js";
+export type { CreateSkillRevisionInput, SkillRevision, SkillSummary, UpdateSkillInput } from "./skill.js";

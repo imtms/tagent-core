@@ -105,12 +105,12 @@ async function readSseEvents(response: Response, count: number) {
 }
 
 describe("v1 API contracts", () => {
-  it("uploads, lists, binds, reads, and disables a Workspace Skill through authenticated Console routes", async () => {
+  it("uploads, edits, references, and deletes Skills through the cross-Workspace Console center", async () => {
     const { app, store, workspace } = await fixture();
     const session = store.createSession();
     const source = "---\nname: release-check\ndescription: Verify a release\n---\nFollow the release checklist.\n";
     const uploaded = await app.inject({
-      method: "POST", url: `/api/v1/console/sessions/${session.id}/skill/upload`,
+      method: "POST", url: "/api/v1/console/skills",
       payload: { filename: "SKILL.md", contentBase64: Buffer.from(source).toString("base64") },
     });
     expect(uploaded.statusCode).toBe(200);
@@ -118,14 +118,22 @@ describe("v1 API contracts", () => {
     expect(selected).toMatchObject({ name: "release-check", revision: 1 });
     expect(await readFile(path.join(workspace, selected.filePath), "utf8")).toContain("Follow the release checklist.");
 
-    const catalog = decodeAbi(SuccessEnvelopeSchema, (await app.inject({ method: "GET", url: "/api/v1/console/skills" })).json()).data as Array<{ latestRevisionId: string }>;
-    expect(catalog).toEqual([expect.objectContaining({ latestRevisionId: selected.id })]);
-    expect(decodeAbi(SuccessEnvelopeSchema, (await app.inject({ method: "GET", url: `/api/v1/console/sessions/${session.id}/skill` })).json()).data)
-      .toMatchObject({ id: selected.id });
-    expect((await app.inject({ method: "DELETE", url: `/api/v1/console/sessions/${session.id}/skill` })).statusCode).toBe(200);
-    expect(decodeAbi(SuccessEnvelopeSchema, (await app.inject({ method: "GET", url: `/api/v1/console/sessions/${session.id}/skill` })).json()).data).toBeNull();
-    expect((await app.inject({ method: "PUT", url: `/api/v1/console/sessions/${session.id}/skill`, payload: { revisionId: selected.id } })).statusCode).toBe(200);
-    expect(store.getSessionSkill(session.id)?.id).toBe(selected.id);
+    let catalog = decodeAbi(SuccessEnvelopeSchema, (await app.inject({ method: "GET", url: "/api/v1/console/skills" })).json()).data as Array<{ id: string; latestRevisionId: string; workspaceCount: number }>;
+    expect(catalog).toEqual([expect.objectContaining({ latestRevisionId: selected.id, workspaceCount: 0 })]);
+    expect((await app.inject({ method: "PUT", url: `/api/v1/console/workspaces/${session.id}/skills`, payload: { skillIds: [catalog[0].id] } })).statusCode).toBe(200);
+    expect(decodeAbi(SuccessEnvelopeSchema, (await app.inject({ method: "GET", url: `/api/v1/console/workspaces/${session.id}/skills` })).json()).data)
+      .toEqual([expect.objectContaining({ id: selected.id })]);
+    const editedResponse = await app.inject({ method: "PATCH", url: `/api/v1/console/skills/${catalog[0].id}`, payload: {
+      name: "release-check", description: "Verify every release", content: "Follow the updated release checklist.", disableModelInvocation: false,
+    } });
+    expect(editedResponse.statusCode).toBe(200);
+    const edited = decodeAbi(SuccessEnvelopeSchema, editedResponse.json()).data as { id: string; revision: number; content: string };
+    expect(edited).toMatchObject({ revision: 2, content: "Follow the updated release checklist." });
+    expect(store.listWorkspaceSkills(session.id)).toEqual([expect.objectContaining({ id: edited.id })]);
+    expect((await app.inject({ method: "DELETE", url: `/api/v1/console/skills/${catalog[0].id}` })).statusCode).toBe(200);
+    expect(store.listWorkspaceSkills(session.id)).toEqual([]);
+    catalog = decodeAbi(SuccessEnvelopeSchema, (await app.inject({ method: "GET", url: "/api/v1/console/skills" })).json()).data as typeof catalog;
+    expect(catalog).toEqual([]);
   });
 
   it("creates Sessions idempotently, exposes GET, and publishes capabilities", async () => {
@@ -143,7 +151,7 @@ describe("v1 API contracts", () => {
     const read = await app.inject({ method: "GET", url: `/api/v1/sessions/${session.id}` });
     expect(decodeAbi(SessionSchema, decodeAbi(SuccessEnvelopeSchema, read.json()).data)).toEqual(session);
     const capabilities = decodeAbi(CoreCapabilitiesResponseSchema, (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).data;
-    expect(capabilities).toMatchObject({ releaseVersion: "0.6.0", persistenceSchemaVersion: 43, interactions: { approvalResolution: true, userInputSubmission: true }, operator: { roadmapGenerationIdempotent: true } });
+    expect(capabilities).toMatchObject({ releaseVersion: "0.6.1", persistenceSchemaVersion: 44, interactions: { approvalResolution: true, userInputSubmission: true }, operator: { roadmapGenerationIdempotent: true } });
   });
 
   it("converges 100 concurrent Session create retries on one durable Session", async () => {

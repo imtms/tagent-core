@@ -35,10 +35,13 @@ export class CoreApplicationCoordinator {
   generateWorkspaceGoalRoadmap(...args: Parameters<CoreApplicationServices["workspaceGoals"]["generateWorkspaceGoalRoadmap"]>) { return this.services.workspaceGoals.generateWorkspaceGoalRoadmap(...args); }
   startWorkspaceGoalRoadmapItem(...args: Parameters<CoreApplicationServices["workspaceGoals"]["startWorkspaceGoalRoadmapItem"]>) { return this.services.workspaceGoals.startWorkspaceGoalRoadmapItem(...args); }
   listSkills(...args: Parameters<CoreApplicationServices["skills"]["listSkills"]>) { return this.services.skills.listSkills(...args); }
-  getSessionSkill(...args: Parameters<CoreApplicationServices["skills"]["getSessionSkill"]>) { return this.services.skills.getSessionSkill(...args); }
+  getSkill(...args: Parameters<CoreApplicationServices["skills"]["getSkill"]>) { return this.services.skills.getSkill(...args); }
+  listSkillRevisions(...args: Parameters<CoreApplicationServices["skills"]["listSkillRevisions"]>) { return this.services.skills.listSkillRevisions(...args); }
   uploadSkill(...args: Parameters<CoreApplicationServices["skills"]["uploadSkill"]>) { return this.services.skills.uploadSkill(...args); }
-  bindSessionSkill(...args: Parameters<CoreApplicationServices["skills"]["bindSessionSkill"]>) { return this.services.skills.bindSessionSkill(...args); }
-  unbindSessionSkill(...args: Parameters<CoreApplicationServices["skills"]["unbindSessionSkill"]>) { return this.services.skills.unbindSessionSkill(...args); }
+  updateSkill(...args: Parameters<CoreApplicationServices["skills"]["updateSkill"]>) { return this.services.skills.updateSkill(...args); }
+  deleteSkill(...args: Parameters<CoreApplicationServices["skills"]["deleteSkill"]>) { return this.services.skills.deleteSkill(...args); }
+  listWorkspaceSkills(...args: Parameters<CoreApplicationServices["skills"]["listWorkspaceSkills"]>) { return this.services.skills.listWorkspaceSkills(...args); }
+  replaceWorkspaceSkills(...args: Parameters<CoreApplicationServices["skills"]["replaceWorkspaceSkills"]>) { return this.services.skills.replaceWorkspaceSkills(...args); }
   teachWorkflow(...args: Parameters<CoreApplicationServices["learning"]["teachWorkflow"]>) { return this.services.learning.teachWorkflow(...args); }
   listWorkflows(...args: Parameters<CoreApplicationServices["learning"]["listWorkflows"]>) { return this.services.learning.listWorkflows(...args); }
   getWorkflow(...args: Parameters<CoreApplicationServices["learning"]["getWorkflow"]>) { return this.services.learning.getWorkflow(...args); }

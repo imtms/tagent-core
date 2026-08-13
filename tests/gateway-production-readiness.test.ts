@@ -859,7 +859,7 @@ describe("Gateway production readiness", () => {
     const firstOpen = new Store(databasePath);
     const firstInventory = schemaInventory(firstOpen);
     expect(firstOpen.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-      .toEqual({ version: 43 });
+      .toEqual({ version: 44 });
     expect(firstInventory.map((entry) => [entry.type, entry.name])).toEqual([
       ["table", "approval_receipts"],
       ["table", "attempts"],
@@ -878,7 +878,7 @@ describe("Gateway production readiness", () => {
     try {
       expect(schemaInventory(store)).toEqual(firstInventory);
       expect(store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-        .toEqual({ version: 43 });
+        .toEqual({ version: 44 });
 
       const writer = CoreWriterLease.claim(store.db, {
         ownerId: "gateway-authority-test",
@@ -991,7 +991,7 @@ describe("Gateway production readiness", () => {
         legacyLastAcked: 2,
       });
       expect(store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-        .toEqual({ version: 43 });
+        .toEqual({ version: 44 });
       writer.release();
     } finally {
       store.close();
@@ -1125,7 +1125,7 @@ describe("Gateway production readiness", () => {
     );
     expect(secondSchemaOpen.status, secondSchemaOpen.stderr).toBe(0);
     const schemaEvidence = {
-      schemaVersion: 43,
+      schemaVersion: 44,
       objects: [
         "approval_receipts",
         "attempts",
@@ -1189,7 +1189,7 @@ describe("Gateway production readiness", () => {
         thresholds: ready.thresholds,
       }).toEqual({
         probeVersion: 4,
-        schemaVersion: 43,
+        schemaVersion: 44,
         migrationOpenIssues: 0,
         writerReady: true,
         writerFence: readinessLease.authority.fence,
@@ -1296,7 +1296,7 @@ describe("Gateway production readiness", () => {
         severity: rejected.severity,
         reasons: rejected.reasons,
       }).toEqual({
-        schemaVersion: 43,
+        schemaVersion: 44,
         writerReady: false,
         writerLeaseFresh: false,
         consumerLag: 0,

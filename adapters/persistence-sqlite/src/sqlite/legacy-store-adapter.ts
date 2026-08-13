@@ -279,10 +279,12 @@ export class LegacyStoreAdapter {
     this.skills = Object.freeze({
       createRevision: mutate(store.createSkillRevision.bind(store)),
       listSkills: query(store.listSkills.bind(store)),
+      getSkill: query(store.getSkill.bind(store)),
+      listRevisions: query(store.listSkillRevisions.bind(store)),
       getRevision: query(store.getSkillRevision.bind(store)),
-      getSessionSkill: query(store.getSessionSkill.bind(store)),
-      bindSessionSkill: mutate(store.bindSessionSkill.bind(store)),
-      unbindSessionSkill: mutate(store.unbindSessionSkill.bind(store)),
+      listWorkspaceSkills: query(store.listWorkspaceSkills.bind(store)),
+      replaceWorkspaceSkills: mutate(store.replaceWorkspaceSkills.bind(store)),
+      deleteSkill: mutate(store.deleteSkill.bind(store)),
     });
 
     this.operatorRead = Object.freeze({

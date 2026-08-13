@@ -21,10 +21,13 @@ export interface SkillSummary {
   latestRevisionId: string;
   description: string;
   sha256: string;
+  workspaceCount: number;
   updatedAt: number;
 }
 
 export interface CreateSkillRevisionInput {
+  /** Existing catalog identity when editing; omitted for a new upload. */
+  skillId?: string;
   name: string;
   description: string;
   content: string;
@@ -32,4 +35,11 @@ export interface CreateSkillRevisionInput {
   sha256: string;
   disableModelInvocation?: boolean;
   sourceFilename: string;
+}
+
+export interface UpdateSkillInput {
+  name: string;
+  description: string;
+  content: string;
+  disableModelInvocation?: boolean;
 }

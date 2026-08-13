@@ -99,15 +99,10 @@ export function runtimeRunContext(run: TaskRun) {
       intent: run.contract.intent,
       relation: run.contract.relation,
       executionPolicy: run.contract.executionPolicy ?? null,
-      skill: run.contract.skill ? {
-        skillId: run.contract.skill.skillId,
-        revisionId: run.contract.skill.revisionId,
-        revision: run.contract.skill.revision,
-        name: run.contract.skill.name,
-        description: truncateUtf8(run.contract.skill.description, 1_000),
-        filePath: run.contract.skill.filePath,
-        sha256: run.contract.skill.sha256,
-      } : null,
+      skills: (run.contract.skills ?? (run.contract.skill ? [run.contract.skill] : [])).slice(0, 32).map((skill) => ({
+        skillId: skill.skillId, revisionId: skill.revisionId, revision: skill.revision, name: skill.name,
+        description: truncateUtf8(skill.description, 1_000), filePath: skill.filePath, sha256: skill.sha256,
+      })),
       workspaceGoal: run.contract.workspaceGoal ? {
         goalId: run.contract.workspaceGoal.goalId,
         mode: run.contract.workspaceGoal.mode,

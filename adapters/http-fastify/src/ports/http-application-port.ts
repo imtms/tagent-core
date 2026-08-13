@@ -112,8 +112,11 @@ export type HttpApplicationPort = HttpAdmissionApplicationPort
   & HttpWorkspaceGoalApplicationPort
   & {
     listSkills(): unknown;
-    getSessionSkill(sessionId: string): unknown;
-    uploadSkill(sessionId: string, input: { filename: string; contentBase64: string }): unknown;
-    bindSessionSkill(sessionId: string, revisionId: string): unknown;
-    unbindSessionSkill(sessionId: string): unknown;
+    getSkill(skillId: string): unknown;
+    listSkillRevisions(skillId: string): unknown;
+    uploadSkill(input: { filename: string; contentBase64: string }): unknown;
+    updateSkill(skillId: string, input: { name: string; description: string; content: string; disableModelInvocation?: boolean }): unknown;
+    deleteSkill(skillId: string): unknown;
+    listWorkspaceSkills(workspaceId: string): unknown;
+    replaceWorkspaceSkills(workspaceId: string, skillIds: readonly string[]): unknown;
   };

@@ -15,9 +15,12 @@ function base64(bytes: Uint8Array): string {
 export function createSkillApi(request: Request) {
   return {
     skills: () => request("/api/v1/console/skills", undefined, ConsoleDecode.skills),
-    sessionSkill: (sessionId: string) => request(`/api/v1/console/sessions/${sessionId}/skill`, undefined, ConsoleDecode.skillRevisionOrNull),
-    uploadSkill: async (sessionId: string, file: File) => request(`/api/v1/console/sessions/${sessionId}/skill/upload`, { method: "POST", body: JSON.stringify({ filename: file.name, contentBase64: base64(new Uint8Array(await file.arrayBuffer())) }) }, ConsoleDecode.skillRevision),
-    bindSkill: (sessionId: string, revisionId: string) => request(`/api/v1/console/sessions/${sessionId}/skill`, { method: "PUT", body: JSON.stringify({ revisionId }) }, ConsoleDecode.skillRevision),
-    unbindSkill: (sessionId: string) => request(`/api/v1/console/sessions/${sessionId}/skill`, { method: "DELETE" }, ConsoleDecode.ok),
+    skill: (skillId: string) => request(`/api/v1/console/skills/${skillId}`, undefined, ConsoleDecode.skillRevision),
+    skillRevisions: (skillId: string) => request(`/api/v1/console/skills/${skillId}/revisions`, undefined, ConsoleDecode.skillRevisions),
+    uploadSkill: async (file: File) => request("/api/v1/console/skills", { method: "POST", body: JSON.stringify({ filename: file.name, contentBase64: base64(new Uint8Array(await file.arrayBuffer())) }) }, ConsoleDecode.skillRevision),
+    updateSkill: (skillId: string, input: Pick<SkillRevision, "name" | "description" | "content" | "disableModelInvocation">) => request(`/api/v1/console/skills/${skillId}`, { method: "PATCH", body: JSON.stringify(input) }, ConsoleDecode.skillRevision),
+    deleteSkill: (skillId: string) => request(`/api/v1/console/skills/${skillId}`, { method: "DELETE" }, ConsoleDecode.ok),
+    workspaceSkills: (workspaceId: string) => request(`/api/v1/console/workspaces/${workspaceId}/skills`, undefined, ConsoleDecode.skillRevisions),
+    replaceWorkspaceSkills: (workspaceId: string, skillIds: string[]) => request(`/api/v1/console/workspaces/${workspaceId}/skills`, { method: "PUT", body: JSON.stringify({ skillIds }) }, ConsoleDecode.skillRevisions),
   };
 }
