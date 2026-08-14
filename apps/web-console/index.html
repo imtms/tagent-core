@@ -3,19 +3,88 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f5f6f3" />
+    <meta name="theme-color" content="#f5f4f2" />
     <script>
       try {
         const saved = localStorage.getItem("tagent.theme");
         const theme = saved === "light" || saved === "dark" ? saved : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
         document.documentElement.dataset.theme = theme;
         document.documentElement.style.colorScheme = theme;
+        document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#171715" : "#f5f4f2");
       } catch {}
     </script>
+    <style>
+      :root {
+        --boot-surface: oklch(0.994 0.001 95);
+        --boot-muted: oklch(0.958 0.002 95);
+        --boot-raised: oklch(1 0 0);
+        --boot-line: oklch(0.875 0.004 95);
+        --boot-ink: oklch(0.18 0.008 95);
+        --boot-copy: oklch(0.51 0.007 95);
+        --boot-mark-bg: var(--boot-ink);
+        --boot-mark-fg: var(--boot-raised);
+      }
+      :root[data-theme="dark"] {
+        --boot-surface: oklch(0.178 0.003 95);
+        --boot-muted: oklch(0.165 0.003 95);
+        --boot-raised: oklch(0.205 0.004 95);
+        --boot-line: oklch(0.285 0.005 95);
+        --boot-ink: oklch(0.955 0.004 95);
+        --boot-copy: oklch(0.66 0.006 95);
+        --boot-mark-bg: oklch(0.71 0.105 155);
+        --boot-mark-fg: oklch(0.15 0.02 155);
+      }
+      html, body, #root { width: 100%; height: 100%; margin: 0; }
+      body { overflow: hidden; background: var(--boot-surface); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .boot-shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); width: 100%; height: 100dvh; overflow: hidden; color: var(--boot-ink); background: var(--boot-surface); }
+      .boot-rail { padding: 16px 12px; border-right: 1px solid var(--boot-line); background: var(--boot-muted); }
+      .boot-brand { display: flex; align-items: center; gap: 10px; min-height: 54px; }
+      .boot-mark { width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; color: var(--boot-mark-fg); background: var(--boot-mark-bg); }
+      .boot-mark svg { display: block; }
+      .boot-brand-copy { display: grid; gap: 3px; }
+      .boot-brand-copy strong { font-size: 13px; line-height: 1; }
+      .boot-brand-copy span { color: var(--boot-copy); font-size: 10px; line-height: 1; }
+      .boot-main { min-width: 0; background: var(--boot-surface); }
+      .boot-topbar { height: 71px; padding: 0 20px; border-bottom: 1px solid var(--boot-line); display: flex; align-items: center; gap: 10px; }
+      .boot-heading { display: grid; gap: 6px; }
+      .boot-heading i, .boot-actions i { display: block; border-radius: 999px; background: var(--boot-line); }
+      .boot-heading i:first-child { width: 78px; height: 8px; }
+      .boot-heading i:last-child { width: 128px; height: 6px; opacity: .7; }
+      .boot-actions { margin-left: auto; display: flex; gap: 6px; }
+      .boot-actions i { width: 34px; height: 34px; border-radius: 9px; background: var(--boot-raised); border: 1px solid var(--boot-line); }
+      @media (max-width: 980px) {
+        .boot-shell { grid-template-columns: minmax(0, 1fr); }
+        .boot-rail { display: none; }
+        .boot-topbar { padding-inline: 12px; }
+        .boot-topbar::before { width: 40px; height: 40px; flex: none; border: 1px solid var(--boot-line); border-radius: 9px; background: var(--boot-raised); content: ""; }
+      }
+    </style>
     <title>TAgent Core</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot-shell" role="status" aria-label="Loading TAgent Core">
+        <aside class="boot-rail" aria-hidden="true">
+          <div class="boot-brand">
+            <span class="boot-mark">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M5 6.5h14M12 6.5V18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                <circle cx="5" cy="6.5" r="2" fill="currentColor" />
+                <circle cx="19" cy="6.5" r="2" fill="currentColor" />
+                <circle cx="12" cy="18" r="2" fill="currentColor" />
+              </svg>
+            </span>
+            <span class="boot-brand-copy"><strong>TAgent</strong><span>Core runtime</span></span>
+          </div>
+        </aside>
+        <main class="boot-main" aria-hidden="true">
+          <header class="boot-topbar">
+            <span class="boot-heading"><i></i><i></i></span>
+            <span class="boot-actions"><i></i><i></i></span>
+          </header>
+        </main>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

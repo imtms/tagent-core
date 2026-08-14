@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.4] - 2026-08-14
+
+### Web Console workspace experience
+
+- Stabilized the Workspace rail under large lists by keeping the New workspace action and search field at fixed, consistent sizes while scrolling only the Workspace list.
+- Added a theme-aware startup skeleton and synchronized browser theme color so the first paint matches the loaded Console instead of flashing a blank or mismatched surface.
+- Refined the empty Workspace experience with TAgent branding, clearer starter cards, and more specific descriptions that make first actions easier to scan.
+- Improved medium-width behavior by progressively collapsing Skills and Workspace controls to titled icons while retaining the existing touch-oriented mobile layout.
+
+### Compatibility and upgrade
+
+- Repacked the desktop Gate selector into a denser two-column layout without changing Gate profiles, persistence, or execution semantics.
+- There is no HTTP API, ABI, configuration, or SQLite schema migration in this release; schema remains 45.
+- Synchronized Core, Web Console, all 13 private workspace manifests, internal dependency pins, capability metadata, fixtures, tests, and the lockfile at 0.6.4. Deploy matching Core and Web Console 0.6.4 artifacts.
+
 ## [0.6.3] - 2026-08-14
 
 ### Durable provider dispatch and credential boundaries
