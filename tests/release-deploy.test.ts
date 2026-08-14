@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 
 const deployScript = path.resolve("scripts/deploy-release.sh");
 const buildScript = path.resolve("scripts/build-release.sh");
+const checksumScript = path.resolve("scripts/write-release-checksum.sh");
 const manifestScript = path.resolve("scripts/release-manifest.mjs");
 const ciWorkflow = path.resolve(".github/workflows/ci.yml");
 const releaseWorkflow = path.resolve(".github/workflows/release.yml");
@@ -68,7 +69,7 @@ async function releaseDirectory(root: string, commit: string, corrupt: "native" 
   await writeFile(path.join(directory, "package.json"), JSON.stringify({
     type: "module",
     dependencies: {
-      "@tagent/core-service": "0.6.5",
+      "@tagent/core-service": "0.6.6",
       "better-sqlite3": "12.4.1",
     },
   }));
@@ -87,28 +88,28 @@ async function releaseDirectory(root: string, commit: string, corrupt: "native" 
   await writeFile(path.join(directory, "node_modules", "better-sqlite3", "package.json"), JSON.stringify({ main: "lib/index.js" }));
   await mkdir(path.join(directory, "node_modules", "better-sqlite3", "lib"), { recursive: true });
   await writeFile(path.join(directory, "node_modules", "better-sqlite3", "lib", "index.js"), "module.exports = require(" + JSON.stringify(packageRoot) + ");\n");
-  await writeFile(path.join(directory, "node_modules", "@tagent", "admission", "package.json"), JSON.stringify({ name: "@tagent/admission", type: "module", dependencies: { "@tagent/execution": "0.6.5", "@tagent/governance": "0.6.5" } }));
+  await writeFile(path.join(directory, "node_modules", "@tagent", "admission", "package.json"), JSON.stringify({ name: "@tagent/admission", type: "module", dependencies: { "@tagent/execution": "0.6.6", "@tagent/governance": "0.6.6" } }));
   await writeFile(path.join(directory, "node_modules", "@tagent", "admission", "dist", "index.js"), "export {};\n");
   await writeFile(path.join(directory, "node_modules", "@tagent", "abi", "package.json"), JSON.stringify({ name: "@tagent/abi", type: "module" }));
   await writeFile(path.join(directory, "node_modules", "@tagent", "abi", "dist", "index.js"), "export {};\n");
-  await writeFile(path.join(directory, "node_modules", "@tagent", "core-service", "package.json"), JSON.stringify({ name: "@tagent/core-service", type: "module", dependencies: { "@tagent/admission": "0.6.5", "@tagent/execution": "0.6.5", "@tagent/governance": "0.6.5", "@tagent/http-fastify": "0.6.5", "@tagent/learning": "0.6.5", "@tagent/memory": "0.6.5", "@tagent/persistence-sqlite": "0.6.5", "@tagent/runtime-pi": "0.6.5", "@tagent/workspace-local": "0.6.5" } }));
+  await writeFile(path.join(directory, "node_modules", "@tagent", "core-service", "package.json"), JSON.stringify({ name: "@tagent/core-service", type: "module", dependencies: { "@tagent/admission": "0.6.6", "@tagent/execution": "0.6.6", "@tagent/governance": "0.6.6", "@tagent/http-fastify": "0.6.6", "@tagent/learning": "0.6.6", "@tagent/memory": "0.6.6", "@tagent/persistence-sqlite": "0.6.6", "@tagent/runtime-pi": "0.6.6", "@tagent/workspace-local": "0.6.6" } }));
   await writeFile(path.join(directory, "node_modules", "@tagent", "core-service", "dist", "index.js"), "export {};\n");
   await writeFile(path.join(directory, "node_modules", "@tagent", "governance", "package.json"), JSON.stringify({ name: "@tagent/governance", type: "module" }));
   await writeFile(path.join(directory, "node_modules", "@tagent", "governance", "dist", "index.js"), "export {};\n");
-  await writeFile(path.join(directory, "node_modules", "@tagent", "http-fastify", "package.json"), JSON.stringify({ name: "@tagent/http-fastify", type: "module", dependencies: { "@tagent/abi": "0.6.5", "@tagent/admission": "0.6.5", "@tagent/execution": "0.6.5", "@tagent/governance": "0.6.5" } }));
+  await writeFile(path.join(directory, "node_modules", "@tagent", "http-fastify", "package.json"), JSON.stringify({ name: "@tagent/http-fastify", type: "module", dependencies: { "@tagent/abi": "0.6.6", "@tagent/admission": "0.6.6", "@tagent/execution": "0.6.6", "@tagent/governance": "0.6.6" } }));
   await writeFile(path.join(directory, "node_modules", "@tagent", "http-fastify", "dist", "index.js"), "export {};\n");
-  await writeFile(path.join(directory, "node_modules", "@tagent", "execution", "package.json"), JSON.stringify({ name: "@tagent/execution", type: "module", dependencies: { "@tagent/governance": "0.6.5" } }));
+  await writeFile(path.join(directory, "node_modules", "@tagent", "execution", "package.json"), JSON.stringify({ name: "@tagent/execution", type: "module", dependencies: { "@tagent/governance": "0.6.6" } }));
   await writeFile(path.join(directory, "node_modules", "@tagent", "execution", "dist", "index.js"), "export {};\n");
-  await writeFile(path.join(directory, "node_modules", "@tagent", "learning", "package.json"), JSON.stringify({ name: "@tagent/learning", type: "module", dependencies: { "@tagent/admission": "0.6.5", "@tagent/execution": "0.6.5", "@tagent/governance": "0.6.5", "@tagent/memory": "0.6.5" } }));
+  await writeFile(path.join(directory, "node_modules", "@tagent", "learning", "package.json"), JSON.stringify({ name: "@tagent/learning", type: "module", dependencies: { "@tagent/admission": "0.6.6", "@tagent/execution": "0.6.6", "@tagent/governance": "0.6.6", "@tagent/memory": "0.6.6" } }));
   await writeFile(path.join(directory, "node_modules", "@tagent", "learning", "dist", "index.js"), "export {};\n");
   await writeFile(path.join(directory, "node_modules", "@tagent", "memory", "package.json"), JSON.stringify({ name: "@tagent/memory", type: "module" }));
   await writeFile(path.join(directory, "node_modules", "@tagent", "memory", "dist", "index.js"), "export {};\n");
   await writeFile(path.join(directory, "node_modules", "@tagent", "memory", "dist", "postgres", "schema.sql"), "SELECT 1;\n");
-  await writeFile(path.join(directory, "node_modules", "@tagent", "persistence-sqlite", "package.json"), JSON.stringify({ name: "@tagent/persistence-sqlite", type: "module", dependencies: { "@tagent/admission": "0.6.5", "@tagent/execution": "0.6.5", "@tagent/governance": "0.6.5", "@tagent/learning": "0.6.5", "@tagent/memory": "0.6.5" } }));
+  await writeFile(path.join(directory, "node_modules", "@tagent", "persistence-sqlite", "package.json"), JSON.stringify({ name: "@tagent/persistence-sqlite", type: "module", dependencies: { "@tagent/admission": "0.6.6", "@tagent/execution": "0.6.6", "@tagent/governance": "0.6.6", "@tagent/learning": "0.6.6", "@tagent/memory": "0.6.6" } }));
   await writeFile(path.join(directory, "node_modules", "@tagent", "persistence-sqlite", "dist", "index.js"), "export {};\n");
-  await writeFile(path.join(directory, "node_modules", "@tagent", "runtime-pi", "package.json"), JSON.stringify({ name: "@tagent/runtime-pi", type: "module", dependencies: { "@tagent/execution": "0.6.5" } }));
+  await writeFile(path.join(directory, "node_modules", "@tagent", "runtime-pi", "package.json"), JSON.stringify({ name: "@tagent/runtime-pi", type: "module", dependencies: { "@tagent/execution": "0.6.6" } }));
   await writeFile(path.join(directory, "node_modules", "@tagent", "runtime-pi", "dist", "index.js"), "export {};\n");
-  await writeFile(path.join(directory, "node_modules", "@tagent", "workspace-local", "package.json"), JSON.stringify({ name: "@tagent/workspace-local", type: "module", dependencies: { "@tagent/execution": "0.6.5" } }));
+  await writeFile(path.join(directory, "node_modules", "@tagent", "workspace-local", "package.json"), JSON.stringify({ name: "@tagent/workspace-local", type: "module", dependencies: { "@tagent/execution": "0.6.6" } }));
   await writeFile(
     path.join(directory, "node_modules", "@tagent", "workspace-local", "dist", "workspace-fd-helper.py"),
     "#!/usr/bin/env python3\n",
@@ -181,6 +182,29 @@ describe("production release deployment", () => {
     });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(`RELEASE_COMMIT must equal checked-out HEAD ${head}`);
+  });
+
+  it("writes portable release checksums that verify outside the build runner path", async () => {
+    const buildSource = await readFile(buildScript, "utf8");
+    expect(buildSource.split("scripts/write-release-checksum.sh")).toHaveLength(3);
+    expect(buildSource).not.toContain('sha256sum "$core_output"');
+    expect(buildSource).not.toContain('sha256sum "$web_output"');
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "tagent-checksum-test-"));
+    const output = path.join(root, "release output");
+    const archive = path.join(output, "tagent-core-test.tar.gz");
+    try {
+      await mkdir(output);
+      await writeFile(archive, "verified archive bytes\n");
+      const write = spawnSync("bash", [checksumScript, archive], { encoding: "utf8" });
+      expect(write.status, write.stderr).toBe(0);
+      expect(await readFile(`${archive}.sha256`, "utf8")).toMatch(/^[a-f0-9]{64} {2}tagent-core-test\.tar\.gz\n$/);
+      const verify = spawnSync("sha256sum", ["-c", "tagent-core-test.tar.gz.sha256"], { cwd: output, encoding: "utf8" });
+      expect(verify.status, verify.stderr).toBe(0);
+      expect(verify.stdout).toContain("tagent-core-test.tar.gz: OK");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("uses the canonical v1 health endpoint by default", async () => {

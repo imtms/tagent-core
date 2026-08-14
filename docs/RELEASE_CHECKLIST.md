@@ -98,6 +98,7 @@ npm run release:build
 ```
 
 - [ ] Core and Web Console tarballs and both SHA-256 files exist.
+- [ ] Each `.sha256` records only the archive basename and verifies after both files are downloaded into an arbitrary directory.
 - [ ] Both release manifests verify from unpacked archives.
 - [ ] Core contains materialized required workspaces, no symbolic links, no Web assets, and a working native SQLite binding.
 - [ ] Web contains `dist/index.html`, its manifest, no Core runtime, and the expected build-time origin policy.

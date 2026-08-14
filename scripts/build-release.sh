@@ -127,7 +127,7 @@ node --check "$core_release/dist/server.js"
 node "$core_release/scripts/release-manifest.mjs" verify "$core_release"
 
 tar -C "$work" -czf "$core_output" "tagent-core-$commit"
-sha256sum "$core_output" > "$core_output.sha256"
+scripts/write-release-checksum.sh "$core_output"
 log "created $core_output"
 
 [[ -f apps/web-console/dist/index.html ]] || fail "Web Console build is missing: apps/web-console/dist/index.html"
@@ -138,5 +138,5 @@ RELEASE_ARTIFACT=web-console RELEASE_COMMIT="$commit" node scripts/release-manif
 node "$web_release/scripts/release-manifest.mjs" verify "$web_release"
 
 tar -C "$work" -czf "$web_output" "tagent-web-console-$commit"
-sha256sum "$web_output" > "$web_output.sha256"
+scripts/write-release-checksum.sh "$web_output"
 log "created $web_output"

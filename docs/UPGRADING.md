@@ -11,6 +11,8 @@ This guide describes the current repository boundary: API v1, independently depl
 - SQLite migrations are forward-only. A schema-44-only binary must not open schema 45.
 - Core, Gateway and Web must honor generation-fenced event replay and durable persist-before-ACK behavior.
 
+Version 0.6.6 does not change runtime behavior, configuration, HTTP API, ABI, or SQLite schema. It supersedes the 0.6.5 release assets so each downloaded `.sha256` file records only its archive basename and works directly with `sha256sum -c` from any directory. Deploy matching Core and Web Console 0.6.6 artifacts.
+
 Version 0.6.5 does not change configuration or SQLite schema. It adds optional structured `error` metadata to public tool transcript/event shapes, so strict consumers should deploy the matching `@tagent/abi`/`@tagent/core-client` while compatibility-tolerant consumers may ignore the field. Runtime shutdown now waits for owned same-process work to reach quiescence instead of abandoning it after five seconds; investigate a slow stop as a cancellation/ownership defect and do not force shared persistence closed underneath it. The new `history_search` tool is scoped internally to the fenced current TaskRun and requires no Gateway route or migration.
 
 ## Before upgrading

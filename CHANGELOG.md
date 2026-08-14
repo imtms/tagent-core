@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.6] - 2026-08-14
+
+### Portable release verification
+
+- Fixed Core and Web `.sha256` assets to record only the archive basename, so `sha256sum -c` works after both files are downloaded into any directory, including paths containing spaces.
+- Added an executable regression test and release checklist gate for downloaded checksum portability. The 0.6.5 tarball digests were correct, but its checksum files contained the ephemeral GitHub runner path; use 0.6.6 assets for direct verification.
+
+### Compatibility and upgrade
+
+- There is no runtime code, HTTP API, ABI, configuration, or SQLite schema migration in this release; schema remains 45.
+- Synchronized Core, Web Console, all 13 private workspace manifests, internal dependency pins, capability metadata, fixtures, tests, and the lockfile at 0.6.6. Deploy matching Core and Web Console 0.6.6 artifacts.
+
 ## [0.6.5] - 2026-08-14
 
 ### Runtime ownership and provider recovery
