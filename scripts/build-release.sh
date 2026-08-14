@@ -20,6 +20,7 @@ commit=$checked_out_commit
 
 core_output=${1:-"$PWD/tagent-core-$commit-linux-x64-node24-abi137.tar.gz"}
 web_output=${2:-"$PWD/tagent-web-console-$commit.tar.gz"}
+sdk_output_directory=${3:-"$(dirname "$core_output")"}
 work=$(mktemp -d)
 cleanup() { rm -rf "$work"; }
 trap cleanup EXIT
@@ -140,3 +141,6 @@ node "$web_release/scripts/release-manifest.mjs" verify "$web_release"
 tar -C "$work" -czf "$web_output" "tagent-web-console-$commit"
 scripts/write-release-checksum.sh "$web_output"
 log "created $web_output"
+
+node scripts/build-sdk-release.mjs "$sdk_output_directory"
+log "created ABI and Core Client SDK artifacts in $sdk_output_directory"

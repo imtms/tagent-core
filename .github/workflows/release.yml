@@ -72,7 +72,8 @@ jobs:
         run: |
           scripts/build-release.sh \
             "$RUNNER_TEMP/tagent-core-${RELEASE_TAG}-linux-x64-node24-abi137.tar.gz" \
-            "$RUNNER_TEMP/tagent-web-console-${RELEASE_TAG}.tar.gz"
+            "$RUNNER_TEMP/tagent-web-console-${RELEASE_TAG}.tar.gz" \
+            "$RUNNER_TEMP"
         shell: bash
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
@@ -85,6 +86,10 @@ jobs:
             ${{ runner.temp }}/tagent-core-${{ inputs.tag || github.ref_name }}-linux-x64-node24-abi137.tar.gz.sha256
             ${{ runner.temp }}/tagent-web-console-${{ inputs.tag || github.ref_name }}.tar.gz
             ${{ runner.temp }}/tagent-web-console-${{ inputs.tag || github.ref_name }}.tar.gz.sha256
+            ${{ runner.temp }}/tagent-abi-*.tgz
+            ${{ runner.temp }}/tagent-abi-*.tgz.sha256
+            ${{ runner.temp }}/tagent-core-client-*.tgz
+            ${{ runner.temp }}/tagent-core-client-*.tgz.sha256
           if-no-files-found: error
           retention-days: 30
       - name: Create GitHub release with verified artifacts
@@ -104,6 +109,10 @@ jobs:
             "$RUNNER_TEMP/tagent-core-${RELEASE_TAG}-linux-x64-node24-abi137.tar.gz.sha256" \
             "$RUNNER_TEMP/tagent-web-console-${RELEASE_TAG}.tar.gz" \
             "$RUNNER_TEMP/tagent-web-console-${RELEASE_TAG}.tar.gz.sha256" \
+            "$RUNNER_TEMP/tagent-abi-${VERSION}.tgz" \
+            "$RUNNER_TEMP/tagent-abi-${VERSION}.tgz.sha256" \
+            "$RUNNER_TEMP/tagent-core-client-${VERSION}.tgz" \
+            "$RUNNER_TEMP/tagent-core-client-${VERSION}.tgz.sha256" \
             --verify-tag \
             --title "TAgent Core ${RELEASE_TAG}" \
             --notes-file release-notes.md

@@ -1,6 +1,6 @@
 # Release checklist
 
-This repository publishes a GitHub source/binary release, not npm packages. Every workspace is private and no workflow runs `npm publish`.
+This repository publishes a GitHub source/binary release, not an npm-registry release. Every workspace remains private and no workflow runs `npm publish`; the ABI and Core Client are attached as installable `.tgz` SDK assets.
 
 Do not prefill this checklist or infer a pass from a previous release. Record the commit, command output, artifact checksums, migration rehearsal, and Gateway probe for the candidate being tagged.
 
@@ -56,8 +56,8 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 ## Migration and recovery gate
 
 - [ ] A representative 0.1.x database plus WAL/SHM was backed up and restored in isolation.
-- [ ] The candidate migrated v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 → v40 → v41 → v42 → v43 → v44 → v45 → v46 and reopened idempotently.
-- [ ] `schema_meta.version` is 46; trusted-evidence and Goal-execution drift checks pass; complete v39 receipt/ACK shapes, the v40 Submission audit shape, exact v41 Operator Read indexes, the v42 Inbox execution-policy column, the v43 Skill catalog, the v44 Workspace reference table/index/constraints, the v45 exact request-envelope table/index/composite foreign key, and the v46 continuation due-time column/index pass fail-closed validation; `migration_issues` has zero open rows.
+- [ ] The candidate migrated v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 → v40 → v41 → v42 → v43 → v44 → v45 → v46 → v47 and reopened idempotently.
+- [ ] `schema_meta.version` is 47; trusted-evidence and Goal-execution drift checks pass; complete v39 receipt/ACK shapes, the v40 Submission audit shape, exact v41 Operator Read indexes, the v42 Inbox execution-policy column, the v43 Skill catalog, the v44 Workspace reference table/index/constraints, the v45 exact request-envelope table/index/composite foreign key, the v46 continuation due-time column/index, and all v47 profile revision/receipt/audit/collection-revision objects pass fail-closed validation; `migration_issues` has zero open rows.
 - [ ] A second Core process is rejected by the OS lock/writer authority.
 - [ ] Writer lease/fence loss clears health readiness and closes Core.
 - [ ] Restart recovery produces `outcome_unknown` for effects/deliveries whose outcome cannot be proven and `restart_before_effect` cancellation only before effect start.
@@ -84,6 +84,8 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] Transcript, interaction and Artifact metadata pages enforce default/max limits; SSE batch/buffer bounds and HTTP 413 Artifact limits match capabilities.
 - [ ] Operator Session/TaskRun lists enforce scope/default/max limits, tied-key and snapshot pagination, cursor retry/mismatch/restart behavior, empty/latest semantics and public-summary redaction.
 - [ ] Core-owned ABI fixtures and provider/consumer tests pass. Gateway separately proves its fake Core and current/previous-client matrix before its production cutover.
+- [ ] `GET /api/v1/capability-profiles` returns all eight profile `1.0` summaries/details for the production principal, with the expected 41 unique endpoint IDs/routes, fine-grained scopes, pagination/retention and exact-replay/durable-receipt recovery semantics.
+- [ ] The real provider harness and canonical fixture suite pass; no Fake Core or Gateway transport simulation has been moved into Core.
 - [ ] `scripts/gateway-readiness-probe.mjs` exits 0 with `ready=true` and no reasons.
 - [ ] Web is served from its independent artifact and targets the Gateway/Core origin; Core serves no static Web content.
 - [ ] Web Skills center upload/drag-and-drop, edit/delete, multi-select Workspace references, empty/loading/error states, keyboard focus, light/dark theme, and mobile-width states were rendered and checked.
@@ -97,20 +99,21 @@ On Linux x64 with the exact toolchain:
 npm run release:build
 ```
 
-- [ ] Core and Web Console tarballs and both SHA-256 files exist.
-- [ ] Each `.sha256` records only the archive basename and verifies after both files are downloaded into an arbitrary directory.
+- [ ] Core and Web Console tarballs, ABI and Core Client `.tgz` files, and all four SHA-256 files exist.
+- [ ] Each `.sha256` records only the artifact basename and verifies after the artifact/checksum pair is downloaded into an arbitrary directory.
 - [ ] Both release manifests verify from unpacked archives.
 - [ ] Core contains materialized required workspaces, no symbolic links, no Web assets, and a working native SQLite binding.
 - [ ] Web contains `dist/index.html`, its manifest, no Core runtime, and the expected build-time origin policy.
+- [ ] Both SDK tarballs have version parity with Core, contain JS, declarations, JS source maps and declaration maps, exclude build caches, and pass isolated joint install/runtime/type smoke tests.
 - [ ] An isolated Core artifact starts and passes `/api/v1/health`.
 
 ## Publish
 
 - [ ] `main` is clean, pushed, and the candidate commit equals `origin/main`.
 - [ ] Create and push the annotated `vVERSION` tag.
-- [ ] The tag-triggered release workflow checks out the tag, installs npm 12, runs PostgreSQL and repository gates, verifies tag/version equality, and builds both immutable artifacts.
-- [ ] The workflow uploads both tarballs and checksums as one 30-day Actions artifact.
-- [ ] The workflow creates the GitHub Release with non-empty changelog notes, verifies the tag, and attaches all four files.
+- [ ] The tag-triggered release workflow checks out the tag, installs npm 12, runs PostgreSQL and repository gates, verifies tag/version equality, and builds all four release artifacts.
+- [ ] The workflow uploads all four artifacts and checksums as one 30-day Actions artifact.
+- [ ] The workflow creates the GitHub Release with non-empty changelog notes, verifies the tag, and attaches all eight files.
 - [ ] Downloaded release assets match their attached checksums and manifests.
 
 Release only when every required gate passes or the release is explicitly stopped. Do not publish a stable tag with an undocumented exception.

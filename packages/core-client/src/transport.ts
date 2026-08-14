@@ -12,6 +12,8 @@ export interface CoreClientOptions {
   headers?: RequestInit["headers"];
   requestIdFactory?: () => string;
   retry?: CoreRetryOptions;
+  /** Default request timeout. Omit to preserve the platform fetch timeout. */
+  timeoutMs?: number;
 }
 
 export interface CoreRequestOptions<T> extends Omit<RequestInit, "body" | "headers"> {
@@ -23,6 +25,16 @@ export interface CoreRequestOptions<T> extends Omit<RequestInit, "body" | "heade
   json?: unknown;
   requestId?: string;
   retry?: false | CoreRetryOptions;
+  /** Overrides the client default for this request. */
+  timeoutMs?: number;
+}
+
+/** Cross-client controls that do not change a typed endpoint's payload. */
+export interface CoreCallOptions {
+  headers?: RequestInit["headers"];
+  requestId?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export interface CoreSseOptions<T> {
@@ -81,6 +93,7 @@ export class CoreTransport {
   private readonly fetchImplementation: CoreFetch;
   private readonly requestIdFactory: () => string;
   private readonly retryOptions: NormalizedRetryOptions;
+  private readonly timeoutMs: number | undefined;
 
   constructor(options: CoreClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "";
@@ -89,6 +102,10 @@ export class CoreTransport {
     this.fetchImplementation = options.fetch ?? ((input, init) => fetch(input, init));
     this.requestIdFactory = options.requestIdFactory ?? defaultRequestId;
     this.retryOptions = normalizeRetry(options.retry);
+    if (options.timeoutMs !== undefined && (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0)) {
+      throw new TypeError("Core client timeoutMs must be a positive finite number");
+    }
+    this.timeoutMs = options.timeoutMs;
   }
 
   protected resolve(path: string): string {
@@ -123,21 +140,32 @@ export class CoreTransport {
       body = JSON.stringify(json);
       if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
     }
-    const { decode, idempotent: _idempotent, idempotencyKey: _idempotencyKey, json: _json, requestId: _requestId, retry: requestRetry, ...requestInit } = options;
+    const {
+      decode, idempotent: _idempotent, idempotencyKey: _idempotencyKey, json: _json,
+      requestId: _requestId, retry: requestRetry, timeoutMs: requestTimeoutMs, ...requestInit
+    } = options;
+    const timeoutMs = requestTimeoutMs ?? this.timeoutMs;
+    if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
+      throw protocolError(method, url, "TAgent Core request timeoutMs must be a positive finite number", requestId);
+    }
+    const timeoutSignal = timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs);
+    const signal = requestInit.signal && timeoutSignal
+      ? AbortSignal.any([requestInit.signal, timeoutSignal])
+      : requestInit.signal ?? timeoutSignal;
     const retry = requestRetry === false ? normalizeRetry({ maxAttempts: 1 }) : requestRetry ? normalizeRetry(requestRetry) : this.retryOptions;
     const retryableRequest = ["GET", "HEAD", "OPTIONS"].includes(method) || Boolean(options.idempotent || options.idempotencyKey);
     let response: Response | undefined;
     for (let attempt = 1; attempt <= retry.maxAttempts; attempt += 1) {
       try {
-        response = await this.fetchImplementation(url, { ...requestInit, body, headers, method });
+        response = await this.fetchImplementation(url, { ...requestInit, body, headers, method, signal });
       } catch (error) {
         if (!retryableRequest || attempt === retry.maxAttempts) throw networkError(method, url, error);
-        await waitForRetry(retryDelay(undefined, attempt, retry), requestInit.signal);
+        await waitForRetry(retryDelay(undefined, attempt, retry), signal);
         continue;
       }
       if (response.ok || !retryableRequest || !retry.statuses.has(response.status) || attempt === retry.maxAttempts) break;
       await response.body?.cancel().catch(() => undefined);
-      await waitForRetry(retryDelay(response, attempt, retry), requestInit.signal);
+      await waitForRetry(retryDelay(response, attempt, retry), signal);
     }
     if (!response) throw networkError(method, url, "request did not produce a response");
 

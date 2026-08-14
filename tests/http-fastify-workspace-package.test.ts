@@ -3,9 +3,10 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
-import { AdminConfigStatusResponseSchema, decodeAbi, MEMORY_SOURCE_TYPES } from "@tagent/abi";
+import { AdminConfigStatusResponseSchema, decodeAbi, MEMORY_SOURCE_TYPES, PROFILE_SERVICE_SCOPES } from "@tagent/abi";
 import { ConsoleDecode } from "@tagent/core-client";
 import { createApp, secureEqual, type ServiceCredential } from "@tagent/http-fastify";
+import { SERVICE_SCOPES } from "@tagent/http-fastify/auth";
 import * as V1 from "@tagent/http-fastify/v1";
 
 const repoRoot = process.cwd();
@@ -127,18 +128,18 @@ afterEach(async () => {
 });
 
 describe("Fastify HTTP adapter workspace package", () => {
-  it("publishes only the compiled root, ports, and v1 package entry points", () => {
+  it("publishes only the compiled root, auth, ports, and v1 package entry points", () => {
     const root = readJson<{ dependencies: Record<string, string>; devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const manifest = readJson<PackageManifest>(`${packageRoot}/package.json`);
-    expect(manifest).toMatchObject({ name: "@tagent/http-fastify", version: "0.6.7", private: true });
+    expect(manifest).toMatchObject({ name: "@tagent/http-fastify", version: "0.7.0", private: true });
     expect(root.devDependencies[manifest.name]).toBe(manifest.version);
     expect(root.dependencies).not.toHaveProperty("fastify");
-    expect(Object.keys(manifest.exports).sort()).toEqual([".", "./ports", "./v1"]);
+    expect(Object.keys(manifest.exports).sort()).toEqual([".", "./auth", "./ports", "./v1"]);
     expect(manifest.dependencies).toEqual({
-      "@tagent/abi": "0.6.7",
-      "@tagent/admission": "0.6.7",
-      "@tagent/execution": "0.6.7",
-      "@tagent/governance": "0.6.7",
+      "@tagent/abi": "0.7.0",
+      "@tagent/admission": "0.7.0",
+      "@tagent/execution": "0.7.0",
+      "@tagent/governance": "0.7.0",
       fastify: "^5.10.0",
       typebox: "^1.1.24",
     });
@@ -324,6 +325,7 @@ describe("Fastify HTTP adapter workspace package", () => {
     expect(credential.scopes).toEqual(["sessions:read"]);
     expect(secureEqual("same", "same")).toBe(true);
     expect(secureEqual("same", "different")).toBe(false);
+    expect(PROFILE_SERVICE_SCOPES.every((scope) => SERVICE_SCOPES.includes(scope))).toBe(true);
     expect(V1.v1ApiPlugin).toEqual(expect.any(Function));
     expect(V1.registerPublicV1Routes).toEqual(expect.any(Function));
     expect(V1.registerChannelV1Routes).toEqual(expect.any(Function));
@@ -334,9 +336,11 @@ describe("Fastify HTTP adapter workspace package", () => {
   it("resolves the current public ABI through compiled Node ESM", () => {
     const script = `
       const root = await import("@tagent/http-fastify");
+      const auth = await import("@tagent/http-fastify/auth");
       const ports = await import("@tagent/http-fastify/ports");
       const v1 = await import("@tagent/http-fastify/v1");
       if (typeof root.createApp !== "function" || typeof root.secureEqual !== "function") process.exit(1);
+      if (typeof auth.secureEqual !== "function" || !Array.isArray(auth.SERVICE_SCOPES)) process.exit(1);
       if ("requiredServiceScope" in root) process.exit(1);
       if (Object.keys(ports).length !== 0) process.exit(1);
       if (typeof v1.v1ApiPlugin !== "function" || typeof v1.V1HttpError !== "function") process.exit(1);

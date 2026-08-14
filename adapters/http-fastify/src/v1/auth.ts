@@ -1,6 +1,6 @@
 import type { FastifyRequest } from "fastify";
 import { createHash } from "node:crypto";
-import { secureEqual, type ServiceCredential, type ServiceScope } from "../auth.js";
+import { secureEqual, SERVICE_SCOPES, type ServiceCredential, type ServiceScope } from "../auth.js";
 import type { HttpMemoryScope } from "../ports/index.js";
 import { V1HttpError } from "./errors.js";
 
@@ -10,6 +10,7 @@ export type V1RequiredScope = ServiceScope;
 export interface V1Principal {
   subjectId: string;
   resourceScopes: HttpMemoryScope[];
+  grantedScopes: ServiceScope[];
   localAdmin: boolean;
 }
 
@@ -20,6 +21,7 @@ function credentialPrincipal(credential: ServiceCredential): V1Principal {
     subjectId: credential.principal?.subjectId
       ?? `service:${createHash("sha256").update(credential.token).digest("hex").slice(0, 24)}`,
     resourceScopes: credential.principal?.resourceScopes.map((scope) => ({ ...scope })) ?? [],
+    grantedScopes: [...credential.scopes],
     localAdmin: false,
   };
 }
@@ -43,7 +45,7 @@ export function authorizeV1Scopes(
   surface: V1Surface,
 ): void {
   if (!credentials.length) {
-    principals.set(request, { subjectId: "local-admin", resourceScopes: [], localAdmin: true });
+    principals.set(request, { subjectId: "local-admin", resourceScopes: [], grantedScopes: [...SERVICE_SCOPES], localAdmin: true });
     return;
   }
   const authorization = request.headers.authorization ?? "";

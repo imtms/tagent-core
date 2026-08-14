@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.7.0] - 2026-08-15
+
+### Gateway capability profiles
+
+- Added the independent `GET /api/v1/capability-profiles` registry and detail documents for Session Settings, Session Inbox, Context Manifest, Skills, Memory, Learning, Workflow, and Autonomy without changing the closed legacy `/api/v1/capabilities` shape.
+- Added ABI-owned DTOs and canonical fixtures, typed Core Client methods, bounded opaque-cursor reads, resource-scoped authorization, conditional exact-replay mutations, durable operation receipt lookup, redacted public projections, and separated Core/delegated audit identity for all eight profiles.
+- Added SQLite schema 47 with durable profile revisions, mutation and operation receipts, audit events, Inbox/catalog collection revisions, and idempotent fail-closed migration validation.
+- Added a real Core provider contract harness and independent `@tagent/abi` and `@tagent/core-client` release tarballs containing JavaScript, declarations, JS/declaration source maps, portable SHA-256 files, and isolated install smoke tests.
+
+### Release and maintenance
+
+- Removed stale current-release, schema, test-fixture, and two-artifact documentation left from the 0.6 line while retaining the legacy v1 capabilities shape, first-party Console routes, and historical migration tests required for compatibility and upgrade coverage.
+- Extended the production readiness probe, CORS contract, compatibility matrix, deployment/upgrade runbooks, and release checklist for profile negotiation, delegated audit headers, revision ETags, durable profile receipts, and all four release artifacts.
+- Synchronized Core, Web Console, all 13 private workspace manifests, internal dependency pins, capability metadata, fixtures, tests, documentation, and the lockfile at 0.7.0.
+
+### Compatibility and upgrade
+
+- The new Gateway profiles add HTTP routes and fine-grained service scopes. Strict consumers must deploy the matching 0.7.0 ABI/Core Client SDK and explicitly configure only the profiles they use; Gateway-owned OIDC, ACL, routing, outbox, external delivery, Fake Core, network-fault, and client-matrix behavior remains outside Core.
+- Back up SQLite together with WAL/SHM before upgrade. Schema advances from 46 to 47; a schema-46-only binary must not open schema 47, and rollback requires the matching pre-upgrade database backup.
+- This release does not change token budgets, pricing, cost controls, or usage accounting.
+
 ## [0.6.7] - 2026-08-14
 
 ### TaskRun recovery

@@ -8,9 +8,16 @@ import {
 } from "@tagent/core-client";
 import {
   MEMORY_SOURCE_TYPES,
+  capabilityProfileDetailFixtures,
+  capabilityProfileRegistryFixture,
   operatorReadCapabilitiesFixture,
   operatorSessionListFixture,
   operatorTaskRunListFixture,
+  operatorSessionSettingsFixture,
+  operatorInboxListFixture,
+  operatorContextManifestListFixture,
+  operatorSkillCatalogFixture,
+  adminMemoryStatusFixture,
   submissionIdempotencyFixtures,
   taskRunEventFixture,
   unknownTaskRunEventFixture,
@@ -38,6 +45,25 @@ describe("console v1 response decoders", () => {
 });
 
 describe("core-client transport", () => {
+  it("supports default and per-request timeouts without discarding caller AbortSignals", async () => {
+    const signals: AbortSignal[] = [];
+    const fetchMock = vi.fn<CoreFetch>(async (_url, init) => {
+      signals.push(init?.signal as AbortSignal);
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
+    });
+    const client = createCoreClient({ fetch: fetchMock, timeoutMs: 20 });
+    await expect(client.request("/api/v1/slow")).rejects.toMatchObject({ code: "client.network_error" });
+    expect(signals[0].aborted).toBe(true);
+
+    const controller = new AbortController();
+    const pending = client.request("/api/v1/abort", { signal: controller.signal, timeoutMs: 10_000 });
+    controller.abort(new Error("caller stopped"));
+    await expect(pending).rejects.toMatchObject({ code: "client.network_error" });
+    expect(signals[1].aborted).toBe(true);
+  });
+
   it("adds Bearer, request, and idempotency headers without mutating the v1 body", async () => {
     const fetchMock = vi.fn<CoreFetch>(async () => new Response(JSON.stringify({ ok: true }), {
       status: 200,
@@ -172,6 +198,93 @@ describe("core-client transport", () => {
 });
 
 describe("channel v1 helpers", () => {
+  it("decodes Skills and Admin profile fixtures and sends recovery headers", async () => {
+    const operation = {
+      data: { operation: {
+        requestId: "capture-key", profileId: "admin.memory.v1", endpointId: "admin.memory.capture",
+        status: "succeeded", resource: { type: "memory_scope", id: "workspace:workspace-1" },
+        result: { jobId: "job-1" }, error: null,
+        createdAt: "2026-08-14T12:00:00.000Z", updatedAt: "2026-08-14T12:00:01.000Z",
+        completedAt: "2026-08-14T12:00:01.000Z",
+      } },
+      requestId: "capture-response",
+    };
+    const fetchMock = vi.fn<CoreFetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(operatorSkillCatalogFixture), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(adminMemoryStatusFixture), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(operation), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const client = createCoreClient({ baseUrl: "https://core.example", fetch: fetchMock });
+    await expect(client.listOperatorSkills({ limit: 25 })).resolves.toEqual(operatorSkillCatalogFixture);
+    await expect(client.getAdminMemoryStatus()).resolves.toEqual(adminMemoryStatusFixture);
+    await expect(client.captureAdminMemory(
+      { scope: { type: "workspace", id: "workspace-1" }, content: "Remember this" }, "capture-key",
+    )).resolves.toEqual(operation);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://core.example/api/v1/operator/skills?limit=25",
+      "https://core.example/api/v1/admin/profiles/memory/status",
+      "https://core.example/api/v1/admin/profiles/memory/captures",
+    ]);
+    expect(new Headers(fetchMock.mock.calls[2][1]?.headers).get("Idempotency-Key")).toBe("capture-key");
+  });
+
+  it("uses opaque pagination and conditional Inbox mutation headers", async () => {
+    const decision = {
+      data: { item: operatorInboxListFixture.data.items[0], collectionRevision: 2 },
+      requestId: "inbox-decision-response",
+    };
+    const fetchMock = vi.fn<CoreFetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(operatorInboxListFixture), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(decision), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(operatorContextManifestListFixture), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const client = createCoreClient({ baseUrl: "https://core.example", fetch: fetchMock });
+    await expect(client.listOperatorInbox("session/id", { cursor: "opaque cursor", limit: 20 }))
+      .resolves.toEqual(operatorInboxListFixture);
+    await expect(client.decideOperatorInboxItem("session/id", "item/id", 1, "decision-key", { decision: "defer" }))
+      .resolves.toEqual(decision);
+    await expect(client.listOperatorContextManifests("run/id", { limit: 10 }))
+      .resolves.toEqual(operatorContextManifestListFixture);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://core.example/api/v1/operator/sessions/session%2Fid/inbox?cursor=opaque+cursor&limit=20",
+      "https://core.example/api/v1/operator/sessions/session%2Fid/inbox/item%2Fid/decision",
+      "https://core.example/api/v1/operator/task-runs/run%2Fid/context-manifests?limit=10",
+    ]);
+    const mutationHeaders = new Headers(fetchMock.mock.calls[1][1]?.headers);
+    expect(mutationHeaders.get("If-Match")).toBe('"r1"');
+    expect(mutationHeaders.get("Idempotency-Key")).toBe("decision-key");
+  });
+
+  it("sends Session Settings revision and idempotency headers and retains response requestId", async () => {
+    const fetchMock = vi.fn<CoreFetch>(async () => new Response(JSON.stringify(operatorSessionSettingsFixture), {
+      status: 200,
+      headers: { "Content-Type": "application/json", ETag: '"r3"' },
+    }));
+    const client = createCoreClient({ baseUrl: "https://core.example", fetch: fetchMock });
+    await expect(client.updateOperatorSessionSettings(
+      "session/id", 2, "settings-key-1", { title: "Gateway workspace" }, { requestId: "client-settings-request" },
+    )).resolves.toEqual(operatorSessionSettingsFixture);
+    const [url, init] = fetchMock.mock.calls[0];
+    const headers = new Headers(init?.headers);
+    expect(url).toBe("https://core.example/api/v1/operator/sessions/session%2Fid/settings");
+    expect(headers.get("If-Match")).toBe('"r2"');
+    expect(headers.get("Idempotency-Key")).toBe("settings-key-1");
+    expect(headers.get("X-Request-Id")).toBe("client-settings-request");
+  });
+
+  it("returns profile registry envelopes so Gateway retains Core requestIds", async () => {
+    const detail = capabilityProfileDetailFixtures[0];
+    const fetchMock = vi.fn<CoreFetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(capabilityProfileRegistryFixture), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(detail), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const client = createCoreClient({ baseUrl: "https://core.example", fetch: fetchMock });
+
+    await expect(client.listCapabilityProfiles()).resolves.toEqual(capabilityProfileRegistryFixture);
+    await expect(client.getCapabilityProfile(detail.data.profile.id)).resolves.toEqual(detail);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://core.example/api/v1/capability-profiles",
+      `https://core.example/api/v1/capability-profiles/${detail.data.profile.id}`,
+    ]);
+  });
+
   it("decodes Operator Read capabilities and sends bounded opaque pagination cursors", async () => {
     const latest = { data: operatorTaskRunListFixture.data.items[0], requestId: "latest" };
     const fetchMock = vi.fn<CoreFetch>()
@@ -212,7 +325,7 @@ describe("channel v1 helpers", () => {
   it("sends explicit Session idempotency and decodes capabilities", async () => {
     const session = { id: "session-1", title: "Gateway", modelId: "gpt-5.6-sol", reasoningEffort: "high", createdAt: "2026-08-04T12:34:56.789Z", updatedAt: "2026-08-04T12:34:56.789Z", latestTaskRunStatus: null, latestTaskRunPhase: null };
     const capabilities = {
-      releaseVersion: "0.6.7", apiVersions: ["channel.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 46,
+      releaseVersion: "0.7.0", apiVersions: ["channel.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 47,
       commandTypes: ["task_run.steer"], eventTypes: ["task_run.started"],
       interactions: { approvalResolution: true, userInputSubmission: true },
       operator: { profileVersion: "1.0", endpointIds: ["channel.capabilities.get"], workspaceGoals: true, roadmapGenerationIdempotent: true },

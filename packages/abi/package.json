@@ -1,11 +1,14 @@
 {
   "name": "@tagent/abi",
-  "version": "0.6.7",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map"
   ],
   "types": "./dist/index.d.ts",
   "exports": {
@@ -16,6 +19,10 @@
     "./admin/v1": {
       "types": "./dist/admin/v1/index.d.ts",
       "import": "./dist/admin/v1/index.js"
+    },
+    "./admin/profiles-v1": {
+      "types": "./dist/admin/profiles-v1/index.d.ts",
+      "import": "./dist/admin/profiles-v1/index.js"
     },
     "./channel/v1": {
       "types": "./dist/channel/v1/index.d.ts",
@@ -36,6 +43,26 @@
     "./operator/read-v1": {
       "types": "./dist/operator/read-v1/index.d.ts",
       "import": "./dist/operator/read-v1/index.js"
+    },
+    "./operator/session-settings-v1": {
+      "types": "./dist/operator/session-settings-v1/index.d.ts",
+      "import": "./dist/operator/session-settings-v1/index.js"
+    },
+    "./operator/inbox-v1": {
+      "types": "./dist/operator/inbox-v1/index.d.ts",
+      "import": "./dist/operator/inbox-v1/index.js"
+    },
+    "./operator/context-manifest-v1": {
+      "types": "./dist/operator/context-manifest-v1/index.d.ts",
+      "import": "./dist/operator/context-manifest-v1/index.js"
+    },
+    "./operator/skills-v1": {
+      "types": "./dist/operator/skills-v1/index.d.ts",
+      "import": "./dist/operator/skills-v1/index.js"
+    },
+    "./profiles/v1": {
+      "types": "./dist/profiles/v1/index.d.ts",
+      "import": "./dist/profiles/v1/index.js"
     },
     "./shared": {
       "types": "./dist/shared/index.d.ts",

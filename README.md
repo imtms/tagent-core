@@ -4,7 +4,7 @@
 
 TAgent Core is a durable, self-hosted control plane for a single agent instance. It turns routed user intent into a persistent `TaskRun`, supervises bounded `Attempt`s, owns authoritative state, evidence, approvals, recovery, Memory, and Learning, and produces verifiable delivery results.
 
-The current 0.6 line adds Core-managed Skills to governed Workspace Goals, trusted execution receipts, durable Gateway contracts, optional Memory and Learning, and the contained `pi-agent-core` runtime. It also hardens cancellation, quiescent shutdown, provider wire-fault and cooldown recovery, structured tool failures, stable system-prompt prefixes with dynamic request-tail context, and exact same-Run recall after compaction. Core remains API-only and `TaskRun` remains the only execution runtime.
+The current 0.7 release adds independently negotiated Gateway capability profiles for Session Settings, Inbox, Context Manifest, Skills, Memory, Learning, Workflow, and Autonomy. It retains Core-managed Skills, governed Workspace Goals, trusted execution receipts, durable Gateway contracts, optional Memory and Learning, the contained `pi-agent-core` runtime, and the 0.6 reliability work. Core remains API-only and `TaskRun` remains the only execution runtime.
 
 ## Supported boundary
 
@@ -33,7 +33,7 @@ The repository contains 13 workspaces in one acyclic dependency graph:
 | Domain | `@tagent/memory` | Optional Hot/Warm/Cold long-term Memory |
 | Domain | `@tagent/learning` | Optional governed Learning projections and workflows |
 | Adapter | `@tagent/http-fastify` | API-only Fastify adapter for `/api/v1` |
-| Adapter | `@tagent/persistence-sqlite` | Schema 46, repositories, migrations, writer fencing, and Unit of Work |
+| Adapter | `@tagent/persistence-sqlite` | Schema 47, repositories, migrations, writer fencing, and Unit of Work |
 | Adapter | `@tagent/runtime-pi` | In-process Pi runtime integration |
 | Adapter | `@tagent/workspace-local` | Workspace-contained tools and path enforcement |
 | Application | `@tagent/core-service` | Core composition root and lifecycle |
@@ -89,13 +89,13 @@ curl -fsS -X POST http://127.0.0.1:3100/api/v1/sessions \
 
 When `TAGENT_SERVICE_CREDENTIALS` is empty, Core uses local-admin mode. Keep that mode bound to the default `127.0.0.1`. When credentials are configured, protected routes fail closed and require a scoped opaque Bearer credential.
 
-Core does not validate browser OIDC/JWT tokens. In production, a Gateway validates browser identity, strips the browser token, and forwards a minimal Core service credential. The independent `operator.read.v1` profile provides authoritative Session/TaskRun inventory without exposing private Console DTOs or SQLite. Configure exact origins with `TAGENT_CORS_ALLOWED_ORIGINS`; a non-empty allowlist requires at least one service credential. See [docs/API_V1.md](docs/API_V1.md), [docs/OPERATOR_READ_API.md](docs/OPERATOR_READ_API.md), and [docs/WEB_CONSOLE_SECURITY.md](docs/WEB_CONSOLE_SECURITY.md).
+Core does not validate browser OIDC/JWT tokens. In production, a Gateway validates browser identity, strips the browser token, and forwards a minimal Core service credential. The independent `operator.read.v1` profile provides authoritative Session/TaskRun inventory, and the capability-profile registry publishes the eight additional stable Gateway feature contracts without exposing private Store DTOs. Configure exact origins with `TAGENT_CORS_ALLOWED_ORIGINS`; a non-empty allowlist requires at least one service credential. See [docs/API_V1.md](docs/API_V1.md), [docs/OPERATOR_READ_API.md](docs/OPERATOR_READ_API.md), [docs/GATEWAY_PROFILE_COMPATIBILITY.md](docs/GATEWAY_PROFILE_COMPATIBILITY.md), and [docs/WEB_CONSOLE_SECURITY.md](docs/WEB_CONSOLE_SECURITY.md).
 
 ## Persistence and recovery
 
-Core owns a schema 46 SQLite database. Startup acquires an OS instance lock, applies migrations, claims a writer lease and fence, installs connection-level mutation guards, performs guarded recovery, starts services and workers, then reports the writer ready.
+Core owns a schema 47 SQLite database. Startup acquires an OS instance lock, applies migrations, claims a writer lease and fence, installs connection-level mutation guards, performs guarded recovery, starts services and workers, then reports the writer ready.
 
-Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Runtime/background shutdown is a quiescence barrier: Core retains the Store, writer lease, guard, and instance lock if owned work cannot prove settlement. Back up the SQLite database together with its WAL/SHM files before an upgrade. Binaries that only understand schema 45 cannot open schema 46; rollback requires the matching pre-upgrade database backup. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md) and [docs/UPGRADING.md](docs/UPGRADING.md).
+Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Runtime/background shutdown is a quiescence barrier: Core retains the Store, writer lease, guard, and instance lock if owned work cannot prove settlement. Back up the SQLite database together with its WAL/SHM files before an upgrade. Binaries that only understand schema 46 cannot open schema 47; rollback requires the matching pre-upgrade database backup. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md) and [docs/UPGRADING.md](docs/UPGRADING.md).
 
 ## Completion evidence and model calls
 
@@ -121,7 +121,7 @@ Passive Learning may run with automatic execution disabled. Enabling automatic e
 
 ## Build and release
 
-The release builder creates separate checksum-manifested Core and Web Console archives. Core explicitly excludes Web assets. The tag-triggered release workflow uploads both archives and checksums as a 30-day Actions artifact and attaches them to the GitHub Release.
+The release builder creates separate checksum-manifested Core and Web Console archives plus installable ABI and Core Client SDK tarballs. Core explicitly excludes Web assets. The tag-triggered release workflow uploads all four artifacts and their checksums as one 30-day Actions artifact and attaches all eight files to the GitHub Release.
 
 ```bash
 npm run lint

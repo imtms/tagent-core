@@ -8,7 +8,7 @@ The Gateway is an external channel and identity boundary. Core does not validate
 
 All commands below run from the unpacked Core release directory. The release contains materialized `@tagent/core-service` and `@tagent/persistence-sqlite` packages plus `scripts/gateway-readiness-probe.mjs`; none of these commands depend on the source checkout.
 
-The tag-triggered release workflow builds Core and Web Console archives in one release job, uploads both archives and checksums as a 30-day Actions artifact, and attaches all four files to the GitHub Release. Acquire the Core artifact and matching checksum from that release output.
+The tag-triggered release workflow builds Core, Web Console, ABI SDK, and Core Client SDK artifacts in one release job, uploads all four artifacts and their checksums as a 30-day Actions artifact, and attaches all eight files to the GitHub Release. Acquire the Core artifact and matching checksum from that release output; Gateway build jobs consume the matching SDK tarballs.
 
 ## Release and configuration gates
 
@@ -18,19 +18,25 @@ Verify the release manifest, commit marker, runtime ABI, native SQLite binding, 
 node scripts/release-manifest.mjs verify "$PWD"
 ```
 
-Validate the Gateway service credential through the production config parser. The token must contain at least 24 characters and include `sessions:read`, `sessions:write`, `runs:read`, `runs:control`, and `events:consume` for the full profile:
+Validate the Gateway service credential through the production config parser. The token must contain at least 24 characters. A Gateway enabling all eight capability profiles needs the five Channel scopes plus the profile scopes below and a wildcard Workspace grant; narrower deployments may omit a profile only when Gateway disables every endpoint in that profile:
 
 ```sh
-TAGENT_SERVICE_CREDENTIALS='[{"token":"REPLACE_WITH_24_PLUS_CHAR_TOKEN","scopes":["sessions:read","sessions:write","runs:read","runs:control","events:consume"],"principal":{"subjectId":"gateway-production","resourceScopes":[{"type":"workspace","id":"production"}]}}]' \
+TAGENT_SERVICE_CREDENTIALS='[{"token":"REPLACE_WITH_24_PLUS_CHAR_TOKEN","scopes":["sessions:read","sessions:write","runs:read","runs:control","events:consume","operator:session-settings:read","operator:session-settings:write","operator:inbox:read","operator:inbox:write","operator:inbox:control","operator:context-manifests:read","operator:skills:read","operator:skills:write","admin:memory:read","admin:memory:write","admin:learning:read","admin:learning:write","admin:workflow:read","admin:workflow:write","admin:autonomy:read","admin:autonomy:decide","admin:autonomy:execute","admin:operations:read"],"principal":{"subjectId":"gateway-production","resourceScopes":[{"type":"workspace","id":"*"}]}}]' \
 node --input-type=module <<'NODE'
 import { loadConfig } from "@tagent/core-service/config";
 const config = loadConfig(process.env);
 const gateway = config.serviceCredentials.find((item) => item.scopes.includes("events:consume"));
-if (!gateway || !["sessions:read","sessions:write","runs:read","runs:control"].every((scope) => gateway.scopes.includes(scope))
+const requiredScopes = ["sessions:read","sessions:write","runs:read","runs:control","events:consume",
+  "operator:session-settings:read","operator:session-settings:write","operator:inbox:read","operator:inbox:write","operator:inbox:control",
+  "operator:context-manifests:read","operator:skills:read","operator:skills:write",
+  "admin:memory:read","admin:memory:write","admin:learning:read","admin:learning:write",
+  "admin:workflow:read","admin:workflow:write","admin:autonomy:read","admin:autonomy:decide","admin:autonomy:execute",
+  "admin:operations:read"];
+if (!gateway || !requiredScopes.every((scope) => gateway.scopes.includes(scope))
   || gateway.principal?.subjectId !== "gateway-production"
   || gateway.principal.resourceScopes.length !== 1
   || gateway.principal.resourceScopes[0]?.type !== "workspace"
-  || gateway.principal.resourceScopes[0]?.id !== "production") process.exit(1);
+  || gateway.principal.resourceScopes[0]?.id !== "*") process.exit(1);
 process.stdout.write(JSON.stringify({ credentialCount: config.serviceCredentials.length, scopes: gateway.scopes, principal: gateway.principal }));
 NODE
 ```
@@ -39,7 +45,7 @@ The command must exit `0` and return one credential with all required scopes and
 
 ## Schema migration gate
 
-Migration v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 → v40 → v41 → v42 → v43 → v44 → v45 → v46 is performed by the production `Store` opener. Back up the database and its WAL/SHM files, then run this command twice:
+Migration v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 → v40 → v41 → v42 → v43 → v44 → v45 → v46 → v47 is performed by the production `Store` opener. Back up the database and its WAL/SHM files, then run this command twice:
 
 ```sh
 TAGENT_DB=/var/lib/tagent/core.sqlite \
@@ -57,7 +63,9 @@ const objects = store.db.prepare(`SELECT name FROM sqlite_master
     'integration_outbox','learning_projection_authority_state',
     'workspace_goal_inbox_links','workspace_goal_roadmap_item_progress','session_create_receipts',
     'task_run_command_receipts','workspace_goal_operation_receipts','submission_audit_receipts',
-    'skills','skill_revisions','workspace_skill_bindings') ORDER BY name`)
+    'skills','skill_revisions','workspace_skill_bindings','workspace_skill_revisions','skill_catalog_state',
+    'session_inbox_revisions','profile_resource_revisions','profile_mutation_receipts',
+    'profile_operation_receipts','profile_audit_events') ORDER BY name`)
   .all().map((row) => row.name);
 const goalRunLinkColumns = store.db.prepare("PRAGMA table_info(workspace_goal_run_links)").all().map((row) => row.name);
 const continuationColumns = store.db.prepare("PRAGMA table_info(run_continuations)").all().map((row) => row.name);
@@ -69,7 +77,7 @@ NODE
 Both runs must exit `0` and return exactly:
 
 ```json
-{"schemaVersion":46,"objects":["approval_receipts","attempt_request_envelopes","attempts","idx_attempts_run_ordinal_id","idx_continuations_due","idx_operations_attempt_created","idx_request_envelopes_attempt_ordinal","idx_request_envelopes_run","idx_run_checks_source_operation","idx_runs_operator_session_created","idx_runs_operator_session_updated","idx_sessions_operator_created","integration_outbox","learning_projection_authority_state","session_create_receipts","skill_revisions","skills","submission_audit_receipts","task_run_command_receipts","workspace_goal_inbox_links","workspace_goal_operation_receipts","workspace_goal_roadmap_item_progress","workspace_skill_bindings"],"hasGoalLinkMode":true,"hasContinuationNotBefore":true}
+{"schemaVersion":47,"objects":["approval_receipts","attempt_request_envelopes","attempts","idx_attempts_run_ordinal_id","idx_continuations_due","idx_operations_attempt_created","idx_request_envelopes_attempt_ordinal","idx_request_envelopes_run","idx_run_checks_source_operation","idx_runs_operator_session_created","idx_runs_operator_session_updated","idx_sessions_operator_created","integration_outbox","learning_projection_authority_state","profile_audit_events","profile_mutation_receipts","profile_operation_receipts","profile_resource_revisions","session_create_receipts","session_inbox_revisions","skill_catalog_state","skill_revisions","skills","submission_audit_receipts","task_run_command_receipts","workspace_goal_inbox_links","workspace_goal_operation_receipts","workspace_goal_roadmap_item_progress","workspace_skill_bindings","workspace_skill_revisions"],"hasGoalLinkMode":true,"hasContinuationNotBefore":true}
 ```
 
 The second open is the idempotence proof. A different version or object inventory blocks deployment.
@@ -83,6 +91,7 @@ TAGENT_DB=/var/lib/tagent/core.sqlite \
 TAGENT_HEALTH_URL=http://127.0.0.1:3100/api/v1/health \
 TAGENT_CAPABILITIES_URL=http://127.0.0.1:3100/api/v1/capabilities \
 TAGENT_OPERATOR_READ_CAPABILITIES_URL=http://127.0.0.1:3100/api/v1/operator/capabilities \
+TAGENT_CAPABILITY_PROFILES_URL=http://127.0.0.1:3100/api/v1/capability-profiles \
 TAGENT_GATEWAY_CORE_TOKEN=REPLACE_WITH_24_PLUS_CHAR_TOKEN \
 TAGENT_GATEWAY_CONSUMER_ID=gateway-production \
 node scripts/gateway-readiness-probe.mjs
@@ -107,12 +116,13 @@ Stable top-level JSON fields:
 | `consumerLag` | Maximum per-run `runs.last_event_seq - event_consumers.acked_seq` for the configured consumer |
 | `settledUnacked`, `finalUnacked` | Recoverable settled and irreversible final Runs whose durable ACK watermark has not reached `runs.last_event_seq` |
 | `terminalUnacked`, `terminalOldestUnackedAgeMs` | Deprecated compatibility alias/age for the settled boundary |
-| `receipts.commands`, `receipts.workspaceGoals` | `started`/`outcomeUnknown` counts and oldest uncertain receipt age |
+| `receipts.commands`, `receipts.workspaceGoals`, `receipts.capabilityProfiles` | `started`/`outcomeUnknown` counts and oldest uncertain receipt age |
 | `authority`, `authorityReady` | `learning_projection_authority_state`; only `legacy_active` and `integration_active` are ready |
 | `watermarks` | `learning_projection_checkpoint` rows ordered by consumer and delivery role |
 | `health` | HTTP reachability, status, `data.ok`, and `data.writer.ready` from `GET /api/v1/health` |
 | `capabilities` | Compatibility decision and negotiated catalog from `GET /api/v1/capabilities` |
 | `operatorReadCapabilities` | Independent compatibility decision and contract from `GET /api/v1/operator/capabilities` |
+| `capabilityProfiles` | Registry/detail compatibility for all eight profiles, endpoint IDs, pagination, retention, authorization and recovery semantics from `GET /api/v1/capability-profiles` |
 | `ready`, `severity`, `reasons` | Final gate decision |
 
 The Core health response used by the probe must include at least this subset;
@@ -136,9 +146,10 @@ These are embedded in the probe output under `thresholds`:
 | `writerLeaseFresh` | `true` | Not applicable | `false` |
 | `migrationOpenIssues` | `0` | Not applicable | Missing table or any open issue |
 | `authorityReady` | `true` | Transition state `switching` or `rollback` | Missing authority state |
-| `schemaVersion` | `46` | Not applicable | Missing or not `46` |
+| `schemaVersion` | `47` | Not applicable | Missing or not `47` |
 | `capabilities.compatible` | `true` | Not applicable | Missing endpoint/catalog/profile or wrong schema |
 | `operatorReadCapabilities.compatible` | `true` | Not applicable | Missing endpoint, pagination/retention guarantee or wrong profile |
+| `capabilityProfiles.compatible` | `true` | Not applicable | Missing/under-scoped profile, endpoint/recovery drift, or wrong pagination/retention contract |
 
 Consumer lag semantics are strict: any value greater than zero makes the Gateway not ready immediately. Warning and critical distinguish alert urgency; they never permit traffic.
 
@@ -187,6 +198,11 @@ SELECT status, COUNT(*) AS count, MIN(updated_at) AS oldest_updated_at
 FROM workspace_goal_operation_receipts
 WHERE status IN ('started','outcome_unknown')
 GROUP BY status;
+
+SELECT status, COUNT(*) AS count, MIN(updated_at) AS oldest_updated_at
+FROM profile_operation_receipts
+WHERE status IN ('started','outcome_unknown')
+GROUP BY status;
 ```
 
 ## Release gate matrix
@@ -195,8 +211,8 @@ GROUP BY status;
 | --- | --- | --- |
 | Manifest | The production verifier exits `0`. | Verifier exits non-zero. |
 | Configuration | The release-local production parser returns the required Gateway scopes. | Parser rejects the environment or a scope is missing. |
-| Migration | Both release-local `Store` opens return schema `46`, the exact object inventory, `hasGoalLinkMode=true`, and `hasContinuationNotBefore=true`. | Open fails, output differs, or the second open is not idempotent. |
-| Capabilities | Probe negotiates the command/event catalogs, legacy Operator allowlist, `operator.read.v1`, Approval authority, receipt protocol, retention and limits. | Endpoint is unavailable, under-scoped, wrong-versioned or missing a required item. |
+| Migration | Both release-local `Store` opens return schema `47`, the exact object inventory, `hasGoalLinkMode=true`, and `hasContinuationNotBefore=true`. | Open fails, output differs, or the second open is not idempotent. |
+| Capabilities | Probe negotiates the command/event catalogs, legacy Operator allowlist, `operator.read.v1`, all eight capability profiles, Approval authority, receipt protocol, retention and limits. | Endpoint is unavailable, under-scoped, wrong-versioned or missing a required item. |
 | Writer | Probe returns `writerReady=true`, a fresh lease, and one current fence. | Health or SQLite lease evidence is not ready. |
 | Persist-before-ACK | The exact `(task_run_id, consumer_id, generation, sequence, event_id)` receipt is durable before its ACK. | ACK has no exact receipt, relies only on a sequence, or precedes the receipt commit. |
 | Replay | A persisted-but-unacked event is promoted to the reclaimed generation, deduped, ACKed, and then quiescent. | Replay is lost, duplicated, stale, or skips the durable ACK. |
@@ -222,17 +238,17 @@ Use **Core before Gateway** order:
 
 ## Rollback point
 
-The rollback point is the last verified prior compatible Gateway source plus the recorded Core consumer and Learning watermarks. Schema v46 is forward-only during application rollback.
+The rollback point is the last verified prior compatible Gateway source plus the recorded Core consumer and Learning watermarks. Schema v47 is forward-only during application rollback.
 
 Rollback steps:
 
 1. Close Gateway traffic admission and stop new submissions.
-2. Save the last successful probe JSON, especially `writerFence`, capability negotiation, `consumerLag`, settled/final ACKs, command/Goal receipts, `authority`, and `watermarks`.
+2. Save the last successful probe JSON, especially `writerFence`, capability/profile negotiation, `consumerLag`, settled/final ACKs, command/Goal/profile receipts, `authority`, and `watermarks`.
 3. Stop the new Gateway writer or wait for its lease to expire; require the replacement owner to obtain a higher fence.
 4. Activate the prior compatible Gateway source through the production learning authority rollback API.
 5. Reclaim the Core event consumer, receiving a new generation.
 6. Resume after the durable ACK watermark; replay persisted-but-unacked events and persist the new-generation exact receipt before ACK.
-7. Keep schema version `46`. Do not restore an older database over it.
+7. Keep schema version `47`. Do not restore an older database over it.
 8. Run the release-local readiness probe again and reopen traffic only after exit `0`.
 
-If the prior deployment cannot coexist with schema v46 or honor the current receipt/ACK contract, keep traffic stopped and deploy a forward-compatible build. Do not perform a destructive schema downgrade.
+If the prior deployment cannot coexist with schema v47 or honor the current receipt/ACK contract, keep traffic stopped and deploy a forward-compatible build. Do not perform a destructive schema downgrade.

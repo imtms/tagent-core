@@ -4,7 +4,7 @@
 
 `@tagent/persistence-sqlite` owns the control-plane SQLite schema, repositories, migrations, transaction boundary, writer authority, and restart recovery primitives. Domains depend on its ports through the Core composition root; they do not issue uncontrolled SQL.
 
-The current schema version is 46:
+The current schema version is 47 and its validated application inventory contains 95 non-SQLite-internal tables:
 
 | Version | Authority introduced |
 | --- | --- |
@@ -25,6 +25,7 @@ The current schema version is 46:
 | 44 | shared catalog references from each Workspace to multiple Skill identities |
 | 45 | exact, hash-verified Attempt request envelopes persisted before provider dispatch |
 | 46 | durable continuation due-time scheduling for provider cooldown recovery |
+| 47 | Gateway capability-profile revisions, exact mutation/operation receipts, audit events, and collection revisions |
 
 Schema 37 added `operations.payload_json`, `run_checks.source_operation_id`, `run_checks.observed_at`, and the partial source-operation index. Legacy operations are not retroactively promoted to trusted evidence.
 
@@ -44,7 +45,9 @@ Schema 45 adds `attempt_request_envelopes`, uniquely keyed by `(attempt_id, requ
 
 Schema 46 adds `run_continuations.not_before` and a due-time index. Provider cooldown continuations remain queued until their durable deadline, survive process restart, and may still be superseded by manual Resume.
 
-Migrations are forward-only for a running release. A binary that only understands schema 45 must never open a schema 46 database.
+Schema 47 adds `profile_resource_revisions`, `profile_mutation_receipts`, `profile_operation_receipts`, and `profile_audit_events`, plus durable Session Inbox, Skill catalog, and Workspace-Skill collection revisions. Synchronous resource writes bind principal, canonical payload, expected revision, and first result for exact replay. Asynchronous or externally observable profile operations retain `started`, terminal, or `outcome_unknown` receipts across restart. Audit rows separate the authenticated Core principal and granted scopes from delegated actor/request identity and never store request bodies. Re-entry validates the complete schema and creates missing v47 objects idempotently even when an interrupted earlier v47 opener already advanced `schema_meta`.
+
+Migrations are forward-only for a running release. A binary that only understands schema 46 must never open a schema 47 database.
 
 ## Startup order
 
@@ -87,7 +90,7 @@ Recovery does not guess that an interrupted external effect succeeded or failed:
 - effect started without a durable terminal receipt becomes `outcome_unknown`;
 - authorized work whose effect had not started becomes `cancelled` with `restart_before_effect`;
 - a Pi control delivery that was in delivery becomes `outcome_unknown`;
-- a TaskRun command or Workspace Goal operation left at `started` becomes `outcome_unknown` before HTTP readiness;
+- a TaskRun command, Workspace Goal operation, or capability-profile operation left at `started` becomes `outcome_unknown` before HTTP readiness;
 - interrupted `Attempt`s release stale execution leases, reject unresolved candidate state, and preserve an auditable recovery event;
 - pending Supervisor continuations, Session Inbox work, Learning deliveries, and checkpoints are reconciled through their durable state; a preparation failure requeues only its own continuation lease, not every lease held by the process owner;
 - external-action continuations require a fresh approval bound to the next Attempt and never inherit a consumed authorization.

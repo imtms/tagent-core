@@ -4,6 +4,7 @@ import type {
   SessionInputAnalysis,
 } from "../domain/index.js";
 import type { RunId, TaskRun } from "@tagent/execution/domain";
+import type { ProfileMutationContext, ProfileMutationResult } from "./profile-contract-repository.js";
 
 export type ClaimedSubmission = { item: SessionInboxItem; run: TaskRun };
 
@@ -35,7 +36,41 @@ export type SubmissionRetryResult =
   | { status: "continuation"; continuationId: string }
   | ({ status: "started" } & ClaimedSubmission);
 
+export interface ProfileInboxMutationValue {
+  itemIds: string[];
+  collectionRevision: number;
+}
+
 export interface SubmissionQueue {
+  updateSessionInboxItemProfile(input: {
+    sessionId: SessionId;
+    itemId: string;
+    content: string;
+    analysis: SessionInputAnalysis;
+    mutation: ProfileMutationContext;
+  }): ProfileMutationResult<ProfileInboxMutationValue>;
+  reorderSessionInboxProfile(input: {
+    sessionId: SessionId;
+    itemIds: string[];
+    mutation: ProfileMutationContext;
+  }): ProfileMutationResult<ProfileInboxMutationValue>;
+  deleteSessionInboxItemProfile(input: {
+    sessionId: SessionId;
+    itemId: string;
+    mutation: ProfileMutationContext;
+  }): ProfileMutationResult<ProfileInboxMutationValue>;
+  decideSessionInboxItemProfile(input: {
+    sessionId: SessionId;
+    itemId: string;
+    decision: "pending" | "defer";
+    mutation: ProfileMutationContext;
+  }): ProfileMutationResult<ProfileInboxMutationValue>;
+  mergeSessionInboxItemsProfile(input: {
+    sessionId: SessionId;
+    sourceId: string;
+    targetId: string;
+    mutation: ProfileMutationContext;
+  }): ProfileMutationResult<ProfileInboxMutationValue>;
   enqueueSessionInbox(
     sessionId: SessionId,
     content: string,

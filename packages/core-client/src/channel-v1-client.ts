@@ -20,7 +20,7 @@ import type {
 } from "@tagent/abi";
 import { loadCoreAbi, type CoreAbi } from "./abi-loader.js";
 import { CoreClientError, protocolError } from "./errors.js";
-import { OperatorReadClient } from "./operator-read-v1-client.js";
+import { AdminProfilesClient } from "./admin-profiles-v1-client.js";
 import { decodeJsonSse } from "./sse.js";
 import type { CoreClientOptions, CoreSseOptions, CoreSseSubscription } from "./transport.js";
 
@@ -89,7 +89,7 @@ function validateEventStreamQueryInput(url: string, query: EventStreamQuery): Ev
   return query;
 }
 
-export class CoreClient extends OperatorReadClient {
+export class CoreClient extends AdminProfilesClient {
   async getCapabilities(): Promise<CoreCapabilities> {
     const abi = await loadCoreAbi();
     return this.request("/api/v1/capabilities", { decode: (payload) => abi.decodeAbi(abi.CoreCapabilitiesResponseSchema, payload).data });

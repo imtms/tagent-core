@@ -6,7 +6,14 @@ import type {
   SessionInputAnalysis,
 } from "../domain/index.js";
 import { assertSubmissionContent } from "../domain/index.js";
-import type { SessionRepository, SubmissionAuditInput, SubmissionQueue } from "../ports/index.js";
+import type {
+  ProfileInboxMutationValue,
+  ProfileMutationContext,
+  ProfileMutationResult,
+  SessionRepository,
+  SubmissionAuditInput,
+  SubmissionQueue,
+} from "../ports/index.js";
 import type { ContextManifestItem, TaskRun } from "@tagent/execution/domain";
 import type {
   AttemptRepository,
@@ -246,6 +253,58 @@ export class AdmissionCoordinator {
       ? { ...routed, executionPolicy: { ...effectiveTaskExecutionPolicy(routed), gateProfile: selectedGateProfile } }
       : routed;
     return this.state.persistence.submissions.updateSessionInboxItem(itemId, sessionId, content, analysis);
+  }
+
+  async updateSessionInputProfile(
+    sessionId: SessionId,
+    itemId: string,
+    content: string,
+    mutation: ProfileMutationContext,
+  ): Promise<ProfileMutationResult<ProfileInboxMutationValue>> {
+    assertSubmissionContent(content);
+    const item = this.state.persistence.submissions.getSessionInboxItem(itemId);
+    if (!item || item.sessionId !== sessionId || item.status !== "queued") return { status: "state_conflict" };
+    const activeRun = this.state.persistence.taskRuns.getActiveRun(sessionId);
+    const routed = await this.dependencies.router.analyze(content, activeRun, this.sessionRouterContext(sessionId));
+    const selectedGateProfile = item.analysis.executionPolicy?.gateProfile;
+    const analysis = selectedGateProfile
+      ? { ...routed, executionPolicy: { ...effectiveTaskExecutionPolicy(routed), gateProfile: selectedGateProfile } }
+      : routed;
+    return this.state.persistence.submissions.updateSessionInboxItemProfile({
+      sessionId, itemId, content, analysis, mutation,
+    });
+  }
+
+  reorderSessionInputsProfile(sessionId: SessionId, itemIds: string[], mutation: ProfileMutationContext) {
+    return this.state.persistence.submissions.reorderSessionInboxProfile({ sessionId, itemIds, mutation });
+  }
+
+  deleteSessionInputProfile(sessionId: SessionId, itemId: string, mutation: ProfileMutationContext) {
+    return this.state.persistence.submissions.deleteSessionInboxItemProfile({ sessionId, itemId, mutation });
+  }
+
+  decideSessionInputProfile(
+    sessionId: SessionId,
+    itemId: string,
+    decision: "pending" | "defer",
+    mutation: ProfileMutationContext,
+  ) {
+    const result = this.state.persistence.submissions.decideSessionInboxItemProfile({
+      sessionId, itemId, decision, mutation,
+    });
+    return result;
+  }
+
+  mergeSessionInputsProfile(
+    sessionId: SessionId,
+    sourceId: string,
+    targetId: string,
+    mutation: ProfileMutationContext,
+  ) {
+    const result = this.state.persistence.submissions.mergeSessionInboxItemsProfile({
+      sessionId, sourceId, targetId, mutation,
+    });
+    return result;
   }
 
   reorderSessionInputs(sessionId: SessionId, itemIds: string[]) {

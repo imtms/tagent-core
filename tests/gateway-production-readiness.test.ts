@@ -636,6 +636,18 @@ describe("Gateway production readiness", () => {
           details: {},
         },
       });
+      const preflight = await app.inject({
+        method: "OPTIONS",
+        url: "/api/v1/operator/sessions/session-1/settings",
+        headers: { origin: "https://gateway.example" },
+      });
+      expect(preflight.statusCode).toBe(204);
+      expect(preflight.headers["access-control-allow-headers"]).toBe(
+        "Authorization, Content-Type, Idempotency-Key, If-Match, X-Request-Id, X-TAgent-Delegated-Actor, X-TAgent-Delegated-Request-Id",
+      );
+      expect(preflight.headers["access-control-expose-headers"]).toBe(
+        "Deprecation, ETag, Idempotency-Replayed, Link, X-Request-Id",
+      );
     } finally {
       await app.close();
       if (previousOrigins === undefined) delete process.env.TAGENT_CORS_ALLOWED_ORIGINS;
@@ -851,7 +863,7 @@ describe("Gateway production readiness", () => {
     }
   });
 
-  it("opens a real v30 SQLite fixture through Store v46 and rolls authority back with replay", () => {
+  it("opens a real v30 SQLite fixture through Store v47 and rolls authority back with replay", () => {
     const directory = temporaryDirectory("tagent-gateway-migration-");
     const databasePath = path.join(directory, "core.sqlite");
     createV30DatabaseFixture(databasePath);
@@ -859,7 +871,7 @@ describe("Gateway production readiness", () => {
     const firstOpen = new Store(databasePath);
     const firstInventory = schemaInventory(firstOpen);
     expect(firstOpen.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-      .toEqual({ version: 46 });
+      .toEqual({ version: 47 });
     expect(firstInventory.map((entry) => [entry.type, entry.name])).toEqual([
       ["table", "approval_receipts"],
       ["table", "attempts"],
@@ -878,7 +890,7 @@ describe("Gateway production readiness", () => {
     try {
       expect(schemaInventory(store)).toEqual(firstInventory);
       expect(store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-        .toEqual({ version: 46 });
+        .toEqual({ version: 47 });
 
       const writer = CoreWriterLease.claim(store.db, {
         ownerId: "gateway-authority-test",
@@ -991,7 +1003,7 @@ describe("Gateway production readiness", () => {
         legacyLastAcked: 2,
       });
       expect(store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-        .toEqual({ version: 46 });
+        .toEqual({ version: 47 });
       writer.release();
     } finally {
       store.close();
@@ -1041,16 +1053,25 @@ describe("Gateway production readiness", () => {
     expect(rejectedManifest.stderr).toContain("commit marker mismatch");
 
     const serviceToken = "gateway-production-credential";
+    const gatewayScopes = [
+      "sessions:read", "sessions:write", "runs:read", "runs:control", "events:consume",
+      "operator:session-settings:read", "operator:session-settings:write",
+      "operator:inbox:read", "operator:inbox:write", "operator:inbox:control",
+      "operator:context-manifests:read", "operator:skills:read", "operator:skills:write",
+      "admin:memory:read", "admin:memory:write", "admin:learning:read", "admin:learning:write",
+      "admin:workflow:read", "admin:workflow:write", "admin:autonomy:read", "admin:autonomy:decide",
+      "admin:autonomy:execute", "admin:operations:read",
+    ];
     const configEnvironment = {
       TAGENT_API_BASE: "https://models.internal/v1",
       TAGENT_MEMORY_ENABLED: "false",
       TAGENT_MODEL: "gpt-5.6-sol",
       TAGENT_SERVICE_CREDENTIALS: JSON.stringify([{
         token: serviceToken,
-        scopes: ["events:consume", "runs:read"],
+        scopes: gatewayScopes,
         principal: {
           subjectId: "gateway-production",
-          resourceScopes: [{ type: "workspace", id: "production" }],
+          resourceScopes: [{ type: "workspace", id: "*" }],
         },
       }]),
     } as NodeJS.ProcessEnv;
@@ -1058,7 +1079,8 @@ describe("Gateway production readiness", () => {
       'import { loadConfig } from "@tagent/core-service/config";',
       "const config=loadConfig(process.env);",
       'const gateway=config.serviceCredentials.find((item)=>item.scopes.includes("events:consume"));',
-      'if(!gateway||!gateway.scopes.includes("runs:read")||gateway.principal?.subjectId!=="gateway-production"||gateway.principal.resourceScopes.length!==1||gateway.principal.resourceScopes[0]?.type!=="workspace"||gateway.principal.resourceScopes[0]?.id!=="production") process.exit(1);',
+      `const requiredScopes=${JSON.stringify(gatewayScopes)};`,
+      'if(!gateway||!requiredScopes.every((scope)=>gateway.scopes.includes(scope))||gateway.principal?.subjectId!=="gateway-production"||gateway.principal.resourceScopes.length!==1||gateway.principal.resourceScopes[0]?.type!=="workspace"||gateway.principal.resourceScopes[0]?.id!=="*") process.exit(1);',
       "process.stdout.write(JSON.stringify({credentialCount:config.serviceCredentials.length,scopes:gateway.scopes,principal:gateway.principal}));",
     ].join("");
     const validConfig = spawnSync(
@@ -1069,10 +1091,10 @@ describe("Gateway production readiness", () => {
     expect(validConfig.status, validConfig.stderr).toBe(0);
     expect(JSON.parse(validConfig.stdout)).toEqual({
       credentialCount: 1,
-      scopes: ["events:consume", "runs:read"],
+      scopes: gatewayScopes,
       principal: {
         subjectId: "gateway-production",
-        resourceScopes: [{ type: "workspace", id: "production" }],
+        resourceScopes: [{ type: "workspace", id: "*" }],
       },
     });
     const invalidConfig = spawnSync(
@@ -1086,7 +1108,7 @@ describe("Gateway production readiness", () => {
           ...configEnvironment,
           TAGENT_SERVICE_CREDENTIALS: JSON.stringify([{
             token: "short",
-            scopes: ["events:consume", "runs:read"],
+            scopes: gatewayScopes,
           }]),
         },
       },
@@ -1126,7 +1148,7 @@ describe("Gateway production readiness", () => {
     );
     expect(secondSchemaOpen.status, secondSchemaOpen.stderr).toBe(0);
     const schemaEvidence = {
-      schemaVersion: 46,
+      schemaVersion: 47,
       objects: [
         "approval_receipts",
         "attempts",
@@ -1191,8 +1213,8 @@ describe("Gateway production readiness", () => {
         reasons: ready.reasons,
         thresholds: ready.thresholds,
       }).toEqual({
-        probeVersion: 4,
-        schemaVersion: 46,
+        probeVersion: 5,
+        schemaVersion: 47,
         migrationOpenIssues: 0,
         writerReady: true,
         writerFence: readinessLease.authority.fence,
@@ -1224,6 +1246,15 @@ describe("Gateway production readiness", () => {
         rollbackCheckpoint: 0,
       });
       expect(ready.watermarks).toEqual([]);
+      expect(ready.capabilityProfiles).toMatchObject({
+        reachable: true,
+        status: 200,
+        compatible: true,
+        data: { profiles: expect.arrayContaining([
+          expect.objectContaining({ id: "operator.session-settings.v1", version: "1.0" }),
+          expect.objectContaining({ id: "admin.autonomy.v1", version: "1.0" }),
+        ]) },
+      });
 
       const receiptSession = readinessStore.createSession("readiness receipt health");
       const receiptRun = readinessStore.createRun(receiptSession.id, "observe in-flight receipts");
@@ -1281,6 +1312,30 @@ describe("Gateway production readiness", () => {
         { accepted: true },
       );
 
+      const profileReceiptTimestamp = Date.now();
+      readinessStore.db.prepare(`INSERT INTO profile_operation_receipts
+        (principal_id,delegated_actor_id,delegated_request_id,profile_id,endpoint_id,resource_type,resource_id,
+         idempotency_key,payload_hash,status,result_json,error_json,created_at,updated_at,completed_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        "gateway-production", null, null, "admin.memory.v1", "admin.memory.capture", "memory", "*",
+        "profile-outcome-unknown", "a".repeat(64), "outcome_unknown", "", "{}",
+        profileReceiptTimestamp, profileReceiptTimestamp, profileReceiptTimestamp,
+      );
+      const unknownProfileProbe = await runChild(
+        process.execPath,
+        ["scripts/gateway-readiness-probe.mjs"],
+        { cwd: releaseDirectory, env: probeEnvironment },
+      );
+      expect(unknownProfileProbe.status).toBe(1);
+      expect(JSON.parse(unknownProfileProbe.stdout)).toMatchObject({
+        ready: false,
+        severity: "critical",
+        reasons: ["profile_receipts_outcome_unknown"],
+        receipts: { capabilityProfiles: { started: 0, outcomeUnknown: 1 } },
+      });
+      readinessStore.db.prepare("DELETE FROM profile_operation_receipts WHERE idempotency_key=?")
+        .run("profile-outcome-unknown");
+
       expect(readinessLease.release()).toBe(true);
       const rejectedProbe = await runChild(
         process.execPath,
@@ -1299,7 +1354,7 @@ describe("Gateway production readiness", () => {
         severity: rejected.severity,
         reasons: rejected.reasons,
       }).toEqual({
-        schemaVersion: 46,
+        schemaVersion: 47,
         writerReady: false,
         writerLeaseFresh: false,
         consumerLag: 0,

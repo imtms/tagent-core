@@ -25,7 +25,9 @@ export type AgentServiceConstructorArguments = [
 
 export type AdmissionApplicationPort = Pick<CoreApplicationCoordinator,
   | "enqueueSessionInput" | "updateSessionInput" | "reorderSessionInputs"
+  | "updateSessionInputProfile" | "reorderSessionInputsProfile"
   | "deleteSessionInput" | "decideSessionInput" | "mergeSessionInputs"
+  | "deleteSessionInputProfile" | "decideSessionInputProfile" | "mergeSessionInputsProfile"
   | "startSessionInputNow" | "requestParallelSessionInputApproval"
   | "retryInboxLaunch" | "recoverSessionInbox" | "start"
   | "generateWorkspaceGoalRoadmap" | "startWorkspaceGoalRoadmapItem"
@@ -45,8 +47,8 @@ export type LearningApplicationPort = Pick<CoreApplicationCoordinator,
   | "runWorkflowDistiller" | "retryWorkflowDistillation"
   | "listDeadLetterDistillations" | "executeWorkflowEvaluation" | "verifyWorkflowEvaluation"
   | "requestWorkflowPromotion" | "listAutonomyApprovals"
-  | "decideAutonomyApproval" | "revokeAutonomyApproval"
-  | "reviseWorkflow" | "setRunLearningPolicy" | "recordWorkflowFeedback"
+  | "decideAutonomyApproval" | "revokeAutonomyApproval" | "getAutonomyApproval"
+  | "reviseWorkflow" | "setRunLearningPolicy" | "getRunLearningPolicy" | "recordWorkflowFeedback"
   | "setCommunicationPreference" | "listCommunicationProfiles" | "lockCommunicationProfile"
   | "listLearningEvents" | "listCorrections" | "recordCorrection"
   | "listFeedbackAttribution" | "drainFeedbackAttribution"
@@ -60,7 +62,9 @@ export type WorkflowGovernanceApplicationPort = Pick<CoreApplicationCoordinator,
 
 export type SkillApplicationPort = Pick<CoreApplicationCoordinator,
   "listSkills" | "getSkill" | "listSkillRevisions" | "uploadSkill" | "updateSkill" | "deleteSkill"
-  | "listWorkspaceSkills" | "replaceWorkspaceSkills"
+  | "listWorkspaceSkills" | "replaceWorkspaceSkills" | "listSkillsProfile" | "getSkillProfile"
+  | "listSkillRevisionsProfile" | "uploadSkillProfile" | "updateSkillProfile" | "deleteSkillProfile"
+  | "listWorkspaceSkillsProfile" | "replaceWorkspaceSkillsProfile"
 >;
 
 export type CoreApplicationPort = AdmissionApplicationPort

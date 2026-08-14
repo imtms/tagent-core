@@ -41,6 +41,7 @@ export interface HttpWorkflowApplicationInput {
 export interface HttpLearningApplicationPort {
   teachWorkflow(sessionId: string, spec: HttpWorkflowSpec, sourceId?: string): unknown;
   listWorkflows(sessionId: string): unknown;
+  getWorkflow(workflowId: string, includeDeleted?: boolean): unknown;
   requestWorkflowActivation(workflowId: string, revisionId?: string, actor?: string, reason?: string): unknown;
   setWorkflowBindingMode(bindingId: string, mode: "suggested" | "adopted" | "partially_adopted" | "rejected"): unknown;
   recordWorkflowApplication(input: HttpWorkflowApplicationInput): unknown;
@@ -54,10 +55,12 @@ export interface HttpLearningApplicationPort {
   verifyWorkflowEvaluation(id: string): unknown;
   requestWorkflowPromotion(workflowId: string, revisionId: string, canaryPercent?: number, maxFailureDelta?: number, actor?: string): unknown;
   listAutonomyApprovals(scopeId: string, limit?: number): unknown;
+  getAutonomyApproval(id: string): unknown;
   decideAutonomyApproval(id: string, decision: "approved" | "rejected", actor: string, reason?: string): unknown;
   revokeAutonomyApproval(id: string, actor: string, reason?: string): unknown;
   reviseWorkflow(workflowId: string, patch: Partial<HttpWorkflowSpec>, sourceId: string, changeSummary: string): unknown;
   setRunLearningPolicy(runId: string, policy: "allow" | "metadata_only" | "deny", reason?: string): unknown;
+  getRunLearningPolicy(runId: string): unknown;
   recordWorkflowFeedback(input: { workflowId: string; revisionId: string; runId: string; attempt: number; signal: HttpWorkflowFeedbackSignal; idempotencyKey: string; note?: string; adopted?: boolean; verified?: boolean }): unknown;
   setCommunicationPreference(input: { subjectId: string; scopeType: "global" | "workspace" | "project" | "session"; scopeId: string; dimension: HttpCommunicationDimension; value: string | string[]; sourceType: "explicit_user" | "inferred" | "governance"; sourceRef: string; confidence?: number; expiresAt?: number }): unknown;
   listCommunicationProfiles(subjectId: string): unknown;
@@ -88,7 +91,9 @@ export interface HttpWorkflowGovernanceApplicationPort {
 
 type HttpAdmissionApplicationPort = Pick<AdmissionCoordinator,
   | "enqueueSessionInput" | "updateSessionInput" | "reorderSessionInputs"
+  | "updateSessionInputProfile" | "reorderSessionInputsProfile"
   | "deleteSessionInput" | "decideSessionInput" | "mergeSessionInputs"
+  | "deleteSessionInputProfile" | "decideSessionInputProfile" | "mergeSessionInputsProfile"
   | "startSessionInputNow" | "requestParallelSessionInputApproval" | "retryInboxLaunch"
 >;
 
@@ -119,4 +124,12 @@ export type HttpApplicationPort = HttpAdmissionApplicationPort
     deleteSkill(skillId: string): unknown;
     listWorkspaceSkills(workspaceId: string): unknown;
     replaceWorkspaceSkills(workspaceId: string, skillIds: readonly string[]): unknown;
+    listSkillsProfile(query: import("@tagent/admission/ports").ProfilePageQuery): unknown;
+    getSkillProfile(skillId: string): unknown;
+    listSkillRevisionsProfile(skillId: string, query: import("@tagent/admission/ports").ProfilePageQuery): unknown;
+    uploadSkillProfile(input: { filename: string; contentBase64: string }, mutation: import("@tagent/admission/ports").ProfileMutationContext): unknown;
+    updateSkillProfile(skillId: string, input: { name: string; description: string; content: string; disableModelInvocation?: boolean }, mutation: import("@tagent/admission/ports").ProfileMutationContext): unknown;
+    deleteSkillProfile(skillId: string, mutation: import("@tagent/admission/ports").ProfileMutationContext): unknown;
+    listWorkspaceSkillsProfile(workspaceId: string, query: import("@tagent/admission/ports").ProfilePageQuery): unknown;
+    replaceWorkspaceSkillsProfile(workspaceId: string, skillIds: readonly string[], mutation: import("@tagent/admission/ports").ProfileMutationContext): unknown;
   };

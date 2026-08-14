@@ -17,6 +17,11 @@ import { successEnvelope, V1HttpError } from "./errors.js";
 import { registerAdminLearningConsoleV1Routes } from "./admin-learning-console-routes.js";
 import { registerAdminMemoryConsoleV1Routes } from "./admin-memory-console-routes.js";
 import { withRequestAbortSignal } from "./console-route-support.js";
+import { registerAdminMemoryProfileV1Routes } from "./admin-memory-profile-routes.js";
+import { registerAdminLearningProfileV1Routes } from "./admin-learning-profile-routes.js";
+import { registerAdminWorkflowProfileV1Routes } from "./admin-workflow-profile-routes.js";
+import { registerAdminAutonomyProfileV1Routes } from "./admin-autonomy-profile-routes.js";
+import { registerAdminOperationV1Routes } from "./admin-operation-routes.js";
 
 function mapLearningSettings(state: Record<string, unknown>): LearningSettings {
   const updatedAt = Number(state.updatedAt ?? 0);
@@ -154,6 +159,11 @@ export function registerAdminV1Routes(app: FastifyInstance, dependencies: V1ApiD
 
   registerAdminMemoryConsoleV1Routes(app, dependencies);
   registerAdminLearningConsoleV1Routes(app, dependencies);
+  registerAdminMemoryProfileV1Routes(app, dependencies);
+  registerAdminLearningProfileV1Routes(app, dependencies);
+  registerAdminWorkflowProfileV1Routes(app, dependencies);
+  registerAdminAutonomyProfileV1Routes(app, dependencies);
+  registerAdminOperationV1Routes(app, dependencies);
 
   app.all("/api/v1/admin/*", { onRequest: authorize }, async () => {
     throw new V1HttpError(404, "route.not_found", "Admin v1 route not found", "not_found", false, { surface: "admin" });

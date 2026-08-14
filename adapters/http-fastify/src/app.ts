@@ -44,8 +44,8 @@ export function createApp({
     reply.header("Access-Control-Allow-Origin", origin);
     reply.header("Vary", "Origin");
     reply.header("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS");
-    reply.header("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-Request-Id");
-    reply.header("Access-Control-Expose-Headers", "Deprecation, Link, X-Request-Id");
+    reply.header("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, If-Match, X-Request-Id, X-TAgent-Delegated-Actor, X-TAgent-Delegated-Request-Id");
+    reply.header("Access-Control-Expose-Headers", "Deprecation, ETag, Idempotency-Replayed, Link, X-Request-Id");
     if (request.method === "OPTIONS") return reply.code(204).send();
   });
 

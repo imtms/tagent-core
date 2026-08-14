@@ -11,8 +11,14 @@
 @tagent/abi/channel/v1/fixtures
 @tagent/abi/console/v1
 @tagent/abi/admin/v1
+@tagent/abi/admin/profiles-v1
 @tagent/abi/internal/v1
 @tagent/abi/operator/read-v1
+@tagent/abi/operator/session-settings-v1
+@tagent/abi/operator/inbox-v1
+@tagent/abi/operator/context-manifest-v1
+@tagent/abi/operator/skills-v1
+@tagent/abi/profiles/v1
 ```
 
 Import only these declared exports. Deep imports from `src` or `dist` are not ABI.
@@ -53,7 +59,7 @@ Fastify route handlers decode ingress and encode egress with `@tagent/abi`. `@ta
 6. Add differential coverage for removed or incompatible routes.
 7. Update [API_V1.md](API_V1.md), [CHANGELOG.md](../CHANGELOG.md), and upgrade guidance.
 
-Core, clients, and artifacts for a release must use the same validated ABI build. Core publishes the owned schemas, canonical fixtures, typed client and provider/consumer contract tests. Gateway owns its fake-Core process/container and the current/previous Gateway-client CI matrix; those components encode Gateway transport and release policy and are not Core runtime deliverables.
+Core, clients, and artifacts for a release must use the same validated ABI build. Core publishes the owned schemas, canonical fixtures, typed client and real-provider contract tests. Each release attaches matching `@tagent/abi` and `@tagent/core-client` tarballs with JavaScript, declarations, JS/declaration source maps and portable SHA-256 files. Gateway owns its fake-Core process/container and the current/previous Gateway-client CI matrix; those components encode Gateway transport and release policy and are not Core runtime deliverables.
 
 ## Gateway contracts v39 migration window
 
@@ -95,12 +101,20 @@ The next public API major should remove the v39 compatibility aliases rather tha
 
 Schema 41 introduces a separate `operator.read.v1` capability profile for Session inventory, per-Session TaskRun inventory and latest TaskRun. `GET /api/v1/capabilities` adds only the API-version marker; clients then decode `GET /api/v1/operator/capabilities` with the dedicated schema. This avoids adding unknown endpoint literals or fields to the strict, closed Operator 1.0 decoder introduced in v40.
 
-The profile freezes bounded public summaries, dual-scope enforcement for nested TaskRun reads, immutable keyset order, cursor bindings, snapshot-membership/read-committed-value consistency and current no-expiry/no-deletion retention. Schema 42 retains this profile while adding the private Inbox execution-policy column. Schema 43 adds first-party Console Skill contracts; schema 44 extends them with shared catalog CRUD and multi-Skill Workspace references; schema 45 adds private Attempt request envelopes; schema 46 adds persisted continuation due-time scheduling. None changes the Operator Read profile. The matching ABI export, fixtures, Core Client and provider must be deployed together.
+The profile freezes bounded public summaries, dual-scope enforcement for nested TaskRun reads, immutable keyset order, cursor bindings, snapshot-membership/read-committed-value consistency and current no-expiry/no-deletion retention. Schema 42 retains this profile while adding the private Inbox execution-policy column. Schema 43 adds first-party Console Skill contracts; schema 44 extends them with shared catalog CRUD and multi-Skill Workspace references; schema 45 adds private Attempt request envelopes; schema 46 adds persisted continuation due-time scheduling; schema 47 adds separate full-feature capability profiles. None changes the Operator Read profile. The matching ABI export, fixtures, Core Client and provider must be deployed together.
 
 | Core profile | Client behavior | Support |
 | --- | --- | --- |
-| schema 46 + `operator.read.v1` | negotiate current capabilities and use the matching 0.6.7 ABI/client | Supported current profile |
+| schema 47 + `operator.read.v1` | negotiate current capabilities and use the matching 0.7.0 ABI/client | Supported current profile |
 | schema 41 + `operator.read.v1` | negotiate API marker and dedicated capabilities, then use matching ABI/client | Supported |
 | schema 41 + legacy Operator 1.0 decoder | unchanged legacy object still decodes; deployment policy must separately accept schema 41 | Wire-compatible only |
 | schema 40 without `operator.read.v1` | Gateway disables only historical inventory/rebuild | Supported feature downgrade |
 | any | depend on `/api/v1/console/*`, SQLite or private Store DTOs | Unsupported cross-team dependency |
+
+## Full-feature profiles (introduced in schema 47)
+
+Schema 47 adds an independent registry rather than extending the strict legacy capabilities object. `GET /api/v1/capability-profiles` lists Session Settings, Session Inbox, Context Manifest, Skills, Memory, Learning, Workflow and Autonomy profile `1.0`; each detail response freezes exact endpoint IDs, required scopes, resource authority, pagination, retention, compatibility and recovery semantics.
+
+An additive endpoint or optional response field requires a profile minor and matching strict fixtures/client decoder. Removing an endpoint, changing a required scope/resource boundary, changing cursor/revision identity, or moving between exact replay and durable receipt recovery requires a new profile major. The registry response itself remains strict: consumers must deploy a matching ABI/client before Core begins returning a newly required profile or field.
+
+The compatibility and CI ownership matrix is maintained in [GATEWAY_PROFILE_COMPATIBILITY.md](GATEWAY_PROFILE_COMPATIBILITY.md). Core proves the current real provider against canonical fixtures. Gateway separately proves the current and previous client releases, Fake Core behavior and network-fault handling.

@@ -1,6 +1,8 @@
 export interface HttpWriterReadiness { isWriterReady(): boolean }
 
 export type HttpRuntimeConfig = object & {
+  modelId?: string;
+  fallbackModelIds?: string[];
   memoryWorkspaceScopeId?: string;
   releaseVersion?: string;
   schemaVersion?: number;

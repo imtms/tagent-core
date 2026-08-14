@@ -53,7 +53,20 @@ import type {
   SkillSummary,
 } from "@tagent/admission/domain";
 import { assertControlContent } from "@tagent/execution/domain";
-import type { SubmissionAuditInput, SubmissionAuditReceipt } from "@tagent/admission/ports";
+import type {
+  ProfileInboxMutationValue,
+  ProfileMutationContext,
+  ProfileMutationResult,
+  ProfilePageQuery,
+  ProfileSkillCatalogPage,
+  ProfileSkillDeleteValue,
+  ProfileSkillMutationValue,
+  ProfileSkillRevisionPage,
+  ProfileWorkspaceSkillPage,
+  ProfileWorkspaceSkillsMutationValue,
+  SubmissionAuditInput,
+  SubmissionAuditReceipt,
+} from "@tagent/admission/ports";
 import {
   ATTEMPT_SCHEMA_V30_SQL,
   migrateAttemptsV30,
@@ -104,12 +117,13 @@ import { assertSkillsV43Schema, migrateSkillsV43 } from "./migrations/v43-skills
 import { assertSkillCenterV44Schema, migrateSkillCenterV44 } from "./migrations/v44-skill-center.js";
 import { assertAttemptRequestEnvelopesV45Schema, migrateAttemptRequestEnvelopesV45 } from "./migrations/v45-attempt-request-envelopes.js";
 import { assertContinuationSchedulingV46Schema, migrateContinuationSchedulingV46 } from "./migrations/v46-continuation-scheduling.js";
+import { assertGatewayProfilesV47Schema, migrateGatewayProfilesV47 } from "./migrations/v47-gateway-profiles.js";
 import { mapLegacyRunApprovalOperation } from "./sqlite/canonical-approval-mapper.js";
 import { appendProjectionPair, finalizeProjectionCheckpoint } from "./sqlite/canonical-integration-event.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 46;
+const SCHEMA_VERSION = 47;
 const MAX_SUBMISSION_CONTENT_CHARS = 200_000;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -1224,15 +1238,23 @@ export class Store {
     assertAttemptRequestEnvelopesV45Schema(this.db);
     const continuationSchedulingMigration = this.db.transaction(() => {
       migrateContinuationSchedulingV46(this.db, previousVersion !== undefined && previousVersion >= 46 ? 46 : 45);
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+      this.db.prepare(`UPDATE schema_meta SET version=46,updated_at=? WHERE id=1`).run(now());
     });
     continuationSchedulingMigration();
     assertContinuationSchedulingV46Schema(this.db);
+    const gatewayProfilesMigration = this.db.transaction(() => {
+      migrateGatewayProfilesV47(this.db, previousVersion !== undefined && previousVersion >= 47 ? 47 : 46);
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+    });
+    gatewayProfilesMigration();
+    assertGatewayProfilesV47Schema(this.db);
     // A process restart loses the in-memory executor for receipts that had only
     // reached "started". Surface uncertainty explicitly; never replay an effect
     // whose outcome may already have escaped Core.
     this.db.prepare("UPDATE task_run_command_receipts SET status='outcome_unknown',updated_at=? WHERE status='started'").run(now());
     this.db.prepare("UPDATE workspace_goal_operation_receipts SET status='outcome_unknown',updated_at=? WHERE status='started'").run(now());
+    this.db.prepare(`UPDATE profile_operation_receipts SET status='outcome_unknown',updated_at=?,completed_at=?
+      WHERE status='started'`).run(now(), now());
   }
 
   private attemptId(runId: string, ordinal: number) {
@@ -1387,6 +1409,7 @@ export class Store {
       }
       const session: Session = { id: randomUUID(), title, modelId: this.defaultModelId, reasoningEffort: "medium", createdAt: now(), updatedAt: now(), latestRunStatus: null, latestRunPhase: null };
       this.db.prepare("INSERT INTO sessions (id, title, model_id, reasoning_effort, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(session.id, session.title, session.modelId, session.reasoningEffort, session.createdAt, session.updatedAt);
+      this.initializeSessionProfileRevisions(session.id, session.createdAt);
       if (requestId) this.db.prepare("INSERT INTO session_requests (request_id,session_id,created_at) VALUES (?,?,?)").run(requestId, session.id, session.createdAt);
       return session;
     });
@@ -1420,6 +1443,7 @@ export class Store {
       };
       this.db.prepare("INSERT INTO sessions (id,title,model_id,reasoning_effort,created_at,updated_at) VALUES (?,?,?,?,?,?)")
         .run(session.id, session.title, session.modelId, session.reasoningEffort, timestamp, timestamp);
+      this.initializeSessionProfileRevisions(session.id, timestamp);
       this.db.prepare(`INSERT INTO session_create_receipts
         (principal_id,idempotency_key,payload_hash,canonical_payload_json,session_id,provenance_json,created_at,updated_at)
         VALUES (?,?,?,?,?,?,?,?)`).run(
@@ -1639,7 +1663,7 @@ export class Store {
     const modelId = settings.modelId === undefined ? current.modelId : settings.modelId.trim();
     const reasoningEffort = settings.reasoningEffort ?? current.reasoningEffort;
     if (!title || !modelId || !REASONING_EFFORTS.has(reasoningEffort)) return undefined;
-    this.db.prepare("UPDATE sessions SET title = ?, model_id = ?, reasoning_effort = ?, updated_at = ? WHERE id = ?")
+    this.db.prepare("UPDATE sessions SET title = ?, model_id = ?, reasoning_effort = ?, revision=revision+1, updated_at = ? WHERE id = ?")
       .run(title, modelId, reasoningEffort, now(), id);
     return this.getSession(id);
   }
@@ -1654,17 +1678,26 @@ export class Store {
       let skill = input.skillId
         ? this.db.prepare("SELECT id,name FROM skills WHERE id=?").get(input.skillId) as { id: string; name: string } | undefined
         : this.db.prepare("SELECT id,name FROM skills WHERE name=?").get(input.name) as { id: string; name: string } | undefined;
+      const createdSkill = !skill;
       if (input.skillId && !skill) throw new Error("Skill not found");
       if (!skill) {
         skill = { id: randomUUID(), name: input.name };
         this.db.prepare("INSERT INTO skills (id,name,created_at,updated_at) VALUES (?,?,?,?)")
           .run(skill.id, input.name, timestamp, timestamp);
-      } else if (skill.name !== input.name) {
-        this.db.prepare("UPDATE skills SET name=?,updated_at=? WHERE id=?").run(input.name, timestamp, skill.id);
       }
       const duplicate = this.db.prepare("SELECT id FROM skill_revisions WHERE skill_id=? AND sha256=?")
         .get(skill.id, input.sha256) as { id: string } | undefined;
-      if (duplicate) return this.getSkillRevision(duplicate.id)!;
+      if (duplicate) {
+        if (skill.name !== input.name) {
+          this.db.prepare("UPDATE skills SET name=?,revision=revision+1,updated_at=? WHERE id=?")
+            .run(input.name, timestamp, skill.id);
+          this.touchSkillCatalogRevision(timestamp);
+        }
+        return this.getSkillRevision(duplicate.id)!;
+      }
+      if (skill.name !== input.name) {
+        this.db.prepare("UPDATE skills SET name=?,updated_at=? WHERE id=?").run(input.name, timestamp, skill.id);
+      }
       const revision = (this.db.prepare("SELECT COALESCE(MAX(revision),0)+1 AS revision FROM skill_revisions WHERE skill_id=?")
         .get(skill.id) as { revision: number }).revision;
       const id = randomUUID();
@@ -1674,7 +1707,9 @@ export class Store {
         id, skill.id, revision, input.description, input.content, input.filePath, input.sha256,
         Number(input.disableModelInvocation ?? false), input.sourceFilename, timestamp,
       );
-      this.db.prepare("UPDATE skills SET updated_at=? WHERE id=?").run(timestamp, skill.id);
+      this.db.prepare(`UPDATE skills SET revision=revision+?,updated_at=? WHERE id=?`)
+        .run(createdSkill ? 0 : 1, timestamp, skill.id);
+      this.touchSkillCatalogRevision(timestamp);
       return this.getSkillRevision(id)!;
     })();
   }
@@ -1694,6 +1729,77 @@ export class Store {
       s.updated_at AS updatedAt FROM skills s JOIN skill_revisions r ON r.skill_id=s.id
       WHERE r.revision=(SELECT MAX(latest.revision) FROM skill_revisions latest WHERE latest.skill_id=s.id)
       ORDER BY s.updated_at DESC,s.name`).all() as SkillSummary[];
+  }
+
+  getCatalogRevision(): number {
+    return Number(this.db.prepare("SELECT revision FROM skill_catalog_state WHERE id=1").pluck().get());
+  }
+
+  getSkillResourceRevision(skillId: string): number | undefined {
+    return (this.db.prepare("SELECT revision FROM skills WHERE id=?").get(skillId) as { revision: number } | undefined)?.revision;
+  }
+
+  getWorkspaceSkillRevision(workspaceId: string): number | undefined {
+    return (this.db.prepare("SELECT revision FROM workspace_skill_revisions WHERE workspace_id=?").get(workspaceId) as
+      { revision: number } | undefined)?.revision;
+  }
+
+  listProfileSkillsPage(query: ProfilePageQuery): ProfileSkillCatalogPage {
+    const snapshotRowId = query.snapshotRowId ?? Number(this.db.prepare("SELECT COALESCE(MAX(rowid),0) FROM skills").pluck().get());
+    const afterClause = query.after
+      ? "AND (s.updated_at < @afterCreatedAt OR (s.updated_at = @afterCreatedAt AND s.id < @afterId))"
+      : "";
+    const items = this.db.prepare(`SELECT s.id,s.name,r.revision AS latestRevision,r.id AS latestRevisionId,
+      r.description,r.sha256,(SELECT COUNT(*) FROM workspace_skill_bindings bindings WHERE bindings.skill_id=s.id) AS workspaceCount,
+      s.updated_at AS updatedAt FROM skills s JOIN skill_revisions r ON r.skill_id=s.id
+      WHERE s.rowid<=@snapshotRowId AND r.revision=(SELECT MAX(latest.revision) FROM skill_revisions latest WHERE latest.skill_id=s.id)
+      ${afterClause} ORDER BY s.updated_at DESC,s.id DESC LIMIT @limit`).all({
+      snapshotRowId,
+      limit: query.limit,
+      ...(query.after ? { afterCreatedAt: query.after.createdAt, afterId: query.after.id } : {}),
+    }) as SkillSummary[];
+    return { items, snapshotRowId, collectionRevision: this.getCatalogRevision() };
+  }
+
+  listProfileSkillRevisionsPage(skillId: string, query: ProfilePageQuery): ProfileSkillRevisionPage | undefined {
+    const resourceRevision = this.getSkillResourceRevision(skillId);
+    if (resourceRevision === undefined) return undefined;
+    const snapshotRowId = query.snapshotRowId ?? Number(this.db.prepare(
+      "SELECT COALESCE(MAX(rowid),0) FROM skill_revisions WHERE skill_id=?",
+    ).pluck().get(skillId));
+    const afterClause = query.after
+      ? "AND (created_at < @afterCreatedAt OR (created_at = @afterCreatedAt AND id < @afterId))"
+      : "";
+    const rows = this.db.prepare(`SELECT id FROM skill_revisions WHERE skill_id=@skillId AND rowid<=@snapshotRowId
+      ${afterClause} ORDER BY created_at DESC,id DESC LIMIT @limit`).all({
+      skillId,
+      snapshotRowId,
+      limit: query.limit,
+      ...(query.after ? { afterCreatedAt: query.after.createdAt, afterId: query.after.id } : {}),
+    }) as Array<{ id: string }>;
+    return { items: rows.map((row) => this.getSkillRevision(row.id)!), snapshotRowId, resourceRevision };
+  }
+
+  listProfileWorkspaceSkillsPage(workspaceId: string, query: ProfilePageQuery): ProfileWorkspaceSkillPage | undefined {
+    const bindingRevision = this.getWorkspaceSkillRevision(workspaceId);
+    if (bindingRevision === undefined) return undefined;
+    const snapshotRowId = query.snapshotRowId ?? Number(this.db.prepare(
+      "SELECT COALESCE(MAX(rowid),0) FROM workspace_skill_bindings WHERE session_id=?",
+    ).pluck().get(workspaceId));
+    const afterClause = query.after
+      ? "AND (revisions.created_at < @afterCreatedAt OR (revisions.created_at = @afterCreatedAt AND revisions.id < @afterId))"
+      : "";
+    const rows = this.db.prepare(`SELECT revisions.id FROM workspace_skill_bindings bindings
+      JOIN skill_revisions revisions ON revisions.skill_id=bindings.skill_id
+      WHERE bindings.session_id=@workspaceId AND bindings.rowid<=@snapshotRowId AND revisions.revision=(
+        SELECT MAX(latest.revision) FROM skill_revisions latest WHERE latest.skill_id=bindings.skill_id
+      ) ${afterClause} ORDER BY revisions.created_at DESC,revisions.id DESC LIMIT @limit`).all({
+      workspaceId,
+      snapshotRowId,
+      limit: query.limit,
+      ...(query.after ? { afterCreatedAt: query.after.createdAt, afterId: query.after.id } : {}),
+    }) as Array<{ id: string }>;
+    return { items: rows.map((row) => this.getSkillRevision(row.id)!), snapshotRowId, bindingRevision };
   }
 
   getSkill(skillId: string): SkillRevision | undefined {
@@ -1726,6 +1832,9 @@ export class Store {
       const insert = this.db.prepare("INSERT INTO workspace_skill_bindings (session_id,skill_id,bound_at) VALUES (?,?,?)");
       const timestamp = now();
       uniqueIds.forEach((skillId, index) => insert.run(workspaceId, skillId, timestamp + index));
+      this.db.prepare(`INSERT INTO workspace_skill_revisions (workspace_id,revision,updated_at) VALUES (?,2,?)
+        ON CONFLICT(workspace_id) DO UPDATE SET revision=workspace_skill_revisions.revision+1,updated_at=excluded.updated_at`)
+        .run(workspaceId, timestamp);
       this.touchSession(workspaceId);
       return this.listWorkspaceSkills(workspaceId);
     })();
@@ -1740,13 +1849,159 @@ export class Store {
       this.db.prepare("DELETE FROM workspace_skill_bindings WHERE skill_id=?").run(skillId);
       this.db.prepare("DELETE FROM skill_revisions WHERE skill_id=?").run(skillId);
       this.db.prepare("DELETE FROM skills WHERE id=?").run(skillId);
-      for (const workspaceId of workspaceIds) this.touchSession(workspaceId);
+      const timestamp = now();
+      this.touchSkillCatalogRevision(timestamp);
+      for (const workspaceId of workspaceIds) {
+        this.db.prepare("UPDATE workspace_skill_revisions SET revision=revision+1,updated_at=? WHERE workspace_id=?")
+          .run(timestamp, workspaceId);
+        this.touchSession(workspaceId);
+      }
       return revisions;
+    })();
+  }
+
+  createRevisionProfile(
+    input: CreateSkillRevisionInput,
+    mutation: ProfileMutationContext,
+  ): ProfileMutationResult<ProfileSkillMutationValue> {
+    const skillId = input.skillId;
+    return this.runSkillProfileMutation({
+      mutation,
+      endpointId: skillId ? "operator.skills.update" : "operator.skills.create",
+      resourceType: skillId ? "skill" : "skill_catalog",
+      resourceId: skillId ?? "catalog",
+      operation: skillId ? "update" : "create",
+      currentRevision: () => skillId ? this.getSkillResourceRevision(skillId) : this.getCatalogRevision(),
+      perform: () => {
+        const skill = this.createSkillRevision(input);
+        return {
+          value: { skill, catalogRevision: this.getCatalogRevision() },
+          resultingRevision: skillId ? this.getSkillResourceRevision(skillId)! : this.getCatalogRevision(),
+        };
+      },
+    });
+  }
+
+  deleteSkillProfile(skillId: string, mutation: ProfileMutationContext): ProfileMutationResult<ProfileSkillDeleteValue> {
+    return this.runSkillProfileMutation({
+      mutation,
+      endpointId: "operator.skills.delete",
+      resourceType: "skill",
+      resourceId: skillId,
+      operation: "delete",
+      currentRevision: () => this.getSkillResourceRevision(skillId),
+      perform: () => {
+        if (!this.deleteSkill(skillId)) throw new Error("Skill disappeared during deletion");
+        const catalogRevision = this.getCatalogRevision();
+        return { value: { ok: true, skillId, catalogRevision }, resultingRevision: catalogRevision };
+      },
+    });
+  }
+
+  replaceWorkspaceSkillsProfile(
+    workspaceId: string,
+    skillIds: readonly string[],
+    mutation: ProfileMutationContext,
+  ): ProfileMutationResult<ProfileWorkspaceSkillsMutationValue> {
+    return this.runSkillProfileMutation({
+      mutation,
+      endpointId: "operator.workspace_skills.replace",
+      resourceType: "workspace",
+      resourceId: workspaceId,
+      operation: "replace",
+      currentRevision: () => this.getWorkspaceSkillRevision(workspaceId),
+      perform: () => {
+        const skills = this.replaceWorkspaceSkills(workspaceId, skillIds);
+        if (!skills) throw new Error("Workspace Skill replacement became invalid");
+        const bindingRevision = this.getWorkspaceSkillRevision(workspaceId)!;
+        return { value: { skills, bindingRevision }, resultingRevision: bindingRevision };
+      },
+    }, () => skillIds.some((skillId) => !this.getSkill(skillId)) ? "state_conflict" : undefined);
+  }
+
+  private runSkillProfileMutation<T>(input: {
+    mutation: ProfileMutationContext;
+    endpointId: string;
+    resourceType: string;
+    resourceId: string;
+    operation: string;
+    currentRevision: () => number | undefined;
+    perform: () => { value: T; resultingRevision: number };
+  }, precondition?: () => "state_conflict" | undefined): ProfileMutationResult<T> {
+    const identity = {
+      principalId: input.mutation.principalId,
+      profileId: "operator.skills.v1",
+      endpointId: input.endpointId,
+      resourceType: input.resourceType,
+      resourceId: input.resourceId,
+      idempotencyKey: input.mutation.idempotencyKey,
+    };
+    const payloadHash = createHash("sha256").update(input.mutation.canonicalPayload).digest("hex");
+    return this.db.transaction((): ProfileMutationResult<T> => {
+      const existing = this.db.prepare(`SELECT payload_hash AS payloadHash,expected_revision AS expectedRevision,
+        result_json AS resultJson FROM profile_mutation_receipts
+        WHERE principal_id=@principalId AND profile_id=@profileId AND endpoint_id=@endpointId
+          AND resource_type=@resourceType AND resource_id=@resourceId AND idempotency_key=@idempotencyKey`)
+        .get(identity) as { payloadHash: string; expectedRevision: number; resultJson: string } | undefined;
+      if (existing) {
+        if (existing.payloadHash !== payloadHash || existing.expectedRevision !== input.mutation.expectedRevision) {
+          return { status: "idempotency_conflict" };
+        }
+        return { status: "succeeded", value: JSON.parse(existing.resultJson) as T, replayed: true };
+      }
+      const currentRevision = input.currentRevision();
+      if (currentRevision === undefined) return { status: "not_found" };
+      if (currentRevision !== input.mutation.expectedRevision) {
+        return { status: "concurrency_conflict", currentRevision };
+      }
+      const rejected = precondition?.();
+      if (rejected) return { status: rejected };
+      const timestamp = now();
+      const result = input.perform();
+      this.db.prepare(`INSERT INTO profile_mutation_receipts
+        (principal_id,profile_id,endpoint_id,resource_type,resource_id,idempotency_key,payload_hash,
+         expected_revision,resulting_revision,result_json,created_at,updated_at)
+        VALUES (@principalId,@profileId,@endpointId,@resourceType,@resourceId,@idempotencyKey,@payloadHash,
+          @expectedRevision,@resultingRevision,@resultJson,@timestamp,@timestamp)`).run({
+        ...identity,
+        payloadHash,
+        expectedRevision: input.mutation.expectedRevision,
+        resultingRevision: result.resultingRevision,
+        resultJson: JSON.stringify(result.value),
+        timestamp,
+      });
+      this.db.prepare(`INSERT INTO profile_audit_events
+        (id,principal_id,granted_scopes_json,delegated_actor_id,delegated_request_id,request_id,profile_id,
+         endpoint_id,resource_type,resource_id,operation,outcome,error_code,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,'succeeded','',?)`).run(
+        randomUUID(), input.mutation.principalId, JSON.stringify([...input.mutation.grantedScopes]),
+        input.mutation.delegatedActorId ?? null, input.mutation.delegatedRequestId ?? null,
+        input.mutation.requestId, identity.profileId, identity.endpointId, identity.resourceType,
+        identity.resourceId, input.operation, timestamp,
+      );
+      return { status: "succeeded", value: result.value, replayed: false };
     })();
   }
 
   private touchSession(id: SessionId) {
     this.db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(now(), id);
+  }
+
+  private touchSkillCatalogRevision(timestamp = now()) {
+    this.db.prepare("UPDATE skill_catalog_state SET revision=revision+1,updated_at=? WHERE id=1").run(timestamp);
+  }
+
+  private initializeSessionProfileRevisions(id: SessionId, timestamp: number) {
+    this.db.prepare("INSERT OR IGNORE INTO workspace_skill_revisions (workspace_id,revision,updated_at) VALUES (?,1,?)")
+      .run(id, timestamp);
+    this.db.prepare("INSERT OR IGNORE INTO session_inbox_revisions (session_id,revision,updated_at) VALUES (?,1,?)")
+      .run(id, timestamp);
+  }
+
+  private touchSessionInboxRevision(sessionId: SessionId, timestamp = now()) {
+    this.db.prepare(`INSERT INTO session_inbox_revisions (session_id,revision,updated_at) VALUES (?,2,?)
+      ON CONFLICT(session_id) DO UPDATE SET revision=session_inbox_revisions.revision+1,updated_at=excluded.updated_at`)
+      .run(sessionId, timestamp);
   }
 
   listMessages(sessionId: SessionId, limit = 200, beforeId?: number): Message[] {
@@ -1789,6 +2044,7 @@ export class Store {
       this.db.prepare(`INSERT INTO session_supervisor_inbox
         (id,session_id,request_id,content,status,decision,position,created_at,updated_at,summary,objectives_json,intent,target_run_id,priority,urgency,relation,acceptance_json,scope,non_goals_json,confidence,decision_reason,router_version,execution_policy_json)
         VALUES (?,?,?,?,'queued','pending',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, sessionId, requestId, content, position, timestamp, timestamp, analysis.summary, JSON.stringify(analysis.objectives ?? [{ id: "objective-1", summary: analysis.summary, timing: "current", kind: "other" }]), analysis.intent, analysis.targetRunId, analysis.priority, analysis.urgency, analysis.relation, JSON.stringify(analysis.acceptanceCriteria), analysis.scope, JSON.stringify(analysis.nonGoals), analysis.confidence, analysis.reason, analysis.routerVersion, JSON.stringify(analysis.executionPolicy ?? null));
+      this.touchSessionInboxRevision(sessionId, timestamp);
       const item = this.getSessionInboxItem(id)!;
       if (audit) this.recordSubmissionAudit(item, audit);
       return item;
@@ -1870,8 +2126,9 @@ export class Store {
 
   routeSessionInboxItem(id: string, sessionId: SessionId, decision: "steer" | "follow_up" | "discussion", runId: RunId | null, error = "") {
     const timestamp = now();
-    const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET status='routed',decision=?,run_id=?,error=?,claimed_at=COALESCE(claimed_at,?),started_at=COALESCE(started_at,?),updated_at=?
+    const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET status='routed',decision=?,run_id=?,error=?,claimed_at=COALESCE(claimed_at,?),started_at=COALESCE(started_at,?),revision=revision+1,updated_at=?
       WHERE id=? AND session_id=? AND status='queued'`).run(decision, runId, error, timestamp, timestamp, timestamp, id, sessionId);
+    if (changed.changes === 1) this.touchSessionInboxRevision(sessionId, timestamp);
     return changed.changes === 1 ? this.getSessionInboxItem(id) : undefined;
   }
 
@@ -1887,8 +2144,9 @@ export class Store {
 
   markSessionInboxDuplicate(sourceId: string, targetId: string, sessionId: SessionId) {
     const timestamp = now();
-    const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET status='deleted',decision='merge',error=?,updated_at=?
+    const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET status='deleted',decision='merge',error=?,revision=revision+1,updated_at=?
       WHERE id=? AND session_id=? AND status='queued'`).run(`Duplicate of ${targetId}`, timestamp, sourceId, sessionId);
+    if (changed.changes === 1) this.touchSessionInboxRevision(sessionId, timestamp);
     return changed.changes === 1 ? this.getSessionInboxItem(sourceId) : undefined;
   }
 
@@ -1898,12 +2156,158 @@ export class Store {
     assertSubmissionContentBound(content);
     const resolved = analysis ?? { ...this.getSessionInboxItem(id)?.analysis, summary: trimmed.slice(0, 120), scope: trimmed.slice(0, 120) } as SessionInputAnalysis;
     const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET content=?,summary=?,objectives_json=?,intent=?,target_run_id=?,priority=?,urgency=?,relation=?,
-      acceptance_json=?,scope=?,non_goals_json=?,confidence=?,decision_reason=?,router_version=?,execution_policy_json=?,updated_at=?
+      acceptance_json=?,scope=?,non_goals_json=?,confidence=?,decision_reason=?,router_version=?,execution_policy_json=?,revision=revision+1,updated_at=?
       WHERE id=? AND session_id=? AND status='queued'`)
       .run(trimmed, resolved.summary, JSON.stringify(resolved.objectives), resolved.intent, resolved.targetRunId, resolved.priority, resolved.urgency, resolved.relation,
         JSON.stringify(resolved.acceptanceCriteria), resolved.scope, JSON.stringify(resolved.nonGoals), resolved.confidence, resolved.reason,
         resolved.routerVersion, JSON.stringify(resolved.executionPolicy ?? null), now(), id, sessionId).changes;
+    if (changed === 1) this.touchSessionInboxRevision(sessionId);
     return changed === 1 ? this.getSessionInboxItem(id) : undefined;
+  }
+
+  private mutateSessionInboxProfile(input: {
+    sessionId: SessionId;
+    endpointId: string;
+    operation: string;
+    mutation: ProfileMutationContext;
+    work: () => string[] | undefined;
+  }): ProfileMutationResult<ProfileInboxMutationValue> {
+    const identity = {
+      principalId: input.mutation.principalId,
+      profileId: "operator.session-inbox.v1",
+      endpointId: input.endpointId,
+      resourceType: "session_inbox",
+      resourceId: input.sessionId,
+      idempotencyKey: input.mutation.idempotencyKey,
+    };
+    const payloadHash = createHash("sha256").update(input.mutation.canonicalPayload).digest("hex");
+    return this.db.transaction((): ProfileMutationResult<ProfileInboxMutationValue> => {
+      const existing = this.db.prepare(`SELECT payload_hash AS payloadHash,expected_revision AS expectedRevision,
+        result_json AS resultJson FROM profile_mutation_receipts
+        WHERE principal_id=@principalId AND profile_id=@profileId AND endpoint_id=@endpointId
+          AND resource_type=@resourceType AND resource_id=@resourceId AND idempotency_key=@idempotencyKey`)
+        .get(identity) as { payloadHash: string; expectedRevision: number; resultJson: string } | undefined;
+      if (existing) {
+        if (existing.payloadHash !== payloadHash || existing.expectedRevision !== input.mutation.expectedRevision) {
+          return { status: "idempotency_conflict" };
+        }
+        return {
+          status: "succeeded",
+          value: JSON.parse(existing.resultJson) as ProfileInboxMutationValue,
+          replayed: true,
+        };
+      }
+      const currentRevision = (this.db.prepare("SELECT revision FROM session_inbox_revisions WHERE session_id=?")
+        .get(input.sessionId) as { revision: number } | undefined)?.revision;
+      if (currentRevision === undefined) return { status: "not_found" };
+      if (currentRevision !== input.mutation.expectedRevision) {
+        return { status: "concurrency_conflict", currentRevision };
+      }
+      const itemIds = input.work();
+      if (!itemIds) return { status: "state_conflict" };
+      const resultingRevision = (this.db.prepare("SELECT revision FROM session_inbox_revisions WHERE session_id=?")
+        .get(input.sessionId) as { revision: number }).revision;
+      const value = { itemIds, collectionRevision: resultingRevision };
+      const timestamp = now();
+      this.db.prepare(`INSERT INTO profile_mutation_receipts
+        (principal_id,profile_id,endpoint_id,resource_type,resource_id,idempotency_key,payload_hash,
+         expected_revision,resulting_revision,result_json,created_at,updated_at)
+        VALUES (@principalId,@profileId,@endpointId,@resourceType,@resourceId,@idempotencyKey,@payloadHash,
+          @expectedRevision,@resultingRevision,@resultJson,@timestamp,@timestamp)`).run({
+        ...identity,
+        payloadHash,
+        expectedRevision: input.mutation.expectedRevision,
+        resultingRevision,
+        resultJson: JSON.stringify(value),
+        timestamp,
+      });
+      this.db.prepare(`INSERT INTO profile_audit_events
+        (id,principal_id,granted_scopes_json,delegated_actor_id,delegated_request_id,request_id,profile_id,
+         endpoint_id,resource_type,resource_id,operation,outcome,error_code,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        randomUUID(), input.mutation.principalId, JSON.stringify([...input.mutation.grantedScopes]),
+        input.mutation.delegatedActorId ?? null, input.mutation.delegatedRequestId ?? null,
+        input.mutation.requestId, identity.profileId, identity.endpointId, identity.resourceType,
+        identity.resourceId, input.operation, "succeeded", "", timestamp,
+      );
+      return { status: "succeeded", value, replayed: false };
+    })();
+  }
+
+  updateSessionInboxItemProfile(input: {
+    sessionId: SessionId;
+    itemId: string;
+    content: string;
+    analysis: SessionInputAnalysis;
+    mutation: ProfileMutationContext;
+  }): ProfileMutationResult<ProfileInboxMutationValue> {
+    return this.mutateSessionInboxProfile({
+      sessionId: input.sessionId,
+      endpointId: "operator.session_inbox.update",
+      operation: "update",
+      mutation: input.mutation,
+      work: () => this.updateSessionInboxItem(input.itemId, input.sessionId, input.content, input.analysis)
+        ? [input.itemId] : undefined,
+    });
+  }
+
+  reorderSessionInboxProfile(input: {
+    sessionId: SessionId;
+    itemIds: string[];
+    mutation: ProfileMutationContext;
+  }): ProfileMutationResult<ProfileInboxMutationValue> {
+    return this.mutateSessionInboxProfile({
+      sessionId: input.sessionId,
+      endpointId: "operator.session_inbox.reorder",
+      operation: "reorder",
+      mutation: input.mutation,
+      work: () => this.reorderSessionInbox(input.sessionId, input.itemIds)?.map((item) => item.id),
+    });
+  }
+
+  deleteSessionInboxItemProfile(input: {
+    sessionId: SessionId;
+    itemId: string;
+    mutation: ProfileMutationContext;
+  }): ProfileMutationResult<ProfileInboxMutationValue> {
+    return this.mutateSessionInboxProfile({
+      sessionId: input.sessionId,
+      endpointId: "operator.session_inbox.delete",
+      operation: "delete",
+      mutation: input.mutation,
+      work: () => this.deleteSessionInboxItem(input.itemId, input.sessionId) ? [input.itemId] : undefined,
+    });
+  }
+
+  decideSessionInboxItemProfile(input: {
+    sessionId: SessionId;
+    itemId: string;
+    decision: "pending" | "defer";
+    mutation: ProfileMutationContext;
+  }): ProfileMutationResult<ProfileInboxMutationValue> {
+    return this.mutateSessionInboxProfile({
+      sessionId: input.sessionId,
+      endpointId: "operator.session_inbox.decide",
+      operation: "decide",
+      mutation: input.mutation,
+      work: () => this.decideSessionInboxItem(input.itemId, input.sessionId, input.decision) ? [input.itemId] : undefined,
+    });
+  }
+
+  mergeSessionInboxItemsProfile(input: {
+    sessionId: SessionId;
+    sourceId: string;
+    targetId: string;
+    mutation: ProfileMutationContext;
+  }): ProfileMutationResult<ProfileInboxMutationValue> {
+    return this.mutateSessionInboxProfile({
+      sessionId: input.sessionId,
+      endpointId: "operator.session_inbox.merge",
+      operation: "merge",
+      mutation: input.mutation,
+      work: () => this.mergeSessionInboxItems(input.sourceId, input.targetId, input.sessionId)
+        ? [input.sourceId, input.targetId] : undefined,
+    });
   }
 
   reorderSessionInbox(sessionId: SessionId, itemIds: string[]) {
@@ -1913,9 +2317,10 @@ export class Store {
       const currentIds = queued.map((item) => item.id);
       if (itemIds.length !== currentIds.length || new Set(itemIds).size !== itemIds.length || itemIds.some((id) => !currentIds.includes(id))) return undefined;
       const timestamp = now();
-      const update = this.db.prepare("UPDATE session_supervisor_inbox SET position=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'");
+      const update = this.db.prepare("UPDATE session_supervisor_inbox SET position=?,revision=revision+1,updated_at=? WHERE id=? AND session_id=? AND status='queued'");
       itemIds.forEach((id, index) => update.run(index + 1, timestamp, id, sessionId));
       this.db.prepare("UPDATE session_supervisor_inbox SET manual_order=1 WHERE session_id=? AND status='queued'").run(sessionId);
+      this.touchSessionInboxRevision(sessionId, timestamp);
       return this.listSessionInbox(sessionId);
     });
     return transaction();
@@ -1923,17 +2328,24 @@ export class Store {
 
   deleteSessionInboxItem(id: string, sessionId: SessionId) {
     const timestamp = now();
-    return this.db.prepare(`UPDATE session_supervisor_inbox SET status='deleted',decision='delete',updated_at=?
+    const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET status='deleted',decision='delete',revision=revision+1,updated_at=?
       WHERE id=? AND session_id=? AND status='queued'`).run(timestamp, id, sessionId).changes === 1;
+    if (changed) this.touchSessionInboxRevision(sessionId, timestamp);
+    return changed;
   }
 
   discardSessionInboxItem(id: string, sessionId: SessionId) {
-    return this.db.prepare("DELETE FROM session_supervisor_inbox WHERE id=? AND session_id=? AND status='queued' AND run_id IS NULL")
+    const changed = this.db.prepare("DELETE FROM session_supervisor_inbox WHERE id=? AND session_id=? AND status='queued' AND run_id IS NULL")
       .run(id, sessionId).changes === 1;
+    if (changed) this.touchSessionInboxRevision(sessionId);
+    return changed;
   }
 
   decideSessionInboxItem(id: string, sessionId: SessionId, decision: "pending" | "defer") {
-    return this.db.prepare("UPDATE session_supervisor_inbox SET decision=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'").run(decision,now(),id,sessionId).changes === 1;
+    const timestamp = now();
+    const changed = this.db.prepare("UPDATE session_supervisor_inbox SET decision=?,revision=revision+1,updated_at=? WHERE id=? AND session_id=? AND status='queued'").run(decision,timestamp,id,sessionId).changes === 1;
+    if (changed) this.touchSessionInboxRevision(sessionId, timestamp);
+    return changed;
   }
 
   mergeSessionInboxItems(sourceId: string, targetId: string, sessionId: SessionId) {
@@ -1954,10 +2366,11 @@ ${source.content}`;
       const urgencyOrder = { low: 1, normal: 2, high: 3, critical: 4 } as const;
       const urgency = urgencyOrder[source.analysis.urgency] > urgencyOrder[target.analysis.urgency] ? source.analysis.urgency : target.analysis.urgency;
       this.db.prepare(`UPDATE session_supervisor_inbox SET content=?,summary=?,acceptance_json=?,scope=?,priority=?,urgency=?,
-        confidence=?,decision_reason=?,decision='pending',updated_at=? WHERE id=? AND status='queued'`)
+        confidence=?,decision_reason=?,decision='pending',revision=revision+1,updated_at=? WHERE id=? AND status='queued'`)
         .run(content, summary, JSON.stringify(mergedCriteria), scope, priority, urgency,
           Math.min(target.analysis.confidence, source.analysis.confidence), `Merged queued instructions ${target.id} and ${source.id}`, timestamp, targetId);
-      this.db.prepare("UPDATE session_supervisor_inbox SET status='deleted',decision='merge',error=?,updated_at=? WHERE id=? AND status='queued'").run(`Merged into ${targetId}`,timestamp,sourceId);
+      this.db.prepare("UPDATE session_supervisor_inbox SET status='deleted',decision='merge',error=?,revision=revision+1,updated_at=? WHERE id=? AND status='queued'").run(`Merged into ${targetId}`,timestamp,sourceId);
+      this.touchSessionInboxRevision(sessionId, timestamp);
       return true;
     });
     return transaction();
@@ -1999,8 +2412,9 @@ ${source.content}`;
 
   private claimSessionInboxItem(itemId: string, sessionId: SessionId) {
     const timestamp = now();
-    const claimed = this.db.prepare("UPDATE session_supervisor_inbox SET status='claimed',decision='start_taskrun',claimed_at=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'").run(timestamp,timestamp,itemId,sessionId);
+    const claimed = this.db.prepare("UPDATE session_supervisor_inbox SET status='claimed',decision='start_taskrun',claimed_at=?,revision=revision+1,updated_at=? WHERE id=? AND session_id=? AND status='queued'").run(timestamp,timestamp,itemId,sessionId);
     if (claimed.changes !== 1) return undefined;
+    this.touchSessionInboxRevision(sessionId, timestamp);
     const inbox = this.getSessionInboxItem(itemId)!;
     const contract: TaskRunContractSnapshot = { sourceInput: inbox.content, summary: inbox.analysis.summary, objectives: inbox.analysis.objectives, acceptanceCriteria: inbox.analysis.acceptanceCriteria, scope: inbox.analysis.scope, nonGoals: inbox.analysis.nonGoals, sourceInboxIds: [inbox.id], parentRunId: inbox.analysis.targetRunId, relation: inbox.analysis.relation, intent: inbox.analysis.intent, decisionReason: inbox.analysis.reason, routerVersion: inbox.analysis.routerVersion, executionPolicy: inbox.analysis.executionPolicy };
     const run = this.createRun(sessionId, inbox.analysis.summary || inbox.content, `inbox:${inbox.id}`, contract);
@@ -2009,13 +2423,18 @@ ${source.content}`;
       this.db.prepare("INSERT OR IGNORE INTO taskrun_edges (from_run_id,to_run_id,relation,reason,created_at) VALUES (?,?,?,?,?)")
         .run(contract.parentRunId,run.id,edgeRelation,`Session Inbox ${inbox.id}: ${contract.decisionReason}`,timestamp);
     }
-    this.db.prepare("UPDATE session_supervisor_inbox SET status='started',run_id=?,started_at=?,updated_at=? WHERE id=? AND status='claimed'").run(run.id,timestamp,timestamp,inbox.id);
+    this.db.prepare("UPDATE session_supervisor_inbox SET status='started',run_id=?,started_at=?,revision=revision+1,updated_at=? WHERE id=? AND status='claimed'").run(run.id,timestamp,timestamp,inbox.id);
+    this.touchSessionInboxRevision(sessionId, timestamp);
     return { item: this.getSessionInboxItem(inbox.id)!, run };
   }
 
   recordSessionInboxLaunchFailure(itemId: string, runId: RunId, error: string) {
     const timestamp = now();
-    this.db.prepare("UPDATE session_supervisor_inbox SET status='started',error=?,updated_at=? WHERE id=? AND run_id=?").run(error,timestamp,itemId,runId);
+    const row = this.db.prepare("SELECT session_id AS sessionId FROM session_supervisor_inbox WHERE id=? AND run_id=?")
+      .get(itemId, runId) as { sessionId: string } | undefined;
+    const changed = this.db.prepare("UPDATE session_supervisor_inbox SET status='started',error=?,revision=revision+1,updated_at=? WHERE id=? AND run_id=?")
+      .run(error,timestamp,itemId,runId);
+    if (changed.changes === 1 && row) this.touchSessionInboxRevision(row.sessionId, timestamp);
   }
 
   private isInboxLaunchRetryable(runId: RunId) {
@@ -2047,7 +2466,8 @@ ${source.content}`;
       const updated = this.db.prepare(`UPDATE runs SET status='running', phase='discover', blocked_reason='', completed_at=NULL,
         attempt=?, resumed_at=?, updated_at=? WHERE id=? AND status='failed' AND attempt=?`).run(nextAttempt,resumedAt,resumedAt,runId,target.attempt);
       if (updated.changes !== 1) return { status: "not_retryable" as const };
-      this.db.prepare("UPDATE session_supervisor_inbox SET error='',updated_at=? WHERE id=? AND run_id=? AND status='started'").run(resumedAt,target.inboxItemId,runId);
+      this.db.prepare("UPDATE session_supervisor_inbox SET error='',revision=revision+1,updated_at=? WHERE id=? AND run_id=? AND status='started'").run(resumedAt,target.inboxItemId,runId);
+      this.touchSessionInboxRevision(target.sessionId, resumedAt);
       this.projectAttempt({
         runId, ordinal: nextAttempt, trigger: "retry", status: "running", scenario: "retry",
         legacyEventSeq: this.getRun(runId)?.lastEventSeq ?? 0, timestamp: resumedAt,

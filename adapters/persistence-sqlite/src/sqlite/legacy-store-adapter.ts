@@ -1,4 +1,4 @@
-import type { MessageSourceRepository, SessionRepository, SkillRepository, SubmissionQueue } from "@tagent/admission/ports";
+import type { MessageSourceRepository, ProfileContractRepository, SessionRepository, SkillRepository, SubmissionQueue } from "@tagent/admission/ports";
 import type {
   AttemptAuthorityRepository,
   AttemptRepository,
@@ -57,6 +57,7 @@ import { SqliteLearningProjectionDeliveryRepository } from "./sqlite-learning-pr
 import { SqliteLearningProjectionReconciliationRepository } from "./sqlite-learning-projection-reconciliation-repository.js";
 import { SqliteWorkspaceGoalRepository } from "./workspace-goal-repository.js";
 import { SqliteAttemptRequestEnvelopeRepository } from "./attempt-request-envelope-repository.js";
+import { SqliteProfileContractRepository } from "./profile-contract-repository.js";
 
 type Operation<Args extends unknown[], Result> = (...args: Args) => Result;
 type SynchronousOperation<Args extends unknown[], Result> = (...args: Args) => Result & SynchronousResult<Result>;
@@ -132,6 +133,7 @@ export class LegacyStoreAdapter {
     listSessionTaskRunsPage: Store["listOperatorSessionTaskRunsPage"];
     getLatestSessionTaskRun: Store["getLatestOperatorSessionTaskRun"];
   };
+  readonly profileContracts: ProfileContractRepository;
 
   constructor(store: Store, mutationUnitOfWork: MutationUnitOfWork) {
     const mutate = <Args extends unknown[], Result>(operation: SynchronousOperation<Args, Result>) =>
@@ -149,6 +151,25 @@ export class LegacyStoreAdapter {
     const sqliteLearningProjectionReconciliation = new SqliteLearningProjectionReconciliationRepository(store.db);
     const sqliteWorkspaceGoals = new SqliteWorkspaceGoalRepository(store.db);
     const sqliteRequestEnvelopes = new SqliteAttemptRequestEnvelopeRepository(store.db);
+    const sqliteProfileContracts = new SqliteProfileContractRepository(store.db);
+
+    this.profileContracts = Object.freeze({
+      getProfileResourceRevision: query(sqliteProfileContracts.getProfileResourceRevision.bind(sqliteProfileContracts)),
+      bumpProfileResourceRevision: mutate(sqliteProfileContracts.bumpProfileResourceRevision.bind(sqliteProfileContracts)),
+      runSynchronousMutation: mutate(sqliteProfileContracts.runSynchronousMutation.bind(sqliteProfileContracts)),
+      getInboxCollectionRevision: query(sqliteProfileContracts.getInboxCollectionRevision.bind(sqliteProfileContracts)),
+      getInboxItem: query(sqliteProfileContracts.getInboxItem.bind(sqliteProfileContracts)),
+      listInboxPage: query(sqliteProfileContracts.listInboxPage.bind(sqliteProfileContracts)),
+      getTaskRunSessionId: query(sqliteProfileContracts.getTaskRunSessionId.bind(sqliteProfileContracts)),
+      listContextManifestPage: query(sqliteProfileContracts.listContextManifestPage.bind(sqliteProfileContracts)),
+      getSessionSettings: query(sqliteProfileContracts.getSessionSettings.bind(sqliteProfileContracts)),
+      updateSessionSettings: mutate(sqliteProfileContracts.updateSessionSettings.bind(sqliteProfileContracts)),
+      claimOperation: mutate(sqliteProfileContracts.claimOperation.bind(sqliteProfileContracts)),
+      getOperation: query(sqliteProfileContracts.getOperation.bind(sqliteProfileContracts)),
+      findOperations: query(sqliteProfileContracts.findOperations.bind(sqliteProfileContracts)),
+      settleOperation: mutate(sqliteProfileContracts.settleOperation.bind(sqliteProfileContracts)),
+      recordAudit: mutate(sqliteProfileContracts.recordAudit.bind(sqliteProfileContracts)),
+    });
 
     this.workspaceGoals = Object.freeze({
       createGoal: mutate(sqliteWorkspaceGoals.createGoal.bind(sqliteWorkspaceGoals)),
@@ -289,6 +310,15 @@ export class LegacyStoreAdapter {
       listWorkspaceSkills: query(store.listWorkspaceSkills.bind(store)),
       replaceWorkspaceSkills: mutate(store.replaceWorkspaceSkills.bind(store)),
       deleteSkill: mutate(store.deleteSkill.bind(store)),
+      getCatalogRevision: query(store.getCatalogRevision.bind(store)),
+      getSkillResourceRevision: query(store.getSkillResourceRevision.bind(store)),
+      getWorkspaceSkillRevision: query(store.getWorkspaceSkillRevision.bind(store)),
+      listProfileSkillsPage: query(store.listProfileSkillsPage.bind(store)),
+      listProfileSkillRevisionsPage: query(store.listProfileSkillRevisionsPage.bind(store)),
+      listProfileWorkspaceSkillsPage: query(store.listProfileWorkspaceSkillsPage.bind(store)),
+      createRevisionProfile: mutate(store.createRevisionProfile.bind(store)),
+      deleteSkillProfile: mutate(store.deleteSkillProfile.bind(store)),
+      replaceWorkspaceSkillsProfile: mutate(store.replaceWorkspaceSkillsProfile.bind(store)),
     });
 
     this.operatorRead = Object.freeze({
@@ -309,6 +339,11 @@ export class LegacyStoreAdapter {
     });
 
     this.submissions = Object.freeze({
+      updateSessionInboxItemProfile: mutate(store.updateSessionInboxItemProfile.bind(store)),
+      reorderSessionInboxProfile: mutate(store.reorderSessionInboxProfile.bind(store)),
+      deleteSessionInboxItemProfile: mutate(store.deleteSessionInboxItemProfile.bind(store)),
+      decideSessionInboxItemProfile: mutate(store.decideSessionInboxItemProfile.bind(store)),
+      mergeSessionInboxItemsProfile: mutate(store.mergeSessionInboxItemsProfile.bind(store)),
       enqueueSessionInbox: mutate(store.enqueueSessionInbox.bind(store)),
       getSessionInboxItem: query(store.getSessionInboxItem.bind(store)),
       getSessionSubmission: query(store.getSessionSubmission.bind(store)),

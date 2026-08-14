@@ -20,6 +20,15 @@ function application(store: Store, workspace: string) {
     listWorkspaceSkills: (id) => store.listWorkspaceSkills(id),
     replaceWorkspaceSkills: (workspaceId, skillIds) => store.replaceWorkspaceSkills(workspaceId, skillIds),
     deleteSkill: (id) => store.deleteSkill(id),
+    getCatalogRevision: () => store.getCatalogRevision(),
+    getSkillResourceRevision: (id) => store.getSkillResourceRevision(id),
+    getWorkspaceSkillRevision: (id) => store.getWorkspaceSkillRevision(id),
+    listProfileSkillsPage: (query) => store.listProfileSkillsPage(query),
+    listProfileSkillRevisionsPage: (id, query) => store.listProfileSkillRevisionsPage(id, query),
+    listProfileWorkspaceSkillsPage: (id, query) => store.listProfileWorkspaceSkillsPage(id, query),
+    createRevisionProfile: (input, mutation) => store.createRevisionProfile(input, mutation),
+    deleteSkillProfile: (id, mutation) => store.deleteSkillProfile(id, mutation),
+    replaceWorkspaceSkillsProfile: (id, skillIds, mutation) => store.replaceWorkspaceSkillsProfile(id, skillIds, mutation),
   }, { getSession: (id) => store.getSession(id) }, workspace);
 }
 

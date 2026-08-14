@@ -205,14 +205,14 @@ describe("SQLite persistence adapter workspace package", () => {
     expect(upperLayerViolations).toEqual([]);
   });
 
-  it("preserves schema v46 and the current SQLite shape", () => {
+  it("preserves schema v47 and the current SQLite shape", () => {
     const store = new Store(":memory:");
     try {
-      expect(store.getSchemaVersion()).toBe(46);
+      expect(store.getSchemaVersion()).toBe(47);
       const tables = store.db.prepare(
         "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'",
       ).all() as Array<{ name: string }>;
-      expect(tables).toHaveLength(88);
+      expect(tables).toHaveLength(95);
       expect(tables.map((table) => table.name)).toEqual(expect.arrayContaining([
         "session_create_receipts",
         "submission_audit_receipts",
@@ -224,10 +224,20 @@ describe("SQLite persistence adapter workspace package", () => {
         "skill_revisions",
         "workspace_skill_bindings",
         "attempt_request_envelopes",
+        "profile_mutation_receipts",
+        "profile_operation_receipts",
+        "profile_audit_events",
+        "workspace_skill_revisions",
+        "session_inbox_revisions",
+        "skill_catalog_state",
+        "profile_resource_revisions",
       ]));
       expect((store.db.prepare("PRAGMA table_info(operations)").all() as Array<{ name: string }>).map((column) => column.name)).toContain("payload_json");
       expect((store.db.prepare("PRAGMA table_info(run_checks)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["source_operation_id", "observed_at"]));
       expect((store.db.prepare("PRAGMA table_info(workspace_goal_run_links)").all() as Array<{ name: string }>).map((column) => column.name)).toContain("link_mode");
+      for (const table of ["sessions", "session_supervisor_inbox", "skills"]) {
+        expect((store.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name)).toContain("revision");
+      }
     } finally {
       store.close();
     }

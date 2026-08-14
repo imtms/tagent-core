@@ -1,6 +1,6 @@
 # Upgrade and rollback
 
-This guide describes the current repository boundary: API v1, independently deployed Core and Web Console artifacts, one fenced SQLite writer, and control-plane schema 46. Release tags retain version-specific historical instructions.
+This guide describes the current repository boundary: API v1, independently deployed Core and Web Console artifacts, publishable ABI/Core Client SDK assets, one fenced SQLite writer, and control-plane schema 47. Release tags retain version-specific historical instructions.
 
 ## Compatibility boundary
 
@@ -8,10 +8,12 @@ This guide describes the current repository boundary: API v1, independently depl
 - Core is API-only and does not serve the Web Console or an SPA fallback.
 - Durable submissions use the `Idempotency-Key` header and v1 receipt envelopes.
 - Production uses Node.js `24.18.1`, npm 12 or newer, and Linux x64/Node ABI 137 for the immutable Core artifact.
-- SQLite migrations are forward-only. A schema-45-only binary must not open schema 46.
+- SQLite migrations are forward-only. A schema-46-only binary must not open schema 47.
 - Core, Gateway and Web must honor generation-fenced event replay and durable persist-before-ACK behavior.
 
-Version 0.6.7 fixes blocked-Run Resume in the Web Console, persists provider cooldown recovery across restart, and keeps the Core system-prompt prefix stable by refreshing mutable TaskRun state in an ephemeral request-tail message. SQLite advances from schema 45 to 46 with `run_continuations.not_before` and its due-time index. The Channel continuation shape now includes `notBefore`, so deploy matching Core, ABI/client, and Web Console 0.6.7 artifacts. Back up SQLite with WAL/SHM before upgrade; a schema-45-only binary cannot open the migrated database.
+Version 0.7.0 adds eight independently negotiated Gateway capability profiles, fine-grained service/resource authorization, revision-preconditioned exact replay, durable operation recovery, redacted public projections, and separate delegated audit provenance. SQLite advances from schema 46 to 47 with profile revision, mutation/operation receipt, audit, and collection-revision tables. Deploy matching Core, ABI/Core Client SDK, and Web Console 0.7.0 artifacts. Back up SQLite with WAL/SHM before upgrade; a schema-46-only binary cannot open the migrated database.
+
+Version 0.6.7 fixes blocked-Run Resume in the Web Console, persists provider cooldown recovery across restart, and keeps the Core system-prompt prefix stable by refreshing mutable TaskRun state in an ephemeral request-tail message. SQLite advances from schema 45 to 46 with `run_continuations.not_before` and its due-time index. The Channel continuation shape includes `notBefore`, so deploy matching Core, ABI/client, and Web Console 0.6.7 artifacts. Back up SQLite with WAL/SHM before upgrade; a schema-45-only binary cannot open the migrated database.
 
 Version 0.6.6 does not change runtime behavior, configuration, HTTP API, ABI, or SQLite schema. It supersedes the 0.6.5 release assets so each downloaded `.sha256` file records only its archive basename and works directly with `sha256sum -c` from any directory. Deploy matching Core and Web Console 0.6.6 artifacts.
 
@@ -99,9 +101,9 @@ The schema 33 preflight may record ambiguous source rows in `migration_issues`. 
 
 1. Verify the candidate Core archive and checksum.
 2. Open a restored database with the release-local `Store` twice.
-3. Require both opens to report `schema_meta.version=46`, zero open migration issues, the trusted-evidence/Goal execution shapes, all v39 receipt/ACK shapes, the v40 Submission audit shape, all v41 Operator Read indexes, the v42 Inbox execution-policy column, the v43 Skill catalog, the v44 Workspace reference table, the v45 request-envelope table/index, and the v46 continuation due-time column/index.
+3. Require both opens to report `schema_meta.version=47`, zero open migration issues, the trusted-evidence/Goal execution shapes, all v39 receipt/ACK shapes, the v40 Submission audit shape, all v41 Operator Read indexes, the v42 Inbox execution-policy column, the v43 Skill catalog, the v44 Workspace reference table, the v45 request-envelope table/index, the v46 continuation due-time column/index, and all v47 profile revision/receipt/audit/collection-revision objects.
 4. Start exactly one Core writer and require `/api/v1/health` to report `data.ok=true` and `data.writer.ready=true`.
-5. Negotiate `GET /api/v1/capabilities`; require schema 46, the necessary commands/events, the versioned Operator allowlist, current Approval authority, receipt-recovery protocol, retention policy, documented limits and the `operator.read.v1` marker. Then validate `GET /api/v1/operator/capabilities` before enabling historical inventory.
+5. Negotiate `GET /api/v1/capabilities`; require schema 47, the necessary commands/events, the versioned Operator allowlist, current Approval authority, receipt-recovery protocol, retention policy, documented limits and the `operator.read.v1` marker. Then validate `GET /api/v1/operator/capabilities` and all required entries/details from `GET /api/v1/capability-profiles` before enabling profile features.
 6. Start one Gateway consumer, claim a new generation, replay from the durable ACK, persist each event, then ACK it.
 7. Run `scripts/gateway-readiness-probe.mjs`; require exit 0, `ready=true`, zero lag and no settled/final unacknowledged events.
 8. Deploy the matching independent Web Console artifact.
@@ -112,7 +114,7 @@ Use [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for the e
 ## Verification
 
 - `/api/v1/health` is ready and removed `/api/health` returns 404;
-- schema version is 46 and a second open is idempotent;
+- schema version is 47 and a second open is idempotent;
 - `migration_issues` has zero open rows;
 - only one fresh writer fence exists;
 - a passed required check is rejected unless it references a successful Bash operation from the current Attempt;
@@ -125,9 +127,9 @@ Use [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for the e
 
 There is no in-place schema downgrade.
 
-For a binary rollback that still understands schema 46 and the current ABI window, stop traffic and the current writer, switch the immutable release pointer, start one replacement writer and rerun readiness checks.
+For a binary rollback that still understands schema 47 and the current ABI/profile window, stop traffic and the current writer, switch the immutable release pointer, start one replacement writer and rerun readiness checks.
 
-For any rollback to a schema-45-only or older binary:
+For any rollback to a schema-46-only or older binary:
 
 1. stop Gateway traffic and all writers;
 2. preserve the failed-upgrade database and readiness evidence for diagnosis;
@@ -136,4 +138,4 @@ For any rollback to a schema-45-only or older binary:
 5. restore the matching artifact and configuration;
 6. start exactly one old writer and validate it before reopening compatible traffic.
 
-Do not overwrite a live schema 46 database with old files, and do not run an incompatible binary merely to inspect it.
+Do not overwrite a live schema 47 database with old files, and do not run an incompatible binary merely to inspect it.

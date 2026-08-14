@@ -13,6 +13,7 @@ Core is API-only. Unversioned paths such as `/api/health`, `/api/sessions`, `/ap
 | Public | `GET /api/v1/health` | process and writer readiness; no credential required |
 | Channel | `/api/v1/sessions`, `/api/v1/task-runs/*` | durable submission, TaskRun reads and commands, transcript, artifacts, event consumers |
 | Operator Read | `/api/v1/operator/*` | stable Gateway Session discovery and per-Session TaskRun history |
+| Capability profiles | `/api/v1/capability-profiles`, declared Operator/Admin routes | independently negotiated Gateway feature contracts |
 | Console | `/api/v1/console/*` | operator projections and controls used by the Web Console |
 | Admin | `/api/v1/admin/*` | configuration, Memory, Learning, Workflow, and governance operations |
 | Internal | `/api/v1/internal/*` | trusted workflow evaluation and worker integration |
@@ -53,6 +54,32 @@ GET /api/v1/operator/sessions/:sessionId/task-runs/latest
 ```
 
 Session inventory requires `sessions:read`; nested TaskRun reads require both `sessions:read` and `runs:read`. Both lists default to 50 and cap at 200. They use immutable `(createdAt DESC, id DESC)` order with snapshot membership and read-committed values. The latest route uses `(updatedAt DESC, id DESC)`, returns `data: null` for an existing empty Session and `404 session.not_found` when the Session is absent. Discover the profile through `apiVersions`, then negotiate its exact independent contract at `/api/v1/operator/capabilities`. See [OPERATOR_READ_API.md](OPERATOR_READ_API.md).
+
+### Gateway capability profiles
+
+The full-feature Gateway contract is discovered independently of the closed legacy capabilities response:
+
+```text
+GET /api/v1/capability-profiles
+GET /api/v1/capability-profiles/:profileId
+```
+
+The registry contains exactly these profile `1.0` identities:
+
+- `operator.session-settings.v1`
+- `operator.session-inbox.v1`
+- `operator.context-manifest.v1`
+- `operator.skills.v1`
+- `admin.memory.v1`
+- `admin.learning.v1`
+- `admin.workflow.v1`
+- `admin.autonomy.v1`
+
+Each summary is evaluated for the authenticated Core principal and reports available endpoint IDs and missing service scopes. Each detail document owns the exact methods/paths, required service and resource scopes, opaque-cursor limits, retention, compatibility and write-recovery semantics. Gateway must not infer availability from another principal's document or call undeclared Console/Admin routes.
+
+Synchronous resource mutations require `Idempotency-Key` and an `If-Match: "rN"` ETag. The first canonical payload and result are retained for exact replay; a changed payload returns `409 idempotency.conflict`, and a stale revision returns `409 concurrency.conflict` with the current ETag. Asynchronous or externally observable mutations require `Idempotency-Key` and return a durable operation receipt. Recover those receipts at `/api/v1/operator/operations/:requestId` or `/api/v1/admin/operations/:requestId`; `outcome_unknown` requires reconciliation and is never permission for automatic replay.
+
+Optional `X-TAgent-Delegated-Actor` and `X-TAgent-Delegated-Request-Id` headers carry Gateway provenance but grant no authority. Core audits them separately from the authenticated service principal and granted scopes. Public Settings/Inbox/Context/Skill/Memory/Learning/Workflow/Autonomy DTOs are ABI-owned projections and intentionally omit private paths, prompts, arbitrary metadata, tool arguments and internal evidence. See [GATEWAY_PROFILE_COMPATIBILITY.md](GATEWAY_PROFILE_COMPATIBILITY.md) and [GATEWAY_HANDOFF_STATUS.md](GATEWAY_HANDOFF_STATUS.md).
 
 ### Workspace Goal Console routes
 
@@ -156,6 +183,15 @@ runs:read           runs:control
 events:consume      workflows:teach
 workflows:govern    workflows:approve
 admin               internal
+operator:session-settings:read   operator:session-settings:write
+operator:inbox:read              operator:inbox:write
+operator:inbox:control           operator:context-manifests:read
+operator:skills:read             operator:skills:write
+admin:memory:read                admin:memory:write
+admin:learning:read              admin:learning:write
+admin:workflow:read              admin:workflow:write
+admin:autonomy:read              admin:autonomy:decide
+admin:autonomy:execute           admin:operations:read
 ```
 
 A configured credential may also define a server-owned `subjectId` and up to 64 `user`, `workspace`, `project`, or `session` resource scopes. The client cannot replace these through request headers.
@@ -214,15 +250,15 @@ Event consumers are durable and generation-fenced:
 
 The durable acknowledged sequence is authoritative. The stream always replays from that sequence and then continues live; an optional `after` value may be equal to or behind the durable ACK but may never skip ahead of it. A client checkpoint may suppress re-applying an already hydrated event, but the client must still persist and ACK the replayed sequence. The stream sends JSON `TaskRunEvent` values in `data:` frames and a comment heartbeat every 15 seconds. A newer claim invalidates an older generation.
 
-Replay reads events in batches of 256 and bounds the replay/live handoff buffer at 1,000 events. Backpressure or overflow closes the stream; the consumer reconnects from its durable ACK. Core v41 does not automatically prune TaskRun events or expire cursors. `settledAcknowledgedSequence` includes recoverable `blocked` and terminal failure states; `finalAcknowledgedSequence` advances only for irreversible `completed` or `cancelled`. The deprecated `terminalAcknowledgedSequence` aliases the settled boundary during the compatibility window.
+Replay reads events in batches of 256 and bounds the replay/live handoff buffer at 1,000 events. Backpressure or overflow closes the stream; the consumer reconnects from its durable ACK. Core does not automatically prune TaskRun events or expire cursors. `settledAcknowledgedSequence` includes recoverable `blocked` and terminal failure states; `finalAcknowledgedSequence` advances only for irreversible `completed` or `cancelled`. The deprecated `terminalAcknowledgedSequence` aliases the settled boundary during the compatibility window.
 
 Projection-critical events use per-type payload schemas and one canonical fixture per catalog member. Internal Supervisor/context/runtime/control detail is projected as `diagnostic.internal` with only `sourceType`; private reasoning and arbitrary internal payloads are never copied to Channel SSE. Unknown future public event types remain ignorable and ACK-able. `task_run.waiting_input` carries the public User Input request. The typed interaction read model is authoritative for the complete lifecycle, including states that do not have a dedicated public event.
 
 ## Capability discovery and Operator profile
 
-`GET /api/v1/capabilities` returns the Core release, API/event/schema versions, command/event catalogs, typed-interaction flags, `operator.profileVersion` and exact endpoint IDs, active Approval authority/readiness, exact receipt recovery, no-auto-delete/no-cursor-expiry retention policy, and enforced payload/stream limits. It advertises `operator.read.v1` in `apiVersions`; the profile's own capabilities are returned separately from `GET /api/v1/operator/capabilities`. Gateway must fail fast for each feature if any required item is absent.
+`GET /api/v1/capabilities` returns the Core release, API/event/schema versions, command/event catalogs, typed-interaction flags, `operator.profileVersion` and exact endpoint IDs, active Approval authority/readiness, exact receipt recovery, no-auto-delete/no-cursor-expiry retention policy, and enforced payload/stream limits. It advertises `operator.read.v1` in `apiVersions`; that profile's own capabilities are returned from `GET /api/v1/operator/capabilities`, while the eight full-feature profiles are returned independently from `GET /api/v1/capability-profiles`. Gateway must fail fast for each feature if any required item is absent.
 
-Only endpoint IDs returned by their owning capability profile are stable cross-team contracts. The legacy Operator profile consists of the completed Channel Session/Submission/TaskRun/interaction/Transcript/Artifact/event-consumer routes and the Workspace Goal subset listed above. Operator Read owns only its four declared endpoint IDs. Other Console/Admin routes remain first-party or experimental because some use handwritten DTOs or non-receipted writes. Gateway must not transparently expose them. Browser credentials never enter Core; Gateway replaces them with a minimum-scope opaque service credential. See [GATEWAY_HANDOFF_STATUS.md](GATEWAY_HANDOFF_STATUS.md) for the responsibility decision.
+Only endpoint IDs returned by their owning capability profile are stable cross-team contracts. The legacy Operator profile consists of the completed Channel Session/Submission/TaskRun/interaction/Transcript/Artifact/event-consumer routes and the Workspace Goal subset listed above. Operator Read owns only its four declared endpoint IDs; the full-feature registry owns only the routes in each of its eight detail documents. Undeclared Console/Admin routes remain first-party or experimental and Gateway must not transparently expose them. Browser credentials never enter Core; Gateway replaces them with a minimum-scope opaque service credential. See [GATEWAY_HANDOFF_STATUS.md](GATEWAY_HANDOFF_STATUS.md) for the responsibility decision.
 
 ## CORS
 
@@ -231,7 +267,7 @@ Only endpoint IDs returned by their owning capability profile are stable cross-t
 Preflight allows the API methods and these headers only:
 
 ```text
-Authorization, Content-Type, Idempotency-Key, X-Request-Id
+Authorization, Content-Type, Idempotency-Key, If-Match, X-Request-Id, X-TAgent-Delegated-Actor, X-TAgent-Delegated-Request-Id
 ```
 
-Core does not send `Access-Control-Allow-Credentials`.
+Core exposes `Deprecation`, `ETag`, `Idempotency-Replayed`, `Link`, and `X-Request-Id` and does not send `Access-Control-Allow-Credentials`.

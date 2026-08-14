@@ -16,9 +16,18 @@ runs:read           runs:control
 events:consume      workflows:teach
 workflows:govern    workflows:approve
 admin               internal
+operator:session-settings:read   operator:session-settings:write
+operator:inbox:read              operator:inbox:write
+operator:inbox:control           operator:context-manifests:read
+operator:skills:read             operator:skills:write
+admin:memory:read                admin:memory:write
+admin:learning:read              admin:learning:write
+admin:workflow:read              admin:workflow:write
+admin:autonomy:read              admin:autonomy:decide
+admin:autonomy:execute           admin:operations:read
 ```
 
-A credential may bind a subject and `user`, `workspace`, `project`, or `session` resource scopes. Core takes these values only from server configuration; identity-bearing client headers are not trusted.
+A credential may bind a subject and `user`, `workspace`, `project`, or `session` resource scopes. Core takes these values only from server configuration. Profile mutation headers may carry delegated actor/request identifiers for audit correlation, but they grant no scope and cannot replace the authenticated principal.
 
 ## Gateway boundary
 

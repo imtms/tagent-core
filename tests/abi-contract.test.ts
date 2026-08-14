@@ -5,6 +5,12 @@ import * as AdminV1 from "@tagent/abi/admin/v1";
 import * as ChannelV1 from "@tagent/abi/channel/v1";
 import * as InternalV1 from "@tagent/abi/internal/v1";
 import * as OperatorReadV1 from "@tagent/abi/operator/read-v1";
+import * as ProfilesV1 from "@tagent/abi/profiles/v1";
+import * as OperatorSessionSettingsV1 from "@tagent/abi/operator/session-settings-v1";
+import * as OperatorInboxV1 from "@tagent/abi/operator/inbox-v1";
+import * as OperatorContextManifestV1 from "@tagent/abi/operator/context-manifest-v1";
+import * as OperatorSkillsV1 from "@tagent/abi/operator/skills-v1";
+import * as AdminProfilesV1 from "@tagent/abi/admin/profiles-v1";
 import {
   AdminConfigStatusSchema,
   AdminConfigStatusResponseSchema,
@@ -48,6 +54,18 @@ import {
   operatorLatestTaskRunFixture,
   operatorSessionListFixture,
   operatorTaskRunListFixture,
+  capabilityProfileDetailFixtures,
+  capabilityProfileRegistryFixture,
+  operatorSessionSettingsFixture,
+  operatorInboxListFixture,
+  operatorContextManifestListFixture,
+  operatorSkillCatalogFixture,
+  operatorSkillResponseFixture,
+  operatorWorkspaceSkillsFixture,
+  adminMemoryStatusFixture,
+  adminLearningCenterFixture,
+  adminWorkflowsFixture,
+  adminAutonomyApprovalsFixture,
   type SubmissionCreateRequest,
   type TaskRunCommand,
   type TaskRunEvent,
@@ -55,6 +73,54 @@ import {
 import { MEMORY_SOURCE_TYPES as DOMAIN_MEMORY_SOURCE_TYPES } from "@tagent/memory";
 
 describe("ABI runtime decoding", () => {
+  it("publishes strict capability-profile descriptors and canonical fixtures", () => {
+    expect(ProfilesV1.CAPABILITY_PROFILE_IDS).toHaveLength(8);
+    expect(decodeAbi(ProfilesV1.CapabilityProfileRegistryResponseSchema, capabilityProfileRegistryFixture))
+      .toEqual(capabilityProfileRegistryFixture);
+    for (const fixture of capabilityProfileDetailFixtures) {
+      expect(decodeAbi(ProfilesV1.CapabilityProfileDetailResponseSchema, fixture)).toEqual(fixture);
+      expect(fixture.data.profile.endpointIds).toEqual(fixture.data.profile.endpoints.map((endpoint) => endpoint.id));
+    }
+  });
+
+  it("publishes the Session Settings profile DTO without Console view-model fields", () => {
+    expect(decodeAbi(OperatorSessionSettingsV1.OperatorSessionSettingsResponseSchema, operatorSessionSettingsFixture))
+      .toEqual(operatorSessionSettingsFixture);
+    expect(() => decodeAbi(OperatorSessionSettingsV1.OperatorSessionSettingsResponseSchema, {
+      ...operatorSessionSettingsFixture,
+      data: { settings: { ...operatorSessionSettingsFixture.data.settings, prompt: "must not leak" } },
+    })).toThrow();
+  });
+
+  it("publishes strict Inbox and redacted Context Manifest fixtures", () => {
+    expect(decodeAbi(OperatorInboxV1.OperatorInboxListResponseSchema, operatorInboxListFixture))
+      .toEqual(operatorInboxListFixture);
+    expect(decodeAbi(OperatorContextManifestV1.OperatorContextManifestListResponseSchema, operatorContextManifestListFixture))
+      .toEqual(operatorContextManifestListFixture);
+    expect(JSON.stringify(operatorContextManifestListFixture)).not.toContain("sourceId");
+    expect(JSON.stringify(operatorContextManifestListFixture)).not.toContain("metadata");
+  });
+
+  it("publishes strict Skills and Admin profile fixtures without private storage fields", () => {
+    expect(decodeAbi(OperatorSkillsV1.OperatorSkillCatalogResponseSchema, operatorSkillCatalogFixture))
+      .toEqual(operatorSkillCatalogFixture);
+    expect(decodeAbi(OperatorSkillsV1.OperatorSkillResponseSchema, operatorSkillResponseFixture))
+      .toEqual(operatorSkillResponseFixture);
+    expect(decodeAbi(OperatorSkillsV1.OperatorWorkspaceSkillsResponseSchema, operatorWorkspaceSkillsFixture))
+      .toEqual(operatorWorkspaceSkillsFixture);
+    expect(JSON.stringify(operatorSkillResponseFixture)).not.toContain("filePath");
+    expect(JSON.stringify(operatorSkillResponseFixture)).not.toContain("sourceFilename");
+
+    expect(decodeAbi(AdminProfilesV1.AdminMemoryStatusResponseSchema, adminMemoryStatusFixture))
+      .toEqual(adminMemoryStatusFixture);
+    expect(decodeAbi(AdminProfilesV1.AdminLearningCenterResponseSchema, adminLearningCenterFixture))
+      .toEqual(adminLearningCenterFixture);
+    expect(decodeAbi(AdminProfilesV1.AdminWorkflowsResponseSchema, adminWorkflowsFixture))
+      .toEqual(adminWorkflowsFixture);
+    expect(decodeAbi(AdminProfilesV1.AdminAutonomyApprovalsResponseSchema, adminAutonomyApprovalsFixture))
+      .toEqual(adminAutonomyApprovalsFixture);
+  });
+
   it("publishes the standalone Operator Read v1 ABI and canonical fixtures", () => {
     expect(decodeAbi(OperatorReadV1.OperatorReadCapabilitiesResponseSchema, operatorReadCapabilitiesFixture))
       .toEqual(operatorReadCapabilitiesFixture);

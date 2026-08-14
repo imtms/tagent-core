@@ -1,4 +1,4 @@
-import type { SessionRepository, SubmissionQueue } from "@tagent/admission/ports";
+import type { ProfileContractRepository, SessionRepository, SubmissionQueue } from "@tagent/admission/ports";
 import type {
   ControlInbox,
   EventConsumerRepository,
@@ -36,6 +36,7 @@ export interface HttpOperatorTaskRunRow {
 }
 
 export interface HttpPersistencePort {
+  profileContracts: ProfileContractRepository;
   operatorRead: {
     listSessionsPage(query: HttpOperatorReadPageQuery): { items: HttpOperatorSessionRow[]; snapshotRowId: number };
     listSessionTaskRunsPage(sessionId: string, query: HttpOperatorReadPageQuery): { items: HttpOperatorTaskRunRow[]; snapshotRowId: number };

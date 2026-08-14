@@ -1,4 +1,4 @@
-import type { ServiceCredential, ServiceScope } from "@tagent/http-fastify";
+import { SERVICE_SCOPES, type ServiceCredential, type ServiceScope } from "@tagent/http-fastify/auth";
 import type { GovernanceApprovalAuthority } from "@tagent/governance/domain";
 import { credentialReference, type CredentialReference, type RuntimeModelSpec } from "@tagent/execution/ports";
 
@@ -220,7 +220,7 @@ function loadMemoryConfig(env: NodeJS.ProcessEnv): MemoryConfig {
 
 function parseServiceCredentials(value?: string): ServiceCredential[] {
   if (!value?.trim()) return [];
-  const allowed = new Set<ServiceScope>(["sessions:read", "sessions:write", "runs:read", "runs:control", "events:consume", "workflows:teach", "workflows:govern", "workflows:approve", "admin", "internal"]);
+  const allowed = new Set<ServiceScope>(SERVICE_SCOPES);
   const resourceTypes = new Set(["user", "workspace", "project", "session"]);
   const parsed = JSON.parse(value) as unknown;
   if (!Array.isArray(parsed)) throw new Error("TAGENT_SERVICE_CREDENTIALS must be a JSON array");
@@ -402,7 +402,7 @@ export interface PublicRuntimeConfig {
 
 export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): PublicRuntimeConfig {
   return {
-    releaseVersion: "0.6.7",
+    releaseVersion: "0.7.0",
     runtime: config.runtime,
     provider: config.model.provider,
     api: config.model.api,

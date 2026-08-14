@@ -76,7 +76,7 @@ describe("Attempt schema v30 migration", () => {
     seed.close();
 
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(46);
+    expect(migrated.getSchemaVersion()).toBe(47);
     expect(migrated.db.prepare("SELECT status,attempt,last_event_seq AS lastEventSeq FROM runs WHERE id=?").get(run.id)).toEqual(legacyBefore);
     expect(migrated.db.prepare("SELECT id,ordinal FROM attempts WHERE run_id=? ORDER BY ordinal").all(run.id)).toEqual([
       { id: attemptIdFor(run.id, 1), ordinal: 1 },

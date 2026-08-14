@@ -39,7 +39,7 @@ TAGENT_SERVICE_CREDENTIALS=[{"token":"REPLACE_WITH_24_PLUS_CHAR_TOKEN","scopes":
 
 Core rejects wildcards, `null`, credentials, paths, query strings, fragments, and non-canonical origins. Invalid configuration fails startup. A non-empty allowlist requires at least one service credential.
 
-Allowed responses echo the exact origin and set `Vary: Origin`. Preflight permits `Authorization`, `Content-Type`, `Idempotency-Key`, and `X-Request-Id`. Core does not send `Access-Control-Allow-Credentials`.
+Allowed responses echo the exact origin and set `Vary: Origin`. Preflight permits `Authorization`, `Content-Type`, `Idempotency-Key`, `If-Match`, `X-Request-Id`, `X-TAgent-Delegated-Actor`, and `X-TAgent-Delegated-Request-Id`; responses expose `ETag` and `Idempotency-Replayed` with the existing metadata headers. Core does not send `Access-Control-Allow-Credentials`.
 
 ## Content and browser controls
 
@@ -49,6 +49,6 @@ Treat Markdown, transcripts, tool output, artifact names, and model content as u
 
 ## Artifact status
 
-`scripts/build-release.sh` creates separate Core and Web Console archives with manifests and checksums. The tag-triggered release workflow builds both in one release job, uploads both archives and checksums as a 30-day Actions artifact, and attaches all four files to the GitHub Release.
+`scripts/build-release.sh` creates separate Core and Web Console archives with manifests/checksums plus ABI and Core Client SDK tarballs with checksums. The tag-triggered release workflow builds all four artifacts in one release job, uploads them as a 30-day Actions artifact, and attaches all eight files to the GitHub Release.
 
 See [DEPLOYMENT_AND_GATEWAY.md](DEPLOYMENT_AND_GATEWAY.md).

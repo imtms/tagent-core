@@ -3,7 +3,15 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFi
 import path from "node:path";
 import { unzipSync } from "fflate";
 import { parse } from "yaml";
-import type { SessionRepository, SkillRepository } from "@tagent/admission/ports";
+import type { SkillRevision } from "@tagent/admission/domain";
+import type {
+  ProfileMutationContext,
+  ProfileMutationResult,
+  ProfilePageQuery,
+  ProfileSkillMutationValue,
+  SessionRepository,
+  SkillRepository,
+} from "@tagent/admission/ports";
 
 const MAX_ARCHIVE_BYTES = 8 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 16 * 1024 * 1024;
@@ -250,18 +258,37 @@ export class CoreSkillApplication {
   ) { this.workspace = path.resolve(workspace); }
 
   listSkills() { return this.skills.listSkills(); }
+  listSkillsProfile(query: ProfilePageQuery) { return this.skills.listProfileSkillsPage(query); }
   getSkill(skillId: string) {
     const skill = this.skills.getSkill(skillId);
     if (!skill) throw new Error("Skill not found");
     return skill;
   }
+  getSkillProfile(skillId: string) {
+    const skill = this.getSkill(skillId);
+    return {
+      skill,
+      resourceRevision: this.skills.getSkillResourceRevision(skillId)!,
+      catalogRevision: this.skills.getCatalogRevision(),
+    };
+  }
   listSkillRevisions(skillId: string) {
     if (!this.skills.getSkill(skillId)) throw new Error("Skill not found");
     return this.skills.listRevisions(skillId);
   }
+  listSkillRevisionsProfile(skillId: string, query: ProfilePageQuery) {
+    const page = this.skills.listProfileSkillRevisionsPage(skillId, query);
+    if (!page) throw new Error("Skill not found");
+    return page;
+  }
   listWorkspaceSkills(workspaceId: string) {
     if (!this.sessions.getSession(workspaceId)) throw new Error("Session not found");
     return this.skills.listWorkspaceSkills(workspaceId);
+  }
+  listWorkspaceSkillsProfile(workspaceId: string, query: ProfilePageQuery) {
+    const page = this.skills.listProfileWorkspaceSkillsPage(workspaceId, query);
+    if (!page) throw new Error("Session not found");
+    return page;
   }
   replaceWorkspaceSkills(workspaceId: string, skillIds: readonly string[]) {
     if (!this.sessions.getSession(workspaceId)) throw new Error("Session not found");
@@ -270,8 +297,31 @@ export class CoreSkillApplication {
     if (!selected) throw new Error("Skill not found");
     return selected;
   }
+  replaceWorkspaceSkillsProfile(workspaceId: string, skillIds: readonly string[], mutation: ProfileMutationContext) {
+    if (skillIds.length > 32) throw new Error("A Workspace can reference at most 32 Skills");
+    return this.skills.replaceWorkspaceSkillsProfile(workspaceId, skillIds, mutation);
+  }
 
-  private async persistBundle(parsed: ParsedSkill, bundle: { files: BundleFile[] }, sourceFilename: string, skillId?: string) {
+  private persistBundle(
+    parsed: ParsedSkill,
+    bundle: { files: BundleFile[] },
+    sourceFilename: string,
+    skillId?: string,
+  ): Promise<SkillRevision>;
+  private persistBundle(
+    parsed: ParsedSkill,
+    bundle: { files: BundleFile[] },
+    sourceFilename: string,
+    skillId: string | undefined,
+    mutation: ProfileMutationContext,
+  ): Promise<ProfileMutationResult<ProfileSkillMutationValue>>;
+  private async persistBundle(
+    parsed: ParsedSkill,
+    bundle: { files: BundleFile[] },
+    sourceFilename: string,
+    skillId?: string,
+    mutation?: ProfileMutationContext,
+  ): Promise<SkillRevision | ProfileMutationResult<ProfileSkillMutationValue>> {
     const sha256 = bundleHash(bundle.files);
     const tagentRoot = path.join(this.workspace, ".tagent");
     const managedRoot = path.join(tagentRoot, "skills");
@@ -308,13 +358,16 @@ export class CoreSkillApplication {
     } finally {
       await rm(staging, { recursive: true, force: true });
     }
-    return this.skills.createRevision({
+    const input = {
       skillId,
       ...parsed,
       filePath: path.posix.join(...relativeDirectory.split(path.sep), "SKILL.md"),
       sha256,
       sourceFilename,
-    });
+    };
+    return mutation
+      ? this.skills.createRevisionProfile(input, mutation)
+      : this.skills.createRevision(input);
   }
 
   async uploadSkill(input: SkillUploadInput) {
@@ -325,6 +378,16 @@ export class CoreSkillApplication {
     const bundle = extractBundle(filename, decodeBase64(input.contentBase64));
     const parsed = parseSkill(bundle.files.find((file) => file.relativePath === bundle.skillPath)!.data);
     return this.persistBundle(parsed, bundle, filename);
+  }
+
+  async uploadSkillProfile(input: SkillUploadInput, mutation: ProfileMutationContext) {
+    const filename = path.basename(input.filename.trim());
+    if (!filename || filename.length > 255 || (!filename.toLowerCase().endsWith(".zip") && !filename.toLowerCase().endsWith(".md"))) {
+      throw new Error("Upload a SKILL.md or .zip Skill bundle");
+    }
+    const bundle = extractBundle(filename, decodeBase64(input.contentBase64));
+    const parsed = parseSkill(bundle.files.find((file) => file.relativePath === bundle.skillPath)!.data);
+    return this.persistBundle(parsed, bundle, filename, undefined, mutation);
   }
 
   async updateSkill(skillId: string, input: SkillUpdateInput) {
@@ -340,10 +403,27 @@ export class CoreSkillApplication {
     return this.persistBundle(parsed, { files: nextFiles }, "web-editor", skillId);
   }
 
+  async updateSkillProfile(skillId: string, input: SkillUpdateInput, mutation: ProfileMutationContext) {
+    const current = this.getSkill(skillId);
+    const edited = editorSkillFile(input);
+    const parsed = parseSkill(edited.data);
+    const duplicateName = this.skills.listSkills().find((skill) => skill.id !== skillId && skill.name === parsed.name);
+    if (duplicateName) throw new Error(`Skill name ${parsed.name} already exists`);
+    const managedRoot = path.join(this.workspace, ".tagent", "skills");
+    const files = await readManagedBundle(current.filePath, this.workspace, managedRoot);
+    const nextFiles = files.filter((file) => file.relativePath !== "SKILL.md");
+    nextFiles.push(edited);
+    return this.persistBundle(parsed, { files: nextFiles }, "profile-editor", skillId, mutation);
+  }
+
   deleteSkill(skillId: string) {
     const deleted = this.skills.deleteSkill(skillId);
     if (!deleted) throw new Error("Skill not found");
     // Immutable content-addressed bundles remain available to historical and active TaskRuns.
     return { ok: true as const };
+  }
+
+  deleteSkillProfile(skillId: string, mutation: ProfileMutationContext) {
+    return this.skills.deleteSkillProfile(skillId, mutation);
   }
 }

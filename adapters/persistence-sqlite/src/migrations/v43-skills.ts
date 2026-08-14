@@ -52,8 +52,12 @@ function quotedIdentifier(value: string): string {
 }
 
 function sameColumns(actual: ColumnShape[], expected: readonly ColumnShape[]): boolean {
-  return actual.length === expected.length && actual.every((column, index) => {
-    const shape = expected[index];
+  const tail = actual.at(-1);
+  const permittedV47Tail = actual.length === expected.length + 1
+    && tail?.name === "revision" && tail.type === "INTEGER" && tail.notnull === 1
+    && tail.dflt_value === "1" && tail.pk === 0;
+  return (actual.length === expected.length || permittedV47Tail) && expected.every((shape, index) => {
+    const column = actual[index];
     return column.name === shape.name && column.type === shape.type && column.notnull === shape.notnull
       && column.dflt_value === shape.dflt_value && column.pk === shape.pk;
   });

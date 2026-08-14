@@ -6,17 +6,17 @@ This document records the Core team's responsibility decisions and evidence-base
 
 | Item | Reviewed value |
 | --- | --- |
-| Review date | 2026-08-14 |
-| Main line at latest review start | `fe503144351655f7bf3c4f7338a6ea8dd683fd68` |
-| Core package version | `0.6.7` |
-| SQLite schema | `46` |
+| Review date | 2026-08-15 |
+| Main line at latest review start | `2dd3e22b03743b7769c29c2a224a8192ad177b07` |
+| Core package version | `0.7.0` |
+| SQLite schema | `47` |
 | Latest Gateway handoff source baseline | Core checkout `62ce7199c5ae8b132efda11d4bcf343e9a527397` |
 
 The Gateway documents mix Core contracts, Gateway implementation work, future scale features and internal Core migrations. This review accepts only requirements that protect the REST/SSE/ABI boundary or Core-owned durable authority. Session/TaskRun inventory is accepted because Core is authoritative; browser identity, ACLs, projection and northbound delivery remain Gateway-owned.
 
 ## Decision
 
-The declared Channel, Workspace Goal Operator and Operator Read profiles satisfy the reasonable Core-owned Gateway requirements. Production use still requires the Core release gate and the Gateway repository's own release gate.
+The declared Channel, Workspace Goal Operator, Operator Read, and eight full-feature capability profiles satisfy the reasonable Core-owned Gateway requirements. Production use still requires the Core release gate and the Gateway repository's own release gate.
 
 Core does not claim that one passing HTTP response proves end-to-end delivery. It guarantees durable identities, typed receipts/read models, generation-fenced replay, explicit uncertain outcomes and runtime capability negotiation. Gateway guarantees browser/channel identity, routing, local persistence before ACK, outbox/external delivery and its client compatibility matrix.
 
@@ -38,7 +38,14 @@ Core does not claim that one passing HTTP response proves end-to-end delivery. I
 | P2-1 trace fields | Public mapping fills correlation from request/command/submission/inbox/approval IDs and causation from owned decision/control identifiers when present. Missing Core event ancestry remains `null`; Core never fabricates a causation event ID. |
 | P2-2 contract observability | The read-only probe reports consumer lag, settled/final unacknowledged counts and age, command/Goal `started` and `outcome_unknown` counts and oldest age, writer fence/readiness, migration issues, capabilities and authority. Young `started` work is observable but does not flap readiness; stale started work and every unknown outcome block it. |
 | P2-3 scopes | Existing `runs:read`/`runs:control` match the current security domain. Cosmetic fine-grained scopes were not added. |
-| Operator Read P0 | Independent `operator.read.v1` capability discovery, bounded Session inventory, complete per-Session TaskRun inventory and latest TaskRun are implemented with ABI schemas/fixtures, Core Client methods, public summaries, scope checks and the schema-41 indexes retained by schema 46. Immutable creation-order keysets preserve snapshot membership across ties and concurrent inserts; values are explicitly read-committed. The legacy strict Operator 1.0 allowlist is unchanged. |
+| Operator Read P0 | Independent `operator.read.v1` capability discovery, bounded Session inventory, complete per-Session TaskRun inventory and latest TaskRun are implemented with ABI schemas/fixtures, Core Client methods, public summaries, scope checks and the schema-41 indexes retained by schema 47. Immutable creation-order keysets preserve snapshot membership across ties and concurrent inserts; values are explicitly read-committed. The legacy strict Operator 1.0 allowlist is unchanged. |
+| Full-feature registry | `GET /api/v1/capability-profiles` and its detail route publish eight independent profile `1.0` contracts, principal-specific endpoint availability, exact endpoint IDs, scope/resource requirements, pagination/retention policy and per-endpoint recovery semantics. The closed legacy capabilities response remains unchanged. |
+| Session Settings / Inbox / Context | Settings use monotonic revision ETags and exact replay. Inbox exposes bounded snapshot pages plus conditional reorder/update/decision/merge/delete and durable start/retry receipts. Context Manifest pages redact private prompt/tool/path material. |
+| Skills | The shared catalog, immutable revision history and Workspace bindings use bounded reads, catalog/resource/binding revisions and exact conditional writes. Global catalog access requires wildcard Workspace authority; public DTOs omit filesystem paths and upload filenames. |
+| Admin Memory / Learning | Memory status, recall and record pages expose bounded/redacted projections; capture/govern/forget use durable receipts. Learning settings and Session center expose stable fields; settings update uses a receipt, and TaskRun policy update uses a persistent monotonic revision. |
+| Admin Workflow / Autonomy | Workflow and approval lists are bounded/redacted. Local lifecycle/decision writes use conditional exact replay; activation request and approval execution use durable receipts. Admin receipt recovery is separately authorized with `admin:operations:read`. |
+| Profile persistence and audit | Schema 47 persists generic resource revisions, exact mutation receipts, durable operation receipts, audit events and collection revisions. Audit separates authenticated Core principal/granted scopes from delegated actor/request IDs and stores no request body. Restart converts unprovable started profile effects to `outcome_unknown`. |
+| SDK and provider evidence | Release assets include independent version-matched ABI and Core Client `.tgz` files with JS, declarations and both source-map types plus portable SHA-256 files. The real-provider harness starts Core, uses the typed client, checks all 8 profiles/41 unique routes and decodes canonical fixtures; it is not a Fake Core. |
 
 ## Accepted recovery design
 
@@ -95,15 +102,15 @@ None of these permits Gateway to depend on an undeclared endpoint today.
 
 ## Gateway integration baseline
 
-Gateway may depend only on endpoint IDs returned by the owning capability profile. Before admitting base traffic it must require schema 46, the required command/event catalogs, legacy Operator profile 1.0, one ready Approval authority, exact-replay/no-blind-replay receipt semantics, no-pruning cursor policy and matching limits. Historical inventory additionally requires `operator.read.v1` in `apiVersions` and a compatible `GET /api/v1/operator/capabilities`; its absence disables only that feature.
+Gateway may depend only on endpoint IDs returned by the owning capability profile. Before admitting base traffic it must require schema 47, the required command/event catalogs, legacy Operator profile 1.0, one ready Approval authority, exact-replay/no-blind-replay receipt semantics, no-pruning cursor policy and matching limits. Historical inventory additionally requires `operator.read.v1` in `apiVersions` and a compatible `GET /api/v1/operator/capabilities`. Each full-feature area must remain disabled unless its matching `GET /api/v1/capability-profiles` summary/detail is compatible and available to the actual Gateway principal.
 
 After an ambiguous response, Gateway queries the original Submission, command or Goal receipt. `started` is in-flight, `outcome_unknown` requires read-model reconciliation, and neither is permission for blind replay. For SSE, Gateway persists the event under `(taskRunId, consumerId, generation, sequence, eventId)` before ACK and reclaims after stale generation.
 
 ## Evidence map
 
-- ABI/catalog/fixtures: `packages/abi/src/channel/v1/*`, `packages/abi/src/console/v1/goal-schemas.ts`, `packages/abi/src/operator/read-v1/*`
-- Core Client: `packages/core-client/src/channel-v1-client.ts`, `packages/core-client/src/console-goal-client.ts`, `packages/core-client/src/operator-read-v1-client.ts`
-- HTTP providers: `adapters/http-fastify/src/v1/*`
-- persistence: `adapters/persistence-sqlite/src/migrations/v39-gateway-contracts.ts`, `v40-gateway-operator.ts`, `v41-operator-read.ts`, `adapters/persistence-sqlite/src/store.ts`
-- readiness: `scripts/gateway-readiness-probe.mjs`
-- automated evidence: `tests/abi-contract.test.ts`, `tests/core-client.test.ts`, `tests/v1-api-differential.test.ts`, `tests/workspace-goals-api.test.ts`, `tests/operator-read-api.test.ts`, `tests/operator-read-v41-migration.test.ts`, `tests/gateway-contracts-v39-migration.test.ts`, `tests/gateway-operator-v40-migration.test.ts`, `tests/gateway-production-readiness.test.ts`
+- ABI/catalog/fixtures: `packages/abi/src/channel/v1/*`, `packages/abi/src/console/v1/goal-schemas.ts`, `packages/abi/src/operator/*-v1/*`, `packages/abi/src/admin/profiles-v1/*`, `packages/abi/src/profiles/v1/*`
+- Core Client: `packages/core-client/src/channel-v1-client.ts`, `packages/core-client/src/console-goal-client.ts`, `packages/core-client/src/operator-*-v1-client.ts`, `packages/core-client/src/admin-profiles-v1-client.ts`, `packages/core-client/src/capability-profile-client.ts`
+- HTTP providers: `adapters/http-fastify/src/v1/*-profile-routes.ts`, `operator-*-routes.ts`, `capability-profile-routes.ts`
+- persistence: `adapters/persistence-sqlite/src/migrations/v39-gateway-contracts.ts`, `v40-gateway-operator.ts`, `v41-operator-read.ts`, `v47-gateway-profiles.ts`, `adapters/persistence-sqlite/src/sqlite/profile-contract-repository.ts`
+- release/readiness: `scripts/build-sdk-release.mjs`, `scripts/gateway-readiness-probe.mjs`, `.github/workflows/release.yml`
+- automated evidence: `tests/abi-contract.test.ts`, `tests/core-client.test.ts`, `tests/gateway-profile-provider-contract.test.ts`, `tests/capability-profiles-api.test.ts`, `tests/operator-*-api.test.ts`, `tests/admin-profiles-api.test.ts`, `tests/gateway-profile-persistence.test.ts`, `tests/gateway-production-readiness.test.ts`, `tests/sdk-release.test.ts`
