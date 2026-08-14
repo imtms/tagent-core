@@ -26,7 +26,7 @@ export interface HttpMemoryPort {
   enqueueCapture(request: unknown): Promise<unknown>;
   listCaptureJobs?(access: HttpMemoryAccess, limit?: number): Promise<unknown>;
   status(access: HttpMemoryAccess): Promise<unknown>;
-  recall(request: unknown): Promise<unknown>;
+  recall(request: unknown, signal: AbortSignal): Promise<unknown>;
   getColdTopic(access: HttpMemoryAccess, topicId: string): Promise<unknown | null>;
   upsert(access: HttpMemoryAccess, records: unknown[], topics?: unknown[]): Promise<unknown>;
   export(access: HttpMemoryAccess, scope: HttpMemoryScope, limit?: number): Promise<unknown>;
@@ -36,7 +36,7 @@ export interface HttpMemoryPort {
   listReindexJobs?(access: HttpMemoryAccess, limit?: number): Promise<unknown>;
   govern?(request: unknown): Promise<unknown>;
   feedback?(access: HttpMemoryAccess, scope: HttpMemoryScope, recordId: string, signal: string, options?: { runId?: string; note?: string }): Promise<unknown>;
-  getCoreSnapshot?(access: HttpMemoryAccess): Promise<unknown>;
+  getCoreSnapshot?(access: HttpMemoryAccess, signal: AbortSignal): Promise<unknown>;
   generateCoreSnapshot?(access: HttpMemoryAccess): Promise<unknown>;
   updateCoreSnapshot?(access: HttpMemoryAccess, markdown: string): Promise<unknown>;
   readiness(access: HttpMemoryAccess): Promise<{ ready: boolean; degraded: boolean; reasons: string[] }>;
@@ -46,6 +46,6 @@ export interface HttpArtifactContentPort {
   filename(title: string, uri: string): string;
   isMarkdown(kind: string, title: string, uri: string): boolean;
   isText(kind: string, title: string, uri: string, content: string): boolean;
-  loadSource(content: string, uri: string, workspaceRoot: string): Promise<{ content: string; source: "inline" | "file" }>;
-  loadDownload(content: string, uri: string, workspaceRoot: string): Promise<{ buffer: Buffer; source: "inline" | "file" }>;
+  loadSource(content: string, uri: string, workspaceRoot: string, signal: AbortSignal): Promise<{ content: string; source: "inline" | "file" }>;
+  loadDownload(content: string, uri: string, workspaceRoot: string, signal: AbortSignal): Promise<{ buffer: Buffer; source: "inline" | "file" }>;
 }

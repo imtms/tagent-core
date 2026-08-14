@@ -19,19 +19,20 @@ function changedLine(before: string, after: string) {
 export class SnapshotWorkspaceEdit implements WorkspaceEditPort {
   constructor(private readonly workspace: string) {}
 
-  async read(path: string): Promise<WorkspaceReadSnapshot> {
-    const source = await readWorkspaceFile(this.workspace, path);
+  async read(path: string, signal: AbortSignal): Promise<WorkspaceReadSnapshot> {
+    const source = await readWorkspaceFile(this.workspace, path, signal);
     const content = source.buffer.toString("utf8").replace(/^\uFEFF/, "");
     const contentHash = workspaceContentHash(content);
     return { path: source.relative, content, contentHash, snapshotId: `sha256:${contentHash}`, bytes: source.buffer.length };
   }
 
-  async patch(request: WorkspacePatchRequest): Promise<WorkspacePatchResult> {
+  async patch(request: WorkspacePatchRequest, signal: AbortSignal): Promise<WorkspacePatchResult> {
+    signal.throwIfAborted();
     if (!request.files.length) throw new WorkspaceEditError("Patch requires at least one file", "workspace.edit_invalid");
     if (new Set(request.files.map((file) => file.path)).size !== request.files.length) throw new WorkspaceEditError("Patch contains duplicate file paths", "workspace.edit_invalid");
     const prepared: Array<{ path: string; content: string; before: string; beforeHash: string; afterHash: string; firstChangedLine: number | null }> = [];
     for (const file of request.files) {
-      const source = await this.read(file.path);
+      const source = await this.read(file.path, signal);
       const expected = file.contentHash || file.snapshotId.replace(/^sha256:/, "");
       if (!expected || expected !== source.contentHash || (file.snapshotId && file.snapshotId !== source.snapshotId)) {
         throw new WorkspaceEditError(`Workspace snapshot is stale for ${file.path}`, "workspace.edit_stale", { path: file.path, expectedContentHash: expected, actualContentHash: source.contentHash, actualSnapshotId: source.snapshotId });
@@ -45,7 +46,7 @@ export class SnapshotWorkspaceEdit implements WorkspaceEditPort {
       }
       prepared.push({ path: file.path, content, before: source.content, beforeHash: source.contentHash, afterHash: workspaceContentHash(content), firstChangedLine: changedLine(source.content, content) });
     }
-    await commitWorkspaceFiles(this.workspace, prepared.map(({ path, content, beforeHash }) => ({ path, content, expectedHash: beforeHash })));
+    await commitWorkspaceFiles(this.workspace, prepared.map(({ path, content, beforeHash }) => ({ path, content, expectedHash: beforeHash })), signal);
     return {
       patchId: request.patchId || randomUUID(),
       changedFiles: prepared.map((file) => ({ path: file.path, beforeHash: file.beforeHash, afterHash: file.afterHash, bytesBefore: Buffer.byteLength(file.before), bytesAfter: Buffer.byteLength(file.content), firstChangedLine: file.firstChangedLine })),

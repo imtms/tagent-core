@@ -1,0 +1,240 @@
+{
+  "schemaVersion": 1,
+  "description": "Deterministic, offline fixtures shaped like TAgent RuntimeMessage transcripts. Summaries are fixed artifacts, not claims about a particular model.",
+  "cases": [
+    {
+      "id": "runtime-reliability-review",
+      "transcript": [
+        {
+          "role": "user",
+          "content": "Review runtime reliability. Prefer literal search over regex. Preserve exact paths, failure codes, and unresolved verification work.",
+          "timestamp": 1786665600000
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call-read-registry",
+              "name": "read",
+              "arguments": {
+                "path": "/Users/tms/Projects/Personal/tagent-core/packages/execution/src/application/runtime-registry.ts",
+                "offset": 1,
+                "limit": 260
+              }
+            }
+          ],
+          "api": "openai-completions",
+          "provider": "benchmark",
+          "model": "benchmark",
+          "usage": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 0,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "toolUse",
+          "timestamp": 1786665600100
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "call-read-registry",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "Runtime registry review\nOwned resources: runtime, store, writer lease, guard, instance lock.\nThe shutdown path must await every owned promise and retain authority when disposal rejects.\nDiagnostic padding: registry acquisition, heartbeat renewal, checkpoint projection, transcript fencing, request envelope hashing, and supervisor event publication were inspected around the lifecycle boundary. These surrounding mechanisms are intentionally present to place exact evidence in the middle of a realistically long tool result.\n[BENCHMARK_PADDING_8000]\nWIRE_SENTINEL_7dc84c21\nObserved receipt: receipt:op_01JZ8T4Q7E2M\nDispatch classification: ABORTED_BEFORE_DISPATCH\nMore diagnostic padding: retry ownership, provider stream closure, context refresh, message projection, tool liveness timers, continuation scheduling, and quiescent teardown were compared. The result remains durable even when historical prompt projection later removes its middle.\nEnd of registry review."
+            }
+          ],
+          "details": {
+            "path": "/Users/tms/Projects/Personal/tagent-core/packages/execution/src/application/runtime-registry.ts",
+            "lineCount": 260
+          },
+          "isError": false,
+          "timestamp": 1786665600200
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "Decision: Do not release the writer lease when runtime disposal fails. The remaining verification item is: Re-run the full Pi session suite after fixing the retry controller race."
+            }
+          ],
+          "api": "openai-completions",
+          "provider": "benchmark",
+          "model": "benchmark",
+          "usage": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 0,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "timestamp": 1786665600300
+        }
+      ],
+      "summary": "Reviewed runtime shutdown and cancellation ownership. Do not release the writer lease when runtime disposal fails. Re-run the full Pi session suite after fixing the retry controller race. The user prefers simple deterministic retrieval.",
+      "facts": [
+        {
+          "class": "exact_file_path",
+          "literal": "/Users/tms/Projects/Personal/tagent-core/packages/execution/src/application/runtime-registry.ts"
+        },
+        {
+          "class": "identifier",
+          "literal": "receipt:op_01JZ8T4Q7E2M"
+        },
+        {
+          "class": "failure_code",
+          "literal": "ABORTED_BEFORE_DISPATCH"
+        },
+        {
+          "class": "decision",
+          "literal": "Do not release the writer lease when runtime disposal fails."
+        },
+        {
+          "class": "unresolved_work",
+          "literal": "Re-run the full Pi session suite after fixing the retry controller race."
+        },
+        {
+          "class": "long_tool_result_middle",
+          "literal": "WIRE_SENTINEL_7dc84c21"
+        },
+        {
+          "class": "user_preference",
+          "literal": "Prefer literal search over regex."
+        }
+      ]
+    },
+    {
+      "id": "migration-and-provider-faults",
+      "transcript": [
+        {
+          "role": "user",
+          "content": "Keep migrations replay-safe and do not let a failed partial provider response enter the next request.",
+          "timestamp": 1786665700000
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "call-wire-suite",
+              "name": "bash",
+              "arguments": {
+                "command": "npx vitest run tests/pi-session.test.ts tests/state-machine-properties.test.ts"
+              }
+            }
+          ],
+          "api": "openai-completions",
+          "provider": "benchmark",
+          "model": "benchmark",
+          "usage": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 0,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "toolUse",
+          "timestamp": 1786665700100
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "call-wire-suite",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "Test run prelude\nSeed: 424242\nProvider script: partial_sse_reset -> success\nCanonical request hash: sha256:67e6ddfbb0cf\nDurable envelope: envelope:req_01JZ8VY3RC5W\nLong diagnostic body: the first attempt emitted a partial text delta, then reset before the terminal marker. The retry opened from the durable transcript, reconstructed the same canonical provider payload, and did not retain failed assistant text. Additional fixture output covers malformed SSE, clean EOF without DONE, empty completion, seeded request sequencing, socket cleanup, and exact payload capture.\n[BENCHMARK_PADDING_8000]\nMigration invariant: v44-to-v45-open-twice-is-idempotent\nLiteral wildcard sample: config_key_%_must_remain_literal\nTest run epilogue: 55 tests passed."
+            }
+          ],
+          "details": {
+            "exitCode": 0,
+            "truncated": false
+          },
+          "isError": false,
+          "timestamp": 1786665700200
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "The wire suite passed. Keep failed partial output outside durable history and preserve repeated-open migration idempotency."
+            }
+          ],
+          "api": "openai-completions",
+          "provider": "benchmark",
+          "model": "benchmark",
+          "usage": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 0,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "timestamp": 1786665700300
+        }
+      ],
+      "summary": "Provider retry and migration checks passed. Keep failed partial output outside durable history. Retries use the same request, and repeated database opens preserve migration state.",
+      "facts": [
+        {
+          "class": "identifier",
+          "literal": "envelope:req_01JZ8VY3RC5W"
+        },
+        {
+          "class": "identifier",
+          "literal": "sha256:67e6ddfbb0cf"
+        },
+        {
+          "class": "decision",
+          "literal": "Keep failed partial output outside durable history"
+        },
+        {
+          "class": "migration_invariant",
+          "literal": "v44-to-v45-open-twice-is-idempotent"
+        },
+        {
+          "class": "literal_matching",
+          "literal": "config_key_%_must_remain_literal"
+        },
+        {
+          "class": "test_evidence",
+          "literal": "55 tests passed"
+        }
+      ]
+    }
+  ]
+}

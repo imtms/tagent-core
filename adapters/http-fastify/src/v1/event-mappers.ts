@@ -1,4 +1,5 @@
 import type { RunEvent } from "@tagent/execution/domain";
+import { TOOL_ERROR_CODES, type StructuredToolError, type ToolErrorCode } from "@tagent/execution/ports";
 
 export function publicIdentifier(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : null;
@@ -18,6 +19,17 @@ function publicToolPayload(data: Record<string, unknown>) {
     toolCallId: publicIdentifier(data.toolCallId) ?? "unknown",
     toolName: publicText(data.toolName, 256) || "tool",
   };
+}
+
+function isToolErrorCode(value: unknown): value is ToolErrorCode {
+  return typeof value === "string" && (TOOL_ERROR_CODES as readonly string[]).includes(value);
+}
+
+export function publicToolError(value: unknown): StructuredToolError | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const error = value as Record<string, unknown>;
+  if (error.name !== "ToolExecutionError" || !isToolErrorCode(error.code)) return undefined;
+  return { name: error.name, code: error.code, message: publicText(error.message, 4_000) };
 }
 
 function publicUserInputFields(value: unknown) {
@@ -55,8 +67,8 @@ export function publicEventProjection(event: RunEvent): { type: string; payload:
     case "message.completed": return { type: "message.completed", payload: { content: publicText(data.content, 65_536), ordinal: publicInteger(data.ordinal) } };
     case "tool.started": return { type: "tool.started", payload: publicToolPayload(data) };
     case "tool.progress": return { type: "tool.progress", payload: publicToolPayload(data) };
-    case "tool.completed": return { type: "tool.completed", payload: { ...publicToolPayload(data), isError: Boolean(data.isError) } };
-    case "tool.failed": return { type: "tool.failed", payload: { ...publicToolPayload(data), reason: publicText(data.reason ?? data.error, 2_000) } };
+    case "tool.completed": return { type: "tool.completed", payload: { ...publicToolPayload(data), isError: Boolean(data.isError), ...(publicToolError(data.error) ? { error: publicToolError(data.error) } : {}) } };
+    case "tool.failed": return { type: "tool.failed", payload: { ...publicToolPayload(data), reason: publicText(data.reason ?? data.error, 2_000), ...(publicToolError(data.error) ? { error: publicToolError(data.error) } : {}) } };
     case "provider.failure": return { type: "provider.failure", payload: { kind: publicText(data.kind, 128), retryable: Boolean(data.retryable), ...(typeof data.stopReason === "string" ? { stopReason: publicText(data.stopReason, 128) } : {}) } };
     case "supervisor.approval.requested": return { type: "approval.requested", payload: { approvalRequestId: publicIdentifier(data.approvalId) ?? "unknown", reason: publicText(data.reason, 4_000) } };
     case "supervisor.approval.approved": return { type: "approval.resolved", payload: { approvalRequestId: publicIdentifier(data.approvalId) ?? "unknown", decision: "approved", resolution: publicText(data.resolution, 4_000) } };

@@ -43,6 +43,7 @@ class WaitingRuntime {
   async followUp() { return "accepted" as const; }
   async compact(): Promise<void> { throw new Error("compaction provider unavailable"); }
   abort(): void { this.resolve?.(); }
+  async dispose() { await this.abort(); }
   getMessages() { return []; }
   getError() { return undefined; }
 }
@@ -151,7 +152,7 @@ describe("v1 API contracts", () => {
     const read = await app.inject({ method: "GET", url: `/api/v1/sessions/${session.id}` });
     expect(decodeAbi(SessionSchema, decodeAbi(SuccessEnvelopeSchema, read.json()).data)).toEqual(session);
     const capabilities = decodeAbi(CoreCapabilitiesResponseSchema, (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).data;
-    expect(capabilities).toMatchObject({ releaseVersion: "0.6.4", persistenceSchemaVersion: 45, interactions: { approvalResolution: true, userInputSubmission: true }, operator: { roadmapGenerationIdempotent: true } });
+    expect(capabilities).toMatchObject({ releaseVersion: "0.6.5", persistenceSchemaVersion: 45, interactions: { approvalResolution: true, userInputSubmission: true }, operator: { roadmapGenerationIdempotent: true } });
   });
 
   it("converges 100 concurrent Session create retries on one durable Session", async () => {
@@ -459,6 +460,30 @@ describe("v1 API contracts", () => {
     expect((await app.inject({ method: "GET", url: `/api/v1/task-runs/${run.id}/artifacts?limit=201` })).statusCode).toBe(400);
   });
 
+  it("passes the HTTP request lifetime into Artifact content reads", async () => {
+    const loadSource = vi.fn(async (_content: string, _uri: string, _workspace: string, signal: AbortSignal) => {
+      signal.throwIfAborted();
+      return { content: "request-owned artifact", source: "inline" as const };
+    });
+    const { app, store } = await fixture([], 32, { artifacts: {
+      filename: () => "artifact.txt",
+      isMarkdown: () => false,
+      isText: () => true,
+      loadSource,
+      loadDownload: async (_content, _uri, _workspace, signal) => {
+        signal.throwIfAborted();
+        return { buffer: Buffer.from("request-owned artifact"), source: "inline" as const };
+      },
+    } });
+    const run = store.createRun(store.createSession().id, "artifact request ownership");
+    store.addArtifact(run.id, { id: "owned-artifact", kind: "text", title: "Owned", content: "body", uri: "" });
+
+    const response = await app.inject({ method: "GET", url: `/api/v1/task-runs/${run.id}/artifacts/owned-artifact/content` });
+
+    expect(response.statusCode).toBe(200);
+    expect(loadSource).toHaveBeenCalledWith("body", "", expect.any(String), expect.any(AbortSignal));
+  });
+
   it("returns typed paginated TaskRun interactions", async () => {
     const { app, store } = await fixture();
     const run = store.createRun(store.createSession().id, "typed interaction");
@@ -691,14 +716,17 @@ describe("v1 API contracts", () => {
       coldTopicCount: 1,
     });
     expect(JSON.stringify(response.json())).not.toMatch(/embedding|encryptionKey|backendMetadata|privateNotes|sensitive-shard/);
-    expect(recall).toHaveBeenCalledWith(expect.objectContaining({
-      access: {
-        subjectId: "service:gateway-a",
-        scopes: [{ type: "workspace", id: "workspace-authorized" }],
-        purpose: "memory_admin",
-      },
-      cue: "find facts",
-    }));
+    expect(recall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        access: {
+          subjectId: "service:gateway-a",
+          scopes: [{ type: "workspace", id: "workspace-authorized" }],
+          purpose: "memory_admin",
+        },
+        cue: "find facts",
+      }),
+      expect.any(AbortSignal),
+    );
   });
 
   it("subscribes before capturing the SSE replay watermark so gap events are delivered", async () => {

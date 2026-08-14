@@ -4,7 +4,7 @@
 
 TAgent Core is a durable, self-hosted control plane for a single agent instance. It turns routed user intent into a persistent `TaskRun`, supervises bounded `Attempt`s, owns authoritative state, evidence, approvals, recovery, Memory, and Learning, and produces verifiable delivery results.
 
-The current 0.6 line adds Core-managed Skills to governed Workspace Goals, trusted execution receipts, durable Gateway contracts, optional Memory and Learning, and the contained `pi-agent-core` runtime. Core remains API-only and `TaskRun` remains the only execution runtime.
+The current 0.6 line adds Core-managed Skills to governed Workspace Goals, trusted execution receipts, durable Gateway contracts, optional Memory and Learning, and the contained `pi-agent-core` runtime. It also hardens cancellation, quiescent shutdown, provider wire-fault recovery, structured tool failures, and exact same-Run recall after compaction. Core remains API-only and `TaskRun` remains the only execution runtime.
 
 ## Supported boundary
 
@@ -95,7 +95,7 @@ Core does not validate browser OIDC/JWT tokens. In production, a Gateway validat
 
 Core owns a schema 45 SQLite database. Startup acquires an OS instance lock, applies migrations, claims a writer lease and fence, installs connection-level mutation guards, performs guarded recovery, starts services and workers, then reports the writer ready.
 
-Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Back up the SQLite database together with its WAL/SHM files before an upgrade. Binaries that only understand schema 44 cannot open schema 45; rollback requires the matching pre-upgrade database backup. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md) and [docs/UPGRADING.md](docs/UPGRADING.md).
+Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Runtime/background shutdown is a quiescence barrier: Core retains the Store, writer lease, guard, and instance lock if owned work cannot prove settlement. Back up the SQLite database together with its WAL/SHM files before an upgrade. Binaries that only understand schema 44 cannot open schema 45; rollback requires the matching pre-upgrade database backup. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md) and [docs/UPGRADING.md](docs/UPGRADING.md).
 
 ## Completion evidence and model calls
 
@@ -128,6 +128,7 @@ npm run lint
 npm run check
 npm test -- --run
 npm run build
+npm run benchmark:compaction
 ```
 
 The immutable artifact build additionally requires Linux x64, Node.js `24.18.1`, Node ABI 137, and npm `12+`:

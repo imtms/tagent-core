@@ -6,6 +6,8 @@ import { Store } from "@tagent/persistence-sqlite/store";
 import type { ToolCapabilityApplicationPort } from "@tagent/execution/ports";
 import { composeWorkspaceTools, createLocalSubprocessPort, createWorkspaceArtifactSink, createWorkspaceEditPort, WorkspaceProjectContextSource } from "@tagent/workspace-local";
 
+const testSignal = new AbortController().signal;
+
 function applyTaskRunBatch(store: Store, runId: string, mutations: Parameters<ToolCapabilityApplicationPort["applyTaskRunBatch"]>[0]) {
   store.db.transaction(() => {
     for (const mutation of mutations) {
@@ -47,7 +49,7 @@ function tools(store: Store, runId: string, workspace: string) {
 }
 
 async function snapshot(read: ReturnType<typeof tools>[number], file: string) {
-  const result = await read.execute(`read-${file}`, { path: file }, undefined);
+  const result = await read.execute(`read-${file}`, { path: file }, testSignal);
   return result.details as { snapshotId: string; contentHash: string };
 }
 
@@ -59,7 +61,7 @@ describe("P0 reliable execution primitives", () => {
     const created = tools(store, run.id, workspace); const read = created.find((tool) => tool.name === "read")!; const edit = created.find((tool) => tool.name === "edit")!;
     const original = await snapshot(read, "a.txt");
     await writeFile(path.join(workspace, "a.txt"), "newer\ntwo\n");
-    await expect(edit.execute("stale", { path: "a.txt", ...original, oldText: "two", newText: "three" }, undefined)).rejects.toMatchObject({ code: "workspace.edit_stale" });
+    await expect(edit.execute("stale", { path: "a.txt", ...original, oldText: "two", newText: "three" }, testSignal)).rejects.toMatchObject({ code: "STALE_STATE" });
     expect(await readFile(path.join(workspace, "a.txt"), "utf8")).toBe("newer\ntwo\n");
     expect(store.listEvents(run.id).at(-1)).toMatchObject({ type: "workspace.edit.rejected", data: { code: "workspace.edit_stale" } });
     store.close();
@@ -75,18 +77,18 @@ describe("P0 reliable execution primitives", () => {
     await expect(patch.execute("bad", { patchId: "bad", files: [
       { path: "a.txt", ...a, hunks: [{ oldText: "alpha", newText: "changed" }] },
       { path: "b.txt", ...b, hunks: [{ oldText: "missing", newText: "changed" }] },
-    ] }, undefined)).rejects.toMatchObject({ code: "workspace.edit_precondition_failed" });
+    ] }, testSignal)).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     expect(await readFile(path.join(workspace, "a.txt"), "utf8")).toBe("alpha\n");
     const result = await patch.execute("good", { patchId: "good", files: [
       { path: "a.txt", ...a, hunks: [{ oldText: "alpha", newText: "changed-a" }] },
       { path: "b.txt", ...b, hunks: [{ oldText: "beta", newText: "changed-b" }] },
-    ] }, undefined);
+    ] }, testSignal);
     expect(store.getRun(run.id)?.checks[0].stale).toBe(true);
     await writeFile(path.join(workspace, "a.txt"), "external\n");
     expect(await patch.execute("good", { patchId: "good", files: [
       { path: "a.txt", ...a, hunks: [{ oldText: "alpha", newText: "changed-a" }] },
       { path: "b.txt", ...b, hunks: [{ oldText: "beta", newText: "changed-b" }] },
-    ] }, undefined)).toEqual(result);
+    ] }, testSignal)).toEqual(result);
     expect(await readFile(path.join(workspace, "a.txt"), "utf8")).toBe("external\n");
     expect(store.listOperations(run.id).find((item) => item.id.endsWith(":good"))).toMatchObject({ operationType: "tool.patch", payloadHash: expect.stringMatching(/^[0-9a-f]{64}$/), status: "succeeded" });
     store.close();
@@ -96,7 +98,7 @@ describe("P0 reliable execution primitives", () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-p0-output-"));
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "output");
     const bash = tools(store, run.id, workspace).find((tool) => tool.name === "bash")!;
-    const result = await bash.execute("large", { command: "python3 -c 'print(\"x\" * 1000000, end=\"\")'", timeoutSeconds: 10 }, undefined);
+    const result = await bash.execute("large", { command: "python3 -c 'print(\"x\" * 1000000, end=\"\")'", timeoutSeconds: 10 }, testSignal);
     expect(result.details).toMatchObject({ totalBytes: 1_000_000, storedBytes: 1_000_000, outputDiscardedBytes: 0, truncatedAtSource: false, artifactId: expect.any(String), sha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
     expect((result.content[0] as { text: string }).text.length).toBeLessThan(25_000);
     const artifact = store.getRun(run.id)!.artifacts[0];
@@ -115,7 +117,7 @@ describe("P0 reliable execution primitives", () => {
       upsertPlanItem: (item) => store.upsertPlanItem(run.id, item), markChecksStale: () => store.markChecksStale(run.id), upsertCheck: (check) => store.upsertCheck(run.id, check), applyTaskRunBatch: (mutations) => applyTaskRunBatch(store, run.id, mutations), addArtifact: (artifact) => store.addArtifact(run.id, artifact), requestUserInput: (_id, prompt, fields) => store.requestUserInput(run.id, prompt, fields), recordToolAttempt: (toolCallId, toolName, args) => store.recordToolAttempt(run.id, store.getRun(run.id)!.attempt, toolCallId, toolName, args), completeToolAttempt: (toolCallId, success, error) => store.completeToolAttempt(run.id, store.getRun(run.id)!.attempt, toolCallId, success, error), consumeAtomicallySettledToolCall: () => false, publish: (type, data) => store.appendEvent(run.id, type, data),
     };
     const bash = composeWorkspaceTools(capabilities, workspace, createLocalSubprocessPort()).catalog.tools.find((tool) => tool.name === "bash")!;
-    const result = await bash.execute("capped", { command: "python3 -c 'print(\"z\" * 100000, end=\"\")'", timeoutSeconds: 10 }, undefined);
+    const result = await bash.execute("capped", { command: "python3 -c 'print(\"z\" * 100000, end=\"\")'", timeoutSeconds: 10 }, testSignal);
     expect(result.details).toMatchObject({ totalBytes: 100_000, storedBytes: 64_000, truncatedAtSource: true, outputDiscardedBytes: 36_000 });
     const artifact = store.getRun(run.id)!.artifacts[0];
     expect((await readFile(path.join(workspace, artifact.uri))).length).toBe(64_000);

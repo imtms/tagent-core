@@ -32,6 +32,7 @@ class ControlledRuntime implements AgentRuntime {
   prompt() { return new Promise<void>((resolve) => { this.settlePrompt = resolve; }); }
   async steer() { return "accepted" as const; }
   abort() { this.settlePrompt?.(); }
+  async dispose() { await this.abort(); }
   resolve() { this.settlePrompt?.(); }
   getMessages() { return [assistantMessage(this.response)]; }
   getError() { return undefined; }

@@ -3,19 +3,13 @@ import type { RunId } from "../domain/task-run.js";
 import type { ExecutionStateView } from "./execution-state.js";
 import type { RunEventPublisherPort } from "./collaboration-ports.js";
 
-const SHUTDOWN_JOIN_TIMEOUT_MS = 5_000;
-
-async function boundedJoin(promises: Promise<unknown>[], timeoutMs = SHUTDOWN_JOIN_TIMEOUT_MS) {
-  if (!promises.length) return;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      Promise.allSettled(promises),
-      new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+async function joinRuntimeShutdown(disposals: Promise<unknown>[], adjacentWork: Promise<unknown>[]) {
+  const [disposalResults] = await Promise.all([
+    Promise.allSettled(disposals),
+    Promise.allSettled(adjacentWork),
+  ]);
+  const failures = disposalResults.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+  if (failures.length) throw new AggregateError(failures, "Runtime shutdown failed to reach quiescence");
 }
 
 type RuntimeRegistryState = ExecutionStateView<
@@ -53,14 +47,15 @@ export class RuntimeRegistry {
 
   async closeRuntimes() {
     this.state.closing = true;
-    for (const task of this.state.preparationTasks.values()) {
+    const preparationTasks = [...this.state.preparationTasks.values()];
+    const controlDeliveryTasks = [...this.state.controlDeliveryTasks.values()];
+    const executionTasks = [...this.state.executionTasks.values()];
+    const runtimes = [...this.state.runtimes.values()];
+    for (const task of preparationTasks) {
       task.controller.abort(new Error("Service is shutting down"));
     }
-    await boundedJoin([...this.state.preparationTasks.values()].map((task) => task.promise));
-    this.state.preparationTasks.clear();
     if (this.state.continuationRecoveryTimer) clearTimeout(this.state.continuationRecoveryTimer);
     this.state.continuationRecoveryTimer = undefined;
-    await boundedJoin([...this.state.controlDeliveryTasks.values()]);
     for (const timer of this.state.checkpointTimers.values()) clearTimeout(timer);
     this.state.checkpointTimers.clear();
     for (const runId of this.state.checkpointDrafts.keys()) {
@@ -72,12 +67,20 @@ export class RuntimeRegistry {
     }
     this.state.checkpointTokens.clear();
     this.state.lastCheckpointTranscriptSeq.clear();
-    const aborts: Promise<void>[] = [];
-    for (const runtime of this.state.runtimes.values()) {
-      aborts.push(this.abortRuntime(runtime).finally(() => runtime.dispose?.()));
-    }
-    await boundedJoin(aborts);
-    await boundedJoin([...this.state.executionTasks.values()]);
+
+    // Disposal requests cancellation and is the runtime-owned quiescence
+    // barrier. Start every disposer before joining adjacent tasks so control
+    // delivery and execution promises that are waiting on a runtime can settle.
+    const disposals = runtimes.map((runtime) => Promise.resolve().then(() => runtime.dispose()));
+    await joinRuntimeShutdown(disposals, [
+      ...preparationTasks.map((task) => task.promise),
+      ...controlDeliveryTasks,
+      ...executionTasks,
+    ]);
+
+    this.state.preparationTasks.clear();
+    this.state.controlDeliveryTasks.clear();
+    this.state.executionTasks.clear();
     this.state.runtimes.clear();
     const released = this.state.persistence.continuations.releaseContinuationLeases(this.state.continuationOwner);
     this.state.persistence.taskRunTransitions.transitionSystem(

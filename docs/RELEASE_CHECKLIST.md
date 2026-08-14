@@ -23,6 +23,7 @@ npm run lint
 npm run check
 npm test -- --run
 npm run build
+npm run benchmark:compaction
 npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
 npm audit --audit-level=high --registry=https://registry.npmjs.org
 git diff --check
@@ -32,7 +33,10 @@ git diff --check
 - [ ] No generated `*.tsbuildinfo`, database, WAL/SHM, secret, log, or release archive is tracked.
 - [ ] Architecture tests confirm the 13-workspace DAG, package exports, API-only Core, and Web dependency boundary.
 - [ ] `pi-coding-agent` is absent from source, manifests, lockfile, release archive and `npm ls`; production `pi-agent-core`/`pi-ai` imports exist only in `adapters/runtime-pi`.
-- [ ] AgentHarness runtime contracts cover transcript-invisible retry/fallback, steering/follow-up during retry and compaction, abort queue audit, tool lifecycle, current-turn context preservation, provider idle timeout, threshold compaction and context-overflow recovery.
+- [ ] `.agents` decision records pass `npm run check:agents`, have one owner per non-trivial decision, and match the shipped paths and verification commands.
+- [ ] AgentHarness runtime contracts cover quiescent asynchronous teardown, required cancellation ownership, transcript-invisible retry/fallback, steering/follow-up during retry and compaction, abort queue audit, structured tool failures, current-turn context preservation, provider idle timeout, threshold compaction and context-overflow recovery.
+- [ ] Scripted wire-fault tests cover reset-before-headers, partial reset, missing `[DONE]`, malformed SSE, empty completion, request identity, and failed-partial isolation; fixed-seed state-machine properties remain reproducible.
+- [ ] `npm run benchmark:compaction` reports full exact-fact literal recall within its checked bounded-cost threshold; its synthetic-corpus limitations remain documented.
 - [ ] Differential API tests confirm removed unversioned routes return 404.
 - [ ] Core-managed Skill tests prove shared catalog CRUD, immutable revisions, multi-Skill Workspace references, TaskRun snapshot isolation, native `resources.skills`/`AgentHarness.skill()` invocation, and upload rejection for traversal, symlink, malformed ZIP, size, and tampering cases.
 

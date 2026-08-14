@@ -37,6 +37,8 @@ Follow [docs/NAMING_CONVENTIONS.md](docs/NAMING_CONVENTIONS.md). Use `TaskRun`, 
 
 When work is executed as a substantial TaskRun, follow [the TaskRun finalization workflow](docs/TASKRUN_FINALIZATION.md). Reuse existing plan keys, finish all Git, release, migration, deployment, and production operations before registering final required checks, then require every plan to be terminal and every check to be passed and non-stale before submitting the final candidate.
 
+Before a non-trivial behavioral, contract, lifecycle, security, or testing change, search [.agents/notes](.agents/notes/README.md) for its decision owner. Update that record instead of creating a duplicate, and add a proposal first when the choice is still undecided. `npm run check` includes the `.agents` consistency gate.
+
 1. Add or update regression tests before changing behavior.
 2. Make the smallest workspace-owned change.
 3. Update ABI fixtures and client behavior together when a wire contract changes.
@@ -50,6 +52,8 @@ npm test -- --run
 npm run build
 git diff --check
 ```
+
+Changes to compaction or durable transcript recall also require `npm run benchmark:compaction`; keep its deterministic corpus, checked thresholds, and limitations synchronized with the owning decision record.
 
 Changes to PostgreSQL-backed Memory also require:
 
@@ -67,6 +71,6 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 
 ## Documentation and releases
 
-Maintained documents are listed in [docs/README.md](docs/README.md). Remove superseded design notes after their durable facts move into a canonical document; Git history retains release evidence.
+Maintained documents are listed in [docs/README.md](docs/README.md). Remove superseded product/operation documents after their durable facts move into a canonical document; Git history retains release evidence. Decision rationale belongs in the owning `.agents` record and must be updated or moved to `rejected/` rather than copied into another note.
 
 Do not claim that lint, tests, audits, artifacts, migrations, or release workflows passed without fresh evidence. A release entry in [CHANGELOG.md](CHANGELOG.md) must be non-empty and describe breaking changes and upgrade requirements.

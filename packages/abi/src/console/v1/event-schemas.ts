@@ -40,7 +40,9 @@ export const ConsoleTranscriptItemSchema = Type.Union([
   Type.Object({
     seq: Type.Number(), index: Type.Number(), attempt: Type.Number(), kind: Type.Literal("tool"),
     toolCallId: Type.String(), toolName: Type.String(), arguments: Type.Unknown(), result: Type.String(),
-    isError: Type.Boolean(), status: Type.String(), createdAt: TimestampMillisecondsSchema,
+    isError: Type.Boolean(),
+    error: Type.Optional(Type.Object({ name: Type.String(), code: Type.String(), message: Type.String() })),
+    status: Type.String(), createdAt: TimestampMillisecondsSchema,
   }),
 ]);
 /** @deprecated Use TranscriptItem from channel/v1. */

@@ -10,6 +10,8 @@ import { attemptIdFor } from "@tagent/execution/domain";
 import { createExecutionCollaborationAdapters } from "../apps/core-service/src/composition/execution-collaboration-adapters.js";
 import { agentPersistence, httpTestResources, learningPersistence, workflowPersistence } from "./support/test-persistence.js";
 
+const testSignal = new AbortController().signal;
+
 const stores: Store[] = [];
 const apps: Array<ReturnType<typeof createApp>> = [];
 
@@ -75,7 +77,7 @@ function runtimeHost(store: Store, sessionId: string, subjectId: string, memory:
 
 async function executeMemorySearch(host: ReturnType<typeof createRuntimeHost>) {
   const tool = host.capabilities.tools.find((candidate) => candidate.name === "memory_search")!;
-  await tool.execute("issue-36-search", { query: "configured subject" } as never, undefined);
+  await tool.execute("issue-36-search", { query: "configured subject" } as never, testSignal);
 }
 
 describe("GitHub issue regressions #36-#38", () => {

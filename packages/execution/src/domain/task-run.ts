@@ -111,7 +111,12 @@ export interface ContextManifest { id: string; runId: RunId; attempt: number; so
 export interface RunContinuation { id: string; runId: RunId; ordinal: number; status: "queued" | "running" | "completed" | "blocked" | "failed" | "cancelled"; reason: string; error: string; createdAt: number; startedAt: number | null; completedAt: number | null; leaseOwner: string; leaseUntil: number | null; heartbeatAt: number | null }
 type RunEventPayload = Record<string, unknown>;
 type MessageDeltaEvent = RunEventPayload & { delta: string; ordinal: number };
-type ToolLifecycleEvent = RunEventPayload & { toolCallId: string; toolName: string; isError?: boolean };
+type ToolLifecycleEvent = RunEventPayload & {
+  toolCallId: string;
+  toolName: string;
+  isError?: boolean;
+  error?: { name: string; code: string; message: string };
+};
 type ProviderFailureEvent = RunEventPayload & {
   kind: string;
   retryable: boolean;
@@ -145,7 +150,7 @@ export interface RunEventMap {
   "runtime.abort.failed": RunEventPayload; "runtime.initialized": RunEventPayload; "runtime.queue": RunEventPayload; "runtime.queue.cleared": RunEventPayload; "runtime.settled": RunEventPayload;
   "session.inbox.related.queued": RunEventPayload; "skill.invoked": RunEventPayload;
   "supervisor.approval.approved": RunEventPayload; "supervisor.approval.rejected": RunEventPayload; "supervisor.approval.requested": RunEventPayload; "supervisor.decision": RunEventPayload;
-  "tool.bash.composite": RunEventPayload; "tool.bash.timed_out": RunEventPayload; "tool.completed": RunEventPayload;
+  "tool.bash.composite": RunEventPayload; "tool.bash.timed_out": RunEventPayload; "tool.completed": ToolLifecycleEvent;
   "tool.failed": ToolLifecycleEvent; "tool.guard.blocked": RunEventPayload; "tool.output.spilled": RunEventPayload; "tool.progress": ToolLifecycleEvent; "tool.started": ToolLifecycleEvent;
   "restart.interruption": RunEventPayload;
   "transcript.repaired": RunEventPayload; "transcript.updated": RunEventPayload; "workflow.learning.failed": RunEventPayload;

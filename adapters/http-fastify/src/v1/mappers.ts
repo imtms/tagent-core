@@ -20,7 +20,7 @@ import type {
   TaskRun,
   TaskRunCommandReceipt as DomainTaskRunCommandReceipt,
 } from "@tagent/execution/domain";
-import { publicEventProjection, publicIdentifier } from "./event-mappers.js";
+import { publicEventProjection, publicIdentifier, publicToolError } from "./event-mappers.js";
 
 function iso(timestamp: number): string;
 function iso(timestamp: number | null): string | null;
@@ -219,7 +219,7 @@ export function mapTaskRunEvent(event: RunEvent): TaskRunEvent {
 type TranscriptViewItem =
   | { seq: number; index?: number; attempt: number; kind: "user" | "assistant"; text: string; createdAt: number }
   | { seq: number; index: number; attempt: number; kind: "thinking"; text: string; redacted: boolean; createdAt: number }
-  | { seq: number; index: number; attempt: number; kind: "tool"; toolCallId: string; toolName: string; arguments: unknown; result: string; isError: boolean; status: "pending" | "completed" | "failed"; createdAt: number };
+  | { seq: number; index: number; attempt: number; kind: "tool"; toolCallId: string; toolName: string; arguments: unknown; result: string; isError: boolean; error?: { name: string; code: string; message: string }; status: "pending" | "completed" | "failed"; createdAt: number };
 
 export function mapTranscriptItem(item: TranscriptViewItem): TranscriptItem {
   const base = {
@@ -236,6 +236,7 @@ export function mapTranscriptItem(item: TranscriptViewItem): TranscriptItem {
     arguments: publicToolArguments(item.toolName, item.arguments),
     result: publicToolResult(item.toolName, item.result),
     isError: item.isError,
+    ...(publicToolError(item.error) ? { error: publicToolError(item.error) } : {}),
     status: item.status,
   };
   if (item.kind === "thinking") return { ...base, kind: item.kind, text: "Model reasoning is hidden in the public transcript.", redacted: true };

@@ -105,7 +105,7 @@ The v33 preflight records ambiguous or unsafe source rows in `migration_issues`.
 
 ## Shutdown order
 
-Core stops new readiness first, then stops background workers, closes active runtimes, stops and drains heartbeat work, removes the connection guard, releases the writer lease, closes the Store, and releases the OS instance lock. Shutdown attempts every step and reports aggregate failures. Repeated lifecycle closure shares the same close operation, so one authority failure cannot release resources more than once.
+Core stops new readiness first, disables heartbeat timers, then closes active runtimes and background workers as quiescence barriers. Runtime closure cancels and joins runtime disposers, preparation, control-delivery, and execution tasks without a timer standing in for settlement. Only after both barriers succeed does Core drain adjacent heartbeat/startup work, remove the connection guard, release the writer lease, close the Store, and release the OS instance lock. A failed runtime/background barrier leaves lifecycle phase `closing` and deliberately retains persistence and writer authority for work that may still be alive. Repeated lifecycle closure shares the same close operation, so one authority failure cannot release resources more than once.
 
 ## Backup and restore
 

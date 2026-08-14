@@ -27,6 +27,7 @@ import { requestIdOf, successEnvelope, V1HttpError } from "./errors.js";
 import { principalOf } from "./auth.js";
 import { mapArtifact, mapArtifactContent, mapCommandReceipt, mapTaskRun, mapTranscriptItem } from "./mappers.js";
 import { authorizeChannel, conflict, decodeQuery, missing } from "./route-support.js";
+import { withRequestAbortSignal } from "./console-route-support.js";
 
 function commandAdmissionError(status: "inactive" | "closing" | "full"): V1HttpError {
   if (status === "full") return new V1HttpError(429, "task_run.command_capacity_exceeded", "TaskRun control inbox is full", "rate_limited", true);
@@ -241,13 +242,14 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
   app.get("/api/v1/task-runs/:taskRunId/artifacts/:artifactId/content", {
     onRequest: authorizeChannel(serviceCredentials, "runs:read"),
     schema: { params: TaskRunArtifactParamsSchema },
-  }, async (request) => {
+  }, async (request, reply) => {
     const { taskRunId, artifactId } = request.params as TaskRunArtifactParams;
     if (!taskRuns.hasRun(taskRunId)) throw missing("task_run");
     const artifact = evidence.getArtifact(taskRunId, artifactId);
     if (!artifact) throw missing("artifact");
     try {
-      const source = await artifacts.loadSource(artifact.content, artifact.uri, workspaceRoot);
+      const source = await withRequestAbortSignal(request, reply, (signal) =>
+        artifacts.loadSource(artifact.content, artifact.uri, workspaceRoot, signal));
       if (!artifacts.isText(artifact.kind, artifact.title, artifact.uri, source.content)) {
         throw new V1HttpError(400, "artifact.unsupported_content", "Artifact is not a supported text file", "validation");
       }

@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { Type } from "typebox";
 import { ToolExecutionPipeline, ToolRegistry, type ToolProvider } from "@tagent/execution/composition";
-import type { RuntimeTool, ToolCapabilityApplicationPort } from "@tagent/execution/ports";
+import type { RuntimeTool, SubprocessSpawnSpec, ToolCapabilityApplicationPort } from "@tagent/execution/ports";
+
+const testSignal = new AbortController().signal;
 
 function tool(name: string, execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "ok" }], details: {} })), mutation = false): RuntimeTool {
   return {
@@ -39,6 +41,59 @@ function capabilities(overrides: Partial<ToolCapabilityApplicationPort> = {}) {
 }
 
 describe("ToolRegistry and ToolExecutionPipeline", () => {
+  it("requires caller-owned cancellation at typed execution seams", () => {
+    expectTypeOf<Parameters<RuntimeTool["execute"]>[2]>().toEqualTypeOf<AbortSignal>();
+    expectTypeOf<SubprocessSpawnSpec>().toMatchTypeOf<{ signal: AbortSignal }>();
+  });
+
+  it("classifies a pre-aborted call without recording or dispatching it", async () => {
+    const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "unsafe" }], details: {} }));
+    const record = vi.fn(() => ({ created: true, status: "running" as const, guard: { blocked: false, reason: "" } }));
+    const { port } = capabilities({ recordToolAttempt: record });
+    const wrapped = new ToolExecutionPipeline(port).bindCatalog({ tools: [tool("read", execute)] }).tools[0];
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled before dispatch"));
+    await expect(wrapped.execute("pre-aborted", {}, controller.signal)).rejects.toMatchObject({
+      name: "ToolExecutionError",
+      code: "ABORTED_BEFORE_DISPATCH",
+      message: "cancelled before dispatch",
+    });
+    expect(record).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("joins a started body and classifies cancellation after dispatch", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const cleanup = new Promise<void>((resolve) => { release = resolve; });
+    const execute = vi.fn(async () => {
+      entered();
+      await cleanup;
+      return { content: [{ type: "text" as const, text: "late success" }], details: {} };
+    });
+    const { port, complete, update } = capabilities();
+    const wrapped = new ToolExecutionPipeline(port).bindCatalog({ tools: [tool("write", execute, true)] }).tools[0];
+    const controller = new AbortController();
+    let settled = false;
+    const pending = wrapped.execute("started-abort", {}, controller.signal).finally(() => { settled = true; });
+    await started;
+    controller.abort(new Error("cancelled after dispatch"));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    release();
+    await expect(pending).rejects.toMatchObject({ code: "ABORTED", message: "cancelled after dispatch" });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledWith("started-abort", false, expect.stringContaining('"code":"ABORTED"'));
+    expect(update).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      status: "failed",
+      effects: expect.arrayContaining([expect.objectContaining({
+        kind: "error",
+        error: expect.objectContaining({ code: "ABORTED" }),
+      })]),
+    }));
+  });
+
   it("fails duplicate registration atomically and supports provider disposal", () => {
     const registry = new ToolRegistry();
     const dispose = registry.register(provider("first", tool("read")));
@@ -72,7 +127,7 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     const wrapped = pipeline.bindCatalog({ tools: [tool("read", execute)] }).tools[0];
     expect(() => pipeline.bindCatalog({ tools: [] })).toThrow("already bound");
     expect(pipeline.beforeToolCall("stable", "read", { value: "one" })).toEqual({ blocked: false });
-    await expect(wrapped.execute("stable", { value: "two" }, undefined)).rejects.toThrow("reused with different payload");
+    await expect(wrapped.execute("stable", { value: "two" }, testSignal)).rejects.toThrow("reused with different payload");
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -93,7 +148,7 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     });
     const firstPipeline = new ToolExecutionPipeline(port);
     const first = firstPipeline.bindCatalog({ tools: [tool("read", execute)] }).tools[0];
-    await first.execute("read-once", {}, undefined);
+    await first.execute("read-once", {}, testSignal);
     expect(order).toEqual(["execute", "claim"]);
     expect(durableResult).toBeDefined();
     expect(execute).toHaveBeenCalledTimes(1);
@@ -107,7 +162,7 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     const { port } = capabilities({ isCurrentAttempt: () => false, authorizeExternalAction: external, authorizeWorkspaceMutation: workspace, recordToolAttempt: record });
     const pipeline = new ToolExecutionPipeline(port);
     const wrapped = pipeline.bindCatalog({ tools: [tool("write", execute, true)] }).tools[0];
-    await expect(wrapped.execute("call-1", {}, undefined)).rejects.toThrow("no longer current");
+    await expect(wrapped.execute("call-1", {}, testSignal)).rejects.toThrow("no longer current");
     expect(external).not.toHaveBeenCalled();
     expect(workspace).not.toHaveBeenCalled();
     expect(record).not.toHaveBeenCalled();
@@ -116,7 +171,7 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     const deniedApproval = vi.fn(() => ({ allowed: false, reason: "missing" }));
     const second = capabilities({ authorizeExternalAction: deniedApproval, authorizeWorkspaceMutation: workspace, recordToolAttempt: record });
     const denied = new ToolExecutionPipeline(second.port).bindCatalog({ tools: [tool("write", execute, true)] }).tools[0];
-    await expect(denied.execute("call-2", {}, undefined)).rejects.toThrow("External action approval guard");
+    await expect(denied.execute("call-2", {}, testSignal)).rejects.toThrow("External action approval guard");
     expect(workspace).not.toHaveBeenCalled();
     expect(record).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
@@ -134,7 +189,7 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     });
     const pipeline = new ToolExecutionPipeline(port);
     const wrapped = pipeline.bindCatalog({ tools: [tool("write", execute, true)] }).tools[0];
-    const first = await wrapped.execute("stable-call", { value: "one" }, undefined);
+    const first = await wrapped.execute("stable-call", { value: "one" }, testSignal);
     pipeline.afterToolCall("stable-call", true);
     expect(execute).toHaveBeenCalledTimes(1);
     expect(complete).toHaveBeenCalledTimes(1);
@@ -143,7 +198,7 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     claimed = false;
     const replayPipeline = new ToolExecutionPipeline(port);
     const replay = replayPipeline.bindCatalog({ tools: [tool("write", execute, true)] }).tools[0];
-    expect(await replay.execute("stable-call", { value: "one" }, undefined)).toEqual(first);
+    expect(await replay.execute("stable-call", { value: "one" }, testSignal)).toEqual(first);
     replayPipeline.afterToolCall("stable-call", true);
     expect(execute).toHaveBeenCalledTimes(1);
     expect(complete).toHaveBeenCalledTimes(2);
@@ -153,7 +208,7 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     const execute = vi.fn(async () => { throw new Error("provider failed"); });
     const { port, complete, update } = capabilities();
     const wrapped = new ToolExecutionPipeline(port).bindCatalog({ tools: [tool("write", execute, true)] }).tools[0];
-    await expect(wrapped.execute("failed-call", {}, undefined)).rejects.toThrow("provider failed");
+    await expect(wrapped.execute("failed-call", {}, testSignal)).rejects.toThrow("provider failed");
     expect(update).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: "failed", stage: "execution_failed" }));
     expect(complete).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledTimes(1);
@@ -167,7 +222,7 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
       claimOperation: vi.fn(() => ({ claimed: false, status: "succeeded", result: receipt })),
     });
     const wrapped = new ToolExecutionPipeline(port).bindCatalog({ tools: [tool("write", execute, true)] }).tools[0];
-    await expect(wrapped.execute("completed-call", {}, undefined)).resolves.toEqual(receipt);
+    await expect(wrapped.execute("completed-call", {}, testSignal)).resolves.toEqual(receipt);
     expect(execute).not.toHaveBeenCalled();
     expect(complete).not.toHaveBeenCalled();
   });

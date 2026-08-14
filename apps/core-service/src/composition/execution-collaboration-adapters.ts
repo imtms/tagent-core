@@ -52,38 +52,34 @@ function durableCommunicationPreferenceScope(content: string, sessionId: string)
     : { preferenceScopeType: "session" as const, preferenceScopeId: sessionId };
 }
 
-async function withinDeadline<T>(work: (signal: AbortSignal) => Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
-  signal?.throwIfAborted();
+export async function withinDeadline<T>(work: (signal: AbortSignal) => Promise<T>, timeoutMs: number, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
   const controller = new AbortController();
-  const abortFromCaller = () => controller.abort(signal?.reason ?? new Error("memory recall cancelled"));
-  signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const abortFromCaller = () => controller.abort(signal.reason ?? new Error("memory recall cancelled"));
+  signal.addEventListener("abort", abortFromCaller, { once: true });
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let rejectOnAbort: (() => void) | undefined;
   let pending: Promise<T> | undefined;
   try {
     pending = work(controller.signal);
     return await Promise.race([
       pending,
       new Promise<never>((_, reject) => {
-        const rejectOnAbort = () => reject(controller.signal.reason ?? new Error("memory recall cancelled"));
+        rejectOnAbort = () => reject(controller.signal.reason ?? new Error("memory recall cancelled"));
         controller.signal.addEventListener("abort", rejectOnAbort, { once: true });
         timer = setTimeout(() => controller.abort(new Error(`online memory recall exceeded ${timeoutMs}ms`)), timeoutMs);
       }),
     ]);
   } catch (error) {
-    // A deadline is a latency boundary. Caller-driven shutdown still gives a
-    // cooperative adapter a short cleanup join before the outer hard bound.
-    if (pending && !signal?.aborted) void pending.catch(() => undefined);
-    if (pending && signal?.aborted) {
-      const cleanup = Promise.allSettled([pending]);
-      let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([cleanup, new Promise<void>((resolve) => { cleanupTimer = setTimeout(resolve, 250); })]);
-      } finally { if (cleanupTimer) clearTimeout(cleanupTimer); }
-    }
+    // A deadline requests cooperative cancellation but never abandons
+    // same-process work. The caller regains control only after ownership has
+    // converged to a settled promise.
+    if (pending) await Promise.allSettled([pending]);
     throw error;
   } finally {
     if (timer) clearTimeout(timer);
-    signal?.removeEventListener("abort", abortFromCaller);
+    if (rejectOnAbort) controller.signal.removeEventListener("abort", rejectOnAbort);
+    signal.removeEventListener("abort", abortFromCaller);
   }
 }
 
@@ -152,7 +148,7 @@ export function createExecutionCollaborationAdapters(
         };
       },
       async enrich(run, query, signal) {
-        signal?.throwIfAborted();
+        signal.throwIfAborted();
         const memoryAccess = access(run);
         let recall: Awaited<ReturnType<MemoryFacade["recall"]>> | undefined;
         let coreSnapshots: Array<NonNullable<Awaited<ReturnType<NonNullable<MemoryFacade["getCoreSnapshot"]>>>>> = [];
@@ -160,11 +156,11 @@ export function createExecutionCollaborationAdapters(
           try {
             [recall, coreSnapshots] = await withinDeadline((deadlineSignal) => Promise.all([
               options.memory!.recall({ access: memoryAccess, cue: query, embeddingTimeoutMs: ONLINE_EMBEDDING_TIMEOUT_MS, signal: deadlineSignal }),
-              Promise.all(memoryAccess.scopes.map((scope) => options.memory!.getCoreSnapshot?.({ ...memoryAccess, scopes: [scope] })))
+              Promise.all(memoryAccess.scopes.map((scope) => options.memory!.getCoreSnapshot?.({ ...memoryAccess, scopes: [scope] }, deadlineSignal)))
                 .then((snapshots) => snapshots.filter((snapshot): snapshot is NonNullable<typeof snapshot> => Boolean(snapshot))),
             ]), ONLINE_RECALL_DEADLINE_MS, signal);
           } catch (error) {
-            if (signal?.aborted) throw signal.reason ?? error;
+            if (signal.aborted) throw signal.reason ?? error;
             options.publish(run.id, "memory.recall.degraded", {
               reason: "online_deadline",
               timeoutMs: ONLINE_RECALL_DEADLINE_MS,
@@ -172,7 +168,7 @@ export function createExecutionCollaborationAdapters(
             });
           }
         }
-        signal?.throwIfAborted();
+        signal.throwIfAborted();
         const { workflows, profile } = learningContext(run, query);
         const coreSection = coreSnapshots.map((snapshot) => `<core_memory scope="${snapshot.scope.type}:${snapshot.scope.id}" revision="${snapshot.revision}">\n${snapshot.markdown}\n</core_memory>`).join("\n\n");
         return {

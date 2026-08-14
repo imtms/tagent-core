@@ -2566,6 +2566,32 @@ ${source.content}`;
     return (rows as Array<{ seq: number; attempt: number; role: string; messageJson: string; createdAt: number }>).map(({ messageJson, ...row }) => ({ ...row, message: JSON.parse(messageJson) as AgentMessage }));
   }
 
+  searchTranscriptLiteral(runId: RunId, query: string, options: { limit?: number; snippetChars?: number; beforeSeq?: number } = {}) {
+    if (!query) throw new Error("Transcript literal search query cannot be empty");
+    const limit = Math.min(20, Math.max(1, Math.floor(options.limit ?? 8)));
+    const snippetChars = Math.min(1_000, Math.max(80, Math.floor(options.snippetChars ?? 320)));
+    const encodedQuery = JSON.stringify(query).slice(1, -1);
+    const beforeSeq = options.beforeSeq ?? Number.MAX_SAFE_INTEGER;
+    const rows = this.db.prepare(`SELECT seq,attempt,role,message_json as messageJson,created_at as createdAt
+      FROM run_transcript
+      WHERE run_id=? AND seq < ? AND instr(message_json, ?) > 0
+      ORDER BY seq DESC LIMIT ?`).all(runId, beforeSeq, encodedQuery, limit + 1) as Array<{
+        seq: number; attempt: number; role: string; messageJson: string; createdAt: number;
+      }>;
+    const matches = rows.slice(0, limit).map(({ messageJson, ...row }) => {
+      const index = messageJson.indexOf(encodedQuery);
+      const available = Math.max(0, snippetChars - encodedQuery.length);
+      let start = Math.max(0, index - Math.floor(available / 2));
+      let end = Math.min(messageJson.length, start + snippetChars);
+      start = Math.max(0, end - snippetChars);
+      return {
+        ...row,
+        snippet: `${start > 0 ? "…" : ""}${messageJson.slice(start, end)}${end < messageJson.length ? "…" : ""}`,
+      };
+    });
+    return { matches, truncated: rows.length > limit };
+  }
+
   listTranscript(runId: RunId): AgentMessage[] {
     return this.listTranscriptEntries(runId).map((entry) => entry.message);
   }
@@ -2587,7 +2613,9 @@ ${source.content}`;
         const message: AgentMessage = {
           role: "toolResult", toolCallId, toolName,
           content: [{ type: "text", text: `Tool result synthesized by TAgent Core because the ${reason} boundary interrupted this call.` }],
-          details: { synthetic: true, reason }, isError: true, timestamp: now(),
+          details: { synthetic: true, reason }, isError: true,
+          error: { name: "ToolExecutionError", code: "ABORTED", message: `Tool call interrupted by ${reason} boundary` },
+          timestamp: now(),
         };
         this.appendTranscript(runId, run.attempt, message);
         repaired.push({ toolCallId, toolName });
@@ -2601,8 +2629,8 @@ ${source.content}`;
     type TranscriptViewItem =
       | { seq: number; index?: number; attempt: number; kind: "user" | "assistant"; text: string; createdAt: number }
       | { seq: number; index: number; attempt: number; kind: "thinking"; text: string; redacted: boolean; createdAt: number }
-      | { seq: number; index: number; attempt: number; kind: "tool"; toolCallId: string; toolName: string; arguments: unknown; result: string; isError: boolean; status: "pending" | "completed" | "failed"; createdAt: number };
-    const toolResults = new Map<string, { content: string; isError: boolean; toolName: string }>();
+      | { seq: number; index: number; attempt: number; kind: "tool"; toolCallId: string; toolName: string; arguments: unknown; result: string; isError: boolean; error?: Extract<AgentMessage, { role: "toolResult" }>["error"]; status: "pending" | "completed" | "failed"; createdAt: number };
+    const toolResults = new Map<string, { content: string; isError: boolean; error?: Extract<AgentMessage, { role: "toolResult" }>["error"]; toolName: string }>();
     const entries = [...this.listTranscriptEntries(runId, options)];
     const supplementalEntrySeqs = new Set<number>();
     const toolCallIds = new Set<string>();
@@ -2615,7 +2643,7 @@ ${source.content}`;
       if (message.role !== "toolResult") continue;
       completedToolCallIds.add(message.toolCallId);
       const content = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
-      toolResults.set(message.toolCallId, { content, isError: message.isError, toolName: message.toolName });
+      toolResults.set(message.toolCallId, { content, isError: message.isError, error: message.error, toolName: message.toolName });
     }
     const missingToolCallSources = [...completedToolCallIds].filter((id) => !toolCallIds.has(id));
     if (missingToolCallSources.length) {
@@ -2645,7 +2673,7 @@ ${source.content}`;
       for (const row of rows) {
         const message = JSON.parse(row.messageJson) as Extract<AgentMessage, { role: "toolResult" }>;
         const content = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
-        toolResults.set(message.toolCallId, { content, isError: message.isError, toolName: message.toolName });
+        toolResults.set(message.toolCallId, { content, isError: message.isError, error: message.error, toolName: message.toolName });
       }
     }
     const view: TranscriptViewItem[] = [];
@@ -2668,7 +2696,7 @@ ${source.content}`;
         }
         if (part.type !== "toolCall") continue;
         const result = toolResults.get(part.id);
-        view.push({ seq: entry.seq, index, attempt: entry.attempt, kind: "tool", toolCallId: part.id, toolName: part.name, arguments: part.arguments, result: result?.content ?? "", isError: result?.isError ?? false, status: result ? (result.isError ? "failed" : "completed") : "pending", createdAt: entry.createdAt });
+        view.push({ seq: entry.seq, index, attempt: entry.attempt, kind: "tool", toolCallId: part.id, toolName: part.name, arguments: part.arguments, result: result?.content ?? "", isError: result?.isError ?? false, error: result?.error, status: result ? (result.isError ? "failed" : "completed") : "pending", createdAt: entry.createdAt });
       }
     }
     return view;

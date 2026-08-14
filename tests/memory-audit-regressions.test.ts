@@ -16,6 +16,7 @@ import type { AccessContext, GraphEdge, GraphNode, PreferenceRecord, TopicDescri
 
 const scope = { type: "user" as const, id: "memory-audit-user" };
 const access: AccessContext = { subjectId: scope.id, scopes: [scope], purpose: "capture" };
+const testSignal = new AbortController().signal;
 
 async function createService(options: { embeddings?: { generation: string; embed(): Promise<number[][]> }; core?: CoreMemorySnapshotService } = {}) {
   const adapter = new InMemoryMemoryAdapter();
@@ -147,14 +148,14 @@ describe("Memory audit regressions", () => {
     const edge: GraphEdge = { id: `${scope.type}:${scope.id}:edge:identity`, fromId: entityIds[0], predicate: "called", toId: entityIds[1], scope, confidence: 1, status: "active" };
     await composed.persistExtracted(access, [record], [descriptor], nodes, [edge]);
     const published = await composed.publishColdTopic(access, descriptor, "# Identity\n\nSecretName is the remembered name.");
-    expect((await composed.getCoreSnapshot(access))?.markdown).toContain("SecretName");
+    expect((await composed.getCoreSnapshot(access, testSignal))?.markdown).toContain("SecretName");
     expect(await composed.getColdTopic(access, topicId)).not.toBeNull();
-    const budgeted = await composed.recall({ access, cue: "SecretName", maxColdTokens: 0 });
+    const budgeted = await composed.recall({ access, cue: "SecretName", maxColdTokens: 0, signal: testSignal });
     expect(budgeted.coldTopics).toEqual([]);
     expect(budgeted.trace.coldTopicRoutes).toContainEqual(expect.objectContaining({ topicId, selected: false, reason: "cold token budget exceeded" }));
     await composed.forget({ access: { ...access, purpose: "memory_admin" }, scope, ids: [record.id], gracePeriodMs: 0 });
     expect(await composed.getColdTopic(access, topicId)).toBeNull();
-    expect((await composed.getCoreSnapshot(access))?.markdown).not.toContain("SecretName");
+    expect((await composed.getCoreSnapshot(access, testSignal))?.markdown).not.toContain("SecretName");
     expect(adapter.edges.size).toBe(0);
     expect([...adapter.vectors.values()].some((vector) => vector.refId === record.id || vector.refId === topicId)).toBe(false);
     expect(adapter.topics.get(topicId)?.status).toBe("deleted");

@@ -16,6 +16,7 @@ import type { V1ApiDependencies } from "./plugin.js";
 import { successEnvelope, V1HttpError } from "./errors.js";
 import { registerAdminLearningConsoleV1Routes } from "./admin-learning-console-routes.js";
 import { registerAdminMemoryConsoleV1Routes } from "./admin-memory-console-routes.js";
+import { withRequestAbortSignal } from "./console-route-support.js";
 
 function mapLearningSettings(state: Record<string, unknown>): LearningSettings {
   const updatedAt = Number(state.updatedAt ?? 0);
@@ -133,18 +134,18 @@ export function registerAdminV1Routes(app: FastifyInstance, dependencies: V1ApiD
   app.post("/api/v1/admin/memory/recall", {
     onRequest: authorize,
     schema: { body: PrincipalMemoryRecallRequestSchema },
-  }, async (request) => {
+  }, async (request, reply) => {
     if (!dependencies.memory) {
       throw new V1HttpError(503, "memory.unavailable", "Memory is unavailable", "unavailable", true);
     }
     const body = decodeAbi(PrincipalMemoryRecallRequestSchema, request.body);
-    const result = mapMemoryRecallResult(await dependencies.memory.recall({
+    const result = mapMemoryRecallResult(await withRequestAbortSignal(request, reply, (signal) => dependencies.memory!.recall({
       access: principalMemoryAccess(request, dependencies, "memory_admin"),
       cue: body.cue.trim(),
       kinds: body.kinds,
       maxCards: body.maxCards,
       maxColdTopics: body.maxColdTopics,
-    }));
+    }, signal)));
     return encodeAbi(
       MemoryRecallResponseSchema,
       successEnvelope(request, { result }),

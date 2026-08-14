@@ -189,10 +189,10 @@ export class RunContextService {
     };
   }
 
-  public async prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter?: number, signal?: AbortSignal) {
-    signal?.throwIfAborted();
+  public async prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter: number | undefined, signal: AbortSignal) {
+    signal.throwIfAborted();
     const enrichment = await this.dependencies.contextEnrichment.enrich(run, query, signal);
-    signal?.throwIfAborted();
+    signal.throwIfAborted();
     const history = this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter);
     const projectContext = loadProjectContext(this.dependencies.projectContextSource);
     const assembly = this.contextAssembler().assemble("session", history.messages, this.buildSystemPrompt(run, enrichment.promptSection, projectContext), query, history.sourceIds);

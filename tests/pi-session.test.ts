@@ -10,6 +10,8 @@ import { createRuntimeHost } from "@tagent/core-service/composition";
 import { attemptIdFor, canonicalRequestJson, requestHash, type AttemptRequestEnvelope } from "@tagent/execution/domain";
 import { credentialReference, type AttemptRequestEnvelopeRepository } from "@tagent/execution/ports";
 import { agentPersistence } from "./support/test-persistence.js";
+import { RunEventProbe } from "./support/event-probe.js";
+import { seededWireFaultScript, WireFaultServer, type WireFaultStep } from "./support/wire-fault-server.js";
 
 describe("Pi AgentHarness integration", () => {
   const testCredential = (value: string) => ({
@@ -28,7 +30,12 @@ describe("Pi AgentHarness integration", () => {
     models.setProvider(faux.provider);
     return models;
   }
-  function runtimeSpec(store: Store, run: ReturnType<Store["createRun"]>, options: Omit<PiRuntimeOptions, "token" | "capabilities" | "eventSink">): PiRuntimeOptions {
+  function runtimeSpec(
+    store: Store,
+    run: ReturnType<Store["createRun"]>,
+    options: Omit<PiRuntimeOptions, "token" | "capabilities" | "eventSink">,
+    onEvent: (event: import("@tagent/execution/domain").RunEvent) => void = () => undefined,
+  ): PiRuntimeOptions {
     const attempt = agentPersistence(store).attempts.getAttemptForRun(run.id, run.attempt)!;
     const ownerId = `pi-test:${run.id}`;
     const lease = agentPersistence(store).attempts.acquireExecutionLease({ attemptId: attempt.id, expectedVersion: attempt.version, ownerId, leaseMs: 30_000 });
@@ -38,7 +45,7 @@ describe("Pi AgentHarness integration", () => {
     };
     const host = createRuntimeHost({
       persistence: agentPersistence(store), token, workspace: options.workspace,
-      onActivity: () => undefined, onEvent: () => undefined,
+      onActivity: () => undefined, onEvent,
       memoryScopeId: "test", memorySubjectId: `session:${run.sessionId}`,
     });
     const eventSink = {
@@ -57,18 +64,43 @@ describe("Pi AgentHarness integration", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "sdk session");
-    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [], providerMaxRetries: 1 }));
-    return { faux, store, run, runtime };
+    const eventProbe = new RunEventProbe();
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [], providerMaxRetries: 1 }, eventProbe.observe));
+    return { faux, store, run, runtime, eventProbe };
   }
 
   it("runs offline with controlled resources and persists the SDK transcript", async () => {
     const { store, run, runtime } = await setup([fauxAssistantMessage("session ready")]);
     await runtime.prompt("hello");
-    expect(runtime.getActiveToolNames().sort()).toEqual(["bash", "edit", "ls", "patch", "read", "task_run", "write"]);
+    expect(runtime.getActiveToolNames().sort()).toEqual(["bash", "edit", "history_search", "ls", "patch", "read", "task_run", "write"]);
     expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "session ready" }] });
     expect(store.listTranscript(run.id).some((message) => message.role === "assistant")).toBe(true);
     expect(store.listEvents(run.id).some((event) => event.type === "message.completed")).toBe(true);
-    runtime.dispose();
+    await runtime.dispose();
+    store.close();
+  });
+
+  it("recalls bounded same-Run durable history through the real Pi tool path", async () => {
+    const marker = "receipt:op_%_pi_literal";
+    const { store, run, runtime } = await setup([
+      fauxAssistantMessage([{ type: "toolCall", id: "history-pi", name: "history_search", arguments: { query: marker } }], { stopReason: "toolUse" }),
+      fauxAssistantMessage("history recalled"),
+    ]);
+    store.appendTranscript(run.id, run.attempt, { role: "user", content: `Durable earlier fact ${marker}`, timestamp: 1 });
+    await runtime.prompt("Find the exact earlier receipt.");
+    const result = store.listTranscript(run.id).find((message) => message.role === "toolResult" && message.toolCallId === "history-pi");
+    expect(result).toMatchObject({ role: "toolResult", isError: false });
+    const text = result?.role === "toolResult"
+      ? result.content.filter((part) => part.type === "text").map((part) => part.text).join("")
+      : "";
+    expect(JSON.parse(text)).toMatchObject({
+      query: marker,
+      semantics: "case-sensitive literal",
+      matches: [expect.objectContaining({ seq: 1, role: "user", snippet: expect.stringContaining(marker) })],
+      truncated: false,
+    });
+    expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "history recalled" }] });
+    await runtime.dispose();
     store.close();
   });
 
@@ -98,7 +130,7 @@ describe("Pi AgentHarness integration", () => {
     expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "skill.invoked", data: expect.objectContaining({ name: "release-check", sha256: "a".repeat(64) }) }),
     ]));
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -111,7 +143,7 @@ describe("Pi AgentHarness integration", () => {
       expect.objectContaining({ kind: "thinking", text: "inspect, compare, verify" }),
       expect.objectContaining({ kind: "assistant", text: "done" }),
     ]));
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -125,7 +157,7 @@ describe("Pi AgentHarness integration", () => {
     expect(deltas.length).toBeLessThan(100);
     expect(deltas.map((event) => String(event.data.delta ?? "")).join("")).toBe(text);
     expect(events.findIndex((event) => event.type === "message.completed")).toBeGreaterThan(events.findIndex((event) => event.type === "message.delta"));
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -135,9 +167,10 @@ describe("Pi AgentHarness integration", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "cancel events");
-    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [] }));
+    const eventProbe = new RunEventProbe();
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [] }, eventProbe.observe));
     const prompt = runtime.prompt("start");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await eventProbe.waitFor("message.started");
     store.transitionRun(run.id, ["running"], "cancelled", "run.cancelled", {}, "Cancelled by user");
     await runtime.abort();
     await prompt;
@@ -146,7 +179,7 @@ describe("Pi AgentHarness integration", () => {
     expect(eventTypes).not.toContain("message.retrying");
     expect(eventTypes).not.toContain("provider.failure");
     expect(store.listTranscript(run.id).some((message) => message.role === "assistant" && message.stopReason === "aborted")).toBe(false);
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -156,10 +189,11 @@ describe("Pi AgentHarness integration", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "dispose active response");
-    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [] }));
+    const eventProbe = new RunEventProbe();
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [] }, eventProbe.observe));
     const prompt = runtime.prompt("start");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    runtime.dispose();
+    await eventProbe.waitFor("message.started");
+    await runtime.dispose();
     await prompt;
     await new Promise<void>((resolve) => setImmediate(resolve));
     const eventTypes = store.listEvents(run.id).map((event) => event.type);
@@ -172,16 +206,17 @@ describe("Pi AgentHarness integration", () => {
 
   it("settles an active tool attempt before disposing an aborted session", async () => {
     const faux = fauxProvider({ models: [{ id: "faux-abort", contextWindow: 32_000, maxTokens: 2_000 }] });
-    faux.setResponses([fauxAssistantMessage([{ type: "toolCall", id: "slow-bash", name: "bash", arguments: { command: "sleep 30" } }], { stopReason: "toolUse" })]);
+    faux.setResponses([fauxAssistantMessage([{ type: "toolCall", id: "slow-bash", name: "bash", arguments: { command: "printf ready; sleep 30" } }], { stopReason: "toolUse" })]);
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "abort active tool");
-    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [] }));
+    const eventProbe = new RunEventProbe();
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [] }, eventProbe.observe));
     const prompt = runtime.prompt("start");
-    for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "tool.started"); index += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    await eventProbe.waitFor("tool.progress", (event) => event.data.toolCallId === "slow-bash");
     await runtime.abort();
     await prompt;
-    runtime.dispose();
+    await runtime.dispose();
     expect(store.db.prepare("SELECT status FROM tool_attempts WHERE run_id = ? AND tool_call_id = 'slow-bash'").get(run.id)).toMatchObject({ status: "failed" });
     expect(store.listOperations(run.id)[0]).toMatchObject({ status: "failed", stage: "execution_failed" });
     store.close();
@@ -193,13 +228,14 @@ describe("Pi AgentHarness integration", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "abort initialization");
-    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [] }));
+    const eventProbe = new RunEventProbe();
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [] }, eventProbe.observe));
     const prompt = runtime.prompt("hello");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await eventProbe.waitFor("message.started");
     await runtime.abort();
     await prompt;
     expect(runtime.getError()).toMatch(/abort/i);
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -222,20 +258,18 @@ describe("Pi AgentHarness integration", () => {
     ]);
     expect(retryContext?.messages.filter((message) => message.role === "assistant" && message.stopReason === "error")).toHaveLength(0);
     expect(JSON.stringify(retryContext?.messages)).not.toContain("TAgent internal continuation");
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
 
   it("keeps provider retry backoff abortable", async () => {
-    const { faux, store, run, runtime } = await setup([
+    const { faux, store, run, runtime, eventProbe } = await setup([
       fauxAssistantMessage([], { stopReason: "error", errorMessage: "503 Service unavailable" }),
       fauxAssistantMessage("must not retry after abort"),
     ]);
     const prompt = runtime.prompt("retry then cancel");
-    for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "provider.retry"); index += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await eventProbe.waitFor("provider.retry");
     const startedAt = Date.now();
     await runtime.abort();
     await prompt;
@@ -244,20 +278,18 @@ describe("Pi AgentHarness integration", () => {
     expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "provider.retry.completed", data: expect.objectContaining({ success: false, finalError: "Retry cancelled" }) }),
     ]));
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
   it("delivers steering accepted during provider retry backoff", async () => {
     let retryContext: Context | undefined;
-    const { faux, store, run, runtime } = await setup([
+    const { faux, store, run, runtime, eventProbe } = await setup([
       fauxAssistantMessage([], { stopReason: "error", errorMessage: "503 Service unavailable" }),
       (context) => { retryContext = context; return fauxAssistantMessage("steered retry recovered"); },
     ]);
     const prompt = runtime.prompt("retry then steer");
-    for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "provider.retry"); index += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await eventProbe.waitFor("provider.retry");
     await expect(runtime.steer("new direction during backoff")).resolves.toBe("accepted");
     await prompt;
     expect(faux.state.callCount).toBe(2);
@@ -265,7 +297,7 @@ describe("Pi AgentHarness integration", () => {
     expect(store.listTranscript(run.id)).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: "user", content: [{ type: "text", text: "new direction during backoff" }] }),
     ]));
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -291,33 +323,33 @@ describe("Pi AgentHarness integration", () => {
     expect(faux.state.callCount).toBe(2);
     expect(JSON.stringify(recoveryContext?.messages)).toContain("replace the failing direction");
     expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "control recovered terminal failure" }] });
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
   it("uses the SDK steering queue while a response is streaming", async () => {
-    const { store, run, runtime } = await setup([fauxAssistantMessage("a long streaming answer"), fauxAssistantMessage("steered result")], 10);
+    const { store, run, runtime, eventProbe } = await setup([fauxAssistantMessage("a long streaming answer"), fauxAssistantMessage("steered result")], 10);
     const prompt = runtime.prompt("start");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await eventProbe.waitFor("message.started");
     await runtime.steer("change direction");
     await prompt;
     expect(store.listEvents(run.id).some((event) => event.type === "runtime.queue" && JSON.stringify(event.data.steering).includes("change direction"))).toBe(true);
     expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "steered result" }] });
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
   it("uses Pi clearQueue when aborting and audits discarded pending input", async () => {
-    const { store, run, runtime } = await setup([fauxAssistantMessage("a long streaming answer"), fauxAssistantMessage("must not run")], 10);
+    const { store, run, runtime, eventProbe } = await setup([fauxAssistantMessage("a long streaming answer"), fauxAssistantMessage("must not run")], 10);
     const prompt = runtime.prompt("start");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await eventProbe.waitFor("message.started");
     await expect(runtime.followUp("pending input")).resolves.toBe("accepted");
     await runtime.abort();
     await prompt;
     expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "runtime.queue.cleared", data: expect.objectContaining({ followUp: ["pending input"] }) }),
     ]));
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -327,19 +359,19 @@ describe("Pi AgentHarness integration", () => {
     await expect(runtime.steer("too late")).resolves.toBe("settled");
     await expect(runtime.followUp("also too late")).resolves.toBe("settled");
     expect(store.listEvents(run.id).filter((event) => event.type === "runtime.queue")).toHaveLength(0);
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
   it("uses the SDK follow-up queue after the active response settles", async () => {
-    const { store, run, runtime } = await setup([fauxAssistantMessage("active response"), fauxAssistantMessage("follow-up result")], 10);
+    const { store, run, runtime, eventProbe } = await setup([fauxAssistantMessage("active response"), fauxAssistantMessage("follow-up result")], 10);
     const prompt = runtime.prompt("start");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await eventProbe.waitFor("message.started");
     await runtime.followUp("check one more thing");
     await prompt;
     expect(store.listEvents(run.id).some((event) => event.type === "runtime.queue" && JSON.stringify(event.data.followUp).includes("check one more thing"))).toBe(true);
     expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "follow-up result" }] });
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -367,7 +399,7 @@ describe("Pi AgentHarness integration", () => {
       expect(store.listTranscript(run.id).find((message) => message.role === "toolResult"))
         .toMatchObject({ content: [{ type: "text", text: fullOutput }] });
     } finally {
-      runtime.dispose();
+      await runtime.dispose();
       store.close();
       await rm(path, { force: true });
     }
@@ -381,10 +413,21 @@ describe("Pi AgentHarness integration", () => {
     ]);
     await runtime.prompt("validate");
     expect(store.listTranscript(run.id)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ role: "toolResult", toolCallId: "invalid-read", isError: true }),
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "invalid-read",
+        isError: true,
+        error: { name: "ToolExecutionError", code: "PATH_REJECTED", message: expect.any(String) },
+      }),
+    ]));
+    expect(store.listTranscriptView(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "tool", toolCallId: "invalid-read", error: expect.objectContaining({ code: "PATH_REJECTED" }) }),
+    ]));
+    expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "tool.completed", data: expect.objectContaining({ error: expect.objectContaining({ code: "PATH_REJECTED" }) }) }),
     ]));
     expect(store.listOperations(run.id)).toHaveLength(0);
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -400,7 +443,7 @@ describe("Pi AgentHarness integration", () => {
       expect.objectContaining({ role: "toolResult", toolCallId: "truncated-write", isError: true }),
     ]));
     expect(store.listOperations(run.id)).toHaveLength(0);
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -420,7 +463,7 @@ describe("Pi AgentHarness integration", () => {
       expect(results.map((message) => message.role === "toolResult" ? message.toolCallId : "")).toEqual(["ordered-write", "ordered-read"]);
       expect(results[1]).toMatchObject({ role: "toolResult", isError: false, content: [{ type: "text", text: "ordered" }] });
     } finally {
-      runtime.dispose();
+      await runtime.dispose();
       store.close();
       await rm(path, { force: true });
     }
@@ -437,11 +480,10 @@ describe("Pi AgentHarness integration", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "manual compaction");
-    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [], providerMaxRetries: 0 }));
+    const eventProbe = new RunEventProbe();
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [], providerMaxRetries: 0 }, eventProbe.observe));
     const prompt = runtime.prompt("start long work");
-    for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "message.started"); index += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await eventProbe.waitFor("message.started");
     await runtime.compact("Preserve unresolved work and completed side effects.");
     await prompt;
     expect(runtime.getError()).toBeUndefined();
@@ -453,20 +495,18 @@ describe("Pi AgentHarness integration", () => {
     expect(runtime.getMessages().some((message) => message.role === "assistant" && message.stopReason === "aborted")).toBe(false);
     expect(JSON.stringify(store.listTranscript(run.id))).not.toContain("TAgent internal continuation");
     expect(store.listEvents(run.id).filter((event) => event.type === "message.completed")).toHaveLength(1);
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
   it("interrupts provider retry backoff for manual compaction and resumes", async () => {
-    const { faux, store, run, runtime } = await setup([
+    const { faux, store, run, runtime, eventProbe } = await setup([
       fauxAssistantMessage([], { stopReason: "error", errorMessage: "503 Service unavailable" }),
       fauxAssistantMessage("manual retry summary"),
       fauxAssistantMessage("continued after retry compaction"),
     ]);
     const prompt = runtime.prompt("retry then compact");
-    for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "provider.retry"); index += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await eventProbe.waitFor("provider.retry");
     await runtime.compact("Preserve the request while replacing retry backoff.");
     await prompt;
     expect(faux.state.callCount).toBe(3);
@@ -475,7 +515,7 @@ describe("Pi AgentHarness integration", () => {
       expect.objectContaining({ type: "provider.retry.completed", data: expect.objectContaining({ success: false, finalError: "Retry superseded by manual compaction" }) }),
       expect.objectContaining({ type: "context.compaction.completed", data: expect.objectContaining({ reason: "manual", aborted: false }) }),
     ]));
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -495,7 +535,7 @@ describe("Pi AgentHarness integration", () => {
       expect.objectContaining({ type: "context.compaction.completed", data: expect.objectContaining({ reason: "threshold", aborted: false }) }),
     ]));
     expect(faux.state.callCount).toBe(2);
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -514,12 +554,11 @@ describe("Pi AgentHarness integration", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "automatic compaction follow-up");
-    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [], providerMaxRetries: 0 }));
+    const eventProbe = new RunEventProbe();
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [], providerMaxRetries: 0 }, eventProbe.observe));
     const prompt = runtime.prompt("compact and keep listening");
     try {
-      for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "context.compaction.started"); index += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
+      await eventProbe.waitFor("context.compaction.started");
       await expect(runtime.followUp("queued during compaction")).resolves.toBe("accepted");
       releaseSummary();
       await prompt;
@@ -532,7 +571,7 @@ describe("Pi AgentHarness integration", () => {
     } finally {
       releaseSummary();
       await prompt.catch(() => undefined);
-      runtime.dispose();
+      await runtime.dispose();
       store.close();
     }
   });
@@ -556,7 +595,7 @@ describe("Pi AgentHarness integration", () => {
     expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "context.compaction.started", data: expect.objectContaining({ reason: "threshold" }) }),
     ]));
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -575,7 +614,7 @@ describe("Pi AgentHarness integration", () => {
       expect.objectContaining({ type: "context.compaction.completed", data: expect.objectContaining({ reason: "threshold", error: expect.any(String) }) }),
       expect.objectContaining({ type: "message.completed", data: expect.objectContaining({ content: "completed despite compaction failure" }) }),
     ]));
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -604,7 +643,7 @@ describe("Pi AgentHarness integration", () => {
     expect(faux.state.callCount).toBe(3);
     expect(runtime.getMessages().some((message) => message.role === "assistant" && message.stopReason === "error")).toBe(false);
     expect(JSON.stringify(store.listTranscript(run.id))).not.toContain("TAgent internal continuation");
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -645,7 +684,7 @@ describe("Pi AgentHarness integration", () => {
         expect.objectContaining({ type: "context.compaction.completed", data: expect.objectContaining({ reason: "overflow", willRetry: false }) }),
       ]));
     } finally {
-      runtime.dispose();
+      await runtime.dispose();
       store.close();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -655,7 +694,7 @@ describe("Pi AgentHarness integration", () => {
     const { store, run, runtime } = await setup([fauxAssistantMessage([], { stopReason: "error", errorMessage: "401 Unauthorized" })]);
     await runtime.prompt("fail");
     expect(store.listEvents(run.id).filter((event) => event.type === "provider.failure")).toEqual(expect.arrayContaining([expect.objectContaining({ data: expect.objectContaining({ retryable: false }) })]));
-    runtime.dispose();
+    await runtime.dispose();
     store.close();
   });
 
@@ -695,7 +734,7 @@ describe("Pi AgentHarness integration", () => {
       expect(payload).not.toHaveProperty("store");
       expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "custom ready" }] });
     } finally {
-      runtime.dispose();
+      await runtime.dispose();
       store.close();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -750,7 +789,7 @@ describe("Pi AgentHarness integration", () => {
         expect.objectContaining({ type: "request.envelope.persisted", data: expect.objectContaining({ envelopeId: durable[0].id }) }),
       ]));
     } finally {
-      runtime.dispose();
+      await runtime.dispose();
       store.close();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -787,7 +826,7 @@ describe("Pi AgentHarness integration", () => {
       expect(requestCount).toBe(0);
       expect(runtime.getError()).toContain("does not match durable envelope");
     } finally {
-      runtime.dispose();
+      await runtime.dispose();
       store.close();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -837,7 +876,7 @@ describe("Pi AgentHarness integration", () => {
       expect(payload.thinking).toEqual({ type: "enabled" });
       expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "deepseek ready" }] });
     } finally {
-      runtime.dispose();
+      await runtime.dispose();
       store.close();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -874,7 +913,7 @@ describe("Pi AgentHarness integration", () => {
       expect(runtime.getError()).toBeUndefined();
       expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "delayed ready" }] });
     } finally {
-      runtime.dispose();
+      await runtime.dispose();
       store.close();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -903,7 +942,7 @@ describe("Pi AgentHarness integration", () => {
       expect(Date.now() - startedAt).toBeLessThan(200);
       expect(runtime.getError()).toMatch(/idle|timed out|timeout/i);
     } finally {
-      runtime.dispose();
+      await runtime.dispose();
       store.close();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -949,7 +988,7 @@ describe("Pi AgentHarness integration", () => {
       expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "0123456" }] });
     } finally {
       if (streamTimer) clearInterval(streamTimer);
-      runtime.dispose();
+      await runtime.dispose();
       store.close();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -982,7 +1021,7 @@ describe("Pi AgentHarness integration", () => {
         expect.objectContaining({ type: "provider.failure", data: expect.objectContaining({ kind: "timeout" }) }),
       ]));
     } finally {
-      runtime.dispose();
+      await runtime.dispose();
       store.close();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -1020,7 +1059,7 @@ describe("Pi AgentHarness integration", () => {
       ]));
     } finally {
       await compaction.catch(() => undefined);
-      runtime.dispose();
+      await runtime.dispose();
       store.close();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
@@ -1036,7 +1075,7 @@ describe("Pi AgentHarness integration", () => {
     await runtime.prompt("hello");
     expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", model: "primary", content: [{ type: "text", text: "primary recovered" }] });
     expect(store.listEvents(run.id).some((event) => event.type === "provider.fallback")).toBe(false);
-    runtime.dispose(); store.close();
+    await runtime.dispose(); store.close();
   });
   it("switches to the next configured model after a rate-limit failure", async () => {
     const faux = fauxProvider({ models: [{ id: "primary", contextWindow: 32_000, maxTokens: 2_000 }, { id: "fallback", contextWindow: 32_000, maxTokens: 2_000 }] });
@@ -1051,7 +1090,68 @@ describe("Pi AgentHarness integration", () => {
     expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([expect.objectContaining({ type: "provider.fallback", data: expect.objectContaining({ previousModel: "primary", model: "fallback" }) })]));
     expect(runtime.getMessages().some((message) => message.role === "assistant" && message.stopReason === "error")).toBe(false);
     expect(JSON.stringify(store.listTranscript(run.id))).not.toContain("TAgent internal continuation");
-    runtime.dispose(); store.close();
+    await runtime.dispose(); store.close();
+  });
+
+  it("builds reproducible seeded wire-fault scripts", () => {
+    const candidates: WireFaultStep[] = [
+      { kind: "reset_before_headers" },
+      { kind: "malformed_sse" },
+      { kind: "empty_completion" },
+    ];
+    expect(seededWireFaultScript(42, candidates, 12)).toEqual(seededWireFaultScript(42, candidates, 12));
+    expect(seededWireFaultScript(42, candidates, 12)).not.toEqual(seededWireFaultScript(43, candidates, 12));
+  });
+
+  it.each([
+    ["socket reset before headers", { kind: "reset_before_headers" }],
+    ["partial SSE reset", { kind: "partial_sse_reset", content: "poison-partial-output" }],
+    ["clean EOF without DONE", { kind: "clean_eof_without_done", content: "poison-incomplete-output" }],
+    ["malformed SSE", { kind: "malformed_sse" }],
+    ["empty completion", { kind: "empty_completion" }],
+  ] satisfies Array<[string, WireFaultStep]>)("retries and isolates %s with byte-identical provider payloads", async (_label, fault) => {
+    const wire = new WireFaultServer([fault, { kind: "success", content: "wire retry recovered" }]);
+    const baseUrl = await wire.start();
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, `wire fault: ${fault.kind}`);
+    const model: Model<"openai-completions"> = {
+      id: "wire-model", name: "wire-model", api: "openai-completions", provider: "openai-compatible",
+      baseUrl, reasoning: false, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
+    };
+    const runtime = new PiRuntime(runtimeSpec(store, run, {
+      workspace: process.cwd(), systemPrompt: "Wire fixture prompt", model,
+      credential: testCredential("wire-test-key"), initialMessages: [],
+      providerMaxRetries: 1, providerTimeoutMs: 1_000, runTimeoutMs: 20, runHardTimeoutMs: 40,
+    }));
+    try {
+      await runtime.prompt("retry this exact request");
+      expect(wire.requests).toHaveLength(2);
+      expect(canonicalRequestJson(wire.requests[0].json)).toBe(canonicalRequestJson(wire.requests[1].json));
+      expect(requestHash(wire.requests[0].json)).toBe(requestHash(wire.requests[1].json));
+      expect(runtime.getMessages().at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "wire retry recovered" }],
+      });
+      expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "provider.retry" }),
+        expect.objectContaining({ type: "provider.retry.completed", data: expect.objectContaining({ success: true }) }),
+      ]));
+      const durable = JSON.stringify(store.listTranscript(run.id));
+      const retryBody = wire.requests[1].body;
+      expect(durable).not.toContain("poison-partial-output");
+      expect(durable).not.toContain("poison-incomplete-output");
+      expect(retryBody).not.toContain("poison-partial-output");
+      expect(retryBody).not.toContain("poison-incomplete-output");
+      expect(store.listTranscript(run.id).filter((message) => message.role === "assistant")).toHaveLength(1);
+      const envelopes = agentPersistence(store).requestEnvelopes.listForAttempt(attemptIdFor(run.id, 1));
+      expect(envelopes).toHaveLength(2);
+      expect(envelopes[0].providerPayloadHash).toBe(envelopes[1].providerPayloadHash);
+    } finally {
+      await runtime.dispose();
+      store.close();
+      await wire.close();
+    }
   });
 
 });

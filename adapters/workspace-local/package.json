@@ -1,6 +1,6 @@
 {
   "name": "@tagent/workspace-local",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "private": true,
   "type": "module",
   "sideEffects": false,
@@ -43,7 +43,7 @@
     "clean": "tsc -b --clean && rm -rf dist"
   },
   "dependencies": {
-    "@tagent/execution": "0.6.4",
+    "@tagent/execution": "0.6.5",
     "typebox": "^1.1.24"
   },
   "engines": {

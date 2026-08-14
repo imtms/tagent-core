@@ -9,6 +9,16 @@ const TranscriptBase = {
   occurredAt: IsoDateTimeSchema,
 };
 
+export const ToolErrorSchema = Type.Object({
+  name: Type.String({ minLength: 1 }),
+  code: Type.Union([
+    Type.Literal("ABORTED_BEFORE_DISPATCH"), Type.Literal("ABORTED"), Type.Literal("TIMEOUT"),
+    Type.Literal("PATH_REJECTED"), Type.Literal("STALE_STATE"), Type.Literal("PRECONDITION_FAILED"),
+    Type.Literal("INVALID_ARGUMENT"), Type.Literal("NOT_AUTHORIZED"), Type.Literal("UNKNOWN"),
+  ]),
+  message: Type.String(),
+}, { additionalProperties: false });
+
 export const TranscriptItemSchema = Type.Union([
   Type.Object({
     ...TranscriptBase,
@@ -29,6 +39,7 @@ export const TranscriptItemSchema = Type.Union([
     arguments: Type.Unknown(),
     result: Type.String(),
     isError: Type.Boolean(),
+    error: Type.Optional(ToolErrorSchema),
     status: Type.String({ minLength: 1 }),
   }),
 ]);

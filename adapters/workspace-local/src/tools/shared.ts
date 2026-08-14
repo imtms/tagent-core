@@ -32,6 +32,7 @@ export function operationId(runId: RunId, attempt: number, toolCallId: string) {
 
 export async function persistToolOutputArtifact(
   capabilities: ToolCapabilityApplicationPort,
+  signal: AbortSignal,
   toolCallId: string,
   content: string | Buffer,
   title: string,
@@ -45,13 +46,14 @@ export async function persistToolOutputArtifact(
   const stored = await capabilities.artifactSink.write({
     runId: capabilities.runId, artifactId, title, kind: "tool-output", content,
     totalBytes, truncatedAtSource, mediaType: "text/plain; charset=utf-8",
-  });
+  }, signal);
   capabilities.addArtifact({ id: artifactId, title, kind: "tool-output", content: "", uri: stored.uri });
   return stored;
 }
 
 export async function durableTextResult(
   capabilities: ToolCapabilityApplicationPort,
+  signal: AbortSignal,
   toolCallId: string,
   text: string,
   details: Record<string, unknown> = {},
@@ -64,7 +66,7 @@ export async function durableTextResult(
     content: [{ type: "text", text: shown }],
     details: { ...details, totalBytes: sourceTotalBytes, shownBytes: Buffer.byteLength(shown), outputDiscardedBytes: 0 },
   };
-  const stored = await persistToolOutputArtifact(capabilities, toolCallId, text, title, sourceTotalBytes, truncatedAtSource);
+  const stored = await persistToolOutputArtifact(capabilities, signal, toolCallId, text, title, sourceTotalBytes, truncatedAtSource);
   capabilities.publish("tool.output.spilled", {
     toolCallId, artifactId: stored.artifactId, totalBytes: sourceTotalBytes,
     shownBytes: Buffer.byteLength(shown), storedBytes: stored.storedBytes, sha256: stored.sha256,

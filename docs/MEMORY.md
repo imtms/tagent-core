@@ -62,7 +62,9 @@ The optional shared Semantic Judge may improve intent, quality, correction, pref
 
 ## Recall
 
-Recall applies caller resource scope, workspace scope, lifecycle state, lexical/vector/topic thresholds, contradiction handling, and token budgets. Empty recall is valid. Selected content is persisted in the Attempt's Context Manifest with provenance and omission reasons.
+Recall applies caller resource scope, workspace scope, lifecycle state, lexical/vector/topic thresholds, contradiction handling, and bounded Cold-topic projection. Empty recall is valid. Selected content is persisted in the Attempt's Context Manifest with provenance and omission reasons.
+
+Execution-facing recall and Core Memory snapshot reads require the caller's `AbortSignal`. The online Attempt path owns one three-second deadline, passes that derived signal unchanged into embedding recall, checks it between repository stages, and waits for started same-process work to settle after cancellation. HTTP Memory operations derive request-scoped cancellation from request abort and response close rather than using a never-abort fallback.
 
 ## Lifecycle
 

@@ -24,6 +24,8 @@ describe("provider failure classification", () => {
 
   it("classifies aborted and successful messages without string heuristics", () => {
     expect(classifyProviderFailure(error("Request was aborted", "aborted"))).toBe("aborted");
-    expect(classifyProviderFailure({ ...error(""), stopReason: "stop" })).toBeUndefined();
+    expect(classifyProviderFailure({ ...error(""), stopReason: "stop", content: [{ type: "text", text: "complete" }] })).toBeUndefined();
+    expect(classifyProviderFailure({ ...error(""), stopReason: "stop" })).toBe("empty_response");
+    expect(isRetryableProviderFailure("empty_response")).toBe(true);
   });
 });

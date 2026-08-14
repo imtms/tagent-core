@@ -32,7 +32,7 @@ async function fixture(credentials: ServiceCredential[] = [], filename = ":memor
   const store = new Store(filename);
   const service = new AgentService(agentPersistence(store), workspace, () => ({
     prompt: async () => undefined, steer: async () => "accepted" as const, followUp: async () => "accepted" as const,
-    compact: async () => undefined, abort: () => undefined, getMessages: () => [], getError: () => undefined,
+    compact: async () => undefined, abort: () => undefined, dispose: async () => undefined, getMessages: () => [], getError: () => undefined,
   }));
   const app = createApp({
     ...httpTestResources(store), service, workspaceRoot: workspace, logger: false, serviceCredentials: credentials,

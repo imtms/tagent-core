@@ -55,7 +55,7 @@ When a TaskRun has a selected Skill, Execution passes one runtime-neutral Skill 
 
 Before an Attempt starts, Core persists an immutable Context Manifest describing selected Session messages, transcript material, TaskRun contract, prompt, Core Memory, dynamic Memory records, Cold Topics, omissions, token estimates, and a content hash. Runtime input is assembled from this manifest, not by letting the provider read the database.
 
-The adapter imports that bounded transcript into an in-memory Harness Session. It projects historical tool output and TaskRun receipts before provider calls, supports explicit compaction, performs threshold compaction after successful turns, and performs one compaction-and-retry cycle after a provider context-overflow response. Compaction is session-local; the durable transcript and Context Manifest remain Core-owned.
+The adapter imports that bounded transcript into an in-memory Harness Session. It projects historical tool output and TaskRun receipts before provider calls, supports explicit compaction, performs threshold compaction after successful turns, and performs one compaction-and-retry cycle after a provider context-overflow response. Compaction is session-local; the durable transcript and Context Manifest remain Core-owned. Because a summary can omit an exact path, identifier, failure code, or middle-of-output fact, `history_search` exposes bounded, case-sensitive literal search over only the current TaskRun's durable transcript. It returns at most eight newest matches with bounded snippets and cannot select another Run, regex mode, or an arbitrary result limit.
 
 ## Provider configuration
 
@@ -71,11 +71,11 @@ The runtime records provider-reported input, output, cache, total token, cost, a
 
 ## Timeouts and progress
 
-`TAGENT_RUN_TIMEOUT_MS` is an inactivity watchdog refreshed by model chunks, tool progress, and a low-frequency in-memory liveness heartbeat while a bounded tool is still running. `TAGENT_RUN_HARD_TIMEOUT_MS` is the absolute TaskRun wall-clock ceiling. Provider, Router, and Supervisor transports have their own bounded idle/retry settings.
+`TAGENT_RUN_TIMEOUT_MS` is an inactivity watchdog refreshed by model chunks, tool progress, and a low-frequency in-memory liveness heartbeat while a bounded tool is still running. `TAGENT_RUN_HARD_TIMEOUT_MS` is the absolute TaskRun wall-clock ceiling. Provider, Router, and Supervisor transports have their own bounded idle/retry settings. OpenAI-compatible streaming requires a complete `[DONE]` sentinel; reset, malformed, incomplete, and empty responses are classified for bounded retry without copying failed partial output into the next provider request or visible transcript.
 
 Submission, steer, and follow-up content is limited to 200,000 characters. Context assembly enforces the effective model budget even for the latest turn by projecting oversized text/tool arguments while retaining the complete durable source in SQLite or an Artifact.
 
-Timeout or transport failure is classified through durable Attempt settlement. A transient failure may schedule a bounded continuation; missing user input, permission, approval, or a non-recoverable condition blocks or pauses instead of looping indefinitely.
+Timeout or transport failure is classified through durable Attempt settlement. A transient failure may schedule a bounded continuation; missing user input, permission, approval, or a non-recoverable condition blocks or pauses instead of looping indefinitely. Cancellation signals are required across Runtime tools, subprocesses, workspace edits, Artifacts, Memory recall, context enrichment, and Session history. A same-process operation that has started is cooperatively cancelled and joined; a deadline never reports ownership released while that operation is still running.
 
 ## Controls
 
@@ -83,7 +83,9 @@ Steer and follow-up controls enter a bounded durable inbox. They are delivered t
 
 ## Tools
 
-`@tagent/workspace-local` provides contained `ls`, `read`, `write`, snapshot-bound `edit`, atomic multi-file `patch`, and `bash` behavior plus TaskRun control integration through the Execution-owned `RuntimeTool` ABI. Concrete tools are grouped into independent Tool Providers. `ToolRegistry` rejects duplicate names and freezes an Attempt-local catalog snapshot; `ToolExecutionPipeline` is the non-bypassable path for current-Attempt fencing, external-action and Workspace Goal guards, tool-attempt records, operation receipts, idempotent replay, check invalidation, and single settlement. `runtime-pi` converts the already wrapped catalog to `AgentHarnessTool` at the adapter edge.
+`@tagent/workspace-local` provides contained `ls`, `read`, `write`, snapshot-bound `edit`, atomic multi-file `patch`, `bash`, and bounded same-Run `history_search` behavior plus TaskRun control integration through the Execution-owned `RuntimeTool` ABI. Concrete tools are grouped into independent Tool Providers. `ToolRegistry` rejects duplicate names and freezes an Attempt-local catalog snapshot; `ToolExecutionPipeline` is the non-bypassable path for current-Attempt fencing, external-action and Workspace Goal guards, tool-attempt records, operation receipts, idempotent replay, check invalidation, and single settlement. `runtime-pi` converts the already wrapped catalog to `AgentHarnessTool` at the adapter edge.
+
+Tool failures retain readable model-facing text and stable machine metadata `{ name, code, message }`. The closed codes distinguish cancellation before dispatch from cancellation after invocation, timeout, path rejection, stale/precondition/argument failures, authorization denial, and unknown failure. The same metadata is persisted on tool results and projected optionally through transcript and tool lifecycle ABI for compatible clients.
 
 `bash` delegates process creation to `SubprocessPort`. The local adapter builds a new child environment by removing all `TAGENT_*` variables and credential-shaped names (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL`, authorization, and cookies), then applies only explicit trusted overrides. POSIX children run in their own process group; abort, timeout, Attempt finalization, and host disposal terminate the whole group with TERM-to-KILL escalation. This is lifecycle and secret containment, not an OS sandbox.
 

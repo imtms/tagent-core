@@ -35,7 +35,7 @@ export class BashToolProvider implements ToolProvider {
   private async execute(
     id: string,
     params: Static<typeof BashSchema>,
-    signal?: AbortSignal,
+    signal: AbortSignal,
     onUpdate?: RuntimeToolUpdateCallback<Record<string, unknown>>,
   ): Promise<RuntimeToolResult<Record<string, unknown>>> {
     if (/\b(rm\s+-rf|mkfs|shutdown|reboot|poweroff|git\s+reset\s+--hard|git\s+clean\s+-[a-z]*f)\b/i.test(params.command)) {
@@ -70,8 +70,8 @@ export class BashToolProvider implements ToolProvider {
     };
     const timeoutSeconds = params.timeoutSeconds ?? 30;
     const timeoutController = new AbortController();
-    const forwardAbort = () => timeoutController.abort(signal?.reason);
-    signal?.addEventListener("abort", forwardAbort, { once: true });
+    const forwardAbort = () => timeoutController.abort(signal.reason);
+    signal.addEventListener("abort", forwardAbort, { once: true });
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; timeoutController.abort(new Error("timeout")); }, timeoutSeconds * 1000);
     try {
@@ -88,15 +88,15 @@ export class BashToolProvider implements ToolProvider {
       const totalBytes = stdoutBytes + stderrBytes;
       let result: RuntimeToolResult<Record<string, unknown>>;
       if (totalBytes > MAX_OUTPUT || sourceDroppedBytes > 0) {
-        const stored = await persistToolOutputArtifact(this.capabilities, id, await readWorkspaceFile(this.workspace, captureRelative).then((value) => value.buffer), `Command output: ${params.command.slice(0, 80)}`, totalBytes, totalBytes > (this.capabilities.artifactSink?.maxBytes ?? MAX_DURABLE_OUTPUT));
+        const stored = await persistToolOutputArtifact(this.capabilities, signal, id, await readWorkspaceFile(this.workspace, captureRelative, signal).then((value) => value.buffer), `Command output: ${params.command.slice(0, 80)}`, totalBytes, totalBytes > (this.capabilities.artifactSink?.maxBytes ?? MAX_DURABLE_OUTPUT));
         const shown = previewText(combined || "Command completed with no output");
         this.capabilities.publish("tool.output.spilled", { toolCallId: id, artifactId: stored.artifactId, totalBytes, shownBytes: Buffer.byteLength(shown), storedBytes: stored.storedBytes, sha256: stored.sha256, truncatedAtSource: stored.truncatedAtSource, outputDiscardedBytes: Math.max(0, totalBytes - stored.storedBytes) });
         result = { content: [{ type: "text", text: shown }], details: { exitCode: outcome.exitCode, stdoutBytes, stderrBytes, capturedBytes: capturedOutputBytes, captureTruncated: stored.truncatedAtSource, artifactId: stored.artifactId, artifactUri: stored.uri, sha256: stored.sha256, totalBytes, storedBytes: stored.storedBytes, shownBytes: Buffer.byteLength(shown), truncatedAtSource: stored.truncatedAtSource, outputDiscardedBytes: Math.max(0, totalBytes - stored.storedBytes) } };
-      } else result = await durableTextResult(this.capabilities, id, combined || "Command completed with no output", { exitCode: outcome.exitCode, stdoutBytes, stderrBytes, capturedBytes: totalBytes, captureTruncated: false }, `Command output: ${params.command.slice(0, 80)}`, totalBytes, false);
+      } else result = await durableTextResult(this.capabilities, signal, id, combined || "Command completed with no output", { exitCode: outcome.exitCode, stdoutBytes, stderrBytes, capturedBytes: totalBytes, captureTruncated: false }, `Command output: ${params.command.slice(0, 80)}`, totalBytes, false);
       await unlink(capturePath).catch(() => undefined);
       const artifact = typeof result.details.artifactId === "string" ? `; artifactId=${result.details.artifactId}` : "";
       const output = (result.content[0] as { text: string }).text;
-      if (signal?.aborted) throw new Error(`Command aborted${artifact}`);
+      if (signal.aborted) throw new Error(`Command aborted${artifact}`);
       if (timedOut) {
         this.capabilities.publish("tool.bash.timed_out", { toolCallId: id, timeoutSeconds, commandHash: createHash("sha256").update(params.command).digest("hex"), artifactId: result.details.artifactId ?? null, stdoutBytes, stderrBytes });
         throw new Error(`Command timed out after ${timeoutSeconds}s${artifact}. Inspect the preserved output before retrying; do not rerun the identical command unchanged.\n${output}`);
@@ -106,7 +106,7 @@ export class BashToolProvider implements ToolProvider {
       return result;
     } finally {
       clearTimeout(timer);
-      signal?.removeEventListener("abort", forwardAbort);
+      signal.removeEventListener("abort", forwardAbort);
     }
   }
 }

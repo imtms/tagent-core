@@ -5,6 +5,7 @@ import { AgentService } from "@tagent/core-service/application";
 import { loadConfig } from "@tagent/core-service/config";
 import { Store } from "@tagent/persistence-sqlite/store";
 import type { RunEventMap, RunEventType } from "@tagent/execution/domain";
+import { ExecutionState, RunEventHub, RuntimeRegistry } from "@tagent/execution/composition";
 import { createEnvironmentCredentialResolver, credentialReference } from "@tagent/execution/ports";
 import { TaskRunSupervisor, SupervisorReviewError, TestSupervisorReviewer, passingTestAudit, type SupervisorAudit, type SupervisorReviewer } from "@tagent/core-service/composition";
 import type {
@@ -33,6 +34,7 @@ class CheckpointRuntime implements AgentRuntime {
   prompt() { return new Promise<void>((resolve) => { this.resolvePrompt = resolve; }); }
   async steer() { return "accepted" as const; }
   abort() { this.resolvePrompt?.(); }
+  async dispose() { await this.abort(); }
   getMessages(): AgentMessage[] { return []; }
   getError() { return undefined; }
   emit<TType extends RunEventType>(type: TType, data: RunEventMap[TType]) {
@@ -47,6 +49,7 @@ class ControlledRuntime implements AgentRuntime {
   prompt() { return new Promise<void>((resolve, reject) => { this.resolvePrompt = resolve; this.rejectPrompt = reject; }); }
   async steer() { return "accepted" as const; }
   abort() { this.resolvePrompt?.(); }
+  async dispose() { await this.abort(); }
   resolve() { this.resolvePrompt?.(); }
   reject(error: Error) { this.rejectPrompt?.(error); }
   getMessages() { return this.messages; }
@@ -61,8 +64,13 @@ class FakeRuntime implements AgentRuntime {
   async prompt(query: string) { this.prompts.push(query); }
   async steer(instruction: string) { this.steered.push(instruction); return "accepted" as const; }
   abort() { this.aborted = true; }
+  async dispose() { await this.abort(); }
   getMessages() { return this.messages; }
   getError() { return undefined; }
+}
+
+class RejectingDisposeRuntime extends FakeRuntime {
+  override async dispose() { throw new Error("runtime disposer failed"); }
 }
 
 class InboxRuntime implements AgentRuntime {
@@ -72,6 +80,7 @@ class InboxRuntime implements AgentRuntime {
   async steer(content: string) { this.delivered.push({ kind: "steer", content }); return "accepted" as const; }
   async followUp(content: string) { this.delivered.push({ kind: "follow_up", content }); return "accepted" as const; }
   abort() { this.resolvePrompt?.(); }
+  async dispose() { await this.abort(); }
   getMessages() { return []; }
   getError() { return undefined; }
 }
@@ -86,7 +95,8 @@ class BlockingControlRuntime implements AgentRuntime {
     return new Promise<"accepted">((resolve) => { this.resolveSteer = resolve; });
   }
   releaseSteer() { this.resolveSteer?.("accepted"); }
-  abort() { this.resolvePrompt?.(); }
+  abort() { this.resolveSteer?.("accepted"); this.resolvePrompt?.(); }
+  async dispose() { await this.abort(); }
   getMessages() { return []; }
   getError() { return undefined; }
 }
@@ -104,6 +114,7 @@ class CallbackRuntime implements AgentRuntime {
   async prompt(query: string) { this.prompts.push(query); this.onPrompt(query); }
   async steer() { return "accepted" as const; }
   abort() {}
+  async dispose() { await this.abort(); }
   getMessages() { return [this.message]; }
   getError() { return undefined; }
 }
@@ -120,6 +131,7 @@ class DeferredRuntime implements AgentRuntime {
   prompt() { return new Promise<void>((_resolve, reject) => { this.rejectPrompt = reject; }); }
   async steer() { return "accepted" as const; }
   abort() { this.aborted = true; this.rejectPrompt?.(new Error("aborted")); }
+  async dispose() { await this.abort(); }
   getMessages(): AgentMessage[] { return []; }
   getError() { return undefined; }
 }
@@ -148,6 +160,18 @@ class ActiveDeferredRuntime extends DeferredRuntime {
     return super.prompt().finally(() => { if (this.timer) clearInterval(this.timer); });
   }
   override abort() { if (this.timer) clearInterval(this.timer); super.abort(); }
+}
+
+class LatchingDisposeRuntime extends DeferredRuntime {
+  disposeStarted = false;
+  private release?: () => void;
+  private readonly quiescence = new Promise<void>((resolve) => { this.release = resolve; });
+  override async dispose() {
+    this.disposeStarted = true;
+    await this.quiescence;
+    await super.dispose();
+  }
+  reachQuiescence() { this.release?.(); }
 }
 
 describe("AgentService runtime boundary", () => {
@@ -253,6 +277,52 @@ describe("AgentService runtime boundary", () => {
     expect(recallCleanupFinished).toBe(true);
     expect(runtimeFactory).not.toHaveBeenCalled();
     expect(store.getRun(admitted.run!.id)).toMatchObject({ status: "interrupted" });
+    store.close();
+  });
+
+  it("treats rejected adjacent work as settled after joining it during shutdown", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "join rejected preparation");
+    const persistence = agentPersistence(store);
+    const state = new ExecutionState({
+      persistence,
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime(),
+      runtimeDefaults: {},
+    });
+    const registry = new RuntimeRegistry(state, { eventHub: new RunEventHub(state) });
+    const controller = new AbortController();
+    state.preparationTasks.set(run.id, {
+      controller,
+      promise: Promise.reject(new Error("preparation stopped after cancellation")),
+    });
+
+    await expect(registry.closeRuntimes()).resolves.toEqual([]);
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(state.preparationTasks.size).toBe(0);
+    expect(store.getRun(run.id)).toMatchObject({ status: "interrupted" });
+    store.close();
+  });
+
+  it("reports runtime disposal rejection as a quiescence failure", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "reject runtime disposal");
+    const persistence = agentPersistence(store);
+    const state = new ExecutionState({
+      persistence,
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime(),
+      runtimeDefaults: {},
+    });
+    const registry = new RuntimeRegistry(state, { eventHub: new RunEventHub(state) });
+    state.runtimes.set(run.id, new RejectingDisposeRuntime([]));
+
+    await expect(registry.closeRuntimes()).rejects.toThrow("Runtime shutdown failed to reach quiescence");
+
+    expect(state.runtimes.has(run.id)).toBe(true);
     store.close();
   });
 
@@ -635,6 +705,7 @@ describe("AgentService runtime boundary", () => {
       },
       async steer() { return "accepted" as const; },
       abort() {},
+      async dispose() { await this.abort(); },
       getMessages() { return [assistantMessage(complete), assistantMessage("")]; },
       getError() { return undefined; },
     });
@@ -771,6 +842,26 @@ describe("AgentService runtime boundary", () => {
     await closing;
     expect(runtime.settled).toBe(true);
     expect(store.getRun((store.listRuns(session.id)[0]).id)?.status).toBe("interrupted");
+    store.close();
+  });
+
+  it("does not report service shutdown before runtime disposal reaches quiescence", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const runtime = new LatchingDisposeRuntime();
+    const service = new AgentService(agentPersistence(store), "/tmp", () => runtime);
+    await service.start(session.id, "quiescent close");
+
+    let closed = false;
+    const closing = service.closeRuntimes().then(() => { closed = true; });
+    await vi.waitFor(() => expect(runtime.disposeStarted).toBe(true));
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    expect(store.db.open).toBe(true);
+
+    runtime.reachQuiescence();
+    await closing;
+    expect(closed).toBe(true);
     store.close();
   });
 

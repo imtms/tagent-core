@@ -3,12 +3,17 @@ import type { ArtifactSinkPort } from "./artifact-sink-port.js";
 import type { WorkspaceEditPort } from "./workspace-edit-port.js";
 import type { TaskRunStateMutation } from "./attempt-repository.js";
 import type { OperationRecord } from "@tagent/governance/ports";
+import type { TranscriptLiteralSearchResult } from "./transcript-repository.js";
 
 export interface MemoryToolCapabilities {
-  search(query: string, kinds?: string[], maxResults?: number): Promise<unknown>;
-  getTopic(topicId: string): Promise<{ body: string; revision: number; checksum: string } | undefined>;
-  getRecord(id: string): Promise<unknown | undefined>;
-  forget(input: { ids?: string[]; topicIds?: string[]; reason?: string; gracePeriodMs?: number }): Promise<unknown>;
+  search(query: string, kinds: string[] | undefined, maxResults: number | undefined, signal: AbortSignal): Promise<unknown>;
+  getTopic(topicId: string, signal: AbortSignal): Promise<{ body: string; revision: number; checksum: string } | undefined>;
+  getRecord(id: string, signal: AbortSignal): Promise<unknown | undefined>;
+  forget(input: { ids?: string[]; topicIds?: string[]; reason?: string; gracePeriodMs?: number }, signal: AbortSignal): Promise<unknown>;
+}
+
+export interface HistoryToolCapabilities {
+  search(query: string, signal: AbortSignal): Promise<TranscriptLiteralSearchResult & { beforeSeq: number }>;
 }
 
 /** Consumer-owned application capabilities exposed to built-in agent tools. */
@@ -67,4 +72,5 @@ export interface ToolCapabilityApplicationPort {
   consumeAtomicallySettledToolCall(toolCallId: string): boolean;
   publish<TType extends import("../domain/task-run.js").RunEventType>(type: TType, data: import("../domain/task-run.js").RunEventMap[TType]): RunEvent<TType> | undefined;
   readonly memory?: MemoryToolCapabilities;
+  readonly history?: HistoryToolCapabilities;
 }

@@ -409,12 +409,16 @@ export class CoreLifecycle implements WriterReadiness {
       }
     };
 
-    await attempt(async () => this.resources.closeRuntimes?.());
-    await attempt(async () => this.resources.stopBackground?.());
-
     if (this.heartbeatTimer) this.timers.clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = undefined;
     this.clearHeartbeatDeadline();
+
+    // These are quiescence barriers, not best-effort cleanup. If either one
+    // fails, persistence, writer authority, and the instance lock must remain
+    // available to any work that may still be alive.
+    await this.resources.closeRuntimes?.();
+    await this.resources.stopBackground?.();
+
     const heartbeatTask = this.heartbeatTask;
     if (heartbeatTask) await attempt(async () => heartbeatTask);
     const startTask = this.startTask;

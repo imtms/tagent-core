@@ -1,5 +1,6 @@
 import type { RunId } from "../domain/task-run.js";
 import type { RuntimeMessage } from "./attempt-runtime.js";
+import type { StructuredToolError } from "./tool-error.js";
 
 export interface TranscriptEntry {
   message: RuntimeMessage;
@@ -7,6 +8,19 @@ export interface TranscriptEntry {
   attempt: number;
   role: string;
   createdAt: number;
+}
+
+export interface TranscriptLiteralSearchMatch {
+  seq: number;
+  attempt: number;
+  role: string;
+  snippet: string;
+  createdAt: number;
+}
+
+export interface TranscriptLiteralSearchResult {
+  matches: TranscriptLiteralSearchMatch[];
+  truncated: boolean;
 }
 
 export type TranscriptViewItem =
@@ -22,6 +36,7 @@ export type TranscriptViewItem =
       arguments: unknown;
       result: string;
       isError: boolean;
+      error?: StructuredToolError;
       status: "pending" | "completed" | "failed";
       createdAt: number;
     };
@@ -31,6 +46,12 @@ export interface TranscriptRepository {
   getTranscriptCount(runId: RunId): number;
   appendTranscript(runId: RunId, attempt: number, message: RuntimeMessage): number;
   listTranscriptEntries(runId: RunId, options?: { limit?: number; attempt?: number; after?: number }): TranscriptEntry[];
+  /** Case-sensitive literal search over durable message JSON, newest match first. `beforeSeq` is exclusive. */
+  searchTranscriptLiteral(
+    runId: RunId,
+    query: string,
+    options?: { limit?: number; snippetChars?: number; beforeSeq?: number },
+  ): TranscriptLiteralSearchResult;
   listTranscript(runId: RunId): RuntimeMessage[];
   repairTranscript(
     runId: RunId,

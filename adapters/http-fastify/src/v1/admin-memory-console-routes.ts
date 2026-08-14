@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { HttpMemoryAccess, HttpMemoryScope } from "../ports/index.js";
 import type { V1ApiDependencies } from "./plugin.js";
 import { successEnvelope } from "./errors.js";
-import { authorizeConsole, consoleError, memoryAccess } from "./console-route-support.js";
+import { authorizeConsole, consoleError, memoryAccess, withRequestAbortSignal } from "./console-route-support.js";
 
 type GovernAction = "approve" | "reject" | "correct" | "resolve";
 type FeedbackSignal = "cited" | "helpful" | "confirmed" | "corrected" | "harmful" | "task_success" | "task_failure";
@@ -44,16 +44,18 @@ export function registerAdminMemoryConsoleV1Routes(app: FastifyInstance, depende
     return successEnvelope(request, await requireMemory().status(access(request, body.scopes, "memory_admin")));
   });
 
-  app.post("/api/v1/admin/memory/recall-console", { onRequest: authorize }, async (request) => {
+  app.post("/api/v1/admin/memory/recall-console", { onRequest: authorize }, async (request, reply) => {
     const body = request.body as { cue?: string; scopes?: HttpMemoryScope[]; kinds?: Array<"fact" | "preference" | "episode" | "procedure">; maxCards?: number; maxColdTopics?: number };
-    if (!body.cue?.trim() || !body.scopes?.length) throw consoleError(400, "memory.recall_invalid", "cue and scopes are required");
-    const result = await requireMemory().recall({
-      access: access(request, body.scopes, "agent_recall"),
-      cue: body.cue.trim(),
+    const cue = body.cue?.trim();
+    const scopes = body.scopes;
+    if (!cue || !scopes?.length) throw consoleError(400, "memory.recall_invalid", "cue and scopes are required");
+    const result = await withRequestAbortSignal(request, reply, (signal) => requireMemory().recall({
+      access: access(request, scopes, "agent_recall"),
+      cue,
       kinds: body.kinds,
       maxCards: body.maxCards,
       maxColdTopics: body.maxColdTopics,
-    });
+    }, signal));
     return successEnvelope(request, result);
   });
 
@@ -109,7 +111,7 @@ export function registerAdminMemoryConsoleV1Routes(app: FastifyInstance, depende
     return successEnvelope(request, result);
   });
 
-  app.post("/api/v1/admin/memory/core-snapshot", { onRequest: authorize }, async (request) => {
+  app.post("/api/v1/admin/memory/core-snapshot", { onRequest: authorize }, async (request, reply) => {
     const body = request.body as { scope?: HttpMemoryScope; generate?: boolean; markdown?: string };
     const port = requireMemory();
     if (!port.getCoreSnapshot) throw consoleError(503, "memory.snapshot_unavailable", "core snapshot is unavailable");
@@ -117,7 +119,7 @@ export function registerAdminMemoryConsoleV1Routes(app: FastifyInstance, depende
     const scoped = access(request, [body.scope], "memory_admin");
     const result = typeof body.markdown === "string" ? await port.updateCoreSnapshot!(scoped, body.markdown)
       : body.generate ? await port.generateCoreSnapshot!(scoped)
-      : await port.getCoreSnapshot(scoped);
+      : await withRequestAbortSignal(request, reply, (signal) => port.getCoreSnapshot!(scoped, signal));
     return successEnvelope(request, result);
   });
 }

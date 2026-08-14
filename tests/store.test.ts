@@ -831,6 +831,29 @@ describe("Store", () => {
     expect(store.getTranscriptCount(run.id)).toBe(2);
   });
 
+  it("searches durable transcript by bounded case-sensitive literal without wildcard semantics", () => {
+    const store = createStore();
+    const run = store.createRun(store.createSession().id, "literal transcript search");
+    store.appendTranscript(run.id, 1, { role: "user", content: "older config_key_aa and ExactCase", timestamp: 1 });
+    store.appendTranscript(run.id, 1, { role: "user", content: "newer config_key_%_must_remain_literal with a quoted \"value\"", timestamp: 2 });
+    store.appendTranscript(run.id, 1, { role: "user", content: "current query config_key_%_must_remain_literal", timestamp: 3 });
+
+    const literal = store.searchTranscriptLiteral(run.id, "config_key_%_must_remain_literal", {
+      beforeSeq: 3,
+      limit: 1,
+      snippetChars: 80,
+    });
+    expect(literal).toMatchObject({ truncated: false, matches: [{ seq: 2, attempt: 1, role: "user" }] });
+    expect(literal.matches[0].snippet.length).toBeLessThanOrEqual(82);
+    expect(store.searchTranscriptLiteral(run.id, "config_key_", { beforeSeq: 3, limit: 1 })).toMatchObject({
+      truncated: true,
+      matches: [{ seq: 2 }],
+    });
+    expect(store.searchTranscriptLiteral(run.id, "exactcase").matches).toEqual([]);
+    expect(store.searchTranscriptLiteral(run.id, 'quoted "value"').matches[0]).toMatchObject({ seq: 2 });
+    expect(() => store.searchTranscriptLiteral(run.id, "")).toThrow("cannot be empty");
+  });
+
   it("does not let an older attempt overwrite a newer checkpoint", () => {
     const store = createStore();
     const session = store.createSession();

@@ -81,10 +81,26 @@ export type {
 } from "./task-run-transition-port.js";
 export type { ToolPersistencePort } from "./tool-persistence-port.js";
 export type {
+  HistoryToolCapabilities,
   MemoryToolCapabilities,
   ToolCapabilityApplicationPort,
 } from "./tool-capability-application-port.js";
-export type { TranscriptEntry, TranscriptRepository, TranscriptViewItem } from "./transcript-repository.js";
+export type {
+  TranscriptEntry,
+  TranscriptLiteralSearchMatch,
+  TranscriptLiteralSearchResult,
+  TranscriptRepository,
+  TranscriptViewItem,
+} from "./transcript-repository.js";
+export {
+  TOOL_ERROR_CODES,
+  ToolExecutionError,
+  classifyToolError,
+  structuredToolErrorFromDetails,
+  toStructuredToolError,
+  type StructuredToolError,
+  type ToolErrorCode,
+} from "./tool-error.js";
 
 export type { WorkspaceEditPort, WorkspacePatchFile, WorkspacePatchHunk, WorkspacePatchRequest, WorkspacePatchResult, WorkspaceReadSnapshot } from "./workspace-edit-port.js";
 export type { RunEventMap, RunEventType } from "../domain/task-run.js";

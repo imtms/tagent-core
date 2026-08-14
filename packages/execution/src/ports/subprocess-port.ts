@@ -22,7 +22,8 @@ export interface SubprocessSpawnSpec {
   readonly env?: Readonly<NodeJS.ProcessEnv>;
   /** Optional finite stdin body. Interactive input belongs behind a different capability. */
   readonly stdin?: string | Uint8Array;
-  readonly signal?: AbortSignal;
+  /** Caller-owned lifetime for this subprocess tree. */
+  readonly signal: AbortSignal;
   readonly terminationGraceMs: number;
   readonly onStdout?: (chunk: Uint8Array) => void;
   readonly onStderr?: (chunk: Uint8Array) => void;

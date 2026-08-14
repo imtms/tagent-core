@@ -173,6 +173,34 @@ describe("Core lifecycle", () => {
     for (const resource of events) expect(counts.get(resource)).toBe(1);
   });
 
+  it("retains persistence and writer authority when runtime quiescence fails", async () => {
+    const events: string[] = [];
+    const lifecycle = new CoreLifecycle({
+      instanceLock: {
+        assertHeld: async () => undefined,
+        release: async () => { events.push("lock.release"); },
+      },
+      writerLease: {
+        heartbeat: () => undefined,
+        release: () => { events.push("lease.release"); return true; },
+      },
+      writerGuard: {
+        assertConnectionGuardCurrent: () => undefined,
+        removeConnectionGuard: () => { events.push("guard.remove"); },
+      },
+      closeRuntimes: async () => { events.push("runtime.join"); throw new Error("runtime still active"); },
+      stopBackground: async () => { events.push("background.stop"); },
+      closeStore: () => { events.push("store.close"); },
+    }, { heartbeatIntervalMs: 60_000, maxHeartbeatAgeMs: 120_000 });
+    await lifecycle.start();
+    lifecycle.markReady();
+
+    await expect(lifecycle.close()).rejects.toThrow("runtime still active");
+
+    expect(events).toEqual(["runtime.join"]);
+    expect(lifecycle.snapshot()).toMatchObject({ phase: "closing", writerReady: false });
+  });
+
   it.each(["lock", "lease", "guard"] as const)(
     "drops readiness and closes every resource exactly once after %s loss",
     async (check) => {

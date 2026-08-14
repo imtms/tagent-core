@@ -8,7 +8,10 @@ export function assembleHttpMemory(memory: MemoryFacade): HttpMemoryPort {
       ? (access, limit) => memory.listCaptureJobs!(access, limit)
       : undefined,
     status: (access) => memory.status(access),
-    recall: (request) => memory.recall(request as Parameters<MemoryFacade["recall"]>[0]),
+    recall: (request, signal) => memory.recall({
+      ...(request as Omit<Parameters<MemoryFacade["recall"]>[0], "signal">),
+      signal,
+    }),
     getColdTopic: (access, topicId) => memory.getColdTopic(access, topicId),
     upsert: (access, records, topics) => memory.upsert(
       access,
@@ -37,7 +40,7 @@ export function assembleHttpMemory(memory: MemoryFacade): HttpMemoryPort {
       )
       : undefined,
     getCoreSnapshot: memory.getCoreSnapshot
-      ? (access) => memory.getCoreSnapshot!(access)
+      ? (access, signal) => memory.getCoreSnapshot!(access, signal)
       : undefined,
     generateCoreSnapshot: memory.generateCoreSnapshot
       ? (access) => memory.generateCoreSnapshot!(access)

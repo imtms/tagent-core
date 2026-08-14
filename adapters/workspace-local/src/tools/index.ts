@@ -4,6 +4,7 @@ import type { RuntimeCapabilityCatalog, SubprocessPort, ToolCapabilityApplicatio
 import { BashToolProvider } from "./bash-tool-provider.js";
 import { EditToolProvider, ListToolProvider, PatchToolProvider, ReadToolProvider, WriteToolProvider } from "./filesystem-tool-providers.js";
 import { MemoryToolProvider } from "./memory-tool-provider.js";
+import { HistoryToolProvider } from "./history-tool-provider.js";
 import { TaskRunToolProvider } from "./task-run-tool-provider.js";
 export { bashInvalidatesChecks } from "./shared.js";
 
@@ -17,7 +18,7 @@ function createToolProviders(capabilities: ToolCapabilityApplicationPort, worksp
     new ListToolProvider(capabilities, workspace), new ReadToolProvider(capabilities, workspace),
     new WriteToolProvider(workspace), new EditToolProvider(capabilities), new PatchToolProvider(capabilities),
     new BashToolProvider(capabilities, workspace, subprocess), new TaskRunToolProvider(capabilities),
-    new MemoryToolProvider(capabilities),
+    new MemoryToolProvider(capabilities), new HistoryToolProvider(capabilities),
   ];
 }
 

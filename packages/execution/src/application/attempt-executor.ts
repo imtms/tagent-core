@@ -8,13 +8,10 @@ import { settleRuntimeFactoryFailure } from "./runtime-factory-failure.js";
 import { settleAttemptExecutionFailure } from "./attempt-execution-failure.js";
 import { selectRuntimeModel } from "./runtime-model-selection.js";
 import { runtimeSkillsFor } from "./runtime-skill.js";
-import type {
-  AttemptSettlementPort, ContinuationControlPort, ControlCommandPort, PostAttemptPort, RecoveryControlPort,
-  RunContextPort, RunEventPublisherPort, RuntimeControlPort, RuntimeHostFactoryPort, SupervisorPort,
-} from "./collaboration-ports.js";
+import type { AttemptSettlementPort, ContinuationControlPort, ControlCommandPort, PostAttemptPort, RecoveryControlPort, RunContextPort, RunEventPublisherPort, RuntimeControlPort, RuntimeHostFactoryPort, SupervisorPort } from "./collaboration-ports.js";
 type AttemptExecutorState = ExecutionStateView<
-  | "checkpointDrafts" | "checkpointTimers" | "checkpointTokens" | "closing" | "continuationOwner" | "executionOwner"
-  | "executionTasks" | "lastCheckpointTranscriptSeq" | "persistence" | "recalledMemory" | "runtimeDefaults" | "runtimeFactory" | "runtimes" | "workspace",
+  | "checkpointDrafts" | "checkpointTimers" | "checkpointTokens" | "closing" | "continuationOwner" | "executionOwner" | "executionTasks"
+  | "lastCheckpointTranscriptSeq" | "persistence" | "recalledMemory" | "runtimeDefaults" | "runtimeFactory" | "runtimes" | "workspace",
   | "attempts" | "continuations" | "events" | "runtime" | "runtimeMutations" | "sessions" | "taskRuns"
   | "taskRunTransitions" | "transcript"
 >;
@@ -267,11 +264,13 @@ export class AttemptExecutor {
       if (leaseTimer) clearInterval(leaseTimer);
       if (executionLeaseTimer) clearInterval(executionLeaseTimer);
       if (this.state.persistence.taskRuns.getRun(run.id)?.status === "cancelled") this.dependencies.recovery.repairTranscript(run.id, "cancelled");
-      runtime.dispose?.();
+      let runtimeDisposed = false;
+      try { await runtime.dispose(); runtimeDisposed = true; }
+      catch { /* Retain failed disposers so shutdown cannot claim quiescence. */ }
       try {
         await runtimeHost.dispose?.();
       } catch { /* Durable finalization must continue even if process cleanup reports an error. */ }
-      this.state.runtimes.delete(run.id);
+      if (runtimeDisposed) this.state.runtimes.delete(run.id);
       this.state.recalledMemory.delete(run.id);
       const timer = this.state.checkpointTimers.get(run.id);
       if (timer) clearTimeout(timer);

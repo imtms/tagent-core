@@ -10,14 +10,15 @@ function safeSegment(value: string) {
 export class WorkspaceArtifactFileSink implements ArtifactSinkPort {
   constructor(private readonly workspace: string, readonly maxBytes = 16 * 1024 * 1024) {}
 
-  async write(input: ArtifactSinkWriteInput) {
+  async write(input: ArtifactSinkWriteInput, signal: AbortSignal) {
+    signal.throwIfAborted();
     const source = Buffer.isBuffer(input.content) ? input.content : Buffer.from(input.content, "utf8");
     const buffer = source.subarray(0, this.maxBytes);
     const truncatedAtSource = (input.truncatedAtSource ?? false) || source.length > buffer.length;
     const sha256 = createHash("sha256").update(buffer).digest("hex");
     const extension = input.mediaType === "application/json" ? "json" : "log";
     const uri = `.tagent/artifacts/${safeSegment(input.runId)}/${safeSegment(input.artifactId)}-${sha256.slice(0, 16)}.${extension}`;
-    await writeWorkspaceFile(this.workspace, uri, buffer);
+    await writeWorkspaceFile(this.workspace, uri, buffer, signal);
     return {
       artifactId: input.artifactId,
       title: input.title,

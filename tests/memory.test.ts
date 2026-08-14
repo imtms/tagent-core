@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,6 +14,7 @@ const access = {
   scopes: [scope],
   purpose: "agent_recall" as const,
 };
+const testSignal = new AbortController().signal;
 async function fixture() {
   const adapter = new InMemoryMemoryAdapter();
   const blobs = new LocalBlobStore(
@@ -33,6 +34,35 @@ async function fixture() {
   return { adapter, service };
 }
 describe("memory platform", () => {
+  it("propagates the required caller signal into embedding recall and rejects cancellation", async () => {
+    const adapter = new InMemoryMemoryAdapter();
+    const blobs = new LocalBlobStore(await mkdtemp(path.join(tmpdir(), "tagent-memory-cancel-")));
+    let observedSignal: AbortSignal | undefined;
+    const embeddings = {
+      generation: "controlled-cancellation-v1",
+      embed: vi.fn(async (_texts: string[], options?: { signal?: AbortSignal }) => new Promise<number[][]>((_resolve, reject) => {
+        observedSignal = options?.signal;
+        if (!observedSignal) return reject(new Error("missing caller signal"));
+        const abort = () => reject(observedSignal?.reason);
+        if (observedSignal.aborted) abort();
+        else observedSignal.addEventListener("abort", abort, { once: true });
+      })),
+    };
+    const service = new MemoryService({
+      records: adapter, vectors: adapter, graph: adapter, topics: adapter,
+      blobs, embeddings, jobs: adapter, policy: new DefaultPolicyEngine(adapter),
+    });
+    const controller = new AbortController();
+    const pending = service.recall({ access, cue: "cancel recall", signal: controller.signal });
+    await vi.waitFor(() => expect(embeddings.embed).toHaveBeenCalledOnce());
+
+    const reason = new Error("caller cancelled recall");
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+    expect(observedSignal).toBe(controller.signal);
+  });
+
   it("keeps facts and preferences separate while recalling both", async () => {
     const { adapter, service } = await fixture();
     const now = Date.now();
@@ -85,7 +115,7 @@ describe("memory platform", () => {
       adapter.records.get("22222222-2222-4222-8222-222222222222")?.kind,
     ).toBe("preference");
     expect(
-      (await service.recall({ access, cue: "PostgreSQL Rust" })).cards
+      (await service.recall({ access, cue: "PostgreSQL Rust", signal: testSignal })).cards
         .map((c) => c.kind)
         .sort(),
     ).toEqual(["fact", "preference"]);
@@ -144,6 +174,7 @@ describe("memory platform", () => {
       access,
       cue: "memory tier routing",
       maxColdTopics: 1,
+      signal: testSignal,
     });
     expect(result.coldTopics[0].body).toBe(body);
     expect(
@@ -182,7 +213,7 @@ describe("memory platform", () => {
       scopes: [{ type: "workspace" as const, id: "other" }],
     };
     expect(
-      (await service.recall({ access: other, cue: "database" })).cards,
+      (await service.recall({ access: other, cue: "database", signal: testSignal })).cards,
     ).toEqual([]);
   });
 });
@@ -306,6 +337,7 @@ describe("memory extraction correctness", () => {
       access,
       cue: "我是谁",
       maxColdTopics: 0,
+      signal: testSignal,
     });
     expect(recalled.cards).toHaveLength(1);
     expect(recalled.cards[0].content).toContain("TMs");
@@ -611,6 +643,7 @@ describe("AgentService memory capture boundaries", () => {
       prompt: async () => {},
       steer: async () => "accepted" as const,
       abort: () => {},
+      dispose: async () => undefined,
       getMessages: () =>
         [
           {
@@ -733,6 +766,7 @@ describe("memory safety hardening", () => {
       cue: "PostgreSQL",
       maxCards: 3,
       maxColdTopics: 0,
+      signal: testSignal,
     });
     expect(result.cards.length).toBeLessThanOrEqual(3);
     expect(result.cards.length).toBeGreaterThan(0);
@@ -920,6 +954,7 @@ describe("memory recall isolation", () => {
       access,
       cue: "公司的组织架构",
       maxColdTopics: 0,
+      signal: testSignal,
     });
     expect(org.cards.some((card) => card.content.includes("TMs"))).toBe(false);
     expect(org.cards.some((card) => card.content.includes("首席执行官"))).toBe(
@@ -929,6 +964,7 @@ describe("memory recall isolation", () => {
       access,
       cue: "量子考古学火星样本",
       maxColdTopics: 0,
+      signal: testSignal,
     });
     expect(missing.cards).toEqual([]);
   });
@@ -980,6 +1016,7 @@ describe("memory recall isolation", () => {
       access,
       cue: "PR #9是否有合并冲突",
       maxColdTopics: 0,
+      signal: testSignal,
     });
     expect(result.cards).toHaveLength(1);
     expect(result.cards[0].content).toContain("仍存在");
@@ -1211,7 +1248,7 @@ describe("memory aging, forgetting, and restoration", () => {
       updatedAt: now,
     };
     await service.persistExtracted(access, [record], []);
-    await service.recall({ access, cue: "PostgreSQL", maxColdTopics: 0 });
+    await service.recall({ access, cue: "PostgreSQL", maxColdTopics: 0, signal: testSignal });
     expect(adapter.records.get(record.id)?.lifecycle).toMatchObject({
       lastSeenAt: now,
       recallCount: 1,

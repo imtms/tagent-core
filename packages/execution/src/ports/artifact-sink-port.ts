@@ -24,5 +24,5 @@ export interface ArtifactSinkWriteResult {
 /** Durable content sink used before a bounded tool-result projection is returned to the model. */
 export interface ArtifactSinkPort {
   readonly maxBytes: number;
-  write(input: ArtifactSinkWriteInput): Promise<ArtifactSinkWriteResult>;
+  write(input: ArtifactSinkWriteInput, signal: AbortSignal): Promise<ArtifactSinkWriteResult>;
 }

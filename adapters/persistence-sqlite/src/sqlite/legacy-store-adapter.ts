@@ -385,6 +385,7 @@ export class LegacyStoreAdapter {
       getTranscriptCount: query(store.getTranscriptCount.bind(store)),
       appendTranscript: mutate(store.appendTranscript.bind(store)),
       listTranscriptEntries: query(store.listTranscriptEntries.bind(store)),
+      searchTranscriptLiteral: query(store.searchTranscriptLiteral.bind(store)),
       listTranscript: query(store.listTranscript.bind(store)),
       repairTranscript: mutate(store.repairTranscript.bind(store)),
       listTranscriptView: query(store.listTranscriptView.bind(store)),

@@ -11,6 +11,7 @@ class DeferredRuntime implements AttemptRuntimePort {
   prompt() { return new Promise<void>((resolve) => { this.resolvePrompt = resolve; }); }
   async steer() { return "accepted" as const; }
   abort() { this.resolvePrompt?.(); }
+  async dispose() { await this.abort(); }
   getMessages() { return []; }
   getError() { return undefined; }
 }

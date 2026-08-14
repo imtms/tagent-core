@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.5] - 2026-08-14
+
+### Runtime ownership and provider recovery
+
+- Replaced timer-bounded runtime disposal with an asynchronous quiescence barrier that cancels and joins owned runtime, preparation, control-delivery, and execution work before releasing persistence or writer authority.
+- Made cancellation ownership explicit across tools, subprocesses, workspace edits, Artifacts, Memory recall, context enrichment, and Session history; started same-process work is joined after cancellation, and HTTP operations derive request-lifetime signals.
+- Added a deterministic provider wire-fault fixture and stricter OpenAI-compatible stream completion, covering resets, incomplete/malformed SSE, empty responses, byte-identical retries, and failed-partial isolation.
+
+### Durable recall, errors, and verification
+
+- Added bounded, case-sensitive `history_search` over the current TaskRun's durable transcript so exact facts omitted by compaction summaries remain recoverable without cross-Run authority or unbounded reads.
+- Added stable structured tool error metadata across execution receipts, Pi tool results, public transcript items, and lifecycle events, distinguishing pre-dispatch cancellation from failures after invocation.
+- Replaced timing-based critical runtime synchronization with event-driven probes, added reproducible fixed-seed state-machine properties, and introduced an executable compaction summary-loss benchmark.
+- Added lightweight `.agents` decision records with an executable consistency gate, and removed obsolete teardown test patterns and duplicated tool-error code catalogs.
+
+### Compatibility and upgrade
+
+- The Channel and Console ABI changes are additive optional tool-error fields; there is no configuration or SQLite schema migration, and schema remains 45.
+- Synchronized Core, Web Console, all 13 private workspace manifests, internal dependency pins, capability metadata, fixtures, tests, and the lockfile at 0.6.5. Deploy matching Core and Web Console 0.6.5 artifacts.
+
 ## [0.6.4] - 2026-08-14
 
 ### Web Console workspace experience

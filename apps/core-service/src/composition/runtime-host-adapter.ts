@@ -19,7 +19,7 @@ export interface RuntimeHostOptions {
   persistence: Pick<
     AgentServicePersistencePort,
     "attempts" | "runtime" | "runtimeMutations" | "taskRuns" | "workspaceGoals"
-    | "approvals"
+    | "approvals" | "transcript"
   >;
   token: AttemptExecutionToken;
   workspace: string;
@@ -136,31 +136,59 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     ),
     consumeAtomicallySettledToolCall: (toolCallId) => atomicallySettledToolCalls.delete(toolCallId),
     publish,
+    history: {
+      search: async (query, signal) => {
+        signal.throwIfAborted();
+        const beforeSeq = persistence.transcript.getLastTranscriptSeq(token.runId);
+        const result = persistence.transcript.searchTranscriptLiteral(token.runId, query, {
+          beforeSeq,
+          limit: 8,
+          snippetChars: 320,
+        });
+        signal.throwIfAborted();
+        return { ...result, beforeSeq };
+      },
+    },
     memory: options.memory ? {
-      search: async (query, kinds, maxResults) => {
+      search: async (query, kinds, maxResults, signal) => {
+        signal.throwIfAborted();
         const result = await options.memory!.recall({
           access: memoryAccess,
           cue: query,
           kinds: kinds as MemoryKind[] | undefined,
           maxCards: maxResults ?? 8,
           maxColdTopics: 0,
+          signal,
         });
+        signal.throwIfAborted();
         return { cards: result.cards, topicIds: result.trace.topicIds, trace: result.trace };
       },
-      getTopic: async (topicId) => {
+      getTopic: async (topicId, signal) => {
+        signal.throwIfAborted();
         const topic = await options.memory!.getColdTopic(memoryAccess, topicId);
+        signal.throwIfAborted();
         return topic ? {
           body: topic.body,
           revision: topic.revision.revision,
           checksum: topic.revision.checksum,
         } : undefined;
       },
-      getRecord: (id) => options.memory!.getRecord(memoryAccess, id),
-      forget: (input) => options.memory!.forget({
-        access: { ...memoryAccess, purpose: "memory_admin" },
-        scope: { type: "workspace", id: options.memoryScopeId },
-        ...input,
-      }),
+      getRecord: async (id, signal) => {
+        signal.throwIfAborted();
+        const record = await options.memory!.getRecord(memoryAccess, id);
+        signal.throwIfAborted();
+        return record;
+      },
+      forget: async (input, signal) => {
+        signal.throwIfAborted();
+        const result = await options.memory!.forget({
+          access: { ...memoryAccess, purpose: "memory_admin" },
+          scope: { type: "workspace", id: options.memoryScopeId },
+          ...input,
+        });
+        signal.throwIfAborted();
+        return result;
+      },
     } : undefined,
   };
   const subprocess = createLocalSubprocessPort();

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { RuntimeCapabilityCatalog, RuntimeTool, RuntimeToolResult, ToolCapabilityApplicationPort } from "../ports/index.js";
+import { classifyToolError, type StructuredToolError, ToolExecutionError } from "../ports/tool-error.js";
 
 interface ToolCallState {
   toolName: string;
@@ -102,14 +103,29 @@ export class ToolExecutionPipeline {
     return blocked ? { blocked: true, reason: blocked } : { blocked: false };
   }
 
-  afterToolCall(toolCallId: string, success: boolean, error?: string) { this.settle(toolCallId, success, error); }
+  afterToolCall(toolCallId: string, success: boolean, error?: StructuredToolError) {
+    this.settle(toolCallId, success, error ? JSON.stringify(error) : undefined);
+  }
 
   private wrap(tool: RuntimeTool): RuntimeTool {
     return Object.freeze({
       ...tool,
-      execute: async (toolCallId: string, args: unknown, signal?: AbortSignal, onUpdate?: Parameters<RuntimeTool["execute"]>[3]) => {
+      execute: async (toolCallId: string, args: unknown, signal: AbortSignal, onUpdate?: Parameters<RuntimeTool["execute"]>[3]) => {
+        if (signal.aborted) {
+          const classified = classifyToolError(signal.reason ?? new Error("Tool call aborted before dispatch"), {
+            signal,
+            beforeDispatch: true,
+          });
+          // Runtime hooks may have admitted and durably recorded this call just
+          // before SDK dispatch. Balance that record even though the body never
+          // starts; a direct pre-aborted caller still records nothing.
+          if (this.calls.has(toolCallId)) this.settle(toolCallId, false, JSON.stringify(classified.toJSON()));
+          throw classified;
+        }
         const guard = this.beforeToolCall(toolCallId, tool.name, args);
-        if (guard.blocked) throw new Error(guard.reason ?? "Tool call blocked");
+        if (guard.blocked) {
+          throw new ToolExecutionError("NOT_AUTHORIZED", guard.reason ?? "Tool call blocked");
+        }
         const state = this.calls.get(toolCallId)!;
         if (state.executing) throw new Error(`Tool call ${toolCallId} is already executing`);
         state.executing = true;
@@ -118,8 +134,9 @@ export class ToolExecutionPipeline {
           this.settle(toolCallId, true);
           return result;
         } catch (error) {
-          this.settle(toolCallId, false, error instanceof Error ? error.message : String(error));
-          throw error;
+          const classified = classifyToolError(error, { signal });
+          this.settle(toolCallId, false, JSON.stringify(classified.toJSON()));
+          throw classified;
         } finally {
           state.executing = false;
         }
@@ -127,13 +144,13 @@ export class ToolExecutionPipeline {
     });
   }
 
-  private async executeWithReceipt(tool: RuntimeTool, toolCallId: string, args: unknown, signal?: AbortSignal, onUpdate?: Parameters<RuntimeTool["execute"]>[3]): Promise<RuntimeToolResult> {
+  private async executeWithReceipt(tool: RuntimeTool, toolCallId: string, args: unknown, signal: AbortSignal, onUpdate?: Parameters<RuntimeTool["execute"]>[3]): Promise<RuntimeToolResult> {
     const policy = tool.policy;
-    if (!policy?.operationType) return tool.execute(toolCallId, args, signal, onUpdate);
+    if (!policy?.operationType) return this.executeToolBody(tool, toolCallId, args, signal, onUpdate);
     const id = operationId(this.capabilities, toolCallId);
     const access = typeof policy.workspaceAccess === "function" ? policy.workspaceAccess(args) : policy.workspaceAccess;
     if (access === "read_only") {
-      const result = await tool.execute(toolCallId, args, signal, onUpdate);
+      const result = await this.executeToolBody(tool, toolCallId, args, signal, onUpdate);
       const receipt = this.capabilities.claimOperation(id, policy.operationType, args);
       if (!receipt.claimed) {
         if (receipt.status === "succeeded") return receipt.result as RuntimeToolResult;
@@ -152,7 +169,7 @@ export class ToolExecutionPipeline {
       throw new Error(`Operation ${id} cannot be replayed from status ${receipt.status}`);
     }
     try {
-      const result = evidencedResult(await tool.execute(toolCallId, args, signal, onUpdate), id, true);
+      const result = evidencedResult(await this.executeToolBody(tool, toolCallId, args, signal, onUpdate), id, true);
       const invalidates = typeof policy.invalidatesChecks === "function" ? policy.invalidatesChecks(args) : policy.invalidatesChecks !== false;
       const staleChecks = invalidates ? this.capabilities.markChecksStale() : 0;
       this.capabilities.updateOperation(id, { status: "succeeded", stage: "completed", effects: [
@@ -161,8 +178,34 @@ export class ToolExecutionPipeline {
       ], result });
       return result;
     } catch (error) {
-      this.capabilities.updateOperation(id, { status: "failed", stage: "execution_failed", effects: [{ kind: "workspace", action: access ?? "mutation" }], error: error instanceof Error ? error.message : String(error) });
-      throw error;
+      const classified = classifyToolError(error, { signal });
+      this.capabilities.updateOperation(id, {
+        status: "failed",
+        stage: "execution_failed",
+        effects: [
+          { kind: "workspace", action: access ?? "mutation" },
+          { kind: "error", error: classified.toJSON() },
+        ],
+        error: classified.message,
+      });
+      throw classified;
+    }
+  }
+
+  private async executeToolBody(
+    tool: RuntimeTool,
+    toolCallId: string,
+    args: unknown,
+    signal: AbortSignal,
+    onUpdate?: Parameters<RuntimeTool["execute"]>[3],
+  ): Promise<RuntimeToolResult> {
+    signal.throwIfAborted();
+    try {
+      const result = await tool.execute(toolCallId, args, signal, onUpdate);
+      signal.throwIfAborted();
+      return result;
+    } catch (error) {
+      throw classifyToolError(error, { signal });
     }
   }
 

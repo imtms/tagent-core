@@ -14,6 +14,7 @@ const scope = { type: "workspace" as const, id: "eval" },
     purpose: "agent_recall" as const,
   },
   now = Date.now();
+const testSignal = new AbortController().signal;
 const fact = (
   id: string,
   title: string,
@@ -177,6 +178,7 @@ describe("memory retrieval benchmark fixture", () => {
         cue: q,
         maxColdTopics: 0,
         maxCards: 5,
+        signal: testSignal,
       });
       const rank = r.cards.findIndex((x) => x.content.includes(expected));
       if (expected) {

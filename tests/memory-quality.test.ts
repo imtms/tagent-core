@@ -7,6 +7,7 @@ import { RuleBasedExtractor } from "../packages/memory/src/adapters/rule-extract
 import { OpenAIEmbeddingAdapter } from "../packages/memory/src/adapters/openai-embedding.js";
 import { LocalMemoryWorker } from "../packages/memory/src/runtime-worker.js";
 const scope = { type: "workspace" as const, id: "quality" };
+const testSignal = new AbortController().signal;
 
 describe("memory semantic quality", () => {
   it("hybrid extraction preserves rule fast paths and merges semantic proposals", async () => {
@@ -484,6 +485,7 @@ it("produces explainable ranking trace and incremental embedding skips", async (
     access: { subjectId: "u", scopes: [scope], purpose: "agent_recall" },
     cue: "我叫什么",
     maxColdTopics: 0,
+    signal: testSignal,
   });
   expect(result.trace.version).toBe(2);
   expect(result.cards[0]).toMatchObject({

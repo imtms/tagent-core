@@ -14,6 +14,8 @@ import { composeWorkspaceTools, createLocalSubprocessPort } from "@tagent/worksp
 import type { ToolCapabilityApplicationPort } from "@tagent/execution/ports";
 import { agentPersistence, httpTestResources } from "./support/test-persistence.js";
 
+const testSignal = new AbortController().signal;
+
 const scope = { type: "workspace" as const, id: "issue-regressions" };
 const access = { subjectId: "tester", scopes: [scope], purpose: "memory_admin" as const };
 
@@ -33,6 +35,7 @@ function waitingRuntime() {
     prompt: () => new Promise<void>((done) => { resolve = done; }),
     steer: async () => "accepted" as const,
     abort: () => resolve?.(), getMessages: () => [], getError: () => undefined,
+    dispose: async () => { resolve?.(); },
   };
 }
 
@@ -62,7 +65,7 @@ describe("GitHub issue regressions #24-#28", () => {
       memory: { search: async () => [], getTopic: async () => undefined, getRecord: async () => undefined, forget: vi.fn(async () => ({})) },
     } as unknown as ToolCapabilityApplicationPort;
     const tool = composeWorkspaceTools(capabilities, await mkdtemp(path.join(tmpdir(), "tagent-issues-tools-")), createLocalSubprocessPort()).catalog.tools.find((item) => item.name === "memory_forget")!;
-    await expect(tool.execute("empty-forget", {} as never, undefined)).rejects.toThrow("requires at least one");
+    await expect(tool.execute("empty-forget", {} as never, testSignal)).rejects.toThrow("requires at least one");
     expect(capabilities.memory!.forget).not.toHaveBeenCalled();
   });
 

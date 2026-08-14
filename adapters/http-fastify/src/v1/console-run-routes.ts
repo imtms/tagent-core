@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { ConsoleContentRequestSchema } from "@tagent/abi";
 import type { V1ApiDependencies } from "./plugin.js";
 import { successEnvelope, V1HttpError } from "./errors.js";
-import { authorizeConsole, consoleError } from "./console-route-support.js";
+import { authorizeConsole, consoleError, withRequestAbortSignal } from "./console-route-support.js";
 
 export function registerConsoleRunV1Routes(app: FastifyInstance, dependencies: V1ApiDependencies): void {
   const { service, persistence, artifacts, workspaceRoot } = dependencies;
@@ -82,13 +82,14 @@ export function registerConsoleRunV1Routes(app: FastifyInstance, dependencies: V
     return successEnvelope(request, transcript.listTranscriptView(id, { after, limit }));
   });
 
-  app.get("/api/v1/console/task-runs/:id/artifacts/:artifactId/content", { onRequest: read }, async (request) => {
+  app.get("/api/v1/console/task-runs/:id/artifacts/:artifactId/content", { onRequest: read }, async (request, reply) => {
     const { id, artifactId } = request.params as { id: string; artifactId: string };
     if (!taskRuns.hasRun(id)) throw consoleError(404, "task_run.not_found", "TaskRun not found");
     const artifact = evidence.getArtifact(id, artifactId);
     if (!artifact) throw consoleError(404, "artifact.not_found", "artifact not found");
     try {
-      const source = await artifacts.loadSource(artifact.content, artifact.uri, workspaceRoot);
+      const source = await withRequestAbortSignal(request, reply, (signal) =>
+        artifacts.loadSource(artifact.content, artifact.uri, workspaceRoot, signal));
       if (!artifacts.isText(artifact.kind, artifact.title, artifact.uri, source.content)) throw consoleError(415, "artifact.unsupported", "artifact is not text");
       return successEnvelope(request, {
         id: artifact.id,
@@ -112,7 +113,8 @@ export function registerConsoleRunV1Routes(app: FastifyInstance, dependencies: V
     const artifact = evidence.getArtifact(id, artifactId);
     if (!artifact) throw consoleError(404, "artifact.not_found", "artifact not found");
     try {
-      const source = await artifacts.loadDownload(artifact.content, artifact.uri, workspaceRoot);
+      const source = await withRequestAbortSignal(request, reply, (signal) =>
+        artifacts.loadDownload(artifact.content, artifact.uri, workspaceRoot, signal));
       reply.header("Content-Type", "application/octet-stream");
       reply.header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(artifacts.filename(artifact.title, artifact.uri))}`);
       return reply.send(source.buffer);

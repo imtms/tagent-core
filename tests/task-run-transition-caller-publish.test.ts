@@ -70,6 +70,7 @@ class ControlledRuntime implements AttemptRuntimePort {
 
   async steer() { return "accepted" as const; }
   abort() { this.resolvePrompt?.(); }
+  async dispose() { await this.abort(); }
   resolve() { this.resolvePrompt?.(); }
   getMessages() { return [assistantMessage("Candidate response")]; }
   getError() { return undefined; }

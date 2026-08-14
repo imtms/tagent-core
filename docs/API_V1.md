@@ -130,6 +130,20 @@ Send an optional `X-Request-Id` containing 1–128 letters, digits, `.`, `_`, `:
 
 Binary artifact responses and SSE streams use their media protocols rather than a JSON success envelope.
 
+### Structured tool failures
+
+Failed tool transcript items and `tool.completed`/`tool.failed` events may include an additive `error` object while retaining the existing readable result/reason and `isError` fields:
+
+```json
+{
+  "name": "ToolExecutionError",
+  "code": "ABORTED_BEFORE_DISPATCH",
+  "message": "Run was cancelled before tool dispatch"
+}
+```
+
+The closed code set is `ABORTED_BEFORE_DISPATCH`, `ABORTED`, `TIMEOUT`, `PATH_REJECTED`, `STALE_STATE`, `PRECONDITION_FAILED`, `INVALID_ARGUMENT`, `NOT_AUTHORIZED`, and `UNKNOWN`. Consumers should route by `code`, not parse `message`. The field is optional so previous persisted items and compatible clients remain valid; `ABORTED_BEFORE_DISPATCH` means the tool body was not invoked, while `ABORTED` means effects may have started and must be reconciled through the durable receipt/state model.
+
 ## Authentication and scopes
 
 When no Core service credential is configured, protected routes resolve to the `local-admin` principal. Keep this mode on `127.0.0.1` and do not configure cross-origin access.

@@ -1,3 +1,5 @@
+import type { StructuredToolError } from "./tool-error.js";
+
 /** Execution-owned identity and fencing token for one bounded Attempt. */
 export interface AttemptExecutionToken {
   runId: string;
@@ -51,6 +53,7 @@ export type RuntimeMessage =
       details?: unknown;
       usage?: RuntimeUsage;
       isError: boolean;
+      error?: StructuredToolError;
       timestamp: number;
     }
   | { role: "bashExecution"; command: string; output: string; exitCode?: number; cancelled: boolean; truncated: boolean; timestamp: number }
@@ -79,7 +82,7 @@ export interface RuntimeTool<TParameters = unknown, TDetails = unknown> {
   execute(
     toolCallId: string,
     params: TParameters,
-    signal?: AbortSignal,
+    signal: AbortSignal,
     onUpdate?: RuntimeToolUpdateCallback<TDetails>,
   ): Promise<RuntimeToolResult<TDetails>>;
   executionMode?: RuntimeToolExecutionMode;
@@ -113,7 +116,7 @@ export interface RuntimeEventSink {
     toolCallId: string;
     toolName: string;
     success: boolean;
-    error?: string;
+    error?: StructuredToolError;
   }): void;
 }
 
@@ -128,7 +131,14 @@ export interface AttemptRuntimePort {
   followUp?(instruction: string): Promise<RuntimeQueueResult>;
   compact?(instructions?: string): Promise<void>;
   abort(): void | Promise<void>;
-  dispose?(): void;
+  /**
+   * Permanently stop this runtime and await all work it owns.
+   *
+   * Implementations must make disposal idempotent. Resolution is a quiescence
+   * guarantee: no callback, provider request, tool, or persistence-facing work
+   * owned by this runtime may still be running afterwards.
+   */
+  dispose(): Promise<void>;
   getMessages(): RuntimeMessage[];
   getError(): string | undefined;
 }

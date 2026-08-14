@@ -1,11 +1,14 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { isContextOverflow } from "@earendil-works/pi-ai";
 
-export type ProviderFailureKind = "aborted" | "auth" | "invalid_request" | "context_overflow" | "rate_limit" | "timeout" | "network" | "server" | "unknown";
+export type ProviderFailureKind = "aborted" | "auth" | "invalid_request" | "context_overflow" | "rate_limit" | "timeout" | "network" | "server" | "empty_response" | "unknown";
 
 export function classifyProviderFailure(message: AssistantMessage, contextWindow?: number): ProviderFailureKind | undefined {
   if (message.stopReason === "aborted") return "aborted";
   if (isContextOverflow(message, contextWindow)) return "context_overflow";
+  const meaningfulCompletion = message.content.some((part) => part.type === "toolCall"
+    || part.type === "text" && Boolean(part.text.trim()));
+  if (message.stopReason === "stop" && !meaningfulCompletion) return "empty_response";
   if (message.stopReason !== "error") return undefined;
   const text = message.errorMessage?.toLowerCase() ?? "";
   if (/\b(401|403)\b|unauthori[sz]ed|forbidden|invalid api key|authentication/.test(text)) return "auth";
@@ -18,5 +21,5 @@ export function classifyProviderFailure(message: AssistantMessage, contextWindow
 }
 
 export function isRetryableProviderFailure(kind: ProviderFailureKind) {
-  return kind === "rate_limit" || kind === "timeout" || kind === "network" || kind === "server" || kind === "unknown";
+  return kind === "rate_limit" || kind === "timeout" || kind === "network" || kind === "server" || kind === "empty_response" || kind === "unknown";
 }

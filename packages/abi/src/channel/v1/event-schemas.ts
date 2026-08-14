@@ -1,5 +1,6 @@
 import { Type, type Static, type TSchema } from "typebox";
 import { IdentifierSchema, IsoDateTimeSchema, JsonObjectSchema, RequestIdSchema } from "../../shared/primitives.js";
+import { ToolErrorSchema } from "./transcript-schemas.js";
 
 export const PROJECTION_CRITICAL_TASK_RUN_EVENT_TYPES = [
   "task_run.started", "task_run.waiting_input", "task_run.blocked", "task_run.resumed",
@@ -44,7 +45,6 @@ const UserInputFieldSchema = Type.Object({
 const ToolPayloadSchema = Type.Object({
   toolCallId: IdentifierSchema, toolName: Type.String({ minLength: 1 }),
 }, { additionalProperties: false });
-
 export const TaskRunStartedEventSchema = eventSchema("task_run.started", Type.Object({ goal: Type.Optional(Type.String()), attempt: Type.Optional(Type.Integer({ minimum: 1 })) }, { additionalProperties: false }));
 export const TaskRunWaitingInputEventSchema = eventSchema("task_run.waiting_input", Type.Object({ requestId: IdentifierSchema, prompt: Type.String(), fields: Type.Array(UserInputFieldSchema) }, { additionalProperties: false }));
 export const TaskRunBlockedEventSchema = eventSchema("task_run.blocked", Type.Object({ reason: Type.String(), action: Type.Optional(Type.String()) }, { additionalProperties: false }));
@@ -58,8 +58,8 @@ export const MessageDeltaEventSchema = eventSchema("message.delta", Type.Object(
 export const MessageCompletedEventSchema = eventSchema("message.completed", Type.Object({ content: Type.String(), ordinal: Type.Integer({ minimum: 1 }) }, { additionalProperties: false }));
 export const ToolStartedEventSchema = eventSchema("tool.started", ToolPayloadSchema);
 export const ToolProgressEventSchema = eventSchema("tool.progress", ToolPayloadSchema);
-export const ToolCompletedEventSchema = eventSchema("tool.completed", Type.Object({ ...ToolPayloadSchema.properties, isError: Type.Boolean() }, { additionalProperties: false }));
-export const ToolFailedEventSchema = eventSchema("tool.failed", Type.Object({ ...ToolPayloadSchema.properties, reason: Type.String() }, { additionalProperties: false }));
+export const ToolCompletedEventSchema = eventSchema("tool.completed", Type.Object({ ...ToolPayloadSchema.properties, isError: Type.Boolean(), error: Type.Optional(ToolErrorSchema) }, { additionalProperties: false }));
+export const ToolFailedEventSchema = eventSchema("tool.failed", Type.Object({ ...ToolPayloadSchema.properties, reason: Type.String(), error: Type.Optional(ToolErrorSchema) }, { additionalProperties: false }));
 export const ProviderFailureEventSchema = eventSchema("provider.failure", Type.Object({ kind: Type.String(), retryable: Type.Boolean(), stopReason: Type.Optional(Type.String()) }, { additionalProperties: false }));
 export const ApprovalRequestedEventSchema = eventSchema("approval.requested", Type.Object({ approvalRequestId: IdentifierSchema, reason: Type.String() }, { additionalProperties: false }));
 export const ApprovalResolvedEventSchema = eventSchema("approval.resolved", Type.Object({ approvalRequestId: IdentifierSchema, decision: Type.Union([Type.Literal("approved"), Type.Literal("rejected")]), resolution: Type.String() }, { additionalProperties: false }));

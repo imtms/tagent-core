@@ -28,7 +28,7 @@ Exact-origin CORS is a browser transport boundary, not authentication. A non-emp
 
 ## Workspace and process boundary
 
-`@tagent/workspace-local` normalizes and contains filesystem paths, and command policy rejects known unsafe operations. These checks do not isolate the process from the host. Every local child process, including the descriptor-relative filesystem helper and permitted `bash` commands, crosses `SubprocessPort`; it does not inherit Core's ambient credential or `TAGENT_*` environment. The local port constructs a scrubbed environment and terminates the process group on abort, timeout, or Attempt disposal. Explicit environment overrides are a trusted composition capability and are never derived from model tool arguments.
+`@tagent/workspace-local` normalizes and contains filesystem paths, and command policy rejects known unsafe operations. These checks do not isolate the process from the host. Every local child process, including the descriptor-relative filesystem helper and permitted `bash` commands, crosses `SubprocessPort`; it does not inherit Core's ambient credential or `TAGENT_*` environment. The local port constructs a scrubbed environment and terminates the process group on abort, timeout, or Attempt disposal. Explicit environment overrides are a trusted composition capability and are never derived from model tool arguments. `history_search` derives its Run from the fenced Attempt capability, searches only that Run before the current tool call, and fixes result/snippet bounds in Core; model arguments cannot widen its authority.
 
 Use a dedicated workspace without SSH keys, provider credentials, cloud config, production secrets, or unrelated files. Apply OS/container controls for filesystem, network, process, and resource isolation when stronger containment is required.
 
@@ -44,6 +44,7 @@ The following are server-owned and cannot be asserted by a caller:
 - Attempt-bound external-action approval consumption before mutation-capable tools, with fresh approval required before any later Attempt retries the action;
 - current-Attempt Bash bindings and Core-derived check evidence;
 - immutable ToolRegistry snapshots and the Core-owned ToolExecutionPipeline guard/receipt/settlement path;
+- caller-owned cancellation through Runtime, subprocess, workspace, Artifact, Memory, and history seams, including distinct before-dispatch and after-invocation failure codes;
 - hash-verified Attempt request envelopes persisted before provider network dispatch;
 - event-consumer generation and acknowledged sequence;
 - internal evaluation receipt verification;

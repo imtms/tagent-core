@@ -10,11 +10,12 @@ import { childEnvironment, createLocalSubprocessPort } from "@tagent/workspace-l
 function runProcess(command: string, options: { signal?: AbortSignal; env?: NodeJS.ProcessEnv; graceMs?: number } = {}) {
   const subprocess = createLocalSubprocessPort();
   const stdout: Buffer[] = [];
+  const operation = options.signal ?? new AbortController().signal;
   const handle = subprocess.spawn({
     argv: ["bash", "-lc", command],
     cwd: process.cwd(),
     env: options.env,
-    signal: options.signal,
+    signal: operation,
     terminationGraceMs: options.graceMs ?? 50,
     onStdout: (chunk) => stdout.push(Buffer.from(chunk)),
   });

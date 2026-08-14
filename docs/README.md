@@ -15,11 +15,11 @@ This directory contains the maintained contracts for the current TAgent Core mai
 - [Naming conventions](NAMING_CONVENTIONS.md) — canonical domain and wire terminology.
 - [Workspace Goals](WORKSPACE_GOALS.md) — Workspace direction, user-approved Goal Roadmaps, guided TaskRuns, verified evidence, and explicit closure.
 - [Skills center](SKILLS.md) — shared upload/edit/delete lifecycle, per-Workspace references, multi-Skill TaskRun snapshots, native Pi execution, and security limits.
-- [Runtime](RUNTIME.md) — includes Core-managed Skill snapshots and explicit Pi Skill execution.
+- [Runtime](RUNTIME.md) — Core-managed Skill snapshots, explicit Pi Skill execution, cancellation ownership, provider recovery, compaction, and bounded durable-history recall.
 
 ## ABI and HTTP
 
-- [API v1](API_V1.md) — route surfaces, envelopes, authentication, idempotency, SSE, and removed routes.
+- [API v1](API_V1.md) — route surfaces, envelopes, authentication, idempotency, structured tool failures, SSE, and removed routes.
 - [Operator Read API](OPERATOR_READ_API.md) — Gateway discovery, Session/TaskRun inventory, stable cursor semantics, scopes, and responsibility boundary.
 - [ABI versioning](ABI_VERSIONING.md) — package exports, `specVersion`, compatibility rules, and fixtures.
 

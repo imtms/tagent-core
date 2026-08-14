@@ -16,6 +16,7 @@ if (configuredUrl && !/(?:^|[_-])test(?:$|[_-])/i.test(databaseName)) {
   throw new Error(`TAGENT_TEST_POSTGRES_URL must target a test-named database, received ${databaseName || "<empty>"}`);
 }
 const suite = configuredUrl ? describe : describe.skip;
+const testSignal = new AbortController().signal;
 
 suite("PostgreSQL memory adapter", () => {
   let adapter: PostgresMemoryAdapter;
@@ -74,7 +75,7 @@ suite("PostgreSQL memory adapter", () => {
       embeddingText: "PostgreSQL pgvector memory", status: "active" as const, updatedAt: now,
     };
     await service.publishColdTopic(access, descriptor, "# PostgreSQL memory\n\nCold is read in full.");
-    const recalled = await service.recall({ access, cue: "PostgreSQL pgvector", maxColdTopics: 1 });
+    const recalled = await service.recall({ access, cue: "PostgreSQL pgvector", maxColdTopics: 1, signal: testSignal });
     expect(recalled.cards[0].content).toContain("pgvector");
     expect(recalled.coldTopics[0].body).toContain("read in full");
     const exported = await service.export(access, scope);
@@ -89,7 +90,7 @@ suite("PostgreSQL memory adapter", () => {
     await adapter.complete(queued.jobId,"test",claimed!.leaseToken!,claimed!.fencingToken!);
     const forgotten = await service.forget({ access, scope, ids: [recalled.cards[0].id] });
     expect(forgotten.records).toBe(1);
-    expect((await service.recall({ access, cue: "PostgreSQL pgvector", maxColdTopics: 0 })).cards).toEqual([]);
+    expect((await service.recall({ access, cue: "PostgreSQL pgvector", maxColdTopics: 0, signal: testSignal })).cards).toEqual([]);
   });
 
   it("extracts graph projections and promotes records through the local lifecycle", async () => {

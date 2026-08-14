@@ -1,4 +1,4 @@
-import type { FastifyRequest } from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import type { ServiceScope } from "../auth.js";
 import type { HttpMemoryAccess, HttpMemoryScope } from "../ports/index.js";
 import { authorizeV1, principalOf } from "./auth.js";
@@ -16,6 +16,24 @@ export function consoleError(status: number, code: string, message: string): V1H
     : status >= 500 ? "unavailable"
     : "validation";
   return new V1HttpError(status, code, message, category, status >= 500);
+}
+
+export async function withRequestAbortSignal<T>(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const abort = () => controller.abort(new Error("HTTP request was aborted"));
+  request.raw.once("aborted", abort);
+  reply.raw.once("close", abort);
+  if (request.raw.aborted || reply.raw.destroyed) abort();
+  try {
+    return await operation(controller.signal);
+  } finally {
+    request.raw.removeListener("aborted", abort);
+    reply.raw.removeListener("close", abort);
+  }
 }
 
 export function memoryAccess(

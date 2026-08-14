@@ -25,7 +25,9 @@ import { classifyProviderFailure, isRetryableProviderFailure } from "./provider-
 import { withProviderIdleTimeout } from "./provider-transport.js";
 import {
   createAttemptRequestEnvelope,
+  classifyToolError,
   requestHash,
+  structuredToolErrorFromDetails,
   type RunEventMap,
   type RunEventType,
   type AttemptRuntimePort,
@@ -33,6 +35,7 @@ import {
   type RuntimeMessage,
   type RuntimeModelSpec,
   type RuntimeTool,
+  type StructuredToolError,
 } from "@tagent/execution/ports";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -77,7 +80,7 @@ function toPiModel(spec: RuntimeModelSpec): Model<Api> {
 }
 
 function providerApi(api: string, idleTimeoutMs: number | undefined, lifetimeSignal: AbortSignal): ProviderStreams {
-  if (api === "openai-completions") return withProviderIdleTimeout(openAICompletionsApi(), idleTimeoutMs, lifetimeSignal);
+  if (api === "openai-completions") return withProviderIdleTimeout(openAICompletionsApi(), idleTimeoutMs, lifetimeSignal, true);
   if (api === "anthropic-messages") return withProviderIdleTimeout(anthropicMessagesApi(), idleTimeoutMs, lifetimeSignal);
   throw new Error(`Unsupported Pi runtime API: ${api}`);
 }
@@ -111,7 +114,7 @@ function buildModels(options: PiRuntimeOptions, models: Model<Api>[], lifetimeSi
   return collection;
 }
 
-function toPiTool(tool: RuntimeTool): AgentHarnessTool<undefined> {
+function toPiTool(tool: RuntimeTool, runtimeSignal: AbortSignal): AgentHarnessTool<undefined> {
   return {
     name: tool.name,
     label: tool.label,
@@ -119,13 +122,30 @@ function toPiTool(tool: RuntimeTool): AgentHarnessTool<undefined> {
     parameters: tool.parameters as AgentHarnessTool<undefined>["parameters"],
     prepareArguments: tool.prepareArguments,
     executionMode: tool.executionMode,
-    execute: async (toolCallId, params, signal, onUpdate) => tool.execute(
-      toolCallId,
-      params,
-      signal,
-      onUpdate ? (update) => onUpdate(update) : undefined,
-    ),
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const operationSignal = signal ?? runtimeSignal;
+      try {
+        return await tool.execute(
+          toolCallId,
+          params,
+          operationSignal,
+          onUpdate ? (update) => onUpdate(update) : undefined,
+        );
+      } catch (error) {
+        const structured = classifyToolError(error, { signal: operationSignal }).toJSON();
+        return {
+          content: [{ type: "text", text: structured.message }],
+          details: { error: structured },
+        };
+      }
+    },
   };
+}
+
+function mergeToolErrorDetails(details: unknown, error: StructuredToolError) {
+  return details && typeof details === "object"
+    ? { ...details, error }
+    : { value: details, error };
 }
 
 function messageText(message: AgentMessage | undefined) {
@@ -211,6 +231,7 @@ export class PiRuntime implements AttemptRuntimePort {
   private streaming = false;
   private abortRequested = false;
   private abortPromise?: Promise<void>;
+  private disposePromise?: Promise<void>;
   private assistantMessageOrdinal = 0;
   private pendingDelta = "";
   private pendingThinkingDelta = "";
@@ -227,6 +248,7 @@ export class PiRuntime implements AttemptRuntimePort {
   private harnessTurnActive = false;
   private internalPromptOrdinal = 0;
   private readonly internalPrompts = new Set<string>();
+  private readonly blockedToolErrors = new Map<string, StructuredToolError>();
   private providerRequestOrdinal = 0;
   private deferredControls: Array<{ mode: "steer" | "followUp"; instruction: string }> = [];
   private harnessPendingMessageCount = 0;
@@ -263,7 +285,7 @@ export class PiRuntime implements AttemptRuntimePort {
       models,
       model: primary,
       systemPrompt: this.options.systemPrompt,
-      tools: this.options.capabilities.tools.map(toPiTool),
+      tools: this.options.capabilities.tools.map((tool) => toPiTool(tool, this.lifetimeAbort.signal)),
       resources: { skills: this.options.skills?.map((skill) => ({ ...skill })) },
       thinkingLevel: primary.reasoning ? (this.options.reasoningEffort ?? "high") : "off",
       steeringMode: "one-at-a-time",
@@ -313,13 +335,20 @@ export class PiRuntime implements AttemptRuntimePort {
     harness.on("tool_call", ({ toolCallId, toolName, input }) => {
       const guard = this.options.eventSink.beforeToolCall({ toolCallId, toolName, args: input });
       if (!guard.blocked) return undefined;
+      const error = classifyToolError(new Error(guard.reason ?? "Tool call blocked"), { code: "NOT_AUTHORIZED" }).toJSON();
+      this.blockedToolErrors.set(toolCallId, error);
       this.emit("tool.guard.blocked", { toolCallId, toolName, reason: guard.reason });
       return { block: true, reason: `${guard.reason}. Use a different approach or report the blocker.` };
     });
-    harness.on("tool_result", ({ toolCallId, toolName, isError }) => {
-      this.options.eventSink.afterToolCall({ toolCallId, toolName, success: !isError, error: isError ? "Tool execution failed" : "" });
+    harness.on("tool_result", ({ toolCallId, toolName, content, details, isError }) => {
+      const text = content.find((part) => part.type === "text")?.text ?? "Tool execution failed";
+      const error = this.blockedToolErrors.get(toolCallId)
+        ?? structuredToolErrorFromDetails(details)
+        ?? (isError ? classifyToolError(new Error(text)).toJSON() : undefined);
+      this.blockedToolErrors.delete(toolCallId);
+      this.options.eventSink.afterToolCall({ toolCallId, toolName, success: !error && !isError, error });
       if (this.options.eventSink.isWaitingForInput()) setImmediate(() => void harness.abort());
-      return undefined;
+      return error ? { details: mergeToolErrorDetails(details, error), isError: true } : undefined;
     });
     this.unsubscribe = harness.subscribe((event) => this.handleEvent(event));
     if (this.disposed) void harness.abort();
@@ -334,12 +363,23 @@ export class PiRuntime implements AttemptRuntimePort {
     }
     if (event.type === "message_end") {
       this.flushDelta(); this.flushThinkingDelta();
-      const message = event.message as RuntimeMessage;
+      const sourceMessage = event.message as RuntimeMessage;
+      const message = sourceMessage.role === "toolResult" && !sourceMessage.error
+        ? { ...sourceMessage, error: structuredToolErrorFromDetails(sourceMessage.details) }
+        : sourceMessage;
       if (this.isInternalMessage(message as AgentMessage)) return;
       if (message.role === "assistant") this.lastError = message.stopReason === "error" || message.stopReason === "aborted" ? message.errorMessage : undefined;
       if (this.abortRequested && message.role === "assistant" && message.stopReason === "aborted") return;
       this.messages.push(message);
-      const transcriptSeq = this.options.eventSink.appendTranscript(message);
+      // Failed provider turns are retained in provider-failure events, but their
+      // partial assistant content must never become visible durable history or
+      // contaminate a retry context.
+      const suppressFailedAssistant = message.role === "assistant"
+        && (message.stopReason === "error" || message.stopReason === "aborted"
+          || classifyProviderFailure(message, this.harness?.getModel().contextWindow ?? this.options.model?.contextWindow) === "empty_response");
+      const transcriptSeq = suppressFailedAssistant
+        ? undefined
+        : this.options.eventSink.appendTranscript(message);
       if (transcriptSeq !== undefined) this.emit("transcript.updated", { transcriptSeq, role: message.role, ordinal: message.role === "assistant" ? this.assistantMessageOrdinal : undefined });
       if (message.role === "assistant") {
         const kind = classifyProviderFailure(message, this.harness?.getModel().contextWindow ?? this.options.model?.contextWindow);
@@ -359,7 +399,18 @@ export class PiRuntime implements AttemptRuntimePort {
       const timestamp = Date.now(), previous = this.lastToolProgressAt.get(event.toolCallId) ?? 0;
       if (timestamp - previous >= 1_000) { this.lastToolProgressAt.set(event.toolCallId, timestamp); this.emit("tool.progress", { toolCallId: event.toolCallId, toolName: event.toolName }); }
     }
-    if (event.type === "tool_execution_end") { const timer = this.toolLivenessTimers.get(event.toolCallId); if (timer) clearInterval(timer); this.toolLivenessTimers.delete(event.toolCallId); this.lastToolProgressAt.delete(event.toolCallId); this.emit("tool.completed", { toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError }); }
+    if (event.type === "tool_execution_end") {
+      const timer = this.toolLivenessTimers.get(event.toolCallId);
+      if (timer) clearInterval(timer);
+      this.toolLivenessTimers.delete(event.toolCallId);
+      this.lastToolProgressAt.delete(event.toolCallId);
+      this.emit("tool.completed", {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        isError: event.isError,
+        error: structuredToolErrorFromDetails(event.result?.details),
+      });
+    }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") this.queueDelta(event.assistantMessageEvent.delta);
     if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") this.queueThinkingDelta(event.assistantMessageEvent.delta);
     if (event.type === "queue_update") {
@@ -416,10 +467,14 @@ export class PiRuntime implements AttemptRuntimePort {
           retryAttempt += 1;
           const delayMs = providerRetryDelayMs(retryAttempt, this.options.runTimeoutMs, this.options.runHardTimeoutMs);
           const summary = (assistant.errorMessage ?? "").replace(/\s+/g, " ").slice(0, 500);
+          // Establish cancellation ownership before publishing the observable
+          // retry state. A controller installed after the event creates a race
+          // where manual compaction cannot interrupt the advertised backoff.
+          const retryDelay = this.waitForRetry(delayMs);
           this.emit("provider.retry", { attempt: retryAttempt, maxAttempts: maxRetries, delayMs, summary });
           this.emit("message.retrying", { content: messageText(assistant), willRetry: true, ordinal: this.assistantMessageOrdinal });
           await this.removeTrailingAssistantFromActiveContext(assistant);
-          if (!await this.waitForRetry(delayMs)) {
+          if (!await retryDelay) {
             this.emit("provider.retry.completed", {
               success: false,
               attempt: retryAttempt,
@@ -581,19 +636,18 @@ export class PiRuntime implements AttemptRuntimePort {
     })();
     await this.abortPromise;
   }
-  dispose() {
+  dispose(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise;
     for (const timer of this.toolLivenessTimers.values()) clearInterval(timer);
     this.toolLivenessTimers.clear();
     this.flushDelta();
     this.flushThinkingDelta();
     this.disposed = true;
-    if (!this.streaming && !this.compactionPromise && !this.initializing) {
-      this.lifetimeAbort.abort(new Error("Runtime disposed"));
+    this.disposePromise = this.abort().finally(() => {
       this.unsubscribe?.();
-      if (this.harness) void this.harness.abort().catch(() => undefined);
-      return;
-    }
-    void this.abort().finally(() => this.unsubscribe?.()).catch(() => undefined);
+      this.unsubscribe = undefined;
+    });
+    return this.disposePromise;
   }
   getMessages() { return this.messages; }
   getError() { return this.lastError; }

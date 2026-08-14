@@ -49,18 +49,21 @@ export function artifactFilename(title: string, uri: string) {
   return path.basename(uriPath || title) || "artifact.bin";
 }
 
-async function loadArtifactBytes(content: string, uri: string, workspaceRoot: string, maxBytes: number) {
+async function loadArtifactBytes(content: string, uri: string, workspaceRoot: string, maxBytes: number, signal: AbortSignal) {
+  signal.throwIfAborted();
   if (content) {
     const buffer = Buffer.from(content, "utf8");
     if (buffer.length > maxBytes) throw Object.assign(new Error(`artifact exceeds the ${Math.floor(maxBytes / 1024 / 1024)} MiB limit`), { code: "ARTIFACT_TOO_LARGE" });
+    signal.throwIfAborted();
     return { buffer, source: "inline" as const };
   }
   const relative = safeRelativeUri(uri);
   if (!relative) throw Object.assign(new Error("artifact content is not available from this server"), { code: "ARTIFACT_SOURCE_UNAVAILABLE" });
   try {
     // Boundary validation and O_NOFOLLOW happen again for every content/download read.
-    const source = await readWorkspaceFile(workspaceRoot, relative);
+    const source = await readWorkspaceFile(workspaceRoot, relative, signal);
     if (source.metadata.size > maxBytes) throw Object.assign(new Error(`artifact exceeds the ${Math.floor(maxBytes / 1024 / 1024)} MiB limit`), { code: "ARTIFACT_TOO_LARGE" });
+    signal.throwIfAborted();
     return { buffer: source.buffer, source: "file" as const };
   } catch (error) {
     if (error instanceof WorkspacePathError) throw Object.assign(new Error(error.message), { code: "ARTIFACT_PATH_REJECTED" });
@@ -68,13 +71,13 @@ async function loadArtifactBytes(content: string, uri: string, workspaceRoot: st
   }
 }
 
-export async function loadArtifactSource(content: string, uri: string, workspaceRoot: string, maxBytes = MAX_PREVIEW_BYTES) {
-  const source = await loadArtifactBytes(content, uri, workspaceRoot, maxBytes);
+export async function loadArtifactSource(content: string, uri: string, workspaceRoot: string, signal: AbortSignal, maxBytes = MAX_PREVIEW_BYTES) {
+  const source = await loadArtifactBytes(content, uri, workspaceRoot, maxBytes, signal);
   return { content: source.buffer.toString("utf8"), source: source.source };
 }
 
-export function loadArtifactDownload(content: string, uri: string, workspaceRoot: string) {
-  return loadArtifactBytes(content, uri, workspaceRoot, MAX_DOWNLOAD_BYTES);
+export function loadArtifactDownload(content: string, uri: string, workspaceRoot: string, signal: AbortSignal) {
+  return loadArtifactBytes(content, uri, workspaceRoot, MAX_DOWNLOAD_BYTES, signal);
 }
 
 export const httpArtifactContent: HttpArtifactContentPort = Object.freeze({

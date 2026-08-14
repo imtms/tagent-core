@@ -402,7 +402,7 @@ export interface PublicRuntimeConfig {
 
 export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): PublicRuntimeConfig {
   return {
-    releaseVersion: "0.6.4",
+    releaseVersion: "0.6.5",
     runtime: config.runtime,
     provider: config.model.provider,
     api: config.model.api,
