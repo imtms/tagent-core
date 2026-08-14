@@ -53,7 +53,7 @@ class ControlledRuntime implements AgentRuntime {
   resolve() { this.resolvePrompt?.(); }
   reject(error: Error) { this.rejectPrompt?.(error); }
   getMessages() { return this.messages; }
-  getError() { return undefined; }
+  getError(): string | undefined { return undefined; }
 }
 
 class FakeRuntime implements AgentRuntime {
@@ -66,7 +66,12 @@ class FakeRuntime implements AgentRuntime {
   abort() { this.aborted = true; }
   async dispose() { await this.abort(); }
   getMessages() { return this.messages; }
-  getError() { return undefined; }
+  getError(): string | undefined { return undefined; }
+}
+
+class CooldownRuntime extends FakeRuntime {
+  override getError() { return '{"type":"model_cooldown","reset_seconds":60}'; }
+  getProviderFailure() { return { kind: "model_cooldown", retryable: true, retryAfterMs: 60_000 }; }
 }
 
 class RejectingDisposeRuntime extends FakeRuntime {
@@ -765,6 +770,70 @@ describe("AgentService runtime boundary", () => {
     expect(runtime.prompts).toHaveLength(1);
     expect(runtime.prompts[0]).toContain("test factory");
     expect(store.getRun(run.id)?.status).toBe("blocked");
+    store.close();
+  });
+
+  it("keeps the system prompt stable across Attempts and supplies current Run state through the dynamic tail", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const systemPrompts: string[] = [];
+    const dynamicContexts: string[] = [];
+    const service = new AgentService(agentPersistence(store), "/tmp", (options) => {
+      systemPrompts.push(options.systemPrompt);
+      dynamicContexts.push(options.dynamicContext?.() ?? "");
+      return new CallbackRuntime(assistantMessage("candidate"), () => {
+        store.upsertPlanItem(options.token.runId, { key: "work", title: "Work", status: "done", required: true, position: 1 });
+      });
+    }, { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit(), passingTestAudit()) });
+
+    const run = await service.start(session.id, "stable-prefix-regression-marker");
+    await vi.waitFor(() => expect(store.getRun(run.id)?.status).toBe("blocked"));
+    await service.resume(run.id);
+    await vi.waitFor(() => expect(systemPrompts).toHaveLength(2));
+
+    expect(systemPrompts).toHaveLength(2);
+    expect(systemPrompts[1]).toBe(systemPrompts[0]);
+    expect(systemPrompts[0]).not.toContain("Active TaskRun");
+    expect(systemPrompts[0]).not.toContain("stable-prefix-regression-marker");
+    expect(dynamicContexts[0]).toContain('"attempt":1');
+    expect(dynamicContexts[1]).toContain('"attempt":2');
+    expect(dynamicContexts[1]).toContain("TAGENT_CORE_RUNTIME_CONTEXT");
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("persists provider cooldown recovery instead of immediately starting another Attempt", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let runtimeCalls = 0;
+    const service = new AgentService(agentPersistence(store), "/tmp", () => {
+      runtimeCalls += 1;
+      return new CooldownRuntime([]);
+    }, { maxContinuations: 2 });
+
+    const run = await service.start(session.id, "provider cooldown recovery");
+    await vi.waitFor(() => expect(store.listContinuations(run.id)).toHaveLength(1));
+    const continuation = store.listContinuations(run.id)[0];
+    expect(store.getRun(run.id)?.status).toBe("blocked");
+    expect(continuation).toMatchObject({ status: "queued", notBefore: expect.any(Number) });
+    expect(continuation.notBefore).toBeGreaterThan(Date.now() + 50_000);
+    expect(continuation.reason).toContain("[provider-retry:model_cooldown:");
+    expect(runtimeCalls).toBe(1);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("lets manual Resume supersede a queued provider cooldown continuation", async () => {
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "manual cooldown override");
+    store.blockRun(run.id, "model_cooldown");
+    const delayed = store.queueContinuation(run.id, "delayed provider retry", Date.now() + 60_000);
+    const service = new AgentService(agentPersistence(store), "/tmp", () => new DeferredRuntime());
+
+    await service.resume(run.id);
+    expect(store.getRun(run.id)).toMatchObject({ status: "running", attempt: 2 });
+    expect(store.listContinuations(run.id)).toEqual([expect.objectContaining({ id: delayed.id, status: "cancelled", error: "Superseded by manual resume" })]);
+    await service.closeRuntimes();
     store.close();
   });
 

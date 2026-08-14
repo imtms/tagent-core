@@ -103,12 +103,13 @@ import { assertExecutionPolicyV42Schema, migrateExecutionPolicyV42 } from "./mig
 import { assertSkillsV43Schema, migrateSkillsV43 } from "./migrations/v43-skills.js";
 import { assertSkillCenterV44Schema, migrateSkillCenterV44 } from "./migrations/v44-skill-center.js";
 import { assertAttemptRequestEnvelopesV45Schema, migrateAttemptRequestEnvelopesV45 } from "./migrations/v45-attempt-request-envelopes.js";
+import { assertContinuationSchedulingV46Schema, migrateContinuationSchedulingV46 } from "./migrations/v46-continuation-scheduling.js";
 import { mapLegacyRunApprovalOperation } from "./sqlite/canonical-approval-mapper.js";
 import { appendProjectionPair, finalizeProjectionCheckpoint } from "./sqlite/canonical-integration-event.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 45;
+const SCHEMA_VERSION = 46;
 const MAX_SUBMISSION_CONTENT_CHARS = 200_000;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -236,8 +237,14 @@ export class Store {
   }
 
   nextContinuationLeaseExpiry() {
-    const row = this.db.prepare(`SELECT MIN(lease_until) as leaseUntil FROM run_continuations
-      WHERE status = 'running' AND lease_until IS NOT NULL`).get() as { leaseUntil: number | null };
+    const timestamp = now();
+    const row = this.db.prepare(`SELECT MIN(wake_at) as leaseUntil FROM (
+      SELECT lease_until AS wake_at FROM run_continuations
+        WHERE status = 'running' AND lease_until IS NOT NULL
+      UNION ALL
+      SELECT CASE WHEN not_before > ? THEN not_before ELSE ? + 1000 END AS wake_at
+        FROM run_continuations WHERE status = 'queued'
+    )`).get(timestamp, timestamp) as { leaseUntil: number | null };
     return row.leaseUntil;
   }
 
@@ -376,6 +383,7 @@ export class Store {
         status TEXT NOT NULL,
         reason TEXT NOT NULL DEFAULT '',
         error TEXT NOT NULL DEFAULT '',
+        not_before INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
         started_at INTEGER,
         completed_at INTEGER,
@@ -1210,10 +1218,16 @@ export class Store {
     assertSkillCenterV44Schema(this.db);
     const requestEnvelopeMigration = this.db.transaction(() => {
       migrateAttemptRequestEnvelopesV45(this.db, previousVersion !== undefined && previousVersion >= 45 ? 45 : 44);
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+      this.db.prepare(`UPDATE schema_meta SET version=45,updated_at=? WHERE id=1`).run(now());
     });
     requestEnvelopeMigration();
     assertAttemptRequestEnvelopesV45Schema(this.db);
+    const continuationSchedulingMigration = this.db.transaction(() => {
+      migrateContinuationSchedulingV46(this.db, previousVersion !== undefined && previousVersion >= 46 ? 46 : 45);
+      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
+    });
+    continuationSchedulingMigration();
+    assertContinuationSchedulingV46Schema(this.db);
     // A process restart loses the in-memory executor for receipts that had only
     // reached "started". Surface uncertainty explicitly; never replay an effect
     // whose outcome may already have escaped Core.
@@ -2348,13 +2362,16 @@ ${source.content}`;
 
   recoverContinuationsAfterRestart(timestamp = now()) {
     const transaction = this.db.transaction(() => {
-      const active = this.db.prepare(`SELECT continuation.id, continuation.run_id as runId, continuation.ordinal,
+      const active = this.db.prepare(`SELECT continuation.id, continuation.run_id as runId, continuation.ordinal, continuation.status,
           run.attempt, run.last_event_seq as lastEventSeq FROM run_continuations continuation
         JOIN runs run ON run.id=continuation.run_id
-        WHERE continuation.status = 'queued' OR (continuation.status = 'running'
+        WHERE (continuation.status = 'queued' AND continuation.not_before <= ?) OR (continuation.status = 'running'
           AND (continuation.lease_until IS NULL OR continuation.lease_until <= ?))
-        ORDER BY continuation.created_at`).all(timestamp) as Array<{ id: string; runId: RunId; ordinal: number; attempt: number; lastEventSeq: number }>;
+        ORDER BY continuation.created_at`).all(timestamp, timestamp) as Array<{ id: string; runId: RunId; ordinal: number; status: "queued" | "running"; attempt: number; lastEventSeq: number }>;
       for (const item of active) {
+        // A queued continuation becoming due is normal scheduling, not recovery.
+        // Only an expired running lease needs durable repair before it can be claimed again.
+        if (item.status === "queued") continue;
         this.db.prepare(`UPDATE run_continuations SET status = 'queued', error = 'Recovered after lease expiry',
           started_at = NULL, completed_at = NULL, lease_owner = '', lease_until = NULL, heartbeat_at = NULL WHERE id = ?`).run(item.id);
         this.db.prepare("UPDATE runs SET status = 'blocked', phase = 'blocked', blocked_reason = 'Continuation recovered after service restart', completed_at = NULL, updated_at = ? WHERE id = ? AND status IN ('running', 'interrupted', 'blocked')")
@@ -2434,20 +2451,22 @@ ${source.content}`;
 
   listContinuations(runId: RunId): RunContinuation[] {
     return this.db.prepare(`SELECT id, run_id as runId, ordinal, status, reason, error,
+      not_before as notBefore,
       created_at as createdAt, started_at as startedAt, completed_at as completedAt,
       lease_owner as leaseOwner, lease_until as leaseUntil, heartbeat_at as heartbeatAt
       FROM run_continuations WHERE run_id = ? ORDER BY ordinal`).all(runId) as RunContinuation[];
   }
 
-  queueContinuation(runId: RunId, reason: string): RunContinuation {
+  queueContinuation(runId: RunId, reason: string, notBefore = 0): RunContinuation {
     const transaction = this.db.transaction(() => {
       const active = this.db.prepare("SELECT id FROM run_continuations WHERE run_id = ? AND status IN ('queued', 'running')").get(runId) as { id: string } | undefined;
       if (active) throw new Error("Run already has an active continuation");
       const timestamp = now();
       const row = this.db.prepare("SELECT COALESCE(MAX(ordinal), 0) + 1 as ordinal FROM run_continuations WHERE run_id = ?").get(runId) as { ordinal: number };
-      const continuation: RunContinuation = { id: randomUUID(), runId, ordinal: row.ordinal, status: "queued", reason, error: "", createdAt: timestamp, startedAt: null, completedAt: null, leaseOwner: "", leaseUntil: null, heartbeatAt: null };
-      this.db.prepare("INSERT INTO run_continuations (id, run_id, ordinal, status, reason, created_at) VALUES (?, ?, ?, 'queued', ?, ?)")
-        .run(continuation.id, runId, continuation.ordinal, reason, timestamp);
+      const earliestStart = Math.max(0, Math.floor(notBefore));
+      const continuation: RunContinuation = { id: randomUUID(), runId, ordinal: row.ordinal, status: "queued", reason, error: "", notBefore: earliestStart, createdAt: timestamp, startedAt: null, completedAt: null, leaseOwner: "", leaseUntil: null, heartbeatAt: null };
+      this.db.prepare("INSERT INTO run_continuations (id, run_id, ordinal, status, reason, not_before, created_at) VALUES (?, ?, ?, 'queued', ?, ?, ?)")
+        .run(continuation.id, runId, continuation.ordinal, reason, earliestStart, timestamp);
       return continuation;
     });
     return transaction();
@@ -2457,7 +2476,7 @@ ${source.content}`;
     const transaction = this.db.transaction(() => {
       const timestamp = now();
       const continuation = this.db.prepare(`SELECT id, ordinal FROM run_continuations
-        WHERE run_id = ? AND status = 'queued' ORDER BY ordinal LIMIT 1`).get(runId) as { id: string; ordinal: number } | undefined;
+        WHERE run_id = ? AND status = 'queued' AND not_before <= ? ORDER BY ordinal LIMIT 1`).get(runId, timestamp) as { id: string; ordinal: number } | undefined;
       if (!continuation) return undefined;
       const run = this.db.prepare("SELECT session_id as sessionId, status, last_event_seq as seq FROM runs WHERE id = ?").get(runId) as { sessionId: SessionId; status: RunStatus; seq: number } | undefined;
       if (!run || run.status !== "blocked") return undefined;
@@ -2466,7 +2485,7 @@ ${source.content}`;
       const leaseUntil = timestamp + leaseMs;
       const claimed = this.db.prepare(`UPDATE run_continuations SET status = 'running', error = '',
         started_at = COALESCE(started_at, ?), completed_at = NULL, lease_owner = ?, lease_until = ?, heartbeat_at = ?
-        WHERE id = ? AND status = 'queued'`).run(timestamp, owner, leaseUntil, timestamp, continuation.id);
+        WHERE id = ? AND status = 'queued' AND not_before <= ?`).run(timestamp, owner, leaseUntil, timestamp, continuation.id, timestamp);
       if (claimed.changes !== 1) return undefined;
       const attempt = (this.db.prepare("SELECT attempt FROM runs WHERE id = ?").get(runId) as { attempt: number }).attempt + 1;
       const seq = run.seq + 1;

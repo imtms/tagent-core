@@ -21,7 +21,7 @@ import {
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { randomUUID } from "node:crypto";
-import { classifyProviderFailure, isRetryableProviderFailure } from "./provider-errors.js";
+import { classifyProviderFailure, describeProviderFailure, isRetryableProviderFailure } from "./provider-errors.js";
 import { withProviderIdleTimeout } from "./provider-transport.js";
 import {
   createAttemptRequestEnvelope,
@@ -34,6 +34,7 @@ import {
   type AttemptRuntimeSpec,
   type RuntimeMessage,
   type RuntimeModelSpec,
+  type RuntimeProviderFailure,
   type RuntimeTool,
   type StructuredToolError,
 } from "@tagent/execution/ports";
@@ -79,19 +80,19 @@ function toPiModel(spec: RuntimeModelSpec): Model<Api> {
   };
 }
 
-function providerApi(api: string, idleTimeoutMs: number | undefined, lifetimeSignal: AbortSignal): ProviderStreams {
-  if (api === "openai-completions") return withProviderIdleTimeout(openAICompletionsApi(), idleTimeoutMs, lifetimeSignal, true);
-  if (api === "anthropic-messages") return withProviderIdleTimeout(anthropicMessagesApi(), idleTimeoutMs, lifetimeSignal);
+function providerApi(api: string, idleTimeoutMs: number | undefined, lifetimeSignal: AbortSignal, onRetryAfter: (retryAfterMs: number | undefined) => void): ProviderStreams {
+  if (api === "openai-completions") return withProviderIdleTimeout(openAICompletionsApi(), idleTimeoutMs, lifetimeSignal, true, onRetryAfter);
+  if (api === "anthropic-messages") return withProviderIdleTimeout(anthropicMessagesApi(), idleTimeoutMs, lifetimeSignal, false, onRetryAfter);
   throw new Error(`Unsupported Pi runtime API: ${api}`);
 }
 
-function buildModels(options: PiRuntimeOptions, models: Model<Api>[], lifetimeSignal: AbortSignal): MutableModels {
+function buildModels(options: PiRuntimeOptions, models: Model<Api>[], lifetimeSignal: AbortSignal, onRetryAfter: (retryAfterMs: number | undefined) => void): MutableModels {
   if (options.models) return options.models;
   const collection = createModels();
   const grouped = new Map<string, Model<Api>[]>();
   for (const model of models) grouped.set(model.provider, [...(grouped.get(model.provider) ?? []), model]);
   for (const [providerId, providerModels] of grouped) {
-    const api = Object.fromEntries([...new Set(providerModels.map((model) => model.api))].map((name) => [name, providerApi(name, options.providerTimeoutMs, lifetimeSignal)]));
+    const api = Object.fromEntries([...new Set(providerModels.map((model) => model.api))].map((name) => [name, providerApi(name, options.providerTimeoutMs, lifetimeSignal, onRetryAfter)]));
     collection.setProvider(createProvider({
       id: providerId,
       name: providerId,
@@ -241,6 +242,8 @@ export class PiRuntime implements AttemptRuntimePort {
   private readonly toolLivenessTimers = new Map<string, ReturnType<typeof setInterval>>();
   private fallbackIndex = 0;
   private lastError?: string;
+  private lastProviderFailure?: RuntimeProviderFailure;
+  private transportRetryAfterMs?: number;
   private messages: RuntimeMessage[];
   private compacting = false;
   private compactionPromise?: Promise<void>;
@@ -276,7 +279,9 @@ export class PiRuntime implements AttemptRuntimePort {
     if (!this.options.model) throw new Error("Pi runtime requires a model");
     const primary = toPiModel(this.options.model);
     const fallbacks = (this.options.fallbackModels ?? []).map(toPiModel);
-    const models = buildModels(this.options, [primary, ...fallbacks], this.lifetimeAbort.signal);
+    const models = buildModels(this.options, [primary, ...fallbacks], this.lifetimeAbort.signal, (retryAfterMs) => {
+      this.transportRetryAfterMs = retryAfterMs;
+    });
     const session = new RuntimeSession((message) => this.isInternalMessage(message));
     this.session = session;
     for (const message of this.options.initialMessages ?? []) await session.appendMessage(message as AgentMessage);
@@ -298,12 +303,20 @@ export class PiRuntime implements AttemptRuntimePort {
       },
       retry: { enabled: (this.options.providerMaxRetries ?? 1) > 0, maxRetries: this.options.providerMaxRetries ?? 1, baseDelayMs: 1_000 },
     });
-    harness.on("context", ({ messages }) => ({ messages: projectRuntimeHistory(
-      messages,
-      this.options.historicalToolResultChars ?? 4_000,
-      this.options.historicalTaskRunReceiptChars ?? 600,
-      (message) => this.isInternalMessage(message),
-    ) }));
+    harness.on("context", ({ messages }) => {
+      const projected = projectRuntimeHistory(
+        messages,
+        this.options.historicalToolResultChars ?? 4_000,
+        this.options.historicalTaskRunReceiptChars ?? 600,
+        (message) => this.isInternalMessage(message),
+      );
+      const dynamicContext = this.options.dynamicContext?.().trim();
+      return { messages: dynamicContext ? [...projected, {
+        role: "user",
+        content: [{ type: "text", text: dynamicContext }],
+        timestamp: Date.now(),
+      }] : projected };
+    });
     harness.on("before_provider_payload", ({ model, payload }) => {
       if (!this.options.requestEnvelopes) return undefined;
       const requestOrdinal = ++this.providerRequestOrdinal;
@@ -382,10 +395,17 @@ export class PiRuntime implements AttemptRuntimePort {
         : this.options.eventSink.appendTranscript(message);
       if (transcriptSeq !== undefined) this.emit("transcript.updated", { transcriptSeq, role: message.role, ordinal: message.role === "assistant" ? this.assistantMessageOrdinal : undefined });
       if (message.role === "assistant") {
-        const kind = classifyProviderFailure(message, this.harness?.getModel().contextWindow ?? this.options.model?.contextWindow);
+        const failure = describeProviderFailure(message, this.harness?.getModel().contextWindow ?? this.options.model?.contextWindow);
+        const kind = failure?.kind;
+        const retryAfterMs = failure?.retryAfterMs ?? this.transportRetryAfterMs;
+        this.lastProviderFailure = failure ? {
+          kind: failure.kind,
+          retryable: isRetryableProviderFailure(failure.kind),
+          ...(retryAfterMs ? { retryAfterMs } : {}),
+        } : undefined;
         const summary = (message.errorMessage ?? "").replace(/\s+/g, " ").slice(0, 500);
         if (kind && !(kind === "aborted" && this.pendingManualCompaction)) {
-          this.emit("provider.failure", { kind, retryable: isRetryableProviderFailure(kind), summary, stopReason: message.stopReason });
+          this.emit("provider.failure", { kind, retryable: isRetryableProviderFailure(kind), summary, stopReason: message.stopReason, ...(retryAfterMs ? { retryAfterMs } : {}) });
         }
       }
     }
@@ -488,14 +508,14 @@ export class PiRuntime implements AttemptRuntimePort {
           this.emit("provider.retry.completed", { success: !nextFailure, attempt: retryAttempt, finalError: assistant.errorMessage?.replace(/\s+/g, " ").slice(0, 500) });
           continue;
         }
-        if (failure === "rate_limit") {
+        if (failure === "rate_limit" || failure === "model_cooldown") {
           const fallback = this.options.fallbackModels?.[this.fallbackIndex++];
           if (fallback) {
             await this.removeTrailingAssistantFromActiveContext(assistant);
             const previousModel = harness.getModel().id;
             await harness.setModel(toPiModel(fallback));
             retryAttempt = 0;
-            this.emit("provider.fallback", { kind: "rate_limit", previousModel, model: fallback.id, ordinal: this.fallbackIndex });
+            this.emit("provider.fallback", { kind: failure, previousModel, model: fallback.id, ordinal: this.fallbackIndex });
             assistant = await this.continueHarness(harness);
             continue;
           }
@@ -651,6 +671,7 @@ export class PiRuntime implements AttemptRuntimePort {
   }
   getMessages() { return this.messages; }
   getError() { return this.lastError; }
+  getProviderFailure() { return this.lastProviderFailure; }
   getActiveToolNames() { return this.harness?.getActiveTools().map((tool) => tool.name) ?? []; }
 
   private isInternalMessage(message: AgentMessage) {

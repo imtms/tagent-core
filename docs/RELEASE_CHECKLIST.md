@@ -56,8 +56,8 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 ## Migration and recovery gate
 
 - [ ] A representative 0.1.x database plus WAL/SHM was backed up and restored in isolation.
-- [ ] The candidate migrated v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 → v40 → v41 → v42 → v43 → v44 → v45 and reopened idempotently.
-- [ ] `schema_meta.version` is 45; trusted-evidence and Goal-execution drift checks pass; complete v39 receipt/ACK shapes, the v40 Submission audit shape, exact v41 Operator Read indexes, the v42 Inbox execution-policy column, the v43 Skill catalog, the v44 Workspace reference table/index/constraints, and the v45 exact request-envelope table/index/composite foreign key pass fail-closed validation; `migration_issues` has zero open rows.
+- [ ] The candidate migrated v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 → v40 → v41 → v42 → v43 → v44 → v45 → v46 and reopened idempotently.
+- [ ] `schema_meta.version` is 46; trusted-evidence and Goal-execution drift checks pass; complete v39 receipt/ACK shapes, the v40 Submission audit shape, exact v41 Operator Read indexes, the v42 Inbox execution-policy column, the v43 Skill catalog, the v44 Workspace reference table/index/constraints, the v45 exact request-envelope table/index/composite foreign key, and the v46 continuation due-time column/index pass fail-closed validation; `migration_issues` has zero open rows.
 - [ ] A second Core process is rejected by the OS lock/writer authority.
 - [ ] Writer lease/fence loss clears health readiness and closes Core.
 - [ ] Restart recovery produces `outcome_unknown` for effects/deliveries whose outcome cannot be proven and `restart_before_effect` cancellation only before effect start.

@@ -143,6 +143,7 @@ export const TaskRunContinuationSchema = Type.Object({
   ]),
   reason: Type.String(),
   error: Type.String(),
+  notBefore: IsoDateTimeSchema,
   createdAt: IsoDateTimeSchema,
   startedAt: Type.Union([IsoDateTimeSchema, Type.Null()]),
   completedAt: Type.Union([IsoDateTimeSchema, Type.Null()]),

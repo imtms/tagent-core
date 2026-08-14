@@ -256,7 +256,7 @@ export const ConsoleTaskRunSchema = Type.Object({
   }), Type.Null()]),
   continuations: Type.Array(Type.Object({
     id: Type.String(), ordinal: Type.Number(), status: Type.String(), reason: Type.String(), error: Type.String(),
-    createdAt: TimestampMillisecondsSchema, startedAt: ConsoleNullableTimestampSchema,
+    notBefore: TimestampMillisecondsSchema, createdAt: TimestampMillisecondsSchema, startedAt: ConsoleNullableTimestampSchema,
     completedAt: ConsoleNullableTimestampSchema, leaseOwner: Type.String(), leaseUntil: ConsoleNullableTimestampSchema,
     heartbeatAt: ConsoleNullableTimestampSchema,
   })),

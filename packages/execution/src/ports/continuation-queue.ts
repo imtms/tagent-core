@@ -20,7 +20,7 @@ export interface ContinuationQueue {
   releaseContinuationLeases(owner: string, reason?: string): ContinuationRecoveryItem[];
   renewContinuationLease(id: string, owner: string, leaseMs: number): boolean;
   listContinuations(runId: RunId): RunContinuation[];
-  queueContinuation(runId: RunId, reason: string): RunContinuation;
+  queueContinuation(runId: RunId, reason: string, notBefore?: number): RunContinuation;
   claimContinuation(runId: RunId, owner: string, leaseMs: number): ClaimedContinuation | undefined;
   updateContinuation(id: string, status: RunContinuation["status"], error?: string, owner?: string): boolean;
   cancelQueuedContinuations(runId: RunId, reason: string): void;

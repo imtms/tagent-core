@@ -140,6 +140,7 @@ export function mapTaskRun(run: TaskRun): V1TaskRun {
       status: item.status,
       reason: item.reason,
       error: item.error,
+      notBefore: iso(item.notBefore),
       createdAt: iso(item.createdAt),
       startedAt: iso(item.startedAt),
       completedAt: iso(item.completedAt),

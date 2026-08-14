@@ -51,6 +51,8 @@ Historical provider context is projected on every Pi request:
 - head/tail and durable Artifact references are retained;
 - the latest active turn stays complete.
 
+The Core system prompt is stable across Attempts while the Workspace and selected project rules are unchanged. Mutable TaskRun state, execution policy, Workspace Goal direction, and recalled Memory are refreshed from durable state and appended as one ephemeral final request message. The dynamic tail is included in context-budget pruning and the exact request envelope, but it is not persisted into Session or TaskRun transcript history.
+
 Configuration:
 
 ```text
@@ -91,6 +93,8 @@ After a Bash command fails or times out, an identical canonical command is fence
 ## Continuation stall detection
 
 Continuation progress signatures use stable failure kind/key/disposition plus durable plan state, trusted check receipt/time bindings, and Artifact content hashes. Two consecutive continuations with the same gate/evidence state stop with `continuation.stalled`, even when timestamps, UUIDs or wording differ. New durable evidence permits another bounded continuation.
+
+Provider cooldown recovery is separate from completion-gate repair. A provider-supplied reset duration becomes a durable continuation due time; the scheduler cannot claim it early, restart preserves it, and these provider-retry continuations do not create a false repeated-gate-state stall.
 
 ## Preserved governance and budget behavior
 

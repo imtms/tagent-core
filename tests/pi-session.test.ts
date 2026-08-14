@@ -80,6 +80,41 @@ describe("Pi AgentHarness integration", () => {
     store.close();
   });
 
+  it("refreshes Core dynamic context as the final provider message without persisting it", async () => {
+    const observed: Context[] = [];
+    let dynamicContext = "<TAGENT_CORE_RUNTIME_CONTEXT>phase=discover</TAGENT_CORE_RUNTIME_CONTEXT>";
+    const faux = fauxProvider({ models: [{ id: "faux-dynamic", contextWindow: 32_000, maxTokens: 2_000 }] });
+    faux.setResponses([
+      (context) => {
+        observed.push(context);
+        dynamicContext = "<TAGENT_CORE_RUNTIME_CONTEXT>phase=implement</TAGENT_CORE_RUNTIME_CONTEXT>";
+        return fauxAssistantMessage([{ type: "toolCall", id: "dynamic-history", name: "history_search", arguments: { query: "no-match" } }], { stopReason: "toolUse" });
+      },
+      (context) => { observed.push(context); return fauxAssistantMessage("dynamic context refreshed"); },
+    ]);
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "dynamic tail");
+    const runtime = new PiRuntime(runtimeSpec(store, run, {
+      workspace: process.cwd(), systemPrompt: "Stable system prefix", model: faux.getModel(), models: fauxModels(faux),
+      initialMessages: [], providerMaxRetries: 0, dynamicContext: () => dynamicContext,
+    }));
+
+    await runtime.prompt("inspect dynamic tail");
+    const tailText = (context: Context) => {
+      const tail = context.messages.at(-1);
+      return tail?.role === "user"
+        ? typeof tail.content === "string" ? tail.content : tail.content.filter((part) => part.type === "text").map((part) => part.text).join("")
+        : "";
+    };
+    expect(observed).toHaveLength(2);
+    expect(tailText(observed[0])).toContain("phase=discover");
+    expect(tailText(observed[1])).toContain("phase=implement");
+    expect(JSON.stringify(observed[1].messages.at(-1))).toContain("TAGENT_CORE_RUNTIME_CONTEXT");
+    expect(JSON.stringify(store.listTranscript(run.id))).not.toContain("TAGENT_CORE_RUNTIME_CONTEXT");
+    await runtime.dispose();
+    store.close();
+  });
+
   it("recalls bounded same-Run durable history through the real Pi tool path", async () => {
     const marker = "receipt:op_%_pi_literal";
     const { store, run, runtime } = await setup([
@@ -770,7 +805,10 @@ describe("Pi AgentHarness integration", () => {
       baseUrl: `http://127.0.0.1:${address.port}/v1`, reasoning: false, input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
     };
-    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Envelope system", model, credential: testCredential("test-runtime-key"), initialMessages: [], providerMaxRetries: 0 }));
+    const runtime = new PiRuntime(runtimeSpec(store, run, {
+      workspace: process.cwd(), systemPrompt: "Envelope system", model, credential: testCredential("test-runtime-key"),
+      initialMessages: [], providerMaxRetries: 0, dynamicContext: () => "<TAGENT_CORE_RUNTIME_CONTEXT>envelope-tail</TAGENT_CORE_RUNTIME_CONTEXT>",
+    }));
     try {
       await runtime.prompt("persist me");
       const durable = persistence.requestEnvelopes.listForAttempt(attemptIdFor(run.id, 1));
@@ -785,6 +823,9 @@ describe("Pi AgentHarness integration", () => {
             expect.objectContaining({ role: "user", content: [expect.objectContaining({ type: "text", text: "persist me" })] }),
           ]) }),
       });
+      const providerMessages = (durable[0].providerPayload as { messages: Array<{ role: string; content: unknown }> }).messages;
+      expect(providerMessages.at(-1)).toMatchObject({ role: "user", content: [expect.objectContaining({ type: "text", text: expect.stringContaining("envelope-tail") })] });
+      expect(JSON.stringify(store.listTranscript(run.id))).not.toContain("envelope-tail");
       expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
         expect.objectContaining({ type: "request.envelope.persisted", data: expect.objectContaining({ envelopeId: durable[0].id }) }),
       ]));

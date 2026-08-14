@@ -314,9 +314,12 @@ describe("TaskRunSupervisor LLM audit", () => {
       async reviewSettled() { return passingTestAudit(); },
       async reviewAttemptFailure() { calls += 1; throw new Error("must not run"); },
     };
-    const decision = await new TaskRunSupervisor(store, reviewer).reviewAttemptFailure(run, 7, "HTTP 429 rate limit exceeded");
+    const supervisor = new TaskRunSupervisor(store, reviewer);
+    const decision = await supervisor.reviewAttemptFailure(run, 7, "HTTP 429 rate limit exceeded");
+    const cooldown = await supervisor.reviewAttemptFailure(run, 8, '{"type":"model_cooldown","reset_seconds":47}');
     expect(calls).toBe(0);
     expect(decision).toMatchObject({ action: "start_continuation", reasonCode: "runtime_transient_failure", evaluator: "system", evaluatorModel: "deterministic-runtime-failure-v1" });
+    expect(cooldown).toMatchObject({ action: "start_continuation", reasonCode: "runtime_transient_failure", evaluator: "system" });
     store.close();
   });
 

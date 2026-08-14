@@ -13,7 +13,7 @@ export function findActiveRun<T extends TaskRun | TaskRunSummary>(runs: T[]): T 
 export function canResumeRun(selectedRun: TaskRun | null, activeRun: TaskRun | null): selectedRun is TaskRun {
   return Boolean(
     selectedRun?.resumable
-      && !activeRun
+      && (!activeRun || activeRun.id === selectedRun.id)
       && !selectedRun.supervision.approvalRequests.some((request) => request.status === "pending"),
   );
 }

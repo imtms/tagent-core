@@ -163,7 +163,7 @@ export class AttemptExecutor {
       runtime = this.state.runtimeFactory({
         token,
         workspace: this.state.workspace,
-        systemPrompt: this.dependencies.contextService.buildSystemPrompt(run, this.state.recalledMemory.get(run.id) ?? ""),
+        systemPrompt: this.dependencies.contextService.buildSystemPrompt(),
         capabilities: runtimeHost.capabilities,
         eventSink: runtimeHost.eventSink,
         initialMessages,
@@ -179,6 +179,7 @@ export class AttemptExecutor {
         runHardTimeoutMs: this.state.runtimeDefaults.runHardTimeoutMs,
         historicalToolResultChars: this.state.runtimeDefaults.historicalToolResultChars,
         historicalTaskRunReceiptChars: this.state.runtimeDefaults.historicalTaskRunReceiptChars,
+        dynamicContext: () => this.dependencies.contextService.buildDynamicContext(run.id, this.state.recalledMemory.get(run.id) ?? ""),
         requestEnvelopes: this.dependencies.requestEnvelopes,
       });
     } catch (error) {
@@ -255,7 +256,7 @@ export class AttemptExecutor {
         const status = this.state.persistence.taskRuns.getRun(run.id)?.status;
         this.state.persistence.continuations.updateContinuation(continuationId, status === "completed" ? "completed" : status === "blocked" ? "blocked" : status === "cancelled" ? "cancelled" : "failed", status === "failed" ? this.state.persistence.taskRuns.getRun(run.id)?.blockedReason ?? "" : "", this.state.continuationOwner);
       }
-      if (blocked) this.dependencies.continuation.queueContinuation(run.id);
+      if (blocked) this.dependencies.continuation.queueContinuation(run.id, runtime.getProviderFailure?.());
     }).catch((error: unknown) => settleAttemptExecutionFailure({
       closing: this.state.closing, run, token, continuationId, continuationOwner: this.state.continuationOwner, error, persistence: this.state.persistence, settlement: this.dependencies.settlement, eventHub: this.dependencies.eventHub,
     })).finally(async () => {

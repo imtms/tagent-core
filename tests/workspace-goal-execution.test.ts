@@ -214,8 +214,9 @@ describe("Workspace Goal Core execution", () => {
       expect(admitted.run?.contract?.acceptanceCriteria.some((criterion) => criterion.startsWith("[Workspace Goal criterion"))).toBe(false);
       expect(goals.get(goal.id)?.runLinks).toContainEqual(expect.objectContaining({ runId: admitted.run!.id, mode: "workspace" }));
       expect(agentPersistence(store).workspaceGoals.authorizeRunMutation(admitted.run!.id).allowed).toBe(true);
-      expect(specs[0].systemPrompt).toContain("user-started TaskRun");
-      expect(specs[0].systemPrompt).toContain("do not treat this Run as responsible for completing every Goal criterion");
+      expect(specs[0].systemPrompt).not.toContain("user-started TaskRun");
+      expect(specs[0].dynamicContext?.()).toContain("user-started TaskRun");
+      expect(specs[0].dynamicContext?.()).toContain("do not treat this Run as responsible for completing every Goal criterion");
       const manifest = store.getLatestContextManifest(admitted.run!.id)!;
       expect(manifest.items).toEqual(expect.arrayContaining([
         expect.objectContaining({ kind: "taskrun_contract", selected: true }),

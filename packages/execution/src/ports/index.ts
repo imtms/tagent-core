@@ -22,6 +22,7 @@ export type {
   RuntimeMessagePart,
   RuntimeUsage,
   RuntimeModelSpec,
+  RuntimeProviderFailure,
   RuntimeSkill,
   RuntimeQueueResult,
   RuntimeTool,

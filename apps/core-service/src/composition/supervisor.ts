@@ -308,7 +308,7 @@ export class TaskRunSupervisor {
     if (/(?:\b401\b|\b403\b|unauthorized|forbidden|invalid api key|authentication|model is not allowed|missing (?:api key|configuration)|configuration error|unknown model)/i.test(source)) {
       return { action: "block_taskrun", reasonCode: "runtime_configuration_invalid", rationale: `Runtime authentication or configuration must be corrected externally: ${error}` };
     }
-    if (/(?:\b408\b|\b429\b|\b50[0234]\b|rate.?limit|too many requests|timed?\s*out|timeout|econnreset|econnrefused|enotfound|socket hang up|network error|fetch failed|service unavailable|temporarily unavailable|context.?length)/i.test(source)) {
+    if (/(?:\b408\b|\b429\b|\b50[0234]\b|rate.?limit|too many requests|model[_ -]?cooldown|model is (?:currently )?(?:in|on) cooldown|timed?\s*out|timeout|econnreset|econnrefused|enotfound|socket hang up|network error|fetch failed|service unavailable|temporarily unavailable|context.?length)/i.test(source)) {
       return { action: "start_continuation", reasonCode: "runtime_transient_failure", rationale: `Runtime reported a known transient provider or transport failure: ${error}` };
     }
     return undefined;

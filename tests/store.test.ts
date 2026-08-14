@@ -550,6 +550,43 @@ describe("Store", () => {
     expect(store.getRun(secondRun.id)?.status).toBe("running");
   });
 
+  it("persists delayed continuations and claims them only after notBefore", () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      const store = createStore();
+      const run = store.createRun(store.createSession().id, "provider cooldown");
+      store.blockRun(run.id, "model_cooldown");
+      const notBefore = 61_000;
+      const queued = store.queueContinuation(run.id, "retry after cooldown", notBefore);
+
+      expect(queued.notBefore).toBe(notBefore);
+      expect(store.claimContinuation(run.id, "early-owner", 30_000)).toBeUndefined();
+      expect(store.recoverContinuationsAfterRestart(notBefore - 1)).toEqual([]);
+      expect(store.recoverContinuationsAfterRestart(notBefore)).toEqual([{ id: queued.id, runId: run.id, ordinal: 1 }]);
+      expect(store.getRun(run.id)?.blockedReason).toBe("model_cooldown");
+      expect(store.listContinuations(run.id)[0]?.error).toBe("");
+      clock.mockReturnValue(notBefore);
+      expect(store.claimContinuation(run.id, "due-owner", 30_000)?.continuation).toMatchObject({ id: queued.id, notBefore });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("retains a delayed continuation deadline across Store restart", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-cooldown-")), "core.db");
+    const first = new Store(filename);
+    const run = first.createRun(first.createSession().id, "restart during cooldown");
+    first.blockRun(run.id, "model_cooldown");
+    const notBefore = Date.now() + 60_000;
+    const continuation = first.queueContinuation(run.id, "delayed provider retry", notBefore);
+    first.close();
+
+    const reopened = new Store(filename);
+    expect(reopened.listContinuations(run.id)[0]).toMatchObject({ id: continuation.id, status: "queued", notBefore });
+    expect(reopened.recoverContinuationsAfterRestart(notBefore - 1)).toEqual([]);
+    reopened.close();
+  });
+
   it("releases only the stopping continuation owner's leases", () => {
     const store = createStore();
     const session = store.createSession();
@@ -707,16 +744,16 @@ describe("Store", () => {
 
   it("records the current schema version", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(45);
+    expect(store.getSchemaVersion()).toBe(46);
   });
 
-  it("migrates an older database to schema version 45", () => {
+  it("migrates an older database to schema version 46", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
     const store = new Store(filename);
     store.db.exec("DROP TABLE core_writer_lease; DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
     store.close();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(45);
+    expect(migrated.getSchemaVersion()).toBe(46);
     expect((migrated.db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
     expect((migrated.db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
     expect((migrated.db.prepare("PRAGMA table_info(operations)").all() as Array<{ name: string }>).map((column) => column.name)).toContain("payload_json");
@@ -758,12 +795,40 @@ describe("Store", () => {
     initial.close();
 
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(45);
+    expect(migrated.getSchemaVersion()).toBe(46);
     expect((migrated.db.prepare("PRAGMA table_info(run_checks)").all() as Array<{ name: string }>).map((column) => column.name))
       .toEqual(expect.arrayContaining(["source_operation_id", "observed_at"]));
     expect(migrated.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_run_checks_source_operation'").get())
       .toEqual({ name: "idx_run_checks_source_operation" });
     migrated.close();
+  });
+
+  it("migrates schema v45 continuation rows to persisted due-time scheduling", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-v45-continuation-")), "core.db");
+    const initial = new Store(filename);
+    initial.db.exec(`
+      DROP INDEX idx_continuations_due;
+      ALTER TABLE run_continuations DROP COLUMN not_before;
+      UPDATE schema_meta SET version=45 WHERE id=1;
+    `);
+    initial.close();
+
+    const migrated = new Store(filename);
+    expect(migrated.getSchemaVersion()).toBe(46);
+    expect((migrated.db.prepare("PRAGMA table_info(run_continuations)").all() as Array<{ name: string }>).map((column) => column.name)).toContain("not_before");
+    expect(migrated.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_continuations_due'").get()).toEqual({ name: "idx_continuations_due" });
+    migrated.close();
+  });
+
+  it("fails closed when the schema-v46 continuation due-time index drifts", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-v46-drift-")), "core.db");
+    const store = new Store(filename);
+    store.db.exec(`
+      DROP INDEX idx_continuations_due;
+      CREATE UNIQUE INDEX idx_continuations_due ON run_continuations(status, created_at);
+    `);
+    store.close();
+    expect(() => new Store(filename)).toThrow("Continuation scheduling v46 schema has invalid idx_continuations_due");
   });
 
   it("fails closed when a schema-v34 execution-profile column is missing", () => {

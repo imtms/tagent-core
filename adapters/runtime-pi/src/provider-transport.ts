@@ -1,4 +1,5 @@
 import type { ProviderStreams, SimpleStreamOptions, StreamOptions } from "@earendil-works/pi-ai";
+import { providerRetryAfterHeaderMs } from "./provider-errors.js";
 
 const DISABLED_SDK_TIMEOUT_MS = 2_147_483_647;
 
@@ -145,17 +146,28 @@ function withIdleTimeout(baseFetch: typeof fetch, idleTimeoutMs: number): typeof
   };
 }
 
+function withRetryAfterCapture(baseFetch: typeof fetch, onRetryAfter: (retryAfterMs: number | undefined) => void): typeof fetch {
+  return async (input, init) => {
+    onRetryAfter(undefined);
+    const response = await baseFetch(input, init);
+    onRetryAfter(response.ok ? undefined : providerRetryAfterHeaderMs(response.headers));
+    return response;
+  };
+}
+
 export function withProviderIdleTimeout(
   streams: ProviderStreams,
   idleTimeoutMs: number | undefined,
   lifetimeSignal?: AbortSignal,
   requireOpenAiDoneSentinel = false,
+  onRetryAfter?: (retryAfterMs: number | undefined) => void,
 ): ProviderStreams {
-  if (idleTimeoutMs === undefined && !lifetimeSignal && !requireOpenAiDoneSentinel) return streams;
+  if (idleTimeoutMs === undefined && !lifetimeSignal && !requireOpenAiDoneSentinel && !onRetryAfter) return streams;
   const hasTimeoutSetting = idleTimeoutMs !== undefined;
   let transportFetch: typeof fetch | undefined;
   if (idleTimeoutMs !== undefined && idleTimeoutMs > 0) transportFetch = withIdleTimeout(globalThis.fetch, idleTimeoutMs);
   if (requireOpenAiDoneSentinel) transportFetch = withOpenAiSseCompletionValidation(transportFetch ?? globalThis.fetch);
+  if (onRetryAfter) transportFetch = withRetryAfterCapture(transportFetch ?? globalThis.fetch, onRetryAfter);
   const streamOptions = <T extends StreamOptions | SimpleStreamOptions>(options: T | undefined): T => ({
     ...options,
     ...(hasTimeoutSetting ? {

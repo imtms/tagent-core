@@ -108,7 +108,7 @@ export type ContextManifestItemKind = "system_prompt" | "taskrun_contract" | "wo
 export interface ContextManifestItem { kind: ContextManifestItemKind; sourceId: string; role?: string; selected: boolean; reason: string; estimatedTokens: number; metadata?: Record<string, unknown> }
 export interface ContextManifest { id: string; runId: RunId; attempt: number; source: ContextManifestSource; items: ContextManifestItem[]; stats: Record<string, number | string>; manifestHash: string; createdAt: number }
 
-export interface RunContinuation { id: string; runId: RunId; ordinal: number; status: "queued" | "running" | "completed" | "blocked" | "failed" | "cancelled"; reason: string; error: string; createdAt: number; startedAt: number | null; completedAt: number | null; leaseOwner: string; leaseUntil: number | null; heartbeatAt: number | null }
+export interface RunContinuation { id: string; runId: RunId; ordinal: number; status: "queued" | "running" | "completed" | "blocked" | "failed" | "cancelled"; reason: string; error: string; notBefore: number; createdAt: number; startedAt: number | null; completedAt: number | null; leaseOwner: string; leaseUntil: number | null; heartbeatAt: number | null }
 type RunEventPayload = Record<string, unknown>;
 type MessageDeltaEvent = RunEventPayload & { delta: string; ordinal: number };
 type ToolLifecycleEvent = RunEventPayload & {

@@ -47,6 +47,14 @@ describe("Web Run state projection", () => {
     expect(canResumeRun(interrupted, null)).toBe(true);
   });
 
+  it("exposes Resume for a blocked Run even when it is the selected active Run", () => {
+    const blocked = taskRun({ status: "blocked", resumable: true });
+
+    expect(isActiveRunStatus(blocked.status)).toBe(true);
+    expect(findActiveRun([blocked])).toBe(blocked);
+    expect(canResumeRun(blocked, blocked)).toBe(true);
+  });
+
   it("does not expose Resume while another Run is active or an approval is pending", () => {
     const interrupted = taskRun();
     const running = taskRun({ id: "run-2", status: "running", resumable: false });

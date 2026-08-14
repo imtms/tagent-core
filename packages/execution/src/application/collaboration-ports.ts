@@ -46,7 +46,7 @@ export interface AttemptSettlementPort {
 
 export interface ContinuationControlPort {
   captureUserMessage(run: TaskRun, messageId: number, content: string, subjectId?: string): void;
-  queueContinuation(runId: RunId): void;
+  queueContinuation(runId: RunId, providerFailure?: import("../ports/attempt-runtime.js").RuntimeProviderFailure): void;
   startQueuedContinuation(runId: RunId): void;
 }
 
@@ -114,7 +114,8 @@ export type RunResumeOptions =
 
 export interface RunContextPort {
   resume(runId: RunId, options?: RunResumeOptions): Promise<unknown>;
-  buildSystemPrompt(run: TaskRun, recalledMemory?: string): string;
+  buildSystemPrompt(): string;
+  buildDynamicContext(runId: RunId, recalledMemory?: string): string;
   requiresAsyncPreparation(): boolean;
   prepareContinuationTranscript(run: TaskRun, prompt: string): PreparedExecutionContext;
   prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter: number | undefined, signal: AbortSignal): Promise<PreparedExecutionContext>;

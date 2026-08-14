@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.7] - 2026-08-14
+
+### TaskRun recovery
+
+- Fixed the Web Console Resume action for a resumable blocked TaskRun when that same Run is the Workspace's active selection; another active Run and pending approval still fail closed.
+- Added first-class `model_cooldown` classification, provider reset-window parsing, existing same-Attempt retry/fallback, and a durable delayed continuation after those bounded options are exhausted.
+- Added SQLite schema 46 with `run_continuations.not_before` and a due-time claim index. Cooldown recovery cannot be claimed early, survives restart, is cancelled by manual Resume, and does not create a false repeated-gate-state stall.
+
+### Stable runtime context
+
+- Removed mutable TaskRun, execution-policy, Workspace Goal, and recalled-Memory content from the fixed system prompt, along with duplicate durable-snapshot text in Resume prompts.
+- Core now refreshes that state before every provider request and appends it as one ephemeral final user message. The dynamic tail is included in context budgeting and the exact durable request envelope but is not written to Session or TaskRun transcript history.
+- Removed the obsolete TaskRun/Memory parameters from the fixed system-prompt builder so future callers cannot accidentally destabilize the prefix.
+
+### Compatibility and upgrade
+
+- The Channel continuation shape now includes `notBefore`; strict consumers must deploy the matching 0.6.7 ABI/client. There is no HTTP route or configuration change.
+- Back up SQLite together with WAL/SHM before upgrade. A schema-45-only binary must not open schema 46; rollback requires the matching pre-upgrade database backup.
+- Synchronized Core, Web Console, all 13 private workspace manifests, internal dependency pins, capability metadata, fixtures, tests, documentation, and the lockfile at 0.6.7. This release does not change token budgets, pricing, cost controls, or usage accounting.
+
 ## [0.6.6] - 2026-08-14
 
 ### Portable release verification

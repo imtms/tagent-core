@@ -120,6 +120,12 @@ export interface RuntimeEventSink {
   }): void;
 }
 
+export interface RuntimeProviderFailure {
+  kind: string;
+  retryable: boolean;
+  retryAfterMs?: number;
+}
+
 export type RuntimeQueueResult = "accepted" | "settled";
 
 export interface AttemptRuntimePort {
@@ -141,6 +147,8 @@ export interface AttemptRuntimePort {
   dispose(): Promise<void>;
   getMessages(): RuntimeMessage[];
   getError(): string | undefined;
+  /** Latest terminal provider failure, when the concrete runtime can classify it. */
+  getProviderFailure?(): RuntimeProviderFailure | undefined;
 }
 
 /** Neutral model projection used only for Execution sizing and runtime selection. */
@@ -188,6 +196,8 @@ export interface AttemptRuntimeSpec {
   runHardTimeoutMs?: number;
   historicalToolResultChars?: number;
   historicalTaskRunReceiptChars?: number;
+  /** Core-owned, ephemeral context refreshed and appended after history for every provider request. */
+  dynamicContext?: () => string;
   requestEnvelopes?: import("./attempt-request-envelope-repository.js").AttemptRequestEnvelopeRepository;
 }
 

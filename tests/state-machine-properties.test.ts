@@ -119,7 +119,7 @@ describe("critical persistence and replay properties", () => {
 
         for (let index = 0; index < reopens; index += 1) {
           const reopened = new Store(filename);
-          expect(reopened.getSchemaVersion()).toBe(45);
+          expect(reopened.getSchemaVersion()).toBe(46);
           expect(reopened.db.prepare("SELECT type,name,tbl_name AS tableName,sql FROM sqlite_master WHERE name LIKE '%request_envelope%' ORDER BY type,name").all()).toEqual(schema);
           expect(agentPersistence(reopened).requestEnvelopes.get(envelope.id)).toEqual(envelope);
           reopened.close();

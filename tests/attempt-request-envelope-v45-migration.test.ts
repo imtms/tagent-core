@@ -29,7 +29,7 @@ describe("Attempt request envelope schema v45", () => {
   it("migrates v44, creates the exact indexes and foreign keys, and is re-entrant", async () => {
     const filename = await v44Fixture();
     const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(45);
+    expect(migrated.getSchemaVersion()).toBe(46);
     expect((migrated.db.prepare("PRAGMA table_info(attempt_request_envelopes)").all() as Array<{ name: string }>).map((row) => row.name)).toEqual([
       "id", "run_id", "attempt_id", "attempt", "request_ordinal", "schema_version",
       "envelope_json", "provider_payload_hash", "envelope_hash", "created_at",

@@ -12,6 +12,7 @@ import type {
 } from "./collaboration-ports.js";
 import { effectiveTaskExecutionPolicy } from "@tagent/governance/domain";
 import { taskPolicyResumeInstructions } from "./llm-payload.js";
+import type { RuntimeProviderFailure } from "../ports/attempt-runtime.js";
 
 type ContinuationState = ExecutionStateView<
   | "closing" | "continuationOwner" | "persistence" | "preparationTasks" | "runtimeDefaults" | "runtimes",
@@ -40,12 +41,16 @@ export class ContinuationScheduler {
 
 
 
-  public queueContinuation(runId: RunId) {
+  public queueContinuation(runId: RunId, providerFailure?: RuntimeProviderFailure) {
     const run = this.state.persistence.taskRuns.getRun(runId);
     if (!run || run.status !== "blocked") return;
+    const delayedProviderRetry = Boolean(providerFailure?.retryable && providerFailure.retryAfterMs);
     const currentSignature = continuationProgressSignature(run);
-    const latestSignatures = run.continuations.slice(-2).map((item) => continuationReasonSignature(item.reason));
-    if (latestSignatures.length === 2 && latestSignatures.every((signature) => signature === currentSignature)) {
+    const latestSignatures = run.continuations
+      .filter((item) => !item.reason.includes("[provider-retry:"))
+      .slice(-2)
+      .map((item) => continuationReasonSignature(item.reason));
+    if (!delayedProviderRetry && latestSignatures.length === 2 && latestSignatures.every((signature) => signature === currentSignature)) {
       this.state.persistence.sessions.appendMessage(run.sessionId, "assistant", `Run remains blocked because two continuations produced the same unresolved gate/evidence state without durable progress: ${run.blockedReason}`);
       this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "continuation.stalled", { reason: "repeated_gate_state", signature: currentSignature }));
       return;
@@ -57,8 +62,18 @@ export class ContinuationScheduler {
       this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "continuation.exhausted", { reason: "max_continuations", limit: maxContinuations }));
       return;
     }
-    const continuation = this.state.persistence.continuations.queueContinuation(runId, `${run.blockedReason}\n[progress-signature:${currentSignature}]`);
-    this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "continuation.queued", { continuationId: continuation.id, ordinal: continuation.ordinal, reason: run.blockedReason, progressSignature: currentSignature }));
+    const notBefore = delayedProviderRetry ? Date.now() + providerFailure!.retryAfterMs! : 0;
+    const providerMarker = delayedProviderRetry ? `\n[provider-retry:${providerFailure!.kind}:${notBefore}]` : "";
+    const continuation = this.state.persistence.continuations.queueContinuation(runId, `${run.blockedReason}${providerMarker}\n[progress-signature:${currentSignature}]`, notBefore);
+    this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "continuation.queued", {
+      continuationId: continuation.id,
+      ordinal: continuation.ordinal,
+      reason: run.blockedReason,
+      progressSignature: currentSignature,
+      notBefore,
+      ...(delayedProviderRetry ? { providerFailureKind: providerFailure!.kind, retryAfterMs: providerFailure!.retryAfterMs } : {}),
+    }));
+    this.dependencies.recovery.scheduleContinuationRecovery();
   }
 
   public startQueuedContinuation(runId: RunId) {
@@ -79,7 +94,7 @@ export class ContinuationScheduler {
         }
       }, 10_000);
       preparationLeaseTimer.unref?.();
-      const prompt = this.buildContinuationPrompt(run, continuation.ordinal);
+      const prompt = this.buildContinuationPrompt(run, continuation.ordinal, continuation.reason);
       const transcript = this.dependencies.contextService.prepareContinuationTranscript(run, prompt);
       this.dependencies.contextService.publishContextEvents(runId, transcript);
       this.dependencies.eventHub.publish(event);
@@ -96,9 +111,17 @@ export class ContinuationScheduler {
     }
   }
 
-  public buildContinuationPrompt(run: TaskRun, ordinal: number) {
+  public buildContinuationPrompt(run: TaskRun, ordinal: number, continuationReason = "") {
     const policyInstructions = taskPolicyResumeInstructions(effectiveTaskExecutionPolicy(run.contract));
     const prerequisiteOnly = ["deterministic_plan_incomplete", "deterministic_check_incomplete"].includes(run.supervision.latestDecision?.reasonCode ?? "");
+    const providerRetry = /\[provider-retry:([^:\]]+):(\d+)\]/.exec(continuationReason);
+    if (providerRetry) return [
+      `Automatic provider recovery ${ordinal} is running after the external ${providerRetry[1]} delay elapsed.`,
+      "The previous Attempt ended because the provider was temporarily unavailable; this is not evidence that the TaskRun work or completion gates regressed.",
+      "Continue from the persisted transcript and current TaskRun state. Do not redo completed work or repeat already successful external effects. Resume only the interrupted work, then provide a complete standalone final response.",
+      ...policyInstructions,
+      `Original goal: ${run.goal}`,
+    ].join("\n\n");
     return [
       `Automatic continuation ${ordinal} is running because the completion gate blocked the previous attempt.`,
       `Gate failures: ${(run.supervision.latestGates.find((gate) => gate.gateType === "completion")?.failures ?? run.completionGate.failures).map((failure) => `${failure.key}: ${failure.reason}`).join("; ")}`,
