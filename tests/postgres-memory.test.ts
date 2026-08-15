@@ -110,6 +110,7 @@ suite("PostgreSQL memory adapter", () => {
 
   it("pages every record beyond 500 with immutable creation-order cursors", async () => {
     const base = Date.now();
+    const existing = await adapter.list([scope], undefined, 10_000);
     const records = Array.from({ length: 501 }, (_, index) => ({
       id: crypto.randomUUID(), kind: "fact" as const, tier: "warm" as const, scope,
       title: `Paged record ${index}`, content: `Paged content ${index}`, summary: `Paged ${index}`,
@@ -131,8 +132,8 @@ suite("PostgreSQL memory adapter", () => {
       const last = items.at(-1);
       after = page.records.length > 200 && last ? { createdAt: last.createdAt, id: last.id } : undefined;
     } while (after);
-    expect(ids).toHaveLength(501);
-    expect(new Set(ids).size).toBe(501);
-    expect(ids).toContain(records[0].id);
+    expect(ids).toHaveLength(existing.length + records.length);
+    expect(new Set(ids).size).toBe(existing.length + records.length);
+    expect(records.every((record) => ids.includes(record.id))).toBe(true);
   });
 });
