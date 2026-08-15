@@ -82,7 +82,7 @@ The Core archive includes `scripts/deploy-release.sh`. It verifies paths, reject
 
 ```bash
 sudo TAGENT_HEALTH_URL=http://127.0.0.1:3100/api/v1/health \
-  /path/to/deploy-release.sh /path/to/tagent-core-v0.8.2-linux-x64-node24-abi137.tar.gz
+  /path/to/deploy-release.sh /path/to/tagent-core-v0.8.4-linux-x64-node24-abi137.tar.gz
 ```
 
 The script changes the binary pointer only. It does not transform database state.

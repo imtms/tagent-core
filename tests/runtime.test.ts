@@ -13,7 +13,7 @@ import type {
   AttemptRuntimePort as AgentRuntime,
 } from "@tagent/execution/ports";
 import type { MemoryFacade } from "@tagent/memory";
-import { corePersistence } from "./support/test-persistence.js";
+import { corePersistence, transitionTaskRun } from "./support/test-persistence.js";
 import { upsertTrustedCheck } from "./support/trusted-evidence.js";
 
 function assistantMessage(text: string): AgentMessage {
@@ -464,7 +464,7 @@ describe("Core application runtime boundary", () => {
       urgency: "normal", relation: "independent", acceptanceCriteria: ["recover me"],
       scope: "recover me", nonGoals: [], confidence: 1, reason: "test", routerVersion: "test",
     }, "recover-inbox");
-    store.finalizeRun(blocking.id, "completed");
+    transitionTaskRun(store, blocking.id, "complete");
     const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime());
     expect(service.recoverSessionInbox()).toHaveLength(1);
     expect(store.getActiveRun(session.id)?.goal).toBe("recover me");
@@ -826,7 +826,7 @@ describe("Core application runtime boundary", () => {
   it("lets manual Resume supersede a queued provider cooldown continuation", async () => {
     const store = new Store(":memory:");
     const run = store.createRun(store.createSession().id, "manual cooldown override");
-    store.blockRun(run.id, "model_cooldown");
+    transitionTaskRun(store, run.id, "block", "model_cooldown");
     const delayed = store.queueContinuation(run.id, "delayed provider retry", Date.now() + 60_000);
     const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime());
 
@@ -841,7 +841,7 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "expired owner completion");
-    store.blockRun(run.id, "gate");
+    transitionTaskRun(store, run.id, "block", "gate");
     store.queueContinuation(run.id, "gate");
     let oldRuntime!: ControlledRuntime;
     let calls = 0;
@@ -882,7 +882,7 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "delayed lease recovery");
-    store.blockRun(run.id, "plan missing");
+    transitionTaskRun(store, run.id, "block", "plan missing");
     store.queueContinuation(run.id, "plan missing");
     const old = store.claimContinuation(run.id, "dead-owner", 30_000)!;
     store.db.prepare("UPDATE run_continuations SET lease_until = ? WHERE id = ?").run(Date.now() + 25, old.continuation.id);
@@ -938,7 +938,7 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "close continuation");
-    store.blockRun(run.id, "gate");
+    transitionTaskRun(store, run.id, "block", "gate");
     store.queueContinuation(run.id, "gate");
     const runtime = new SlowAbortRuntime();
     const service = createCoreApplication(corePersistence(store), "/tmp", () => runtime);
@@ -1089,7 +1089,7 @@ describe("Core application runtime boundary", () => {
     const assistant = assistantMessage("alpha remembered");
     store.appendTranscript(run.id, 1, user);
     store.appendTranscript(run.id, 1, assistant);
-    store.blockRun(run.id, "gate");
+    transitionTaskRun(store, run.id, "block", "gate");
     let options: Parameters<RuntimeFactory>[0] | undefined;
     const runtime = new FakeRuntime([assistantMessage("done")]);
     const service = createCoreApplication(corePersistence(store), "/tmp", (value) => { options = value; return runtime; });
@@ -1124,7 +1124,7 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "restart continuation");
-    store.blockRun(run.id, "plan missing");
+    transitionTaskRun(store, run.id, "block", "plan missing");
     const continuation = store.queueContinuation(run.id, "plan missing");
     store.updateContinuation(continuation.id, "running");
     store.resumeRun(run.id);
@@ -1171,7 +1171,7 @@ describe("Core application runtime boundary", () => {
     const policy = { mode: "semantic_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "test", confidence: 1, reason: "translation" } as const;
     const contract = { sourceInput: "translate", summary: "translate", objectives: [{ id: "o1", summary: "translate", timing: "current" as const, kind: "other" as const }], acceptanceCriteria: ["Preserve meaning"], scope: "text", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
     const run = store.createRun(session.id, "translate", undefined, contract);
-    store.blockRun(run.id, "semantic correction required");
+    transitionTaskRun(store, run.id, "block", "semantic correction required");
     store.queueContinuation(run.id, "semantic correction required");
     let prompt = "";
     const service = createCoreApplication(corePersistence(store), "/tmp", () => new CallbackRuntime(assistantMessage("translated"), (value) => { prompt = value; }), { maxContinuations: 1 });
@@ -1188,12 +1188,12 @@ describe("Core application runtime boundary", () => {
     const contract = { sourceInput: "research", summary: "research", objectives: [{ id: "o1", summary: "research", timing: "current" as const, kind: "investigate" as const }], acceptanceCriteria: ["Deliver the final research report"], scope: "public evidence", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
     const run = store.createRun(session.id, "research", undefined, contract);
     store.upsertPlanItem(run.id, { key: "research", title: "Research evidence", status: "pending", required: true, position: 1 });
-    let prompt = "";
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new CallbackRuntime(assistantMessage("done"), (value) => { prompt = value; }), { maxContinuations: 0 });
     const supervisor = new TaskRunSupervisor(store, new TestSupervisorReviewer());
     await supervisor.reviewSettled(store.getRun(run.id)!, 1, "partial candidate");
-    store.blockRun(run.id, "research: Required plan item is pending");
+    transitionTaskRun(store, run.id, "block", "research: Required plan item is pending");
     store.queueContinuation(run.id, "research: Required plan item is pending");
+    let prompt = "";
+    const service = createCoreApplication(corePersistence(store), "/tmp", () => new CallbackRuntime(assistantMessage("done"), (value) => { prompt = value; }), { maxContinuations: 0 });
     service.recoverContinuations();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(prompt).toContain("Semantic contract coverage has not been evaluated yet");
@@ -1210,7 +1210,7 @@ describe("Core application runtime boundary", () => {
     const newUser = { role: "user", content: "latest", timestamp: 3 } as const;
     const newAssistant = assistantMessage("latest answer");
     for (const message of [oldUser, oldAssistant, newUser, newAssistant]) store.appendTranscript(run.id, 1, message);
-    store.blockRun(run.id, "gate");
+    transitionTaskRun(store, run.id, "block", "gate");
     let options: Parameters<RuntimeFactory>[0] | undefined;
     const service = createCoreApplication(corePersistence(store), "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 1_000, maxContextTurns: 1, model: { contextWindow: 1_000, maxTokens: 100 } as never });
     await service.resume(run.id);
@@ -1545,12 +1545,12 @@ describe("Core application runtime boundary", () => {
       override async prompt() {}
       override getMessages() { return [assistantMessage("waiting")]; }
     }
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new ApprovalRuntime());
     // Exercise the same durable state produced by settled supervision without relying on provider timing.
     const approvalAudit = { ...continuationAudit("Production approval is required."), action: "pause_for_approval" as const, reasonCode: "approval_required" };
     const decision = (await new TaskRunSupervisor(store, reviewer(approvalAudit)).reviewSettled(store.getRun(run.id)!, 1, "waiting")).decision;
-    store.blockRun(run.id, decision.rationale);
+    transitionTaskRun(store, run.id, "block", decision.rationale);
     const approval = store.ensureApprovalRequest(run.id, decision.id, decision.rationale);
+    const service = createCoreApplication(corePersistence(store), "/tmp", () => new ApprovalRuntime());
     await expect(service.resume(run.id)).rejects.toThrow(/approval decision/);
     store.resolveApprovalRequest(approval.id, "rejected", "user", "not now");
     expect(store.getRun(run.id)?.supervision.approvalRequests).toEqual([expect.objectContaining({ status: "rejected" })]);

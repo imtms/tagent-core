@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.8.4] - 2026-08-15
+
+### Single mutation authorities
+
+- Removed the duplicate Workflow lifecycle, approved-proposal, canary, approval-settlement, and feature-policy mutation implementations from the Learning repository; Workflow Governance remains the only authority for those effects.
+- Removed standalone Learning settings and Workflow binding-mode writers. Runtime settings now flow only through governed feature-policy commits, while binding mode changes only with a durable Workflow application receipt.
+
+### TaskRun and Session Inbox boundaries
+
+- Removed the tests-only `Store.finalizeRun`, `Store.blockRun`, and `Store.completeWithGate` shortcuts. Test fixtures now exercise the same fenced TaskRun transition or Attempt cancellation authority as production.
+- Removed the unmounted, unreceipted Session Inbox collection facade and narrowed application/persistence ports to the mounted `operator.session-inbox.v1` profile mutations with idempotency and collection-revision enforcement.
+- Retained the negative architecture tests that prevent direct TaskRun, Learning settings, Workflow Governance, and Inbox mutation bypasses from being reintroduced.
+
+### Verification and compatibility
+
+- Updated the modular-monolith, Learning, API, Gateway compatibility, deployment, release, and owning decision-record documentation for the single-authority design.
+- This patch preserves the current `tagent-core/0.8` and `tagent-memory/0.8` schema identities and public feature set. Deploy the matching `0.8.4` Core, Web Console, ABI, and Core Client artifacts against fresh persistence; older release tuples remain unsupported.
+
 ## [0.8.2] - 2026-08-15
 
 ### Gateway profile correctness

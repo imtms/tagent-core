@@ -2772,43 +2772,6 @@ ${source.content}`;
       lifecycle, outcome, eventSeq, payload, taskRunSnapshot: run as unknown as Record<string, unknown>, timestamp, runEventType });
   }
 
-  finalizeRun(runId: RunId, status: Exclude<RunStatus, "running" | "interrupted" | "blocked">, reason = "") {
-    const timestamp = now();
-    const completedAt = status === "completed" || status === "cancelled" || status === "failed" ? timestamp : null;
-    const transaction = this.db.transaction(() => {
-      const run = this.db.prepare("SELECT attempt FROM runs WHERE id=?").get(runId) as { attempt: number } | undefined;
-      if (!run) return;
-      const seq = (this.db.prepare("SELECT last_event_seq as seq FROM runs WHERE id=?").get(runId) as { seq: number }).seq + 1;
-      this.db.prepare("INSERT INTO run_events (run_id,seq,attempt_id,type,data,created_at) VALUES (?,?,?,?,?,?)").run(runId, seq, this.attemptId(runId, run.attempt), `run.${status}`, JSON.stringify({ reason }), timestamp);
-      this.db.prepare("UPDATE runs SET status = ?, blocked_reason = ?, completed_at = ?, last_event_seq=?, updated_at = ? WHERE id = ?")
-        .run(status, reason, completedAt, seq, timestamp, runId);
-      this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id = ?")
-        .run(timestamp, runId);
-      this.projectAttempt({ runId, ordinal: run.attempt, trigger: "recovery", status, scenario: "terminal", reason, eventSequence: seq, timestamp });
-      finalizeProjectionCheckpoint(this.db, { runId, attemptId: this.attemptId(runId, run.attempt), attemptOrdinal: run.attempt, eventSeq: seq, timestamp });
-      this.enqueueLearningProjection(runId, run.attempt, `run.${status}`, status, seq, { reason }, timestamp);
-    });
-    transaction();
-  }
-
-  blockRun(runId: RunId, reason: string) {
-    const timestamp = now();
-    const transaction = this.db.transaction(() => {
-      const run = this.db.prepare("SELECT attempt FROM runs WHERE id=?").get(runId) as { attempt: number } | undefined;
-      if (!run) return;
-      const seq = (this.db.prepare("SELECT last_event_seq as seq FROM runs WHERE id=?").get(runId) as { seq: number }).seq + 1;
-      this.db.prepare("INSERT INTO run_events (run_id,seq,attempt_id,type,data,created_at) VALUES (?,?,?,?,?,?)").run(runId, seq, this.attemptId(runId, run.attempt), "run.blocked", JSON.stringify({ reason }), timestamp);
-      this.db.prepare("UPDATE runs SET status = 'blocked', phase = 'blocked', blocked_reason = ?, last_event_seq=?, updated_at = ? WHERE id = ?")
-        .run(reason, seq, timestamp, runId);
-      this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id = ?")
-        .run(timestamp, runId);
-      this.projectAttempt({ runId, ordinal: run.attempt, trigger: "recovery", status: "blocked", scenario: "terminal", reason, eventSequence: seq, timestamp });
-      finalizeProjectionCheckpoint(this.db, { runId, attemptId: this.attemptId(runId, run.attempt), attemptOrdinal: run.attempt, eventSeq: seq, timestamp });
-      this.enqueueLearningProjection(runId, run.attempt, "run.blocked", "blocked", seq, { reason }, timestamp);
-    });
-    transaction();
-  }
-
   markInterrupted() {
     const timestamp = now();
     const transaction = this.db.transaction(() => {
@@ -2881,28 +2844,6 @@ ${source.content}`;
       learningEnabled: Boolean(row.learningEnabled),
       autoExecutionEnabled: Boolean(row.autoExecutionEnabled),
     } : undefined;
-  }
-
-  saveLearningSettings(settings: {
-    memoryEnabled: boolean;
-    learningEnabled: boolean;
-    autoExecutionEnabled: boolean;
-    updatedAt: number;
-    reason: string;
-  }): void {
-    this.db.prepare(`INSERT INTO learning_feature_settings
-      (id, memory_enabled, learning_enabled, auto_execution_enabled, updated_at, reason)
-      VALUES (1, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET memory_enabled = excluded.memory_enabled,
-        learning_enabled = excluded.learning_enabled,
-        auto_execution_enabled = excluded.auto_execution_enabled,
-        updated_at = excluded.updated_at, reason = excluded.reason`).run(
-      Number(settings.memoryEnabled),
-      Number(settings.learningEnabled),
-      Number(settings.autoExecutionEnabled),
-      settings.updatedAt,
-      settings.reason,
-    );
   }
 
   getSemanticCacheEntry(cacheKey: string, timestamp = now()): {
@@ -3051,13 +2992,4 @@ ${source.content}`;
     return { passed: failures.length === 0, failures };
   }
 
-  completeWithGate(runId: RunId, response: string, expectedAttempt?: number) {
-    const run = this.getRun(runId);
-    if (!run) throw new Error("Run not found");
-    const gate = this.evaluateGate(run);
-    const reason = gate.failures.map((failure) => `${failure.key}: ${failure.reason}`).join("; ");
-    const event = this.transitionRun(runId, ["running"], gate.passed ? "completed" : "blocked", gate.passed ? "run.completed" : "run.blocked", { response, gate }, reason, expectedAttempt);
-    if (!event) throw new Error("Run is no longer running");
-    return { gate, run: this.getRun(runId)!, event };
-  }
 }

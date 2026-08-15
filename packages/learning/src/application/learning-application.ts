@@ -23,7 +23,6 @@ export class LearningApplication {
   listWorkflows(sessionId: SessionId) { return this.workflowService.listWorkflows(sessionId); }
   getWorkflow(workflowId: string, includeDeleted = false) { return this.workflowService.getWorkflow(workflowId, includeDeleted); }
   requestWorkflowActivation(workflowId: string, revisionId?: string, actor?: string, reason?: string) { return this.workflowService.requestActivation(workflowId, revisionId, actor, reason); }
-  setWorkflowBindingMode(bindingId: string, mode: "suggested" | "adopted" | "partially_adopted" | "rejected") { return this.workflowService.setBindingMode(bindingId, mode); }
   recordWorkflowApplication(input: Parameters<WorkflowLearningService["recordApplication"]>[0]) { return this.workflowService.recordApplication(input); }
   getLearningCenter(sessionId: SessionId) { return this.workflowService.getLearningCenter(sessionId); }
   decideWorkflowProposal(id: string, decision: "approved" | "rejected", actor: string, reason?: string) { return this.workflowService.decideProposal(id, decision, actor, reason); }

@@ -62,4 +62,6 @@ This separation prepares multiple future channels to use the same stable ABI and
 
 All control-plane writes pass through the active SQLite writer fence. Multi-repository changes execute inside a synchronous Unit of Work so state, receipts, and events commit atomically. Background code consumes owned ports and cannot escape the transaction with an async callback.
 
+Each governed state has one mutation entrance. Runtime completion, blocking, and failure use the fenced TaskRun transition port; cancellation uses the Attempt repository. Workflow lifecycle, proposal application, canary, and Learning feature-policy changes use Workflow Governance. Session Inbox collection edits use the receipt-backed Session Inbox capability profile. The SQLite `Store` supplies repository primitives, but it does not publish parallel terminal shortcuts, Workflow-governance shadows, or unreceipted Inbox application facades.
+
 See [PERSISTENCE_AND_RECOVERY.md](PERSISTENCE_AND_RECOVERY.md) for the lifecycle and recovery contract.

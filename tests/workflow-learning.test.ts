@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WorkflowLearningService } from "@tagent/learning";
 import type { WorkflowSpec } from "@tagent/learning/domain";
 import { Store } from "@tagent/persistence-sqlite";
-import { workflowPersistence } from "./support/test-persistence.js";
+import { transitionTaskRun, workflowPersistence } from "./support/test-persistence.js";
 
 const stores: Store[] = [];
 const create = () => { const store = new Store(":memory:"); stores.push(store); return { store, workflows: new WorkflowLearningService(workflowPersistence(store)) }; };
@@ -52,7 +52,7 @@ describe("controlled workflow learning", () => {
     expect(recalled.contextItems[0].reason).toContain("confidence");
     workflows.recordApplication({ bindingId: recalled.workflows[0].bindingId, status: "adopted", executedStepIds: ["test", "build"], verificationMapping: [{ verificationCheck: "release tests", runCheckKey: "release" }] });
     store.upsertCheck(run.id, { key: "release", title: "Release checks", status: "passed", required: true, command: "npm test", evidence: "ok", stale: false });
-    store.finalizeRun(run.id, "completed"); workflows.recordRunApplications(store.getRun(run.id)!);
+    transitionTaskRun(store, run.id, "complete"); workflows.recordRunApplications(store.getRun(run.id)!);
     expect(store.db.prepare("SELECT attribution_level as level FROM workflow_application_receipts").get()).toEqual({ level: "verified_contribution" });
     expect(store.db.prepare("SELECT signal FROM workflow_feedback").get()).toEqual({ signal: "successful" });
   });
@@ -63,7 +63,7 @@ describe("controlled workflow learning", () => {
     store.upsertPlanItem(first.id, { key: "prepare", title: "Prepare release inputs", status: "done", required: true, position: 1 });
     store.upsertPlanItem(first.id, { key: "test", title: "Run tests", status: "done", required: true, position: 2 });
     store.upsertCheck(first.id, { key: "tests", title: "Tests pass", status: "passed", required: true, command: "npm test", evidence: "ok", stale: false });
-    store.finalizeRun(first.id, "completed"); workflows.projectRun(store.getRun(first.id)!, "completed");
+    transitionTaskRun(store, first.id, "complete"); workflows.projectRun(store.getRun(first.id)!, "completed");
     expect(store.db.prepare("SELECT source_type as sourceType, run_id as runId, attempt FROM experience_observations WHERE run_id = ?").get(first.id)).toEqual({ sourceType: "task_experience", runId: first.id, attempt: 1 });
     expect(workflows.listWorkflows(session.id)).toHaveLength(0);
 
@@ -71,7 +71,7 @@ describe("controlled workflow learning", () => {
     store.upsertPlanItem(second.id, { key: "prepare", title: "Prepare release inputs", status: "done", required: true, position: 1 });
     store.upsertPlanItem(second.id, { key: "test", title: "Run tests", status: "done", required: true, position: 2 });
     store.upsertCheck(second.id, { key: "tests", title: "Tests pass", status: "passed", required: true, command: "npm test", evidence: "ok", stale: false });
-    store.finalizeRun(second.id, "completed"); workflows.projectRun(store.getRun(second.id)!, "completed");
+    transitionTaskRun(store, second.id, "complete"); workflows.projectRun(store.getRun(second.id)!, "completed");
     await workflows.runNextDistillationJob("test-worker");
     const distilled = workflows.listWorkflows(session.id);
     expect(distilled).toHaveLength(1);
@@ -86,11 +86,11 @@ describe("controlled workflow learning", () => {
     const { store, workflows } = create(); const session = store.createSession();
     const run = store.createRun(session.id, "unchecked success");
     store.upsertPlanItem(run.id, { key: "done", title: "Do work", status: "done", required: true, position: 1 });
-    store.finalizeRun(run.id, "completed"); workflows.projectRun(store.getRun(run.id)!, "completed");
+    transitionTaskRun(store, run.id, "complete"); workflows.projectRun(store.getRun(run.id)!, "completed");
     expect(store.db.prepare("SELECT source_type as sourceType FROM experience_observations WHERE run_id=?").get(run.id)).toEqual({ sourceType: "task_failure" });
     const confirmed = store.createRun(session.id, "confirmed success");
     store.upsertPlanItem(confirmed.id, { key: "done", title: "Do work", status: "done", required: true, position: 1 });
-    store.finalizeRun(confirmed.id, "completed"); workflows.projectRun(store.getRun(confirmed.id)!, "completed", { lifecycle: "run.completed", payload: { explicitUserConfirmation: true } });
+    transitionTaskRun(store, confirmed.id, "complete"); workflows.projectRun(store.getRun(confirmed.id)!, "completed", { lifecycle: "run.completed", payload: { explicitUserConfirmation: true } });
     expect(store.db.prepare("SELECT source_type as sourceType FROM experience_observations WHERE run_id=?").get(confirmed.id)).toEqual({ sourceType: "task_experience" });
   });
 
@@ -117,7 +117,7 @@ describe("controlled workflow learning", () => {
     const { store, workflows } = create(); const session = store.createSession(); const run = store.createRun(session.id, "failed release");
     store.upsertPlanItem(run.id, { key: "test", title: "Run tests", status: "done", required: true, position: 1 });
     store.upsertCheck(run.id, { key: "tests", title: "Tests pass", status: "failed", required: true, command: "npm test", evidence: "failed", stale: false });
-    store.finalizeRun(run.id, "failed", "tests failed"); workflows.projectRun(store.getRun(run.id)!, "failed");
+    transitionTaskRun(store, run.id, "fail", "tests failed"); workflows.projectRun(store.getRun(run.id)!, "failed");
     expect(store.db.prepare("SELECT source_type as sourceType FROM experience_observations").get()).toEqual({ sourceType: "task_failure" });
     expect(workflows.listWorkflows(session.id)).toHaveLength(0);
   });
@@ -126,7 +126,7 @@ describe("controlled workflow learning", () => {
     const { store, workflows } = create(); const session = store.createSession(); const denied = store.createRun(session.id, "private task");
     workflows.setRunLearningPolicy(denied.id, "deny");
     store.upsertPlanItem(denied.id, { key: "one", title: "Use token=super-secret-value", status: "done", required: true, position: 1 });
-    store.finalizeRun(denied.id, "completed"); workflows.projectRun(store.getRun(denied.id)!, "completed");
+    transitionTaskRun(store, denied.id, "complete"); workflows.projectRun(store.getRun(denied.id)!, "completed");
     expect(store.db.prepare("SELECT COUNT(*) as count FROM experience_observations").get()).toEqual({ count: 0 });
 
     workflows.recordExperience({ scopeId: session.id, sourceType: "explicit_user", taskSignature: "secret flow", procedureSummary: "password=hunter2 token=abcd1234", sourceRefs: ["secret=reference-value"], learnPolicy: "allow" });

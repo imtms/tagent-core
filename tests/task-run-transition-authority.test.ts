@@ -4,7 +4,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { attemptIdFor } from "@tagent/execution/domain";
-import type { RuntimeTransitionFence, SystemTransitionAuthority } from "@tagent/execution/ports";
+import type { RuntimeTransitionCommand, RuntimeTransitionFence, SystemTransitionAuthority } from "@tagent/execution/ports";
 import {
   Store,
   createGuardedSqlitePersistence,
@@ -74,6 +74,44 @@ function fixture(): Fixture {
 
 function attemptSnapshot(receipt: Fixture) {
   return receipt.adapter.attempts.getAttempt(receipt.attempt.id);
+}
+
+function transitionFixtureRun(
+  receipt: Fixture,
+  runId: string,
+  kind: RuntimeTransitionCommand["kind"],
+  reason = "",
+) {
+  const attempt = receipt.adapter.attempts.getActiveAttempt(runId);
+  if (!attempt) throw new Error(`Active Attempt for fixture Run ${runId} was not found`);
+  if (attempt.id === receipt.fence.attemptId) {
+    return receipt.adapter.taskRunTransitions.transitionRuntime({ kind, reason, data: { reason } }, receipt.fence);
+  }
+  const ownerId = `fixture-transition:${runId}`;
+  const lease = receipt.adapter.attempts.acquireExecutionLease({
+    attemptId: attempt.id,
+    expectedVersion: attempt.version,
+    ownerId,
+    leaseMs: 30_000,
+  });
+  try {
+    return receipt.adapter.taskRunTransitions.transitionRuntime(
+      { kind, reason, data: { reason } },
+      {
+        attemptId: attempt.id,
+        expectedVersion: attempt.version,
+        leaseToken: lease.token,
+        executionFence: lease.fence,
+      },
+    );
+  } finally {
+    receipt.adapter.attempts.releaseExecutionLease({
+      attemptId: attempt.id,
+      ownerId,
+      leaseToken: lease.token,
+      fence: lease.fence,
+    });
+  }
 }
 
 function open(filename: string): Database.Database {
@@ -423,10 +461,10 @@ describe("TaskRun transition authority persistence", () => {
     const receipt = fixture();
     const blockedSession = receipt.adapter.sessions.createSession("blocked");
     const blocked = receipt.adapter.taskRuns.createRun(blockedSession.id, "blocked run");
-    receipt.store.blockRun(blocked.id, "review required");
+    transitionFixtureRun(receipt, blocked.id, "block", "review required");
     const completedSession = receipt.adapter.sessions.createSession("completed");
     const completed = receipt.adapter.taskRuns.createRun(completedSession.id, "completed run");
-    receipt.store.finalizeRun(completed.id, "completed");
+    transitionFixtureRun(receipt, completed.id, "complete");
     const blockedBefore = receipt.adapter.taskRuns.getRun(blocked.id);
     const completedBefore = receipt.adapter.taskRuns.getRun(completed.id);
 
@@ -497,7 +535,7 @@ describe("TaskRun transition authority persistence", () => {
         };
         authority = { kind: "input_resume" as const, inputRequestId: pending.id };
       } else {
-        receipt.store.blockRun(receipt.run.id, "review required");
+        transitionFixtureRun(receipt, receipt.run.id, "block", "review required");
         const source = receipt.adapter.attempts.getAttempt(receipt.attempt.id)!;
         if (scenario === "manual") {
           command = {
@@ -542,7 +580,7 @@ describe("TaskRun transition authority persistence", () => {
 
   it("rejects system authority casts, mismatched evidence, stale versions, and extra keys", () => {
     const receipt = fixture();
-    receipt.store.blockRun(receipt.run.id, "blocked");
+    transitionFixtureRun(receipt, receipt.run.id, "block", "blocked");
     const source = receipt.adapter.attempts.getAttempt(receipt.attempt.id)!;
     const command = {
       kind: "resume_manual" as const,

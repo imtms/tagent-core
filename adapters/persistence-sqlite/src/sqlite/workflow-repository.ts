@@ -1,8 +1,6 @@
 import type Database from "better-sqlite3";
 import type {
   AutonomyAuditWrite,
-  CanaryOutcomeRecord,
-  CanaryPromotionRecord,
   DistillationJobRecord,
   ExperienceObservationRecord,
   ExperienceObservationWrite,
@@ -21,12 +19,8 @@ import type {
   WorkflowApplicationStatus,
   WorkflowDefinition,
   WorkflowFeedbackSignal,
-  WorkflowStatus,
 } from "@tagent/learning/domain";
-import {
-  buildWorkflowExecutedReceipt,
-  mapWorkflowApprovalOperation,
-} from "./approval-operation-mapper.js";
+import { mapWorkflowApprovalOperation } from "./approval-operation-mapper.js";
 
 export class SqliteWorkflowLearningRepository implements WorkflowLearningRepository {
   constructor(private readonly db: Database.Database) {}
@@ -187,11 +181,6 @@ export class SqliteWorkflowLearningRepository implements WorkflowLearningReposit
     );
   }
 
-  recordWorkflowDistillation(input: { evidenceSetHash: string; workflowId: string; createdAt: number }): void {
-    this.db.prepare("INSERT INTO workflow_distillations (evidence_set_hash,workflow_id,created_at) VALUES (?,?,?)")
-      .run(input.evidenceSetHash, input.workflowId, input.createdAt);
-  }
-
   createWorkflow(
     definition: WorkflowDefinitionWrite,
     revision: WorkflowRevisionWrite,
@@ -253,64 +242,6 @@ export class SqliteWorkflowLearningRepository implements WorkflowLearningReposit
       source_type as sourceType,source_evidence_json as sourceEvidenceJson,confidence,
       change_summary as changeSummary,created_at as createdAt FROM workflow_revisions WHERE id=?`)
       .get(id) as WorkflowRevisionRecord | undefined;
-  }
-
-  activateWorkflow(input: { workflowId: string; revisionId: string; timestamp: number; receipt: WorkflowGovernanceReceiptWrite }): void {
-    this.db.transaction(() => {
-      this.db.prepare(`UPDATE workflow_definitions SET status='active',active_revision_id=?,updated_at=?
-        WHERE id=? AND deleted_at IS NULL`).run(input.revisionId, input.timestamp, input.workflowId);
-      this.insertGovernanceReceipt(input.receipt);
-    })();
-  }
-
-  setWorkflowStatus(input: { workflowId: string; previousStatus: WorkflowStatus; status: WorkflowStatus; reason: string; historyId: string; timestamp: number }): void {
-    this.db.transaction(() => {
-      this.db.prepare(`UPDATE workflow_definitions SET status=?,
-        active_revision_id=CASE WHEN ?='active' THEN active_revision_id ELSE NULL END,updated_at=? WHERE id=?`).run(
-        input.status, input.status, input.timestamp, input.workflowId,
-      );
-      this.db.prepare(`INSERT INTO workflow_status_history
-        (id,workflow_id,previous_status,next_status,reason,created_at) VALUES (?,?,?,?,?,?)`).run(
-        input.historyId, input.workflowId, input.previousStatus, input.status, input.reason, input.timestamp,
-      );
-    })();
-  }
-
-  forgetWorkflow(input: { workflowId: string; previousStatus: WorkflowStatus; previousActiveRevisionId: string | null; deletedAt: number; purgeAfter: number; reason: string; receipt: WorkflowGovernanceReceiptWrite }): boolean {
-    return this.db.transaction(() => {
-      const changed = this.db.prepare(`UPDATE workflow_definitions SET status='deprecated',active_revision_id=NULL,
-        deleted_at=?,purge_after=?,delete_reason=?,previous_status=?,previous_active_revision_id=?,updated_at=?
-        WHERE id=? AND deleted_at IS NULL`).run(
-        input.deletedAt, input.purgeAfter, input.reason, input.previousStatus, input.previousActiveRevisionId,
-        input.deletedAt, input.workflowId,
-      ).changes === 1;
-      if (changed) this.insertGovernanceReceipt(input.receipt);
-      return changed;
-    })();
-  }
-
-  getRestorableWorkflow(id: string) {
-    return this.db.prepare(`SELECT previous_status as previousStatus,
-      previous_active_revision_id as previousActiveRevisionId,purge_after as purgeAfter
-      FROM workflow_definitions WHERE id=? AND deleted_at IS NOT NULL`).get(id) as {
-      previousStatus: WorkflowStatus | null;
-      previousActiveRevisionId: string | null;
-      purgeAfter: number | null;
-    } | undefined;
-  }
-
-  restoreWorkflow(input: { workflowId: string; status: WorkflowStatus; activeRevisionId: string | null; timestamp: number; receipt: WorkflowGovernanceReceiptWrite }): void {
-    this.db.transaction(() => {
-      this.db.prepare(`UPDATE workflow_definitions SET status=?,active_revision_id=?,deleted_at=NULL,purge_after=NULL,
-        delete_reason='',previous_status=NULL,previous_active_revision_id=NULL,updated_at=? WHERE id=?`).run(
-        input.status, input.activeRevisionId, input.timestamp, input.workflowId,
-      );
-      this.insertGovernanceReceipt(input.receipt);
-    })();
-  }
-
-  recordGovernanceReceipt(receipt: WorkflowGovernanceReceiptWrite): void {
-    this.insertGovernanceReceipt(receipt);
   }
 
   findActiveApprovalByHash(requestHash: string) {
@@ -414,71 +345,6 @@ export class SqliteWorkflowLearningRepository implements WorkflowLearningReposit
     })();
   }
 
-  completeApprovalExecution(input: { id: string; executedAt: number; receiptJson: string; audit: AutonomyAuditWrite }): void {
-    this.db.transaction(() => {
-      const approval = this.db.prepare(`SELECT id,scope_id as scopeId,action_type as actionType,
-        target_type as targetType,target_id as targetId,workflow_id as workflowId,revision_id as revisionId,
-        proposal_id as proposalId,binding_id as bindingId,status,impact_scope_json as impactScopeJson,
-        diff_json as diffJson,rollback_json as rollbackJson,operation_digest as operationDigest,
-        reuse_mode as reuseMode,max_uses as maxUses,used_count as usedCount
-        FROM autonomy_approval_requests WHERE id=?`).get(input.id) as {
-          id: string;
-          scopeId: string;
-          actionType: string;
-          targetType: string;
-          targetId: string;
-          workflowId: string | null;
-          revisionId: string | null;
-          proposalId: string | null;
-          bindingId: string | null;
-          status: string;
-          impactScopeJson: string;
-          diffJson: string;
-          rollbackJson: string;
-          operationDigest: string | null;
-          reuseMode: string | null;
-          maxUses: number | null;
-          usedCount: number | null;
-        } | undefined;
-      if (!approval || approval.status !== "approved") {
-        throw new Error("Approved request is required before Workflow approval settlement");
-      }
-      const canonical = mapWorkflowApprovalOperation(approval);
-      if (approval.operationDigest !== canonical.operationDigest
-        || approval.reuseMode !== "one_time"
-        || approval.maxUses !== 1
-        || approval.usedCount !== 0) {
-        throw new Error(`Canonical approval conflict for Workflow approval ${input.id}`);
-      }
-      const receipt = buildWorkflowExecutedReceipt({
-        approvalId: input.id,
-        actionType: approval.actionType,
-        targetId: approval.targetId,
-        operationDigest: canonical.operationDigest,
-        executedAt: input.executedAt,
-        receiptJson: input.receiptJson,
-      });
-      const changed = this.db.prepare(`UPDATE autonomy_approval_requests
-        SET status='executed',executed_at=?,execution_receipt_json=?,updated_at=?,used_count=1
-        WHERE id=? AND status='approved' AND operation_digest=? AND reuse_mode='one_time'
-          AND max_uses=1 AND used_count=0`).run(
-        input.executedAt,
-        input.receiptJson,
-        input.executedAt,
-        input.id,
-        canonical.operationDigest,
-      );
-      if (changed.changes !== 1) {
-        throw new Error(`Canonical approval conflict while settling Workflow approval ${input.id}`);
-      }
-      this.db.prepare(`INSERT INTO approval_receipts
-        (id,approval_source,approval_id,operation_id,operation_digest,outcome,actor_id,details_json,created_at)
-        VALUES (@id,@approval_source,@approval_id,@operation_id,@operation_digest,@outcome,@actor_id,@details_json,@created_at)`)
-        .run(receipt);
-      this.insertAudit(input.audit);
-    })();
-  }
-
   expireApprovals(
     timestamp: number,
     createAudits: (rows: Array<{ id: string; scopeId: string; workflowId: string | null; revisionId: string | null }>) => AutonomyAuditWrite[],
@@ -493,10 +359,6 @@ export class SqliteWorkflowLearningRepository implements WorkflowLearningReposit
       for (const audit of createAudits(rows)) this.insertAudit(audit);
       return rows;
     })();
-  }
-
-  setBindingMode(bindingId: string, mode: string): boolean {
-    return this.db.prepare("UPDATE workflow_bindings SET application_mode=? WHERE id=?").run(mode, bindingId).changes === 1;
   }
 
   recordApplication(input: { id: string; bindingId: string; status: WorkflowApplicationStatus; mode: string; executedStepIdsJson: string; skippedStepsJson: string; correctionObserved: number; repeatedToolCalls: number; continuationCount: number; verificationMappingJson: string; attributionLevel: string; createdAt: number }): unknown {
@@ -660,18 +522,6 @@ export class SqliteWorkflowLearningRepository implements WorkflowLearningReposit
     })();
   }
 
-  applyProposalRevision(input: { proposalId: string; actor: string; timestamp: number; receipt: WorkflowGovernanceReceiptWrite; revision: WorkflowRevisionWrite }): number {
-    return this.db.transaction(() => {
-      const ordinal = (this.db.prepare("SELECT COALESCE(MAX(revision),0) revision FROM workflow_revisions WHERE workflow_id=?")
-        .get(input.revision.workflowId) as { revision: number }).revision + 1;
-      this.insertRevision(input.revision, ordinal);
-      this.db.prepare(`UPDATE workflow_revision_proposals SET status='applied',applied_revision_id=?,decided_by=?,decided_at=?
-        WHERE id=?`).run(input.revision.id, input.actor, input.timestamp, input.proposalId);
-      this.insertGovernanceReceipt(input.receipt);
-      return ordinal;
-    })();
-  }
-
   listDistillationJobs(scopeId: string): unknown[] {
     return this.db.prepare(`SELECT id,task_signature as taskSignature,status,checkpoint_json as checkpointJson,
       attempts,lease_owner as leaseOwner,lease_until as leaseUntil,fence,workflow_id as workflowId,error,
@@ -780,40 +630,6 @@ export class SqliteWorkflowLearningRepository implements WorkflowLearningReposit
       WHERE workflow_id=? AND candidate_revision_id=? AND status='passed'`).all(workflowId, revisionId) as Array<{
         id: string; kind: string; receiptHash: string;
       }>;
-  }
-
-  startCanary(input: { id: string; workflowId: string; revisionId: string; previousRevisionId: string; canaryPercent: number; maxFailureDelta: number; reason: string; timestamp: number; receipt: WorkflowGovernanceReceiptWrite }): void {
-    this.db.transaction(() => {
-      this.db.prepare(`INSERT INTO workflow_promotions
-        (id,workflow_id,revision_id,previous_revision_id,status,canary_percent,max_failure_delta,reason,created_at,updated_at)
-        VALUES (?,?,?,?,'canary',?,?,?,?,?)`).run(
-        input.id, input.workflowId, input.revisionId, input.previousRevisionId, input.canaryPercent,
-        input.maxFailureDelta, input.reason, input.timestamp, input.timestamp,
-      );
-      this.insertGovernanceReceipt(input.receipt);
-    })();
-  }
-
-  getCanaryPromotionById(id: string): CanaryPromotionRecord | undefined {
-    return this.db.prepare(`SELECT workflow_id as workflowId,revision_id as revisionId,
-      previous_revision_id as previousRevisionId,max_failure_delta as maxFailureDelta,status
-      FROM workflow_promotions WHERE id=?`).get(id) as CanaryPromotionRecord | undefined;
-  }
-
-  listCanaryOutcomes(promotionId: string): CanaryOutcomeRecord[] {
-    return this.db.prepare(`SELECT variant,success,run_id as runId FROM workflow_canary_bindings
-      WHERE promotion_id=? AND outcome_recorded_at IS NOT NULL`).all(promotionId) as CanaryOutcomeRecord[];
-  }
-
-  settleCanary(input: { promotionId: string; workflowId: string; activeRevisionId: string; status: "promoted" | "rolled_back"; reason: string; timestamp: number; evaluation: WorkflowEvaluationWrite; receipt: WorkflowGovernanceReceiptWrite }): void {
-    this.db.transaction(() => {
-      this.db.prepare(`UPDATE workflow_definitions SET status='active',active_revision_id=?,updated_at=? WHERE id=?`)
-        .run(input.activeRevisionId, input.timestamp, input.workflowId);
-      this.db.prepare("UPDATE workflow_promotions SET status=?,reason=?,updated_at=? WHERE id=?")
-        .run(input.status, input.reason, input.timestamp, input.promotionId);
-      this.insertEvaluation(input.evaluation);
-      this.insertGovernanceReceipt(input.receipt);
-    })();
   }
 
   listPendingCanaryBindings(runId: string, attempt: number) {

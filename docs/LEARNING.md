@@ -41,6 +41,8 @@ TAGENT_LEARNING_SEMANTIC_JUDGE_MIN_CONFIDENCE=0.72
 
 Environment values seed a new database. Runtime feature settings are persisted and survive restart. Turning Learning off forces automatic execution off; turning Memory off forces both off.
 
+Runtime setting changes enter through `CoreWorkflowGovernanceApplication` and the Workflow Governance repository, which atomically stores the policy and its receipts. Learning reads and refreshes the resulting state; it has no direct settings writer. Likewise, a Workflow binding's application mode changes only as part of the durable `recordApplication` receipt, not through an independent mode setter.
+
 ## Integration projection
 
 Execution publishes canonical lifecycle evidence to the immutable `integration_outbox` inside the same writer-fenced transaction as the TaskRun/Attempt event.
@@ -52,6 +54,8 @@ There is no alternate projection source or runtime switch. A replacement worker 
 ## Approval and no-bypass rule
 
 Learning may create proposals, requests, evaluations, and receipts. It cannot directly mutate TaskRun authority or execute a capability without Governance approval. Approval resolution and active effect receipt are separate durable steps.
+
+The Learning repository owns observations, jobs, definitions, revisions, approval preparation, application receipts, and feedback. Activation, suspension, restore/forget, approved proposal application, canary promotion, and feature-policy effects belong only to Workflow Governance; Learning does not retain a second mutation implementation for those actions.
 
 The shared Semantic Judge may classify reusable evidence and cross-language similarity, but low-confidence or malformed output cannot activate a Workflow, grant capability, or weaken deterministic checks.
 

@@ -42,8 +42,6 @@ export type {
 export type { LearningSettings, SettingsRepository } from "./settings-repository.js";
 export type {
   AutonomyAuditWrite,
-  CanaryOutcomeRecord,
-  CanaryPromotionRecord,
   DistillationJobRecord,
   ExperienceObservationRecord,
   ExperienceObservationWrite,

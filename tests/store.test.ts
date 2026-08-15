@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Store } from "@tagent/persistence-sqlite";
+import { cancelTaskRun, transitionTaskRun } from "./support/test-persistence.js";
 import { recordSuccessfulBash, upsertTrustedCheck } from "./support/trusted-evidence.js";
 
 const stores: Store[] = [];
@@ -76,7 +77,7 @@ describe("Store", () => {
     const idle = store.createSession("Idle");
     const active = store.createSession("Active");
     const firstRun = store.createRun(active.id, "first");
-    store.finalizeRun(firstRun.id, "completed");
+    transitionTaskRun(store, firstRun.id, "complete");
     const latestRun = store.createRun(active.id, "latest");
     store.setRunPhase(latestRun.id, "implement");
 
@@ -118,7 +119,7 @@ describe("Store", () => {
     expect(claimed.item).toMatchObject({ id: first.id, status: "started", decision: "start_taskrun", runId: claimed.run.id });
     expect(claimed.run.goal).toBe("first");
     expect(store.claimNextSessionInbox(session.id)).toBeUndefined();
-    store.finalizeRun(claimed.run.id, "completed");
+    transitionTaskRun(store, claimed.run.id, "complete");
     expect(store.claimNextSessionInbox(session.id)?.item.id).toBe(third.id);
   });
 
@@ -183,7 +184,7 @@ describe("Store", () => {
     const store = createStore();
     const session = store.createSession();
     const blocked = store.createRun(session.id, "blocked task");
-    store.blockRun(blocked.id, "waiting for review");
+    transitionTaskRun(store, blocked.id, "block", "waiting for review");
     const first = store.enqueueSessionInbox(session.id, "first", analysis("first"), "manual-first");
     const second = store.enqueueSessionInbox(session.id, "second", analysis("second"), "manual-second");
 
@@ -200,10 +201,10 @@ describe("Store", () => {
     const queued = store.enqueueSessionInbox(session.id, "queued", analysis("queued"), "manual-conflict");
     const running = store.createRun(session.id, "running");
     expect(store.claimSessionInboxNow(queued.id, session.id)).toEqual({ status: "running", runId: running.id });
-    store.finalizeRun(running.id, "completed");
+    transitionTaskRun(store, running.id, "complete");
 
     const blocked = store.createRun(session.id, "blocked");
-    store.blockRun(blocked.id, "gate");
+    transitionTaskRun(store, blocked.id, "block", "gate");
     const continuation = store.queueContinuation(blocked.id, "gate");
     expect(store.claimSessionInboxNow(queued.id, session.id)).toEqual({ status: "continuation", continuationId: continuation.id });
   });
@@ -213,7 +214,8 @@ describe("Store", () => {
       const store = createStore();
       const session = store.createSession();
       const previous = store.createRun(session.id, status);
-      store.finalizeRun(previous.id, status);
+      if (status === "cancelled") cancelTaskRun(store, previous.id);
+      else transitionTaskRun(store, previous.id, status === "completed" ? "complete" : "fail", status === "failed" ? "failed" : "");
       const queued = store.enqueueSessionInbox(session.id, `after ${status}`, analysis(`after ${status}`), `after-${status}`);
       expect(store.claimNextSessionInbox(session.id)?.item.id).toBe(queued.id);
     }
@@ -225,7 +227,7 @@ describe("Store", () => {
     stores.push(firstStore, secondStore);
     const session = firstStore.createSession();
     const blocked = firstStore.createRun(session.id, "blocked");
-    firstStore.blockRun(blocked.id, "gate");
+    transitionTaskRun(firstStore, blocked.id, "block", "gate");
     const queued = firstStore.enqueueSessionInbox(session.id, "manual", analysis("manual"), "manual-race");
     const claims = await Promise.all([
       Promise.resolve().then(() => firstStore.claimSessionInboxNow(queued.id, session.id)),
@@ -246,7 +248,7 @@ describe("Store", () => {
     const store = createStore();
     const session = store.createSession();
     const blocked = store.createRun(session.id, "blocked");
-    store.blockRun(blocked.id, "gate");
+    transitionTaskRun(store, blocked.id, "block", "gate");
     store.queueContinuation(blocked.id, "gate");
     store.db.prepare("UPDATE run_continuations SET status = 'cancelled' WHERE run_id = ?").run(blocked.id);
     const queued = store.enqueueSessionInbox(session.id, "manual", analysis("manual"), "manual-fence");
@@ -274,9 +276,9 @@ describe("Store", () => {
     const store = createStore();
     const session = store.createSession();
     const older = store.createRun(session.id, "older blocked work");
-    store.blockRun(older.id, "waiting for review");
+    transitionTaskRun(store, older.id, "block", "waiting for review");
     const successful = store.createRun(session.id, "newer successful work");
-    store.finalizeRun(successful.id, "completed");
+    transitionTaskRun(store, successful.id, "complete");
     const queued = store.enqueueSessionInbox(session.id, "next task", analysis("next task"), "after-latest-success");
 
     expect(store.claimNextSessionInbox(session.id)?.item.id).toBe(queued.id);
@@ -328,8 +330,8 @@ describe("Store", () => {
     store.transitionRun(claimed.run.id, ["running"], "failed", "run.failed", { reason: "runtime_initialization_failed", retryable: true }, "init failed", 1);
     const running = store.createRun(session.id, "other");
     expect(store.retryInboxLaunch(claimed.run.id)).toMatchObject({ status: "running", runId: running.id });
-    store.finalizeRun(running.id, "completed");
-    const blocked = store.createRun(session.id, "blocked"); store.blockRun(blocked.id, "gate");
+    transitionTaskRun(store, running.id, "complete");
+    const blocked = store.createRun(session.id, "blocked"); transitionTaskRun(store, blocked.id, "block", "gate");
     const continuation = store.queueContinuation(blocked.id, "gate");
     expect(store.retryInboxLaunch(claimed.run.id)).toMatchObject({ status: "continuation", continuationId: continuation.id });
   });
@@ -352,7 +354,7 @@ describe("Store", () => {
     const second = store.enqueueSessionInbox(session.id, "detail", analysis("detail"), "merge-2");
     expect(store.decideSessionInboxItem(first.id, session.id, "defer")).toBe(true);
     expect(store.claimNextSessionInbox(session.id)?.item.id).toBe(second.id);
-    store.finalizeRun(store.getActiveRun(session.id)!.id, "completed");
+    transitionTaskRun(store, store.getActiveRun(session.id)!.id, "complete");
     expect(store.decideSessionInboxItem(first.id, session.id, "pending")).toBe(true);
     const third = store.enqueueSessionInbox(session.id, "extra", analysis("extra"), "merge-3");
     expect(store.mergeSessionInboxItems(third.id, first.id, session.id)).toBe(true);
@@ -463,7 +465,7 @@ describe("Store", () => {
     const store = createStore();
     const session = store.createSession();
     const run = store.createRun(session.id, "expired renewal");
-    store.blockRun(run.id, "gate");
+    transitionTaskRun(store, run.id, "block", "gate");
     store.queueContinuation(run.id, "gate");
     const claimed = store.claimContinuation(run.id, "owner", 10_000)!;
     store.db.prepare("UPDATE run_continuations SET lease_until = ? WHERE id = ?").run(Date.now() - 1, claimed.continuation.id);
@@ -474,7 +476,7 @@ describe("Store", () => {
     const store = createStore();
     const session = store.createSession();
     const run = store.createRun(session.id, "attempt fence");
-    store.blockRun(run.id, "gate");
+    transitionTaskRun(store, run.id, "block", "gate");
     store.queueContinuation(run.id, "gate");
     const claimed = store.claimContinuation(run.id, "owner", 30_000)!;
     expect(claimed.run.attempt).toBe(2);
@@ -551,11 +553,11 @@ describe("Store", () => {
   });
 
   it("persists delayed continuations and claims them only after notBefore", () => {
+    const store = createStore();
+    const run = store.createRun(store.createSession().id, "provider cooldown");
+    transitionTaskRun(store, run.id, "block", "model_cooldown");
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {
-      const store = createStore();
-      const run = store.createRun(store.createSession().id, "provider cooldown");
-      store.blockRun(run.id, "model_cooldown");
       const notBefore = 61_000;
       const queued = store.queueContinuation(run.id, "retry after cooldown", notBefore);
 
@@ -576,7 +578,7 @@ describe("Store", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-cooldown-")), "core.db");
     const first = new Store(filename);
     const run = first.createRun(first.createSession().id, "restart during cooldown");
-    first.blockRun(run.id, "model_cooldown");
+    transitionTaskRun(first, run.id, "block", "model_cooldown");
     const notBefore = Date.now() + 60_000;
     const continuation = first.queueContinuation(run.id, "delayed provider retry", notBefore);
     first.close();
@@ -643,7 +645,7 @@ describe("Store", () => {
     const store = createStore();
     const session = store.createSession();
     const run = store.createRun(session.id, "lease fencing");
-    store.blockRun(run.id, "gate");
+    transitionTaskRun(store, run.id, "block", "gate");
     store.queueContinuation(run.id, "gate");
     const claimed = store.claimContinuation(run.id, "current-owner", 1_000)!;
     const initialLease = claimed.continuation.leaseUntil!;
@@ -660,7 +662,7 @@ describe("Store", () => {
     const firstStore = new Store(filename);
     const session = firstStore.createSession();
     const run = firstStore.createRun(session.id, "claim continuation");
-    firstStore.blockRun(run.id, "gate");
+    transitionTaskRun(firstStore, run.id, "block", "gate");
     firstStore.queueContinuation(run.id, "gate");
     const secondStore = new Store(filename);
     const claims = await Promise.all([
@@ -679,7 +681,7 @@ describe("Store", () => {
     const store = createStore();
     const session = store.createSession();
     const run = store.createRun(session.id, "single active continuation");
-    store.blockRun(run.id, "gate");
+    transitionTaskRun(store, run.id, "block", "gate");
     store.queueContinuation(run.id, "first");
     expect(() => store.queueContinuation(run.id, "second")).toThrow("active continuation");
   });
@@ -703,13 +705,10 @@ describe("Store", () => {
     const store = createStore();
     const session = store.createSession();
     const run = store.createRun(session.id, "ship it");
-    expect(store.completeWithGate(run.id, "done").gate.passed).toBe(false);
-    store.resumeRun(run.id);
+    expect(store.evaluateGate(store.getRun(run.id)!)).toMatchObject({ passed: false });
     store.upsertPlanItem(run.id, { key: "build", title: "Build", status: "done", required: true, position: 1 });
     upsertTrustedCheck(store, run.id, { key: "test", title: "Tests", command: "npm test", output: "all tests passed" });
-    const result = store.completeWithGate(run.id, "done");
-    expect(result.gate.passed).toBe(true);
-    expect(result.run.status).toBe("completed");
+    expect(store.evaluateGate(store.getRun(run.id)!)).toEqual({ passed: true, failures: [] });
   });
 
   it("rejects self-reported, tampered, failed, and wrong-Attempt check evidence", () => {
@@ -922,7 +921,7 @@ describe("Store", () => {
     const store = createStore();
     const session = store.createSession();
     const run = store.createRun(session.id, "restart");
-    store.blockRun(run.id, "gate");
+    transitionTaskRun(store, run.id, "block", "gate");
     const continuation = store.queueContinuation(run.id, "gate");
     store.updateContinuation(continuation.id, "running");
     store.resumeRun(run.id);
@@ -936,7 +935,7 @@ describe("Store", () => {
     const store = createStore();
     const session = store.createSession();
     const run = store.createRun(session.id, "latest");
-    store.finalizeRun(run.id, "completed");
+    transitionTaskRun(store, run.id, "complete");
     expect(store.getLatestRun(session.id)?.id).toBe(run.id);
     expect(store.getActiveRun(session.id)).toBeUndefined();
   });
@@ -959,7 +958,7 @@ describe("Store", () => {
     const store = createStore();
     const session = store.createSession();
     const run = store.createRun(session.id, "resume", "stable");
-    store.blockRun(run.id, "gate");
+    transitionTaskRun(store, run.id, "block", "gate");
     const resumed = store.resumeRun(run.id);
     expect(resumed.id).toBe(run.id);
     expect(resumed.requestId).toBe("stable");

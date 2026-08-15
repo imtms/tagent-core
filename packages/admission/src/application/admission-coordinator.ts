@@ -242,19 +242,6 @@ export class AdmissionCoordinator {
     return related;
   }
 
-  async updateSessionInput(sessionId: SessionId, itemId: string, content: string) {
-    assertSubmissionContent(content);
-    const item = this.state.persistence.submissions.getSessionInboxItem(itemId);
-    if (!item || item.sessionId !== sessionId || item.status !== "queued") return undefined;
-    const activeRun = this.state.persistence.taskRuns.getActiveRun(sessionId);
-    const routed = await this.dependencies.router.analyze(content, activeRun, this.sessionRouterContext(sessionId));
-    const selectedGateProfile = item.analysis.executionPolicy?.gateProfile;
-    const analysis = selectedGateProfile
-      ? { ...routed, executionPolicy: { ...effectiveTaskExecutionPolicy(routed), gateProfile: selectedGateProfile } }
-      : routed;
-    return this.state.persistence.submissions.updateSessionInboxItem(itemId, sessionId, content, analysis);
-  }
-
   async updateSessionInputProfile(
     sessionId: SessionId,
     itemId: string,
@@ -305,26 +292,6 @@ export class AdmissionCoordinator {
       sessionId, sourceId, targetId, mutation,
     });
     return result;
-  }
-
-  reorderSessionInputs(sessionId: SessionId, itemIds: string[]) {
-    return this.state.persistence.submissions.reorderSessionInbox(sessionId, itemIds);
-  }
-
-  deleteSessionInput(sessionId: SessionId, itemId: string) {
-    return this.state.persistence.submissions.deleteSessionInboxItem(itemId, sessionId);
-  }
-
-  decideSessionInput(sessionId: SessionId, itemId: string, decision: "pending" | "defer") {
-    const changed = this.state.persistence.submissions.decideSessionInboxItem(itemId, sessionId, decision);
-    if (changed && decision === "pending") this.dispatchSessionInbox(sessionId);
-    return changed;
-  }
-
-  mergeSessionInputs(sessionId: SessionId, sourceId: string, targetId: string) {
-    const changed = this.state.persistence.submissions.mergeSessionInboxItems(sourceId, targetId, sessionId);
-    if (changed) this.dispatchSessionInbox(sessionId);
-    return changed;
   }
 
   startSessionInputNow(sessionId: SessionId, itemId: string) {

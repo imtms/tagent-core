@@ -9,6 +9,7 @@ import {
 } from "@tagent/execution/domain";
 import { SqlitePersistence, Store } from "@tagent/persistence-sqlite";
 import type { SynchronousResult } from "@tagent/persistence-sqlite/unit-of-work";
+import { transitionTaskRun } from "./support/test-persistence.js";
 
 const stores: Store[] = [];
 
@@ -62,7 +63,7 @@ describe("Attempt shadow domain", () => {
       trigger: "initial", status: "running", active: true, version: 1,
     });
 
-    store.blockRun(run.id, "needs another pass");
+    transitionTaskRun(store, run.id, "block", "needs another pass");
     store.resumeRun(run.id);
 
     expect(adapter.attempts.listAttempts(run.id)).toMatchObject([
@@ -89,7 +90,7 @@ describe("Attempt shadow domain", () => {
     expect(adapter.attempts.getAttemptForRun(inputRun.id, 2)).toMatchObject({ trigger: "input", active: true });
 
     const continuationRun = adapter.taskRuns.createRun(adapter.sessions.createSession().id, "continuation");
-    store.blockRun(continuationRun.id, "gate");
+    transitionTaskRun(store, continuationRun.id, "block", "gate");
     adapter.continuations.queueContinuation(continuationRun.id, "gate");
     const claimed = adapter.continuations.claimContinuation(continuationRun.id, "worker", 30_000)!;
     expect(adapter.attempts.getAttemptForRun(continuationRun.id, claimed.run.attempt)).toMatchObject({ trigger: "continuation", active: true });

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WorkflowLearningService } from "@tagent/learning";
 import type { WorkflowSpec } from "@tagent/learning/domain";
 import { Store } from "@tagent/persistence-sqlite";
-import { workflowPersistence } from "./support/test-persistence.js";
+import { transitionTaskRun, workflowPersistence } from "./support/test-persistence.js";
 
 const stores: Store[] = [];
 const make = () => { const store = new Store(":memory:"); stores.push(store); return { store, service: new WorkflowLearningService(workflowPersistence(store), "test-evaluator-secret") }; };
@@ -14,7 +14,7 @@ function completedRun(store:Store,sessionId:string,workflowId:string,revisionId:
   const run=store.createRun(sessionId,`evaluation ${index}`);
   store.db.prepare(`INSERT INTO workflow_bindings (id,run_id,attempt,workflow_id,revision_id,selector_version,relevance_score,selected_reason_json,application_mode,created_at) VALUES (?,?,?,?,?,'evaluator',1,'[]','adopted',?)`).run(`binding-${run.id}`,run.id,1,workflowId,revisionId,Date.now());
   store.upsertCheck(run.id,{key:"tests",title:"tests",status:success?"passed":"failed",required:true,command:"test",evidence:"actual",stale:false});
-  store.finalizeRun(run.id,success?"completed":"failed"); return run;
+  transitionTaskRun(store,run.id,success?"complete":"fail",success?"":"failed"); return run;
 }
 function trustedGates(store:Store,service:WorkflowLearningService,sessionId:string,workflowId:string,baselineRevisionId:string,candidateRevisionId:string){
   const baseline=Array.from({length:5},(_,i)=>completedRun(store,sessionId,workflowId,baselineRevisionId,i));
@@ -50,7 +50,7 @@ describe("trusted workflow evaluation and real canary",()=>{
     }
     expect(variants.candidate.length).toBeGreaterThanOrEqual(5); expect(variants.baseline.length).toBeGreaterThanOrEqual(5);
     for(const runId of [...variants.baseline.slice(0,5),...variants.candidate.slice(0,5)]){
-      const candidateVariant=variants.candidate.includes(runId); store.upsertCheck(runId,{key:"tests",title:"tests",status:candidateVariant?"failed":"passed",required:true,command:"test",evidence:"actual",stale:false}); store.finalizeRun(runId,candidateVariant?"failed":"completed"); service.recordCanaryOutcome(store.getRun(runId)!);
+      const candidateVariant=variants.candidate.includes(runId); store.upsertCheck(runId,{key:"tests",title:"tests",status:candidateVariant?"failed":"passed",required:true,command:"test",evidence:"actual",stale:false}); transitionTaskRun(store,runId,candidateVariant?"fail":"complete",candidateVariant?"failed":""); service.recordCanaryOutcome(store.getRun(runId)!);
     }
     expect(store.db.prepare("SELECT status FROM workflow_promotions WHERE id=?").get(promotion.id)).toEqual({status:"canary"});
     expect(store.db.prepare("SELECT COUNT(*) count FROM workflow_canary_bindings WHERE promotion_id=? AND outcome_recorded_at IS NOT NULL").get(promotion.id)).toEqual({count:10});

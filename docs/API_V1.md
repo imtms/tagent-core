@@ -81,6 +81,8 @@ Synchronous resource mutations require `Idempotency-Key` and an `If-Match: "rN"`
 
 Profile list cursors freeze membership with immutable creation or binding order keys while returning current public projections. Updating an unread item cannot move it past the cursor. Memory and Autonomy pages query storage with `limit + 1`; the 200-item HTTP maximum is a per-page bound, not a 500-item collection cap.
 
+Session Inbox update, reorder, decision, merge, and delete operations exist only through the declared `operator.session-inbox.v1` profile endpoints. They always use the profile's idempotency receipt, resource scope, and collection-revision checks; Core does not expose a parallel unreceipted application mutation surface.
+
 Optional `X-TAgent-Delegated-Actor` and `X-TAgent-Delegated-Request-Id` headers carry Gateway provenance but grant no authority. Core audits them separately from the authenticated service principal and granted scopes. Public Settings/Inbox/Context/Skill/Memory/Learning/Workflow/Autonomy DTOs are ABI-owned projections and intentionally omit private paths, prompts, arbitrary metadata, tool arguments and internal evidence. See [GATEWAY_PROFILE_COMPATIBILITY.md](GATEWAY_PROFILE_COMPATIBILITY.md) and [GATEWAY_HANDOFF_STATUS.md](GATEWAY_HANDOFF_STATUS.md).
 
 ### Workspace Goal Console routes

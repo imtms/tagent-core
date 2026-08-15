@@ -6,7 +6,7 @@ import {
   type IntegrationLearningProjectionRecord,
 } from "@tagent/learning/domain";
 import { Store } from "@tagent/persistence-sqlite";
-import { workflowPersistence } from "./support/test-persistence.js";
+import { transitionTaskRun, workflowPersistence } from "./support/test-persistence.js";
 
 const stores: Store[]=[]; const fixture=()=>{const store=new Store(":memory:");stores.push(store);return{store,workflows:new WorkflowLearningService(workflowPersistence(store))}};
 afterEach(()=>stores.splice(0).forEach(store=>store.close()));
@@ -37,7 +37,7 @@ describe("workflow safety and governance",()=>{
     const recalled=workflows.recall(session.id,"verify change",run.id,1);const bindingId=recalled.workflows[0].bindingId;
     workflows.recordApplication({bindingId,status:"partial",executedStepIds:["check"],skippedSteps:[{stepId:"optional",reason:"not applicable"}],correctionObserved:true,repeatedToolCalls:2,continuationCount:1});
     store.upsertCheck(run.id,{key:"other",title:"Other required check",status:"passed",required:true,command:"test",evidence:"ok",stale:false});
-    store.finalizeRun(run.id,"completed");workflows.recordRunApplications(store.getRun(run.id)!);
+    transitionTaskRun(store,run.id,"complete");workflows.recordRunApplications(store.getRun(run.id)!);
     expect(store.db.prepare("SELECT application_status status,attribution_level attribution,executed_step_ids_json steps,skipped_steps_json skipped,correction_observed correction,repeated_tool_calls repeats,continuation_count continuations FROM workflow_application_receipts WHERE binding_id=?").get(bindingId)).toMatchObject({status:"partial",attribution:"adopted",steps:'["check"]',correction:1,repeats:2,continuations:1});
     workflows.recordApplication({bindingId,status:"adopted",executedStepIds:["check"],verificationMapping:[{verificationCheck:"target check",runCheckKey:"other"}]});
     workflows.recordRunApplications(store.getRun(run.id)!);

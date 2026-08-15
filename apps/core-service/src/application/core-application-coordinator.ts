@@ -23,15 +23,10 @@ export class CoreApplicationCoordinator {
   getRun(...args: Parameters<CoreApplicationServices["execution"]["getRun"]>) { return this.services.execution.getRun(...args); }
   getCurrentAttemptId(...args: Parameters<CoreApplicationServices["execution"]["getCurrentAttemptId"]>) { return this.services.execution.getCurrentAttemptId(...args); }
   enqueueSessionInput(...args: Parameters<CoreApplicationServices["admission"]["enqueueSessionInput"]>) { return this.services.admission.enqueueSessionInput(...args); }
-  updateSessionInput(...args: Parameters<CoreApplicationServices["admission"]["updateSessionInput"]>) { return this.services.admission.updateSessionInput(...args); }
   updateSessionInputProfile(...args: Parameters<CoreApplicationServices["admission"]["updateSessionInputProfile"]>) { return this.services.admission.updateSessionInputProfile(...args); }
-  reorderSessionInputs(...args: Parameters<CoreApplicationServices["admission"]["reorderSessionInputs"]>) { return this.services.admission.reorderSessionInputs(...args); }
   reorderSessionInputsProfile(...args: Parameters<CoreApplicationServices["admission"]["reorderSessionInputsProfile"]>) { return this.services.admission.reorderSessionInputsProfile(...args); }
-  deleteSessionInput(...args: Parameters<CoreApplicationServices["admission"]["deleteSessionInput"]>) { return this.services.admission.deleteSessionInput(...args); }
   deleteSessionInputProfile(...args: Parameters<CoreApplicationServices["admission"]["deleteSessionInputProfile"]>) { return this.services.admission.deleteSessionInputProfile(...args); }
-  decideSessionInput(...args: Parameters<CoreApplicationServices["admission"]["decideSessionInput"]>) { return this.services.admission.decideSessionInput(...args); }
   decideSessionInputProfile(...args: Parameters<CoreApplicationServices["admission"]["decideSessionInputProfile"]>) { return this.services.admission.decideSessionInputProfile(...args); }
-  mergeSessionInputs(...args: Parameters<CoreApplicationServices["admission"]["mergeSessionInputs"]>) { return this.services.admission.mergeSessionInputs(...args); }
   mergeSessionInputsProfile(...args: Parameters<CoreApplicationServices["admission"]["mergeSessionInputsProfile"]>) { return this.services.admission.mergeSessionInputsProfile(...args); }
   startSessionInputNow(...args: Parameters<CoreApplicationServices["admission"]["startSessionInputNow"]>) { return this.services.admission.startSessionInputNow(...args); }
   requestParallelSessionInputApproval(...args: Parameters<CoreApplicationServices["admission"]["requestParallelSessionInputApproval"]>) { return this.services.admission.requestParallelSessionInputApproval(...args); }
@@ -64,7 +59,6 @@ export class CoreApplicationCoordinator {
   rollbackWorkflow(...args: Parameters<CoreApplicationServices["governance"]["rollbackWorkflow"]>) { return this.services.governance.rollbackWorkflow(...args); }
   forgetWorkflow(...args: Parameters<CoreApplicationServices["governance"]["forgetWorkflow"]>) { return this.services.governance.forgetWorkflow(...args); }
   restoreWorkflow(...args: Parameters<CoreApplicationServices["governance"]["restoreWorkflow"]>) { return this.services.governance.restoreWorkflow(...args); }
-  setWorkflowBindingMode(...args: Parameters<CoreApplicationServices["learning"]["setWorkflowBindingMode"]>) { return this.services.learning.setWorkflowBindingMode(...args); }
   recordWorkflowApplication(...args: Parameters<CoreApplicationServices["learning"]["recordWorkflowApplication"]>) { return this.services.learning.recordWorkflowApplication(...args); }
   getLearningCenter(...args: Parameters<CoreApplicationServices["learning"]["getLearningCenter"]>) { return this.services.learning.getLearningCenter(...args); }
   decideWorkflowProposal(...args: Parameters<CoreApplicationServices["learning"]["decideWorkflowProposal"]>) { return this.services.learning.decideWorkflowProposal(...args); }

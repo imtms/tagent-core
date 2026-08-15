@@ -143,20 +143,6 @@ export interface WorkflowEvaluationWrite {
   createdAt: number;
 }
 
-export interface CanaryPromotionRecord {
-  workflowId: string;
-  revisionId: string;
-  previousRevisionId: string;
-  maxFailureDelta: number;
-  status: string;
-}
-
-export interface CanaryOutcomeRecord {
-  variant: string;
-  success: number;
-  runId: string;
-}
-
 interface WorkflowLearningStorageContract {
   upsertRunLearningPolicy(record: RunLearningPolicyRecord): RunLearningPolicyRecord;
   getRunLearningPolicy(runId: string): RunLearningPolicyRecord | undefined;
@@ -173,8 +159,6 @@ interface WorkflowLearningStorageContract {
   listExperienceCandidates(scopeId: string, limit?: number): ExperienceObservationRecord[];
   findDistilledWorkflow(evidenceSetHash: string): { workflowId: string } | undefined;
   recordDistillationConflict(input: { id: string; jobId: string; scopeId: string; candidateSignature: string; workflowId: string; revisionId: string; kind: "duplicate" | "conflict"; similarity: number; reasonsJson: string; createdAt: number }): void;
-  recordWorkflowDistillation(input: { evidenceSetHash: string; workflowId: string; createdAt: number }): void;
-
   createWorkflow(
     definition: WorkflowDefinitionWrite,
     revision: WorkflowRevisionWrite,
@@ -185,8 +169,6 @@ interface WorkflowLearningStorageContract {
   getWorkflowDefinition(id: string, includeDeleted: boolean): WorkflowDefinition | undefined;
   listWorkflowRevisionIds(workflowId: string): string[];
   getWorkflowRevision(id: string): WorkflowRevisionRecord | undefined;
-  recordGovernanceReceipt(receipt: WorkflowGovernanceReceiptWrite): void;
-
   findActiveApprovalByHash(requestHash: string): { id: string; status: AutonomyApprovalStatus } | undefined;
   createApproval(input: { approval: Omit<AutonomyApprovalRequest, "decidedAt" | "executedAt"> & { decidedAt?: number | null; executedAt?: number | null }; audit: AutonomyAuditWrite }): void;
   getApproval(id: string): AutonomyApprovalRequest | undefined;
@@ -203,7 +185,6 @@ interface WorkflowLearningStorageContract {
     createAudits: (rows: Array<{ id: string; scopeId: string; workflowId: string | null; revisionId: string | null }>) => AutonomyAuditWrite[],
   ): Array<{ id: string; scopeId: string; workflowId: string | null; revisionId: string | null }>;
 
-  setBindingMode(bindingId: string, mode: string): boolean;
   recordApplication(input: { id: string; bindingId: string; status: WorkflowApplicationStatus; mode: string; executedStepIdsJson: string; skippedStepsJson: string; correctionObserved: number; repeatedToolCalls: number; continuationCount: number; verificationMappingJson: string; attributionLevel: string; createdAt: number }): unknown;
   getApplicationReceipt(bindingId: string): Record<string, unknown> | undefined;
   listRunBindings(runId: string, attempt: number): Array<{ id: string; workflowId: string; revisionId: string; applicationMode: string }>;
@@ -256,7 +237,6 @@ export type WorkflowObservationRepository = Pick<WorkflowLearningStorageContract
   | "listExperienceCandidates"
   | "findDistilledWorkflow"
   | "recordDistillationConflict"
-  | "recordWorkflowDistillation"
   | "retryDistillationJob"
   | "listDeadLetterJobs">;
 
@@ -283,8 +263,6 @@ export type WorkflowApprovalRepository = Pick<WorkflowLearningStorageContract,
   | "expireApprovals">;
 
 export type WorkflowLearningReceiptRepository = Pick<WorkflowLearningStorageContract,
-  | "recordGovernanceReceipt"
-  | "setBindingMode"
   | "recordApplication"
   | "getApplicationReceipt"
   | "listRunBindings"

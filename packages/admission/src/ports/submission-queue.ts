@@ -94,18 +94,9 @@ export interface SubmissionQueue {
   ): Submission | undefined;
   findMergeCandidate(sessionId: SessionId, analysis: SessionInputAnalysis): Submission | undefined;
   markSessionInboxDuplicate(sourceId: string, targetId: string, sessionId: SessionId): Submission | undefined;
-  updateSessionInboxItem(
-    id: string,
-    sessionId: SessionId,
-    content: string,
-    analysis?: SessionInputAnalysis,
-  ): Submission | undefined;
-  reorderSessionInbox(sessionId: SessionId, itemIds: string[]): Submission[] | undefined;
-  deleteSessionInboxItem(id: string, sessionId: SessionId): boolean;
   /** Compensates a failed pre-launch admission before the Inbox item becomes observable work. */
   discardSessionInboxItem(id: string, sessionId: SessionId): boolean;
   decideSessionInboxItem(id: string, sessionId: SessionId, decision: "pending" | "defer"): boolean;
-  mergeSessionInboxItems(sourceId: string, targetId: string, sessionId: SessionId): boolean;
   claimNextSessionInbox(sessionId: SessionId): ClaimedSubmission | undefined;
   claimSessionInboxNow(itemId: string, sessionId: SessionId, allowApprovedParallel?: boolean): SubmissionStartResult;
   recordSessionInboxLaunchFailure(itemId: string, runId: RunId, error: string): void;

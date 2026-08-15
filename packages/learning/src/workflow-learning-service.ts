@@ -464,11 +464,6 @@ export class WorkflowLearningService {
       })));
   }
 
-  setBindingMode(bindingId: string, mode: "suggested" | "adopted" | "partially_adopted" | "rejected") {
-    if (!this.persistence.workflow.setBindingMode(bindingId, mode)) throw new Error("Workflow binding not found");
-    return { bindingId, mode };
-  }
-
   recordApplication(input: { bindingId: string; status: WorkflowApplicationStatus; executedStepIds?: string[]; skippedSteps?: WorkflowSkippedStep[]; correctionObserved?: boolean; repeatedToolCalls?: number; continuationCount?: number; verificationMapping?: WorkflowVerificationMapping[] }) {
     this.requireAutoExecution();
     const mode = input.status === "adopted" ? "adopted" : input.status === "partial" ? "partially_adopted" : input.status === "rejected" ? "rejected" : "suggested";

@@ -43,7 +43,6 @@ export interface HttpLearningApplicationPort {
   listWorkflows(sessionId: string): unknown;
   getWorkflow(workflowId: string, includeDeleted?: boolean): unknown;
   requestWorkflowActivation(workflowId: string, revisionId?: string, actor?: string, reason?: string): unknown;
-  setWorkflowBindingMode(bindingId: string, mode: "suggested" | "adopted" | "partially_adopted" | "rejected"): unknown;
   recordWorkflowApplication(input: HttpWorkflowApplicationInput): unknown;
   getLearningCenter(sessionId: string): unknown;
   decideWorkflowProposal(id: string, decision: "approved" | "rejected", actor: string, reason?: string): unknown;
@@ -95,9 +94,8 @@ interface HttpWorkflowGovernanceApplicationPort {
 }
 
 type HttpAdmissionApplicationPort = Pick<AdmissionCoordinator,
-  | "enqueueSessionInput" | "updateSessionInput" | "reorderSessionInputs"
+  | "enqueueSessionInput"
   | "updateSessionInputProfile" | "reorderSessionInputsProfile"
-  | "deleteSessionInput" | "decideSessionInput" | "mergeSessionInputs"
   | "deleteSessionInputProfile" | "decideSessionInputProfile" | "mergeSessionInputsProfile"
   | "startSessionInputNow" | "requestParallelSessionInputApproval" | "retryInboxLaunch"
 >;
