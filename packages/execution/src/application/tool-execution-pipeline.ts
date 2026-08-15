@@ -81,7 +81,7 @@ export class ToolExecutionPipeline {
     let recorded = false;
     if (!this.capabilities.isCurrentAttempt()) blocked = "Attempt is no longer current";
     if (!blocked && tool.policy?.externalAction) {
-      const approval = this.capabilities.authorizeExternalAction();
+      const approval = this.capabilities.authorizeExternalAction(tool.policy.externalAction === "explicit");
       if (!approval.allowed) blocked = `External action approval guard: ${approval.reason}`;
     }
     const access = typeof tool.policy?.workspaceAccess === "function" ? tool.policy.workspaceAccess(args) : tool.policy?.workspaceAccess;
@@ -176,6 +176,13 @@ export class ToolExecutionPipeline {
         { kind: "workspace", action: access ?? "mutation" },
         { kind: "checks", action: staleChecks ? "stale" : "preserved", count: staleChecks },
       ], result });
+      try {
+        tool.onOperationSettled?.(toolCallId, args, result);
+      } catch {
+        // The successful receipt is already authoritative and must never be
+        // rewritten as failed by an optional post-settlement notification.
+        // Durable consumers reconcile any missed notification on startup.
+      }
       return result;
     } catch (error) {
       const classified = classifyToolError(error, { signal });

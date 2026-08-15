@@ -45,7 +45,7 @@ import {
   type SupervisorPort,
 } from "@tagent/execution/composition";
 import type { AttemptRuntimeFactory, CredentialResolverPort, CredentialReference, RuntimeModelSpec } from "@tagent/execution/ports";
-import { createRuntimeHost } from "./runtime-host-adapter.js";
+import { createRuntimeHost, type AdditionalToolProviderFactory } from "./runtime-host-adapter.js";
 import { createProjectContextSource } from "@tagent/workspace-local/project-context";
 import { createWorkspaceArtifactSink } from "@tagent/workspace-local/artifact-file-sink";
 import { createWorkspaceEditPort } from "@tagent/workspace-local/snapshot-edit";
@@ -82,6 +82,7 @@ export interface ExecutionCompositionOptions {
   projectRuleFiles?: string[];
   toolArtifactMaxBytes?: number;
   startupOptions?: ExecutionCoordinatorStartupOptions;
+  additionalToolProviders?: AdditionalToolProviderFactory;
 }
 
 type CredentialBinding = { reference: CredentialReference; resolver: CredentialResolverPort };
@@ -247,6 +248,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
           memoryScopeId: options.memoryScopeId ?? "default",
           artifactSink,
           workspaceEdit,
+          additionalToolProviders: options.additionalToolProviders,
           ...input,
           memorySubjectId: run
             ? resolveMemorySubjectId(options.persistence, run.sessionId)

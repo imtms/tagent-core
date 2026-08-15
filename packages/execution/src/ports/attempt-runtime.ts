@@ -88,13 +88,16 @@ export interface RuntimeTool<TParameters = unknown, TDetails = unknown> {
   executionMode?: RuntimeToolExecutionMode;
   /** Core-enforced execution policy. Providers describe effects; they cannot settle their own guard. */
   policy?: RuntimeToolPolicy;
+  /** Runs only for the process that durably settles a new successful operation receipt. */
+  onOperationSettled?(toolCallId: string, params: TParameters, result: RuntimeToolResult<TDetails>): void;
 }
 
 export interface RuntimeToolPolicy {
   operationType?: string;
   workspaceAccess?: "none" | "read_only" | "mutation" | ((parameters: unknown) => "none" | "read_only" | "mutation");
   invalidatesChecks?: boolean | ((parameters: unknown) => boolean);
-  externalAction?: boolean;
+  /** `explicit` requires a consumed human approval even for an otherwise non-external TaskRun. */
+  externalAction?: boolean | "explicit";
 }
 
 export interface RuntimeCapabilityCatalog {

@@ -1,7 +1,10 @@
 #!/usr/bin/env node
-import { runCoreServiceFromCli } from "./server.js";
+import { runCoreHostFromCli } from "./host.js";
 
-void runCoreServiceFromCli().catch((error) => {
-  console.error("TAgent Core failed to start", error);
+void runCoreHostFromCli({
+  entryPath: process.argv[1]!,
+  directGenerationEntry: "dist/generation-entry.js",
+}).catch((error) => {
+  console.error("TAgent Core Host failed to start", error);
   process.exitCode = 1;
 });

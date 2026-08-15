@@ -2,6 +2,12 @@ import Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
 import {
+  GENERATION_ACTIVATION_OPERATION,
+  GENERATION_HANDOFF_MARKER,
+  type GenerationActivationRequest,
+  type GenerationActivationResult,
+} from "@tagent/execution/ports";
+import {
   RUN_APPROVAL_DEFAULTS,
   effectiveGateProfile,
   effectiveTaskExecutionPolicy,
@@ -75,6 +81,7 @@ import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-inp
 
 const now = () => Date.now();
 const MAX_SUBMISSION_CONTENT_CHARS = 200_000;
+const DEFAULT_MAX_SAFE_CRASH_RECOVERIES = 2;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
 function assertSubmissionContentBound(content: string): void {
@@ -1805,6 +1812,99 @@ ${source.content}`;
     return transaction();
   }
 
+  queueSafeCrashRecoveryContinuations(maxRecoveries = DEFAULT_MAX_SAFE_CRASH_RECOVERIES) {
+    if (!Number.isSafeInteger(maxRecoveries) || maxRecoveries <= 0) {
+      throw new TypeError("maxRecoveries must be a positive safe integer");
+    }
+    return this.db.transaction(() => {
+      const candidates = this.db.prepare(`SELECT run.id,run.attempt,run.last_event_seq as lastEventSeq,
+          interruption.seq as interruptionSeq
+        FROM runs run
+        JOIN run_events interruption ON interruption.run_id=run.id
+          AND interruption.type='restart.interruption'
+          AND interruption.seq=(SELECT MAX(latest.seq) FROM run_events latest
+            WHERE latest.run_id=run.id AND latest.type='restart.interruption')
+        WHERE run.status='interrupted'
+          AND NOT EXISTS (SELECT 1 FROM run_continuations continuation
+            WHERE continuation.run_id=run.id AND continuation.status IN ('queued','running'))
+          AND NOT EXISTS (SELECT 1 FROM operations operation
+            WHERE operation.run_id=run.id AND operation.status='outcome_unknown')
+          AND NOT EXISTS (SELECT 1 FROM control_inbox control
+            WHERE control.run_id=run.id AND control.status='outcome_unknown')
+          AND NOT EXISTS (SELECT 1 FROM task_run_command_receipts command
+            WHERE command.task_run_id=run.id AND command.status='outcome_unknown')
+          AND NOT EXISTS (SELECT 1 FROM tool_attempts tool
+            WHERE tool.run_id=run.id AND tool.status='running')
+          AND NOT EXISTS (SELECT 1 FROM user_input_requests input
+            WHERE input.run_id=run.id AND input.status='pending')
+          AND NOT EXISTS (SELECT 1 FROM approval_requests approval
+            WHERE approval.run_id=run.id AND approval.status='pending')
+          AND (SELECT COUNT(*) FROM run_events recovery
+            WHERE recovery.run_id=run.id AND recovery.type='continuation.queued'
+              AND json_extract(recovery.data,'$.reason')='safe_crash_recovery') < ?
+        ORDER BY interruption.created_at,run.id`).all(maxRecoveries) as Array<{
+          id: RunId;
+          attempt: number;
+          lastEventSeq: number;
+          interruptionSeq: number;
+        }>;
+      const recovered: Array<{ id: string; runId: RunId; ordinal: number }> = [];
+      for (const run of candidates) {
+        const timestamp = now();
+        const ordinal = (this.db.prepare("SELECT COALESCE(MAX(ordinal),0)+1 as ordinal FROM run_continuations WHERE run_id=?")
+          .get(run.id) as { ordinal: number }).ordinal;
+        const id = randomUUID();
+        const marker = `[crash-recovery:${run.interruptionSeq}]`;
+        const reason = `Core Generation crash recovery was proven safe.\n${marker}`;
+        this.db.prepare(`INSERT INTO run_continuations
+          (id,run_id,ordinal,status,reason,not_before,created_at)
+          VALUES (?,?,?,'queued',?,0,?)`).run(id, run.id, ordinal, reason, timestamp);
+        const seq = run.lastEventSeq + 1;
+        this.db.prepare(`INSERT INTO run_events (run_id,seq,attempt_id,type,data,created_at)
+          VALUES (?,?,?,'continuation.queued',?,?)`).run(
+          run.id,
+          seq,
+          this.attemptId(run.id, run.attempt),
+          JSON.stringify({ continuationId: id, ordinal, reason: "safe_crash_recovery", interruptionSeq: run.interruptionSeq }),
+          timestamp,
+        );
+        this.db.prepare(`UPDATE runs SET status='blocked',phase='blocked',blocked_reason=?,completed_at=NULL,
+          last_event_seq=?,updated_at=? WHERE id=? AND status='interrupted'`)
+          .run(reason, seq, timestamp, run.id);
+        this.db.prepare("UPDATE run_checkpoints SET active=0,current_tool_json='',updated_at=? WHERE run_id=?")
+          .run(timestamp, run.id);
+        this.projectAttempt({
+          runId: run.id,
+          ordinal: run.attempt,
+          trigger: "recovery",
+          status: "blocked",
+          scenario: "recovery",
+          reason,
+          eventSequence: seq,
+          timestamp,
+        });
+        finalizeProjectionCheckpoint(this.db, {
+          runId: run.id,
+          attemptId: this.attemptId(run.id, run.attempt),
+          attemptOrdinal: run.attempt,
+          eventSeq: seq,
+          timestamp,
+        });
+        this.enqueueLearningProjection(
+          run.id,
+          run.attempt,
+          "continuation.queued",
+          "blocked",
+          seq,
+          { continuationId: id, ordinal, reason: "safe_crash_recovery", interruptionSeq: run.interruptionSeq },
+          timestamp,
+        );
+        recovered.push({ id, runId: run.id, ordinal });
+      }
+      return recovered;
+    }).immediate();
+  }
+
 
   recoverContinuationsAfterRestart(timestamp = now()) {
     const transaction = this.db.transaction(() => {
@@ -2204,6 +2304,220 @@ ${source.content}`;
       .run(update.status, update.stage ?? current.stage, JSON.stringify(update.effects ?? current.effects), update.result === undefined ? (current.result === undefined ? "" : JSON.stringify(current.result)) : JSON.stringify(update.result), update.error ?? current.error, timestamp, completedAt, id, ...expected);
     if (result.changes !== 1) throw new Error(`Operation ${id} transition lost its compare-and-set race`);
     return this.getOperation(id)!;
+  }
+
+  listPendingGenerationActivations(): GenerationActivationRequest[] {
+    const rows = this.db.prepare(`SELECT operation.id as operationId,operation.run_id as runId,
+        operation.result_json as resultJson
+      FROM operations operation
+      WHERE operation.operation_type=? AND operation.status='succeeded'
+        AND operation.result_json<>''
+        AND NOT EXISTS (
+          SELECT 1 FROM run_events event
+          WHERE event.run_id=operation.run_id
+            AND event.type IN ('maintenance.activation.succeeded','maintenance.activation.failed')
+            AND json_extract(event.data,'$.requestId')=json_extract(operation.result_json,'$.details.requestId')
+        )
+      ORDER BY operation.created_at,operation.id`).all(GENERATION_ACTIVATION_OPERATION) as Array<{
+        operationId: string;
+        runId: RunId;
+        resultJson: string;
+      }>;
+    return rows.map((row) => this.generationActivationFromOperation(row));
+  }
+
+  prepareGenerationHandoff(request: GenerationActivationRequest): { continuationId: string; created: boolean } {
+    return this.db.transaction(() => {
+      const operation = this.db.prepare(`SELECT id as operationId,run_id as runId,status,operation_type as operationType,
+          result_json as resultJson FROM operations WHERE id=?`).get(request.operationId) as {
+            operationId: string;
+            runId: RunId;
+            status: string;
+            operationType: string;
+            resultJson: string;
+          } | undefined;
+      if (!operation || operation.operationType !== GENERATION_ACTIVATION_OPERATION || operation.status !== "succeeded") {
+        throw new Error(`Generation activation operation ${request.operationId} is not durably accepted`);
+      }
+      const persisted = this.generationActivationFromOperation(operation);
+      if (JSON.stringify(persisted) !== JSON.stringify(request)) {
+        throw new Error(`Generation activation ${request.requestId} does not match its durable operation`);
+      }
+      const prepared = this.db.prepare(`SELECT json_extract(data,'$.continuationId') as continuationId
+        FROM run_events WHERE run_id=? AND type='maintenance.handoff.prepared'
+          AND json_extract(data,'$.requestId')=? ORDER BY seq DESC LIMIT 1`)
+        .get(request.runId, request.requestId) as { continuationId: string } | undefined;
+      if (prepared?.continuationId) return { continuationId: prepared.continuationId, created: false };
+      const run = this.db.prepare("SELECT status,attempt,last_event_seq as lastEventSeq FROM runs WHERE id=?")
+        .get(request.runId) as { status: RunStatus; attempt: number; lastEventSeq: number } | undefined;
+      if (!run) throw new Error(`Generation activation Run ${request.runId} does not exist`);
+      if (!["running", "interrupted", "blocked", "completed", "failed"].includes(run.status)) {
+        throw new Error(`Generation activation Run ${request.runId} cannot prepare handoff from ${run.status}`);
+      }
+      const marker = `[${GENERATION_HANDOFF_MARKER}:${request.requestId}:${request.targetRelease}]`;
+      const handoffReason = `Core Generation activation ${request.requestId} must resume on ${request.targetRelease}.\n${marker}`;
+      const existing = this.db.prepare(`SELECT id,status,reason FROM run_continuations
+        WHERE run_id=? AND status IN ('queued','running') ORDER BY ordinal LIMIT 1`).get(request.runId) as {
+          id: string;
+          status: "queued" | "running";
+          reason: string;
+        } | undefined;
+      let continuationId: string;
+      let created = false;
+      if (existing) {
+        continuationId = existing.id;
+        if (!existing.reason.includes(marker)) {
+          this.db.prepare("UPDATE run_continuations SET reason=? WHERE id=?")
+            .run(`${existing.reason.trim()}\n${handoffReason}`.trim(), existing.id);
+        }
+      } else {
+        continuationId = randomUUID();
+        const ordinal = (this.db.prepare("SELECT COALESCE(MAX(ordinal),0)+1 as ordinal FROM run_continuations WHERE run_id=?")
+          .get(request.runId) as { ordinal: number }).ordinal;
+        this.db.prepare(`INSERT INTO run_continuations
+          (id,run_id,ordinal,status,reason,not_before,created_at)
+          VALUES (?,?,?,'queued',?,0,?)`).run(continuationId, request.runId, ordinal, handoffReason, now());
+        created = true;
+      }
+      const timestamp = now();
+      const seq = run.lastEventSeq + 1;
+      const eventData = {
+        requestId: request.requestId,
+        operationId: request.operationId,
+        targetRelease: request.targetRelease,
+        expectedCurrent: request.expectedCurrent,
+        continuationId,
+      };
+      this.db.prepare(`INSERT INTO run_events
+        (run_id,seq,attempt_id,type,data,created_at)
+        VALUES (?,?,?,'maintenance.handoff.prepared',?,?)`)
+        .run(request.runId, seq, this.attemptId(request.runId, run.attempt), JSON.stringify(eventData), timestamp);
+      this.db.prepare(`UPDATE runs SET status='blocked',phase='blocked',blocked_reason=?,completed_at=NULL,
+        last_event_seq=?,updated_at=? WHERE id=?`).run(handoffReason, seq, timestamp, request.runId);
+      this.db.prepare("UPDATE run_checkpoints SET active=0,current_tool_json='',updated_at=? WHERE run_id=?")
+        .run(timestamp, request.runId);
+      this.projectAttempt({
+        runId: request.runId,
+        ordinal: run.attempt,
+        trigger: "recovery",
+        status: "blocked",
+        scenario: "recovery",
+        reason: handoffReason,
+        eventSequence: seq,
+        timestamp,
+      });
+      finalizeProjectionCheckpoint(this.db, {
+        runId: request.runId,
+        attemptId: this.attemptId(request.runId, run.attempt),
+        attemptOrdinal: run.attempt,
+        eventSeq: seq,
+        timestamp,
+      });
+      this.enqueueLearningProjection(
+        request.runId,
+        run.attempt,
+        "maintenance.handoff.prepared",
+        "blocked",
+        seq,
+        eventData,
+        timestamp,
+      );
+      return { continuationId, created };
+    }).immediate();
+  }
+
+  recordGenerationActivationResult(result: GenerationActivationResult): { runId: RunId; recorded: boolean } | undefined {
+    return this.db.transaction(() => {
+      const row = this.db.prepare(`SELECT operation.id as operationId,operation.run_id as runId,
+          operation.result_json as resultJson
+        FROM operations operation
+        WHERE operation.operation_type=? AND operation.status='succeeded'
+          AND json_extract(operation.result_json,'$.details.requestId')=?
+        ORDER BY operation.created_at,operation.id LIMIT 1`)
+        .get(GENERATION_ACTIVATION_OPERATION, result.requestId) as {
+          operationId: string;
+          runId: RunId;
+          resultJson: string;
+        } | undefined;
+      if (!row) return undefined;
+      const request = this.generationActivationFromOperation(row);
+      const type = result.status === "succeeded" ? "maintenance.activation.succeeded" : "maintenance.activation.failed";
+      const data = {
+        requestId: result.requestId,
+        operationId: request.operationId,
+        targetRelease: request.targetRelease,
+        activeRelease: result.activeRelease,
+        status: result.status,
+        ...(result.error ? { error: result.error } : {}),
+      };
+      const existing = this.db.prepare(`SELECT type,data FROM run_events WHERE run_id=?
+        AND type IN ('maintenance.activation.succeeded','maintenance.activation.failed')
+        AND json_extract(data,'$.requestId')=? ORDER BY seq LIMIT 1`).get(row.runId, result.requestId) as {
+          type: string;
+          data: string;
+        } | undefined;
+      if (existing) {
+        let existingData: unknown;
+        try { existingData = JSON.parse(existing.data); }
+        catch { throw new Error(`Generation activation ${result.requestId} has invalid terminal event data`); }
+        if (existing.type !== type || this.canonicalHash(existingData) !== this.canonicalHash(data)) {
+          throw new Error(`Generation activation ${result.requestId} terminal result conflicts with its durable event`);
+        }
+        return { runId: row.runId, recorded: false };
+      }
+      const run = this.db.prepare("SELECT attempt,last_event_seq as lastEventSeq FROM runs WHERE id=?")
+        .get(row.runId) as { attempt: number; lastEventSeq: number } | undefined;
+      if (!run) throw new Error(`Generation activation Run ${row.runId} does not exist`);
+      const timestamp = now();
+      const seq = run.lastEventSeq + 1;
+      this.db.prepare("INSERT INTO run_events (run_id,seq,attempt_id,type,data,created_at) VALUES (?,?,?,?,?,?)")
+        .run(row.runId, seq, this.attemptId(row.runId, run.attempt), type, JSON.stringify(data), timestamp);
+      this.db.prepare("UPDATE runs SET last_event_seq=?,updated_at=? WHERE id=?").run(seq, timestamp, row.runId);
+      return { runId: row.runId, recorded: true };
+    }).immediate();
+  }
+
+  private generationActivationFromOperation(row: { operationId: string; runId: RunId; resultJson: string }): GenerationActivationRequest {
+    let result: unknown;
+    try { result = JSON.parse(row.resultJson); }
+    catch { throw new Error(`Generation activation operation ${row.operationId} has invalid result JSON`); }
+    const details = result && typeof result === "object" && !Array.isArray(result)
+      ? (result as { details?: unknown }).details
+      : undefined;
+    if (!details || typeof details !== "object" || Array.isArray(details)) {
+      throw new Error(`Generation activation operation ${row.operationId} has no request details`);
+    }
+    const value = details as Record<string, unknown>;
+    const keys = Object.keys(value).sort();
+    const expectedKeys = ["accepted", "expectedCurrent", "observedAt", "operationId", "reason", "requestId", "resultDigest", "targetRelease"].sort();
+    if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
+      throw new Error(`Generation activation operation ${row.operationId} has unexpected request details`);
+    }
+    if (value.accepted !== true || value.operationId !== row.operationId || value.requestId !== row.operationId) {
+      throw new Error(`Generation activation operation ${row.operationId} result identity is inconsistent`);
+    }
+    for (const key of ["requestId", "targetRelease", "expectedCurrent", "reason"] as const) {
+      if (typeof value[key] !== "string" || !(value[key] as string).trim()) {
+        throw new Error(`Generation activation operation ${row.operationId} has invalid ${key}`);
+      }
+    }
+    if (value.targetRelease !== "current" && !/^[0-9a-f]{40}$/.test(value.targetRelease as string)) {
+      throw new Error(`Generation activation operation ${row.operationId} has invalid targetRelease`);
+    }
+    if (!/^[0-9a-f]{40}$/.test(value.expectedCurrent as string)) {
+      throw new Error(`Generation activation operation ${row.operationId} has invalid expectedCurrent`);
+    }
+    if (!Number.isSafeInteger(value.observedAt) || !/^[0-9a-f]{64}$/.test(String(value.resultDigest))) {
+      throw new Error(`Generation activation operation ${row.operationId} has invalid receipt evidence`);
+    }
+    return {
+      requestId: value.requestId as string,
+      operationId: row.operationId,
+      runId: row.runId,
+      targetRelease: value.targetRelease as string,
+      expectedCurrent: value.expectedCurrent as string,
+      reason: value.reason as string,
+    };
   }
 
   getOperation(id: string) {

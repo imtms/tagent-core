@@ -152,6 +152,8 @@ export interface RunEventMap {
   "tool.bash.composite": RunEventPayload; "tool.bash.timed_out": RunEventPayload; "tool.completed": ToolLifecycleEvent;
   "tool.failed": ToolLifecycleEvent; "tool.guard.blocked": RunEventPayload; "tool.output.spilled": RunEventPayload; "tool.progress": ToolLifecycleEvent; "tool.started": ToolLifecycleEvent;
   "restart.interruption": RunEventPayload;
+  "maintenance.activation.dispatch_failed": RunEventPayload; "maintenance.handoff.prepared": RunEventPayload;
+  "maintenance.activation.succeeded": RunEventPayload; "maintenance.activation.failed": RunEventPayload;
   "transcript.repaired": RunEventPayload; "transcript.updated": RunEventPayload; "workflow.learning.failed": RunEventPayload;
   "workspace.edit.completed": RunEventPayload; "workspace.edit.rejected": RunEventPayload;
 }

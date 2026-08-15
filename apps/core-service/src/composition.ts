@@ -30,6 +30,16 @@ export {
 } from "./composition/runtime-host-adapter.js";
 export type { RuntimeHost, RuntimeHostOptions } from "./composition/runtime-host-adapter.js";
 export {
+  GenerationHostBridge,
+  parseHostToGenerationMessage,
+} from "./composition/generation-host-bridge.js";
+export type {
+  CoreGenerationDrainRequest,
+  GenerationHostBridgeOptions,
+} from "./composition/generation-host-bridge.js";
+export { ManagedGenerationAdapter } from "./composition/managed-generation-adapter.js";
+export type { ManagedGenerationAdapterOptions } from "./composition/managed-generation-adapter.js";
+export {
   OpenAiSseIdleTimeoutError,
   readOpenAiChatContent,
   readOpenAiChatSse,

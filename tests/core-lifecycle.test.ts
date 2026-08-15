@@ -126,6 +126,7 @@ function lifecycleHarness() {
     },
     stopBackground: async () => { step("background.stop"); },
     closeRuntimes: async () => { step("runtime.join"); },
+    prepareHandoff: async () => { step("handoff.prepare"); },
     closeStore: () => { step("store.close"); },
     requestServerClose: async () => {
       step("server.close.request");
@@ -164,6 +165,7 @@ describe("Core lifecycle", () => {
     expect(events).toEqual([
       "runtime.join",
       "background.stop",
+      "handoff.prepare",
       "guard.remove",
       "lease.release",
       "store.close",
@@ -218,6 +220,7 @@ describe("Core lifecycle", () => {
       expect(events.filter((event) => [
         "background.stop",
         "runtime.join",
+        "handoff.prepare",
         "guard.remove",
         "lease.release",
         "store.close",
@@ -225,12 +228,13 @@ describe("Core lifecycle", () => {
       ].includes(event))).toEqual([
         "runtime.join",
         "background.stop",
+        "handoff.prepare",
         "guard.remove",
         "lease.release",
         "store.close",
         "lock.release",
       ]);
-      for (const resource of ["background.stop", "runtime.join", "guard.remove", "lease.release", "store.close", "lock.release", "server.close.request"]) {
+      for (const resource of ["background.stop", "runtime.join", "handoff.prepare", "guard.remove", "lease.release", "store.close", "lock.release", "server.close.request"]) {
         expect(counts.get(resource), `${resource} executed more than once`).toBe(1);
       }
     },

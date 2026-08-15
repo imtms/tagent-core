@@ -393,7 +393,7 @@ function createCoreReleaseFixture(directory: string): void {
 
   copyFileSync(path.resolve("package.json"), path.join(directory, "package.json"));
   copyFileSync(path.resolve("package-lock.json"), path.join(directory, "package-lock.json"));
-  writeFileSync(path.join(directory, "dist/server.js"), "export {};\n");
+  writeFileSync(path.join(directory, "dist/host.js"), "export {};\n");
   copyFileSync(
     path.resolve("packages/memory/dist/postgres/schema.sql"),
     path.join(directory, "dist/memory/postgres/schema.sql"),

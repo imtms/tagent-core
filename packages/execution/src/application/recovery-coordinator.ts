@@ -31,6 +31,7 @@ export class RecoveryCoordinator {
       this.state.supervisorRestartReconciled = true;
       this.state.persistence.supervisorDecisions.reconcileSupervisorDecisionStatuses();
       for (const pending of this.state.persistence.supervisorDecisions.listSupervisorContinuationsNeedingReconcile()) this.dependencies.continuation.queueContinuation(pending.runId);
+      this.state.persistence.continuations.queueSafeCrashRecoveryContinuations();
     }
     const recovered = this.state.persistence.continuations.recoverContinuationsAfterRestart();
     const runIds = [...new Set(recovered.map((item) => item.runId))];

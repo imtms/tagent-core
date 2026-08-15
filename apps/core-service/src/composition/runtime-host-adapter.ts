@@ -13,7 +13,12 @@ import type {
 import type { AccessContext, MemoryFacade, MemoryKind } from "@tagent/memory";
 import { effectiveTaskExecutionPolicy } from "@tagent/governance/domain";
 import { composeWorkspaceTools } from "@tagent/workspace-local/tools";
+import type { ToolProvider } from "@tagent/execution/composition";
 import { createLocalSubprocessPort } from "@tagent/workspace-local/local-subprocess";
+
+export type AdditionalToolProviderFactory = (
+  capabilities: ToolCapabilityApplicationPort,
+) => readonly ToolProvider[];
 
 export interface RuntimeHostOptions {
   persistence: Pick<
@@ -30,6 +35,7 @@ export interface RuntimeHostOptions {
   memorySubjectId: string;
   artifactSink?: ArtifactSinkPort;
   workspaceEdit?: WorkspaceEditPort;
+  additionalToolProviders?: AdditionalToolProviderFactory;
 }
 
 export interface RuntimeHost {
@@ -104,7 +110,8 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     getRunExecutionState: currentRunExecutionState,
     isCurrentAttempt: () => Boolean(currentAttempt()),
     authorizeWorkspaceMutation: () => persistence.workspaceGoals.authorizeRunMutation(token.runId),
-    authorizeExternalAction: () => effectiveTaskExecutionPolicy(currentRun()?.contract ?? null).mode === "external_action"
+    authorizeExternalAction: (requireExplicit = false) => requireExplicit
+      || effectiveTaskExecutionPolicy(currentRun()?.contract ?? null).mode === "external_action"
       ? persistence.approvals.authorizeExternalAction(token.runId, token.ordinal)
       : { allowed: true, reason: "TaskRun does not require external-action approval" },
     advanceRunPhase: (phase) => persistence.runtimeMutations.advanceRunPhase(mutationContext, phase),
@@ -192,7 +199,12 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     } : undefined,
   };
   const subprocess = createLocalSubprocessPort();
-  const toolComposition = composeWorkspaceTools(toolCapabilities, options.workspace, subprocess);
+  const toolComposition = composeWorkspaceTools(
+    toolCapabilities,
+    options.workspace,
+    subprocess,
+    options.additionalToolProviders?.(toolCapabilities),
+  );
   const eventSink: RuntimeEventSink = {
     activity: options.onActivity,
     publish,

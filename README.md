@@ -4,13 +4,13 @@
 
 TAgent Core is a durable, self-hosted control plane for a single agent instance. It turns routed user intent into a persistent `TaskRun`, supervises bounded `Attempt`s, owns authoritative state, evidence, approvals, recovery, Memory, and Learning, and produces verifiable delivery results.
 
-The current 0.8 release is one fresh-schema Core system with independently negotiated Gateway capability profiles for Session Settings, Inbox, Context Manifest, Skills, Memory, Learning, Workflow, and Autonomy. Profile mutations replay immutable stored responses before mutable validation or side effects, and snapshot lists use stable storage-backed pagination without a 500-member ceiling. Core retains managed Skills, governed Workspace Goals, trusted execution receipts, optional Memory and Learning, and the contained `pi-agent-core` runtime. Core remains API-only and `TaskRun` remains the only execution runtime.
+The current 0.8 release is one fresh-schema Core system with independently negotiated Gateway capability profiles for Session Settings, Inbox, Context Manifest, Skills, Memory, Learning, Workflow, and Autonomy. Profile mutations replay immutable stored responses before mutable validation or side effects, and snapshot lists use stable storage-backed pagination without a 500-member ceiling. Core retains managed Skills, governed Workspace Goals, trusted execution receipts, optional Memory and Learning, the contained `pi-agent-core` runtime, and receipt-backed self-restart/handoff. Core remains API-only and `TaskRun` remains the only execution runtime.
 
 ## Supported boundary
 
 The supported production profile is:
 
-- one TAgent Core process and one SQLite control-plane database;
+- one TAgent Core service with one stable Host, at most one active Generation, and one SQLite control-plane writer;
 - one trusted tool workspace;
 - Node.js `24.18.1` and npm `12+`;
 - Linux x64 for the immutable Core production artifact;
@@ -62,7 +62,7 @@ Set `OPENAI_API_KEY` and `TAGENT_WORKSPACE` in `.env` before submitting work. De
 - Core API: <http://127.0.0.1:3100/api/v1/health>
 - Web Console: <http://127.0.0.1:5173>
 
-`npm run dev` builds the workspaces, then runs Core and the Vite development server together.
+`npm run dev` builds the workspaces, then runs the Host-managed development Generation and the Vite development server together. The Generation child entry is internal and the immutable-release activation tool is intentionally absent in this mode.
 
 To build and run Core only:
 
@@ -95,7 +95,13 @@ Core does not validate browser OIDC/JWT tokens. In production, a Gateway validat
 
 Core owns a fresh-only SQLite database identified by `tagent-core/0.8` and exposed as schema version `1`. Startup acquires an OS instance lock, creates or validates the exact current schema, claims a writer lease and fence, installs connection-level mutation guards, performs guarded recovery, starts services and workers, then reports the writer ready.
 
-Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Runtime/background shutdown is a quiescence barrier: Core retains the Store, writer lease, guard, and instance lock if owned work cannot prove settlement. This release does not upgrade databases created by earlier releases: deploy with an empty database, and restore only backups created by the same schema ID and release line. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md).
+Only the active fenced Generation may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Runtime/background shutdown is a quiescence barrier: Core retains the Store, writer lease, guard, and instance lock if owned work cannot prove settlement. The stable Host never opens the application database; it supervises a verified Generation, restarts unexpected exits with a durable bounded budget, and coordinates receipt-backed handoff and rollback. Safe automatic TaskRun continuation is allowed only when no effect is ambiguous. This release does not upgrade databases created by earlier releases: deploy with an empty database, and restore only backups created by the same schema ID and release line. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md).
+
+## Self-managed Generation replacement
+
+Production exposes one system entrypoint: `dist/host.js`. The Host forks the unexported `node_modules/@tagent/core-service/dist/generation-entry.js` child selected by the immutable `current` link; that child refuses to boot without the Host marker and IPC channel, while package binaries and development startup also enter through the Host. Every Generation keeps the stable release root as its working directory, so relative database and workspace paths do not move with immutable code releases. Deployment only stages and verifies a release; an explicitly approved `core_generation_activate` call restarts `current` or activates a staged 40-character commit after its operation receipt is durable.
+
+The old Generation stops HTTP, joins owned work, stores a Continuation handoff, and releases its writer fence before the candidate starts. `current` changes only after candidate readiness. Candidate failure restores the previous compatible release, while a Generation crash restarts the committed release and resumes only provably safe interrupted TaskRuns. Host changes themselves still require a normal service restart. See [docs/DEPLOYMENT_AND_GATEWAY.md](docs/DEPLOYMENT_AND_GATEWAY.md).
 
 ## Completion evidence and model calls
 

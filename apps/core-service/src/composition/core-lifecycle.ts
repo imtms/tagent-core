@@ -82,6 +82,7 @@ export interface CoreLifecycleResources {
   };
   stopBackground?: () => void | Promise<void>;
   closeRuntimes?: () => void | Promise<void>;
+  prepareHandoff?: () => void | Promise<void>;
   closeStore: () => void;
   requestServerClose?: (failure: unknown) => void | Promise<void>;
   onFailure?: (failure: unknown) => void;
@@ -418,6 +419,7 @@ export class CoreLifecycle implements WriterReadiness {
     // available to any work that may still be alive.
     await this.resources.closeRuntimes?.();
     await this.resources.stopBackground?.();
+    await this.resources.prepareHandoff?.();
 
     const heartbeatTask = this.heartbeatTask;
     if (heartbeatTask) await attempt(async () => heartbeatTask);

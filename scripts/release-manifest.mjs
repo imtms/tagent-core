@@ -16,7 +16,9 @@ const workspaceHelper = "node_modules/@tagent/workspace-local/dist/workspace-fd-
 const coreRequiredReleaseFiles = [
   "package.json",
   "package-lock.json",
-  "dist/server.js",
+  "dist/host.js",
+  "node_modules/@tagent/core-service/dist/host.js",
+  "node_modules/@tagent/core-service/dist/generation-entry.js",
   nativeBinding,
   workspaceHelper,
   "node_modules/@tagent/memory/dist/postgres/schema.sql",
@@ -30,6 +32,11 @@ const webRequiredReleaseFiles = [
   "dist/index.html",
   "scripts/release-manifest.mjs",
 ];
+const coreContract = Object.freeze({
+  hostProtocolVersion: 1,
+  stateProtocol: "tagent-core/state-0.8",
+  generationEntry: "node_modules/@tagent/core-service/dist/generation-entry.js",
+});
 
 function fail(message) {
   console.error(`[release-verify] ${message}`);
@@ -182,7 +189,7 @@ async function createManifest() {
   const files = Object.fromEntries(await Promise.all(releaseFiles.map(async (file) => [file, await sha256(file)])));
   await writeFile(path.join(root, "RELEASE_COMMIT"), `${commit}\n`, "utf8");
   const manifest = artifact === "core"
-    ? { schemaVersion: 2, artifact, commit, runtime: requiredRuntime, files }
+    ? { schemaVersion: 2, artifact, commit, runtime: requiredRuntime, core: coreContract, files }
     : { schemaVersion: 2, artifact, commit, files };
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   console.log(`[release-verify] created ${artifact} manifest for ${commit}`);
@@ -197,7 +204,12 @@ async function verifyManifest() {
   if (manifest.schemaVersion !== 2) fail(`unsupported manifest schema: ${manifest.schemaVersion}`);
   const artifact = releaseArtifact(manifest.artifact);
   if (!/^[0-9a-f]{40}$/.test(manifest.commit ?? "")) fail("manifest commit is invalid");
-  if (artifact === "core") assertRuntime(manifest.runtime);
+  if (artifact === "core") {
+    assertRuntime(manifest.runtime);
+    if (JSON.stringify(manifest.core) !== JSON.stringify(coreContract)) {
+      fail("Core Host/state protocol contract is missing or incompatible");
+    }
+  }
   const commitFile = (await readFile(path.join(root, "RELEASE_COMMIT"), "utf8")).trim();
   if (commitFile !== manifest.commit) fail(`commit marker mismatch: manifest=${manifest.commit}, file=${commitFile}`);
   assertArtifactBoundary(actualFiles, artifact);

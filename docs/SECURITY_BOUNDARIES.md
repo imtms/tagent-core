@@ -2,7 +2,7 @@
 
 ## Trust model
 
-TAgent Core supports one trusted Core process, one trusted tool workspace, and one SQLite writer. It is not a public multi-tenant sandbox. Run it under a dedicated OS identity and keep it behind a private network boundary.
+TAgent Core supports one trusted service containing a stable Host and one active Generation, one trusted tool workspace, and one SQLite writer. The Host does not open application persistence. It is not a public multi-tenant sandbox. Run it under a dedicated OS identity and keep it behind a private network boundary.
 
 ## Authentication modes
 
@@ -41,7 +41,7 @@ Exact-origin CORS is a browser transport boundary, not authentication. A non-emp
 
 `@tagent/workspace-local` normalizes and contains filesystem paths, and command policy rejects known unsafe operations. These checks do not isolate the process from the host. Every local child process, including the descriptor-relative filesystem helper and permitted `bash` commands, crosses `SubprocessPort`; it does not inherit Core's ambient credential or `TAGENT_*` environment. The local port constructs a scrubbed environment and terminates the process group on abort, timeout, or Attempt disposal. Explicit environment overrides are a trusted composition capability and are never derived from model tool arguments. `history_search` derives its Run from the fenced Attempt capability, searches only that Run before the current tool call, and fixes result/snippet bounds in Core; model arguments cannot widen its authority.
 
-Use a dedicated workspace without SSH keys, provider credentials, cloud config, production secrets, or unrelated files. Apply OS/container controls for filesystem, network, process, and resource isolation when stronger containment is required.
+Use a dedicated workspace without SSH keys, provider credentials, cloud config, production secrets, release roots, or unrelated files. The supported activation path is the receipt-backed `core_generation_activate` tool, but TAgent's tool containment is not an OS sandbox: if the Generation's OS identity can mutate the release root, permitted process tools may be able to reach it too. Apply OS/container controls for filesystem, network, process, and resource isolation when stronger containment is required.
 
 Uploaded Skills are untrusted instructions, not capabilities. Core accepts a bounded UTF-8 `SKILL.md` or ZIP bundle, validates frontmatter, rejects absolute/traversal paths and ZIP symlinks, bounds entry count and expanded size, and stores an immutable revision below `.tagent/skills`. A Skill cannot add tools or weaken the existing approval, receipt, path, and settlement boundaries. ZIP validation is an ingestion boundary; `bash` remains subject to the process-level limitation above.
 
@@ -55,6 +55,8 @@ The following are server-owned and cannot be asserted by a caller:
 - Attempt-bound external-action approval consumption before mutation-capable tools, with fresh approval required before any later Attempt retries the action;
 - current-Attempt Bash bindings and Core-derived check evidence;
 - immutable ToolRegistry snapshots and the Core-owned ToolExecutionPipeline guard/receipt/settlement path;
+- explicit external-action approval and a writer-fenced successful operation receipt before a managed Generation activation can reach the Host;
+- Host-owned verified release containment, protocol compatibility, activation identity, crash budget, and post-readiness `current` commit;
 - caller-owned cancellation through Runtime, subprocess, workspace, Artifact, Memory, and history seams, including distinct before-dispatch and after-invocation failure codes;
 - hash-verified Attempt request envelopes persisted before provider network dispatch;
 - event-consumer generation and acknowledged sequence;

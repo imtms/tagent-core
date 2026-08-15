@@ -114,6 +114,22 @@ export class ContinuationScheduler {
   public buildContinuationPrompt(run: TaskRun, ordinal: number, continuationReason = "") {
     const policyInstructions = taskPolicyResumeInstructions(effectiveTaskExecutionPolicy(run.contract));
     const prerequisiteOnly = ["deterministic_plan_incomplete", "deterministic_check_incomplete"].includes(run.supervision.latestDecision?.reasonCode ?? "");
+    const restartHandoff = /\[restart-handoff:(.+):([^:\]]+)\]\s*$/.exec(continuationReason);
+    if (restartHandoff) return [
+      `Core Generation handoff ${restartHandoff[1]} resumed after requesting release ${restartHandoff[2]}.`,
+      "Continue from the persisted transcript, operation receipts, Context Manifest, checkpoints, and current TaskRun state. Do not repeat a settled external effect. Reconcile any outcome_unknown receipt before acting.",
+      "Verify the active Core release and the work completed before restart, finish only the remaining objective, then provide one complete standalone final response.",
+      ...policyInstructions,
+      `Original goal: ${run.goal}`,
+    ].join("\n\n");
+    const crashRecovery = /\[crash-recovery:(\d+)\]\s*$/.exec(continuationReason);
+    if (crashRecovery) return [
+      `Automatic Core crash recovery resumed the interrupted TaskRun from restart event ${crashRecovery[1]}.`,
+      "Core verified that there was no outcome_unknown operation or control delivery, no unfinished tool call, and no pending input or approval before queuing this continuation.",
+      "Continue from the persisted transcript, operation receipts, Context Manifest, checkpoints, and current TaskRun state. Do not repeat a settled effect; complete only the interrupted work and then provide one standalone final response.",
+      ...policyInstructions,
+      `Original goal: ${run.goal}`,
+    ].join("\n\n");
     const providerRetry = /\[provider-retry:([^:\]]+):(\d+)\]/.exec(continuationReason);
     if (providerRetry) return [
       `Automatic provider recovery ${ordinal} is running after the external ${providerRetry[1]} delay elapsed.`,

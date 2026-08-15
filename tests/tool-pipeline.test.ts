@@ -177,6 +177,18 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("requests an explicit approval for maintenance even outside external-action TaskRuns", () => {
+    const approval = vi.fn(() => ({ allowed: true, reason: "approved" }));
+    const { port } = capabilities({ authorizeExternalAction: approval });
+    const maintenance = tool("maintenance", undefined, true);
+    maintenance.policy = { ...maintenance.policy!, externalAction: "explicit" };
+    const pipeline = new ToolExecutionPipeline(port);
+    pipeline.bindCatalog({ tools: [maintenance] });
+
+    expect(pipeline.beforeToolCall("maintenance-1", "maintenance", {})).toEqual({ blocked: false });
+    expect(approval).toHaveBeenCalledWith(true);
+  });
+
   it("settles a successful mutation once and replays its receipt without repeating the provider", async () => {
     const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "changed" }], details: { bytes: 1 } }));
     let durableResult: unknown;
@@ -202,6 +214,69 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     replayPipeline.afterToolCall("stable-call", true);
     expect(execute).toHaveBeenCalledTimes(1);
     expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("dispatches post-receipt work only after a new success is durable", async () => {
+    const order: string[] = [];
+    let durableResult: unknown;
+    let claimed = true;
+    const operationTool = tool("maintenance", vi.fn(async () => {
+      order.push("execute");
+      return { content: [{ type: "text" as const, text: "accepted" }], details: {} };
+    }), true);
+    operationTool.onOperationSettled = vi.fn(() => { order.push("dispatch"); });
+    const { port } = capabilities({
+      claimOperation: vi.fn(() => claimed
+        ? { claimed: true, status: "running" }
+        : { claimed: false, status: "succeeded", result: durableResult }),
+      updateOperation: vi.fn((_id, update) => {
+        order.push(`persist:${update.status}`);
+        durableResult = update.result;
+        return update;
+      }),
+    });
+
+    await new ToolExecutionPipeline(port).bindCatalog({ tools: [operationTool] }).tools[0]
+      .execute("activate", {}, testSignal);
+    expect(order).toEqual(["execute", "persist:succeeded", "dispatch"]);
+    expect(operationTool.onOperationSettled).toHaveBeenCalledOnce();
+
+    claimed = false;
+    await new ToolExecutionPipeline(port).bindCatalog({ tools: [operationTool] }).tools[0]
+      .execute("activate", {}, testSignal);
+    expect(operationTool.onOperationSettled).toHaveBeenCalledOnce();
+  });
+
+  it("never dispatches post-receipt work when success settlement fails", async () => {
+    const operationTool = tool("maintenance", undefined, true);
+    operationTool.onOperationSettled = vi.fn();
+    let updates = 0;
+    const { port } = capabilities({
+      updateOperation: vi.fn((_id, update) => {
+        updates += 1;
+        if (updates === 1) throw new Error("writer fence lost before receipt settlement");
+        return update;
+      }),
+    });
+
+    await expect(new ToolExecutionPipeline(port).bindCatalog({ tools: [operationTool] }).tools[0]
+      .execute("activate", {}, testSignal)).rejects.toThrow("writer fence lost before receipt settlement");
+    expect(operationTool.onOperationSettled).not.toHaveBeenCalled();
+  });
+
+  it("keeps a durable success authoritative when its post-settlement hook throws", async () => {
+    const operationTool = tool("maintenance", undefined, true);
+    operationTool.onOperationSettled = vi.fn(() => { throw new Error("notification failed"); });
+    const { port, update } = capabilities();
+
+    await expect(new ToolExecutionPipeline(port).bindCatalog({ tools: [operationTool] }).tools[0]
+      .execute("activate", {}, testSignal)).resolves.toMatchObject({
+        content: [{ type: "text" }],
+      });
+
+    expect(operationTool.onOperationSettled).toHaveBeenCalledOnce();
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: "succeeded" }));
   });
 
   it("records a failed receipt and never lets the provider settle the tool attempt directly", async () => {

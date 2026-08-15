@@ -131,15 +131,15 @@ describe("Fastify HTTP adapter workspace package", () => {
   it("publishes only the compiled root, auth, ports, and v1 package entry points", () => {
     const root = readJson<{ dependencies: Record<string, string>; devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const manifest = readJson<PackageManifest>(`${packageRoot}/package.json`);
-    expect(manifest).toMatchObject({ name: "@tagent/http-fastify", version: "0.8.4", private: true });
+    expect(manifest).toMatchObject({ name: "@tagent/http-fastify", version: "0.8.5", private: true });
     expect(root.devDependencies[manifest.name]).toBe(manifest.version);
     expect(root.dependencies).not.toHaveProperty("fastify");
     expect(Object.keys(manifest.exports).sort()).toEqual([".", "./auth", "./ports", "./v1"]);
     expect(manifest.dependencies).toEqual({
-      "@tagent/abi": "0.8.4",
-      "@tagent/admission": "0.8.4",
-      "@tagent/execution": "0.8.4",
-      "@tagent/governance": "0.8.4",
+      "@tagent/abi": "0.8.5",
+      "@tagent/admission": "0.8.5",
+      "@tagent/execution": "0.8.5",
+      "@tagent/governance": "0.8.5",
       fastify: "^5.10.0",
       typebox: "^1.1.24",
     });
@@ -153,7 +153,7 @@ describe("Fastify HTTP adapter workspace package", () => {
   });
 
   it("has no root HTTP facade or removed scope mapper export", () => {
-    expect(sourceFiles("src")).toEqual(["src/server.ts"]);
+    expect(sourceFiles("src")).toEqual(["src/host.ts"]);
     for (const removed of ["src/app.ts", "src/auth.ts"]) {
       expect(existsSync(path.join(repoRoot, removed)), `${removed} must remain deleted`).toBe(false);
     }

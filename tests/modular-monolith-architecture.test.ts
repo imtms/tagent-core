@@ -106,16 +106,16 @@ describe("modular monolith architecture", () => {
     expect([...edges.entries()].filter(([, dependencies]) => dependencies.includes("@tagent/web-console"))).toEqual([]);
   });
 
-  it("compiles and releases only the root server entrypoint", () => {
+  it("compiles and releases only the root Host system entrypoint", () => {
     const serverConfig = JSON.parse(source("tsconfig.server.json")) as {
       files?: string[];
       include?: string[];
       compilerOptions?: { outDir?: string; rootDir?: string };
     };
-    expect(serverConfig.files).toEqual(["src/server.ts"]);
+    expect(serverConfig.files).toEqual(["src/host.ts"]);
     expect(serverConfig.include).toBeUndefined();
     expect(serverConfig.compilerOptions).toMatchObject({ outDir: "dist", rootDir: "src" });
-    expect(buildRootServer()).toEqual(["server.js"]);
+    expect(buildRootServer()).toEqual(["host.js"]);
 
     const rootPackage = JSON.parse(source("package.json")) as {
       engines: { node: string; npm: string };
@@ -129,7 +129,9 @@ describe("modular monolith architecture", () => {
     expect(releaseBuild).toContain('cp -a "$install_root/node_modules" "$core_release/"');
     expect(releaseBuild).not.toContain("npm prune");
     expect(releaseBuild).not.toMatch(/cp\s+-a\s+src(?:\s|$)/);
-    expect(releaseBuild).toContain('node --check "$core_release/dist/server.js"');
+    expect(releaseBuild).toContain('node --check "$core_release/dist/host.js"');
+    expect(releaseBuild).toContain('node --check "$core_release/node_modules/@tagent/core-service/dist/host.js"');
+    expect(releaseBuild).toContain('node --check "$core_release/node_modules/@tagent/core-service/dist/generation-entry.js"');
   });
 
   it("keeps HTTP, ABI, and client modules owned and reviewable", () => {
@@ -164,7 +166,7 @@ describe("modular monolith architecture", () => {
     expect(release).not.toMatch(/webRequiredReleaseFiles\s*=\s*\[[\s\S]*gateway-readiness-probe/);
 
     const documentContracts: Record<string, RegExp[]> = {
-      "docs/MODULAR_MONOLITH.md": [/workspace map/i, /one Core process/i, /unit of work/i, /writer fence/i, /Web Console/i],
+      "docs/MODULAR_MONOLITH.md": [/workspace map/i, /one Core product and one service/i, /unit of work/i, /writer fence/i, /Web Console/i],
       "docs/API_V1.md": [/\/api\/v1/i, /channel/i, /admin/i, /internal/i, /successful JSON response/i, /JSON failure/i],
       "docs/NAMING_CONVENTIONS.md": [/TaskRun/i, /submission/i, /event consumer/i, /v1/i],
       "docs/ABI_VERSIONING.md": [

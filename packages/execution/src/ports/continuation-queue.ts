@@ -15,6 +15,7 @@ export interface ClaimedContinuation {
 export interface ContinuationQueue {
   nextContinuationLeaseExpiry(): number | null;
   ownsContinuationLease(id: string, owner: string): boolean;
+  queueSafeCrashRecoveryContinuations(maxRecoveries?: number): ContinuationRecoveryItem[];
   recoverContinuationsAfterRestart(timestamp?: number): ContinuationRecoveryItem[];
   releaseContinuationLease(id: string, owner: string, reason?: string): ContinuationRecoveryItem | undefined;
   releaseContinuationLeases(owner: string, reason?: string): ContinuationRecoveryItem[];

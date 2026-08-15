@@ -124,7 +124,9 @@ if [[ -s "$release_links" ]]; then
 fi
 
 RELEASE_COMMIT="$commit" node scripts/release-manifest.mjs create "$core_release"
-node --check "$core_release/dist/server.js"
+node --check "$core_release/dist/host.js"
+node --check "$core_release/node_modules/@tagent/core-service/dist/host.js"
+node --check "$core_release/node_modules/@tagent/core-service/dist/generation-entry.js"
 node "$core_release/scripts/release-manifest.mjs" verify "$core_release"
 
 tar -C "$work" -czf "$core_output" "tagent-core-$commit"

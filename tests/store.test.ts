@@ -931,6 +931,206 @@ describe("Store", () => {
     expect(store.listContinuations(run.id)[0]).toMatchObject({ status: "queued", error: "Recovered after lease expiry", startedAt: null });
   });
 
+  it("queues crash recovery only when every in-flight effect is unambiguous", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const safe = store.createRun(session.id, "resume safe work");
+    store.markInterrupted();
+
+    expect(store.queueSafeCrashRecoveryContinuations()).toEqual([{
+      id: expect.any(String), runId: safe.id, ordinal: 1,
+    }]);
+    expect(store.getRun(safe.id)).toMatchObject({
+      status: "blocked",
+      blockedReason: expect.stringContaining("crash recovery was proven safe"),
+      continuations: [expect.objectContaining({ reason: expect.stringMatching(/\[crash-recovery:\d+\]$/) })],
+    });
+    expect(store.queueSafeCrashRecoveryContinuations()).toEqual([]);
+    expect(store.listEvents(safe.id).at(-1)).toMatchObject({
+      type: "continuation.queued",
+      data: { reason: "safe_crash_recovery" },
+    });
+  });
+
+  it.each([
+    "outcome_unknown operation",
+    "outcome_unknown control delivery",
+    "outcome_unknown TaskRun command",
+    "unfinished tool",
+    "pending user input",
+    "pending approval",
+    "existing Continuation",
+  ])(
+    "keeps an interrupted Run blocked from automatic recovery for an %s",
+    (ambiguity) => {
+      const store = createStore();
+      const session = store.createSession();
+      const run = store.createRun(session.id, ambiguity);
+      if (ambiguity === "outcome_unknown operation") {
+        store.claimOperation("ambiguous-op", run.id, 1, "tool.write", { path: "result.txt" });
+        store.runStartupRecovery();
+      } else if (ambiguity === "outcome_unknown control delivery") {
+        const control = store.enqueueControl(run.id, "ambiguous-control", "steer", "continue", 1);
+        store.claimControlItem(run.id, 1);
+        expect(control.item).toBeDefined();
+        store.runStartupRecovery();
+      } else if (ambiguity === "outcome_unknown TaskRun command") {
+        store.claimTaskRunCommand({
+          principalId: "principal",
+          taskRunId: run.id,
+          commandId: "ambiguous-command",
+          commandType: "task_run.cancel",
+          canonicalPayload: JSON.stringify({ reason: "stop" }),
+          targetAttemptId: null,
+          requestId: "request-command",
+        });
+        store.settleTaskRunCommand(
+          "principal",
+          run.id,
+          "ambiguous-command",
+          "outcome_unknown",
+        );
+      } else {
+        if (ambiguity === "unfinished tool") {
+          store.recordToolAttempt(run.id, 1, "tool-call", "bash", { command: "work" });
+        } else if (ambiguity === "pending user input") {
+          store.requestUserInput(run.id, "Choose", [{
+            key: "choice",
+            label: "Choice",
+            description: "Choose one",
+            inputType: "text",
+            required: true,
+            placeholder: "value",
+          }]);
+          store.transitionRun(run.id, ["waiting_input"], "interrupted", "restart.interruption", { reason: "service_restart" });
+        } else if (ambiguity === "pending approval") {
+          store.recordSupervisorDecision({
+            id: "decision-pending",
+            runId: run.id,
+            attempt: 1,
+            checkpointSeq: 0,
+            trigger: "settled",
+            action: "pause_for_approval",
+            reasonCode: "approval_required",
+            rationale: "Approve recovery",
+            confidence: 1,
+            instruction: "",
+            candidateResponseHash: "",
+            status: "proposed",
+            error: "",
+            createdAt: Date.now(),
+            executedAt: null,
+            evaluator: "system",
+            evaluatorModel: "",
+          });
+          store.ensureApprovalRequest(run.id, "decision-pending", "Approve recovery");
+        } else {
+          store.transitionRun(run.id, ["running"], "blocked", "run.blocked", { reason: "gate" }, "gate");
+          store.queueContinuation(run.id, "already queued");
+          store.transitionRun(run.id, ["blocked"], "interrupted", "restart.interruption", { reason: "service_restart" });
+        }
+      }
+      if (store.getRun(run.id)?.status === "running") store.markInterrupted();
+
+      expect(store.queueSafeCrashRecoveryContinuations()).toEqual([]);
+      expect(store.getRun(run.id)).toMatchObject({
+        status: "interrupted",
+        continuations: ambiguity === "existing Continuation"
+          ? [expect.objectContaining({ status: "queued" })]
+          : [],
+      });
+    },
+  );
+
+  it("limits automatic crash recovery to two Continuations per Run", () => {
+    const store = createStore();
+    const run = store.createRun(store.createSession().id, "bounded recovery");
+
+    for (let recovery = 1; recovery <= 2; recovery += 1) {
+      store.markInterrupted();
+      const queued = store.queueSafeCrashRecoveryContinuations();
+      expect(queued).toHaveLength(1);
+      const continuation = store.listContinuations(run.id).at(-1)!;
+      store.updateContinuation(continuation.id, "running");
+      store.updateContinuation(continuation.id, "completed");
+      store.resumeRun(run.id);
+    }
+
+    store.markInterrupted();
+    expect(store.queueSafeCrashRecoveryContinuations()).toEqual([]);
+    expect(store.getRun(run.id)).toMatchObject({ status: "interrupted" });
+    expect(store.listEvents(run.id).filter((event) => event.type === "continuation.queued"))
+      .toHaveLength(2);
+  });
+
+  it("prepares and settles an idempotent Generation handoff from an accepted operation receipt", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const run = store.createRun(session.id, "restart Core");
+    const operationId = `${run.id}:1:activate`;
+    const expectedCurrent = "1".repeat(40);
+    const reason = "Apply the staged Core release";
+    store.claimOperation(operationId, run.id, 1, "maintenance.activate_generation", {
+      targetRelease: "current",
+      reason,
+    });
+    store.updateOperation(operationId, {
+      status: "succeeded",
+      stage: "completed",
+      result: {
+        content: [{ type: "text", text: "accepted" }],
+        details: {
+          accepted: true,
+          requestId: operationId,
+          targetRelease: "current",
+          expectedCurrent,
+          reason,
+          operationId,
+          observedAt: 1,
+          resultDigest: "a".repeat(64),
+        },
+      },
+    });
+    const request = {
+      requestId: operationId,
+      operationId,
+      runId: run.id,
+      targetRelease: "current",
+      expectedCurrent,
+      reason,
+    };
+
+    expect(store.listPendingGenerationActivations()).toEqual([request]);
+    const prepared = store.prepareGenerationHandoff(request);
+    expect(prepared).toMatchObject({ continuationId: expect.any(String), created: true });
+    expect(store.prepareGenerationHandoff(request)).toEqual({ continuationId: prepared.continuationId, created: false });
+    expect(store.getRun(run.id)).toMatchObject({
+      status: "blocked",
+      continuations: [expect.objectContaining({ reason: expect.stringContaining(`[restart-handoff:${operationId}:current]`) })],
+    });
+    expect(store.recordGenerationActivationResult({
+      requestId: operationId,
+      status: "succeeded",
+      activeRelease: expectedCurrent,
+    })).toEqual({ runId: run.id, recorded: true });
+    expect(store.recordGenerationActivationResult({
+      requestId: operationId,
+      status: "succeeded",
+      activeRelease: expectedCurrent,
+    })).toEqual({ runId: run.id, recorded: false });
+    expect(() => store.recordGenerationActivationResult({
+      requestId: operationId,
+      status: "rolled_back",
+      activeRelease: expectedCurrent,
+      error: "conflicting replay",
+    })).toThrow("terminal result conflicts");
+    expect(store.listPendingGenerationActivations()).toEqual([]);
+    expect(store.listEvents(run.id).map((event) => event.type)).toEqual(expect.arrayContaining([
+      "maintenance.handoff.prepared",
+      "maintenance.activation.succeeded",
+    ]));
+  });
+
   it("returns the latest terminal run for a session", () => {
     const store = createStore();
     const session = store.createSession();

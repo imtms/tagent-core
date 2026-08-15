@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = process.cwd();
 const workspaceGroups = ["packages", "adapters", "apps"] as const;
-const internalVersion = "0.8.4";
+const internalVersion = "0.8.5";
 const expectedInternalGraph = {
   "@tagent/abi": [],
   "@tagent/core-client": ["@tagent/abi"],
@@ -502,25 +502,23 @@ describe("workspace architecture", () => {
     expect(violations).toEqual([]);
   });
 
-  it("keeps only the documented root CLI wrapper", () => {
-    expect(sourceFiles(path.join(repoRoot, "src")).map(relative)).toEqual(["src/server.ts"]);
-    const serverPath = path.join(repoRoot, "src/server.ts");
-    const server = parsedSource(serverPath);
-    expect(server.statements.every((statement) =>
+  it("keeps only the documented root Host CLI wrapper", () => {
+    expect(sourceFiles(path.join(repoRoot, "src")).map(relative)).toEqual(["src/host.ts"]);
+    const hostPath = path.join(repoRoot, "src/host.ts");
+    const host = parsedSource(hostPath);
+    expect(host.statements.every((statement) =>
       ts.isImportDeclaration(statement)
-      || ts.isExportDeclaration(statement)
       || ts.isVariableStatement(statement)
       || ts.isIfStatement(statement)
     )).toBe(true);
-    expect(moduleReferences(serverPath).specifiers.sort()).toEqual([
-      "@tagent/core-service",
-      "@tagent/core-service",
+    expect(moduleReferences(hostPath).specifiers.sort()).toEqual([
+      "@tagent/core-service/host",
       "node:path",
       "node:url",
     ]);
-    const serverText = readFileSync(serverPath, "utf8");
-    expect(serverText).toContain("if (entry === import.meta.url)");
-    expect(serverText).not.toMatch(/\b(?:Store|CoreLifecycle|TaskRunSupervisor|createApp)\b/);
+    const hostText = readFileSync(hostPath, "utf8");
+    expect(hostText).toContain("if (entry === import.meta.url)");
+    expect(hostText).not.toMatch(/\b(?:Store|CoreLifecycle|TaskRunSupervisor|createApp)\b/);
   });
 
   it("keeps Web on the channel ABI and Core client without backend source reach-through", () => {

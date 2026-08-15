@@ -60,8 +60,12 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] `core_schema.schema_id` is `tagent-core/0.8`, `Store.getSchemaVersion()` is `1`, and exact `sqlite_master` drift validation fails closed.
 - [ ] A nonempty unmarked database, another schema ID, and missing/extra/changed schema objects are rejected with instructions to recreate the database.
 - [ ] A second Core process is rejected by the OS lock/writer authority.
+- [ ] The stable Host imports no application composition or persistence, supervises one Generation, rejects malformed/stale/incompatible IPC and release paths, and uses its own trusted verifier for candidates.
+- [ ] Same-release restart, staged-release activation, drain timeout, candidate readiness failure, activation replay/conflict, Host crash points, `current` rollback, parent disconnect, and durable crash-budget exhaustion pass.
+- [ ] `core_generation_activate` is absent outside a managed immutable release, requires explicit external-action approval, dispatches only after its exact operation receipt is durable, and startup redispatch does not repeat a settled receipt.
 - [ ] Writer lease/fence loss clears health readiness and closes Core.
 - [ ] Restart recovery produces `outcome_unknown` for effects/deliveries whose outcome cannot be proven and `restart_before_effect` cancellation only before effect start.
+- [ ] Automatic crash Continuations are queued only with no ambiguous effect, running tool, pending input/approval, or existing Continuation, and stop after the bounded recovery budget.
 - [ ] An interrupted TaskRun command or Goal operation becomes `outcome_unknown`; a Session and its create receipt remain atomic across restart.
 - [ ] A required passed check rejects self-reported, failed, stale, wrong-Run and wrong-Attempt evidence, and accepts only the matching successful Bash receipt.
 - [ ] TaskRun completion Gate profiles are frozen at Admission: `off` skips completion review, `relaxed` performs at most one outcome-focused semantic review without plan/check prerequisites, and `strict` retains the full deterministic and semantic audit.
@@ -105,6 +109,7 @@ npm run release:build
 - [ ] Each `.sha256` records only the artifact basename and verifies after the artifact/checksum pair is downloaded into an arbitrary directory.
 - [ ] Both release manifests verify from unpacked archives.
 - [ ] Core contains materialized required workspaces, no symbolic links, no Web assets, and a working native SQLite binding.
+- [ ] Core exposes only syntax-valid `dist/host.js` as its system entrypoint, contains the syntax-valid private Host module and `node_modules/@tagent/core-service/dist/generation-entry.js` child, and records the exact Host/state/generation-entry manifest contract; deployment stages an existing installation without changing `current`, restarting systemd, or probing health.
 - [ ] Web contains `dist/index.html`, its manifest, no Core runtime, and the expected build-time origin policy.
 - [ ] Both SDK tarballs have version parity with Core, contain JS, declarations, JS source maps and declaration maps, exclude build caches, and pass isolated joint install/runtime/type smoke tests.
 - [ ] An isolated Core artifact starts and passes `/api/v1/health`.

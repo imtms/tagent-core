@@ -6,6 +6,7 @@ import type {
   ControlInbox,
   EventConsumerRepository,
   FencedRuntimeMutationPort,
+  GenerationMaintenanceRepository,
   TaskRunTransitionPort,
   RunEventJournal,
   RuntimePersistencePort,
@@ -115,6 +116,7 @@ export class SqlitePersistence {
   readonly workspaceGoals: WorkspaceGoalRepository;
   readonly workspaceGoalOperations: WorkspaceGoalOperationRepository;
   readonly taskRunCommands: TaskRunCommandReceiptRepository;
+  readonly generationMaintenance: GenerationMaintenanceRepository;
   readonly operatorRead: {
     listSessionsPage: Store["listOperatorSessionsPage"];
     listSessionTaskRunsPage: Store["listOperatorSessionTaskRunsPage"];
@@ -345,6 +347,7 @@ export class SqlitePersistence {
     this.continuations = Object.freeze({
       nextContinuationLeaseExpiry: query(store.nextContinuationLeaseExpiry.bind(store)),
       ownsContinuationLease: query(store.ownsContinuationLease.bind(store)),
+      queueSafeCrashRecoveryContinuations: mutate(store.queueSafeCrashRecoveryContinuations.bind(store)),
       recoverContinuationsAfterRestart: mutate(store.recoverContinuationsAfterRestart.bind(store)),
       releaseContinuationLease: mutate(store.releaseContinuationLease.bind(store)),
       releaseContinuationLeases: mutate(store.releaseContinuationLeases.bind(store)),
@@ -430,6 +433,12 @@ export class SqlitePersistence {
       record: mutate(sqliteRequestEnvelopes.record.bind(sqliteRequestEnvelopes)),
       get: query(sqliteRequestEnvelopes.get.bind(sqliteRequestEnvelopes)),
       listForAttempt: query(sqliteRequestEnvelopes.listForAttempt.bind(sqliteRequestEnvelopes)),
+    });
+
+    this.generationMaintenance = Object.freeze({
+      listPendingGenerationActivations: query(store.listPendingGenerationActivations.bind(store)),
+      prepareGenerationHandoff: mutate(store.prepareGenerationHandoff.bind(store)),
+      recordGenerationActivationResult: mutate(store.recordGenerationActivationResult.bind(store)),
     });
 
     this.approvals = Object.freeze({

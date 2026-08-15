@@ -40,7 +40,11 @@ import {
   type SqlitePersistence,
 } from "@tagent/persistence-sqlite";
 import { resolveRuntimeFactory } from "@tagent/runtime-pi/factory";
-import { createEnvironmentCredentialResolver } from "@tagent/execution/ports";
+import {
+  createEnvironmentCredentialResolver,
+  type GenerationMaintenanceRepository,
+} from "@tagent/execution/ports";
+import type { AdditionalToolProviderFactory } from "./composition/runtime-host-adapter.js";
 
 type HttpServer = ReturnType<typeof createApp>;
 
@@ -59,6 +63,17 @@ export interface CoreBackgroundWorkerStarter {
 
 export interface CoreBootstrapDependencies {
   backgroundWorkerStarter?: CoreBackgroundWorkerStarter;
+  generationManagementFactory?: (
+    persistence: GenerationMaintenanceRepository,
+  ) => CoreGenerationManagement;
+}
+
+export interface CoreGenerationManagement {
+  readonly defersInitialRecovery: boolean;
+  toolProviderFactory(): AdditionalToolProviderFactory;
+  bindRecovery(recover: () => void): void;
+  prepareHandoffBeforeWriterRelease(): void;
+  announceReady(closeGeneration: () => Promise<void>, writerFence: number): void;
 }
 
 const defaultBackgroundWorkerStarter: CoreBackgroundWorkerStarter = Object.freeze({
@@ -136,6 +151,7 @@ export async function bootstrapCore(
   let canaryBackgroundRuntime: LearningBackgroundRuntimeCoordinator | undefined;
   let service: CoreApplicationCoordinator | undefined;
   let unsubscribeLearning: (() => void) | undefined;
+  let managedGeneration: CoreGenerationManagement | undefined;
   const backgroundWorkerStarter = dependencies.backgroundWorkerStarter ?? defaultBackgroundWorkerStarter;
 
   try {
@@ -153,6 +169,7 @@ export async function bootstrapCore(
     const persistence = createGuardedSqlitePersistence(store, writerConnection.writerGuard);
     const corePersistence = assembleCoreApplicationPersistence(persistence);
     const httpPersistence = assembleHttpPersistence(persistence);
+    managedGeneration = dependencies.generationManagementFactory?.(persistence.generationMaintenance);
 
     lifecycle = new CoreLifecycle({
       instanceLock,
@@ -195,6 +212,7 @@ export async function bootstrapCore(
         if (failures.length) throw new AggregateError(failures, "Background worker shutdown failed");
       },
       closeRuntimes: async () => { await service?.closeRuntimes(); },
+      prepareHandoff: () => managedGeneration?.prepareHandoffBeforeWriterRelease(),
       closeStore: () => store?.close(),
       requestServerClose: async (failure) => {
         if (app) await app.close();
@@ -280,7 +298,12 @@ export async function bootstrapCore(
       { startupMode: "deferred" },
       config.projectRuleFiles,
       config.toolArtifactMaxBytes,
+      managedGeneration?.toolProviderFactory(),
     );
+    managedGeneration?.bindRecovery(() => {
+      service?.recoverContinuations();
+      service?.recoverSessionInbox();
+    });
     const workflowService = new WorkflowLearningService(
       persistence.workflow,
       undefined,
@@ -369,8 +392,10 @@ export async function bootstrapCore(
     });
 
     service.initialize();
-    service.recoverContinuations();
-    service.recoverSessionInbox();
+    if (!managedGeneration?.defersInitialRecovery) {
+      service.recoverContinuations();
+      service.recoverSessionInbox();
+    }
 
     await app.listen({ host: config.host, port: config.port });
     service.startBackgroundWork();
@@ -381,6 +406,10 @@ export async function bootstrapCore(
       canaryBackgroundRuntime.reconcile(initialLearningState.autoExecutionEnabled),
     ]);
     lifecycle.markReady();
+    managedGeneration?.announceReady(
+      () => app!.close(),
+      writerConnection.writerLease.authority.fence,
+    );
     return { app, config, lifecycle, close: () => app!.close() };
   } catch (error) {
     const cleanupErrors: unknown[] = [];
@@ -406,26 +435,4 @@ export async function bootstrapCore(
     }
     throw error;
   }
-}
-
-export async function runCoreServiceFromCli(): Promise<BootstrappedCore> {
-  const core = await bootstrapCore();
-  console.log(`TAgent Core listening on http://${core.config.host}:${core.config.port}`);
-  console.log(`Runtime=${core.config.runtime} Model=${core.config.model.modelId} Base=${core.config.model.baseUrl}`);
-
-  let closing = false;
-  const closeServer = async (signal: NodeJS.Signals) => {
-    if (closing) return;
-    closing = true;
-    console.log(`Received ${signal}; closing TAgent Core`);
-    try {
-      await core.close();
-    } catch (error) {
-      console.error("TAgent Core close failed", error);
-      process.exitCode = 1;
-    }
-  };
-  process.once("SIGTERM", () => void closeServer("SIGTERM"));
-  process.once("SIGINT", () => void closeServer("SIGINT"));
-  return core;
 }

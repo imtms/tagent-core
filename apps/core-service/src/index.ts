@@ -1,9 +1,7 @@
-export {
-  bootstrapCore,
-  runCoreServiceFromCli,
-} from "./server.js";
+export { bootstrapCore } from "./server.js";
 export type {
   BootstrappedCore,
   CoreBackgroundWorkerStarter,
   CoreBootstrapDependencies,
+  CoreGenerationManagement,
 } from "./server.js";

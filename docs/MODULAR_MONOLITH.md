@@ -4,7 +4,7 @@
 
 TAgent Core is the persistent execution kernel and governance control plane for one agent instance. It receives routed intent, creates a durable `TaskRun`, supervises bounded `Attempt`s, owns authoritative state and evidence, and delivers a result only after completion policy settles.
 
-The system deploys as one Core process but is developed as an acyclic npm-workspaces graph. This keeps transactions and lifecycle coordination local while giving each domain a production boundary and public interface.
+The system deploys as one Core product and one service. A small stable Host process supervises one replaceable Generation process; the Generation is the modular monolith described below. This keeps transactions and lifecycle coordination local while allowing the application kernel to restart or change release without adding an updater service.
 
 ## Workspace map
 
@@ -21,10 +21,10 @@ The system deploys as one Core process but is developed as an acyclic npm-worksp
 | Adapter | `@tagent/persistence-sqlite` | current schema, repositories, UOW, writer fence |
 | Adapter | `@tagent/runtime-pi` | `pi-agent-core.AgentHarness` session policy and `pi-ai` provider normalization |
 | Adapter | `@tagent/workspace-local` | Tool Providers, contained filesystem tools, managed subprocesses |
-| App | `@tagent/core-service` | configuration, composition, startup, recovery, shutdown |
+| App | `@tagent/core-service` | stable Host plus Generation configuration, composition, startup, recovery, shutdown |
 | App | `@tagent/web-console` | independent browser operator interface |
 
-The repository root contains build and release orchestration plus the `src/server.ts` CLI shim. It is not a second domain layer.
+The repository root contains build and release orchestration plus one thin system CLI shim: `src/host.ts` starts the stable supervision loop. The Generation child entry remains private inside `@tagent/core-service`; it is neither exported nor exposed as a package binary and refuses startup without Host-provided IPC. The root is not a second domain layer.
 
 ## Dependency direction
 
@@ -46,9 +46,13 @@ The exact graph is enforced by workspace manifests, package exports, ESLint boun
 
 ## Composition and runtime
 
-`@tagent/core-service` is the Core composition root. It acquires the SQLite instance lock and writer authority, creates repositories and domain services, registers the Fastify adapter, coordinates recovery and background workers, listens, and owns ordered shutdown.
+`@tagent/core-service` contains two deliberately unequal roots. `host.ts` depends only on Node operating-system/release APIs and the neutral `generation-protocol.ts`: verified immutable selection, strict versioned IPC, bounded restart, activation state, readiness, and rollback. Architecture tests reject imports from `@tagent/*`, application composition, persistence, or `server.ts`. `server.ts` is the Generation composition root: it acquires the SQLite instance lock and writer authority, creates repositories and domain services, registers Fastify, coordinates recovery and background workers, listens, and owns ordered shutdown.
 
-The system remains a modular monolith: Core domains, adapters, and background workers run in one process. Boundaries are TypeScript/package interfaces and durable contracts, not network calls. A later process split can replace a port implementation without moving domain authority into transport code.
+Generation-side Host awareness is isolated in the optional `ManagedGenerationAdapter`. It contributes one receipt-backed tool provider through the generic Runtime extension seam and one lifecycle callback between quiescence and writer release. Execution, domain services, and `CoreApplicationPersistencePort` contain no Host type. Direct Generation bootstrap remains valid with no adapter.
+
+The application remains a modular monolith: all Core domains, adapters, and background workers run in the single active Generation. Host/Generation IPC is a lifecycle boundary, not a domain API, and the Host never proxies HTTP. Boundaries inside the Generation are TypeScript/package interfaces and durable contracts, not network calls. A later persistence-provider replacement can implement the existing application ports without moving domain authority into the Host or transport code.
+
+Only one Generation may own the listener and writer fence. During activation the old Generation first quiesces and releases authority; only then is a verified candidate started. The Host switches `current` after candidate readiness. This favors a small availability gap over shared sockets, overlapping database writers, live-heap patching, or another updater daemon.
 
 Tools follow the same composition rule. Workspace-local providers describe schemas and effects, Execution's registry produces one immutable Attempt catalog, and Execution's pipeline applies authorization, receipts and settlement before provider code can run. Pi sees only the wrapped runtime-neutral catalog. Process creation is behind `SubprocessPort`, while credential values are behind `CredentialResolverPort`; neither host concern leaks into tool domain contracts or durable configuration.
 

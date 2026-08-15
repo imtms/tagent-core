@@ -6,6 +6,7 @@ import type { CoreApplicationCoordinator } from "./core-application-coordinator.
 import { composeExecutionApplication } from "../composition/execution-composition.js";
 import type { ExecutionCoordinatorStartupOptions } from "@tagent/execution/composition";
 import type { CoreRuntimeDefaults } from "../composition/execution-composition.js";
+import type { AdditionalToolProviderFactory } from "../composition/runtime-host-adapter.js";
 
 type CoreApplicationArguments = [
   persistence: CoreApplicationPersistencePort,
@@ -19,14 +20,15 @@ type CoreApplicationArguments = [
   startupOptions?: ExecutionCoordinatorStartupOptions,
   projectRuleFiles?: string[],
   toolArtifactMaxBytes?: number,
+  additionalToolProviders?: AdditionalToolProviderFactory,
 ];
 
 export function createCoreApplication(
   ...args: CoreApplicationArguments
 ): CoreApplicationCoordinator {
-  const [persistence, workspace, runtimeFactory, runtimeDefaults, memory, memoryScopeId, learningControl, semanticJudge, startupOptions, projectRuleFiles, toolArtifactMaxBytes] = args;
+  const [persistence, workspace, runtimeFactory, runtimeDefaults, memory, memoryScopeId, learningControl, semanticJudge, startupOptions, projectRuleFiles, toolArtifactMaxBytes, additionalToolProviders] = args;
   return composeExecutionApplication({
     persistence, workspace, runtimeFactory, runtimeDefaults, memory,
-    memoryScopeId, learningControl, semanticJudge, startupOptions, projectRuleFiles, toolArtifactMaxBytes,
+    memoryScopeId, learningControl, semanticJudge, startupOptions, projectRuleFiles, toolArtifactMaxBytes, additionalToolProviders,
   });
 }

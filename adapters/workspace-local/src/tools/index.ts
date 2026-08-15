@@ -22,9 +22,14 @@ function createToolProviders(capabilities: ToolCapabilityApplicationPort, worksp
   ];
 }
 
-export function composeWorkspaceTools(capabilities: ToolCapabilityApplicationPort, workspace: string, subprocess: SubprocessPort): WorkspaceToolComposition {
+export function composeWorkspaceTools(
+  capabilities: ToolCapabilityApplicationPort,
+  workspace: string,
+  subprocess: SubprocessPort,
+  additionalProviders: readonly ToolProvider[] = [],
+): WorkspaceToolComposition {
   const registry = new ToolRegistry();
-  for (const provider of createToolProviders(capabilities, workspace, subprocess)) registry.register(provider);
+  for (const provider of [...createToolProviders(capabilities, workspace, subprocess), ...additionalProviders]) registry.register(provider);
   const pipeline = new ToolExecutionPipeline(capabilities);
   return { pipeline, catalog: pipeline.bindCatalog(registry.snapshot()) };
 }

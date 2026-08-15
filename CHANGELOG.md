@@ -2,10 +2,27 @@
 
 ## Unreleased
 
+## [0.8.5] - 2026-08-15
+
+### Self-managed Core generations
+
+- Added one stable Core Host inside the existing service boundary. It supervises exactly one replaceable Generation, verifies immutable releases with the running Host's trusted verifier, persists bounded crash/activation state atomically, restarts crashes with backoff, and commits `current` only after candidate readiness.
+- Added the explicitly approved `core_generation_activate` tool with receipt-before-dispatch semantics, strict versioned IPC, quiescent drain, durable Continuation handoff, candidate rollback, exact activation replay, Host crash-point reconciliation, and parent-disconnect fail-stop behavior.
+- Reused `operations`, `run_events`, `run_continuations`, writer fencing, checkpoints, and existing lifecycle barriers without adding a database table or changing the `tagent-core/0.8` SQLite schema.
+- Added conservative automatic crash recovery only when no operation, control/command delivery, tool attempt, input, approval, or existing Continuation is ambiguous; all `outcome_unknown` effects remain manual.
+- Changed immutable deployment to stage-only after the first bootstrap. Running release activation is owned by the Host rather than the deployment script, systemd, or an additional updater process.
+- Made the Host the sole system entrypoint for production, package binaries, and development. The Generation child entry is private to `@tagent/core-service` and is started only by the Host.
+- Kept every Generation on the stable release-root working directory so default relative database and workspace identities survive activation and rollback.
+
 ### Unified TaskRun transcript
 
 - Removed transcript redaction from the stable Channel projection. The single `/api/v1/task-runs/:taskRunId/transcript` response now preserves durable model reasoning, tool arguments, and complete tool results for the Web Console and every other `runs:read` client.
 - Kept one transcript contract instead of adding a Web- or Console-specific endpoint, and documented `runs:read` as execution-sensitive authority.
+
+### Compatibility and deployment
+
+- Preserved the `tagent-core/0.8`, `tagent-memory/0.8`, and Host state protocol identities without adding persistence tables or migrations. Deploy the matching `0.8.5` Core, Web Console, ABI, and Core Client artifacts.
+- Changed immutable deployment to stage releases without restarting the service; activate an already running installation through the approved Generation maintenance flow, while retaining systemd as the Host recovery boundary.
 
 ## [0.8.4] - 2026-08-15
 

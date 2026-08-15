@@ -109,3 +109,10 @@ export {
   type AttemptRequestEnvelope,
   type AttemptRequestEnvelopeRepository,
 } from "./attempt-request-envelope-repository.js";
+export {
+  GENERATION_ACTIVATION_OPERATION,
+  GENERATION_HANDOFF_MARKER,
+  type GenerationActivationRequest,
+  type GenerationActivationResult,
+  type GenerationMaintenanceRepository,
+} from "./generation-maintenance.js";

@@ -6,7 +6,7 @@
     "rootDir": "src",
     "types": ["node"]
   },
-  "files": ["src/server.ts"],
+  "files": ["src/host.ts"],
   "references": [
     { "path": "./packages/abi" },
     { "path": "./packages/core-client" },

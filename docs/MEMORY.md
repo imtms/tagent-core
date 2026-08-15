@@ -4,7 +4,7 @@
 
 Memory is an optional `@tagent/memory` domain. With `TAGENT_MEMORY_ENABLED=false`, Core does not construct Memory adapters, connect to PostgreSQL/S3, access Local Cold storage, or start Memory workers. SQLite sessions, TaskRuns, transcripts, and recovery remain available.
 
-The supported persistent profile uses one Core process with PostgreSQL 17, `vector`, `pg_trgm`, and Local Cold storage. The in-memory backend is for tests/development. S3 is implemented as a Cold adapter but is not the primary release-gated deployment profile.
+The supported persistent profile uses one active Core Generation with PostgreSQL 17, `vector`, `pg_trgm`, and Local Cold storage. The stable Host does not open Memory storage. The in-memory backend is for tests/development. S3 is implemented as a Cold adapter but is not the primary release-gated deployment profile.
 
 Persistent Memory accepts an absent PostgreSQL `memory` schema or the exact current identity `tagent-memory/0.8`, version `1`. Initialization creates the complete schema directly. An existing unmarked or differently identified schema is rejected; Core does not run PostgreSQL column-upgrade steps.
 
