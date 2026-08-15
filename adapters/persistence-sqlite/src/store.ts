@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
 import {
-  LEGACY_RUN_APPROVAL_DEFAULTS,
+  RUN_APPROVAL_DEFAULTS,
   effectiveGateProfile,
   effectiveTaskExecutionPolicy,
   type ApprovalRequest,
@@ -44,7 +44,7 @@ import type {
   ReasoningEffort,
   Session,
   SessionId,
-  SessionInboxItem,
+  Submission,
   SessionInputAnalysis,
   SessionSettingsUpdate,
   TaskObjective,
@@ -67,63 +67,12 @@ import type {
   SubmissionAuditInput,
   SubmissionAuditReceipt,
 } from "@tagent/admission/ports";
-import {
-  ATTEMPT_SCHEMA_V30_SQL,
-  migrateAttemptsV30,
-} from "./migrations/v30-attempts.js";
-import { migrateGovernanceV31 } from "./migrations/v31-governance.js";
-import {
-  assertCapabilityAuthorizationV32Schema,
-  migrateCapabilityAuthorizationV32,
-} from "./migrations/v32-capability-authorization.js";
-import {
-  migrateLearningIntegrationV33,
-  prepareLearningIntegrationV33,
-} from "./migrations/v33-learning-integration.js";
-import {
-  assertWorkspaceExecutionProfileV34Schema,
-  migrateWorkspaceExecutionProfileV34,
-} from "./migrations/v34-workspace-execution-profile.js";
-import {
-  assertWorkspaceGoalsV35Schema,
-  migrateWorkspaceGoalsV35,
-} from "./migrations/v35-workspace-goals.js";
-import {
-  assertWorkspaceGoalReliabilityV36Schema,
-  migrateWorkspaceGoalReliabilityV36,
-} from "./migrations/v36-workspace-goal-reliability.js";
-import {
-  assertTrustedEvidenceV37Schema,
-  migrateTrustedEvidenceV37,
-} from "./migrations/v37-trusted-evidence.js";
-import {
-  assertWorkspaceGoalExecutionV38Schema,
-  migrateWorkspaceGoalExecutionV38,
-} from "./migrations/v38-workspace-goal-execution.js";
-import {
-  assertGatewayContractsV39Schema,
-  migrateGatewayContractsV39,
-} from "./migrations/v39-gateway-contracts.js";
-import {
-  assertGatewayOperatorV40Schema,
-  migrateGatewayOperatorV40,
-} from "./migrations/v40-gateway-operator.js";
-import {
-  assertOperatorReadV41Schema,
-  migrateOperatorReadV41,
-} from "./migrations/v41-operator-read.js";
-import { assertExecutionPolicyV42Schema, migrateExecutionPolicyV42 } from "./migrations/v42-execution-policy.js";
-import { assertSkillsV43Schema, migrateSkillsV43 } from "./migrations/v43-skills.js";
-import { assertSkillCenterV44Schema, migrateSkillCenterV44 } from "./migrations/v44-skill-center.js";
-import { assertAttemptRequestEnvelopesV45Schema, migrateAttemptRequestEnvelopesV45 } from "./migrations/v45-attempt-request-envelopes.js";
-import { assertContinuationSchedulingV46Schema, migrateContinuationSchedulingV46 } from "./migrations/v46-continuation-scheduling.js";
-import { assertGatewayProfilesV47Schema, migrateGatewayProfilesV47 } from "./migrations/v47-gateway-profiles.js";
-import { mapLegacyRunApprovalOperation } from "./sqlite/canonical-approval-mapper.js";
-import { appendProjectionPair, finalizeProjectionCheckpoint } from "./sqlite/canonical-integration-event.js";
+import { CURRENT_SCHEMA_ID, CURRENT_SCHEMA_SQL } from "./current-schema.js";
+import { mapRunApprovalOperation } from "./sqlite/approval-operation-mapper.js";
+import { appendLearningProjection, finalizeProjectionCheckpoint } from "./sqlite/learning-integration-event.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
 
 const now = () => Date.now();
-const SCHEMA_VERSION = 47;
 const MAX_SUBMISSION_CONTENT_CHARS = 200_000;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -135,8 +84,8 @@ function assertSubmissionContentBound(content: string): void {
 }
 
 export interface StoreOptions {
-  deferPostMigrationRecovery?: boolean;
-  /** Concrete Core primary model captured by new Workspaces and v34 migration. */
+  deferStartupRecovery?: boolean;
+  /** Concrete Core primary model captured by new Workspaces. */
   defaultModelId?: string;
 }
 
@@ -193,8 +142,8 @@ export class Store {
       this.db.pragma("busy_timeout = 5000");
       this.db.pragma("journal_mode = WAL");
       this.db.pragma("foreign_keys = ON");
-      this.migrate();
-      if (!options.deferPostMigrationRecovery) this.runPostMigrationRecovery();
+      this.initializeSchema();
+      if (!options.deferStartupRecovery) this.runStartupRecovery();
       registerInternalUserInputCoordinator(this, (runId, prompt, fields, hook) =>
         this.requestUserInputInternal(runId, prompt, fields, hook));
     } catch (error) {
@@ -296,965 +245,47 @@ export class Store {
     this.db.close();
   }
 
-  private migrate() {
-    let previousVersion: number | undefined;
-    const foundationMigration = this.db.transaction(() => {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS schema_meta (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        version INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS core_writer_lease (
-        lock_name TEXT PRIMARY KEY CHECK (lock_name = 'core-writer'),
-        owner_id TEXT NOT NULL,
-        fence INTEGER NOT NULL CHECK (fence > 0),
-        pid INTEGER NOT NULL CHECK (pid > 0),
-        host TEXT NOT NULL,
-        acquired_at INTEGER NOT NULL,
-        heartbeat_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL,
-        released_at INTEGER,
-        CHECK (expires_at >= heartbeat_at),
-        CHECK (released_at IS NULL OR released_at >= acquired_at)
-      );
-      CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        model_id TEXT NOT NULL DEFAULT 'gpt-5.6-sol',
-        reasoning_effort TEXT NOT NULL DEFAULT 'high' CHECK(reasoning_effort IN ('minimal','low','medium','high','xhigh','max')),
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS session_requests (
-        request_id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL REFERENCES sessions(id),
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL REFERENCES sessions(id),
-        role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
-        content TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
-      CREATE TABLE IF NOT EXISTS runs (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL REFERENCES sessions(id),
-        request_id TEXT NOT NULL UNIQUE,
-        status TEXT NOT NULL,
-        phase TEXT NOT NULL,
-        goal TEXT NOT NULL,
-        model_id TEXT NOT NULL DEFAULT 'gpt-5.6-sol',
-        reasoning_effort TEXT NOT NULL DEFAULT 'high' CHECK(reasoning_effort IN ('minimal','low','medium','high','xhigh','max')),
-        gate_required INTEGER NOT NULL DEFAULT 1,
-        blocked_reason TEXT NOT NULL DEFAULT '',
-        last_event_seq INTEGER NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        completed_at INTEGER,
-        attempt INTEGER NOT NULL DEFAULT 1,
-        resumed_at INTEGER,
-        usage_input INTEGER NOT NULL DEFAULT 0,
-        usage_output INTEGER NOT NULL DEFAULT 0,
-        usage_cache_read INTEGER NOT NULL DEFAULT 0,
-        usage_cache_write INTEGER NOT NULL DEFAULT 0,
-        usage_total_tokens INTEGER NOT NULL DEFAULT 0,
-        usage_cost REAL NOT NULL DEFAULT 0,
-        contract_json TEXT NOT NULL DEFAULT ''
-      );
-      CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id, updated_at);
-      CREATE TABLE IF NOT EXISTS run_model_usage (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        component TEXT NOT NULL,
-        model TEXT NOT NULL DEFAULT '',
-        usage_input INTEGER NOT NULL DEFAULT 0,
-        usage_output INTEGER NOT NULL DEFAULT 0,
-        usage_cache_read INTEGER NOT NULL DEFAULT 0,
-        usage_cache_write INTEGER NOT NULL DEFAULT 0,
-        usage_total_tokens INTEGER NOT NULL DEFAULT 0,
-        usage_cost REAL NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_run_model_usage_run ON run_model_usage(run_id, component);
-      CREATE TABLE IF NOT EXISTS run_events (
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        seq INTEGER NOT NULL,
-        attempt_id TEXT,
-        type TEXT NOT NULL,
-        data TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY (run_id, seq)
-      );
-      CREATE TABLE IF NOT EXISTS run_continuations (
-        id TEXT PRIMARY KEY,
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        ordinal INTEGER NOT NULL,
-        source_attempt_id TEXT,
-        scheduled_attempt_id TEXT,
-        status TEXT NOT NULL,
-        reason TEXT NOT NULL DEFAULT '',
-        error TEXT NOT NULL DEFAULT '',
-        not_before INTEGER NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL,
-        started_at INTEGER,
-        completed_at INTEGER,
-        lease_owner TEXT NOT NULL DEFAULT '',
-        lease_until INTEGER,
-        heartbeat_at INTEGER,
-        UNIQUE(run_id, ordinal)
-      );
-      CREATE INDEX IF NOT EXISTS idx_continuations_run ON run_continuations(run_id, ordinal);
-      CREATE TABLE IF NOT EXISTS run_transcript (
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        seq INTEGER NOT NULL,
-        attempt INTEGER NOT NULL,
-        attempt_id TEXT,
-        role TEXT NOT NULL,
-        message_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY (run_id, seq)
-      );
-      CREATE INDEX IF NOT EXISTS idx_transcript_run ON run_transcript(run_id, seq);
-      CREATE TABLE IF NOT EXISTS session_supervisor_inbox (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL REFERENCES sessions(id),
-        request_id TEXT NOT NULL,
-        content TEXT NOT NULL,
-        status TEXT NOT NULL,
-        decision TEXT NOT NULL DEFAULT 'pending',
-        run_id TEXT REFERENCES runs(id),
-        error TEXT NOT NULL DEFAULT '',
-        position INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        claimed_at INTEGER,
-        started_at INTEGER,
-        summary TEXT NOT NULL DEFAULT '',
-        objectives_json TEXT NOT NULL DEFAULT '[]',
-        intent TEXT NOT NULL DEFAULT 'new_task',
-        target_run_id TEXT,
-        priority INTEGER NOT NULL DEFAULT 500,
-        urgency TEXT NOT NULL DEFAULT 'normal',
-        relation TEXT NOT NULL DEFAULT 'independent',
-        acceptance_json TEXT NOT NULL DEFAULT '[]',
-        scope TEXT NOT NULL DEFAULT '',
-        non_goals_json TEXT NOT NULL DEFAULT '[]',
-        confidence REAL NOT NULL DEFAULT 0,
-        decision_reason TEXT NOT NULL DEFAULT '',
-        router_version TEXT NOT NULL DEFAULT '',
-        execution_policy_json TEXT NOT NULL DEFAULT '',
-        manual_order INTEGER NOT NULL DEFAULT 0,
-        UNIQUE(session_id, request_id)
-      );
-      CREATE INDEX IF NOT EXISTS idx_session_supervisor_inbox_queue ON session_supervisor_inbox(session_id,status,position,created_at);
-      CREATE TABLE IF NOT EXISTS supervisor_decisions (
-        id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), attempt INTEGER NOT NULL,
-        checkpoint_seq INTEGER NOT NULL, trigger TEXT NOT NULL, action TEXT NOT NULL, reason_code TEXT NOT NULL,
-        rationale TEXT NOT NULL, confidence REAL NOT NULL, instruction TEXT NOT NULL DEFAULT '',
-        candidate_response_hash TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL, executed_at INTEGER, evaluator TEXT NOT NULL DEFAULT 'system',
-        evaluator_model TEXT NOT NULL DEFAULT ''
-      );
-      CREATE INDEX IF NOT EXISTS idx_supervisor_decisions_run ON supervisor_decisions(run_id, attempt, created_at);
-      CREATE TABLE IF NOT EXISTS gate_evaluations (
-        id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), attempt INTEGER NOT NULL,
-        checkpoint_seq INTEGER NOT NULL, gate_type TEXT NOT NULL, evaluator TEXT NOT NULL DEFAULT 'system',
-        evaluator_model TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '', passed INTEGER NOT NULL,
-        failures_json TEXT NOT NULL, criterion_coverage_json TEXT NOT NULL DEFAULT '[]', input_manifest_hash TEXT NOT NULL, created_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_gate_evaluations_run ON gate_evaluations(run_id, attempt, created_at);
-      CREATE TABLE IF NOT EXISTS progress_snapshots (
-        run_id TEXT PRIMARY KEY REFERENCES runs(id), attempt INTEGER NOT NULL, checkpoint_seq INTEGER NOT NULL,
-        meaningful_changes INTEGER NOT NULL DEFAULT 0, consecutive_failures INTEGER NOT NULL DEFAULT 0,
-        repeated_operations INTEGER NOT NULL DEFAULT 0, last_progress_at INTEGER NOT NULL,
-        last_decision_id TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS taskrun_edges (
-        from_run_id TEXT NOT NULL REFERENCES runs(id), to_run_id TEXT NOT NULL REFERENCES runs(id),
-        relation TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL,
-        PRIMARY KEY(from_run_id, to_run_id, relation)
-      );
-      CREATE TABLE IF NOT EXISTS approval_requests (
-        id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), decision_id TEXT NOT NULL REFERENCES supervisor_decisions(id),
-        action_type TEXT NOT NULL DEFAULT 'resume_taskrun', target_type TEXT NOT NULL DEFAULT 'taskrun', target_id TEXT NOT NULL DEFAULT '',
-        reason TEXT NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL, requested_at INTEGER NOT NULL, resolved_at INTEGER,
-        resolved_by TEXT NOT NULL DEFAULT '', resolution TEXT NOT NULL DEFAULT ''
-      );
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_requests_pending ON approval_requests(run_id) WHERE status = 'pending';
-      CREATE INDEX IF NOT EXISTS idx_approval_requests_run ON approval_requests(run_id, requested_at);
-      CREATE TABLE IF NOT EXISTS user_input_requests (
-        id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), attempt INTEGER NOT NULL,
-        prompt TEXT NOT NULL, fields_json TEXT NOT NULL, status TEXT NOT NULL,
-        response_json TEXT NOT NULL DEFAULT '{}', requested_at INTEGER NOT NULL, submitted_at INTEGER
-      );
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_user_input_requests_pending ON user_input_requests(run_id) WHERE status = 'pending';
-      CREATE INDEX IF NOT EXISTS idx_user_input_requests_run ON user_input_requests(run_id, requested_at);
-      CREATE TABLE IF NOT EXISTS context_manifests (
-        id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), attempt INTEGER NOT NULL,
-        source TEXT NOT NULL, items_json TEXT NOT NULL, stats_json TEXT NOT NULL,
-        manifest_hash TEXT NOT NULL, created_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_context_manifests_run ON context_manifests(run_id, attempt, created_at);
-      CREATE TABLE IF NOT EXISTS control_inbox (
-        id TEXT PRIMARY KEY,
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        request_id TEXT NOT NULL,
-        attempt INTEGER NOT NULL,
-        attempt_id TEXT,
-        kind TEXT NOT NULL CHECK (kind IN ('steer', 'follow_up')),
-        content TEXT NOT NULL,
-        status TEXT NOT NULL,
-        error TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL,
-        claimed_at INTEGER,
-        completed_at INTEGER,
-        UNIQUE(run_id, request_id)
-      );
-      CREATE INDEX IF NOT EXISTS idx_control_inbox_delivery ON control_inbox(run_id, attempt, status, created_at);
-      CREATE TABLE IF NOT EXISTS event_consumers (
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        consumer_id TEXT NOT NULL,
-        generation INTEGER NOT NULL DEFAULT 0,
-        acked_seq INTEGER NOT NULL DEFAULT 0,
-        terminal_acked_seq INTEGER,
-        claimed_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (run_id, consumer_id)
-      );
-      CREATE INDEX IF NOT EXISTS idx_event_consumers_updated ON event_consumers(updated_at);
-      CREATE TABLE IF NOT EXISTS run_checkpoints (
-        run_id TEXT PRIMARY KEY REFERENCES runs(id),
-        attempt INTEGER NOT NULL,
-        attempt_id TEXT,
-        active INTEGER NOT NULL DEFAULT 1,
-        assistant_partial TEXT NOT NULL DEFAULT '',
-        current_tool_json TEXT NOT NULL DEFAULT '',
-        last_event_seq INTEGER NOT NULL DEFAULT 0,
-        last_transcript_seq INTEGER NOT NULL DEFAULT 0,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS operations (
-        id TEXT PRIMARY KEY,
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        attempt INTEGER NOT NULL,
-        attempt_id TEXT,
-        operation_type TEXT NOT NULL,
-        payload_hash TEXT NOT NULL,
-        payload_json TEXT NOT NULL DEFAULT '',
-        status TEXT NOT NULL,
-        stage TEXT NOT NULL,
-        effects_json TEXT NOT NULL DEFAULT '[]',
-        result_json TEXT NOT NULL DEFAULT '',
-        error TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        completed_at INTEGER
-      );
-      CREATE INDEX IF NOT EXISTS idx_operations_run ON operations(run_id, created_at);
-      CREATE TABLE IF NOT EXISTS tool_attempts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        attempt INTEGER NOT NULL,
-        attempt_id TEXT,
-        tool_call_id TEXT NOT NULL,
-        tool_name TEXT NOT NULL,
-        args_hash TEXT NOT NULL,
-        status TEXT NOT NULL,
-        error TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL,
-        completed_at INTEGER,
-        UNIQUE(run_id, attempt, tool_call_id)
-      );
-      CREATE INDEX IF NOT EXISTS idx_tool_attempts_guard ON tool_attempts(run_id, tool_name, args_hash, id);
-      CREATE TABLE IF NOT EXISTS plan_items (
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        item_key TEXT NOT NULL,
-        title TEXT NOT NULL,
-        status TEXT NOT NULL,
-        required INTEGER NOT NULL DEFAULT 1,
-        position INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY (run_id, item_key)
-      );
-      CREATE TABLE IF NOT EXISTS run_checks (
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        check_key TEXT NOT NULL,
-        title TEXT NOT NULL,
-        status TEXT NOT NULL,
-        required INTEGER NOT NULL DEFAULT 1,
-        command TEXT NOT NULL DEFAULT '',
-        evidence TEXT NOT NULL DEFAULT '',
-        stale INTEGER NOT NULL DEFAULT 0,
-        source_operation_id TEXT,
-        observed_at INTEGER,
-        PRIMARY KEY (run_id, check_key)
-      );
-      CREATE TABLE IF NOT EXISTS artifacts (
-        id TEXT PRIMARY KEY,
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        kind TEXT NOT NULL,
-        title TEXT NOT NULL,
-        content TEXT NOT NULL DEFAULT '',
-        uri TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS run_learning_policies (
-        run_id TEXT PRIMARY KEY REFERENCES runs(id),
-        policy TEXT NOT NULL CHECK (policy IN ('allow','metadata_only','deny')),
-        reason TEXT NOT NULL DEFAULT '',
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS experience_observations (
-        id TEXT PRIMARY KEY,
-        scope_id TEXT NOT NULL,
-        run_id TEXT REFERENCES runs(id),
-        attempt INTEGER,
-        lifecycle TEXT NOT NULL DEFAULT 'manual',
-        outcome TEXT NOT NULL DEFAULT '',
-        event_seq INTEGER NOT NULL DEFAULT 0,
-        source_type TEXT NOT NULL CHECK (source_type IN ('explicit_user','task_experience','task_failure','user_correction')),
-        task_signature TEXT NOT NULL,
-        procedure_summary TEXT NOT NULL,
-        checks_passed_json TEXT NOT NULL DEFAULT '[]',
-        checks_failed_json TEXT NOT NULL DEFAULT '[]',
-        source_refs_json TEXT NOT NULL DEFAULT '[]',
-        learn_policy TEXT NOT NULL CHECK (learn_policy IN ('allow','metadata_only','deny')),
-        observation_hash TEXT NOT NULL UNIQUE,
-        created_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_experience_scope_signature ON experience_observations(scope_id, task_signature, source_type, created_at);
-      CREATE TABLE IF NOT EXISTS workflow_definitions (
-        id TEXT PRIMARY KEY,
-        scope_id TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('candidate','active','suspended','deprecated')),
-        active_revision_id TEXT,
-        deleted_at INTEGER,
-        purge_after INTEGER,
-        delete_reason TEXT NOT NULL DEFAULT '',
-        previous_status TEXT,
-        previous_active_revision_id TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_workflow_definitions_scope ON workflow_definitions(scope_id, status, updated_at);
-      CREATE TABLE IF NOT EXISTS workflow_revisions (
-        id TEXT PRIMARY KEY,
-        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
-        revision INTEGER NOT NULL,
-        spec_json TEXT NOT NULL,
-        source_type TEXT NOT NULL CHECK (source_type IN ('explicit_user','task_experience','task_failure','user_correction')),
-        source_evidence_json TEXT NOT NULL DEFAULT '[]',
-        confidence REAL NOT NULL,
-        change_summary TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL,
-        UNIQUE(workflow_id, revision)
-      );
-      CREATE TABLE IF NOT EXISTS workflow_bindings (
-        id TEXT PRIMARY KEY,
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        attempt INTEGER NOT NULL,
-        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
-        revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
-        selector_version TEXT NOT NULL,
-        relevance_score REAL NOT NULL,
-        selected_reason_json TEXT NOT NULL DEFAULT '[]',
-        application_mode TEXT NOT NULL DEFAULT 'suggested',
-        created_at INTEGER NOT NULL,
-        UNIQUE(run_id, attempt, workflow_id, revision_id)
-      );
-      CREATE TABLE IF NOT EXISTS workflow_application_receipts (
-        id TEXT PRIMARY KEY,
-        binding_id TEXT NOT NULL REFERENCES workflow_bindings(id),
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        attempt INTEGER NOT NULL,
-        task_outcome TEXT NOT NULL,
-        application_status TEXT NOT NULL DEFAULT 'exposed' CHECK (application_status IN ('exposed','adopted','partial','rejected')),
-        executed_step_ids_json TEXT NOT NULL DEFAULT '[]',
-        skipped_steps_json TEXT NOT NULL DEFAULT '[]',
-        correction_observed INTEGER NOT NULL DEFAULT 0,
-        repeated_tool_calls INTEGER NOT NULL DEFAULT 0,
-        continuation_count INTEGER NOT NULL DEFAULT 0,
-        verification_mapping_json TEXT NOT NULL DEFAULT '[]',
-        required_checks_passed INTEGER NOT NULL,
-        required_checks_failed INTEGER NOT NULL,
-        attribution_level TEXT NOT NULL CHECK (attribution_level IN ('exposed','adopted','verified_contribution')),
-        receipt_version INTEGER NOT NULL DEFAULT 1,
-        created_at INTEGER NOT NULL,
-        UNIQUE(binding_id, receipt_version)
-      );
-      CREATE TABLE IF NOT EXISTS workflow_feedback (
-        id TEXT PRIMARY KEY,
-        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
-        revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        attempt INTEGER NOT NULL,
-        signal TEXT NOT NULL,
-        weight REAL NOT NULL,
-        adopted INTEGER NOT NULL DEFAULT 1,
-        verified INTEGER NOT NULL DEFAULT 0,
-        idempotency_key TEXT NOT NULL UNIQUE,
-        note TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS workflow_revision_proposals (
-        id TEXT PRIMARY KEY,
-        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
-        base_revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
-        reason TEXT NOT NULL,
-        evidence_json TEXT NOT NULL DEFAULT '[]',
-        patch_json TEXT NOT NULL DEFAULT '{}',
-        status TEXT NOT NULL CHECK (status IN ('candidate','approved','rejected','applied')),
-        decided_by TEXT NOT NULL DEFAULT '',
-        decision_reason TEXT NOT NULL DEFAULT '',
-        decided_at INTEGER,
-        applied_revision_id TEXT REFERENCES workflow_revisions(id),
-        created_at INTEGER NOT NULL,
-        UNIQUE(workflow_id, base_revision_id, reason)
-      );
-      CREATE TABLE IF NOT EXISTS workflow_status_history (
-        id TEXT PRIMARY KEY,
-        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
-        previous_status TEXT NOT NULL,
-        next_status TEXT NOT NULL,
-        reason TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS workflow_distillations (
-        evidence_set_hash TEXT PRIMARY KEY,
-        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS learning_projection_outbox (
-        id TEXT PRIMARY KEY,
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        attempt INTEGER NOT NULL,
-        lifecycle TEXT NOT NULL,
-        outcome TEXT NOT NULL,
-        event_seq INTEGER NOT NULL DEFAULT 0,
-        payload_json TEXT NOT NULL DEFAULT '{}',
-        snapshot_json TEXT NOT NULL DEFAULT '{}',
-        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','completed','failed')),
-        error TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        UNIQUE(run_id, attempt, lifecycle, event_seq)
-      );
-      CREATE INDEX IF NOT EXISTS idx_learning_projection_pending ON learning_projection_outbox(status, created_at);
-      CREATE TABLE IF NOT EXISTS semantic_learning_jobs (
-        id TEXT PRIMARY KEY,
-        kind TEXT NOT NULL CHECK (kind IN ('user_message','workflow_eligibility','feedback_attribution')),
-        run_id TEXT REFERENCES runs(id),
-        attempt INTEGER,
-        idempotency_key TEXT NOT NULL UNIQUE,
-        payload_json TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','failed','completed','dead_letter')),
-        attempts INTEGER NOT NULL DEFAULT 0,
-        next_retry_at INTEGER NOT NULL DEFAULT 0,
-        error TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        completed_at INTEGER
-      );
-      CREATE INDEX IF NOT EXISTS idx_semantic_learning_jobs_pending ON semantic_learning_jobs(status, next_retry_at, created_at);
-      CREATE TABLE IF NOT EXISTS workflow_selector_receipts (
-        id TEXT PRIMARY KEY,
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        attempt INTEGER NOT NULL,
-        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
-        revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
-        decision TEXT NOT NULL CHECK (decision IN ('selected','excluded')),
-        reasons_json TEXT NOT NULL DEFAULT '[]',
-        score REAL,
-        created_at INTEGER NOT NULL,
-        UNIQUE(run_id, attempt, workflow_id, revision_id)
-      );
-      CREATE TABLE IF NOT EXISTS workflow_governance_receipts (
-        id TEXT PRIMARY KEY,
-        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
-        action TEXT NOT NULL,
-        actor TEXT NOT NULL,
-        reason TEXT NOT NULL DEFAULT '',
-        metadata_json TEXT NOT NULL DEFAULT '{}',
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS learning_feature_settings (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        memory_enabled INTEGER NOT NULL DEFAULT 0,
-        learning_enabled INTEGER NOT NULL DEFAULT 0,
-        auto_execution_enabled INTEGER NOT NULL DEFAULT 0,
-        updated_at INTEGER NOT NULL,
-        reason TEXT NOT NULL DEFAULT ''
-      );
-      CREATE TABLE IF NOT EXISTS autonomy_approval_requests (
-        id TEXT PRIMARY KEY,
-        scope_id TEXT NOT NULL,
-        action_type TEXT NOT NULL CHECK (action_type IN ('activate_workflow','apply_revision','start_canary','execute_workflow')),
-        target_type TEXT NOT NULL,
-        target_id TEXT NOT NULL,
-        workflow_id TEXT REFERENCES workflow_definitions(id),
-        revision_id TEXT REFERENCES workflow_revisions(id),
-        proposal_id TEXT REFERENCES workflow_revision_proposals(id),
-        binding_id TEXT REFERENCES workflow_bindings(id),
-        status TEXT NOT NULL CHECK (status IN ('pending','approved','rejected','revoked','expired','executed')),
-        risk_class TEXT NOT NULL CHECK (risk_class IN ('low','medium','high')),
-        impact_scope_json TEXT NOT NULL DEFAULT '{}',
-        evidence_json TEXT NOT NULL DEFAULT '[]',
-        diff_json TEXT NOT NULL DEFAULT '{}',
-        rollback_json TEXT NOT NULL DEFAULT '{}',
-        requested_by TEXT NOT NULL,
-        request_reason TEXT NOT NULL DEFAULT '',
-        expires_at INTEGER NOT NULL,
-        decided_by TEXT NOT NULL DEFAULT '',
-        decision_reason TEXT NOT NULL DEFAULT '',
-        decided_at INTEGER,
-        executed_at INTEGER,
-        execution_receipt_json TEXT NOT NULL DEFAULT '{}',
-        request_hash TEXT NOT NULL UNIQUE,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_autonomy_approvals_scope_status ON autonomy_approval_requests(scope_id,status,created_at);
-      CREATE INDEX IF NOT EXISTS idx_autonomy_approvals_target ON autonomy_approval_requests(action_type,target_id,status);
-      CREATE TABLE IF NOT EXISTS autonomy_audit_events (
-        id TEXT PRIMARY KEY,
-        scope_id TEXT NOT NULL,
-        category TEXT NOT NULL CHECK (category IN ('observe','learn','distill','evolve','approval','execute')),
-        action TEXT NOT NULL,
-        actor TEXT NOT NULL,
-        source_run_id TEXT REFERENCES runs(id),
-        workflow_id TEXT REFERENCES workflow_definitions(id),
-        revision_id TEXT REFERENCES workflow_revisions(id),
-        approval_id TEXT REFERENCES autonomy_approval_requests(id),
-        evidence_json TEXT NOT NULL DEFAULT '[]',
-        metadata_json TEXT NOT NULL DEFAULT '{}',
-        receipt_hash TEXT NOT NULL UNIQUE,
-        created_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_autonomy_audit_scope ON autonomy_audit_events(scope_id,created_at);
-      CREATE TABLE IF NOT EXISTS workflow_distillation_jobs (
-        id TEXT PRIMARY KEY,
-        scope_id TEXT NOT NULL,
-        task_signature TEXT NOT NULL,
-        signature_terms_json TEXT NOT NULL DEFAULT '[]',
-        status TEXT NOT NULL CHECK (status IN ('queued','running','completed','failed','dead_letter')),
-        checkpoint_json TEXT NOT NULL DEFAULT '{}',
-        attempts INTEGER NOT NULL DEFAULT 0,
-        lease_owner TEXT NOT NULL DEFAULT '',
-        lease_token TEXT NOT NULL DEFAULT '',
-        lease_until INTEGER,
-        fence INTEGER NOT NULL DEFAULT 0,
-        workflow_id TEXT REFERENCES workflow_definitions(id),
-        error TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        UNIQUE(scope_id, task_signature)
-      );
-      CREATE INDEX IF NOT EXISTS idx_workflow_distillation_jobs_claim ON workflow_distillation_jobs(status, lease_until, created_at);
-      CREATE TABLE IF NOT EXISTS workflow_distillation_conflicts (
-        id TEXT PRIMARY KEY,
-        job_id TEXT NOT NULL REFERENCES workflow_distillation_jobs(id),
-        scope_id TEXT NOT NULL,
-        candidate_signature TEXT NOT NULL,
-        existing_workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
-        existing_revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
-        kind TEXT NOT NULL CHECK (kind IN ('duplicate','conflict')),
-        similarity REAL NOT NULL,
-        reasons_json TEXT NOT NULL DEFAULT '[]',
-        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved','ignored')),
-        created_at INTEGER NOT NULL,
-        UNIQUE(job_id, existing_workflow_id, existing_revision_id, kind)
-      );
-      CREATE INDEX IF NOT EXISTS idx_workflow_distillation_conflicts_scope ON workflow_distillation_conflicts(scope_id, status, created_at);
-      CREATE TABLE IF NOT EXISTS workflow_evaluations (
-        id TEXT PRIMARY KEY,
-        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
-        revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
-        kind TEXT NOT NULL CHECK (kind IN ('shadow','offline_replay','canary')),
-        status TEXT NOT NULL CHECK (status IN ('pending','passed','failed','rolled_back')),
-        sample_size INTEGER NOT NULL DEFAULT 0,
-        success_rate REAL NOT NULL DEFAULT 0,
-        baseline_rate REAL NOT NULL DEFAULT 0,
-        risk_class TEXT NOT NULL,
-        evidence_json TEXT NOT NULL DEFAULT '{}',
-        evaluator_id TEXT NOT NULL DEFAULT '',
-        evaluator_version TEXT NOT NULL DEFAULT '',
-        dataset_id TEXT NOT NULL DEFAULT '',
-        dataset_hash TEXT NOT NULL DEFAULT '',
-        baseline_revision_id TEXT REFERENCES workflow_revisions(id),
-        candidate_revision_id TEXT REFERENCES workflow_revisions(id),
-        evaluation_run_ids_json TEXT NOT NULL DEFAULT '[]',
-        check_results_json TEXT NOT NULL DEFAULT '[]',
-        receipt_hash TEXT NOT NULL DEFAULT '',
-        signature TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS workflow_promotions (
-        id TEXT PRIMARY KEY,
-        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
-        revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
-        previous_revision_id TEXT REFERENCES workflow_revisions(id),
-        status TEXT NOT NULL CHECK (status IN ('candidate','canary','promoted','rolled_back','rejected')),
-        canary_percent INTEGER NOT NULL DEFAULT 0,
-        max_failure_delta REAL NOT NULL DEFAULT 0,
-        reason TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS workflow_canary_bindings (
-        id TEXT PRIMARY KEY,
-        promotion_id TEXT NOT NULL REFERENCES workflow_promotions(id),
-        workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id),
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        attempt INTEGER NOT NULL,
-        scope_id TEXT NOT NULL,
-        assignment_key TEXT NOT NULL,
-        assignment_hash TEXT NOT NULL,
-        bucket INTEGER NOT NULL CHECK (bucket >= 0 AND bucket < 10000),
-        variant TEXT NOT NULL CHECK (variant IN ('baseline','candidate')),
-        revision_id TEXT NOT NULL REFERENCES workflow_revisions(id),
-        receipt_hash TEXT NOT NULL UNIQUE,
-        outcome_status TEXT,
-        success INTEGER,
-        required_checks INTEGER NOT NULL DEFAULT 0,
-        passed_checks INTEGER NOT NULL DEFAULT 0,
-        outcome_recorded_at INTEGER,
-        created_at INTEGER NOT NULL,
-        UNIQUE(promotion_id, run_id, attempt)
-      );
-      CREATE INDEX IF NOT EXISTS idx_workflow_canary_outcomes ON workflow_canary_bindings(promotion_id, variant, outcome_recorded_at);
-      CREATE TABLE IF NOT EXISTS communication_profiles (
-        id TEXT PRIMARY KEY,
-        subject_id TEXT NOT NULL,
-        scope_type TEXT NOT NULL CHECK (scope_type IN ('global','workspace','project','session','task')),
-        scope_id TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('active','superseded','deleted')),
-        active_revision_id TEXT,
-        locked INTEGER NOT NULL DEFAULT 0,
-        deleted_at INTEGER,
-        previous_status TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        UNIQUE(subject_id, scope_type, scope_id)
-      );
-      CREATE TABLE IF NOT EXISTS communication_profile_revisions (
-        id TEXT PRIMARY KEY,
-        profile_id TEXT NOT NULL REFERENCES communication_profiles(id),
-        revision INTEGER NOT NULL,
-        values_json TEXT NOT NULL DEFAULT '{}',
-        evidence_json TEXT NOT NULL DEFAULT '{}',
-        source_type TEXT NOT NULL CHECK (source_type IN ('explicit_user','inferred','governance')),
-        change_summary TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL,
-        UNIQUE(profile_id, revision)
-      );
-      CREATE INDEX IF NOT EXISTS idx_communication_profiles_resolve ON communication_profiles(subject_id, scope_type, scope_id, status);
-      CREATE TABLE IF NOT EXISTS learning_events (
-        id TEXT PRIMARY KEY,
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        attempt INTEGER NOT NULL,
-        lifecycle TEXT NOT NULL,
-        event_seq INTEGER NOT NULL DEFAULT 0,
-        task_classification_json TEXT NOT NULL DEFAULT '{}',
-        strategy_selected_json TEXT NOT NULL DEFAULT '[]',
-        context_used_json TEXT NOT NULL DEFAULT '{}',
-        execution_trace_json TEXT NOT NULL DEFAULT '{}',
-        outcome_json TEXT NOT NULL DEFAULT '{}',
-        attribution_json TEXT NOT NULL DEFAULT '{}',
-        policy_json TEXT NOT NULL DEFAULT '{}',
-        event_hash TEXT NOT NULL UNIQUE,
-        created_at INTEGER NOT NULL,
-        UNIQUE(run_id, attempt, lifecycle, event_seq)
-      );
-      CREATE INDEX IF NOT EXISTS idx_learning_events_run ON learning_events(run_id, attempt, created_at);
-      CREATE TABLE IF NOT EXISTS outcome_labels (
-        id TEXT PRIMARY KEY,
-        learning_event_id TEXT NOT NULL REFERENCES learning_events(id),
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        attempt INTEGER NOT NULL,
-        taxonomy_version TEXT NOT NULL,
-        label TEXT NOT NULL,
-        value TEXT NOT NULL,
-        confidence REAL NOT NULL,
-        evidence_json TEXT NOT NULL DEFAULT '[]',
-        idempotency_key TEXT NOT NULL UNIQUE,
-        created_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_outcome_labels_run ON outcome_labels(run_id, attempt, label);
-      CREATE TABLE IF NOT EXISTS user_corrections (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL REFERENCES sessions(id),
-        run_id TEXT REFERENCES runs(id),
-        attempt INTEGER,
-        message_id INTEGER REFERENCES messages(id),
-        correction_type TEXT NOT NULL,
-        target_type TEXT NOT NULL DEFAULT 'run',
-        target_id TEXT NOT NULL DEFAULT '',
-        content TEXT NOT NULL,
-        source TEXT NOT NULL CHECK (source IN ('explicit_user','router','governance')),
-        applied INTEGER NOT NULL DEFAULT 0,
-        idempotency_key TEXT NOT NULL UNIQUE,
-        created_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_user_corrections_run ON user_corrections(run_id, attempt, created_at);
-      CREATE TABLE IF NOT EXISTS feedback_attribution_receipts (
-        id TEXT PRIMARY KEY,
-        run_id TEXT NOT NULL REFERENCES runs(id),
-        attempt INTEGER NOT NULL,
-        actor_id TEXT NOT NULL,
-        record_id TEXT NOT NULL,
-        signal TEXT NOT NULL,
-        weight REAL NOT NULL,
-        basis TEXT NOT NULL,
-        context_manifest_id TEXT NOT NULL DEFAULT '',
-        evidence_json TEXT NOT NULL DEFAULT '[]',
-        status TEXT NOT NULL CHECK (status IN ('pending','applied','skipped','failed','dead_letter')),
-        error TEXT NOT NULL DEFAULT '',
-        attempts INTEGER NOT NULL DEFAULT 0,
-        next_retry_at INTEGER NOT NULL DEFAULT 0,
-        idempotency_key TEXT NOT NULL UNIQUE,
-        created_at INTEGER NOT NULL,
-        applied_at INTEGER
-      );
-      CREATE INDEX IF NOT EXISTS idx_feedback_attribution_run ON feedback_attribution_receipts(run_id, attempt, status);
-      CREATE TABLE IF NOT EXISTS semantic_judgment_cache (
-        cache_key TEXT PRIMARY KEY,
-        task TEXT NOT NULL,
-        input_hash TEXT NOT NULL,
-        model TEXT NOT NULL,
-        result_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_semantic_judgment_cache_expiry ON semantic_judgment_cache(expires_at);
-      ${ATTEMPT_SCHEMA_V30_SQL}
-    `);
-    const current = this.db.prepare("SELECT version FROM schema_meta WHERE id = 1").get() as { version: number } | undefined;
-    previousVersion = current?.version;
-    if (current && current.version > SCHEMA_VERSION) throw new Error(`Database schema version ${current.version} is newer than supported version ${SCHEMA_VERSION}`);
-    this.ensureColumn("runs", "attempt", "INTEGER NOT NULL DEFAULT 1");
-    this.ensureColumn("runs", "resumed_at", "INTEGER");
-    this.ensureColumn("runs", "usage_input", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureColumn("runs", "usage_output", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureColumn("runs", "usage_cache_read", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureColumn("runs", "usage_cache_write", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureColumn("runs", "usage_total_tokens", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureColumn("runs", "usage_cost", "REAL NOT NULL DEFAULT 0");
-    this.ensureColumn("run_continuations", "lease_owner", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("run_continuations", "lease_until", "INTEGER");
-    this.ensureColumn("run_continuations", "heartbeat_at", "INTEGER");
-    this.ensureColumn("runs", "contract_json", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("experience_observations", "lifecycle", "TEXT NOT NULL DEFAULT 'manual'");
-    this.ensureColumn("experience_observations", "outcome", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("experience_observations", "event_seq", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureColumn("learning_projection_outbox", "snapshot_json", "TEXT NOT NULL DEFAULT '{}'");
-    this.ensureColumn("feedback_attribution_receipts", "attempts", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureColumn("feedback_attribution_receipts", "next_retry_at", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureColumn("semantic_learning_jobs", "lease_owner", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("semantic_learning_jobs", "lease_token", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("semantic_learning_jobs", "lease_until", "INTEGER");
-    this.ensureColumn("semantic_learning_jobs", "fence", "INTEGER NOT NULL DEFAULT 0");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_semantic_learning_jobs_claim ON semantic_learning_jobs(status, next_retry_at, lease_until, created_at)");
-    this.ensureColumn("workflow_definitions", "deleted_at", "INTEGER");
-    this.ensureColumn("workflow_definitions", "purge_after", "INTEGER");
-    this.ensureColumn("workflow_definitions", "delete_reason", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("workflow_definitions", "previous_status", "TEXT");
-    this.ensureColumn("workflow_definitions", "previous_active_revision_id", "TEXT");
-    this.ensureColumn("workflow_application_receipts", "application_status", "TEXT NOT NULL DEFAULT 'exposed'");
-    this.ensureColumn("workflow_application_receipts", "executed_step_ids_json", "TEXT NOT NULL DEFAULT '[]'");
-    this.ensureColumn("workflow_application_receipts", "skipped_steps_json", "TEXT NOT NULL DEFAULT '[]'");
-    this.ensureColumn("workflow_application_receipts", "correction_observed", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureColumn("workflow_application_receipts", "repeated_tool_calls", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureColumn("workflow_application_receipts", "continuation_count", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureColumn("workflow_application_receipts", "verification_mapping_json", "TEXT NOT NULL DEFAULT '[]'");
-    this.ensureColumn("workflow_revision_proposals", "patch_json", "TEXT NOT NULL DEFAULT '{}'");
-    this.ensureColumn("workflow_revision_proposals", "decided_by", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("workflow_revision_proposals", "decision_reason", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("workflow_revision_proposals", "decided_at", "INTEGER");
-    this.ensureColumn("workflow_revision_proposals", "applied_revision_id", "TEXT");
-    this.ensureColumn("workflow_revision_proposals", "base_spec_hash", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("workflow_revision_proposals", "proposed_spec_hash", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("workflow_revision_proposals", "changed_paths_json", "TEXT NOT NULL DEFAULT '[]'");
-    this.ensureColumn("workflow_revisions", "spec_hash", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("workflow_evaluations", "evaluator_id", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("workflow_evaluations", "evaluator_version", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("workflow_evaluations", "dataset_id", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("workflow_evaluations", "dataset_hash", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("workflow_evaluations", "baseline_revision_id", "TEXT");
-    this.ensureColumn("workflow_evaluations", "candidate_revision_id", "TEXT");
-    this.ensureColumn("workflow_evaluations", "evaluation_run_ids_json", "TEXT NOT NULL DEFAULT '[]'");
-    this.ensureColumn("workflow_evaluations", "check_results_json", "TEXT NOT NULL DEFAULT '[]'");
-    this.ensureColumn("workflow_evaluations", "receipt_hash", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("workflow_evaluations", "signature", "TEXT NOT NULL DEFAULT ''");
-    this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_evaluations_receipt_hash ON workflow_evaluations(receipt_hash) WHERE receipt_hash <> ''");
-    this.db.prepare(`UPDATE workflow_revisions SET spec_hash=lower(hex(randomblob(32))) WHERE spec_hash=''`).run();
-    this.db.prepare(`UPDATE workflow_revision_proposals SET status='rejected',decision_reason='Legacy empty proposal invalidated by schema v20',decided_at=? WHERE trim(patch_json) IN ('','{}') AND status IN ('candidate','approved')`).run(now());
-    this.ensureColumn("session_supervisor_inbox", "summary", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("session_supervisor_inbox", "objectives_json", "TEXT NOT NULL DEFAULT '[]'");
-    this.ensureColumn("session_supervisor_inbox", "intent", "TEXT NOT NULL DEFAULT 'new_task'");
-    this.ensureColumn("session_supervisor_inbox", "target_run_id", "TEXT");
-    this.ensureColumn("session_supervisor_inbox", "priority", "INTEGER NOT NULL DEFAULT 500");
-    this.ensureColumn("session_supervisor_inbox", "urgency", "TEXT NOT NULL DEFAULT 'normal'");
-    this.ensureColumn("session_supervisor_inbox", "relation", "TEXT NOT NULL DEFAULT 'independent'");
-    this.ensureColumn("session_supervisor_inbox", "acceptance_json", "TEXT NOT NULL DEFAULT '[]'");
-    this.ensureColumn("session_supervisor_inbox", "scope", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("session_supervisor_inbox", "non_goals_json", "TEXT NOT NULL DEFAULT '[]'");
-    this.ensureColumn("session_supervisor_inbox", "confidence", "REAL NOT NULL DEFAULT 0");
-    this.ensureColumn("session_supervisor_inbox", "decision_reason", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("session_supervisor_inbox", "router_version", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("session_supervisor_inbox", "manual_order", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureColumn("gate_evaluations", "evaluator", "TEXT NOT NULL DEFAULT 'system'");
-    this.ensureColumn("gate_evaluations", "evaluator_model", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("gate_evaluations", "summary", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("gate_evaluations", "criterion_coverage_json", "TEXT NOT NULL DEFAULT '[]'");
-    this.ensureColumn("approval_requests", "action_type", "TEXT NOT NULL DEFAULT 'resume_taskrun'");
-    this.ensureColumn("approval_requests", "target_type", "TEXT NOT NULL DEFAULT 'taskrun'");
-    this.ensureColumn("approval_requests", "target_id", "TEXT NOT NULL DEFAULT ''");
-    this.ensureColumn("approval_requests", "metadata_json", "TEXT NOT NULL DEFAULT '{}'");
-    this.db.prepare("UPDATE approval_requests SET target_id=run_id WHERE target_id=''").run();
-    this.ensureColumn("supervisor_decisions", "evaluator", "TEXT NOT NULL DEFAULT 'system'");
-    this.ensureColumn("supervisor_decisions", "evaluator_model", "TEXT NOT NULL DEFAULT ''");
-    this.migrateSpawnProposalsToSessionInbox();
-    this.db.prepare(`UPDATE run_continuations SET status = 'cancelled',
-      error = 'Superseded while enforcing one active continuation per Run', completed_at = ?,
-      lease_owner = '', lease_until = NULL, heartbeat_at = NULL
-      WHERE status IN ('queued', 'running') AND id NOT IN (
-        SELECT id FROM run_continuations active
-        WHERE active.run_id = run_continuations.run_id AND active.status IN ('queued', 'running')
-        ORDER BY active.ordinal LIMIT 1
-      )`).run(now());
-    this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_continuations_one_active
-      ON run_continuations(run_id) WHERE status IN ('queued', 'running')`);
-    migrateAttemptsV30(this.db, current?.version, now());
-    if (current?.version === undefined || current.version <= 31) {
-      migrateGovernanceV31(this.db, current?.version, now());
+  private initializeSchema(): void {
+    const objectCount = (this.db.prepare(`SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE name NOT LIKE 'sqlite_%'`).get() as { count: number }).count;
+    if (objectCount === 0) {
+      this.db.transaction(() => this.db.exec(CURRENT_SCHEMA_SQL))();
     }
-    if (current?.version === undefined || current.version <= 32) {
-      migrateCapabilityAuthorizationV32(
-        this.db,
-        current?.version === undefined || current.version < 31 ? 31 : current.version,
-        now(),
-      );
-    } else {
-      assertCapabilityAuthorizationV32Schema(this.db);
-    }
-    this.db.prepare(`INSERT INTO schema_meta (id, version, updated_at) VALUES (1, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET version = excluded.version, updated_at = excluded.updated_at`)
-      .run(current?.version === SCHEMA_VERSION ? SCHEMA_VERSION : 32, now());
-    });
-    foundationMigration();
+    this.assertCurrentSchema();
 
-    const v33PreviousVersion = previousVersion !== undefined && previousVersion >= 33 ? 33 : 32;
-    prepareLearningIntegrationV33(this.db, v33PreviousVersion, now());
-    const learningIntegrationMigration = this.db.transaction(() => {
-      migrateLearningIntegrationV33(this.db, v33PreviousVersion, now());
-      this.db.prepare(`UPDATE schema_meta SET version=33,updated_at=? WHERE id=1`).run(now());
-    });
-    learningIntegrationMigration();
-
-    const workspaceExecutionProfileMigration = this.db.transaction(() => {
-      migrateWorkspaceExecutionProfileV34(this.db, previousVersion !== undefined && previousVersion >= 34 ? 34 : 33, this.defaultModelId);
-      this.db.prepare(`UPDATE schema_meta SET version=34,updated_at=? WHERE id=1`).run(now());
-    });
-    workspaceExecutionProfileMigration();
-    assertWorkspaceExecutionProfileV34Schema(this.db);
-
-    const workspaceGoalsMigration = this.db.transaction(() => {
-      const hasWorkspaceGoals = Boolean(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workspace_goals'").get());
-      migrateWorkspaceGoalsV35(this.db, hasWorkspaceGoals ? 35 : 34);
-      this.db.prepare(`UPDATE schema_meta SET version=35,updated_at=? WHERE id=1`).run(now());
-    });
-    workspaceGoalsMigration();
-    assertWorkspaceGoalsV35Schema(this.db);
-
-    const workspaceGoalReliabilityMigration = this.db.transaction(() => {
-      migrateWorkspaceGoalReliabilityV36(this.db, previousVersion !== undefined && previousVersion >= 36 ? 36 : 35);
-      this.db.prepare(`UPDATE schema_meta SET version=36,updated_at=? WHERE id=1`).run(now());
-    });
-    workspaceGoalReliabilityMigration();
-    assertWorkspaceGoalReliabilityV36Schema(this.db);
-
-    const trustedEvidenceMigration = this.db.transaction(() => {
-      migrateTrustedEvidenceV37(this.db, previousVersion !== undefined && previousVersion >= 37 ? 37 : 36);
-      this.db.prepare(`UPDATE schema_meta SET version=37,updated_at=? WHERE id=1`).run(now());
-    });
-    trustedEvidenceMigration();
-    assertTrustedEvidenceV37Schema(this.db);
-
-    const workspaceGoalExecutionMigration = this.db.transaction(() => {
-      migrateWorkspaceGoalExecutionV38(this.db, previousVersion !== undefined && previousVersion >= 38 ? 38 : 37);
-      this.db.prepare(`UPDATE schema_meta SET version=38,updated_at=? WHERE id=1`).run(now());
-    });
-    workspaceGoalExecutionMigration();
-    assertWorkspaceGoalExecutionV38Schema(this.db);
-
-    const gatewayContractsMigration = this.db.transaction(() => {
-      migrateGatewayContractsV39(this.db, previousVersion !== undefined && previousVersion >= 39 ? 39 : 38);
-      this.db.prepare(`UPDATE schema_meta SET version=39,updated_at=? WHERE id=1`).run(now());
-    });
-    gatewayContractsMigration();
-    assertGatewayContractsV39Schema(this.db);
-    const gatewayOperatorMigration = this.db.transaction(() => {
-      migrateGatewayOperatorV40(this.db, previousVersion !== undefined && previousVersion >= 40 ? 40 : 39);
-      this.db.prepare(`UPDATE schema_meta SET version=40,updated_at=? WHERE id=1`).run(now());
-    });
-    gatewayOperatorMigration();
-    assertGatewayOperatorV40Schema(this.db);
-    const operatorReadMigration = this.db.transaction(() => {
-      migrateOperatorReadV41(this.db, previousVersion !== undefined && previousVersion >= 41 ? 41 : 40);
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`)
-        .run(previousVersion !== undefined && previousVersion >= 42 ? 42 : 41, now());
-    });
-    operatorReadMigration();
-    assertOperatorReadV41Schema(this.db);
-    const executionPolicyMigration = this.db.transaction(() => {
-      migrateExecutionPolicyV42(this.db, previousVersion !== undefined && previousVersion >= 42 ? 42 : 41);
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`)
-        .run(previousVersion !== undefined && previousVersion >= 43 ? 43 : 42, now());
-    });
-    executionPolicyMigration();
-    assertExecutionPolicyV42Schema(this.db);
-    const skillsMigration = this.db.transaction(() => {
-      if (previousVersion === undefined || previousVersion < 44) {
-        migrateSkillsV43(this.db, previousVersion !== undefined && previousVersion >= 43 ? 43 : 42);
-      }
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`)
-        .run(previousVersion !== undefined && previousVersion >= 44 ? 44 : 43, now());
-    });
-    skillsMigration();
-    if (previousVersion === undefined || previousVersion < 44) assertSkillsV43Schema(this.db);
-    const skillCenterMigration = this.db.transaction(() => {
-      migrateSkillCenterV44(this.db, previousVersion !== undefined && previousVersion >= 44 ? 44 : 43);
-      this.db.prepare(`UPDATE schema_meta SET version=44,updated_at=? WHERE id=1`).run(now());
-    });
-    skillCenterMigration();
-    assertSkillCenterV44Schema(this.db);
-    const requestEnvelopeMigration = this.db.transaction(() => {
-      migrateAttemptRequestEnvelopesV45(this.db, previousVersion !== undefined && previousVersion >= 45 ? 45 : 44);
-      this.db.prepare(`UPDATE schema_meta SET version=45,updated_at=? WHERE id=1`).run(now());
-    });
-    requestEnvelopeMigration();
-    assertAttemptRequestEnvelopesV45Schema(this.db);
-    const continuationSchedulingMigration = this.db.transaction(() => {
-      migrateContinuationSchedulingV46(this.db, previousVersion !== undefined && previousVersion >= 46 ? 46 : 45);
-      this.db.prepare(`UPDATE schema_meta SET version=46,updated_at=? WHERE id=1`).run(now());
-    });
-    continuationSchedulingMigration();
-    assertContinuationSchedulingV46Schema(this.db);
-    const gatewayProfilesMigration = this.db.transaction(() => {
-      migrateGatewayProfilesV47(this.db, previousVersion !== undefined && previousVersion >= 47 ? 47 : 46);
-      this.db.prepare(`UPDATE schema_meta SET version=?,updated_at=? WHERE id=1`).run(SCHEMA_VERSION, now());
-    });
-    gatewayProfilesMigration();
-    assertGatewayProfilesV47Schema(this.db);
-    // A process restart loses the in-memory executor for receipts that had only
-    // reached "started". Surface uncertainty explicitly; never replay an effect
-    // whose outcome may already have escaped Core.
+    // A process restart loses the executor for operations that only reached started.
+    // Surface uncertainty explicitly; never replay an effect that may have escaped Core.
     this.db.prepare("UPDATE task_run_command_receipts SET status='outcome_unknown',updated_at=? WHERE status='started'").run(now());
     this.db.prepare("UPDATE workspace_goal_operation_receipts SET status='outcome_unknown',updated_at=? WHERE status='started'").run(now());
     this.db.prepare(`UPDATE profile_operation_receipts SET status='outcome_unknown',updated_at=?,completed_at=?
       WHERE status='started'`).run(now(), now());
+  }
+
+  private assertCurrentSchema(): void {
+    let marker: { schemaId: string } | undefined;
+    try {
+      marker = this.db.prepare("SELECT schema_id AS schemaId FROM core_schema WHERE id=1")
+        .get() as { schemaId: string } | undefined;
+    } catch {
+      marker = undefined;
+    }
+    if (marker?.schemaId !== CURRENT_SCHEMA_ID) {
+      throw new Error(`Unsupported SQLite schema. Core accepts only an empty database or ${CURRENT_SCHEMA_ID}; discard the existing database instead of upgrading it.`);
+    }
+
+    const snapshot = (db: Database.Database) => db.prepare(`SELECT type,name,tbl_name AS tableName,sql
+      FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND sql IS NOT NULL
+      ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'trigger' THEN 2 ELSE 3 END,name`).all();
+    const reference = new Database(":memory:");
+    try {
+      reference.pragma("foreign_keys = ON");
+      reference.exec(CURRENT_SCHEMA_SQL);
+      if (JSON.stringify(snapshot(this.db)) !== JSON.stringify(snapshot(reference))) {
+        throw new Error(`SQLite schema does not match ${CURRENT_SCHEMA_ID}; recreate the database from the current Core release.`);
+      }
+    } finally {
+      reference.close();
+    }
   }
 
   private attemptId(runId: string, ordinal: number) {
@@ -1268,7 +299,7 @@ export class Store {
     status: RunStatus | "superseded";
     scenario: "initial" | "resume" | "continuation" | "retry" | "input" | "recovery" | "terminal";
     reason?: string;
-    legacyEventSeq?: number;
+    eventSequence?: number;
     timestamp?: number;
   }) {
     const timestamp = input.timestamp ?? now();
@@ -1282,36 +313,23 @@ export class Store {
         .run(timestamp, timestamp, input.runId, attemptId);
     }
     if (existing) {
-      this.db.prepare(`UPDATE attempts SET status=?,active=?,version=version+1,legacy_event_seq=?,updated_at=?,
-        completed_at=CASE WHEN ?=1 THEN NULL ELSE COALESCE(completed_at,?) END,
-        reconstruction_state='complete' WHERE id=?`)
-        .run(input.status, Number(active), input.legacyEventSeq ?? 0, timestamp, Number(active), timestamp, attemptId);
+      this.db.prepare(`UPDATE attempts SET status=?,active=?,version=version+1,event_sequence=?,updated_at=?,
+        completed_at=CASE WHEN ?=1 THEN NULL ELSE COALESCE(completed_at,?) END WHERE id=?`)
+        .run(input.status, Number(active), input.eventSequence ?? 0, timestamp, Number(active), timestamp, attemptId);
     } else {
       this.db.prepare(`INSERT INTO attempts
-        (id,run_id,ordinal,trigger,status,active,version,legacy_event_seq,started_at,updated_at,completed_at,reconstruction_state)
-        VALUES (?,?,?,?,?,?,1,?,?,?,?,'complete')`).run(
-        attemptId, input.runId, input.ordinal, input.trigger, input.status, Number(active), input.legacyEventSeq ?? 0,
+        (id,run_id,ordinal,trigger,status,active,version,event_sequence,started_at,updated_at,completed_at)
+        VALUES (?,?,?,?,?,?,1,?,?,?,?)`).run(
+        attemptId, input.runId, input.ordinal, input.trigger, input.status, Number(active), input.eventSequence ?? 0,
         timestamp, timestamp, active ? null : timestamp,
       );
     }
-    const projected = this.db.prepare(`SELECT id,run_id as runId,ordinal,trigger,status,active,version,
-      legacy_event_seq as legacyEventSeq FROM attempts WHERE id=?`).get(attemptId) as Record<string, unknown>;
-    const run = this.db.prepare("SELECT id as runId,attempt as ordinal,status,last_event_seq as legacyEventSeq FROM runs WHERE id=?")
-      .get(input.runId) as Record<string, unknown> | undefined;
-    const legacy = { ...run, active: run?.status === "running" };
-    const comparable = { runId: projected.runId, ordinal: projected.ordinal, status: projected.status, legacyEventSeq: projected.legacyEventSeq, active: Boolean(projected.active) };
-    const mismatch = JSON.stringify(legacy) !== JSON.stringify(comparable);
-    const version = Number(projected.version);
+    const projected = this.db.prepare("SELECT version FROM attempts WHERE id=?").get(attemptId) as { version: number };
     this.db.prepare(`INSERT INTO attempt_transition_audit
-      (id,attempt_id,run_id,ordinal,from_status,to_status,trigger,scenario,reason,version,legacy_event_seq,created_at)
+      (id,attempt_id,run_id,ordinal,from_status,to_status,trigger,scenario,reason,version,event_sequence,created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       randomUUID(), attemptId, input.runId, input.ordinal, existing?.status ?? null, input.status,
-      String(projected.trigger), input.scenario, input.reason ?? "", version, input.legacyEventSeq ?? 0, timestamp,
-    );
-    this.db.prepare(`INSERT INTO attempt_shadow_comparisons
-      (id,attempt_id,scenario,legacy_json,projected_json,mismatch,gate_sample,created_at)
-      VALUES (?,?,?,?,?,?,0,?)`).run(
-      randomUUID(), attemptId, input.scenario, JSON.stringify(legacy), JSON.stringify(comparable), Number(mismatch), timestamp,
+      existing?.trigger ?? input.trigger, input.scenario, input.reason ?? "", projected.version, input.eventSequence ?? 0, timestamp,
     );
   }
 
@@ -1321,11 +339,11 @@ export class Store {
    * Receipt-bound capability operations use a fail-closed protocol: an effect
    * that started becomes outcome_unknown, while an authorized effect that did
    * not start becomes cancelled/restart_before_effect. Both are terminal exact
-   * replays and retain their append-only allow receipt and approval use. Legacy
-   * running operations retain the historical outcome_unknown/service_restart
-   * projection. Production supplies the current WriterFenceGuard as `guard`.
+   * replays and retain their append-only allow receipt and approval use. Other
+   * running operations use the outcome_unknown/service_restart projection.
+   * Production supplies the current WriterFenceGuard as `guard`.
    */
-  runPostMigrationRecovery(guard?: StoreMutationRunner) {
+  runStartupRecovery(guard?: StoreMutationRunner) {
     const recover = (db: Database.Database) => {
       const timestamp = now();
       const malformedCapability = db.prepare(`SELECT operation.id FROM operations operation
@@ -1356,14 +374,14 @@ export class Store {
           AND EXISTS (SELECT 1 FROM approval_receipts receipt
             WHERE receipt.operation_id=operations.id AND receipt.outcome='allow')`)
         .run(timestamp, timestamp).changes;
-      const legacyOperations = db.prepare(`UPDATE operations SET
+      const ordinaryOperations = db.prepare(`UPDATE operations SET
         status='outcome_unknown',stage='service_restart',
         error='Service restarted before operation outcome was recorded',updated_at=?
         WHERE status='running' AND NOT (
           attempt_id IS NOT NULL AND EXISTS (SELECT 1 FROM approval_receipts receipt
             WHERE receipt.operation_id=operations.id AND receipt.outcome='allow')
         )`).run(timestamp).changes;
-      const operations = capabilityRunning + capabilityAuthorized + legacyOperations;
+      const operations = capabilityRunning + capabilityAuthorized + ordinaryOperations;
       const controlInbox = db.prepare("UPDATE control_inbox SET status = 'outcome_unknown', error = 'Service restarted while Pi delivery outcome was unknown', completed_at = ? WHERE status = 'delivering'").run(timestamp).changes;
       return { operations, controlInbox };
     };
@@ -1371,34 +389,8 @@ export class Store {
     return this.db.transaction(() => recover(this.db)).immediate();
   }
 
-  getSchemaVersion() {
-    return (this.db.prepare("SELECT version FROM schema_meta WHERE id = 1").get() as { version: number }).version;
-  }
-
-  private ensureColumn(table: string, column: string, definition: string) {
-    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-    if (!columns.some((item) => item.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-  }
-
-  private migrateSpawnProposalsToSessionInbox() {
-    const exists = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='spawn_proposals'").get();
-    if (!exists) return;
-    const rows = this.db.prepare(`SELECT p.id,p.run_id as runId,p.goal,p.acceptance_json as acceptanceJson,p.relation,p.status,
-      p.spawned_run_id as spawnedRunId,p.created_at as createdAt,p.updated_at as updatedAt,r.session_id as sessionId
-      FROM spawn_proposals p JOIN runs r ON r.id=p.run_id ORDER BY p.created_at,p.id`).all() as Array<{id:string;runId:string;goal:string;acceptanceJson:string;relation:string;status:string;spawnedRunId:string;createdAt:number;updatedAt:number;sessionId:string}>;
-    const insert = this.db.prepare(`INSERT OR IGNORE INTO session_supervisor_inbox
-      (id,session_id,request_id,content,status,decision,run_id,error,position,created_at,updated_at,claimed_at,started_at,summary,objectives_json,intent,target_run_id,priority,urgency,relation,acceptance_json,scope,non_goals_json,confidence,decision_reason,router_version,manual_order)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`);
-    for (const row of rows) {
-      if (row.status === "spawned" && row.spawnedRunId) continue;
-      const status = row.status === "rejected" ? "deleted" : "queued";
-      const decision = row.status === "rejected" ? "delete" : "pending";
-      const relation = ["parallel","follow_up"].includes(row.relation) ? row.relation : "independent";
-      const timing = row.relation === "parallel" ? "parallel" : "follow_up";
-      const position = (this.db.prepare("SELECT COALESCE(MAX(position),0)+1 as position FROM session_supervisor_inbox WHERE session_id=?").get(row.sessionId) as {position:number}).position;
-      insert.run(`migrated:${row.id}`,row.sessionId,`spawn-migration:${row.id}`,row.goal,status,decision,null,`Migrated from legacy SpawnProposal ${row.id} (${row.status})`,position,row.createdAt,row.updatedAt,null,null,row.goal,JSON.stringify([{id:"objective-1",summary:row.goal,timing,kind:"other"}]),row.relation === "parallel" ? "parallel_task" : "new_task",row.runId,500,"normal",relation,row.acceptanceJson,row.goal,"[]",1,"Migrated from legacy SpawnProposal into Session Inbox","spawn-proposal-migration-v1");
-    }
-    this.db.exec("DROP TABLE spawn_proposals");
+  getSchemaVersion(): number {
+    return 1;
   }
 
   createSession(title = "New workspace", requestId?: string): Session {
@@ -2028,7 +1020,7 @@ export class Store {
     analysis: SessionInputAnalysis,
     requestId: string = randomUUID(),
     audit?: SubmissionAuditInput,
-  ): SessionInboxItem {
+  ): Submission {
     assertSubmissionContentBound(content);
     const transaction = this.db.transaction(() => {
       const existing = this.db.prepare("SELECT id FROM session_supervisor_inbox WHERE session_id = ? AND request_id = ?").get(sessionId, requestId) as { id: string } | undefined;
@@ -2052,14 +1044,14 @@ export class Store {
     return transaction();
   }
 
-  private hydrateSessionInbox(row: Record<string, unknown> | undefined): SessionInboxItem | undefined {
+  private hydrateSessionInbox(row: Record<string, unknown> | undefined): Submission | undefined {
     if (!row) return undefined;
     const acceptanceCriteria = JSON.parse(String(row.acceptanceJson || "[]")) as string[];
     const nonGoals = JSON.parse(String(row.nonGoalsJson || "[]")) as string[];
     const objectives = JSON.parse(String(row.objectivesJson || "[]")) as TaskObjective[];
     const fallbackObjective = { id: "objective-1", summary: String(row.summary || row.content || ""), timing: row.relation === "parallel" ? "parallel" : row.relation === "follow_up" ? "follow_up" : "current", kind: "other" } as const;
     const executionPolicy = row.executionPolicyJson ? JSON.parse(String(row.executionPolicyJson)) : undefined;
-    return { ...row, manualOrder: Boolean(row.manualOrder), analysis: { summary: String(row.summary || row.content || ""), objectives: objectives.length ? objectives : [fallbackObjective], intent: row.intent, targetRunId: row.targetRunId || null, priority: Number(row.priority || 0), urgency: row.urgency, relation: row.relation, acceptanceCriteria, scope: String(row.scope || row.summary || ""), nonGoals, confidence: Number(row.confidence || 0), reason: String(row.decisionReason || ""), routerVersion: String(row.routerVersion || ""), ...(executionPolicy ? { executionPolicy } : {}) } } as SessionInboxItem;
+    return { ...row, manualOrder: Boolean(row.manualOrder), analysis: { summary: String(row.summary || row.content || ""), objectives: objectives.length ? objectives : [fallbackObjective], intent: row.intent, targetRunId: row.targetRunId || null, priority: Number(row.priority || 0), urgency: row.urgency, relation: row.relation, acceptanceCriteria, scope: String(row.scope || row.summary || ""), nonGoals, confidence: Number(row.confidence || 0), reason: String(row.decisionReason || ""), routerVersion: String(row.routerVersion || ""), ...(executionPolicy ? { executionPolicy } : {}) } } as Submission;
   }
 
   private sessionInboxSelect(where: string) {
@@ -2070,15 +1062,15 @@ export class Store {
       FROM session_supervisor_inbox ${where}`;
   }
 
-  getSessionInboxItem(id: string): SessionInboxItem | undefined {
+  getSessionInboxItem(id: string): Submission | undefined {
     return this.hydrateSessionInbox(this.db.prepare(this.sessionInboxSelect("WHERE id = ?")).get(id) as Record<string, unknown> | undefined);
   }
 
-  getSessionSubmission(sessionId: SessionId, requestId: string): SessionInboxItem | undefined {
+  getSessionSubmission(sessionId: SessionId, requestId: string): Submission | undefined {
     return this.hydrateSessionInbox(this.db.prepare(this.sessionInboxSelect("WHERE session_id = ? AND request_id = ?")).get(sessionId, requestId) as Record<string, unknown> | undefined);
   }
 
-  recordSubmissionAudit(item: SessionInboxItem, audit: SubmissionAuditInput): SubmissionAuditReceipt {
+  recordSubmissionAudit(item: Submission, audit: SubmissionAuditInput): SubmissionAuditReceipt {
     const payloadHash = createHash("sha256").update(audit.canonicalPayload).digest("hex");
     const existing = this.getSubmissionAudit(item.sessionId, item.requestId);
     if (existing) {
@@ -2117,7 +1109,7 @@ export class Store {
     return { ...receipt, provenance: JSON.parse(provenanceJson) as Record<string, unknown> };
   }
 
-  listSessionInbox(sessionId: SessionId, includeTerminal = false): SessionInboxItem[] {
+  listSessionInbox(sessionId: SessionId, includeTerminal = false): Submission[] {
     const rows = this.db.prepare(`${this.sessionInboxSelect(`WHERE session_id = ? ${includeTerminal ? "" : "AND status IN ('queued','claimed')"}`)} ORDER BY
       manual_order DESC, CASE WHEN manual_order=1 THEN position END ASC, CASE urgency WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'normal' THEN 2 ELSE 1 END DESC,
       priority DESC, position, created_at, id`).all(sessionId) as Array<Record<string, unknown>>;
@@ -2470,7 +1462,7 @@ ${source.content}`;
       this.touchSessionInboxRevision(target.sessionId, resumedAt);
       this.projectAttempt({
         runId, ordinal: nextAttempt, trigger: "retry", status: "running", scenario: "retry",
-        legacyEventSeq: this.getRun(runId)?.lastEventSeq ?? 0, timestamp: resumedAt,
+        eventSequence: this.getRun(runId)?.lastEventSeq ?? 0, timestamp: resumedAt,
       });
       return { status: "started" as const, item: this.getSessionInboxItem(target.inboxItemId)!, run: this.getRun(runId)! };
     });
@@ -2495,7 +1487,6 @@ ${source.content}`;
           description: skill.description, content: skill.content, filePath: skill.filePath,
           sha256: skill.sha256, disableModelInvocation: skill.disableModelInvocation,
         })),
-        skill: undefined,
       } : contract;
       this.db.prepare(`
         INSERT INTO runs (id, session_id, request_id, status, phase, goal, model_id, reasoning_effort, gate_required, created_at, updated_at, contract_json)
@@ -2503,7 +1494,7 @@ ${source.content}`;
       `).run(id, sessionId, requestId, goal, session.modelId, session.reasoningEffort, effectiveGateProfile(frozenContract) === "off" ? 0 : 1, timestamp, timestamp, frozenContract ? JSON.stringify(frozenContract) : "");
       this.projectAttempt({
         runId: id, ordinal: 1, trigger: "initial", status: "running", scenario: "initial",
-        legacyEventSeq: 0, timestamp,
+        eventSequence: 0, timestamp,
       });
       return this.getRun(id)!;
     });
@@ -2722,7 +1713,7 @@ ${source.content}`;
       this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id = ?").run(request.requestedAt, runId);
       this.projectAttempt({
         runId, ordinal: run.attempt, trigger: "input", status: "waiting_input", scenario: "input",
-        reason: prompt, legacyEventSeq: seq, timestamp: request.requestedAt,
+        reason: prompt, eventSequence: seq, timestamp: request.requestedAt,
       });
       finalizeProjectionCheckpoint(this.db, { runId, attemptId: this.attemptId(runId, run.attempt), attemptOrdinal: run.attempt, eventSeq: seq, timestamp: request.requestedAt });
       internalHook?.({ request, event: { runId, seq, type: "run.waiting_for_input", data: { requestId: request.id, prompt, fields }, createdAt: request.requestedAt } });
@@ -2800,7 +1791,7 @@ ${source.content}`;
           .run(timestamp, item.runId);
         this.projectAttempt({
           runId: item.runId, ordinal: item.attempt, trigger: "recovery", status: "blocked", scenario: "recovery",
-          reason: "Continuation recovered after service restart", legacyEventSeq: item.lastEventSeq, timestamp,
+          reason: "Continuation recovered after service restart", eventSequence: item.lastEventSeq, timestamp,
         });
       }
       return active.map(({ id, runId, ordinal }) => ({ id, runId, ordinal }));
@@ -2827,7 +1818,7 @@ ${source.content}`;
           .run(timestamp, item.runId);
         this.projectAttempt({
           runId: item.runId, ordinal: item.attempt, trigger: "recovery", status: "blocked", scenario: "recovery",
-          reason, legacyEventSeq: item.lastEventSeq, timestamp,
+          reason, eventSequence: item.lastEventSeq, timestamp,
         });
       }
       return active.map(({ id, runId, ordinal }) => ({ id, runId, ordinal }));
@@ -2855,7 +1846,7 @@ ${source.content}`;
         .run(timestamp, item.runId);
       this.projectAttempt({
         runId: item.runId, ordinal: item.attempt, trigger: "recovery", status: "blocked", scenario: "recovery",
-        reason, legacyEventSeq: item.lastEventSeq, timestamp,
+        reason, eventSequence: item.lastEventSeq, timestamp,
       });
       return { id: item.id, runId: item.runId, ordinal: item.ordinal };
     });
@@ -2923,7 +1914,7 @@ ${source.content}`;
       );
       this.projectAttempt({
         runId, ordinal: attempt, trigger: "continuation", status: "running", scenario: "continuation",
-        legacyEventSeq: seq, timestamp,
+        eventSequence: seq, timestamp,
       });
       return { continuation: this.listContinuations(runId).find((item) => item.id === continuation.id)!, run: this.getRun(runId)!, event: { runId, seq, type: "continuation.started", data, createdAt: timestamp } satisfies RunEvent };
     });
@@ -3392,8 +2383,8 @@ ${source.content}`;
       if (!this.db.prepare("SELECT 1 FROM runs WHERE id = ?").get(runId)) throw new Error(`Unknown run ${runId}`);
       const timestamp = now();
       this.db.prepare(`INSERT INTO event_consumers
-        (run_id, consumer_id, generation, acked_seq, terminal_acked_seq, claimed_at, updated_at)
-        VALUES (?, ?, 1, 0, NULL, ?, ?)
+        (run_id, consumer_id, generation, acked_seq, claimed_at, updated_at)
+        VALUES (?, ?, 1, 0, ?, ?)
         ON CONFLICT(run_id, consumer_id) DO UPDATE SET generation = event_consumers.generation + 1,
           claimed_at = excluded.claimed_at, updated_at = excluded.updated_at`).run(runId, consumerId, timestamp, timestamp);
       return this.getEventConsumer(runId, consumerId)!;
@@ -3403,7 +2394,7 @@ ${source.content}`;
 
   getEventConsumer(runId: RunId, consumerId: string): EventConsumerCursor | undefined {
     return this.db.prepare(`SELECT run_id as runId, consumer_id as consumerId, generation,
-      acked_seq as ackedSeq, terminal_acked_seq as terminalAckedSeq,
+      acked_seq as ackedSeq,
       settled_acked_seq as settledAckedSeq, final_acked_seq as finalAckedSeq,
       claimed_at as claimedAt, updated_at as updatedAt FROM event_consumers
       WHERE run_id = ? AND consumer_id = ?`).get(runId, consumerId) as EventConsumerCursor | undefined;
@@ -3421,11 +2412,10 @@ ${source.content}`;
       const final = this.db.prepare(`SELECT seq FROM run_events WHERE run_id = ? AND seq <= ?
         AND type IN ('run.completed','run.cancelled') ORDER BY seq DESC LIMIT 1`).get(runId, seq) as { seq: number } | undefined;
       this.db.prepare(`UPDATE event_consumers SET acked_seq = ?,
-        terminal_acked_seq = COALESCE(?, terminal_acked_seq),
         settled_acked_seq = COALESCE(?, settled_acked_seq),
         final_acked_seq = COALESCE(?, final_acked_seq), updated_at = ?
         WHERE run_id = ? AND consumer_id = ? AND generation = ?`).run(
-        seq, settled?.seq ?? null, settled?.seq ?? null, final?.seq ?? null,
+        seq, settled?.seq ?? null, final?.seq ?? null,
         now(), runId, consumerId, generation,
       );
       return "accepted" as const;
@@ -3585,7 +2575,7 @@ ${source.content}`;
         resolvedBy: "",
         resolution: "",
       };
-      const canonical = mapLegacyRunApprovalOperation({
+      const canonical = mapRunApprovalOperation({
         id: request.id,
         runId,
         decisionId,
@@ -3612,11 +2602,11 @@ ${source.content}`;
         canonical.operation.scope.type,
         canonical.operation.scope.id,
         canonical.operationDigest,
-        LEGACY_RUN_APPROVAL_DEFAULTS.risk,
-        LEGACY_RUN_APPROVAL_DEFAULTS.expiresAt,
-        LEGACY_RUN_APPROVAL_DEFAULTS.reuse.mode,
-        LEGACY_RUN_APPROVAL_DEFAULTS.reuse.maxUses,
-        LEGACY_RUN_APPROVAL_DEFAULTS.reuse.usedCount,
+        RUN_APPROVAL_DEFAULTS.risk,
+        RUN_APPROVAL_DEFAULTS.expiresAt,
+        RUN_APPROVAL_DEFAULTS.reuse.mode,
+        RUN_APPROVAL_DEFAULTS.reuse.maxUses,
+        RUN_APPROVAL_DEFAULTS.reuse.usedCount,
       );
       return request;
     })();
@@ -3730,7 +2720,7 @@ ${source.content}`;
       this.projectAttempt({
         runId, ordinal: row.attempt, trigger: "recovery", status: nextStatus,
         scenario: nextStatus === "running" ? "recovery" : "terminal",
-        reason, legacyEventSeq: seq, timestamp: createdAt,
+        reason, eventSequence: seq, timestamp: createdAt,
       });
       finalizeProjectionCheckpoint(this.db, { runId, attemptId: this.attemptId(runId, row.attempt), attemptOrdinal: row.attempt, eventSeq: seq, timestamp: createdAt });
       this.enqueueLearningProjection(runId, row.attempt, type, nextStatus, seq, { ...data, reason }, createdAt);
@@ -3743,18 +2733,9 @@ ${source.content}`;
     if (eventSeq <= 0) throw new Error("New Learning projections require a real run event");
     const run = this.getRun(runId);
     if (!run) throw new Error(`Run ${runId} not found for Learning projection`);
-    appendProjectionPair(this.db, { runId, attemptId: this.attemptId(runId, attempt), attemptOrdinal: attempt,
+    appendLearningProjection(this.db, { runId, attemptId: this.attemptId(runId, attempt), attemptOrdinal: attempt,
       lifecycle, outcome, eventSeq, payload, taskRunSnapshot: run as unknown as Record<string, unknown>, timestamp, runEventType });
   }
-
-  listPendingLearningProjections(limit = 100) {
-    return this.db.prepare(`SELECT id, run_id as runId, attempt, lifecycle, outcome, event_seq as eventSeq,
-      payload_json as payloadJson, snapshot_json as snapshotJson, status, error, created_at as createdAt, updated_at as updatedAt
-      FROM learning_projection_outbox WHERE status IN ('pending','failed') ORDER BY created_at LIMIT ?`).all(limit) as Array<{ id: string; runId: string; attempt: number; lifecycle: string; outcome: string; eventSeq: number; payloadJson: string; snapshotJson: string; status: string; error: string; createdAt: number; updatedAt: number }>;
-  }
-
-  completeLearningProjection(id: string) { this.db.prepare("UPDATE learning_projection_outbox SET status='completed', error='', updated_at=? WHERE id=?").run(now(), id); }
-  failLearningProjection(id: string, error: string) { this.db.prepare("UPDATE learning_projection_outbox SET status='failed', error=?, updated_at=? WHERE id=?").run(error.slice(0, 4000), now(), id); }
 
   finalizeRun(runId: RunId, status: Exclude<RunStatus, "running" | "interrupted" | "blocked">, reason = "") {
     const timestamp = now();
@@ -3768,7 +2749,7 @@ ${source.content}`;
         .run(status, reason, completedAt, seq, timestamp, runId);
       this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id = ?")
         .run(timestamp, runId);
-      this.projectAttempt({ runId, ordinal: run.attempt, trigger: "recovery", status, scenario: "terminal", reason, legacyEventSeq: seq, timestamp });
+      this.projectAttempt({ runId, ordinal: run.attempt, trigger: "recovery", status, scenario: "terminal", reason, eventSequence: seq, timestamp });
       finalizeProjectionCheckpoint(this.db, { runId, attemptId: this.attemptId(runId, run.attempt), attemptOrdinal: run.attempt, eventSeq: seq, timestamp });
       this.enqueueLearningProjection(runId, run.attempt, `run.${status}`, status, seq, { reason }, timestamp);
     });
@@ -3786,7 +2767,7 @@ ${source.content}`;
         .run(reason, seq, timestamp, runId);
       this.db.prepare("UPDATE run_checkpoints SET active = 0, current_tool_json = '', updated_at = ? WHERE run_id = ?")
         .run(timestamp, runId);
-      this.projectAttempt({ runId, ordinal: run.attempt, trigger: "recovery", status: "blocked", scenario: "terminal", reason, legacyEventSeq: seq, timestamp });
+      this.projectAttempt({ runId, ordinal: run.attempt, trigger: "recovery", status: "blocked", scenario: "terminal", reason, eventSequence: seq, timestamp });
       finalizeProjectionCheckpoint(this.db, { runId, attemptId: this.attemptId(runId, run.attempt), attemptOrdinal: run.attempt, eventSeq: seq, timestamp });
       this.enqueueLearningProjection(runId, run.attempt, "run.blocked", "blocked", seq, { reason }, timestamp);
     });
@@ -3804,7 +2785,7 @@ ${source.content}`;
         this.db.prepare("UPDATE run_checkpoints SET active=0,current_tool_json='',updated_at=? WHERE run_id=?").run(timestamp, run.id);
         this.projectAttempt({
           runId: run.id, ordinal: run.attempt, trigger: "recovery", status: "interrupted", scenario: "recovery",
-          reason: "service_restart", legacyEventSeq: seq, timestamp,
+          reason: "service_restart", eventSequence: seq, timestamp,
         });
         finalizeProjectionCheckpoint(this.db, { runId: run.id, attemptId: this.attemptId(run.id, run.attempt), attemptOrdinal: run.attempt, eventSeq: seq, timestamp });
         this.enqueueLearningProjection(run.id, run.attempt, "restart.interruption", "interrupted", seq, { reason: "service_restart" }, timestamp);
@@ -3836,7 +2817,7 @@ ${source.content}`;
         .run(resumedAt, resumedAt, runId);
       this.projectAttempt({
         runId, ordinal: run.attempt + 1, trigger: resumedFromInput ? "input" : "resume", status: "running",
-        scenario: resumedFromInput ? "input" : "resume", legacyEventSeq: run.lastEventSeq, timestamp: resumedAt,
+        scenario: resumedFromInput ? "input" : "resume", eventSequence: run.lastEventSeq, timestamp: resumedAt,
       });
       return this.getRun(runId)!;
     });

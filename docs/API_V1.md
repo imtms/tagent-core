@@ -57,7 +57,7 @@ Session inventory requires `sessions:read`; nested TaskRun reads require both `s
 
 ### Gateway capability profiles
 
-The full-feature Gateway contract is discovered independently of the closed legacy capabilities response:
+The full-feature Gateway contract is discovered independently of the base capabilities response:
 
 ```text
 GET /api/v1/capability-profiles
@@ -224,7 +224,7 @@ Submission reuse with the same canonical content, optional `gateProfile` (`off`,
 
 ## TaskRun commands and interactions
 
-Commands are scoped by `(principal, taskRunId, commandId)`. Core checks the durable command receipt before Attempt fencing, preserves the original structured result/error, and exposes it through POST replay and `GET /commands/:commandId`. Receipt `state` is `started`, `succeeded`, `failed`, or `outcome_unknown`; `outcome` is `accepted`, `rejected`, or `unknown`; `replayed` identifies a lookup/retry. The deprecated `status: duplicate` remains during the v39 compatibility window, but consumers must read `state`, `outcome`, `result`, and `error`.
+Commands are scoped by `(principal, taskRunId, commandId)`. Core checks the durable command receipt before Attempt fencing, preserves the original structured result/error, and exposes it through POST replay and `GET /commands/:commandId`. Receipt `state` is `started`, `succeeded`, `failed`, or `outcome_unknown`; `outcome` is `accepted`, `rejected`, or `unknown`; `replayed` identifies a lookup/retry.
 
 Supported commands are `task_run.steer`, `task_run.follow_up`, `task_run.cancel`, `task_run.resume`, `task_run.compact`, `task_run.submit_user_input`, and `task_run.resolve_approval`. `steer` and `follow_up` return after the fenced control intent is durable; Runtime delivery continues asynchronously. `TaskRun.pendingInteractions` is the typed source for pending Approval and User Input UI. Gateway needs only `runs:read` and `runs:control`.
 
@@ -232,9 +232,9 @@ An interrupted command or Goal operation with no provable terminal receipt becom
 
 ## Bounded reads and artifacts
 
-Transcript pages are ordered by durable transcript sequence. `after` is exclusive, `limit` defaults to 100 and is capped at 500; `pageInfo.nextCursor` is supplied only when `hasMore=true`. `CoreClient.getTranscriptPage()` exposes the bounded page. `getTranscript()` walks every page for compatibility and can aggregate a long transcript in memory, so Gateway should use the page method.
+Transcript pages are ordered by durable transcript sequence. `after` is exclusive, `limit` defaults to 100 and is capped at 500; `pageInfo.nextCursor` is supplied only when `hasMore=true`. `CoreClient.getTranscriptPage()` exposes the bounded page.
 
-Artifact metadata is ordered by `createdAt` then `id`. Its offset cursor `after` defaults to 0, `limit` defaults to 100 and is capped at 200; `CoreClient.getArtifactsPage()` is the bounded method while legacy `listArtifacts()` aggregates pages. Artifact preview is capped at 5 MiB and download at 50 MiB. Oversize content returns HTTP 413 `artifact.too_large`; unavailable content remains a 503. Interaction history uses the same default/max 100/200 bounded offset-page shape.
+Artifact metadata is ordered by `createdAt` then `id`. Its offset cursor `after` defaults to 0, `limit` defaults to 100 and is capped at 200; `CoreClient.getArtifactsPage()` is the client method. Artifact preview is capped at 5 MiB and download at 50 MiB. Oversize content returns HTTP 413 `artifact.too_large`; unavailable content remains a 503. Interaction history uses the same default/max 100/200 bounded offset-page shape.
 
 The operator Console updates a Workspace title and next-TaskRun execution preferences through `PATCH /api/v1/console/sessions/:id`. `modelId` must be the configured primary or fallback model, and `reasoningEffort` must be one of `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. These preferences do not mutate an active TaskRun; each admitted TaskRun carries its own immutable execution-profile snapshot.
 
@@ -250,7 +250,7 @@ Event consumers are durable and generation-fenced:
 
 The durable acknowledged sequence is authoritative. The stream always replays from that sequence and then continues live; an optional `after` value may be equal to or behind the durable ACK but may never skip ahead of it. A client checkpoint may suppress re-applying an already hydrated event, but the client must still persist and ACK the replayed sequence. The stream sends JSON `TaskRunEvent` values in `data:` frames and a comment heartbeat every 15 seconds. A newer claim invalidates an older generation.
 
-Replay reads events in batches of 256 and bounds the replay/live handoff buffer at 1,000 events. Backpressure or overflow closes the stream; the consumer reconnects from its durable ACK. Core does not automatically prune TaskRun events or expire cursors. `settledAcknowledgedSequence` includes recoverable `blocked` and terminal failure states; `finalAcknowledgedSequence` advances only for irreversible `completed` or `cancelled`. The deprecated `terminalAcknowledgedSequence` aliases the settled boundary during the compatibility window.
+Replay reads events in batches of 256 and bounds the replay/live handoff buffer at 1,000 events. Backpressure or overflow closes the stream; the consumer reconnects from its durable ACK. Core does not automatically prune TaskRun events or expire cursors. `settledAcknowledgedSequence` includes recoverable `blocked` and terminal failure states; `finalAcknowledgedSequence` advances only for irreversible `completed` or `cancelled`.
 
 Projection-critical events use per-type payload schemas and one canonical fixture per catalog member. Internal Supervisor/context/runtime/control detail is projected as `diagnostic.internal` with only `sourceType`; private reasoning and arbitrary internal payloads are never copied to Channel SSE. Unknown future public event types remain ignorable and ACK-able. `task_run.waiting_input` carries the public User Input request. The typed interaction read model is authoritative for the complete lifecycle, including states that do not have a dedicated public event.
 
@@ -258,7 +258,7 @@ Projection-critical events use per-type payload schemas and one canonical fixtur
 
 `GET /api/v1/capabilities` returns the Core release, API/event/schema versions, command/event catalogs, typed-interaction flags, `operator.profileVersion` and exact endpoint IDs, active Approval authority/readiness, exact receipt recovery, no-auto-delete/no-cursor-expiry retention policy, and enforced payload/stream limits. It advertises `operator.read.v1` in `apiVersions`; that profile's own capabilities are returned from `GET /api/v1/operator/capabilities`, while the eight full-feature profiles are returned independently from `GET /api/v1/capability-profiles`. Gateway must fail fast for each feature if any required item is absent.
 
-Only endpoint IDs returned by their owning capability profile are stable cross-team contracts. The legacy Operator profile consists of the completed Channel Session/Submission/TaskRun/interaction/Transcript/Artifact/event-consumer routes and the Workspace Goal subset listed above. Operator Read owns only its four declared endpoint IDs; the full-feature registry owns only the routes in each of its eight detail documents. Undeclared Console/Admin routes remain first-party or experimental and Gateway must not transparently expose them. Browser credentials never enter Core; Gateway replaces them with a minimum-scope opaque service credential. See [GATEWAY_HANDOFF_STATUS.md](GATEWAY_HANDOFF_STATUS.md) for the responsibility decision.
+Only endpoint IDs returned by their owning capability profile are stable cross-team contracts. The base Operator profile consists of the completed Channel Session/Submission/TaskRun/interaction/Transcript/Artifact/event-consumer routes and the Workspace Goal subset listed above. Operator Read owns only its four declared endpoint IDs; the full-feature registry owns only the routes in each of its eight detail documents. Undeclared Console/Admin routes remain first-party or experimental and Gateway must not transparently expose them. Browser credentials never enter Core; Gateway replaces them with a minimum-scope opaque service credential. See [GATEWAY_HANDOFF_STATUS.md](GATEWAY_HANDOFF_STATUS.md) for the responsibility decision.
 
 ## CORS
 

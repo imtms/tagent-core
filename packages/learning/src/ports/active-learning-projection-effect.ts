@@ -1,10 +1,9 @@
 import type {
   DecodedLearningProjection,
-  LearningProjectionAuthoritySource,
 } from "../domain/learning-projection.js";
 
 export interface ApplyActiveLearningProjectionEffectInput {
-  source: LearningProjectionAuthoritySource;
+  source: "integration";
   outboxSequence: number;
   sourceEventId: string;
   effectHash: string;

@@ -325,11 +325,11 @@ describe("channel v1 helpers", () => {
   it("sends explicit Session idempotency and decodes capabilities", async () => {
     const session = { id: "session-1", title: "Gateway", modelId: "gpt-5.6-sol", reasoningEffort: "high", createdAt: "2026-08-04T12:34:56.789Z", updatedAt: "2026-08-04T12:34:56.789Z", latestTaskRunStatus: null, latestTaskRunPhase: null };
     const capabilities = {
-      releaseVersion: "0.7.0", apiVersions: ["channel.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 47,
+      releaseVersion: "0.8.0", apiVersions: ["channel.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 1,
       commandTypes: ["task_run.steer"], eventTypes: ["task_run.started"],
       interactions: { approvalResolution: true, userInputSubmission: true },
       operator: { profileVersion: "1.0", endpointIds: ["channel.capabilities.get"], workspaceGoals: true, roadmapGenerationIdempotent: true },
-      approval: { authority: "legacy", ready: true, canonicalCutoverReady: false },
+      approval: { ready: true },
       receiptRecovery: { protocolVersion: "1.0", exactReplay: true, commandLookup: true, interruptedEffectState: "outcome_unknown", automaticUnknownReplay: false },
       retention: { automaticDeletion: false, cursorExpiry: false },
       limits: { transcriptPageMax: 500, eventReplayBatch: 256, eventLiveBuffer: 1000, artifactPreviewBytes: 5242880, artifactDownloadBytes: 52428800, artifactListPageMax: 200, interactionPageMax: 200 },
@@ -383,7 +383,6 @@ describe("channel v1 helpers", () => {
       acknowledgedSequence: 7,
       settledAcknowledgedSequence: null,
       finalAcknowledgedSequence: null,
-      terminalAcknowledgedSequence: null,
       claimedAt: "2026-08-04T12:34:56.789Z",
       updatedAt: "2026-08-04T12:34:56.789Z",
     };

@@ -1,6 +1,6 @@
 import type { ContextManifest, ExecutionSessionRef } from "../domain/task-run.js";
 import type { ApprovalRepository, SupervisorDecisionJournal, WorkspaceGoalRepository } from "@tagent/governance/ports";
-import type { AttemptAuthorityRepository, AttemptRepository, FencedRuntimeMutationPort } from "./attempt-repository.js";
+import type { AttemptRepository, FencedRuntimeMutationPort } from "./attempt-repository.js";
 import type { CheckpointRepository } from "./checkpoint-repository.js";
 import type { ContinuationQueue } from "./continuation-queue.js";
 import type { ControlInbox } from "./control-inbox.js";
@@ -43,7 +43,6 @@ export type ExecutionSupervisorDecisionPort = Pick<
 /** Persistence surface owned by Execution; adapters may implement additional context ports. */
 export interface ExecutionPersistencePort {
   readonly attempts: AttemptRepository;
-  readonly attemptAuthority: AttemptAuthorityRepository;
   readonly runtimeMutations: FencedRuntimeMutationPort;
   readonly taskRuns: TaskRunRepository;
   readonly taskRunTransitions: TaskRunTransitionPort;

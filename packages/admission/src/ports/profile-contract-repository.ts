@@ -80,9 +80,14 @@ export interface ProfileInboxItemRecord {
   runId: string | null;
   position: number;
   summary: string;
+  intent: "steer_active" | "follow_up_active" | "update_active_context" | "new_task" | "parallel_task" | "merge_candidate" | "discussion" | "clarification" | "defer";
+  targetRunId: string | null;
   priority: number;
   urgency: "low" | "normal" | "high" | "critical";
   relation: "same_goal" | "correction" | "constraint" | "follow_up" | "parallel" | "derived" | "depends_on" | "independent";
+  acceptanceCriteria: string[];
+  confidence: number;
+  reason: string;
   executionPolicy: { gateProfile?: "off" | "relaxed" | "strict" } | null;
   revision: number;
   createdAt: number;

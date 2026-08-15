@@ -67,8 +67,8 @@ export class ApprovedWorkflowGovernanceExecutor {
     if (approval.status === "approved" && approval.expiresAt !== null && approval.expiresAt <= Date.now()) {
       throw new Error("Approval request has expired");
     }
-    if (approval.ref.source !== "legacy_workflow") {
-      throw new Error("Workflow Governance preserves legacy_workflow approval authority");
+    if (approval.ref.source !== "workflow") {
+      throw new Error("Workflow Governance preserves workflow approval authority");
     }
     const exhausted = approval.status === "approved" && (approval.reuse.usedCount < 0
       || (approval.reuse.mode === "one_time" && approval.reuse.usedCount > 0)

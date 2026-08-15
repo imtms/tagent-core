@@ -621,9 +621,9 @@ describe("AgentService runtime boundary", () => {
   it("normalizes a persisted external-risk policy before runtime admission", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const inconsistentPolicy = { mode: "semantic_delivery", sideEffectRisk: "external_high", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "legacy-bad", confidence: 1, reason: "legacy mismatch" } as const;
-    const analysis = { summary: "external legacy task", objectives: [{ id: "o1", summary: "external legacy task", timing: "current" as const, kind: "other" as const }], intent: "new_task" as const, targetRunId: null, priority: 500, urgency: "normal" as const, relation: "independent" as const, acceptanceCriteria: ["complete"], scope: "external", nonGoals: [], confidence: 1, reason: "legacy", routerVersion: "legacy", executionPolicy: inconsistentPolicy };
-    store.enqueueSessionInbox(session.id, "legacy external action", analysis, "legacy-external");
+    const inconsistentPolicy = { mode: "semantic_delivery", sideEffectRisk: "external_high", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "inconsistent-test", confidence: 1, reason: "risk mismatch" } as const;
+    const analysis = { summary: "external task", objectives: [{ id: "o1", summary: "external task", timing: "current" as const, kind: "other" as const }], intent: "new_task" as const, targetRunId: null, priority: 500, urgency: "normal" as const, relation: "independent" as const, acceptanceCriteria: ["complete"], scope: "external", nonGoals: [], confidence: 1, reason: "test", routerVersion: "test", executionPolicy: inconsistentPolicy };
+    store.enqueueSessionInbox(session.id, "external action", analysis, "external-risk");
     let launched = false;
     const service = new AgentService(agentPersistence(store), "/tmp", () => { launched = true; return new DeferredRuntime(); });
     expect(service.recoverSessionInbox()).toHaveLength(1);
@@ -1575,7 +1575,9 @@ describe("AgentService runtime boundary", () => {
     expect(store.getRun(run.id)).toMatchObject({ status: "blocked", attempt: 1 });
     expect(store.getRun(run.id)?.continuations).toHaveLength(0);
     expect(store.listSupervisorDecisions(run.id)).toEqual([expect.objectContaining({ reasonCode: "supervisor_review_failed", action: "block_taskrun", evaluator: "llm" })]);
-    expect(store.listMessages(session.id).at(-1)?.content).toMatch(/no automatic continuation/i);
+    expect(store.listMessages(session.id)).toEqual([
+      expect.objectContaining({ role: "user", content: "Explain audit failure isolation." }),
+    ]);
     await service.closeRuntimes();
     store.close();
   });

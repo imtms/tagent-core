@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   GateProfile,
   SessionId,
-  SessionInboxItem,
+  Submission,
   SessionInputAnalysis,
 } from "../domain/index.js";
 import { assertSubmissionContent } from "../domain/index.js";
@@ -219,7 +219,7 @@ export class AdmissionCoordinator {
     return { item: this.state.persistence.submissions.getSessionInboxItem(item.id)!, run };
   }
 
-  public enqueueRelatedSessionTask(parent: TaskRun, sourceItem: SessionInboxItem, summary: string, relation: "parallel" | "follow_up" | "derived", analysis: SessionInputAnalysis) {
+  public enqueueRelatedSessionTask(parent: TaskRun, sourceItem: Submission, summary: string, relation: "parallel" | "follow_up" | "derived", analysis: SessionInputAnalysis) {
     const objective = analysis.objectives.find((item) => item.summary === summary);
     const criteria = analysis.acceptanceCriteria.filter((criterion) => {
       const words = summary.toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u).filter((word) => word.length > 1);
@@ -386,7 +386,7 @@ export class AdmissionCoordinator {
     return this.launchClaimedSessionInbox(claimed.item, claimed.run);
   }
 
-  public launchClaimedSessionInbox(item: SessionInboxItem, run: TaskRun, retry = false) {
+  public launchClaimedSessionInbox(item: Submission, run: TaskRun, retry = false) {
     try {
       this.state.persistence.workspaceGoals.attachRun(run.id, item.id);
       run = this.state.persistence.taskRuns.getRun(run.id) ?? run;
@@ -426,7 +426,7 @@ export class AdmissionCoordinator {
     return this.state.persistence.taskRuns.getRun(run.id)!;
   }
 
-  private pauseForExternalActionApproval(item: SessionInboxItem, run: TaskRun, retry: boolean) {
+  private pauseForExternalActionApproval(item: Submission, run: TaskRun, retry: boolean) {
     const reason = `External action requires explicit approval before any mutation-capable tool can execute: ${run.contract?.summary || item.content}`;
     const decision = this.dependencies.supervisor.proposeExternalActionStart(run.id, run.contract?.summary || item.content);
     const approval = this.state.persistence.approvals.ensureApprovalRequest(run.id, decision.id, reason, {
@@ -458,7 +458,7 @@ export class AdmissionCoordinator {
     this.state.persistence.workspaceGoals.recordRunOutcome(run.id);
   }
 
-  public completeClaimedSessionLaunch(item: SessionInboxItem, run: TaskRun, sessionHistory: ContextAssembly & { recalledMemory?: string; memoryContextItems?: ContextManifestItem[] }, retry: boolean) {
+  public completeClaimedSessionLaunch(item: Submission, run: TaskRun, sessionHistory: ContextAssembly & { recalledMemory?: string; memoryContextItems?: ContextManifestItem[] }, retry: boolean) {
     const current = this.currentLaunchRun(run);
     if (!current) return;
     run = current;
@@ -484,7 +484,7 @@ export class AdmissionCoordinator {
     ].join("\n\n");
   }
 
-  public failClaimedSessionLaunch(item: SessionInboxItem, run: TaskRun, error: unknown) {
+  public failClaimedSessionLaunch(item: Submission, run: TaskRun, error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     const retryable = !message.startsWith("Model is not allowed:");
     const attempt = this.state.persistence.attempts.getAttemptForRun(run.id, run.attempt);

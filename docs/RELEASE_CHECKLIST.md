@@ -2,7 +2,7 @@
 
 This repository publishes a GitHub source/binary release, not an npm-registry release. Every workspace remains private and no workflow runs `npm publish`; the ABI and Core Client are attached as installable `.tgz` SDK assets.
 
-Do not prefill this checklist or infer a pass from a previous release. Record the commit, command output, artifact checksums, migration rehearsal, and Gateway probe for the candidate being tagged.
+Do not prefill this checklist or infer a pass from a previous release. Record the commit, command output, artifact checksums, current-schema validation, and Gateway probe for the candidate being tagged.
 
 ## Toolchain
 
@@ -53,27 +53,27 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] Memory-disabled startup does not connect to PostgreSQL/Cold storage or start Memory/Learning workers.
 - [ ] Backup/restore and reindex generation behavior were rehearsed for production configuration changes.
 
-## Migration and recovery gate
+## Current schema and recovery gate
 
-- [ ] A representative 0.1.x database plus WAL/SHM was backed up and restored in isolation.
-- [ ] The candidate migrated v30 → v31 → v32 → v33 → v34 → v35 → v36 → v37 → v38 → v39 → v40 → v41 → v42 → v43 → v44 → v45 → v46 → v47 and reopened idempotently.
-- [ ] `schema_meta.version` is 47; trusted-evidence and Goal-execution drift checks pass; complete v39 receipt/ACK shapes, the v40 Submission audit shape, exact v41 Operator Read indexes, the v42 Inbox execution-policy column, the v43 Skill catalog, the v44 Workspace reference table/index/constraints, the v45 exact request-envelope table/index/composite foreign key, the v46 continuation due-time column/index, and all v47 profile revision/receipt/audit/collection-revision objects pass fail-closed validation; `migration_issues` has zero open rows.
+- [ ] An empty database creates the complete current schema in one transaction and reopens successfully.
+- [ ] `core_schema.schema_id` is `tagent-core/0.8`, `Store.getSchemaVersion()` is `1`, and exact `sqlite_master` drift validation fails closed.
+- [ ] A nonempty unmarked database, another schema ID, and missing/extra/changed schema objects are rejected with instructions to recreate the database.
 - [ ] A second Core process is rejected by the OS lock/writer authority.
 - [ ] Writer lease/fence loss clears health readiness and closes Core.
 - [ ] Restart recovery produces `outcome_unknown` for effects/deliveries whose outcome cannot be proven and `restart_before_effect` cancellation only before effect start.
 - [ ] An interrupted TaskRun command or Goal operation becomes `outcome_unknown`; a Session and its create receipt remain atomic across restart.
 - [ ] A required passed check rejects self-reported, failed, stale, wrong-Run and wrong-Attempt evidence, and accepts only the matching successful Bash receipt.
 - [ ] TaskRun completion Gate profiles are frozen at Admission: `off` skips completion review, `relaxed` performs at most one outcome-focused semantic review without plan/check prerequisites, and `strict` retains the full deterministic and semantic audit.
-- [ ] Older clients and persisted TaskRuns without a profile remain `strict`; Web defaults new Workspace selections to `relaxed`; Submission idempotency conflicts when the same key is reused with a different profile.
+- [ ] TaskRuns without an explicit Gate profile remain `strict`; Web defaults new Workspace selections to `relaxed`; Submission idempotency conflicts when the same key is reused with a different profile.
 - [ ] Semantic delivery uses the compact judge; substantial strict settlement sends actual bounded receipts to one full Supervisor call; relaxed settlement uses one bounded outcome review; deterministic failures, exact delivery, and disabled Gate skip unnecessary calls; malformed output does not trigger a schema-repair call.
 - [ ] External-action approval, Workspace Goal authority, and mutation-capable tool policy remain enforced identically under `off`, `relaxed`, and `strict`.
-- [ ] Restoring the pre-upgrade backup with the old artifact was tested as the 0.1.x rollback path.
+- [ ] Same-release SQLite/WAL/SHM restore was tested in isolation; earlier schema IDs are rejected rather than upgraded.
 
 ## API, Web, and Gateway gate
 
 - [ ] [Gateway handoff status](GATEWAY_HANDOFF_STATUS.md) confirms every dependency is either Core Ready, explicitly Gateway-owned, or deferred by current policy; a passing Core runtime probe alone cannot prove Gateway-owned behavior.
 - [ ] `GET /api/v1/health` reports writer readiness; `/api/health` returns 404.
-- [ ] `GET /api/v1/capabilities` matches the release/schema, required commands/events, legacy Operator allowlist, active Approval authority, receipt-recovery protocol, retention and limits; `operator.read.v1` and `/api/v1/operator/capabilities` match the independent read profile.
+- [ ] `GET /api/v1/capabilities` matches the release/schema, required commands/events, base Operator endpoint list, ready Approval contract, receipt-recovery protocol, retention and limits; `operator.read.v1` and `/api/v1/operator/capabilities` match the independent read profile.
 - [ ] Credential mode fails closed for missing, invalid, and under-scoped opaque tokens.
 - [ ] Resource scopes are enforced from server configuration.
 - [ ] Exact CORS origins pass and wildcard/invalid origins fail startup or request policy as designed.

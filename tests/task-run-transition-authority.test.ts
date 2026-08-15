@@ -7,8 +7,8 @@ import { attemptIdFor } from "@tagent/execution/domain";
 import type { RuntimeTransitionFence, SystemTransitionAuthority } from "@tagent/execution/ports";
 import {
   Store,
-  createGuardedLegacyStoreAdapter,
-  type LegacyStoreAdapter,
+  createGuardedSqlitePersistence,
+  type SqlitePersistence,
 } from "@tagent/persistence-sqlite";
 import { CoreWriterLease, WriterAuthorityLostError, WriterFenceGuard } from "@tagent/persistence-sqlite/writer";
 
@@ -19,12 +19,12 @@ const temporaryDirectories: string[] = [];
 
 interface Fixture {
   store: Store;
-  adapter: LegacyStoreAdapter;
+  adapter: SqlitePersistence;
   guard: WriterFenceGuard;
   writerLease: CoreWriterLease;
   filename: string;
-  run: ReturnType<LegacyStoreAdapter["taskRuns"]["createRun"]>;
-  attempt: NonNullable<ReturnType<LegacyStoreAdapter["attempts"]["getActiveAttempt"]>>;
+  run: ReturnType<SqlitePersistence["taskRuns"]["createRun"]>;
+  attempt: NonNullable<ReturnType<SqlitePersistence["attempts"]["getActiveAttempt"]>>;
   fence: RuntimeTransitionFence;
   setNow(value: number): void;
 }
@@ -33,7 +33,7 @@ function fixture(): Fixture {
   const directory = mkdtempSync(path.join(tmpdir(), "tagent-transition-authority-"));
   temporaryDirectories.push(directory);
   const filename = path.join(directory, "core.sqlite");
-  const store = new Store(filename, { deferPostMigrationRecovery: true });
+  const store = new Store(filename, { deferStartupRecovery: true });
   stores.push(store);
   store.db.exec(`CREATE TABLE writer_test_clock (id INTEGER PRIMARY KEY CHECK (id=1),value INTEGER NOT NULL);
     INSERT INTO writer_test_clock VALUES (1,1000);`);
@@ -44,7 +44,7 @@ function fixture(): Fixture {
   )!;
   const guard = new WriterFenceGuard(store.db, writerLease.authority, { skewMarginMs: 2_000, nowSql });
   guard.installConnectionGuard();
-  const adapter = createGuardedLegacyStoreAdapter(store, guard);
+  const adapter = createGuardedSqlitePersistence(store, guard);
   const session = adapter.sessions.createSession("transition-test");
   const run = adapter.taskRuns.createRun(session.id, "transition authority");
   const attempt = adapter.attempts.getActiveAttempt(run.id)!;
@@ -230,7 +230,7 @@ describe("TaskRun transition authority persistence", () => {
       status: "failed",
       active: false,
       version: 2,
-      legacyEventSeq: 1,
+      eventSequence: 1,
     });
     expect(receipt.store.listEvents(receipt.run.id)).toEqual([
       expect.objectContaining({ seq: 1, type: "run.failed", data: { reason: "idle_timeout", stage: "execute", timeoutMs: 30_000 } }),

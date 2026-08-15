@@ -49,7 +49,7 @@ export class ContextAssembler {
     // same provider context budget and must participate in history pruning.
     const systemTokens = estimateTextTokens(systemPrompt) + estimateTextTokens(tailContext);
     const promptTokens = estimateTextTokens(prompt);
-    const entries = messages.map((message, index) => ({ message, sourceId: sourceIds[index] || legacyMessageIdentity(message, index) }));
+    const entries = messages.map((message, index) => ({ message, sourceId: sourceIds[index] || synthesizedMessageIdentity(message, index) }));
     const originalTurns = identifyTurns(entries);
     const turnLimited = originalTurns.slice(-Math.max(1, this.options.maxTurns));
     const prepared = turnLimited.map((turn, index) => this.prepareHistoricalTurn(turn, index === turnLimited.length - 1));
@@ -254,7 +254,7 @@ function summarizeTaskRunReceipt(text: string, limit: number) {
   }
 }
 
-function legacyMessageIdentity(message: AgentMessage, index: number) {
+function synthesizedMessageIdentity(message: AgentMessage, index: number) {
   const timestamp = "timestamp" in message && typeof message.timestamp === "number" ? message.timestamp : 0;
-  return `legacy:${message.role}:${timestamp}:${index}`;
+  return `synthesized:${message.role}:${timestamp}:${index}`;
 }

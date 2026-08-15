@@ -127,29 +127,6 @@ function dormantViolations(relativePath: string, sourceText?: string): DormantVi
   return [...violations.values()];
 }
 
-function serviceCallsForRoute(source: ts.SourceFile, routePath: string): Set<string> {
-  const calls = new Set<string>();
-  const collect = (node: ts.Node) => {
-    if (ts.isPropertyAccessExpression(node)
-      && ts.isIdentifier(node.expression)
-      && node.expression.text === "service") calls.add(node.name.text);
-    ts.forEachChild(node, collect);
-  };
-  const visit = (node: ts.Node) => {
-    if (ts.isCallExpression(node)
-      && ts.isPropertyAccessExpression(node.expression)
-      && ts.isIdentifier(node.expression.expression)
-      && node.expression.expression.text === "app"
-      && node.expression.name.text === "post"
-      && literalText(node.arguments[0]) === routePath) {
-      node.arguments.slice(1).forEach(collect);
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return calls;
-}
-
 describe("dormant capability execution architecture", () => {
   it("keeps the capability handler and canonical repository out of every production composition surface", () => {
     for (const root of productionRoots) expect(sourceFiles(root).length, root).toBeGreaterThan(0);
@@ -187,12 +164,13 @@ describe("dormant capability execution architecture", () => {
     ]));
   });
 
-  it("keeps Run approval commands on the versioned Console surface", () => {
-    const consoleRoutes = parseSource("adapters/http-fastify/src/v1/console-run-routes.ts");
-    expect(serviceCallsForRoute(consoleRoutes, "/api/v1/console/approval-requests/:id/approve"))
-      .toContain("approveRunApproval");
-    expect(serviceCallsForRoute(consoleRoutes, "/api/v1/console/approval-requests/:id/reject"))
-      .toContain("rejectRunApproval");
+  it("keeps Run approval commands on the versioned Channel surface", () => {
+    const taskRunRoutes = parseSource("adapters/http-fastify/src/v1/task-run-routes.ts");
+    const taskRunCommandHandler = parseSource("adapters/http-fastify/src/v1/task-run-command-handler.ts");
+    expect(taskRunRoutes.text).toContain('/api/v1/task-runs/:taskRunId/commands');
+    expect(taskRunCommandHandler.text).toContain('case "task_run.resolve_approval"');
+    expect(taskRunCommandHandler.text).toContain("service.approveRunApproval");
+    expect(taskRunCommandHandler.text).toContain("service.rejectRunApproval");
 
     const coordinator = readFileSync(
       path.join(repoRoot, "apps/core-service/src/application/core-application-coordinator.ts"),

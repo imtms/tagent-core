@@ -17,7 +17,6 @@ import {
   TranscriptResponseSchema,
   TranscriptQuerySchema,
   type TaskRunArtifactParams,
-  type TaskRunCommand,
   type TaskRunCommandParams,
   type TaskRunInteraction,
   type TaskRunParams,
@@ -28,47 +27,7 @@ import { principalOf } from "./auth.js";
 import { mapArtifact, mapArtifactContent, mapCommandReceipt, mapTaskRun, mapTranscriptItem } from "./mappers.js";
 import { authorizeChannel, conflict, decodeQuery, missing } from "./route-support.js";
 import { withRequestAbortSignal } from "./console-route-support.js";
-
-function commandAdmissionError(status: "inactive" | "closing" | "full"): V1HttpError {
-  if (status === "full") return new V1HttpError(429, "task_run.command_capacity_exceeded", "TaskRun control inbox is full", "rate_limited", true);
-  if (status === "closing") return new V1HttpError(503, "service.closing", "Service is closing", "unavailable", true);
-  return conflict("task_run.invalid_transition", "TaskRun is not active");
-}
-
-async function executeCommand(dependencies: ChannelV1Dependencies, taskRunId: string, command: TaskRunCommand): Promise<void> {
-  const { service } = dependencies;
-  switch (command.type) {
-    case "task_run.steer": {
-      const result = await service.steer(taskRunId, command.payload.content, command.commandId);
-      if (result.status !== "accepted") throw commandAdmissionError(result.status);
-      return;
-    }
-    case "task_run.follow_up": {
-      const result = await service.followUp(taskRunId, command.payload.content, command.commandId);
-      if (result.status !== "accepted") throw commandAdmissionError(result.status);
-      return;
-    }
-    case "task_run.cancel":
-      if (!service.cancel(taskRunId)) throw conflict("task_run.invalid_transition", "TaskRun is not active");
-      return;
-    case "task_run.resume":
-      await service.resume(taskRunId);
-      return;
-    case "task_run.compact": {
-      const result = await service.compact(taskRunId, command.payload.reason);
-      if (result === "inactive") throw conflict("task_run.invalid_transition", "TaskRun is not active");
-      if (result === "failed") throw new V1HttpError(503, "task_run.compaction_failed", "TaskRun compaction failed", "unavailable", true);
-      return;
-    }
-    case "task_run.submit_user_input":
-      await service.submitUserInput(command.payload.requestId, command.payload.response);
-      return;
-    case "task_run.resolve_approval":
-      if (command.payload.decision === "approved") await service.approveRunApproval(command.payload.approvalRequestId, command.payload.resolution);
-      else service.rejectRunApproval(command.payload.approvalRequestId, command.payload.resolution);
-      return;
-  }
-}
+import { executeTaskRunCommand } from "./task-run-command-handler.js";
 
 export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: ChannelV1Dependencies): void {
   const { persistence, service, serviceCredentials, workspaceRoot, artifacts } = dependencies;
@@ -130,8 +89,8 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
       throw mismatch;
     }
     try {
-      await executeCommand(dependencies, taskRunId, command);
-      taskRunCommands.settleTaskRunCommand(principalId, taskRunId, command.commandId, "succeeded", { accepted: true });
+      const result = await executeTaskRunCommand(dependencies, taskRunId, command);
+      taskRunCommands.settleTaskRunCommand(principalId, taskRunId, command.commandId, "succeeded", result);
     } catch (error) {
       const mapped = error instanceof V1HttpError
         ? error
@@ -264,6 +223,30 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
       if (error instanceof V1HttpError) throw error;
       const cause = error as NodeJS.ErrnoException & { code?: string };
       if (cause.code === "ENOENT") throw missing("artifact");
+      if (cause.code === "ARTIFACT_PATH_REJECTED") throw new V1HttpError(400, "artifact.path_rejected", cause.message, "validation");
+      if (cause.code === "ARTIFACT_TOO_LARGE") throw new V1HttpError(413, "artifact.too_large", cause.message, "validation");
+      throw new V1HttpError(503, "artifact.unavailable", "Artifact content is unavailable", "unavailable", true);
+    }
+  });
+
+  app.get("/api/v1/task-runs/:taskRunId/artifacts/:artifactId/download", {
+    onRequest: authorizeChannel(serviceCredentials, "runs:read"),
+    schema: { params: TaskRunArtifactParamsSchema },
+  }, async (request, reply) => {
+    const { taskRunId, artifactId } = request.params as TaskRunArtifactParams;
+    if (!taskRuns.hasRun(taskRunId)) throw missing("task_run");
+    const artifact = evidence.getArtifact(taskRunId, artifactId);
+    if (!artifact) throw missing("artifact");
+    try {
+      const source = await withRequestAbortSignal(request, reply, (signal) =>
+        artifacts.loadDownload(artifact.content, artifact.uri, workspaceRoot, signal));
+      reply.header("Content-Type", "application/octet-stream");
+      reply.header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(artifacts.filename(artifact.title, artifact.uri))}`);
+      return reply.send(source.buffer);
+    } catch (error) {
+      const cause = error as NodeJS.ErrnoException & { code?: string };
+      if (cause.code === "ENOENT") throw missing("artifact");
+      if (cause.code === "EACCES" || cause.code === "EISDIR") throw new V1HttpError(422, "artifact.unreadable", cause.message, "validation");
       if (cause.code === "ARTIFACT_PATH_REJECTED") throw new V1HttpError(400, "artifact.path_rejected", cause.message, "validation");
       if (cause.code === "ARTIFACT_TOO_LARGE") throw new V1HttpError(413, "artifact.too_large", cause.message, "validation");
       throw new V1HttpError(503, "artifact.unavailable", "Artifact content is unavailable", "unavailable", true);

@@ -489,7 +489,7 @@ export class SqliteTaskRunTransitionRepository implements TaskRunTransitionPort 
 
   private assertManagedTransaction(): void {
     if (!this.db.inTransaction) {
-      throw new Error("TaskRun transitions require the LegacyStoreAdapter writer transaction");
+      throw new Error("TaskRun transitions require the SqlitePersistence writer transaction");
     }
   }
 }

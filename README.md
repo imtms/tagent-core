@@ -33,7 +33,7 @@ The repository contains 13 workspaces in one acyclic dependency graph:
 | Domain | `@tagent/memory` | Optional Hot/Warm/Cold long-term Memory |
 | Domain | `@tagent/learning` | Optional governed Learning projections and workflows |
 | Adapter | `@tagent/http-fastify` | API-only Fastify adapter for `/api/v1` |
-| Adapter | `@tagent/persistence-sqlite` | Schema 47, repositories, migrations, writer fencing, and Unit of Work |
+| Adapter | `@tagent/persistence-sqlite` | Current schema, repositories, writer fencing, and Unit of Work |
 | Adapter | `@tagent/runtime-pi` | In-process Pi runtime integration |
 | Adapter | `@tagent/workspace-local` | Workspace-contained tools and path enforcement |
 | Application | `@tagent/core-service` | Core composition root and lifecycle |
@@ -93,9 +93,9 @@ Core does not validate browser OIDC/JWT tokens. In production, a Gateway validat
 
 ## Persistence and recovery
 
-Core owns a schema 47 SQLite database. Startup acquires an OS instance lock, applies migrations, claims a writer lease and fence, installs connection-level mutation guards, performs guarded recovery, starts services and workers, then reports the writer ready.
+Core owns a fresh-only SQLite database identified by `tagent-core/0.8` and exposed as schema version `1`. Startup acquires an OS instance lock, creates or validates the exact current schema, claims a writer lease and fence, installs connection-level mutation guards, performs guarded recovery, starts services and workers, then reports the writer ready.
 
-Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Runtime/background shutdown is a quiescence barrier: Core retains the Store, writer lease, guard, and instance lock if owned work cannot prove settlement. Back up the SQLite database together with its WAL/SHM files before an upgrade. Binaries that only understand schema 46 cannot open schema 47; rollback requires the matching pre-upgrade database backup. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md) and [docs/UPGRADING.md](docs/UPGRADING.md).
+Only the active fenced writer may mutate control-plane state. Multi-repository writes use a synchronous Unit of Work. Runtime/background shutdown is a quiescence barrier: Core retains the Store, writer lease, guard, and instance lock if owned work cannot prove settlement. This release does not upgrade databases created by earlier releases: deploy with an empty database, and restore only backups created by the same schema ID and release line. See [docs/PERSISTENCE_AND_RECOVERY.md](docs/PERSISTENCE_AND_RECOVERY.md).
 
 ## Completion evidence and model calls
 
@@ -148,7 +148,6 @@ See [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
 - [Workspace Skills](docs/SKILLS.md)
 - [Execution reliability and efficiency](docs/EXECUTION_EFFICIENCY.md)
 - [Deployment and Gateway](docs/DEPLOYMENT_AND_GATEWAY.md)
-- [Upgrade and rollback](docs/UPGRADING.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
 

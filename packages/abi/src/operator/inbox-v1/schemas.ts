@@ -18,6 +18,12 @@ export const OperatorInboxItemSchema = Type.Object({
   runId: Type.Union([IdentifierSchema, Type.Null()]),
   position: Type.Integer({ minimum: 0 }),
   summary: Type.String({ maxLength: 500 }),
+  intent: Type.Union([
+    Type.Literal("steer_active"), Type.Literal("follow_up_active"), Type.Literal("update_active_context"),
+    Type.Literal("new_task"), Type.Literal("parallel_task"), Type.Literal("merge_candidate"),
+    Type.Literal("discussion"), Type.Literal("clarification"), Type.Literal("defer"),
+  ]),
+  targetRunId: Type.Union([IdentifierSchema, Type.Null()]),
   priority: Type.Integer(),
   urgency: Type.Union([Type.Literal("low"), Type.Literal("normal"), Type.Literal("high"), Type.Literal("critical")]),
   relation: Type.Union([
@@ -25,6 +31,9 @@ export const OperatorInboxItemSchema = Type.Object({
     Type.Literal("constraint"), Type.Literal("follow_up"), Type.Literal("parallel"),
     Type.Literal("depends_on"), Type.Literal("derived"),
   ]),
+  acceptanceCriteria: Type.Array(Type.String(), { maxItems: 100 }),
+  confidence: Type.Number({ minimum: 0, maximum: 1 }),
+  reason: Type.String({ maxLength: 4_000 }),
   gateProfile: Type.Union([Type.Literal("off"), Type.Literal("relaxed"), Type.Literal("strict")]),
   revision: ResourceRevisionSchema,
   createdAt: IsoDateTimeSchema,

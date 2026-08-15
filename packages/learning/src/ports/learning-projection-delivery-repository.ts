@@ -1,46 +1,30 @@
 import type {
   LearningProjectionCheckpoint,
-  LearningProjectionAuthorityFence,
-  LearningProjectionAuthoritySource,
   LearningProjectionConsumer,
   LearningProjectionDeliveryClaim,
-  LearningProjectionDeliveryRole,
 } from "../domain/learning-projection.js";
 
-export interface ClaimShadowLearningProjectionInput {
+export interface ClaimLearningProjectionInput {
   consumer: LearningProjectionConsumer;
   owner: string;
   leaseMs: number;
   timestamp: number;
 }
 
-export interface ClaimActiveLearningProjectionInput {
-  consumer: LearningProjectionConsumer;
-  source: LearningProjectionAuthoritySource;
-  authority: LearningProjectionAuthorityFence;
-  owner: string;
-  leaseMs: number;
-  timestamp: number;
-}
-
-export interface AcknowledgeActiveLearningProjectionInput {
+export interface AcknowledgeLearningProjectionInput {
   claim: LearningProjectionDeliveryClaim;
   effectHash: string;
   timestamp: number;
 }
 
-export interface FailActiveLearningProjectionInput {
+export interface FailLearningProjectionInput {
   claim: LearningProjectionDeliveryClaim;
   timestamp: number;
 }
 
 export interface LearningProjectionDeliveryRepository {
-  getCheckpoint(
-    consumer: LearningProjectionConsumer,
-    deliveryRole: LearningProjectionDeliveryRole,
-  ): LearningProjectionCheckpoint | null;
-  claimNextShadow(input: ClaimShadowLearningProjectionInput): LearningProjectionDeliveryClaim | null;
-  claimNextActive(input: ClaimActiveLearningProjectionInput): LearningProjectionDeliveryClaim | null;
-  acknowledgeActive(input: AcknowledgeActiveLearningProjectionInput): LearningProjectionCheckpoint | null;
-  failActive(input: FailActiveLearningProjectionInput): boolean;
+  getCheckpoint(consumer: LearningProjectionConsumer): LearningProjectionCheckpoint | null;
+  claimNext(input: ClaimLearningProjectionInput): LearningProjectionDeliveryClaim | null;
+  acknowledge(input: AcknowledgeLearningProjectionInput): LearningProjectionCheckpoint | null;
+  fail(input: FailLearningProjectionInput): boolean;
 }

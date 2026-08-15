@@ -1,5 +1,4 @@
 import { SERVICE_SCOPES, type ServiceCredential, type ServiceScope } from "@tagent/http-fastify/auth";
-import type { GovernanceApprovalAuthority } from "@tagent/governance/domain";
 import { credentialReference, type CredentialReference, type RuntimeModelSpec } from "@tagent/execution/ports";
 
 export interface ModelConfig {
@@ -20,7 +19,6 @@ export interface AppConfig {
   projectRuleFiles: string[];
   toolArtifactMaxBytes: number;
   runtime: "in-process";
-  governanceApprovalAuthority: GovernanceApprovalAuthority;
   apiCredentialReference: CredentialReference;
   apiCredentialConfigured: boolean;
   providerTimeoutMs: number;
@@ -121,13 +119,6 @@ function enabled(value: string | undefined, name: string) {
   if (value === "true") return true;
   throw new Error(`${name} must be true or false`);
 }
-
-function governanceApprovalAuthority(value: string | undefined): GovernanceApprovalAuthority {
-  if (value === undefined) return "legacy";
-  if (value === "legacy" || value === "canonical") return value;
-  throw new Error("TAGENT_GOVERNANCE_APPROVAL_AUTHORITY must be legacy or canonical");
-}
-
 
 function parseJsonObject(value:string|undefined,name:string){if(!value?.trim())return undefined;let parsed:unknown;try{parsed=JSON.parse(value);}catch{throw new Error(`${name} must be valid JSON`);}if(!parsed||Array.isArray(parsed)||typeof parsed!=="object")throw new Error(`${name} must be a JSON object`);return parsed as Record<string,unknown>;}
 function memoryEmbeddingProvider(env: NodeJS.ProcessEnv) {
@@ -302,7 +293,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     projectRuleFiles: (env.TAGENT_PROJECT_RULE_FILES ?? "AGENTS.md").split(",").map((value) => value.trim()).filter(Boolean),
     toolArtifactMaxBytes: positiveInteger(env.TAGENT_TOOL_ARTIFACT_MAX_BYTES, 16 * 1024 * 1024, "TAGENT_TOOL_ARTIFACT_MAX_BYTES"),
     runtime,
-    governanceApprovalAuthority: governanceApprovalAuthority(env.TAGENT_GOVERNANCE_APPROVAL_AUTHORITY),
     apiCredentialReference: credentialReference(env.TAGENT_API_KEY_ENV?.trim() || "OPENAI_API_KEY"),
     apiCredentialConfigured: Boolean(env[env.TAGENT_API_KEY_ENV?.trim() || "OPENAI_API_KEY"]?.trim()),
     providerTimeoutMs: positiveInteger(env.TAGENT_PROVIDER_TIMEOUT_MS, 15_000, "TAGENT_PROVIDER_TIMEOUT_MS"),
@@ -388,7 +378,6 @@ export interface PublicRuntimeConfig {
   historicalTaskRunReceiptChars: number;
   controlInboxCapacity: number;
   schemaVersion?: number;
-  governanceApprovalAuthority: GovernanceApprovalAuthority;
   memoryEnabled: boolean;
   memoryRuntimeEnabled?: boolean;
   memoryWorkspaceScopeId?: string;
@@ -402,7 +391,7 @@ export interface PublicRuntimeConfig {
 
 export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): PublicRuntimeConfig {
   return {
-    releaseVersion: "0.7.0",
+    releaseVersion: "0.8.0",
     runtime: config.runtime,
     provider: config.model.provider,
     api: config.model.api,
@@ -425,7 +414,6 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     historicalTaskRunReceiptChars: config.historicalTaskRunReceiptChars,
     controlInboxCapacity: config.controlInboxCapacity,
     schemaVersion,
-    governanceApprovalAuthority: config.governanceApprovalAuthority,
     memoryEnabled: config.memory.enabled,
     memoryWorkspaceScopeId: config.memory.enabled ? config.memory.workspaceScopeId : undefined,
     memoryBackend: config.memory.enabled ? config.memory.backend : undefined,

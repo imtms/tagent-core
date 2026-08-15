@@ -106,7 +106,7 @@ export interface TaskRunTransitionOutcome {
   readonly fromStatus: RunStatus;
   readonly toStatus: RunStatus;
   readonly precedingEvents: readonly RunEvent[];
-  /** Null only for legacy-compatible interrupt/resume transitions, which did not append a RunEvent. */
+  /** Null only for lifecycle interrupt and resume transitions, which do not append a RunEvent. */
   readonly event: RunEvent | null;
 }
 
@@ -114,7 +114,7 @@ export interface TaskRunTransitionResult {
   readonly transitions: readonly TaskRunTransitionOutcome[];
 }
 
-/** New production transition authority. Legacy TaskRunRepository mutations remain temporary compatibility only. */
+/** Closed production authority for TaskRun state transitions. */
 export interface TaskRunTransitionPort {
   transitionRuntime(
     command: RuntimeTransitionCommand,

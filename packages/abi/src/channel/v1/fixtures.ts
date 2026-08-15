@@ -75,7 +75,6 @@ export const commandResponseFixture = {
       commandId: "command-steer",
       taskRunId: "task-run-fixture-001",
       type: "task_run.steer",
-      status: "accepted",
       state: "succeeded",
       outcome: "accepted",
       replayed: false,
@@ -92,12 +91,12 @@ export const commandResponseFixture = {
 
 export const coreCapabilitiesFixture = {
   data: {
-    releaseVersion: "0.7.0", apiVersions: ["channel.v1", "operator.console.v1", "operator.read.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 47,
+    releaseVersion: "0.8.0", apiVersions: ["channel.v1", "operator.console.v1", "operator.read.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 1,
     commandTypes: taskRunCommandFixtures.map((command) => command.type),
     eventTypes: ["task_run.started", "task_run.completed", "diagnostic.internal"],
     interactions: { approvalResolution: true, userInputSubmission: true },
     operator: { profileVersion: "1.0", endpointIds: [...OPERATOR_PROFILE_ENDPOINT_IDS], workspaceGoals: true, roadmapGenerationIdempotent: true },
-    approval: { authority: "legacy", ready: true, canonicalCutoverReady: false },
+    approval: { ready: true },
     receiptRecovery: { protocolVersion: "1.0", exactReplay: true, commandLookup: true, interruptedEffectState: "outcome_unknown", automaticUnknownReplay: false },
     retention: { automaticDeletion: false, cursorExpiry: false },
     limits: {

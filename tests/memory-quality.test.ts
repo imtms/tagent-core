@@ -410,7 +410,6 @@ it("separates raw capture source from extracted record evidence", async () => {
   const job = [...adapter.jobs.values()][0],
     record = [...adapter.records.values()][0];
   expect(job.request.captureSource?.kind).toBe("user_message");
-  expect(job.request.provenance).toBeUndefined();
   expect(record.provenance?.evidenceClass).toBe("user_explicit");
 });
 

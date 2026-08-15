@@ -18,7 +18,7 @@ The system deploys as one Core process but is developed as an acyclic npm-worksp
 | Domain | `@tagent/memory` | recall, capture, lifecycle, Hot/Warm/Cold storage ports |
 | Domain | `@tagent/learning` | observations, projections, workflow evolution and authority |
 | Adapter | `@tagent/http-fastify` | `/api/v1`, auth, CORS, media protocols |
-| Adapter | `@tagent/persistence-sqlite` | schema 47, repositories, migrations, UOW, writer fence |
+| Adapter | `@tagent/persistence-sqlite` | current schema, repositories, UOW, writer fence |
 | Adapter | `@tagent/runtime-pi` | `pi-agent-core.AgentHarness` session policy and `pi-ai` provider normalization |
 | Adapter | `@tagent/workspace-local` | Tool Providers, contained filesystem tools, managed subprocesses |
 | App | `@tagent/core-service` | configuration, composition, startup, recovery, shutdown |
@@ -66,4 +66,4 @@ See [PERSISTENCE_AND_RECOVERY.md](PERSISTENCE_AND_RECOVERY.md) for the lifecycle
 
 ## Unsupported compatibility surfaces
 
-The supported production surface excludes pre-refactor root source trees, unversioned HTTP handlers, Core-hosted Web assets, compatibility ABI namespaces, and compatibility client decoders. Migration code required to open an existing database remains contained inside the persistence boundary.
+The supported production surface excludes pre-refactor root source trees, unversioned HTTP handlers, Core-hosted Web assets, compatibility ABI namespaces, and compatibility client decoders. Persistence accepts only an empty database or the exact current schema.

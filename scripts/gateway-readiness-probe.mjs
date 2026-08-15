@@ -11,7 +11,8 @@ const TERMINAL_UNACKED_CRITICAL_AGE_MS = 120_000;
 const RECEIPT_UNCERTAIN_CRITICAL_AGE_MS = 120_000;
 const SETTLED_STATUSES = ["completed", "failed", "cancelled", "blocked"];
 const FINAL_STATUSES = ["completed", "cancelled"];
-const EXPECTED_SCHEMA_VERSION = 47;
+const EXPECTED_SCHEMA_VERSION = 1;
+const EXPECTED_SCHEMA_ID = "tagent-core/0.8";
 const REQUIRED_COMMANDS = ["task_run.steer", "task_run.follow_up", "task_run.cancel", "task_run.resume", "task_run.compact", "task_run.submit_user_input", "task_run.resolve_approval"];
 const REQUIRED_EVENTS = ["task_run.started", "task_run.waiting_input", "task_run.blocked", "task_run.resumed", "task_run.completed", "task_run.failed", "task_run.cancelled", "approval.requested", "approval.resolved", "user_input.submitted"];
 const REQUIRED_OPERATOR_ENDPOINTS = [
@@ -81,13 +82,9 @@ function tableExists(db, name) {
 }
 
 function readSchemaVersion(db) {
-  if (!tableExists(db, "schema_meta")) return null;
-  return db.prepare("SELECT version FROM schema_meta WHERE id=1").get()?.version ?? null;
-}
-
-function readMigrationOpenIssues(db) {
-  if (!tableExists(db, "migration_issues")) return null;
-  return db.prepare("SELECT COUNT(*) AS count FROM migration_issues WHERE status='open'").get().count;
+  if (!tableExists(db, "core_schema")) return { schemaId: null, schemaVersion: null };
+  const schemaId = db.prepare("SELECT schema_id AS schemaId FROM core_schema WHERE id=1").get()?.schemaId ?? null;
+  return { schemaId, schemaVersion: schemaId === EXPECTED_SCHEMA_ID ? EXPECTED_SCHEMA_VERSION : null };
 }
 
 function readWriter(db, now) {
@@ -125,19 +122,15 @@ function readConsumer(db, consumerId, now) {
   };
 }
 
-function readAuthority(db) {
-  if (!tableExists(db, "learning_projection_authority_state")) return null;
-  return db.prepare(`SELECT active_source AS activeSource,status,generation,
-    switch_watermark AS switchWatermark,legacy_last_acked AS legacyLastAcked,
-    legacy_resume_position AS legacyResumePosition,
-    integration_checkpoint AS integrationCheckpoint,rollback_checkpoint AS rollbackCheckpoint
-    FROM learning_projection_authority_state WHERE id=1`).get() ?? null;
-}
-
 function readWatermarks(db) {
   if (!tableExists(db, "learning_projection_checkpoint")) return [];
-  return db.prepare(`SELECT consumer,delivery_role AS deliveryRole,watermark,generation
-    FROM learning_projection_checkpoint ORDER BY consumer,delivery_role`).all();
+  return db.prepare(`SELECT consumer,watermark,generation
+    FROM learning_projection_checkpoint ORDER BY consumer`).all();
+}
+
+function learningProjectionReady(db) {
+  return ["integration_outbox", "integration_consumer_delivery", "learning_projection_checkpoint", "effect_receipts"]
+    .every((table) => tableExists(db, table));
 }
 
 function readReceiptHealth(db, now) {
@@ -205,7 +198,6 @@ async function readCapabilities(url, token) {
       && data?.operator?.roadmapGenerationIdempotent === true
       && REQUIRED_OPERATOR_ENDPOINTS.every((item) => operatorEndpoints.has(item))
       && data?.approval?.ready === true
-      && ["legacy", "canonical"].includes(data?.approval?.authority)
       && data?.receiptRecovery?.exactReplay === true
       && data?.receiptRecovery?.commandLookup === true
       && data?.receiptRecovery?.interruptedEffectState === "outcome_unknown"
@@ -349,8 +341,6 @@ async function readCapabilityProfiles(url, token) {
 function severityFor(snapshot) {
   if (snapshot.ready) return "ready";
   if (snapshot.schemaVersion !== EXPECTED_SCHEMA_VERSION
-    || snapshot.migrationOpenIssues === null
-    || snapshot.migrationOpenIssues > 0
     || !snapshot.health.reachable
     || !snapshot.capabilities.compatible
     || !snapshot.operatorReadCapabilities.compatible
@@ -367,7 +357,7 @@ function severityFor(snapshot) {
     || (snapshot.receipts?.commands?.oldestUncertainAgeMs ?? 0) >= RECEIPT_UNCERTAIN_CRITICAL_AGE_MS
     || (snapshot.receipts?.workspaceGoals?.oldestUncertainAgeMs ?? 0) >= RECEIPT_UNCERTAIN_CRITICAL_AGE_MS
     || (snapshot.receipts?.capabilityProfiles?.oldestUncertainAgeMs ?? 0) >= RECEIPT_UNCERTAIN_CRITICAL_AGE_MS
-    || !snapshot.authority) return "critical";
+    || !snapshot.learningProjectionReady) return "critical";
   return "warning";
 }
 
@@ -388,16 +378,16 @@ async function main() {
   try {
     const writer = readWriter(db, now);
     const consumer = readConsumer(db, consumerId, now);
+    const schema = readSchemaVersion(db);
     databaseSnapshot = {
-      schemaVersion: readSchemaVersion(db),
-      migrationOpenIssues: readMigrationOpenIssues(db),
+      ...schema,
       writerOwnerId: writer.ownerId,
       writerFence: writer.fence,
       writerExpiresAt: writer.expiresAt,
       writerReleasedAt: writer.releasedAt,
       writerLeaseFresh: writer.leaseFresh,
       ...consumer,
-      authority: readAuthority(db),
+      learningProjectionReady: learningProjectionReady(db),
       watermarks: readWatermarks(db),
       receipts: readReceiptHealth(db, now),
     };
@@ -411,13 +401,8 @@ async function main() {
     readOperatorReadCapabilities(operatorReadCapabilitiesUrl, coreToken),
     readCapabilityProfiles(capabilityProfilesUrl, coreToken),
   ]);
-  const authorityReady = databaseSnapshot.authority !== null
-    && ["legacy_active", "integration_active"].includes(databaseSnapshot.authority.status);
   const reasons = [];
   if (databaseSnapshot.schemaVersion !== EXPECTED_SCHEMA_VERSION) reasons.push("schema_version");
-  if (databaseSnapshot.migrationOpenIssues === null || databaseSnapshot.migrationOpenIssues > 0) {
-    reasons.push("migration_open_issues");
-  }
   if (!health.reachable) reasons.push("health_unreachable");
   else if (!health.ok || !health.writerReady) reasons.push("health_writer_not_ready");
   if (!capabilities.reachable) reasons.push("capabilities_unreachable");
@@ -454,10 +439,10 @@ async function main() {
     }
     if (databaseSnapshot.receipts.capabilityProfiles.outcomeUnknown > 0) reasons.push("profile_receipts_outcome_unknown");
   }
-  if (!authorityReady) reasons.push("authority_not_active");
+  if (!databaseSnapshot.learningProjectionReady) reasons.push("learning_projection_storage");
 
   const snapshot = {
-    probeVersion: 5,
+    probeVersion: 6,
     database: path.resolve(database),
     healthUrl,
     capabilitiesUrl,
@@ -466,7 +451,6 @@ async function main() {
     consumerId,
     ...databaseSnapshot,
     writerReady: health.writerReady && databaseSnapshot.writerLeaseFresh,
-    authorityReady,
     health,
     capabilities,
     operatorReadCapabilities,

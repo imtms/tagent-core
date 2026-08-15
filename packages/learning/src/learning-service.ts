@@ -4,6 +4,7 @@ import type { MemoryFacade } from "@tagent/memory";
 import type { MemoryScope, RecallFeedbackSignal } from "@tagent/memory/domain";
 import type { LearningServicePersistencePort } from "./ports/learning-ledger-repository.js";
 import type { SemanticJudge } from "./semantic-judge.js";
+import type { DecodedLearningProjection } from "./domain/learning-projection.js";
 
 export type CommunicationDimension = "language" | "verbosity" | "technicalDepth" | "answerStructure" | "progressUpdatePolicy" | "clarificationTolerance" | "uncertaintyStyle" | "challengeLevel" | "forbiddenPatterns";
 export type CommunicationApplicability = "global" | "workspace" | "project" | "session" | "task";
@@ -151,12 +152,6 @@ export class LearningService {
     });
   }
 
-  drainLearningProjectionLedger(limit = 200) {
-    const rows = this.persistence.learningLedger.listUnprojectedLearningRows(limit);
-    for (const row of rows) { const snapshot = safeJson<TaskRun | null>(row.snapshotJson, null); const run = snapshot ?? this.persistence.getRun(row.runId); if (run) this.projectRun({ ...run, attempt: row.attempt }, row.lifecycle, row.eventSeq, row.outcome as TaskRun["status"]); }
-    return rows.length;
-  }
-
   projectRun(run: TaskRun, lifecycle = `run.${run.status}`, eventSeq = run.lastEventSeq, projectedStatus: TaskRun["status"] = run.status) {
     const effectiveRun = projectedStatus === run.status ? run : { ...run, status: projectedStatus };
     const manifest = run.supervision.latestContextManifest?.attempt === run.attempt
@@ -212,6 +207,24 @@ export class LearningService {
     this.createConservativeFeedbackReceipts(run, manifest?.id ?? "", manifest?.items ?? [], success, correctionCount > 0);
     if (this.semanticJudge) this.persistence.enqueueSemanticLearningJob("feedback_attribution", { runId: run.id, attempt: run.attempt, manifestId: manifest?.id ?? "", items: manifest?.items ?? [], success, corrected: correctionCount > 0 }, `semantic-feedback:${run.id}:${run.attempt}:${manifest?.id ?? "none"}`, run.id, run.attempt);
     return this.getLearningEvent(eventId);
+  }
+
+  /** Applies one decoded durable projection without mutating its TaskRun source. */
+  applyActiveProjection(projection: DecodedLearningProjection) {
+    const snapshot = projection.taskRunSnapshot as unknown as TaskRun;
+    if (snapshot.id !== projection.runId
+      || !Array.isArray(snapshot.plan)
+      || !Array.isArray(snapshot.checks)
+      || typeof snapshot.sessionId !== "string"
+      || typeof snapshot.goal !== "string") {
+      throw new TypeError("Learning projection TaskRun snapshot is malformed");
+    }
+    return this.projectRun(
+      { ...snapshot, attempt: projection.attemptOrdinal, status: projection.outcome as TaskRun["status"] },
+      projection.lifecycle,
+      projection.eventSeq,
+      projection.outcome as TaskRun["status"],
+    );
   }
 
   private createConservativeFeedbackReceipts(run: TaskRun, manifestId: string, items: ContextManifestItem[], success: boolean, corrected: boolean) {

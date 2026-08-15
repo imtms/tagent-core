@@ -9,7 +9,6 @@ import { registerConsoleGoalV1Routes } from "./console-goal-routes.js";
 import { registerCapabilityV1Routes } from "./capability-routes.js";
 import { registerCapabilityProfileV1Routes } from "./capability-profile-routes.js";
 import { registerOperatorReadV1Routes } from "./operator-read-routes.js";
-import { registerConsoleSkillV1Routes } from "./console-skill-routes.js";
 import { registerOperatorSessionSettingsV1Routes } from "./operator-session-settings-routes.js";
 import { registerOperatorInboxV1Routes } from "./operator-inbox-routes.js";
 import { registerOperatorContextManifestV1Routes } from "./operator-context-manifest-routes.js";
@@ -29,7 +28,6 @@ export async function registerChannelV1Routes(app: FastifyInstance, dependencies
   registerTaskRunV1Routes(app, dependencies);
   registerEventV1Routes(app, dependencies);
   registerConsoleSessionV1Routes(app, dependencies);
-  registerConsoleSkillV1Routes(app, dependencies);
   registerConsoleRunV1Routes(app, dependencies);
   registerConsoleGoalV1Routes(app, dependencies);
 }

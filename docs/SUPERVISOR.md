@@ -28,7 +28,7 @@ An omitted profile means `strict`, preserving historical Runs and API clients. T
 
 `external_action` has a separate effect-before-approval boundary. Admission persists a pending request and blocks the first Attempt before Runtime construction. Approval is bound to the next Attempt and atomically consumed by the runtime host before its first mutation-capable tool call; it is not a reusable Run-wide bypass. If settlement or a transient failure would otherwise require another Attempt, Core pauses for a fresh next-Attempt approval instead of automatically launching a retry that cannot inherit authority. LLMs may classify semantic risk but cannot create, approve, or consume this authority.
 
-Successful `read` and `ls` calls produce read-only operation receipts that Full Supervisor review can cite. Bash commands in the bounded read-only allowlist (for example `rg`, `git diff`, and test/check commands) also carry an explicit read-only workspace effect. These observations do not trigger mutation governance or create an artificial Bash-check requirement; unclassified and legacy Bash receipts remain mutation-capable by default.
+Successful `read` and `ls` calls produce read-only operation receipts that Full Supervisor review can cite. Bash commands in the bounded read-only allowlist (for example `rg`, `git diff`, and test/check commands) also carry an explicit read-only workspace effect. These observations do not trigger mutation governance or create an artificial Bash-check requirement; receipts without explicit workspace-effect metadata remain mutation-capable by default.
 
 In `strict`, before semantic review Core checks authoritative prerequisites appropriate to that policy:
 
@@ -90,7 +90,6 @@ Long candidates and operation receipts use bounded head/tail projections. Projec
 | Action | Meaning |
 | --- | --- |
 | `complete_taskrun` | persist the candidate as the final Session answer |
-| `request_evidence` | legacy semantic action normalized to `start_continuation` for current-Attempt evidence repair |
 | `start_continuation` | start bounded repair or completion work |
 | `pause_for_approval` | create/retain a durable approval request; do not auto-continue |
 | `wait_for_runtime` | wait for pending durable control delivery |

@@ -11,10 +11,10 @@ export {
   type CoreInstanceLockOptions,
 } from "./sqlite/core-instance-lock.js";
 export {
-  GuardedStoreUnitOfWork,
-  LegacyStoreAdapter,
-  createGuardedLegacyStoreAdapter,
-} from "./sqlite/legacy-store-adapter.js";
+  GuardedSqliteUnitOfWork,
+  SqlitePersistence,
+  createGuardedSqlitePersistence,
+} from "./sqlite/sqlite-persistence.js";
 export {
   claimCoreWriterConnectionWithRetry,
   claimCoreWriterLeaseWithRetry,

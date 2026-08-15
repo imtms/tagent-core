@@ -2,7 +2,7 @@
 
 ## Package boundary
 
-`@tagent/abi` owns every supported wire schema and runtime codec. Its public exports are:
+`@tagent/abi` owns every supported wire schema and runtime codec. Its declared exports are:
 
 ```text
 @tagent/abi
@@ -21,100 +21,79 @@
 @tagent/abi/profiles/v1
 ```
 
-Import only these declared exports. Deep imports from `src` or `dist` are not ABI.
+Deep imports from another workspace's `src` or `dist` tree are not ABI.
 
-## Version markers
+## Current release tuple
 
-HTTP paths carry the API major as `/api/v1`. Resources and events that cross durable asynchronous boundaries use `specVersion: "1.0"`. The package version identifies the repository release; it does not replace the wire major or resource `specVersion`.
+Core 0.8 publishes one coordinated contract tuple:
+
+| Marker | Value |
+| --- | --- |
+| HTTP major | `/api/v1` |
+| Durable resource/event version | `specVersion: "1.0"` where declared |
+| SQLite schema ID | `tagent-core/0.8` |
+| Public persistence schema version | `1` |
+| Capability profile version | `1.0` |
+| SDK package version | same as the Core release |
+
+The package version identifies the release; it does not replace the HTTP major, resource version, or profile version. Core, Web, ABI SDK, and Core Client from different release tuples are unsupported unless Gateway proves and explicitly accepts that combination.
 
 ## Compatibility rules
 
-The following changes require a new major ABI or a named migration window:
+The v1 decoders are strict. Breaking changes require a new major ABI or a new owning profile major. This includes:
 
 - removing or renaming a route, field, literal, or event type;
-- changing a required field, identifier meaning, status transition, idempotency rule, or authorization requirement;
-- changing media framing, acknowledgement semantics, error envelope shape, or retry meaning;
-- accepting a payload that an existing runtime decoder must reject, when that changes authority or safety.
+- changing identifier meaning, status transitions, idempotency, receipt recovery, or authorization;
+- changing media framing, ACK semantics, error-envelope shape, cursor identity, or retry meaning;
+- changing an endpoint between exact replay and durable receipt lookup.
 
-The following may remain in v1 when consumers and fixtures are updated together:
+These changes may remain in v1 when schemas, fixtures, providers, and current consumers are updated together:
 
-- a new optional field with a safe default;
+- a safe optional field;
 - a new error code within the existing envelope;
-- a new route that does not change existing resource semantics;
-- a new event type that old consumers may safely ignore by contract.
+- a new independent route;
+- a new event type that consumers may safely ignore and ACK by contract.
 
-Do not keep indefinite compatibility namespaces in the primary ABI. A deprecation must name its successor, migration instructions, and removal release.
+The maintained ABI contains no compatibility namespaces or deprecated response aliases. Removed clients and payload shapes are not accepted by the current release.
+
+Any future deprecation must name its successor, migration instructions, and removal release. A deprecation does not make an otherwise breaking removal compatible within the same major.
 
 ## Runtime validation
 
-Fastify route handlers decode ingress and encode egress with `@tagent/abi`. `@tagent/core-client` decodes response envelopes and SSE frames and reports malformed wire data as a protocol error. Compile-time TypeScript types alone are not sufficient.
+Fastify decodes ingress and encodes egress with `@tagent/abi`. `@tagent/core-client` decodes envelopes and SSE frames and reports malformed wire data as a protocol error. TypeScript types alone are not validation.
+
+## Channel and Operator contracts
+
+`GET /api/v1/capabilities` publishes the current release, schema version, command/event catalogs, typed interactions, base Operator endpoint IDs, Approval readiness, receipt recovery, retention, and enforced limits. Gateway must negotiate it before enabling Channel traffic.
+
+`operator.read.v1` is negotiated independently through `GET /api/v1/operator/capabilities`. It freezes bounded public Session and TaskRun summaries, dual-scope enforcement, immutable keyset ordering, cursor bindings, snapshot membership, read-committed values, and no-expiry/no-deletion retention.
+
+## Full-feature profiles
+
+`GET /api/v1/capability-profiles` and its detail route publish eight profile `1.0` identities:
+
+- Session Settings;
+- Session Inbox;
+- Context Manifest;
+- Skills;
+- Memory;
+- Learning;
+- Workflow;
+- Autonomy.
+
+Each detail owns its exact endpoint IDs, required scopes, resource authority, pagination, retention, compatibility, and recovery semantics. Adding an endpoint or optional field requires a profile minor and matching strict fixtures/client. Removing an endpoint, changing a scope/resource boundary, cursor/revision identity, or recovery kind requires a profile major.
+
+Gateway may depend only on endpoint IDs returned by the owning profile. Undeclared Console/Admin routes are first-party Core/Web interfaces, not cross-team contracts.
 
 ## Change procedure
 
 1. Change the owned schema and exported type.
 2. Update canonical fixtures and encode/decode tests.
 3. Update Fastify request/response mapping.
-4. Update `@tagent/core-client` and replay/ack behavior.
-5. Update Web or other channel consumers.
+4. Update `@tagent/core-client`, including replay/ACK behavior.
+5. Update Web or other current consumers.
 6. Add differential coverage for removed or incompatible routes.
-7. Update [API_V1.md](API_V1.md), [CHANGELOG.md](../CHANGELOG.md), and upgrade guidance.
+7. Update `API_V1.md`, the compatibility matrix, and `CHANGELOG.md`.
+8. Build and smoke-test the matching ABI and Core Client SDK archives.
 
-Core, clients, and artifacts for a release must use the same validated ABI build. Core publishes the owned schemas, canonical fixtures, typed client and real-provider contract tests. Each release attaches matching `@tagent/abi` and `@tagent/core-client` tarballs with JavaScript, declarations, JS/declaration source maps and portable SHA-256 files. Gateway owns its fake-Core process/container and the current/previous Gateway-client CI matrix; those components encode Gateway transport and release policy and are not Core runtime deliverables.
-
-## Gateway contracts v39 migration window
-
-Schema v39 introduces the named `gateway-contracts-v39` migration window. It intentionally tightens the pre-production Channel/Operator contract before Gateway ownership is enabled:
-
-- `POST /api/v1/sessions` now requires `Idempotency-Key`;
-- TaskRun adds `currentAttempt` and typed `pendingInteractions`;
-- command receipts add `state`, `outcome`, `replayed`, and original `result`;
-- Transcript responses add mandatory `pageInfo` and are server-paginated;
-- event-consumer cursors add settled/final ACK fields;
-- Workspace Goal writes require `requestId`.
-
-Because v1 decoders reject unknown fields, a pre-v39 client is not wire-compatible with these tightened responses. `status: "duplicate"` and `terminalAcknowledgedSequence` remain deprecated aliases only for the named schema-39 migration window. New consumers must use `replayed` plus `state/outcome`, and `settledAcknowledgedSequence`/`finalAcknowledgedSequence`; the aliases are removed with the next public API major.
-
-## Gateway operator v40 migration window
-
-Schema v40 completes the Gateway-facing audit and discovery contract:
-
-- Submission accepts channel-neutral `origin`, persists its first Core principal/canonical audit receipt, and returns `audit`;
-- Artifact metadata uses bounded `after`/`limit` pages with mandatory `pageInfo`;
-- capabilities publishes the exact Operator endpoint allowlist, active Approval authority, receipt-recovery protocol, no-pruning cursor policy, and read-size limits;
-- the Workspace Goal Operator subset has ABI-owned write bodies and typed Core Client methods;
-- every public event catalog member has a canonical producer-valid fixture.
-
-Deploy schema-40 Core and the matching `@tagent/abi`/`@tagent/core-client` before enabling the v40 profile. Gateway must negotiate `persistenceSchemaVersion=40`, `operator.profileVersion=1.0`, the required endpoint IDs and receipt/retention capabilities. The stable allowlist—not every `/api/v1/console/*` route—is the compatibility promise.
-
-| Core profile | Client profile | Support |
-| --- | --- | --- |
-| schema 40 / Operator 1.0 | matching v40 ABI and Core Client | Supported |
-| schema 40 / Operator 1.0 | pre-v40 strict decoder | Unsupported; mandatory audit/page/capability fields changed in the named window |
-| schema 39 / Gateway contracts v39 | matching v39 client | Historical migration window only |
-| any | undeclared Console/Admin proxy | Unsupported cross-team dependency |
-
-Gateway CI may support more client minors, but it cannot infer compatibility when capability negotiation or strict decoding fails.
-
-The next public API major should remove the v39 compatibility aliases rather than extending that window indefinitely.
-
-## Operator Read profile (introduced in schema 41)
-
-Schema 41 introduces a separate `operator.read.v1` capability profile for Session inventory, per-Session TaskRun inventory and latest TaskRun. `GET /api/v1/capabilities` adds only the API-version marker; clients then decode `GET /api/v1/operator/capabilities` with the dedicated schema. This avoids adding unknown endpoint literals or fields to the strict, closed Operator 1.0 decoder introduced in v40.
-
-The profile freezes bounded public summaries, dual-scope enforcement for nested TaskRun reads, immutable keyset order, cursor bindings, snapshot-membership/read-committed-value consistency and current no-expiry/no-deletion retention. Schema 42 retains this profile while adding the private Inbox execution-policy column. Schema 43 adds first-party Console Skill contracts; schema 44 extends them with shared catalog CRUD and multi-Skill Workspace references; schema 45 adds private Attempt request envelopes; schema 46 adds persisted continuation due-time scheduling; schema 47 adds separate full-feature capability profiles. None changes the Operator Read profile. The matching ABI export, fixtures, Core Client and provider must be deployed together.
-
-| Core profile | Client behavior | Support |
-| --- | --- | --- |
-| schema 47 + `operator.read.v1` | negotiate current capabilities and use the matching 0.7.0 ABI/client | Supported current profile |
-| schema 41 + `operator.read.v1` | negotiate API marker and dedicated capabilities, then use matching ABI/client | Supported |
-| schema 41 + legacy Operator 1.0 decoder | unchanged legacy object still decodes; deployment policy must separately accept schema 41 | Wire-compatible only |
-| schema 40 without `operator.read.v1` | Gateway disables only historical inventory/rebuild | Supported feature downgrade |
-| any | depend on `/api/v1/console/*`, SQLite or private Store DTOs | Unsupported cross-team dependency |
-
-## Full-feature profiles (introduced in schema 47)
-
-Schema 47 adds an independent registry rather than extending the strict legacy capabilities object. `GET /api/v1/capability-profiles` lists Session Settings, Session Inbox, Context Manifest, Skills, Memory, Learning, Workflow and Autonomy profile `1.0`; each detail response freezes exact endpoint IDs, required scopes, resource authority, pagination, retention, compatibility and recovery semantics.
-
-An additive endpoint or optional response field requires a profile minor and matching strict fixtures/client decoder. Removing an endpoint, changing a required scope/resource boundary, changing cursor/revision identity, or moving between exact replay and durable receipt recovery requires a new profile major. The registry response itself remains strict: consumers must deploy a matching ABI/client before Core begins returning a newly required profile or field.
-
-The compatibility and CI ownership matrix is maintained in [GATEWAY_PROFILE_COMPATIBILITY.md](GATEWAY_PROFILE_COMPATIBILITY.md). Core proves the current real provider against canonical fixtures. Gateway separately proves the current and previous client releases, Fake Core behavior and network-fault handling.
+Core publishes the schemas, canonical fixtures, typed client, and real-provider contract harness. Gateway owns its Fake Core, network-fault scenarios, and the client-release matrix it promises to support. See [GATEWAY_PROFILE_COMPATIBILITY.md](GATEWAY_PROFILE_COMPATIBILITY.md).

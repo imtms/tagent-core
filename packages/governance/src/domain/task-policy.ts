@@ -19,7 +19,7 @@ export interface TaskExecutionPolicy {
   policyVersion: string;
   confidence: number;
   reason: string;
-  /** User-selected completion acceptance style. Missing legacy values remain strict. */
+  /** User-selected completion acceptance style. Missing values remain strict. */
   gateProfile?: GateProfile;
   /** Present only when the user requested one literal response. */
   exactOutput?: string;
@@ -62,14 +62,14 @@ function operationMayMutate(operation: TaskPolicyOperationView) {
   if (operation.status === "pre_effect_rejected") return false;
   if (["tool.write", "tool.edit", "tool.patch", "tool.memory_forget"].includes(operation.operationType)) return true;
   if (operation.operationType !== "tool.bash") return false;
-  // Old Bash receipts have no workspace-effect marker. They remain mutation-capable
+  // Receipts without explicit workspace-effect metadata remain mutation-capable
   // by default; only a current explicit read-only receipt lowers this observation.
   const workspaceEffects = (operation.effects ?? []).map(record).filter((effect): effect is Record<string, unknown> => effect?.kind === "workspace");
   return !workspaceEffects.some((effect) => effect.action === "read_only")
     || workspaceEffects.some((effect) => effect.action !== "read_only");
 }
 
-export function legacyTaskExecutionPolicy(contract: TaskPolicyContractView | null): TaskExecutionPolicy {
+export function conservativeTaskExecutionPolicy(contract: TaskPolicyContractView | null): TaskExecutionPolicy {
   const currentKinds = contract?.objectives.filter((item) => item.timing === "current").map((item) => item.kind) ?? [];
   const mutating = currentKinds.some((kind) => ["change", "verify", "release"].includes(kind));
   const discussion = currentKinds.length === 1 && currentKinds[0] === "answer";
@@ -78,9 +78,9 @@ export function legacyTaskExecutionPolicy(contract: TaskPolicyContractView | nul
     sideEffectRisk: mutating ? "workspace" : discussion ? "none" : "read_only",
     evidencePolicy: mutating ? "trusted_check" : discussion ? "semantic" : "operation_receipt",
     reviewPolicy: mutating || !discussion ? "full" : "semantic_lite",
-    policyVersion: "legacy-conservative-v1",
+    policyVersion: "conservative-default-v1",
     confidence: 1,
-    reason: "Core conservatively derived policy for a legacy contract without an Admission execution policy.",
+    reason: "Core conservatively derived policy for a contract without an Admission execution policy.",
   };
 }
 
@@ -93,7 +93,7 @@ export function effectiveTaskExecutionPolicy(
   operations: TaskPolicyOperationView[] = [],
   currentAttempt?: number,
 ): TaskExecutionPolicy {
-  const source = contract?.executionPolicy ?? legacyTaskExecutionPolicy(contract);
+  const source = contract?.executionPolicy ?? conservativeTaskExecutionPolicy(contract);
   const normalizedMode: TaskExecutionMode = source.mode === "external_action" || source.sideEffectRisk === "external_high"
     ? "external_action"
     : source.mode === "workspace_mutation" || source.sideEffectRisk === "workspace" || source.evidencePolicy === "trusted_check"

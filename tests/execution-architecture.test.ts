@@ -230,7 +230,7 @@ describe("execution architecture boundaries", () => {
     const violations: string[] = [];
     const forbiddenConstructors = new Set([
       "SessionInputRouter",
-      "WorkflowService",
+      "WorkflowLearningService",
       "LearningService",
       "TaskRunSupervisor",
       "PiRuntime",
@@ -364,7 +364,7 @@ describe("execution architecture boundaries", () => {
     const composition = sourceText("apps/core-service/src/composition/execution-composition.ts");
     expect(composition).not.toMatch(/mutableServices|as\s+ExecutionServices/);
     expect(composition.match(/createOneShotPort</g)?.length).toBe(6);
-    for (const forbidden of ["SessionInputRouter", "TaskRunSupervisor", "WorkflowService", "LearningService", "MemoryFacade", "@earendil-works/pi-"]) {
+    for (const forbidden of ["SessionInputRouter", "TaskRunSupervisor", "WorkflowLearningService", "LearningService", "MemoryFacade", "@earendil-works/pi-"]) {
       expect(sourceText("packages/execution/src/application/execution-state.ts")).not.toContain(forbidden);
     }
   });

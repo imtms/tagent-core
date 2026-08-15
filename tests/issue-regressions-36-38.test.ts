@@ -1,14 +1,11 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "@tagent/http-fastify";
-import { LearningService, WorkflowService } from "@tagent/learning";
+import { LearningService, WorkflowLearningService } from "@tagent/learning";
 import { Store } from "@tagent/persistence-sqlite/store";
 import { createRuntimeHost } from "@tagent/core-service/composition";
 import { attemptIdFor } from "@tagent/execution/domain";
 import { createExecutionCollaborationAdapters } from "../apps/core-service/src/composition/execution-collaboration-adapters.js";
-import { agentPersistence, httpTestResources, learningPersistence, workflowPersistence } from "./support/test-persistence.js";
+import { agentPersistence, learningPersistence, workflowPersistence } from "./support/test-persistence.js";
 
 const testSignal = new AbortController().signal;
 
@@ -30,7 +27,7 @@ function collaborationFixture(principalId = "session:alice", withMemory = true) 
   }).session;
   const persistence = agentPersistence(store);
   const learning = new LearningService(learningPersistence(store));
-  const workflows = new WorkflowService(workflowPersistence(store));
+  const workflows = new WorkflowLearningService(workflowPersistence(store));
   const captureRequests: any[] = [];
   const adapters = createExecutionCollaborationAdapters({
     persistence,
@@ -127,29 +124,4 @@ describe("GitHub issue regressions #36-#38", () => {
     expect(adapters.contextEnrichment.prepareWithoutRecall(secondRun, "unrelated task").promptSection).not.toContain("verbosity: 简洁");
   });
 
-  it("#38 generates collision-resistant durable keys when console session requestId is omitted across app restarts", async () => {
-    const databasePath = path.join(await mkdtemp(path.join(tmpdir(), "tagent-issue-38-")), "core.db");
-    const openApp = () => {
-      const store = new Store(databasePath);
-      const app = createApp({ ...httpTestResources(store), service: { closeRuntimes: async () => undefined } as never, logger: false });
-      apps.push(app);
-      return { store, app };
-    };
-
-    const first = openApp();
-    const firstResponse = await first.app.inject({ method: "POST", url: "/api/v1/console/sessions", payload: { title: "First" } });
-    expect(firstResponse.statusCode).toBe(200);
-    await first.app.close(); apps.splice(apps.indexOf(first.app), 1);
-
-    const second = openApp();
-    const replayAfterRestart = await second.app.inject({ method: "POST", url: "/api/v1/console/sessions", payload: { title: "First" } });
-    expect(replayAfterRestart.statusCode).toBe(200);
-    expect(replayAfterRestart.json().data.id).not.toBe(firstResponse.json().data.id);
-    await second.app.close(); apps.splice(apps.indexOf(second.app), 1);
-
-    const third = openApp();
-    const changedTitleAfterRestart = await third.app.inject({ method: "POST", url: "/api/v1/console/sessions", payload: { title: "Second" } });
-    expect(changedTitleAfterRestart.statusCode).toBe(200);
-    expect((third.store.db.prepare("SELECT COUNT(*) count FROM sessions").get() as { count: number }).count).toBe(3);
-  });
 });

@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
-import { WorkflowService } from "@tagent/learning";
+import { WorkflowLearningService } from "@tagent/learning";
 import type { WorkflowSpec } from "@tagent/learning/domain";
-import type { WorkflowServicePersistencePort } from "@tagent/learning/ports";
-import { LegacyStoreAdapter, Store } from "@tagent/persistence-sqlite";
+import type { WorkflowLearningPersistencePort } from "@tagent/learning/ports";
+import { SqlitePersistence, Store } from "@tagent/persistence-sqlite";
 
 const stores: Store[] = [];
 afterEach(() => { while (stores.length) stores.pop()!.close(); });
@@ -26,16 +26,16 @@ const spec: WorkflowSpec = {
 function fixture() {
   const store = new Store(":memory:");
   stores.push(store);
-  const adapter = new LegacyStoreAdapter(store, {
+  const adapter = new SqlitePersistence(store, {
     run: <T>(work: () => T) => store.db.transaction(work)(),
   });
-  const persistence: WorkflowServicePersistencePort = adapter.workflow;
+  const persistence: WorkflowLearningPersistencePort = adapter.workflow;
   const workflow = persistence.workflow;
-  return { store, workflow, service: new WorkflowService(persistence) };
+  return { store, workflow, service: new WorkflowLearningService(persistence) };
 }
 
 describe("workflow persistence boundary", () => {
-  it("keeps WorkflowService storage-neutral", () => {
+  it("keeps WorkflowLearningService storage-neutral", () => {
     const source = readFileSync(new URL("../packages/learning/src/workflow-learning-service.ts", import.meta.url), "utf8");
     expect(source).not.toMatch(/store\/store|better-sqlite3|\.db\b|\.prepare\b|\.transaction\b/);
   });

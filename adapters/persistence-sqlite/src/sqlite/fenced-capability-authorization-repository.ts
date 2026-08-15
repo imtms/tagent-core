@@ -22,11 +22,11 @@ import type {
   CapabilityExecutionStatus,
 } from "@tagent/execution/ports";
 import {
-  mapLegacyRunApprovalOperation,
-  mapLegacyWorkflowApprovalOperation,
-  type LegacyRunApprovalSemanticInput,
-  type LegacyWorkflowApprovalSemanticInput,
-} from "./canonical-approval-mapper.js";
+  mapRunApprovalOperation,
+  mapWorkflowApprovalOperation,
+  type RunApprovalSemanticInput,
+  type WorkflowApprovalSemanticInput,
+} from "./approval-operation-mapper.js";
 import { SQLITE_DB_TIME_MS } from "./core-writer-lease.js";
 import {
   TaskRunExecutionFenceValidator,
@@ -42,13 +42,13 @@ interface ApprovalUseRow {
   expiresAt: number | null;
 }
 
-interface LegacyRunApprovalRow extends LegacyRunApprovalSemanticInput {
+interface RunApprovalRow extends RunApprovalSemanticInput {
   scopeType: string | null;
   scopeId: string | null;
   storedDigest: string | null;
 }
 
-interface LegacyWorkflowApprovalRow extends LegacyWorkflowApprovalSemanticInput {
+interface WorkflowApprovalRow extends WorkflowApprovalSemanticInput {
   storedDigest: string | null;
 }
 
@@ -105,7 +105,7 @@ const CAPABILITY_STAGE_BY_STATUS: Readonly<Record<CapabilityExecutionStatus, str
 };
 
 function approvalTable(source: ApprovalSource): "approval_requests" | "autonomy_approval_requests" {
-  return source === "legacy_run" ? "approval_requests" : "autonomy_approval_requests";
+  return source === "run" ? "approval_requests" : "autonomy_approval_requests";
 }
 
 function sameApprovalRef(left: ApprovalRef | null, right: ApprovalRef): boolean {
@@ -133,7 +133,7 @@ function parseCanonicalJson(source: string, name: string): CanonicalJsonValue {
 }
 
 function hydrateReceipt(row: ApprovalReceiptRow): AuthorizationReceipt {
-  if (row.approvalSource !== "legacy_run" && row.approvalSource !== "legacy_workflow") {
+  if (row.approvalSource !== "run" && row.approvalSource !== "workflow") {
     throw new Error(`Approval receipt ${row.id} has an unknown approval source`);
   }
   if (row.outcome !== "allow" && row.outcome !== "require_approval" && row.outcome !== "deny") {
@@ -321,8 +321,8 @@ implements CapabilityExecutionPersistencePort, AuthorizationReceiptReadPort {
       throw new TypeError("Capability command schema is unsupported");
     }
     assertNonEmpty(request.command.commandId, "command.commandId");
-    if (request.approvalRef.source !== "legacy_run" && request.approvalRef.source !== "legacy_workflow") {
-      throw new TypeError("approvalRef.source must identify one legacy approval authority");
+    if (request.approvalRef.source !== "run" && request.approvalRef.source !== "workflow") {
+      throw new TypeError("approvalRef.source must identify run or workflow approval authority");
     }
     assertNonEmpty(request.approvalRef.id, "approvalRef.id");
     assertNonEmpty(request.actorId, "actorId");
@@ -344,7 +344,7 @@ implements CapabilityExecutionPersistencePort, AuthorizationReceiptReadPort {
   }
 
   private bindApproval(request: CapabilityExecutionRequest, scope: TaskRunExecutionScope): BoundApproval {
-    const mapped = request.approvalRef.source === "legacy_run"
+    const mapped = request.approvalRef.source === "run"
       ? this.mapRunApproval(request.approvalRef.id)
       : this.mapWorkflowApproval(request.approvalRef.id);
     this.assertCommandMatchesMappedOperation(request.command, mapped.operation);
@@ -375,12 +375,12 @@ implements CapabilityExecutionPersistencePort, AuthorizationReceiptReadPort {
       approval.scope_type as scopeType,approval.scope_id as scopeId,
       approval.operation_digest as storedDigest
       FROM approval_requests approval LEFT JOIN runs run ON run.id=approval.run_id
-      WHERE approval.id=?`).get(id) as LegacyRunApprovalRow | undefined;
-    if (!row) throw new Error(`Approval legacy_run:${id} does not exist`);
-    const mapped = mapLegacyRunApprovalOperation({ ...row, enforceScopeConsistency: true });
+      WHERE approval.id=?`).get(id) as RunApprovalRow | undefined;
+    if (!row) throw new Error(`Approval run:${id} does not exist`);
+    const mapped = mapRunApprovalOperation({ ...row, enforceScopeConsistency: true });
     if (row.scopeType !== mapped.operation.scope.type || row.scopeId !== mapped.operation.scope.id
       || row.storedDigest !== mapped.operationDigest) {
-      throw new Error(`Approval legacy_run:${id} canonical binding is stale`);
+      throw new Error(`Approval run:${id} canonical binding is stale`);
     }
     return mapped;
   }
@@ -391,11 +391,11 @@ implements CapabilityExecutionPersistencePort, AuthorizationReceiptReadPort {
       revision_id as revisionId,proposal_id as proposalId,binding_id as bindingId,
       impact_scope_json as impactScopeJson,diff_json as diffJson,rollback_json as rollbackJson,
       operation_digest as storedDigest FROM autonomy_approval_requests WHERE id=?`)
-      .get(id) as LegacyWorkflowApprovalRow | undefined;
-    if (!row) throw new Error(`Approval legacy_workflow:${id} does not exist`);
-    const mapped = mapLegacyWorkflowApprovalOperation(row);
+      .get(id) as WorkflowApprovalRow | undefined;
+    if (!row) throw new Error(`Approval workflow:${id} does not exist`);
+    const mapped = mapWorkflowApprovalOperation(row);
     if (row.storedDigest !== mapped.operationDigest) {
-      throw new Error(`Approval legacy_workflow:${id} canonical binding is stale`);
+      throw new Error(`Approval workflow:${id} canonical binding is stale`);
     }
     return mapped;
   }

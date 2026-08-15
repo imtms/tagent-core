@@ -53,9 +53,7 @@ export const CoreCapabilitiesSchema = Type.Object({
     roadmapGenerationIdempotent: Type.Boolean(),
   }, { additionalProperties: false }),
   approval: Type.Object({
-    authority: Type.Union([Type.Literal("legacy"), Type.Literal("canonical")]),
-    ready: Type.Boolean(),
-    canonicalCutoverReady: Type.Boolean(),
+    ready: Type.Literal(true),
   }, { additionalProperties: false }),
   receiptRecovery: Type.Object({
     protocolVersion: Type.String({ minLength: 1 }),

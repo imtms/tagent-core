@@ -83,7 +83,7 @@ describe("Core workflow Governance delegation", () => {
 
   it("dispatches generic execution only from a matching neutral approval view", () => {
     const approval = {
-      ref: { source: "legacy_workflow" as const, id: "approval-1" },
+      ref: { source: "workflow" as const, id: "approval-1" },
       action: "workflow.activate" as const,
       status: "approved" as const,
       expiresAt: Date.now() + 60_000,
@@ -91,7 +91,7 @@ describe("Core workflow Governance delegation", () => {
       workflowId: "workflow-1",
       revisionId: "revision-1",
       proposalId: null,
-      scope: { type: "legacy_workflow_scope", id: "scope-1" },
+      scope: { type: "workflow_scope", id: "scope-1" },
       operationDigest: "digest-1",
       risk: "low" as const,
       reuse: { mode: "one_time" as const, maxUses: 1, usedCount: 0 },

@@ -106,7 +106,6 @@ export const CommandReceiptSchema = Type.Object({
   commandId: IdentifierSchema,
   taskRunId: IdentifierSchema,
   type: TaskRunCommandTypeSchema,
-  status: Type.Union([Type.Literal("accepted"), Type.Literal("duplicate"), Type.Literal("rejected")]),
   state: Type.Union([Type.Literal("started"), Type.Literal("succeeded"), Type.Literal("failed"), Type.Literal("outcome_unknown")]),
   outcome: Type.Union([Type.Literal("accepted"), Type.Literal("rejected"), Type.Literal("unknown")]),
   replayed: Type.Boolean(),

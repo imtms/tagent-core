@@ -17,7 +17,7 @@ import {
 import {
   LearningService,
   LearningWorkflowRevisionMaterializer,
-  WorkflowService,
+  WorkflowLearningService,
 } from "@tagent/learning";
 import { LearningApplication } from "@tagent/learning/application";
 import { WorkflowGovernanceApplication } from "@tagent/governance/application";
@@ -164,7 +164,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
       ? createSessionInputModelPort(routerModel, runtimeDefaults.credential, routerTimeoutMs)
       : undefined,
   });
-  const workflowService = new WorkflowService(options.persistence.workflow, undefined, options.learningControl, options.semanticJudge);
+  const workflowService = new WorkflowLearningService(options.persistence.workflow, undefined, options.learningControl, options.semanticJudge);
   const learningService = new LearningService(options.persistence.learning, options.memory, options.memoryScopeId ?? "default", options.semanticJudge);
   const projectContextSource = createProjectContextSource(options.workspace, options.projectRuleFiles);
   const artifactSink = createWorkspaceArtifactSink(options.workspace, options.toolArtifactMaxBytes);

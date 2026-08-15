@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { FencedRuntimeMutationContext } from "@tagent/execution/ports";
-import { LegacyStoreAdapter, Store } from "@tagent/persistence-sqlite";
+import { SqlitePersistence, Store } from "@tagent/persistence-sqlite";
 import type { SynchronousResult } from "@tagent/persistence-sqlite/unit-of-work";
 
 const stores: Store[] = [];
@@ -9,7 +9,7 @@ afterEach(() => stores.splice(0).forEach((store) => store.close()));
 function fixture() {
   const store = new Store(":memory:");
   stores.push(store);
-  const adapter = new LegacyStoreAdapter(store, {
+  const adapter = new SqlitePersistence(store, {
     run<T>(work: () => T & SynchronousResult<T>): T { return store.db.transaction(work)(); },
   });
   const run = adapter.taskRuns.createRun(adapter.sessions.createSession().id, "fenced runtime mutation");
@@ -189,7 +189,7 @@ describe("Fenced RuntimeMutationPort", () => {
     });
     expect(store.getRun(run.id)).toMatchObject({ status: "waiting_input", lastEventSeq: 1 });
     expect(adapter.attempts.getAttempt(attempt.id)).toMatchObject({
-      status: "waiting_input", version: 2, legacyEventSeq: 1, active: false,
+      status: "waiting_input", version: 2, eventSequence: 1, active: false,
     });
     expect(store.db.prepare("SELECT status FROM tool_attempts WHERE tool_call_id='tool-input'").get())
       .toEqual({ status: "succeeded" });

@@ -8,12 +8,7 @@ import type {
 } from "../domain/task-run.js";
 import type {
   Attempt,
-  AttemptAuthorityGate,
-  AttemptAuthorityReceipt,
-  AttemptAuthorityScenario,
-  AttemptAuthorityState,
   AttemptId,
-  AttemptShadowComparison,
   AttemptTransitionAudit,
   CandidateResult,
   ExecutionLease,
@@ -22,22 +17,12 @@ import type {
 import type { Artifact, PlanItem, RunCheck } from "@tagent/governance/domain";
 import type { OperationRecord, OperationUpdate } from "@tagent/governance/ports";
 
-export interface ShadowComparisonInput {
-  attemptId: string;
-  scenario: AttemptAuthorityScenario;
-  legacy: Record<string, unknown>;
-  projected: Record<string, unknown>;
-  mismatch: boolean;
-  createdAt?: number;
-}
-
 export interface AttemptRepository {
   getAttempt(attemptId: string): Attempt | undefined;
   getAttemptForRun(runId: string, ordinal: number): Attempt | undefined;
   getActiveAttempt(runId: string): Attempt | undefined;
   listAttempts(runId: string): Attempt[];
   listTransitionAudit(attemptId: string): AttemptTransitionAudit[];
-  listShadowComparisons(filter?: { attemptId?: string; runId?: string }): AttemptShadowComparison[];
   acquireExecutionLease(input: {
     attemptId: string;
     expectedVersion: number;
@@ -95,23 +80,6 @@ export interface AttemptRepository {
     reason: string;
     timestamp?: number;
   }): { attempt: Attempt; event?: RunEvent; cancelled: boolean };
-}
-
-export interface AttemptAuthorityRepository {
-  getAuthorityState(): AttemptAuthorityState;
-  evaluateAuthorityGate(): AttemptAuthorityGate;
-  recordShadowComparisons(inputs: ShadowComparisonInput[]): AttemptShadowComparison[];
-  recordAuthorityReceipt(input: {
-    id: string;
-    requestedAttemptId: string;
-    decision: AttemptAuthorityReceipt["decision"];
-    actor: string;
-    reason: string;
-    createdAt?: number;
-  }): AttemptAuthorityReceipt;
-  requestAuthority(input: { requestedAttemptId: string; receiptId: string; timestamp?: number }): AttemptAuthorityState;
-  assertAttemptApproved(attemptId: string): void;
-  rollbackAuthority(input: { receiptId: string; timestamp?: number }): AttemptAuthorityState;
 }
 
 export interface FencedRuntimeMutationContext {

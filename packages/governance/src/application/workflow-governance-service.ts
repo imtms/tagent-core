@@ -64,8 +64,8 @@ function validateCommand(command: ApprovedWorkflowGovernanceCommand | OwnedWorkf
 
 function validateApprovedCommand(command: ApprovedWorkflowGovernanceCommand): void {
   validateCommand(command);
-  if (command.approval.ref.source !== "legacy_workflow") {
-    throw new Error("Workflow Governance preserves legacy_workflow approval authority");
+  if (command.approval.ref.source !== "workflow") {
+    throw new Error("Workflow Governance preserves workflow approval authority");
   }
   if (command.approval.action !== command.action) {
     throw new Error(`Workflow approval does not authorize ${command.action}`);
@@ -186,7 +186,7 @@ function validateMaterialization(
   }
 }
 
-/** Governance owns authorization dispatch; persistence owns the atomic legacy mutation. */
+/** Governance owns authorization dispatch; persistence owns the atomic mutation. */
 export class WorkflowGovernanceService {
   constructor(
     private readonly persistence: WorkflowGovernancePersistencePort,

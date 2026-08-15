@@ -98,13 +98,20 @@ describe("GitHub issue regressions #24-#28", () => {
     store.close();
   });
 
-  it("#27 maps malformed console pagination limits to non-retryable HTTP 400", async () => {
+  it("#27 maps malformed current pagination limits to non-retryable HTTP 400", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const service = new AgentService(agentPersistence(store), await mkdtemp(path.join(tmpdir(), "tagent-issues-http-")), () => waitingRuntime());
     const app = createApp({ ...httpTestResources(store), service, logger: false });
-    for (const suffix of [`messages?limit=abc`, `messages?limit=1.5`, `messages?limit=0`, `messages?limit=201`, `task-runs?limit=NaN`]) {
-      const response = await app.inject({ method: "GET", url: `/api/v1/console/sessions/${session.id}/${suffix}` });
+    const urls = [
+      `/api/v1/console/sessions/${session.id}/messages?limit=abc`,
+      `/api/v1/console/sessions/${session.id}/messages?limit=1.5`,
+      `/api/v1/console/sessions/${session.id}/messages?limit=0`,
+      `/api/v1/console/sessions/${session.id}/messages?limit=201`,
+      `/api/v1/operator/sessions/${session.id}/task-runs?limit=NaN`,
+    ];
+    for (const url of urls) {
+      const response = await app.inject({ method: "GET", url });
       expect(response.statusCode).toBe(400);
       expect(response.json()).toMatchObject({ error: { code: "pagination.limit_invalid", retryable: false } });
     }
@@ -116,12 +123,17 @@ describe("GitHub issue regressions #24-#28", () => {
     const session = store.createSession();
     const service = new AgentService(agentPersistence(store), await mkdtemp(path.join(tmpdir(), "tagent-issues-idempotency-")), () => waitingRuntime());
     const app = createApp({ ...httpTestResources(store), service, logger: false });
-    const post = (content: string) => app.inject({ method: "POST", url: `/api/v1/console/sessions/${session.id}/messages`, payload: { content, requestId: "issue-28-key" } });
+    const post = (content: string) => app.inject({
+      method: "POST",
+      url: `/api/v1/sessions/${session.id}/submissions`,
+      headers: { "idempotency-key": "issue-28-key" },
+      payload: { content },
+    });
     const first = await post("first payload");
     const replay = await post("first payload");
     expect(first.statusCode).toBe(200);
     expect(replay.statusCode).toBe(200);
-    expect(replay.json().data.item.id).toBe(first.json().data.item.id);
+    expect(replay.json().data.receipt.submissionId).toBe(first.json().data.receipt.submissionId);
     expect(store.getSessionPrincipalId(session.id)).toBe("local-admin");
     const sequentialConflict = await post("second payload");
     expect(sequentialConflict.statusCode).toBe(409);
@@ -129,8 +141,8 @@ describe("GitHub issue regressions #24-#28", () => {
 
     const secondSession = store.createSession();
     const concurrent = await Promise.all([
-      app.inject({ method: "POST", url: `/api/v1/console/sessions/${secondSession.id}/messages`, payload: { content: "alpha", requestId: "concurrent-key" } }),
-      app.inject({ method: "POST", url: `/api/v1/console/sessions/${secondSession.id}/messages`, payload: { content: "beta", requestId: "concurrent-key" } }),
+      app.inject({ method: "POST", url: `/api/v1/sessions/${secondSession.id}/submissions`, headers: { "idempotency-key": "concurrent-key" }, payload: { content: "alpha" } }),
+      app.inject({ method: "POST", url: `/api/v1/sessions/${secondSession.id}/submissions`, headers: { "idempotency-key": "concurrent-key" }, payload: { content: "beta" } }),
     ]);
     expect(concurrent.map((response: { statusCode: number }) => response.statusCode).sort()).toEqual([200, 409]);
     expect(store.listSessionInbox(secondSession.id, true)).toHaveLength(1);

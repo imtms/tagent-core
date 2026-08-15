@@ -101,14 +101,17 @@ export class SqliteProfileContractRepository implements ProfileContractRepositor
 
   getInboxItem(sessionId: string, itemId: string): ProfileInboxItemRecord | undefined {
     const row = this.db.prepare(`SELECT id,session_id AS sessionId,content,status,decision,run_id AS runId,
-      position,summary,priority,urgency,relation,execution_policy_json AS executionPolicyJson,revision,
+      position,summary,intent,target_run_id AS targetRunId,priority,urgency,relation,
+      acceptance_json AS acceptanceCriteriaJson,confidence,decision_reason AS reason,
+      execution_policy_json AS executionPolicyJson,revision,
       created_at AS createdAt,updated_at AS updatedAt
       FROM session_supervisor_inbox WHERE session_id=? AND id=?`).get(sessionId, itemId) as
-      (Omit<ProfileInboxItemRecord, "executionPolicy"> & { executionPolicyJson: string }) | undefined;
+      (Omit<ProfileInboxItemRecord, "executionPolicy" | "acceptanceCriteria"> & { executionPolicyJson: string; acceptanceCriteriaJson: string }) | undefined;
     if (!row) return undefined;
-    const { executionPolicyJson, ...item } = row;
+    const { executionPolicyJson, acceptanceCriteriaJson, ...item } = row;
     return {
       ...item,
+      acceptanceCriteria: JSON.parse(acceptanceCriteriaJson || "[]") as string[],
       executionPolicy: executionPolicyJson ? JSON.parse(executionPolicyJson) as ProfileInboxItemRecord["executionPolicy"] : null,
     };
   }
@@ -127,7 +130,9 @@ export class SqliteProfileContractRepository implements ProfileContractRepositor
       ? "AND (created_at < @afterCreatedAt OR (created_at = @afterCreatedAt AND id < @afterId))"
       : "";
     const rows = this.db.prepare(`SELECT id,session_id AS sessionId,content,status,decision,run_id AS runId,
-      position,summary,priority,urgency,relation,execution_policy_json AS executionPolicyJson,revision,
+      position,summary,intent,target_run_id AS targetRunId,priority,urgency,relation,
+      acceptance_json AS acceptanceCriteriaJson,confidence,decision_reason AS reason,
+      execution_policy_json AS executionPolicyJson,revision,
       created_at AS createdAt,updated_at AS updatedAt
       FROM session_supervisor_inbox WHERE session_id=@sessionId AND rowid<=@snapshotRowId ${afterClause}
       ORDER BY created_at DESC,id DESC LIMIT @limit`).all({
@@ -135,10 +140,11 @@ export class SqliteProfileContractRepository implements ProfileContractRepositor
       snapshotRowId,
       limit: query.limit,
       ...(query.after ? { afterCreatedAt: query.after.createdAt, afterId: query.after.id } : {}),
-    }) as Array<Omit<ProfileInboxItemRecord, "executionPolicy"> & { executionPolicyJson: string }>;
+    }) as Array<Omit<ProfileInboxItemRecord, "executionPolicy" | "acceptanceCriteria"> & { executionPolicyJson: string; acceptanceCriteriaJson: string }>;
     return {
-      items: rows.map(({ executionPolicyJson, ...row }) => ({
+      items: rows.map(({ executionPolicyJson, acceptanceCriteriaJson, ...row }) => ({
         ...row,
+        acceptanceCriteria: JSON.parse(acceptanceCriteriaJson || "[]") as string[],
         executionPolicy: executionPolicyJson ? JSON.parse(executionPolicyJson) as ProfileInboxItemRecord["executionPolicy"] : null,
       })),
       snapshotRowId,

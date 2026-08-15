@@ -26,7 +26,7 @@ function command(commandId = "command-1") {
   });
 }
 
-const approvalRef = { source: "legacy_run" as const, id: "approval-1" };
+const approvalRef = { source: "run" as const, id: "approval-1" };
 
 function request(commandId = "command-1") {
   return {

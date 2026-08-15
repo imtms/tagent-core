@@ -1,6 +1,6 @@
 import { Type, type Static } from "typebox";
 import { JsonObjectSchema, TimestampMillisecondsSchema } from "../../shared/primitives.js";
-import { GateProfileSchema, MAX_SUBMISSION_CONTENT_CHARS } from "../../channel/v1/submission-schemas.js";
+import { GateProfileSchema } from "../../channel/v1/submission-schemas.js";
 
 const ConsoleNullableTimestampSchema = Type.Union([TimestampMillisecondsSchema, Type.Null()]);
 const ConsoleTaskExecutionPolicySchema = Type.Object({
@@ -12,38 +12,6 @@ export const ConsoleReasoningEffortSchema = Type.Union([
   Type.Literal("minimal"), Type.Literal("low"), Type.Literal("medium"),
   Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max"),
 ]);
-
-export const ConsoleContentRequestSchema = Type.Object({
-  content: Type.String({ minLength: 1, maxLength: MAX_SUBMISSION_CONTENT_CHARS }),
-  requestId: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })),
-}, { additionalProperties: false });
-export type ConsoleContentRequest = Static<typeof ConsoleContentRequestSchema>;
-
-export const ConsoleSubmissionRequestSchema = Type.Object({
-  content: Type.String({ minLength: 1, maxLength: MAX_SUBMISSION_CONTENT_CHARS }),
-  requestId: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })),
-  gateProfile: Type.Optional(GateProfileSchema),
-}, { additionalProperties: false });
-export type ConsoleSubmissionRequest = Static<typeof ConsoleSubmissionRequestSchema>;
-
-export const ConsoleInboxContentRequestSchema = Type.Object({
-  content: Type.String({ minLength: 1, maxLength: MAX_SUBMISSION_CONTENT_CHARS }),
-}, { additionalProperties: false });
-export type ConsoleInboxContentRequest = Static<typeof ConsoleInboxContentRequestSchema>;
-
-/** @deprecated Use Session from channel/v1. */
-export const ConsoleSessionSchema = Type.Object({
-  id: Type.String(),
-  title: Type.String(),
-  modelId: Type.String({ minLength: 1 }),
-  reasoningEffort: ConsoleReasoningEffortSchema,
-  createdAt: TimestampMillisecondsSchema,
-  updatedAt: TimestampMillisecondsSchema,
-  latestRunStatus: Type.Union([Type.String(), Type.Null()]),
-  latestRunPhase: Type.Union([Type.String(), Type.Null()]),
-});
-/** @deprecated Use Session from channel/v1. */
-export type ConsoleSession = Static<typeof ConsoleSessionSchema>;
 
 export const ConsoleSessionInputAnalysisSchema = Type.Object({
   summary: Type.String(),
@@ -88,19 +56,6 @@ export const ConsoleTaskRunWorkspaceGoalSchema = Type.Object({
 });
 export type ConsoleTaskRunWorkspaceGoal = Static<typeof ConsoleTaskRunWorkspaceGoalSchema>;
 
-export const ConsoleSkillRevisionSchema = Type.Object({
-  id: Type.String(), skillId: Type.String(), revision: Type.Number(), name: Type.String(),
-  description: Type.String(), content: Type.String(), filePath: Type.String(), sha256: Type.String(),
-  disableModelInvocation: Type.Boolean(), sourceFilename: Type.String(), createdAt: TimestampMillisecondsSchema,
-});
-export type ConsoleSkillRevision = Static<typeof ConsoleSkillRevisionSchema>;
-
-export const ConsoleSkillSummarySchema = Type.Object({
-  id: Type.String(), name: Type.String(), latestRevision: Type.Number(), latestRevisionId: Type.String(),
-  description: Type.String(), sha256: Type.String(), workspaceCount: Type.Number(), updatedAt: TimestampMillisecondsSchema,
-});
-export type ConsoleSkillSummary = Static<typeof ConsoleSkillSummarySchema>;
-
 export const ConsoleTaskRunSkillSchema = Type.Object({
   skillId: Type.String(), revisionId: Type.String(), revision: Type.Number(), name: Type.String(),
   description: Type.String(), content: Type.String(), filePath: Type.String(), sha256: Type.String(),
@@ -123,7 +78,6 @@ export const ConsoleTaskRunContractSchema = Type.Object({
   executionPolicy: Type.Optional(Type.Union([ConsoleTaskExecutionPolicySchema, Type.Null()])),
   workspaceGoal: Type.Optional(Type.Union([ConsoleTaskRunWorkspaceGoalSchema, Type.Null()])),
   skills: Type.Optional(Type.Array(ConsoleTaskRunSkillSchema)),
-  skill: Type.Optional(Type.Union([ConsoleTaskRunSkillSchema, Type.Null()])),
 });
 export type ConsoleTaskRunContract = Static<typeof ConsoleTaskRunContractSchema>;
 
@@ -194,10 +148,6 @@ export const ConsoleTaskRunPlanItemSchema = Type.Object({
   key: Type.String(), title: Type.String(), status: Type.String(), required: Type.Boolean(), position: Type.Number(),
 });
 export type ConsoleTaskRunPlanItem = Static<typeof ConsoleTaskRunPlanItemSchema>;
-/** @deprecated Use TaskRunPlanItem from channel/v1. */
-export const ConsolePlanItemSchema = ConsoleTaskRunPlanItemSchema;
-/** @deprecated Use TaskRunPlanItem from channel/v1. */
-export type ConsolePlanItem = Static<typeof ConsolePlanItemSchema>;
 
 export const ConsoleTaskRunCheckSchema = Type.Object({
   key: Type.String(), title: Type.String(), status: Type.String(), required: Type.Boolean(),
@@ -206,10 +156,6 @@ export const ConsoleTaskRunCheckSchema = Type.Object({
   observedAt: ConsoleNullableTimestampSchema,
 });
 export type ConsoleTaskRunCheck = Static<typeof ConsoleTaskRunCheckSchema>;
-/** @deprecated Use TaskRunCheck from channel/v1. */
-export const ConsoleRunCheckSchema = ConsoleTaskRunCheckSchema;
-/** @deprecated Use TaskRunCheck from channel/v1. */
-export type ConsoleRunCheck = Static<typeof ConsoleRunCheckSchema>;
 
 export const ConsoleArtifactSchema = Type.Object({
   id: Type.String(), title: Type.String(), kind: Type.String(), uri: Type.String(),
@@ -233,7 +179,6 @@ export const ConsoleUserInputRequestSchema = Type.Object({
 });
 export type ConsoleUserInputRequest = Static<typeof ConsoleUserInputRequestSchema>;
 
-/** @deprecated Use TaskRun from channel/v1. */
 export const ConsoleTaskRunSchema = Type.Object({
   id: Type.String(), sessionId: Type.String(), requestId: Type.String(), status: Type.String(), phase: Type.String(),
   goal: Type.String(), modelId: Type.String({ minLength: 1 }), reasoningEffort: ConsoleReasoningEffortSchema,
@@ -300,12 +245,4 @@ export const ConsoleTaskRunSchema = Type.Object({
     latestContextManifest: Type.Union([ConsoleContextManifestSchema, Type.Null()]),
   }),
 });
-/** @deprecated Use TaskRun from channel/v1. */
 export type ConsoleTaskRun = Static<typeof ConsoleTaskRunSchema>;
-
-export const ConsoleTaskRunSummarySchema = Type.Object({
-  id: Type.String(), goal: Type.String(), status: Type.String(), phase: Type.String(),
-  contract: Type.Union([ConsoleTaskRunContractSchema, Type.Null()]),
-  attempt: Type.Number(), createdAt: TimestampMillisecondsSchema, updatedAt: TimestampMillisecondsSchema,
-});
-export type ConsoleTaskRunSummary = Static<typeof ConsoleTaskRunSummarySchema>;

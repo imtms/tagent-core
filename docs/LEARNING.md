@@ -41,13 +41,13 @@ TAGENT_LEARNING_SEMANTIC_JUDGE_MIN_CONFIDENCE=0.72
 
 Environment values seed a new database. Runtime feature settings are persisted and survive restart. Turning Learning off forces automatic execution off; turning Memory off forces both off.
 
-## Schema 33 integration authority
+## Integration projection
 
-Schema 33 separates Learning consumption from Execution persistence through an immutable integration journal and fenced delivery state. Execution publishes canonical lifecycle evidence through a generic integration port inside the same writer-fenced transaction as the TaskRun/Attempt event.
+Execution publishes canonical lifecycle evidence to the immutable `integration_outbox` inside the same writer-fenced transaction as the TaskRun/Attempt event.
 
-The persistence adapter retains migration-window legacy and integration projections, checkpoints, reconciliation, effect receipts, and a single active authority. Only the active generation/source may claim and ACK. Shadow consumption may compare results but cannot apply effects.
+Learning has one durable consumer, `learning-projection-v1`. Delivery leases and generations live in `integration_consumer_delivery`; the contiguous watermark lives in `learning_projection_checkpoint`; `effect_receipts` prevent repeating an applied effect. The worker applies the projection and records its effect receipt atomically before ACK and checkpoint advancement.
 
-Cutover requires a contiguous watermark, drained leases, matching reconciliation, a new authority generation, and replay evidence. Rollback resumes from the stored watermark and uses effect receipts to avoid repeating committed effects. Do not delete legacy migration paths merely because their name contains “legacy”; removal requires a separately evidenced deprecation gate.
+There is no alternate projection source or runtime switch. A replacement worker must reclaim a higher delivery generation and resume from the stored checkpoint.
 
 ## Approval and no-bypass rule
 
@@ -55,7 +55,7 @@ Learning may create proposals, requests, evaluations, and receipts. It cannot di
 
 The shared Semantic Judge may classify reusable evidence and cross-language similarity, but low-confidence or malformed output cannot activate a Workflow, grant capability, or weaken deterministic checks.
 
-User-message preference jobs remain durable when the Semantic Judge is disabled. Core consumes them with deterministic explicit-preference rules instead of leaving them pending. Explicitly durable communication habits (for example “以后…” or “always…”) are owned by the authenticated principal at global applicability; one-off formatting requests remain Session-scoped. Profiles resolve through global, Workspace, Session and Task overrides, and legacy `session:*` profiles remain readable as Session-level fallbacks.
+User-message preference jobs remain durable when the Semantic Judge is disabled. Core consumes them with deterministic explicit-preference rules instead of leaving them pending. Explicitly durable communication habits (for example “以后…” or “always…”) are owned by the authenticated principal at global applicability; one-off formatting requests remain Session-scoped. Profiles resolve through global, Workspace, Session and Task overrides. Anonymous Sessions use their Session-owned profile identity.
 
 ## Admin surface
 
@@ -81,11 +81,11 @@ Monitor:
 
 - effective Memory/Learning/automatic-execution settings;
 - distillation worker running/ready state;
-- integration and legacy checkpoints, authority generation, and reconciliation;
+- the `learning-projection-v1` checkpoint, delivery generation, and lag;
 - failed/leased deliveries and effect receipts;
 - pending or expired approval requests;
 - harmful feedback, suspended Workflows, and canary results.
 
 The fastest emergency containment is to disable automatic execution, leaving passive evidence intact. Disable Learning to stop new projection/distillation work while retaining Memory. Disable Memory for the strongest feature boundary; Core normalizes Learning and automatic execution off.
 
-Before an upgrade or authority switch, back up SQLite and Memory together and record all watermarks. See [PERSISTENCE_AND_RECOVERY.md](PERSISTENCE_AND_RECOVERY.md).
+Before release or storage maintenance, stop workers, back up SQLite and Memory together, and record the projection watermark. See [PERSISTENCE_AND_RECOVERY.md](PERSISTENCE_AND_RECOVERY.md).

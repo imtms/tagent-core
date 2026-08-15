@@ -578,13 +578,13 @@ describe("Core lifecycle", () => {
     expect(milestones).toEqual([...milestones].sort((leftOffset, rightOffset) => leftOffset - rightOffset));
   });
 
-  it("cleans up migration failure before any writer lease is claimed", async () => {
+  it("cleans up current-schema validation failure before any writer lease is claimed", async () => {
     const config = await temporaryConfig();
     const seed = new Store(config.database);
-    seed.db.prepare("UPDATE schema_meta SET version = 999 WHERE id = 1").run();
+    seed.db.exec("DROP TABLE core_schema");
     seed.close();
 
-    await expect(bootstrapCore(config)).rejects.toThrow("newer than supported");
+    await expect(bootstrapCore(config)).rejects.toThrow("accepts only an empty database");
     await assertInstanceLockReleased(config.database);
     expect(readLease(config.database)).toBeUndefined();
   });
@@ -606,12 +606,17 @@ describe("Core lifecycle", () => {
     const seed = new Store(config.database);
     const session = seed.createSession();
     const run = seed.createRun(session.id, "Recovery failure seed");
-    seed.claimOperation("running-operation", run.id, run.attempt, "test", { value: 1 });
-    seed.db.exec(`CREATE TRIGGER reject_recovery BEFORE UPDATE OF status ON operations
-      WHEN OLD.status = 'running' BEGIN SELECT RAISE(ABORT, 'simulated recovery failure'); END`);
+    const attemptId = `attempt:${run.id}:${run.attempt}`;
+    seed.db.prepare(`INSERT INTO operations
+      (id,run_id,attempt,attempt_id,operation_type,payload_hash,status,stage,created_at,updated_at)
+      VALUES ('running-operation',?,?,?,?,?,'running','invalid-recovery-stage',1,1)`)
+      .run(run.id, run.attempt, attemptId, "test", "recovery-payload");
+    seed.db.prepare(`INSERT INTO approval_receipts
+      (id,approval_source,approval_id,operation_id,operation_digest,outcome,actor_id,details_json,created_at)
+      VALUES ('recovery-allow','run','recovery-approval','running-operation','recovery-digest','allow','test','{}',1)`).run();
     seed.close();
 
-    await expect(bootstrapCore(config)).rejects.toThrow("simulated recovery failure");
+    await expect(bootstrapCore(config)).rejects.toThrow("running-operation has invalid restart state");
     await assertInstanceLockReleased(config.database);
     expect(readLease(config.database)?.releasedAt).not.toBeNull();
   });

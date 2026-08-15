@@ -226,9 +226,9 @@ export class RunContextService {
     if (run) {
       const items: ContextManifestItem[] = [
         { kind: "system_prompt", sourceId: `run:${runId}:attempt:${run.attempt}`, selected: true, reason: "required runtime instruction", estimatedTokens: stats.systemTokens },
-        ...(run.contract ? [{ kind: "taskrun_contract" as const, sourceId: run.requestId, selected: true, reason: "active TaskRun execution contract", estimatedTokens: estimateContextTokens(JSON.stringify({ ...run.contract, workspaceGoal: undefined, skill: undefined, skills: undefined })) }] : []),
+        ...(run.contract ? [{ kind: "taskrun_contract" as const, sourceId: run.requestId, selected: true, reason: "active TaskRun execution contract", estimatedTokens: estimateContextTokens(JSON.stringify({ ...run.contract, workspaceGoal: undefined, skills: undefined })) }] : []),
         ...(run.contract?.workspaceGoal ? [{ kind: "workspace_goal" as const, sourceId: `${run.contract.workspaceGoal.goalId}:${run.contract.workspaceGoal.definitionRevisionId}`, selected: true, reason: "immutable Workspace Goal direction", estimatedTokens: estimateContextTokens(JSON.stringify(run.contract.workspaceGoal)), metadata: { mode: run.contract.workspaceGoal.mode, roadmapRevisionId: run.contract.workspaceGoal.roadmapRevisionId } }] : []),
-        ...(run.contract?.skills ?? (run.contract?.skill ? [run.contract.skill] : [])).map((skill) => ({ kind: "skill" as const, sourceId: skill.revisionId, selected: true, reason: "Workspace-referenced immutable Skill revision", estimatedTokens: estimateContextTokens(skill.content), metadata: { name: skill.name, revision: skill.revision, sha256: skill.sha256, filePath: skill.filePath } })),
+        ...(run.contract?.skills ?? []).map((skill) => ({ kind: "skill" as const, sourceId: skill.revisionId, selected: true, reason: "Workspace-referenced immutable Skill revision", estimatedTokens: estimateContextTokens(skill.content), metadata: { name: skill.name, revision: skill.revision, sha256: skill.sha256, filePath: skill.filePath } })),
         ...assembly.contextItems,
         ...(assembly.memoryContextItems ?? []),
         ...(assembly.projectContextItems ?? []),

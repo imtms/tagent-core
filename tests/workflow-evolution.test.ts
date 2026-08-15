@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { WorkflowService } from "@tagent/learning";
+import { WorkflowLearningService } from "@tagent/learning";
 import type { WorkflowSpec } from "@tagent/learning/domain";
 import { Store } from "@tagent/persistence-sqlite";
 import { workflowPersistence } from "./support/test-persistence.js";
 
 const stores: Store[] = [];
-const make = () => { const store = new Store(":memory:"); stores.push(store); return { store, service: new WorkflowService(workflowPersistence(store), "test-evaluator-secret") }; };
+const make = () => { const store = new Store(":memory:"); stores.push(store); return { store, service: new WorkflowLearningService(workflowPersistence(store), "test-evaluator-secret") }; };
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
 const spec: WorkflowSpec = { name:"Evolution",intent:"verify software change",cueTerms:["verify","change"],applicability:["verify change"],nonApplicability:[],preconditions:[],inputContract:[],outputContract:[],steps:[{stepId:"test",instruction:"Run tests",required:true}],verification:[{check:"tests",required:true,successCondition:"pass"}],requiredCapabilities:[],riskClass:"low" };
-const activate=(store:Store,service:WorkflowService,workflowId:string)=>{const revisionId=service.getWorkflow(workflowId,true)!.revision!.id;store.db.prepare("UPDATE workflow_definitions SET status='active',active_revision_id=?,updated_at=? WHERE id=?").run(revisionId,Date.now(),workflowId);};
+const activate=(store:Store,service:WorkflowLearningService,workflowId:string)=>{const revisionId=service.getWorkflow(workflowId,true)!.revision!.id;store.db.prepare("UPDATE workflow_definitions SET status='active',active_revision_id=?,updated_at=? WHERE id=?").run(revisionId,Date.now(),workflowId);};
 
 function completedRun(store:Store,sessionId:string,workflowId:string,revisionId:string,index:number,success=true){
   const run=store.createRun(sessionId,`evaluation ${index}`);
@@ -16,7 +16,7 @@ function completedRun(store:Store,sessionId:string,workflowId:string,revisionId:
   store.upsertCheck(run.id,{key:"tests",title:"tests",status:success?"passed":"failed",required:true,command:"test",evidence:"actual",stale:false});
   store.finalizeRun(run.id,success?"completed":"failed"); return run;
 }
-function trustedGates(store:Store,service:WorkflowService,sessionId:string,workflowId:string,baselineRevisionId:string,candidateRevisionId:string){
+function trustedGates(store:Store,service:WorkflowLearningService,sessionId:string,workflowId:string,baselineRevisionId:string,candidateRevisionId:string){
   const baseline=Array.from({length:5},(_,i)=>completedRun(store,sessionId,workflowId,baselineRevisionId,i));
   const candidate=Array.from({length:5},(_,i)=>completedRun(store,sessionId,workflowId,candidateRevisionId,10+i));
   const input={workflowId,candidateRevisionId,baselineRevisionId,datasetId:"fixed-dataset-v1",baselineRunIds:baseline.map(run=>run.id),candidateRunIds:candidate.map(run=>run.id)};

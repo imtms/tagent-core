@@ -5,7 +5,6 @@ This directory contains the maintained contracts for the current TAgent Core mai
 ## Start here
 
 - [Project overview](../README.md)
-- [Upgrade and rollback](UPGRADING.md)
 - [Security policy](../SECURITY.md)
 - [Contributing](../CONTRIBUTING.md)
 
@@ -25,7 +24,7 @@ This directory contains the maintained contracts for the current TAgent Core mai
 
 ## Persistence and execution
 
-- [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md) — SQLite ownership, schema 47, Gateway/trusted/request/profile receipts, Skill revisions, writer fencing, Unit of Work, lifecycle, and restart recovery.
+- [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md) — current SQLite schema, receipts, writer fencing, Unit of Work, lifecycle, and restart recovery.
 - [Gateway profile compatibility](GATEWAY_PROFILE_COMPATIBILITY.md) — Core/profile/SDK release tuple, feature negotiation, CI ownership, and rollout matrix.
 - [Runtime](RUNTIME.md) — in-process AgentHarness boundary, Pi dependency containment, `TaskRun`/`Attempt` execution, compaction, provider compatibility, timeouts, and tool authority.
 - [Execution reliability and efficiency](EXECUTION_EFFICIENCY.md) — snapshot edits, Artifact spill, project context, batching, context projection, Bash repeat protection, and continuation stalls.
@@ -38,7 +37,7 @@ This directory contains the maintained contracts for the current TAgent Core mai
 - [Web Console security](WEB_CONSOLE_SECURITY.md) — separate origin, CORS, OIDC hosting boundary, and browser storage.
 - [Deployment and Gateway](DEPLOYMENT_AND_GATEWAY.md) — deployment order, artifacts, configuration, backup, and rollback.
 - [Gateway handoff status](GATEWAY_HANDOFF_STATUS.md) — evidence-based P0/P1/P2 implementation and acceptance gaps against the Gateway team's handoff.
-- [Gateway production readiness](GATEWAY_PRODUCTION_READINESS.md) — pre-cutover verification and probes.
+- [Gateway production readiness](GATEWAY_PRODUCTION_READINESS.md) — pre-deployment verification and probes.
 
 ## Memory and Learning
 
@@ -47,5 +46,5 @@ This directory contains the maintained contracts for the current TAgent Core mai
 
 ## Release
 
-- [Release checklist](RELEASE_CHECKLIST.md) — toolchain, tests, audits, artifacts, migrations, and publication.
+- [Release checklist](RELEASE_CHECKLIST.md) — toolchain, tests, audits, current-schema checks, artifacts, and publication.
 - [Changelog](../CHANGELOG.md) — release-level changes and upgrade notices.

@@ -1,126 +1,82 @@
 # Persistence and recovery
 
-## Ownership
+`@tagent/persistence-sqlite` owns Core's control-plane SQLite schema, repositories, synchronous transaction boundary, writer fencing, and restart recovery. Domain packages depend on persistence ports wired by `@tagent/core-service`; they do not issue uncontrolled SQL.
 
-`@tagent/persistence-sqlite` owns the control-plane SQLite schema, repositories, migrations, transaction boundary, writer authority, and restart recovery primitives. Domains depend on its ports through the Core composition root; they do not issue uncontrolled SQL.
+## Supported database contract
 
-The current schema version is 47 and its validated application inventory contains 95 non-SQLite-internal tables:
+Core 0.8 supports one database shape:
 
-| Version | Authority introduced |
+| Field | Value |
 | --- | --- |
-| 30 | canonical `Attempt`, execution leases, projection checkpoints, restart comparison |
-| 31 | canonical Governance projections and expanded approval receipts |
-| 32 | capability-authorization uniqueness, indexes, and immutable identity constraints |
-| 33 | Learning integration journal, delivery, checkpoints, reconciliation, authority, effect receipts, migration issue ledger |
-| 34 | Workspace model/reasoning preferences and immutable TaskRun execution-profile snapshots |
-| 35 | lightweight Workspace Goals, immutable definition/Roadmap revisions, decisions, Run links and evidence links |
-| 36 | Goal decision/evidence idempotency, dynamic evidence freshness and mutation authorization support |
-| 37 | operation audit payloads and current-Attempt trusted Bash bindings for Run checks |
-| 38 | automatic Goal guidance, Goal Roadmap admission/progress, Run link modes and repeatable lifecycle decisions |
-| 39 | Gateway Session/command/Goal operation receipts plus settled/final event-consumer ACK boundaries |
-| 40 | Submission principal/provenance audit receipts and canonical-payload recovery |
-| 41 | ordered Session/TaskRun indexes for bounded Operator Read keyset pagination |
-| 42 | durable Session Inbox execution-policy snapshots for effect-before-approval enforcement |
-| 43 | Core-managed Skill revisions and per-Session Skill bindings |
-| 44 | shared catalog references from each Workspace to multiple Skill identities |
-| 45 | exact, hash-verified Attempt request envelopes persisted before provider dispatch |
-| 46 | durable continuation due-time scheduling for provider cooldown recovery |
-| 47 | Gateway capability-profile revisions, exact mutation/operation receipts, audit events, and collection revisions |
+| Durable marker | `core_schema.schema_id = 'tagent-core/0.8'` |
+| Public numeric schema version | `1` |
+| Creation source | `adapters/persistence-sqlite/src/current-schema.ts` |
+| Upgrade support | none; only an empty database or the exact current schema is accepted |
 
-Schema 37 added `operations.payload_json`, `run_checks.source_operation_id`, `run_checks.observed_at`, and the partial source-operation index. Legacy operations are not retroactively promoted to trusted evidence.
+An empty database is created in one transaction. Every subsequent open builds the reference schema in memory and compares the ordered `sqlite_master` table, index, and trigger definitions with the persisted database. A missing marker, another schema ID, an extra or missing object, or changed SQL fails startup. Core does not repair, backfill, or upgrade an earlier database.
 
-Schema 38 adds `workspace_goal_run_links.link_mode`, `workspace_goal_inbox_links` and `workspace_goal_roadmap_item_progress`. It classifies historical Goal-linked Runs, backfills Roadmap progress and removes the legacy decision-identity constraint so valid pause/resume cycles can repeat. Re-entry validates the complete v37 trusted-evidence shape and the v38 Goal execution shape and fails closed on drift.
-
-Schema 39 adds `session_create_receipts`, `task_run_command_receipts`, `workspace_goal_operation_receipts`, `event_consumers.settled_acked_seq`, and `event_consumers.final_acked_seq`. Session identity is scoped by `(principal_id,idempotency_key)`; command identity by `(principal_id,task_run_id,command_id)`; Goal operation identity by `(goal_id,request_id)`. Every receipt stores the canonical payload hash. Re-entry validates the complete receipt column order/type/nullability/default/primary-key shape, foreign keys, status checks, ACK columns, and every explicit index fail-closed.
-
-Schema 40 adds `submission_audit_receipts`. Submission identity remains `(session_id,idempotency_key)` while the audit receipt preserves the first Core principal, canonical content-plus-origin payload/hash, channel-neutral provenance, and Submission identity. The inbox item and its audit receipt commit together for new submissions; replay returns the original audit chain and changed canonical provenance conflicts. Re-entry validates the full table, unique identity, foreign key and indexes.
-
-Schema 41 adds `idx_sessions_operator_created`, `idx_runs_operator_session_created`, and `idx_runs_operator_session_updated`. They support immutable Session/TaskRun inventory order and deterministic latest-Run selection. Re-entry validates index ownership and exact column order fail-closed. Operator cursor snapshot membership uses persisted row boundaries; read values remain read-committed.
-
-Schema 42 adds `session_supervisor_inbox.execution_policy_json`. The Router decision now survives queueing and is copied into the immutable TaskRun contract, so external-action approval cannot be bypassed by the Inbox persistence boundary. Existing rows remain readable and use conservative legacy normalization.
-
-Schema 43 adds `skills`, immutable `skill_revisions`, and the original single-revision Session binding. Schema 44 migrates that binding to `workspace_skill_bindings(session_id, skill_id)`, allowing multiple references per Workspace. Admission resolves the latest revision of every reference and freezes the complete array, including content and hashes, into a new TaskRun. Catalog deletion removes references but does not erase content-addressed bundle files or self-contained historical snapshots.
-
-Schema 45 adds `attempt_request_envelopes`, uniquely keyed by `(attempt_id, request_ordinal)`. Each row stores canonical JSON, the exact final provider payload, its SHA-256 digest, and a digest of the complete replay envelope. Runtime writes the envelope, reads it through the repository, and validates both hashes before returning the payload to the transport hook. Re-entry validates the exact columns, unique Attempt/ordinal index, and foreign keys.
-
-Schema 46 adds `run_continuations.not_before` and a due-time index. Provider cooldown continuations remain queued until their durable deadline, survive process restart, and may still be superseded by manual Resume.
-
-Schema 47 adds `profile_resource_revisions`, `profile_mutation_receipts`, `profile_operation_receipts`, and `profile_audit_events`, plus durable Session Inbox, Skill catalog, and Workspace-Skill collection revisions. Synchronous resource writes bind principal, canonical payload, expected revision, and first result for exact replay. Asynchronous or externally observable profile operations retain `started`, terminal, or `outcome_unknown` receipts across restart. Audit rows separate the authenticated Core principal and granted scopes from delegated actor/request identity and never store request bodies. Re-entry validates the complete schema and creates missing v47 objects idempotently even when an interrupted earlier v47 opener already advanced `schema_meta`.
-
-Migrations are forward-only for a running release. A binary that only understands schema 46 must never open a schema 47 database.
+For a new deployment, point `TAGENT_DB` at a nonexistent file or a verified empty database. If Core reports an unsupported schema or schema drift, stop it and create a new database. Do not copy rows or edit the marker to bypass validation.
 
 ## Startup order
 
-Core becomes ready only after this sequence succeeds:
+Production startup is ordered so no runtime can mutate before writer ownership is established:
 
-1. acquire the OS instance lock next to the SQLite database;
-2. open the Store and run schema migrations;
-3. claim the Core writer lease and fence;
-4. install the connection-level writer guard;
-5. start writer heartbeat verification;
-6. run guarded post-migration and restart recovery;
-7. construct Memory, Learning, runtime, Supervisor, and HTTP services;
-8. recover continuations and Session Inbox work;
-9. listen, start background workers, and mark the writer ready.
+1. acquire the OS instance lock;
+2. open SQLite, create or validate the exact current schema, and surface interrupted durable profile operations as `outcome_unknown`;
+3. claim the `core_writer_lease` and monotonic fence;
+4. install connection-level mutation guards;
+5. create `SqlitePersistence` and the domain services;
+6. start lifecycle-owned workers;
+7. run writer-guarded startup recovery;
+8. start HTTP and mark the writer ready.
 
-`GET /api/v1/health` returns 503 when the writer exists but is not ready. A lost instance lock, stale heartbeat, rejected lease, or changed connection guard clears readiness and initiates shutdown.
+Core rejects a second live instance. Losing the writer lease or failing a guard clears readiness and initiates shutdown.
 
-The writer heartbeat keeps the 5-second interval and 10-second maximum-age safety boundary. The asynchronous instance-lock check is bounded by the remaining heartbeat lifetime, so a permanently pending check cannot hold shutdown open indefinitely. A synchronous writer-lease or connection-guard stage that returns only after the maximum age is treated as a missed heartbeat and cannot refresh readiness.
+## Transaction and writer authority
 
-Heartbeat deadline failures include sanitized diagnostics for the active stage, completed stage durations, heartbeat age, and the event-loop delay maximum and p99 for the current heartbeat window. These diagnostics intentionally exclude database URLs, SQL, filesystem paths, request payloads, and credentials. Use them to distinguish a pending instance-lock check from SQLite contention or an event-loop stall; the fail-closed boundary must not be disabled or increased without production latency evidence.
+`SqliteUnitOfWork` is synchronous by design: work cannot cross an `await` while a SQLite transaction is open. Multi-repository mutations use this boundary. The active writer fence is checked by mutation adapters and connection guards, so reaching a lower repository directly does not grant write authority.
 
-## Single-writer authority
+TaskRun state changes use the closed `TaskRunTransitionPort`. Attempt identity, version, execution lease token, and fence are validated inside the same transaction as runtime mutations. Approval consumption, operation authorization, and the append-only allow receipt are also one atomic write.
 
-The OS lock prevents two local Core processes from targeting the same database. Stale-lock recovery verifies host and process identity and fails closed when ownership cannot be proven.
+## Restart recovery
 
-The SQLite writer lease supplies a monotonic fence. Mutation adapters assert that fence, and connection-level triggers reject writes that do not carry the active authority. This protects the database even if code reaches a lower repository layer incorrectly.
+Startup never blindly repeats an effect whose outcome may have escaped Core:
 
-## Unit of Work
+- a capability effect that reached `effect_started` becomes `outcome_unknown`;
+- an authorized capability operation that had not started is cancelled with `restart_before_effect`;
+- other running operations become `outcome_unknown` with `service_restart`;
+- in-flight control delivery becomes `outcome_unknown`;
+- started TaskRun command, Workspace Goal, and capability-profile operation receipts become `outcome_unknown`;
+- exact terminal receipts remain replayable without repeating the effect.
 
-Writes that span repositories can use a synchronous Unit of Work. The callback must finish before the SQLite transaction returns; asynchronous callbacks are rejected. State transitions, receipts, events, projection checkpoints, and outbox entries become visible atomically only when their application path composes them in that Unit of Work.
+Callers must reconcile `outcome_unknown` explicitly. Automatic replay is forbidden.
 
-The HTTP TaskRun command path persists the command claim before applying an effect and settles the terminal receipt afterward. Durable inbox admission and domain transitions own their own atomic state/event boundaries. A crash after an effect but before terminal receipt settlement therefore reopens the command receipt as `outcome_unknown`; Core never blindly repeats it. Gateway reconciles that explicit state against the typed read model. This conservative protocol is the stable public recovery contract for commands that can cross Runtime, provider, scheduler, or application-service boundaries.
+## Learning integration
 
-Do not perform provider calls, filesystem I/O, timers, or other asynchronous work inside the transaction. Persist intent/outbox state first, commit, then perform the effect under its owned lease and receipt protocol.
+Learning consumes the immutable `integration_outbox` through one durable consumer, `learning-projection-v1`. Delivery state lives in `integration_consumer_delivery`; the contiguous checkpoint lives in `learning_projection_checkpoint`; `effect_receipts` deduplicate applied effects. A worker must hold the current lease generation, apply the effect and record its receipt atomically, then ACK and advance the checkpoint. There is no alternate projection source or runtime authority switch.
 
-## Restart classification
+## Event delivery and receipts
 
-Recovery does not guess that an interrupted external effect succeeded or failed:
+Gateway event consumers claim a generation and ACK monotonically. Reclaiming produces a higher generation; stale generations cannot ACK. Gateway must durably persist the exact `(taskRunId, consumerId, generation, sequence, eventId)` delivery before ACK.
 
-- effect started without a durable terminal receipt becomes `outcome_unknown`;
-- authorized work whose effect had not started becomes `cancelled` with `restart_before_effect`;
-- a Pi control delivery that was in delivery becomes `outcome_unknown`;
-- a TaskRun command, Workspace Goal operation, or capability-profile operation left at `started` becomes `outcome_unknown` before HTTP readiness;
-- interrupted `Attempt`s release stale execution leases, reject unresolved candidate state, and preserve an auditable recovery event;
-- pending Supervisor continuations, Session Inbox work, Learning deliveries, and checkpoints are reconciled through their durable state; a preparation failure requeues only its own continuation lease, not every lease held by the process owner;
-- external-action continuations require a fresh approval bound to the next Attempt and never inherit a consumed authorization.
+TaskRun commands, Workspace Goal operations, and capability-profile operations bind idempotency identity to a canonical payload hash. An exact retry returns the first result; a changed payload conflicts. A started receipt recovered after process loss is observable as `outcome_unknown`, not as permission to repeat an external effect.
 
-`outcome_unknown` requires explicit reconciliation or operator action. Replaying the same external mutation automatically could duplicate side effects.
+## Trusted verification
 
-Session creation is a fully local transaction: Session row and receipt commit together. `steer`/`follow_up` accept at the durable fenced control-inbox boundary and deliver asynchronously. Commands persist their receipt claim before invoking the effect; if Core cannot prove terminal settlement after restart, GET returns the preserved `outcome_unknown` receipt rather than executing the command again. This classification is a safe recovery fallback, not proof of atomic command completion. Goal Roadmap generation similarly claims its request before the single LLM call and never calls the model twice for the same request identity.
-
-## Trusted verification receipts
-
-Core persists the canonical input hash for every operation and a JSON audit payload for new operations. A passed check may bind only to a completed, succeeded `tool.bash` operation from the same Run and current Attempt whose actual command is present and whose result reports exit code zero. Core copies the operation completion time into the check and derives evidence from the receipt; caller-provided evidence text and timestamps cannot establish trust.
-
-Read-only and verification Bash commands preserve current checks. Commands classified as workspace mutations make prior checks stale. Completion revalidates the source operation, Attempt, command, status, exit code and completion time instead of trusting the denormalized check row.
-
-## Schema 33 migration issues
-
-The v33 preflight records ambiguous or unsafe source rows in `migration_issues`. Startup must stop while open issues remain. Do not delete, ignore, or manually mark the ledger resolved without correcting the source data and following the migration procedure.
+A trusted passed check binds to a completed successful `tool.bash` operation from the same Run and current Attempt. Core verifies the canonical command, exit code, completion time, and source operation on finalization. Caller-authored evidence text or timestamps cannot establish trust. Workspace mutations make earlier checks stale; explicit read-only receipts do not.
 
 ## Shutdown order
 
-Core stops new readiness first, disables heartbeat timers, then closes active runtimes and background workers as quiescence barriers. Runtime closure cancels and joins runtime disposers, preparation, control-delivery, and execution tasks without a timer standing in for settlement. Only after both barriers succeed does Core drain adjacent heartbeat/startup work, remove the connection guard, release the writer lease, close the Store, and release the OS instance lock. A failed runtime/background barrier leaves lifecycle phase `closing` and deliberately retains persistence and writer authority for work that may still be alive. Repeated lifecycle closure shares the same close operation, so one authority failure cannot release resources more than once.
+Core removes readiness first and stops heartbeat timers. Runtime and background services then cancel and join all owned work as quiescence barriers. Only after both barriers settle does Core remove the connection guard, release the writer lease, close SQLite, and release the OS lock. If settlement cannot be proved, lifecycle remains `closing` and persistence authority is retained rather than being released under live work.
 
 ## Backup and restore
 
-Before upgrades or storage maintenance:
+For same-release disaster recovery:
 
 1. stop Core and confirm no writer remains;
-2. copy the SQLite database with its WAL and SHM files as one recovery set;
-3. record the release commit, artifact checksum, configuration, and schema version;
-4. back up PostgreSQL and Local Cold/S3 state consistently when Memory is enabled;
-5. test restore into an isolated location.
+2. copy the SQLite database with any WAL and SHM files as one recovery set;
+3. record the release tag, commit, artifact checksum, configuration, and schema ID;
+4. back up PostgreSQL and cold storage consistently when Memory is enabled;
+5. test the restore with the identical release artifact in an isolated location.
 
-Do not copy only the main SQLite file while a writer is active. Rollback across schema versions means restoring the matching database backup and binary together.
+Backups from an earlier schema ID are not upgrade inputs for Core 0.8. A release rollback is safe only when it accepts `tagent-core/0.8`; otherwise deploy with a new empty database or keep the current release running.

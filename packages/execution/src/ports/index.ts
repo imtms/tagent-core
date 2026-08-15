@@ -46,11 +46,9 @@ export {
   type SubprocessSpawnSpec,
 } from "./subprocess-port.js";
 export type {
-  AttemptAuthorityRepository,
   AttemptRepository,
   FencedRuntimeMutationContext,
   FencedRuntimeMutationPort,
-  ShadowComparisonInput,
   TaskRunStateMutation,
 } from "./attempt-repository.js";
 export type { ClaimedContinuation, ContinuationQueue, ContinuationRecoveryItem } from "./continuation-queue.js";

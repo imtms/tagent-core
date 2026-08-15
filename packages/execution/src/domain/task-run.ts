@@ -58,7 +58,6 @@ export interface EventConsumerCursor {
   consumerId: string;
   generation: number;
   ackedSeq: number;
-  terminalAckedSeq: number | null;
   settledAckedSeq: number | null;
   finalAckedSeq: number | null;
   claimedAt: number;

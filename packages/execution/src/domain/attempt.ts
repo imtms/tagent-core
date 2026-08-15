@@ -6,11 +6,9 @@ export type AttemptTrigger =
   | "continuation"
   | "retry"
   | "input"
-  | "recovery"
-  | "legacy_backfill";
+  | "recovery";
 
 export const ATTEMPT_STATUSES = Object.freeze([
-  "legacy_unknown",
   "queued",
   "starting",
   "running",
@@ -28,10 +26,7 @@ export type AttemptStatus = (typeof ATTEMPT_STATUSES)[number];
 
 export type TerminalAttemptStatus = "completed" | "blocked" | "failed" | "cancelled";
 
-export type AttemptReconstructionState = "complete" | "legacy_unknown";
-
 const ATTEMPT_TRANSITIONS: Readonly<Record<AttemptStatus, readonly AttemptStatus[]>> = Object.freeze({
-  legacy_unknown: [],
   queued: ["starting", "failed", "cancelled", "interrupted"],
   starting: ["running", "failed", "cancelled", "interrupted"],
   running: ["settling", "waiting_input", "blocked", "failed", "cancelled", "interrupted"],
@@ -65,11 +60,10 @@ export interface Attempt {
   status: AttemptStatus;
   active: boolean;
   version: number;
-  legacyEventSeq: number;
+  eventSequence: number;
   startedAt: number;
   updatedAt: number;
   completedAt: number | null;
-  reconstructionState: AttemptReconstructionState;
 }
 
 export interface ExecutionLease {
@@ -105,17 +99,7 @@ export interface AttemptTransitionAudit {
   scenario: string;
   reason: string;
   version: number;
-  legacyEventSeq: number;
-  createdAt: number;
-}
-
-export interface AttemptShadowComparison {
-  id: string;
-  attemptId: AttemptId;
-  scenario: string;
-  legacy: Record<string, unknown>;
-  projected: Record<string, unknown>;
-  mismatch: boolean;
+  eventSequence: number;
   createdAt: number;
 }
 

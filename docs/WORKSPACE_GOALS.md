@@ -101,9 +101,9 @@ These routes are the Workspace Goal subset of the stable Operator profile, not C
 
 Every write requires a stable request ID. Definition/Roadmap revision and generation operations use `workspace_goal_operation_receipts`; Goal creation, decisions and TaskRun admission retain their existing durable identities. Reusing an identity with the same canonical payload returns the original result; different content is `workspace_goal.idempotency_conflict`. The operation GET exposes recovery state without another LLM call.
 
-## Persistence and upgrade
+## Persistence
 
-SQLite schema 47 retains the Goal tables, schema-38 execution linkage and schema-39 Gateway operation receipts:
+The current SQLite schema stores Goal execution linkage and Gateway operation receipts in:
 
 ```text
 workspace_goal_run_links.link_mode
@@ -112,9 +112,7 @@ workspace_goal_roadmap_item_progress
 workspace_goal_operation_receipts
 ```
 
-The v38 → v39 migration adds Goal operation payload hashes, result/error receipts and restart recovery state. Schema 40 adds Submission audit receipts, schema 41 adds Operator Read indexes, and schema 42 durably carries the Admission execution policy through the Inbox. Schema 43 adds the Skill catalog and revisions; schema 44 replaces the original single binding with multi-Skill Workspace references; schema 45 adds Attempt request envelopes; schema 46 adds persisted continuation due-time scheduling; schema 47 adds independent Gateway profile persistence. None changes Goal semantics. Some internal SQLite columns and values retain `plan` names for forward-compatible migration of existing databases; they are not public domain or API terminology.
-
-Migrations are forward-only. Stop Core and back up SQLite together with WAL/SHM before upgrading. A schema-46-only binary must never open a schema-47 database; rollback across this boundary requires the matching pre-upgrade database backup. See [UPGRADING.md](UPGRADING.md).
+Roadmap revision kind, decision kind, and linkage columns use current `roadmap` terminology. Goal operation receipts bind request IDs to canonical payload hashes and preserve result/error or `outcome_unknown` recovery state. Core 0.8 accepts only an empty database or the exact `tagent-core/0.8` schema.
 
 ## Explicit non-goals
 

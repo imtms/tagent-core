@@ -71,10 +71,10 @@ describe("Execution workspace package", () => {
     const root = readJson<{ devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const execution = readJson<PackageManifest>("packages/execution/package.json");
 
-    expect(execution).toMatchObject({ name: "@tagent/execution", version: "0.7.0", private: true });
+    expect(execution).toMatchObject({ name: "@tagent/execution", version: "0.8.0", private: true });
     expect(root.devDependencies[execution.name]).toBe(execution.version);
     expect(Object.keys(execution.exports).sort()).toEqual(expectedExports);
-    expect(execution.dependencies).toEqual({ "@tagent/governance": "0.7.0" });
+    expect(execution.dependencies).toEqual({ "@tagent/governance": "0.8.0" });
     for (const [subpath, target] of Object.entries(execution.exports)) {
       expect(subpath).not.toContain("*");
       expect(target.types).toMatch(/^\.\/dist\/.+\.d\.ts$/);
@@ -91,7 +91,7 @@ describe("Execution workspace package", () => {
       ...sourceFiles("packages/execution/src/domain"),
       ...sourceFiles("packages/execution/src/ports"),
     ];
-    expect(implementationFiles).toHaveLength(59);
+    expect(implementationFiles).toHaveLength(58);
     expect(implementationFiles).toEqual(expect.arrayContaining([
       "packages/execution/src/application/attempt-execution-failure.ts",
       "packages/execution/src/application/context-token-estimate.ts",

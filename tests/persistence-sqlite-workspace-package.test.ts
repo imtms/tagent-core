@@ -4,14 +4,13 @@ import path from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
-  GuardedStoreUnitOfWork,
-  LegacyStoreAdapter,
+  GuardedSqliteUnitOfWork,
+  SqlitePersistence,
   Store,
 } from "@tagent/persistence-sqlite";
 import {
   SqliteAttemptRepository,
 } from "@tagent/persistence-sqlite/sqlite";
-import { migrateAttemptsV30 } from "@tagent/persistence-sqlite/migrations";
 import type { MutationUnitOfWork } from "@tagent/persistence-sqlite/unit-of-work";
 import { WriterFenceGuard } from "@tagent/persistence-sqlite/writer";
 
@@ -20,7 +19,6 @@ const packageRoot = "adapters/persistence-sqlite";
 const sourceRoot = `${packageRoot}/src`;
 const expectedExports = [
   ".",
-  "./migrations",
   "./sqlite",
   "./store",
   "./unit-of-work",
@@ -132,11 +130,10 @@ describe("SQLite persistence adapter workspace package", () => {
   });
 
   it("exposes the approved runtime and type surface", () => {
-    expect(LegacyStoreAdapter).toBeTypeOf("function");
+    expect(SqlitePersistence).toBeTypeOf("function");
     expect(SqliteAttemptRepository).toBeTypeOf("function");
-    expect(migrateAttemptsV30).toBeTypeOf("function");
     expect(WriterFenceGuard).toBeTypeOf("function");
-    expect(GuardedStoreUnitOfWork).toBeTypeOf("function");
+    expect(GuardedSqliteUnitOfWork).toBeTypeOf("function");
     const unitOfWork: MutationUnitOfWork | undefined = undefined;
     expect(unitOfWork).toBeUndefined();
   });
@@ -179,7 +176,7 @@ describe("SQLite persistence adapter workspace package", () => {
     expect((serverSource.match(/new Store\(/g) ?? [])).toHaveLength(1);
     expect((serverSource.match(/claimCoreWriterConnectionWithRetry\(store/g) ?? [])).toHaveLength(1);
     expect((serverSource.match(/writerConnection\.writerGuard\.installConnectionGuard\(\)/g) ?? [])).toHaveLength(1);
-    expect((serverSource.match(/createGuardedLegacyStoreAdapter\(store, writerConnection\.writerGuard\)/g) ?? [])).toHaveLength(1);
+    expect((serverSource.match(/createGuardedSqlitePersistence\(store, writerConnection\.writerGuard\)/g) ?? [])).toHaveLength(1);
     expect(serverSource).toContain("closeStore: () => store?.close()");
     expect(adapterSource).not.toMatch(/new Store\(/);
     expect(serverSource).toContain('from "@tagent/persistence-sqlite"');
@@ -205,14 +202,22 @@ describe("SQLite persistence adapter workspace package", () => {
     expect(upperLayerViolations).toEqual([]);
   });
 
-  it("preserves schema v47 and the current SQLite shape", () => {
+  it("creates the single current SQLite shape", () => {
     const store = new Store(":memory:");
     try {
-      expect(store.getSchemaVersion()).toBe(47);
+      expect(store.getSchemaVersion()).toBe(1);
       const tables = store.db.prepare(
         "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'",
       ).all() as Array<{ name: string }>;
-      expect(tables).toHaveLength(95);
+      expect(tables).toHaveLength(88);
+      expect(tables.map((table) => table.name)).not.toEqual(expect.arrayContaining([
+        "attempt_authority_state",
+        "attempt_shadow_comparisons",
+        "learning_projection_outbox",
+        "learning_projection_authority_state",
+        "integration_reconciliation",
+        "migration_issues",
+      ]));
       expect(tables.map((table) => table.name)).toEqual(expect.arrayContaining([
         "session_create_receipts",
         "submission_audit_receipts",
@@ -252,7 +257,6 @@ describe("SQLite persistence adapter workspace package", () => {
         'await import("@tagent/persistence-sqlite/store");',
         'await import("@tagent/persistence-sqlite/sqlite");',
         'await import("@tagent/persistence-sqlite/writer");',
-        'await import("@tagent/persistence-sqlite/migrations");',
         'await import("@tagent/persistence-sqlite/unit-of-work");',
       ].join("\n"),
     ], { cwd: repoRoot, stdio: "pipe" });

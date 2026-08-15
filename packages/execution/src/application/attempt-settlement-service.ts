@@ -4,7 +4,6 @@ import type { RunId } from "../domain/task-run.js";
 import type { CandidateResult } from "../domain/index.js";
 import type { ExecutionStateView } from "./execution-state.js";
 import { ensureSettlementApproval } from "./settlement-approval.js";
-import { blockRuntimeTaskRun, canonicalGateEvaluations, completeRuntimeTaskRun, publishTransitionOutcome } from "./task-run-transition-helpers.js";
 import { executeRuntimePrompt } from "./runtime-skill.js";
 import type {
   AttemptProjectionPort,
@@ -15,7 +14,7 @@ import type {
 
 type AttemptSettlementState = ExecutionStateView<
   | "closing" | "continuationOwner" | "persistence",
-  | "approvals" | "attemptAuthority" | "attempts" | "checkpoints"
+  | "approvals" | "attempts" | "checkpoints"
   | "continuations" | "events" | "sessions" | "taskRuns" | "taskRunTransitions"
 >;
 
@@ -44,11 +43,11 @@ export class AttemptSettlementService {
   public projectWorkflowExperience(runId: RunId) { this.dependencies.projection.project(runId); }
   public async execute(runId: RunId, token: AttemptExecutionToken, runtime: AttemptRuntimePort, prompt: string, continuationId?: string, onRuntimeSettled: () => void = () => {}) {
     let candidateResponse = "";
-    let canaryCandidate: CandidateResult | undefined;
+    let candidate: CandidateResult | undefined;
     try {
       try {
         const contract = this.state.persistence.taskRuns.getRun(runId)?.contract;
-        const skills = contract?.skills ?? (contract?.skill ? [contract.skill] : []);
+        const skills = contract?.skills ?? [];
         await executeRuntimePrompt(runtime, prompt, skills.length === 1 ? skills[0].name : undefined);
       } finally {
         // The Run idle watchdog covers active Agent/runtime work only. Supervisor
@@ -73,12 +72,11 @@ export class AttemptSettlementService {
         .filter(Boolean);
       const response = checkpointResponse || assistantResponses.at(-1) || "";
       candidateResponse = response;
-      canaryCandidate = this.recordCanaryCandidate(token, response);
+      candidate = this.recordCandidate(token, response);
       const finalAssistant = assistantMessages.at(-1);
       const modelOutputTruncated = finalAssistant && "stopReason" in finalAssistant && finalAssistant.stopReason === "length";
       const checkpointSeq = this.state.persistence.checkpoints.getCheckpoint(runId)?.lastEventSeq ?? current.lastEventSeq;
       const review = await this.dependencies.supervisor.reviewSettled(current, checkpointSeq, response, { modelOutputTruncated });
-      const canonicalGates = canonicalGateEvaluations(review.gates);
       const decision = review.decision;
       const reviewedRun = this.state.persistence.taskRuns.getRun(runId);
       if (!reviewedRun || reviewedRun.status !== "running" || reviewedRun.attempt !== decision.attempt) {
@@ -86,38 +84,10 @@ export class AttemptSettlementService {
         return false;
       }
       if (decision.action === "complete_taskrun") {
-        const authoritative = this.settleAuthoritatively(token, canaryCandidate, decision.id, decision.action, "completed", "");
-        if (authoritative !== undefined) return authoritative;
-        const transition = completeRuntimeTaskRun(this.state.persistence.taskRunTransitions, token, {
-          response, supervisionDecisionId: decision.id, gates: canonicalGates,
-        });
-        if (response) this.state.persistence.sessions.appendMessage(current.sessionId, "assistant", response);
-        this.dependencies.supervisor.markExecuted(decision.id, "executed");
-        publishTransitionOutcome(this.dependencies.eventHub, transition);
-        this.projectWorkflowExperience(runId);
-        return false;
+        return this.settleCandidate(token, candidate, decision.id, decision.action, "completed", "");
       }
       const reason = review.gates.find((gate) => gate.gateType === "completion")?.failures.map((failure) => `${failure.key}: ${failure.reason}`).join("; ") || decision.rationale;
-      const authoritative = this.settleAuthoritatively(token, canaryCandidate, decision.id, decision.action, "blocked", reason);
-      if (authoritative !== undefined) return authoritative;
-      const transition = blockRuntimeTaskRun(
-        this.state.persistence.taskRunTransitions,
-        token,
-        reason,
-        { response, supervisionDecisionId: decision.id, action: decision.action, gates: canonicalGates },
-        [{
-          kind: "message_rejected",
-          data: { response, reason, supervisionDecisionId: decision.id, action: decision.action },
-        }],
-      );
-      this.dependencies.supervisor.markExecuted(decision.id, "executed");
-      publishTransitionOutcome(this.dependencies.eventHub, transition);
-      this.projectWorkflowExperience(runId);
-      if (decision.action === "pause_for_approval") {
-        const approval = ensureSettlementApproval(this.state.persistence.approvals, current, decision.id, reason);
-        this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "supervisor.approval.requested", { approvalId: approval.id, decisionId: decision.id, reason }));
-      }
-      return decision.action === "start_continuation" || decision.action === "request_evidence" || decision.action === "wait_for_runtime";
+      return this.settleCandidate(token, candidate, decision.id, decision.action, "blocked", reason);
     } catch (error) {
       if (this.state.closing) return false;
       if (isAuthoritativeSettlementRejection(error)) {
@@ -135,15 +105,14 @@ export class AttemptSettlementService {
       if (this.dependencies.supervisor.isReviewError(error)) {
         const decision = this.dependencies.supervisor.recordReviewFailure(current, checkpointSeq, message);
         try {
-          const authoritative = this.settleAuthoritatively(
+          return this.settleCandidate(
             token,
-            canaryCandidate,
+            candidate,
             decision.id,
             decision.action,
             "blocked",
             "Supervisor review failed after bounded internal retries. The candidate result was preserved and the Agent was not rerun.",
           );
-          if (authoritative !== undefined) return authoritative;
         } catch (settlementError) {
           if (isAuthoritativeSettlementRejection(settlementError)) {
             this.recoverInterruptedAttempt(token, settlementError.message, settlementError.supervisorDecisionId);
@@ -151,20 +120,9 @@ export class AttemptSettlementService {
           }
           throw settlementError;
         }
-        const transition = blockRuntimeTaskRun(
-          this.state.persistence.taskRunTransitions,
-          token,
-          "Supervisor review failed after bounded internal retries. The candidate result was preserved and the Agent was not rerun.",
-          { error: message, reason: decision.reasonCode, action: decision.action, supervisionDecisionId: decision.id },
-        );
-        this.dependencies.supervisor.markExecuted(decision.id, "executed");
-        this.state.persistence.sessions.appendMessage(current.sessionId, "assistant", "Run blocked: Supervisor quality review failed after bounded internal retries. The Agent result was preserved for audit; no automatic continuation was started.");
-        publishTransitionOutcome(this.dependencies.eventHub, transition);
-        this.projectWorkflowExperience(runId);
-        return false;
       }
       try {
-        canaryCandidate ??= this.recordCanaryCandidate(token, candidateResponse);
+        candidate ??= this.recordCandidate(token, candidateResponse);
       } catch (settlementError) {
         if (isAuthoritativeSettlementRejection(settlementError)) {
           this.recoverInterruptedAttempt(token, settlementError.message, settlementError.supervisorDecisionId);
@@ -173,10 +131,8 @@ export class AttemptSettlementService {
         throw settlementError;
       }
       const decision = await this.dependencies.supervisor.reviewAttemptFailure(current, checkpointSeq, message);
-      const recoverable = decision.action === "start_continuation";
       try {
-        const authoritative = this.settleAuthoritatively(token, canaryCandidate, decision.id, decision.action, "blocked", message);
-        if (authoritative !== undefined) return authoritative;
+        return this.settleCandidate(token, candidate, decision.id, decision.action, "blocked", message);
       } catch (settlementError) {
         if (isAuthoritativeSettlementRejection(settlementError)) {
           this.recoverInterruptedAttempt(token, settlementError.message, settlementError.supervisorDecisionId);
@@ -184,30 +140,11 @@ export class AttemptSettlementService {
         }
         throw settlementError;
       }
-      const transition = blockRuntimeTaskRun(
-        this.state.persistence.taskRunTransitions,
-        token,
-        message,
-        { error: message, reason: decision.reasonCode, action: decision.action, supervisionDecisionId: decision.id },
-      );
-      this.dependencies.supervisor.markExecuted(decision.id, "executed");
-      if (decision.action === "pause_for_approval") {
-        const approval = ensureSettlementApproval(this.state.persistence.approvals, current, decision.id, message);
-        this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "supervisor.approval.requested", { approvalId: approval.id, decisionId: decision.id, reason: message }));
-      }
-      this.state.persistence.sessions.appendMessage(current.sessionId, "assistant", decision.action === "pause_for_approval" ? `Run paused for approval: ${message}` : `Run blocked: ${message}`);
-      publishTransitionOutcome(this.dependencies.eventHub, transition);
-      this.projectWorkflowExperience(runId);
-      return recoverable;
     }
   }
 
-  private recordCanaryCandidate(token: AttemptExecutionToken, response: string): CandidateResult | undefined {
-    const authority = this.state.persistence.attemptAuthority.getAuthorityState();
-    if (authority.mode !== "canary" || authority.status !== "approved"
-      || authority.approvedAttemptId !== token.attemptId) return undefined;
+  private recordCandidate(token: AttemptExecutionToken, response: string): CandidateResult {
     try {
-      this.state.persistence.attemptAuthority.assertAttemptApproved(token.attemptId);
       const current = this.state.persistence.taskRuns.getRun(token.runId);
       if (!current || current.attempt !== token.ordinal || current.status !== "running") {
         throw new Error(`TaskRun projection is stale for Attempt ${token.attemptId}`);
@@ -228,13 +165,11 @@ export class AttemptSettlementService {
     }
   }
 
-  private settleAuthoritatively(
+  private settleCandidate(
     token: AttemptExecutionToken, candidate: CandidateResult | undefined,
     supervisorDecisionId: string, action: string, status: "completed" | "blocked", reason: string,
-  ): boolean | undefined {
-    if (!candidate) return undefined;
+  ): boolean {
     try {
-      this.state.persistence.attemptAuthority.assertAttemptApproved(token.attemptId);
       const current = this.state.persistence.taskRuns.getRun(token.runId);
       if (!current || current.attempt !== token.ordinal || current.status !== "running") {
         throw new Error(`TaskRun projection is stale for Attempt ${token.attemptId}`);
@@ -260,7 +195,7 @@ export class AttemptSettlementService {
         const approval = ensureSettlementApproval(this.state.persistence.approvals, current, supervisorDecisionId, reason);
         this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(token.runId, "supervisor.approval.requested", { approvalId: approval.id, decisionId: supervisorDecisionId, reason }));
       }
-      return action === "start_continuation" || action === "request_evidence" || action === "wait_for_runtime";
+      return action === "start_continuation" || action === "wait_for_runtime";
     } catch (error) {
       throw {
         kind: authoritativeSettlementRejected,
@@ -290,9 +225,4 @@ export class AttemptSettlementService {
     }
   }
 
-  public isApprovedCanaryAttempt(token: AttemptExecutionToken): boolean {
-    const authority = this.state.persistence.attemptAuthority.getAuthorityState();
-    return authority.mode === "canary" && authority.status === "approved"
-      && authority.approvedAttemptId === token.attemptId;
-  }
 }

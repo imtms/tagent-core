@@ -70,8 +70,8 @@ function normalizeRequest(input: ExecuteCapabilityInput): CapabilityExecutionReq
   }
   const approvalRef = asRecord(cloned.approvalRef, "ExecuteCapability approvalRef");
   assertExactKeys(approvalRef, ["source", "id"], "ExecuteCapability approvalRef");
-  if (approvalRef.source !== "legacy_run" && approvalRef.source !== "legacy_workflow") {
-    throw new TypeError("ExecuteCapability approvalRef.source must identify a legacy authority");
+  if (approvalRef.source !== "run" && approvalRef.source !== "workflow") {
+    throw new TypeError("ExecuteCapability approvalRef.source must identify run or workflow approval authority");
   }
   assertNonEmpty(approvalRef.id, "ExecuteCapability approvalRef.id");
   assertNonEmpty(cloned.actorId, "ExecuteCapability actorId");

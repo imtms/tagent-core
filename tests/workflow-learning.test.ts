@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { WorkflowService } from "@tagent/learning";
+import { WorkflowLearningService } from "@tagent/learning";
 import type { WorkflowSpec } from "@tagent/learning/domain";
 import { Store } from "@tagent/persistence-sqlite";
 import { workflowPersistence } from "./support/test-persistence.js";
 
 const stores: Store[] = [];
-const create = () => { const store = new Store(":memory:"); stores.push(store); return { store, workflows: new WorkflowService(workflowPersistence(store)) }; };
-const activate = (store: Store, workflows: WorkflowService, workflowId: string, revisionId?: string) => {
+const create = () => { const store = new Store(":memory:"); stores.push(store); return { store, workflows: new WorkflowLearningService(workflowPersistence(store)) }; };
+const activate = (store: Store, workflows: WorkflowLearningService, workflowId: string, revisionId?: string) => {
   const selectedRevisionId = revisionId ?? workflows.getWorkflow(workflowId, true)!.revision!.id;
   store.db.prepare("UPDATE workflow_definitions SET status='active',active_revision_id=?,updated_at=? WHERE id=?").run(selectedRevisionId, Date.now(), workflowId);
 };

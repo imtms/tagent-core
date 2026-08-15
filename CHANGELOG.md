@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.8.0] - 2026-08-15
+
+### One current Core system
+
+- Replaced the schema-30-through-47 migration chain with direct creation and strict structural validation of the single `tagent-core/0.8` SQLite schema, exposed to clients as persistence schema version `1`.
+- Removed migration ledgers, upgrade repair paths, compatibility aliases and decoders, aggregate helpers, and the Approval, Attempt, and Learning dual-authority, shadow, reconciliation, and cutover machinery.
+- Consolidated Learning delivery on the durable `integration_outbox` with the single `learning-projection-v1` consumer while retaining idempotent recovery, fencing, authorization, redaction, pagination, cancellation, and durable receipts.
+
+### Gateway, operator, and maintainability
+
+- Completed the current Gateway capability-profile, operator inbox/read, command receipt, delegated audit, pagination, conditional mutation, and readiness contracts across the ABI, Core Client, HTTP adapter, persistence, and executable probes.
+- Simplified the Console HTTP surface and split the Web Console API transport, types, event stream, and administration modules without changing the current user-visible feature set.
+- Removed historical migration-only tests, obsolete routes and actions, stale recovery terminology, and upgrade documentation; synchronized current persistence, Gateway, Learning, security, architecture, deployment, and release documentation.
+
+### Breaking compatibility and deployment
+
+- This release intentionally supports only newly created 0.8 databases and matching 0.8 ABI/Core Client consumers. Existing databases, databases without the 0.8 schema marker, structurally drifted databases, and older Gateway or SDK clients are rejected rather than upgraded.
+- Deploy by creating an empty database and using the matching 0.8.0 Core, Web Console, ABI, and Core Client artifacts. There is no supported in-place database upgrade or rollback to an older binary.
+- Synchronized Core, Web Console, all 13 private workspace manifests, internal dependency pins, fixtures, tests, documentation, and the lockfile at 0.8.0. This release does not change token budgets, pricing, cost controls, or usage accounting.
+
 ## [0.7.0] - 2026-08-15
 
 ### Gateway capability profiles

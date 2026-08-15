@@ -8,7 +8,7 @@ import {
   LearningFeatureControl,
   LearningService,
   SemanticJudge,
-  WorkflowService,
+  WorkflowLearningService,
 } from "@tagent/learning";
 import { LearningApplication } from "@tagent/learning/application";
 import type { WorkflowSpec } from "@tagent/learning/domain";
@@ -98,7 +98,7 @@ describe("Learning workspace package", () => {
     expect(LearningFeatureControl).toBeTypeOf("function");
     expect(LearningService).toBeTypeOf("function");
     expect(SemanticJudge).toBeTypeOf("function");
-    expect(WorkflowService).toBeTypeOf("function");
+    expect(WorkflowLearningService).toBeTypeOf("function");
     expect(LearningApplication).toBeTypeOf("function");
     const workflow: WorkflowSpec | undefined = undefined;
     const modelPort: SemanticJudgeModelPort | undefined = undefined;
@@ -147,9 +147,9 @@ describe("Learning workspace package", () => {
 
   it("keeps SQLite implementations outside Learning and pointed at its ports", () => {
     for (const relativePath of [
-      "adapters/persistence-sqlite/src/sqlite/legacy-learning-ledger-repository.ts",
-      "adapters/persistence-sqlite/src/sqlite/legacy-workflow-repository.ts",
-      "adapters/persistence-sqlite/src/sqlite/legacy-store-adapter.ts",
+      "adapters/persistence-sqlite/src/sqlite/learning-ledger-repository.ts",
+      "adapters/persistence-sqlite/src/sqlite/workflow-repository.ts",
+      "adapters/persistence-sqlite/src/sqlite/sqlite-persistence.ts",
     ]) {
       expect(readFileSync(path.join(repoRoot, relativePath), "utf8")).toContain("@tagent/learning/");
     }

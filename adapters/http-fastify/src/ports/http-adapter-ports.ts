@@ -6,7 +6,6 @@ export type HttpRuntimeConfig = object & {
   memoryWorkspaceScopeId?: string;
   releaseVersion?: string;
   schemaVersion?: number;
-  governanceApprovalAuthority?: "legacy" | "canonical";
 };
 
 export interface HttpLearningFeatureState {

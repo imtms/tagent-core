@@ -12,7 +12,7 @@ import type {
   TranscriptItem,
 } from "@tagent/abi";
 import { createTaskRunEventId } from "@tagent/abi";
-import type { Session as DomainSession, SessionInboxItem } from "@tagent/admission/domain";
+import type { Session as DomainSession, Submission } from "@tagent/admission/domain";
 import type { SubmissionAuditReceipt } from "@tagent/admission/ports";
 import type {
   EventConsumerCursor as DomainEventConsumerCursor,
@@ -41,7 +41,7 @@ export function mapSession(session: DomainSession): Session {
   };
 }
 
-export function mapSubmissionReceipt(item: SessionInboxItem, audit?: SubmissionAuditReceipt): SubmissionReceipt {
+export function mapSubmissionReceipt(item: Submission, audit?: SubmissionAuditReceipt): SubmissionReceipt {
   const status = item.status === "queued" ? "queued"
     : item.status === "started" ? "started"
     : item.status === "failed" || item.status === "deleted" ? "failed"
@@ -194,7 +194,6 @@ export function mapEventConsumerCursor(cursor: DomainEventConsumerCursor): Event
     acknowledgedSequence: cursor.ackedSeq,
     settledAcknowledgedSequence: cursor.settledAckedSeq,
     finalAcknowledgedSequence: cursor.finalAckedSeq,
-    terminalAcknowledgedSequence: cursor.settledAckedSeq,
     claimedAt: iso(cursor.claimedAt),
     updatedAt: iso(cursor.updatedAt),
   };
@@ -254,7 +253,6 @@ export function mapCommandReceipt(receipt: DomainTaskRunCommandReceipt, replayed
     commandId: receipt.commandId,
     taskRunId: receipt.taskRunId,
     type: receipt.commandType as TaskRunCommand["type"],
-    status: replayed ? "duplicate" : receipt.state === "failed" ? "rejected" : "accepted",
     state: receipt.state,
     outcome: receipt.state === "succeeded" ? "accepted" : receipt.state === "failed" ? "rejected" : "unknown",
     replayed,

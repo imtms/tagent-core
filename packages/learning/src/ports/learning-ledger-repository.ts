@@ -33,15 +33,6 @@ export interface CommunicationRevisionWrite {
   changeSummary: string;
 }
 
-export interface LearningProjectionLedgerRow {
-  runId: string;
-  attempt: number;
-  lifecycle: string;
-  outcome: string;
-  eventSeq: number;
-  snapshotJson: string;
-}
-
 export interface LearningToolAttemptRow {
   toolName: string;
   argsHash: string;
@@ -110,7 +101,6 @@ export interface LearningLedgerRepository {
   getCommunicationProfile(id: string): CommunicationProfileRecord | undefined;
   getCommunicationRevision(id: string): CommunicationRevisionRecord | undefined;
   recordCorrection(input: Record<string, unknown> & { id: string; idempotencyKey: string; createdAt: number }): unknown;
-  listUnprojectedLearningRows(limit: number): LearningProjectionLedgerRow[];
   listLearningToolAttempts(runId: string, attempt: number): LearningToolAttemptRow[];
   countRunCorrections(runId: string, attempt: number): number;
   getRunLearningPolicyRecord(runId: string): { policy: string; reason: string } | undefined;

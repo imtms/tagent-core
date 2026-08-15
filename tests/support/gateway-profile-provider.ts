@@ -61,8 +61,8 @@ export async function verifyGatewayProfileProvider(
   ];
   for (const [schema, fixture] of fixtures) decodeAbi(schema as never, fixture);
 
-  const legacy = await client.getCapabilities();
-  assert.equal(Object.hasOwn(legacy as object, "profiles"), false, "legacy capabilities response grew a profiles field");
+  const baseCapabilities = await client.getCapabilities();
+  assert.equal(Object.hasOwn(baseCapabilities as object, "profiles"), false, "base capabilities response grew a profiles field");
 
   const registry = await client.listCapabilityProfiles();
   assert.deepEqual(

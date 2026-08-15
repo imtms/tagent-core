@@ -28,8 +28,8 @@ import type { RunStatus, TaskRunContractSnapshot, TaskRunWorkspaceGoalSnapshot }
 const now = () => Date.now();
 const TERMINAL_STATUSES = new Set<WorkspaceGoalStatus>(["completed", "cancelled"]);
 
-type DbRevisionKind = "definition" | "plan";
-type DbDecisionKind = "approve_goal" | "approve_plan" | "request_change" | "pause" | "resume" | "close" | "cancel";
+type DbRevisionKind = WorkspaceGoalRevision["kind"];
+type DbDecisionKind = WorkspaceGoalDecision["kind"];
 
 interface GoalRow { id: string; workspaceId: string; status: WorkspaceGoalStatus; activeDefinitionRevisionId: string | null; activeRoadmapRevisionId: string | null; currentRunId: string | null; createdAt: number; updatedAt: number; completedAt: number | null }
 interface RevisionRow { id: string; goalId: string; kind: DbRevisionKind; revision: number; contentJson: string; contentHash: string; sourceArtifactId: string | null; createdBy: string; createdAt: number }
@@ -63,7 +63,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
     this.db.transaction(() => {
       if (!this.db.prepare("SELECT 1 FROM sessions WHERE id=?").get(input.workspaceId)) throw new Error("workspace not found");
       this.db.prepare(`INSERT INTO workspace_goals
-        (id,workspace_id,status,active_definition_revision_id,active_plan_revision_id,current_run_id,created_at,updated_at,completed_at)
+        (id,workspace_id,status,active_definition_revision_id,active_roadmap_revision_id,current_run_id,created_at,updated_at,completed_at)
         VALUES (?,?,'draft',NULL,NULL,NULL,?,?,NULL)`).run(goalId, input.workspaceId, createdAt, createdAt);
       insertRevision(this.db, revision);
       if (input.idempotencyKey) this.db.prepare("INSERT INTO workspace_goal_requests (idempotency_key,goal_id,payload_hash,created_at) VALUES (?,?,?,?)").run(input.idempotencyKey, goalId, payloadHash, createdAt);
@@ -73,7 +73,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
 
   listGoals(workspaceId: string): WorkspaceGoalSummary[] {
     return (this.db.prepare(`SELECT id,workspace_id as workspaceId,status,active_definition_revision_id as activeDefinitionRevisionId,
-      active_plan_revision_id as activeRoadmapRevisionId,current_run_id as currentRunId,created_at as createdAt,updated_at as updatedAt,
+      active_roadmap_revision_id as activeRoadmapRevisionId,current_run_id as currentRunId,created_at as createdAt,updated_at as updatedAt,
       completed_at as completedAt FROM workspace_goals WHERE workspace_id=? ORDER BY updated_at DESC`).all(workspaceId) as GoalRow[])
       .map((row) => this.summary(row));
   }
@@ -174,7 +174,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
       if (!approvedItemIds.length) throw new Error("approve_roadmap requires at least one approved item");
       if (approvedItemIds.some((itemId) => !knownItemIds.has(itemId))) throw new Error("approve_roadmap contains an unknown Roadmap item");
       if (roadmap.items.some((item) => approvedItemIds.includes(item.id) && !item.criterionKeys.length)) {
-        throw new Error("every approved Roadmap item must advance at least one Goal criterion; create a new revision for this legacy item");
+        throw new Error("every approved Roadmap item must advance at least one Goal criterion");
       }
       if (roadmap.items.some((item) => item.criterionKeys.some((key) => !knownCriteria.has(key)))) throw new Error("approve_roadmap references a criterion outside the active Goal definition");
     }
@@ -199,8 +199,8 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
       }
       this.db.prepare(`INSERT INTO workspace_goal_decisions
         (id,request_id,payload_hash,goal_id,target_revision_id,target_hash,kind,approved_item_ids_json,reason,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
-        .run(decision.id, decision.requestId, decision.payloadHash, decision.goalId, decision.targetRevisionId, decision.targetHash, toDbDecisionKind(decision.kind), JSON.stringify(decision.approvedItemIds), decision.reason, decision.actorId, createdAt);
-      this.db.prepare(`UPDATE workspace_goals SET status=?,active_definition_revision_id=?,active_plan_revision_id=?,updated_at=?,completed_at=? WHERE id=?`)
+        .run(decision.id, decision.requestId, decision.payloadHash, decision.goalId, decision.targetRevisionId, decision.targetHash, decision.kind, JSON.stringify(decision.approvedItemIds), decision.reason, decision.actorId, createdAt);
+      this.db.prepare(`UPDATE workspace_goals SET status=?,active_definition_revision_id=?,active_roadmap_revision_id=?,updated_at=?,completed_at=? WHERE id=?`)
         .run(status, definitionId, roadmapId, createdAt, completedAt, input.goalId);
       if (input.kind === "approve_roadmap") {
         for (const itemId of approvedItemIds) this.db.prepare(`INSERT INTO workspace_goal_roadmap_item_progress
@@ -421,7 +421,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
     const contract = mergeGoalSnapshot(run, snapshot);
     this.db.transaction(() => {
       this.db.prepare(`INSERT INTO workspace_goal_run_links
-        (goal_id,run_id,goal_revision,plan_revision_id,approved_item_ids_json,criterion_keys_json,created_at,link_mode)
+        (goal_id,run_id,goal_revision,roadmap_revision_id,approved_item_ids_json,criterion_keys_json,created_at,link_mode)
         VALUES (?,?,?,?,?,?,?,?)`).run(spec.goal.id, run.id, spec.goalRevision, spec.roadmapRevisionId, JSON.stringify(spec.roadmapItemIds), JSON.stringify(spec.criterionKeys), createdAt, spec.mode);
       this.db.prepare("UPDATE runs SET contract_json=?,updated_at=? WHERE id=?").run(JSON.stringify(contract), createdAt, run.id);
       this.db.prepare(`UPDATE workspace_goals SET current_run_id=?,status=CASE WHEN status='ready_to_close' THEN 'active' ELSE status END,updated_at=? WHERE id=?`).run(run.id, createdAt, spec.goal.id);
@@ -498,7 +498,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
     const goal = this.requireGoal(goalId);
     if (TERMINAL_STATUSES.has(goal.status)) throw new Error("terminal workspace Goal cannot be revised");
     if (goal.currentRunId) throw new Error("workspace Goal cannot be revised while a guided TaskRun is active");
-    const dbKind = toDbRevisionKind(kind);
+    const dbKind = kind;
     const revisionNumber = Number((this.db.prepare("SELECT COALESCE(MAX(revision),0)+1 as revision FROM workspace_goal_revisions WHERE goal_id=? AND kind=?").get(goalId, dbKind) as { revision: number }).revision);
     const revision = revisionRecord(goalId, kind, revisionNumber, content, sourceArtifactId, createdBy, now());
     this.db.transaction(() => {
@@ -506,7 +506,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
       const status = kind === "definition" ? "draft" : goal.status === "ready_to_close" ? "active" : goal.status;
       this.db.prepare(`UPDATE workspace_goals SET status=?,
         active_definition_revision_id=CASE WHEN ?='definition' THEN NULL ELSE active_definition_revision_id END,
-        active_plan_revision_id=CASE WHEN ?='roadmap' OR ?='definition' THEN NULL ELSE active_plan_revision_id END,
+        active_roadmap_revision_id=CASE WHEN ?='roadmap' OR ?='definition' THEN NULL ELSE active_roadmap_revision_id END,
         updated_at=? WHERE id=?`).run(status, kind, kind, kind, revision.createdAt, goalId);
     })();
     return revision;
@@ -666,7 +666,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
   }
 
   private runLinkForRun(runId: string): RunLinkRow | undefined {
-    return this.db.prepare(`SELECT goal_id as goalId,run_id as runId,goal_revision as goalRevision,plan_revision_id as roadmapRevisionId,
+    return this.db.prepare(`SELECT goal_id as goalId,run_id as runId,goal_revision as goalRevision,roadmap_revision_id as roadmapRevisionId,
       approved_item_ids_json as roadmapItemIdsJson,criterion_keys_json as criterionKeysJson,link_mode as mode,created_at as createdAt
       FROM workspace_goal_run_links WHERE run_id=?`).get(runId) as RunLinkRow | undefined;
   }
@@ -676,12 +676,12 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
       roadmap_item_ids_json as roadmapItemIdsJson,criterion_keys_json as criterionKeysJson FROM workspace_goal_inbox_links WHERE inbox_item_id=?`).get(inboxItemId) as { goalId: string; goalRevision: number; roadmapRevisionId: string; roadmapItemIdsJson: string; criterionKeysJson: string } | undefined;
   }
 
-  private goalRow(goalId: string): GoalRow | null { return (this.db.prepare(`SELECT id,workspace_id as workspaceId,status,active_definition_revision_id as activeDefinitionRevisionId,active_plan_revision_id as activeRoadmapRevisionId,current_run_id as currentRunId,created_at as createdAt,updated_at as updatedAt,completed_at as completedAt FROM workspace_goals WHERE id=?`).get(goalId) as GoalRow | undefined) ?? null; }
+  private goalRow(goalId: string): GoalRow | null { return (this.db.prepare(`SELECT id,workspace_id as workspaceId,status,active_definition_revision_id as activeDefinitionRevisionId,active_roadmap_revision_id as activeRoadmapRevisionId,current_run_id as currentRunId,created_at as createdAt,updated_at as updatedAt,completed_at as completedAt FROM workspace_goals WHERE id=?`).get(goalId) as GoalRow | undefined) ?? null; }
   private revision(id: string): WorkspaceGoalRevision | null { const row = this.db.prepare(`SELECT id,goal_id as goalId,kind,revision,content_json as contentJson,content_hash as contentHash,source_artifact_id as sourceArtifactId,created_by as createdBy,created_at as createdAt FROM workspace_goal_revisions WHERE id=?`).get(id) as RevisionRow | undefined; return row ? revisionFromRow(row) : null; }
-  private latestRevision(goalId: string, kind: WorkspaceGoalRevision["kind"]): WorkspaceGoalRevision | null { const row = this.db.prepare(`SELECT id,goal_id as goalId,kind,revision,content_json as contentJson,content_hash as contentHash,source_artifact_id as sourceArtifactId,created_by as createdBy,created_at as createdAt FROM workspace_goal_revisions WHERE goal_id=? AND kind=? ORDER BY revision DESC LIMIT 1`).get(goalId, toDbRevisionKind(kind)) as RevisionRow | undefined; return row ? revisionFromRow(row) : null; }
+  private latestRevision(goalId: string, kind: WorkspaceGoalRevision["kind"]): WorkspaceGoalRevision | null { const row = this.db.prepare(`SELECT id,goal_id as goalId,kind,revision,content_json as contentJson,content_hash as contentHash,source_artifact_id as sourceArtifactId,created_by as createdBy,created_at as createdAt FROM workspace_goal_revisions WHERE goal_id=? AND kind=? ORDER BY revision DESC LIMIT 1`).get(goalId, kind) as RevisionRow | undefined; return row ? revisionFromRow(row) : null; }
   private decisionByRequest(goalId: string, requestId: string) { return this.db.prepare(`SELECT id,request_id as requestId,payload_hash as payloadHash,goal_id as goalId,target_revision_id as targetRevisionId,target_hash as targetHash,kind,approved_item_ids_json as approvedItemIdsJson,reason,actor_id as actorId,created_at as createdAt FROM workspace_goal_decisions WHERE goal_id=? AND request_id=?`).get(goalId, requestId) as DecisionRow | undefined; }
   private decisions(goalId: string): WorkspaceGoalDecision[] { return (this.db.prepare(`SELECT id,COALESCE(request_id,'') as requestId,payload_hash as payloadHash,goal_id as goalId,target_revision_id as targetRevisionId,target_hash as targetHash,kind,approved_item_ids_json as approvedItemIdsJson,reason,actor_id as actorId,created_at as createdAt FROM workspace_goal_decisions WHERE goal_id=? ORDER BY created_at ASC,id ASC`).all(goalId) as DecisionRow[]).map(decisionFromRow); }
-  private runLinks(goalId: string): WorkspaceGoalRunLink[] { return (this.db.prepare(`SELECT goal_id as goalId,run_id as runId,goal_revision as goalRevision,plan_revision_id as roadmapRevisionId,approved_item_ids_json as roadmapItemIdsJson,criterion_keys_json as criterionKeysJson,link_mode as mode,created_at as createdAt FROM workspace_goal_run_links WHERE goal_id=? ORDER BY created_at ASC`).all(goalId) as RunLinkRow[]).map(runLinkFromRow); }
+  private runLinks(goalId: string): WorkspaceGoalRunLink[] { return (this.db.prepare(`SELECT goal_id as goalId,run_id as runId,goal_revision as goalRevision,roadmap_revision_id as roadmapRevisionId,approved_item_ids_json as roadmapItemIdsJson,criterion_keys_json as criterionKeysJson,link_mode as mode,created_at as createdAt FROM workspace_goal_run_links WHERE goal_id=? ORDER BY created_at ASC`).all(goalId) as RunLinkRow[]).map(runLinkFromRow); }
   private evidenceLinks(goalId: string): WorkspaceGoalEvidenceLink[] { return this.db.prepare(`SELECT id,goal_id as goalId,goal_revision as goalRevision,criterion_key as criterionKey,run_id as runId,check_key as checkKey,artifact_id as artifactId,operation_id as operationId,source_digest as sourceDigest,status,created_at as createdAt,updated_at as updatedAt FROM workspace_goal_evidence_links WHERE goal_id=? ORDER BY created_at ASC`).all(goalId) as WorkspaceGoalEvidenceLink[]; }
 }
 
@@ -707,20 +707,17 @@ function mergeGoalSnapshot(run: { goal: string; contractJson: string }, snapshot
 
 function sha256(content: Buffer): string { return createHash("sha256").update(content).digest("hex"); }
 function revisionRecord(goalId: string, kind: WorkspaceGoalRevision["kind"], revision: number, content: WorkspaceGoalDefinition | WorkspaceGoalRoadmap, sourceArtifactId: string | null, createdBy: string, createdAt: number): WorkspaceGoalRevision { return { id: randomUUID(), goalId, kind, revision, content, contentHash: workspaceGoalContentHash(content), sourceArtifactId, createdBy, createdAt }; }
-function insertRevision(db: Database.Database, revision: WorkspaceGoalRevision): void { db.prepare(`INSERT INTO workspace_goal_revisions (id,goal_id,kind,revision,content_json,content_hash,source_artifact_id,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)`).run(revision.id, revision.goalId, toDbRevisionKind(revision.kind), revision.revision, JSON.stringify(revision.content), revision.contentHash, revision.sourceArtifactId, revision.createdBy, revision.createdAt); }
+function insertRevision(db: Database.Database, revision: WorkspaceGoalRevision): void { db.prepare(`INSERT INTO workspace_goal_revisions (id,goal_id,kind,revision,content_json,content_hash,source_artifact_id,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)`).run(revision.id, revision.goalId, revision.kind, revision.revision, JSON.stringify(revision.content), revision.contentHash, revision.sourceArtifactId, revision.createdBy, revision.createdAt); }
 function revisionFromRow(row: RevisionRow): WorkspaceGoalRevision {
   const content = JSON.parse(row.contentJson) as WorkspaceGoalDefinition | WorkspaceGoalRoadmap;
   if (workspaceGoalContentHash(content) !== row.contentHash) throw new Error(`workspace Goal revision ${row.id} content hash mismatch`);
   const { contentJson: _contentJson, kind, ...revision } = row;
-  return { ...revision, kind: kind === "plan" ? "roadmap" : "definition", content: kind === "plan" ? normalizeRoadmap(content as WorkspaceGoalRoadmap) : content };
+  return { ...revision, kind, content };
 }
 function definitionContent(revision: WorkspaceGoalRevision): WorkspaceGoalDefinition { return revision.content as WorkspaceGoalDefinition; }
-function roadmapContent(revision: WorkspaceGoalRevision): WorkspaceGoalRoadmap { return normalizeRoadmap(revision.content as WorkspaceGoalRoadmap); }
-function normalizeRoadmap(roadmap: WorkspaceGoalRoadmap): WorkspaceGoalRoadmap { return { ...roadmap, items: roadmap.items.map((item) => ({ ...item, criterionKeys: Array.isArray(item.criterionKeys) ? item.criterionKeys : [] })) }; }
-function decisionFromRow(row: DecisionRow): WorkspaceGoalDecision { const { approvedItemIdsJson, requestId, kind, ...decision } = row; return { ...decision, kind: kind === "approve_plan" ? "approve_roadmap" : kind, requestId: requestId ?? "", approvedItemIds: JSON.parse(approvedItemIdsJson) as string[] }; }
+function roadmapContent(revision: WorkspaceGoalRevision): WorkspaceGoalRoadmap { return revision.content as WorkspaceGoalRoadmap; }
+function decisionFromRow(row: DecisionRow): WorkspaceGoalDecision { const { approvedItemIdsJson, requestId, ...decision } = row; return { ...decision, requestId: requestId ?? "", approvedItemIds: JSON.parse(approvedItemIdsJson) as string[] }; }
 function runLinkFromRow(row: RunLinkRow): WorkspaceGoalRunLink { return { goalId: row.goalId, runId: row.runId, goalRevision: row.goalRevision, roadmapRevisionId: row.roadmapRevisionId, roadmapItemIds: JSON.parse(row.roadmapItemIdsJson) as string[], criterionKeys: JSON.parse(row.criterionKeysJson) as string[], mode: row.mode, createdAt: row.createdAt }; }
-function toDbRevisionKind(kind: WorkspaceGoalRevision["kind"]): DbRevisionKind { return kind === "roadmap" ? "plan" : "definition"; }
-function toDbDecisionKind(kind: WorkspaceGoalDecision["kind"]): DbDecisionKind { return kind === "approve_roadmap" ? "approve_plan" : kind; }
 function splitEvidenceRef(ref: string): [string, string] { const index = ref.indexOf(":"); return index < 1 ? ["", ""] : [ref.slice(0, index), ref.slice(index + 1)]; }
 function projectedRoadmapStatus(persisted: WorkspaceGoalRoadmapItemProgress["status"], runStatus: RunStatus | null): WorkspaceGoalRoadmapItemProgress["status"] {
   if (runStatus === "completed") return "completed";

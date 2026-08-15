@@ -19,7 +19,7 @@ export interface TaskExecutionPolicy {
   policyVersion: string;
   confidence: number;
   reason: string;
-  /** User-selected completion acceptance style. Missing legacy values remain strict. */
+  /** User-selected completion acceptance style. Missing values remain strict. */
   gateProfile?: GateProfile;
   /** Present only when the user explicitly requested one literal response. */
   exactOutput?: string;

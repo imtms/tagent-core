@@ -4,16 +4,13 @@ import { TimestampMillisecondsSchema } from "../../shared/primitives.js";
 const ConsoleNullableTimestampSchema = Type.Union([TimestampMillisecondsSchema, Type.Null()]);
 const ConsoleNullableStringSchema = Type.Union([Type.String(), Type.Null()]);
 
-/** @deprecated Use LearningSettings from admin/v1. */
 export const ConsoleLearningFeatureStateSchema = Type.Object({
   memoryAvailable: Type.Boolean(), memoryEnabled: Type.Boolean(), learningEnabled: Type.Boolean(),
   autoExecutionEnabled: Type.Boolean(), passiveLearningEnabled: Type.Boolean(),
   activeExecutionRequiresApproval: Type.Literal(true), updatedAt: TimestampMillisecondsSchema, reason: Type.String(),
 });
-/** @deprecated Use LearningSettings from admin/v1. */
 export type ConsoleLearningFeatureState = Static<typeof ConsoleLearningFeatureStateSchema>;
 
-/** @deprecated Use AdminConfigStatus from admin/v1. */
 export const ConsoleRuntimeStatusSchema = Type.Object({
   runtime: Type.String(), provider: Type.String(), api: Type.String(), baseUrl: Type.String(), modelId: Type.String(),
   fallbackModelIds: Type.Array(Type.String()),
@@ -26,10 +23,8 @@ export const ConsoleRuntimeStatusSchema = Type.Object({
   learningActiveExecutionRequiresApproval: Type.Literal(true), autoExecutionEnabled: Type.Optional(Type.Boolean()),
   passiveLearningEnabled: Type.Optional(Type.Boolean()),
 });
-/** @deprecated Use AdminConfigStatus from admin/v1. */
 export type ConsoleRuntimeStatus = Static<typeof ConsoleRuntimeStatusSchema>;
 
-/** @deprecated Use WorkflowRevision from admin/v1. */
 export const ConsoleWorkflowRevisionSchema = Type.Object({
   id: Type.String(), workflowId: Type.String(), revision: Type.Number(), name: Type.String(), intent: Type.String(),
   cueTerms: Type.Array(Type.String()), applicability: Type.Array(Type.String()), nonApplicability: Type.Array(Type.String()),
@@ -39,10 +34,8 @@ export const ConsoleWorkflowRevisionSchema = Type.Object({
   riskClass: Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
   confidence: Type.Number(), createdAt: TimestampMillisecondsSchema,
 });
-/** @deprecated Use WorkflowRevision from admin/v1. */
 export type ConsoleWorkflowRevision = Static<typeof ConsoleWorkflowRevisionSchema>;
 
-/** @deprecated Use WorkflowDefinition from admin/v1. */
 export const ConsoleWorkflowDefinitionSchema = Type.Object({
   id: Type.String(), scopeId: Type.String(),
   status: Type.Union([Type.Literal("candidate"), Type.Literal("active"), Type.Literal("suspended"), Type.Literal("deprecated")]),
@@ -51,10 +44,8 @@ export const ConsoleWorkflowDefinitionSchema = Type.Object({
   createdAt: TimestampMillisecondsSchema, updatedAt: TimestampMillisecondsSchema,
   revision: Type.Optional(ConsoleWorkflowRevisionSchema),
 });
-/** @deprecated Use WorkflowDefinition from admin/v1. */
 export type ConsoleWorkflowDefinition = Static<typeof ConsoleWorkflowDefinitionSchema>;
 
-/** @deprecated Use AutonomyApproval from admin/v1. */
 export const ConsoleAutonomyApprovalSchema = Type.Object({
   id: Type.String(), scopeId: Type.String(),
   actionType: Type.Union([
@@ -73,7 +64,6 @@ export const ConsoleAutonomyApprovalSchema = Type.Object({
   decidedBy: Type.String(), decisionReason: Type.String(), decidedAt: ConsoleNullableTimestampSchema,
   executedAt: ConsoleNullableTimestampSchema, executionReceiptJson: Type.String(), createdAt: TimestampMillisecondsSchema,
 });
-/** @deprecated Use AutonomyApproval from admin/v1. */
 export type ConsoleAutonomyApproval = Static<typeof ConsoleAutonomyApprovalSchema>;
 
 export const ConsoleWorkflowBindingSchema = Type.Object({
@@ -135,7 +125,6 @@ export const ConsoleAutonomyAuditSchema = Type.Object({
 });
 export type ConsoleAutonomyAudit = Static<typeof ConsoleAutonomyAuditSchema>;
 
-/** @deprecated Use the focused admin/v1 resources instead of the legacy aggregate. */
 export const ConsoleLearningCenterDataSchema = Type.Object({
   featureState: Type.Union([ConsoleLearningFeatureStateSchema, Type.Null()]),
   workflows: Type.Array(ConsoleWorkflowDefinitionSchema),
@@ -154,5 +143,4 @@ export const ConsoleLearningCenterDataSchema = Type.Object({
   approvals: Type.Array(ConsoleAutonomyApprovalSchema),
   autonomyAudit: Type.Array(ConsoleAutonomyAuditSchema),
 });
-/** @deprecated Use the focused admin/v1 resources instead of the legacy aggregate. */
 export type ConsoleLearningCenterData = Static<typeof ConsoleLearningCenterDataSchema>;

@@ -70,7 +70,7 @@ describe("CapabilityCommand", () => {
     expect(() => { (created.operation as { action: string }).action = "workspace.shell.execute"; }).toThrow();
   });
 
-  it("rejects legacy dual fields, extra structure, accessors, and invalid canonical payloads", () => {
+  it("rejects noncanonical dual fields, extra structure, accessors, and invalid payloads", () => {
     expect(() => createCapabilityCommand({
       commandId: "dual-field",
       operation: {

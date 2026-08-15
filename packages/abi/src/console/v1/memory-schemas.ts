@@ -5,11 +5,9 @@ import {
 } from "../../admin/v1/memory-schemas.js";
 import { TimestampMillisecondsSchema } from "../../shared/primitives.js";
 
-/** @deprecated Use MemoryKind from admin/v1. */
 export const ConsoleMemoryKindSchema = Type.Union([
   Type.Literal("fact"), Type.Literal("preference"), Type.Literal("episode"), Type.Literal("procedure"),
 ]);
-/** @deprecated Use MemoryKind from admin/v1. */
 export type ConsoleMemoryKind = Static<typeof ConsoleMemoryKindSchema>;
 
 export const ConsoleMemoryTierSchema = Type.Union([Type.Literal("hot"), Type.Literal("warm")]);
@@ -21,17 +19,13 @@ export const ConsoleMemoryStatusSchema = Type.Union([
 ]);
 export type ConsoleMemoryStatus = Static<typeof ConsoleMemoryStatusSchema>;
 
-/** @deprecated Use MemoryScope from admin/v1. */
 export const ConsoleMemoryScopeSchema = Type.Object({
   type: Type.Union([Type.Literal("user"), Type.Literal("workspace"), Type.Literal("project"), Type.Literal("session")]),
   id: Type.String(),
 });
-/** @deprecated Use MemoryScope from admin/v1. */
 export type ConsoleMemoryScope = Static<typeof ConsoleMemoryScopeSchema>;
 
-/** @deprecated Use MemorySourceReference from admin/v1. */
 export const ConsoleMemorySourceRefSchema = MemorySourceReferenceSchema;
-/** @deprecated Use MemorySourceReference from admin/v1. */
 export type ConsoleMemorySourceRef = MemorySourceReference;
 
 export const ConsoleMemoryRecordSchema = Type.Object({

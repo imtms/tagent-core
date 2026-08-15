@@ -7,7 +7,7 @@ import {
   isActiveAttemptStatus,
   type AttemptStatus,
 } from "@tagent/execution/domain";
-import { LegacyStoreAdapter, Store } from "@tagent/persistence-sqlite";
+import { SqlitePersistence, Store } from "@tagent/persistence-sqlite";
 import type { SynchronousResult } from "@tagent/persistence-sqlite/unit-of-work";
 
 const stores: Store[] = [];
@@ -15,7 +15,7 @@ const stores: Store[] = [];
 function fixture() {
   const store = new Store(":memory:");
   stores.push(store);
-  const adapter = new LegacyStoreAdapter(store, {
+  const adapter = new SqlitePersistence(store, {
     run<T>(work: () => T & SynchronousResult<T>): T {
       return store.db.transaction(work)();
     },
@@ -28,7 +28,6 @@ afterEach(() => stores.splice(0).forEach((store) => store.close()));
 describe("Attempt shadow domain", () => {
   it("enforces the first-class Attempt state machine exhaustively", () => {
     const allowed: Readonly<Record<AttemptStatus, readonly AttemptStatus[]>> = {
-      legacy_unknown: [],
       queued: ["starting", "failed", "cancelled", "interrupted"],
       starting: ["running", "failed", "cancelled", "interrupted"],
       running: ["settling", "waiting_input", "blocked", "failed", "cancelled", "interrupted"],
@@ -72,7 +71,7 @@ describe("Attempt shadow domain", () => {
     ]);
   });
 
-  it("projects input, continuation, retry, recovery, and terminal scenarios in the legacy transaction", () => {
+  it("projects input, continuation, retry, recovery, and terminal scenarios", () => {
     const { store, adapter } = fixture();
     const session = adapter.sessions.createSession();
 
@@ -113,11 +112,9 @@ describe("Attempt shadow domain", () => {
     const recoveryRun = adapter.taskRuns.createRun(adapter.sessions.createSession().id, "recovery");
     store.markInterrupted();
     expect(adapter.attempts.getAttemptForRun(recoveryRun.id, 1)).toMatchObject({ status: "interrupted", active: false });
-    expect(adapter.attempts.listShadowComparisons({ runId: recoveryRun.id }).some((row) => row.scenario === "recovery")).toBe(true);
 
     const terminalRun = adapter.taskRuns.createRun(adapter.sessions.createSession().id, "terminal");
     store.transitionRun(terminalRun.id, ["running"], "completed", "run.completed", {}, "", 1);
     expect(adapter.attempts.getAttemptForRun(terminalRun.id, 1)).toMatchObject({ status: "completed", active: false });
-    expect(adapter.attempts.listShadowComparisons({ runId: terminalRun.id }).some((row) => row.scenario === "terminal")).toBe(true);
   });
 });

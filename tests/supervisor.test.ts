@@ -183,7 +183,7 @@ describe("TaskRunSupervisor LLM audit", () => {
 
   it("does not use exact local validation for an inconsistent persisted semantic policy", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "only reply OK");
-    const executionPolicy = { mode: "exact_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "local", exactOutput: "OK", policyVersion: "legacy-bad", confidence: 1, reason: "inconsistent" } as const;
+    const executionPolicy = { mode: "exact_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "local", exactOutput: "OK", policyVersion: "inconsistent-test", confidence: 1, reason: "inconsistent" } as const;
     const contract = { sourceInput: run.goal, summary: run.goal, objectives: [{ id: "objective-1", summary: run.goal, timing: "current" as const, kind: "other" as const }], acceptanceCriteria: ["Return OK"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy };
     store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify(contract), run.id);
     let semanticCalls = 0;
@@ -285,9 +285,9 @@ describe("TaskRunSupervisor LLM audit", () => {
     expect(review.gates.every((gate) => gate.passed)).toBe(true); store.close();
   });
 
-  it("normalizes LLM evidence findings to a continuation", async () => {
+  it("continues when the LLM reports missing evidence", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "evidence");
-    const audit = failedAudit("request_evidence", "verification_evidence_required", { kind: "evidence", key: "test", reason: "Fresh independent evidence is missing.", disposition: "auto_fixable" });
+    const audit = failedAudit("start_continuation", "verification_evidence_required", { kind: "evidence", key: "test", reason: "Fresh independent evidence is missing.", disposition: "auto_fixable" });
     const review = await new TaskRunSupervisor(store, new TestSupervisorReviewer(audit)).reviewSettled(run, 5, "result");
     expect(review.decision.action).toBe("start_continuation"); expect(review.gates.find((gate) => gate.gateType === "evidence")?.passed).toBe(false); store.close();
   });

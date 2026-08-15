@@ -456,7 +456,7 @@ describe("Store", () => {
     expect(store.ackEventConsumer(run.id, "web-client", second.generation, 0)).toBe("invalid");
     expect(store.ackEventConsumer(run.id, "web-client", second.generation, 3)).toBe("invalid");
     expect(store.ackEventConsumer(run.id, "web-client", second.generation, 2)).toBe("accepted");
-    expect(store.getEventConsumer(run.id, "web-client")).toMatchObject({ ackedSeq: 2, terminalAckedSeq: 2 });
+    expect(store.getEventConsumer(run.id, "web-client")).toMatchObject({ ackedSeq: 2, settledAckedSeq: 2 });
   });
 
   it("does not renew an already expired continuation lease", () => {
@@ -742,121 +742,38 @@ describe("Store", () => {
     expect(operations).not.toHaveBeenCalled();
   });
 
-  it("records the current schema version", () => {
+  it("records the single current schema and excludes migration-only state", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(47);
+    expect(store.getSchemaVersion()).toBe(1);
+    expect(store.db.prepare("SELECT schema_id as schemaId FROM core_schema WHERE id=1").get())
+      .toEqual({ schemaId: "tagent-core/0.8" });
+    const tables = (store.db.prepare(`SELECT name FROM sqlite_master
+      WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map(({ name }) => name);
+    expect(tables).not.toEqual(expect.arrayContaining([
+      "schema_meta",
+      "attempt_authority_state",
+      "attempt_shadow_comparisons",
+      "learning_projection_outbox",
+      "learning_projection_authority_state",
+      "integration_reconciliation",
+      "migration_issues",
+    ]));
   });
 
-  it("migrates an older database to schema version 47", () => {
-    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "migration.db");
-    const store = new Store(filename);
-    store.db.exec("DROP TABLE core_writer_lease; DROP TABLE run_checkpoints; DROP TABLE tool_attempts; DROP TABLE operations; UPDATE schema_meta SET version = 1 WHERE id = 1;");
-    store.close();
-    const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(47);
-    expect((migrated.db.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
-    expect((migrated.db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["model_id", "reasoning_effort"]));
-    expect((migrated.db.prepare("PRAGMA table_info(operations)").all() as Array<{ name: string }>).map((column) => column.name)).toContain("payload_json");
-    expect((migrated.db.prepare("PRAGMA table_info(run_checks)").all() as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(["source_operation_id", "observed_at"]));
-    expect((migrated.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('approval_receipts','approval_requests','attempt_authority_receipts','attempt_authority_state','attempt_shadow_comparisons','attempt_transition_audit','attempts','candidate_results','context_manifests','control_inbox','core_writer_lease','event_consumers','execution_leases','gate_evaluations','operations','progress_snapshots','run_checkpoints','semantic_learning_jobs','session_supervisor_inbox','supervisor_decisions','taskrun_edges','tool_attempts') ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)).toEqual(["approval_receipts", "approval_requests", "attempt_authority_receipts", "attempt_authority_state", "attempt_shadow_comparisons", "attempt_transition_audit", "attempts", "candidate_results", "context_manifests", "control_inbox", "core_writer_lease", "event_consumers", "execution_leases", "gate_evaluations", "operations", "progress_snapshots", "run_checkpoints", "semantic_learning_jobs", "session_supervisor_inbox",  "supervisor_decisions", "taskrun_edges", "tool_attempts"]);
-    expect((migrated.db.prepare("PRAGMA table_info(core_writer_lease)").all() as Array<{ name: string; type: string; notnull: number; pk: number }>).map(({ name, type, notnull, pk }) => ({ name, type, notNull: notnull, primaryKey: pk }))).toEqual([
-      { name: "lock_name", type: "TEXT", notNull: 0, primaryKey: 1 },
-      { name: "owner_id", type: "TEXT", notNull: 1, primaryKey: 0 },
-      { name: "fence", type: "INTEGER", notNull: 1, primaryKey: 0 },
-      { name: "pid", type: "INTEGER", notNull: 1, primaryKey: 0 },
-      { name: "host", type: "TEXT", notNull: 1, primaryKey: 0 },
-      { name: "acquired_at", type: "INTEGER", notNull: 1, primaryKey: 0 },
-      { name: "heartbeat_at", type: "INTEGER", notNull: 1, primaryKey: 0 },
-      { name: "expires_at", type: "INTEGER", notNull: 1, primaryKey: 0 },
-      { name: "released_at", type: "INTEGER", notNull: 0, primaryKey: 0 },
-    ]);
-    const writerLeaseSql = (migrated.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'core_writer_lease'").get() as { sql: string }).sql;
-    for (const constraint of [
-      "CHECK (lock_name = 'core-writer')",
-      "CHECK (fence > 0)",
-      "CHECK (pid > 0)",
-      "CHECK (expires_at >= heartbeat_at)",
-      "CHECK (released_at IS NULL OR released_at >= acquired_at)",
-    ]) expect(writerLeaseSql).toContain(constraint);
-    expect(migrated.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='spawn_proposals'").get()).toBeUndefined();
-    migrated.close();
-  });
-
-  it("adds v37 trusted-evidence columns before creating their index", () => {
-    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-v36-order-")), "core.db");
+  it("rejects an existing database without the current schema marker", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-unsupported-schema-")), "core.db");
     const initial = new Store(filename);
-    initial.db.exec(`
-      DROP INDEX idx_run_checks_source_operation;
-      ALTER TABLE operations DROP COLUMN payload_json;
-      ALTER TABLE run_checks DROP COLUMN source_operation_id;
-      ALTER TABLE run_checks DROP COLUMN observed_at;
-      UPDATE schema_meta SET version=36 WHERE id=1;
-    `);
+    initial.db.exec("DROP TABLE core_schema");
     initial.close();
-
-    const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(47);
-    expect((migrated.db.prepare("PRAGMA table_info(run_checks)").all() as Array<{ name: string }>).map((column) => column.name))
-      .toEqual(expect.arrayContaining(["source_operation_id", "observed_at"]));
-    expect(migrated.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_run_checks_source_operation'").get())
-      .toEqual({ name: "idx_run_checks_source_operation" });
-    migrated.close();
+    expect(() => new Store(filename)).toThrow(/accepts only an empty database.*discard/i);
   });
 
-  it("migrates schema v45 continuation rows to persisted due-time scheduling", () => {
-    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-v45-continuation-")), "core.db");
+  it("fails closed when the current schema drifts", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-schema-drift-")), "core.db");
     const initial = new Store(filename);
-    initial.db.exec(`
-      DROP INDEX idx_continuations_due;
-      ALTER TABLE run_continuations DROP COLUMN not_before;
-      UPDATE schema_meta SET version=45 WHERE id=1;
-    `);
+    initial.db.exec("DROP INDEX idx_continuations_due");
     initial.close();
-
-    const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(47);
-    expect((migrated.db.prepare("PRAGMA table_info(run_continuations)").all() as Array<{ name: string }>).map((column) => column.name)).toContain("not_before");
-    expect(migrated.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_continuations_due'").get()).toEqual({ name: "idx_continuations_due" });
-    migrated.close();
-  });
-
-  it("fails closed when the schema-v46 continuation due-time index drifts", () => {
-    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-v46-drift-")), "core.db");
-    const store = new Store(filename);
-    store.db.exec(`
-      DROP INDEX idx_continuations_due;
-      CREATE UNIQUE INDEX idx_continuations_due ON run_continuations(status, created_at);
-    `);
-    store.close();
-    expect(() => new Store(filename)).toThrow("Continuation scheduling v46 schema has invalid idx_continuations_due");
-  });
-
-  it("fails closed when a schema-v34 execution-profile column is missing", () => {
-    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-v34-drift-")), "core.db");
-    const store = new Store(filename);
-    store.db.exec("ALTER TABLE sessions RENAME COLUMN model_id TO incompatible_model_id");
-    store.close();
-    expect(() => new Store(filename)).toThrow("Workspace execution profile v34 schema has incompatible sessions.model_id");
-  });
-
-  it("fails closed when schema-v37 trusted-evidence storage drifts", () => {
-    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-v37-drift-")), "core.db");
-    const store = new Store(filename);
-    store.db.exec("ALTER TABLE operations RENAME COLUMN payload_json TO incompatible_payload_json");
-    store.close();
-    expect(() => new Store(filename)).toThrow("Trusted evidence v37 schema has incompatible operations.payload_json");
-  });
-
-  it("migrates legacy SpawnProposal rows into related Session Inbox items before dropping the table", () => {
-    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "spawn-migration.db");
-    const initial = new Store(filename); const session = initial.createSession(); const parent = initial.createRun(session.id, "parent");
-    initial.db.exec(`CREATE TABLE spawn_proposals (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, goal TEXT NOT NULL, acceptance_json TEXT NOT NULL, relation TEXT NOT NULL, status TEXT NOT NULL, spawned_run_id TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
-    initial.db.prepare("INSERT INTO spawn_proposals VALUES (?,?,?,?,?,'proposed','',?,?)").run("legacy-proposal",parent.id,"legacy child",JSON.stringify(["child verified"]),"parallel",1,1);
-    initial.db.prepare("UPDATE schema_meta SET version=26 WHERE id=1").run(); initial.close();
-    const migrated = new Store(filename);
-    expect(migrated.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='spawn_proposals'").get()).toBeUndefined();
-    expect(migrated.listSessionInbox(session.id)).toEqual([expect.objectContaining({ content: "legacy child", status: "queued", analysis: expect.objectContaining({ targetRunId: parent.id, relation: "parallel", acceptanceCriteria: ["child verified"] }) })]);
-    migrated.close();
+    expect(() => new Store(filename)).toThrow(/schema does not match tagent-core\/0\.8/i);
   });
 
   it("persists immutable per-attempt context manifests", () => {
@@ -1100,13 +1017,13 @@ describe("Store", () => {
     store.close();
   });
 
-  it("treats legacy Bash receipts without an explicit effect as mutation-capable", () => {
+  it("treats Bash receipts without an explicit effect as mutation-capable", () => {
     const store = new Store(":memory:"); const session = store.createSession();
     const policy = { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "research" } as const;
     const contract = { sourceInput: "research", summary: "research", objectives: [{ id: "o1", summary: "research", timing: "current" as const, kind: "investigate" as const }], acceptanceCriteria: ["Report findings"], scope: "public evidence", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
     const run = store.createRun(session.id, "research", undefined, contract);
     store.upsertPlanItem(run.id, { key: "research", title: "Research evidence", status: "done", required: true, position: 1 });
-    const operation = store.claimOperation("legacy-bash", run.id, run.attempt, "tool.bash", { command: "unknown-command" });
+    const operation = store.claimOperation("unclassified-bash", run.id, run.attempt, "tool.bash", { command: "unknown-command" });
     store.updateOperation(operation.id, { status: "succeeded", result: { details: { exitCode: 0 } } });
     expect(store.getRun(run.id)?.completionGate.failures).toEqual(expect.arrayContaining([
       expect.objectContaining({ key: "trusted_evidence", kind: "check" }),
@@ -1152,7 +1069,7 @@ describe("Store", () => {
 
   it("normalizes an inconsistent persisted policy to its strongest safety implication", () => {
     const store = new Store(":memory:"); const session = store.createSession();
-    const policy = { mode: "semantic_delivery", sideEffectRisk: "external_high", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "legacy-bad", confidence: 1, reason: "inconsistent legacy policy" } as const;
+    const policy = { mode: "semantic_delivery", sideEffectRisk: "external_high", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", policyVersion: "inconsistent-test", confidence: 1, reason: "inconsistent policy" } as const;
     const contract = { sourceInput: "unsafe", summary: "unsafe", objectives: [{ id: "o1", summary: "unsafe", timing: "current" as const, kind: "other" as const }], acceptanceCriteria: ["done"], scope: "external", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
     const run = store.createRun(session.id, "unsafe", undefined, contract);
     expect(store.getRun(run.id)?.completionGate).toMatchObject({ passed: false, failures: expect.arrayContaining([expect.objectContaining({ key: "plan" }), expect.objectContaining({ key: "trusted_evidence" })]) }); store.close();

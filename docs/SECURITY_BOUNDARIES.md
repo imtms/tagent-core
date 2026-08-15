@@ -57,7 +57,7 @@ The following are server-owned and cannot be asserted by a caller:
 - hash-verified Attempt request envelopes persisted before provider network dispatch;
 - event-consumer generation and acknowledged sequence;
 - internal evaluation receipt verification;
-- Learning projection authority and migration issue state.
+- the single Learning integration consumer, delivery generation, checkpoint, and effect receipts.
 
 State-changing handlers persist through guarded repositories and a synchronous Unit of Work. Losing writer authority clears readiness and shuts Core down.
 

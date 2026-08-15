@@ -58,7 +58,7 @@ export interface OwnedWorkflowGovernanceCommit {
 
 export interface WorkflowGovernanceMutationRepository {
   /**
-   * Atomically validates and consumes the legacy approval, mutates the workflow,
+   * Atomically validates and consumes the approval, mutates the workflow,
    * and records approval, governance, and audit receipts. Exact command replay
    * must be idempotent; any mismatch must fail closed with zero writes.
    */

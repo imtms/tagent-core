@@ -8,7 +8,7 @@ import type {
   MemorySourceViewPort,
 } from "@tagent/memory/ports";
 import { estimateTextTokens } from "@tagent/memory/domain";
-import type { LegacyStoreAdapter } from "@tagent/persistence-sqlite";
+import type { SqlitePersistence } from "@tagent/persistence-sqlite";
 
 const forbiddenDomains = new Set([
   "admission",
@@ -32,7 +32,7 @@ function sourceFiles(root: string): string[] {
 
 describe("Memory package boundary", () => {
   it("owns source-view contracts that the current persistence composition satisfies structurally", () => {
-    expectTypeOf<LegacyStoreAdapter["memory"]>().toMatchTypeOf<MemoryRuntimeSourcePort>();
+    expectTypeOf<SqlitePersistence["memory"]>().toMatchTypeOf<MemoryRuntimeSourcePort>();
   });
 
   it("loads only the message and run source fields required by Memory", async () => {

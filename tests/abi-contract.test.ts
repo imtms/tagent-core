@@ -167,7 +167,7 @@ describe("ABI runtime decoding", () => {
 
     expect(() => decodeAbi(MemorySourceReferenceSchema, {
       sourceType: "task_run",
-      sourceId: "legacy-abi-typo",
+      sourceId: "invalid-abi-typo",
     })).toThrow();
   });
 
@@ -370,7 +370,6 @@ describe("channel v1 commands and event consumption", () => {
       acknowledgedSequence: 41,
       settledAcknowledgedSequence: null,
       finalAcknowledgedSequence: null,
-      terminalAcknowledgedSequence: null,
       claimedAt: "2026-08-04T12:34:56.789Z",
       updatedAt: "2026-08-04T12:34:56.789Z",
     };

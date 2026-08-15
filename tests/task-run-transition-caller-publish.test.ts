@@ -170,7 +170,6 @@ describe("TaskRun transition caller publishing", () => {
         execute: async () => false,
         projectWorkflowExperience() {},
         recoverInterruptedAttempt: () => false,
-        isApprovedCanaryAttempt: () => false,
       },
       postAttempt: { attemptLaunchFailed, attemptFinalized() {} },
       eventHub: {

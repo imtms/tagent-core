@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -106,37 +106,6 @@ async function readSseEvents(response: Response, count: number) {
 }
 
 describe("v1 API contracts", () => {
-  it("uploads, edits, references, and deletes Skills through the cross-Workspace Console center", async () => {
-    const { app, store, workspace } = await fixture();
-    const session = store.createSession();
-    const source = "---\nname: release-check\ndescription: Verify a release\n---\nFollow the release checklist.\n";
-    const uploaded = await app.inject({
-      method: "POST", url: "/api/v1/console/skills",
-      payload: { filename: "SKILL.md", contentBase64: Buffer.from(source).toString("base64") },
-    });
-    expect(uploaded.statusCode).toBe(200);
-    const selected = decodeAbi(SuccessEnvelopeSchema, uploaded.json()).data as { id: string; name: string; revision: number; filePath: string };
-    expect(selected).toMatchObject({ name: "release-check", revision: 1 });
-    expect(await readFile(path.join(workspace, selected.filePath), "utf8")).toContain("Follow the release checklist.");
-
-    let catalog = decodeAbi(SuccessEnvelopeSchema, (await app.inject({ method: "GET", url: "/api/v1/console/skills" })).json()).data as Array<{ id: string; latestRevisionId: string; workspaceCount: number }>;
-    expect(catalog).toEqual([expect.objectContaining({ latestRevisionId: selected.id, workspaceCount: 0 })]);
-    expect((await app.inject({ method: "PUT", url: `/api/v1/console/workspaces/${session.id}/skills`, payload: { skillIds: [catalog[0].id] } })).statusCode).toBe(200);
-    expect(decodeAbi(SuccessEnvelopeSchema, (await app.inject({ method: "GET", url: `/api/v1/console/workspaces/${session.id}/skills` })).json()).data)
-      .toEqual([expect.objectContaining({ id: selected.id })]);
-    const editedResponse = await app.inject({ method: "PATCH", url: `/api/v1/console/skills/${catalog[0].id}`, payload: {
-      name: "release-check", description: "Verify every release", content: "Follow the updated release checklist.", disableModelInvocation: false,
-    } });
-    expect(editedResponse.statusCode).toBe(200);
-    const edited = decodeAbi(SuccessEnvelopeSchema, editedResponse.json()).data as { id: string; revision: number; content: string };
-    expect(edited).toMatchObject({ revision: 2, content: "Follow the updated release checklist." });
-    expect(store.listWorkspaceSkills(session.id)).toEqual([expect.objectContaining({ id: edited.id })]);
-    expect((await app.inject({ method: "DELETE", url: `/api/v1/console/skills/${catalog[0].id}` })).statusCode).toBe(200);
-    expect(store.listWorkspaceSkills(session.id)).toEqual([]);
-    catalog = decodeAbi(SuccessEnvelopeSchema, (await app.inject({ method: "GET", url: "/api/v1/console/skills" })).json()).data as typeof catalog;
-    expect(catalog).toEqual([]);
-  });
-
   it("creates Sessions idempotently, exposes GET, and publishes capabilities", async () => {
     const { app, store } = await fixture();
     const headers = { "idempotency-key": "gateway-session-create", "x-request-id": "session-create-original" };
@@ -152,7 +121,13 @@ describe("v1 API contracts", () => {
     const read = await app.inject({ method: "GET", url: `/api/v1/sessions/${session.id}` });
     expect(decodeAbi(SessionSchema, decodeAbi(SuccessEnvelopeSchema, read.json()).data)).toEqual(session);
     const capabilities = decodeAbi(CoreCapabilitiesResponseSchema, (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).data;
-    expect(capabilities).toMatchObject({ releaseVersion: "0.7.0", persistenceSchemaVersion: 47, interactions: { approvalResolution: true, userInputSubmission: true }, operator: { roadmapGenerationIdempotent: true } });
+    expect(capabilities).toMatchObject({
+      releaseVersion: "0.8.0",
+      persistenceSchemaVersion: 1,
+      interactions: { approvalResolution: true, userInputSubmission: true },
+      operator: { roadmapGenerationIdempotent: true },
+      approval: { ready: true },
+    });
   });
 
   it("converges 100 concurrent Session create retries on one durable Session", async () => {
@@ -543,7 +518,7 @@ describe("v1 API contracts", () => {
       payload: { commandId: "current-attempt-command", expectedAttemptId: currentAttemptId, type: "task_run.steer", payload: { content: "apply once" } },
     });
     expect(current.statusCode).toBe(200);
-    expect(decodeAbi(CommandResponseSchema, current.json()).data.receipt.status).toBe("accepted");
+    expect(decodeAbi(CommandResponseSchema, current.json()).data.receipt).toMatchObject({ state: "succeeded", outcome: "accepted", replayed: false });
   });
 
   it("returns a generic 500 envelope without leaking unexpected storage errors", async () => {
@@ -580,11 +555,11 @@ describe("v1 API contracts", () => {
       origin: { surface: "api", gatewayActorId: "command-actor", sourceId: "gateway-command" },
     } as const;
     const first = await app.inject({ method: "POST", url: `/api/v1/task-runs/${runId}/commands`, payload: steer });
-    expect(decodeAbi(CommandResponseSchema, first.json()).data.receipt.status).toBe("accepted");
+    expect(decodeAbi(CommandResponseSchema, first.json()).data.receipt).toMatchObject({ state: "succeeded", outcome: "accepted", replayed: false });
     const duplicate = await app.inject({ method: "POST", url: `/api/v1/task-runs/${runId}/commands`, payload: steer });
     const duplicateReceipt = decodeAbi(CommandResponseSchema, duplicate.json()).data.receipt;
     expect(duplicateReceipt).toMatchObject({
-      status: "duplicate", state: "succeeded", outcome: "accepted", replayed: true, result: { accepted: true },
+      state: "succeeded", outcome: "accepted", replayed: true, result: { accepted: true },
       audit: { principalId: "local-admin", origin: steer.origin },
     });
     const lookup = await app.inject({ method: "GET", url: `/api/v1/task-runs/${runId}/commands/${steer.commandId}` });

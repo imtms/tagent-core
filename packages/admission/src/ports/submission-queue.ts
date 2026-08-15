@@ -1,12 +1,12 @@
 import type {
   SessionId,
-  SessionInboxItem,
+  Submission,
   SessionInputAnalysis,
 } from "../domain/index.js";
 import type { RunId, TaskRun } from "@tagent/execution/domain";
 import type { ProfileMutationContext, ProfileMutationResult } from "./profile-contract-repository.js";
 
-export type ClaimedSubmission = { item: SessionInboxItem; run: TaskRun };
+export type ClaimedSubmission = { item: Submission; run: TaskRun };
 
 export interface SubmissionAuditInput {
   principalId: string;
@@ -77,30 +77,30 @@ export interface SubmissionQueue {
     analysis: SessionInputAnalysis,
     requestId?: string,
     audit?: SubmissionAuditInput,
-  ): SessionInboxItem;
-  getSessionInboxItem(id: string): SessionInboxItem | undefined;
-  getSessionSubmission(sessionId: SessionId, requestId: string): SessionInboxItem | undefined;
-  recordSubmissionAudit(item: SessionInboxItem, audit: SubmissionAuditInput): SubmissionAuditReceipt;
+  ): Submission;
+  getSessionInboxItem(id: string): Submission | undefined;
+  getSessionSubmission(sessionId: SessionId, requestId: string): Submission | undefined;
+  recordSubmissionAudit(item: Submission, audit: SubmissionAuditInput): SubmissionAuditReceipt;
   getSubmissionAudit(sessionId: SessionId, requestId: string): SubmissionAuditReceipt | undefined;
-  /** Stable owner identity for user-level Memory/Learning; legacy Sessions may not have one. */
-  getSessionPrincipalId?(sessionId: SessionId): string | undefined;
-  listSessionInbox(sessionId: SessionId, includeTerminal?: boolean): SessionInboxItem[];
+  /** Stable owner identity for user-level Memory/Learning; anonymous Sessions may not have one. */
+  getSessionPrincipalId(sessionId: SessionId): string | undefined;
+  listSessionInbox(sessionId: SessionId, includeTerminal?: boolean): Submission[];
   routeSessionInboxItem(
     id: string,
     sessionId: SessionId,
     decision: "steer" | "follow_up" | "discussion",
     runId: RunId | null,
     error?: string,
-  ): SessionInboxItem | undefined;
-  findMergeCandidate(sessionId: SessionId, analysis: SessionInputAnalysis): SessionInboxItem | undefined;
-  markSessionInboxDuplicate(sourceId: string, targetId: string, sessionId: SessionId): SessionInboxItem | undefined;
+  ): Submission | undefined;
+  findMergeCandidate(sessionId: SessionId, analysis: SessionInputAnalysis): Submission | undefined;
+  markSessionInboxDuplicate(sourceId: string, targetId: string, sessionId: SessionId): Submission | undefined;
   updateSessionInboxItem(
     id: string,
     sessionId: SessionId,
     content: string,
     analysis?: SessionInputAnalysis,
-  ): SessionInboxItem | undefined;
-  reorderSessionInbox(sessionId: SessionId, itemIds: string[]): SessionInboxItem[] | undefined;
+  ): Submission | undefined;
+  reorderSessionInbox(sessionId: SessionId, itemIds: string[]): Submission[] | undefined;
   deleteSessionInboxItem(id: string, sessionId: SessionId): boolean;
   /** Compensates a failed pre-launch admission before the Inbox item becomes observable work. */
   discardSessionInboxItem(id: string, sessionId: SessionId): boolean;

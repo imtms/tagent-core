@@ -28,21 +28,6 @@ export function settleRuntimeInitializationFailure(input: RuntimeInitializationF
   const current = input.persistence.taskRuns.getRun(input.run.id);
   if (input.closing || current?.status !== "running" || current.attempt !== input.token.ordinal) return;
 
-  if (input.settlement.isApprovedCanaryAttempt(input.token)) {
-    const recovered = input.settlement.recoverInterruptedAttempt(
-      input.token,
-      `Runtime initialization failed: ${message}`,
-    );
-    if (recovered && input.launchOptions?.inboxItemId) {
-      input.postAttempt.attemptLaunchFailed({
-        inboxItemId: input.launchOptions.inboxItemId,
-        runId: input.run.id,
-        message,
-      });
-    }
-    return;
-  }
-
   const transition = failRuntimeTaskRun(
     input.persistence.taskRunTransitions,
     input.token,

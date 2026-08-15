@@ -34,24 +34,6 @@ describe("Core service configuration", () => {
     });
   });
 
-  it("keeps Run token limits and dynamic hard budgets disabled even when legacy env names are present", () => {
-    const config = loadConfig({
-      TAGENT_MAX_RUN_TOKENS: "1",
-      TAGENT_DYNAMIC_BUDGET: "true",
-      TAGENT_MAX_MODEL_CALLS: "1",
-      TAGENT_MAX_TOOL_CALLS: "1",
-    });
-    const publicConfig = publicRuntimeConfig(config);
-    expect(config.model.maxTokens).toBe(32_768); // Per-response model output cap, not a Run budget.
-    expect(config).not.toHaveProperty("maxRunTokens");
-    expect(config).not.toHaveProperty("dynamicBudget");
-    expect(config).not.toHaveProperty("maxModelCalls");
-    expect(config).not.toHaveProperty("maxToolCalls");
-    expect(publicConfig).not.toHaveProperty("maxRunTokens");
-    expect(publicConfig).not.toHaveProperty("dynamicBudget");
-    expect(JSON.stringify(publicConfig)).not.toMatch(/runToken|dynamicBudget|modelCall|toolCall/i);
-  });
-
   it("supports an ordered main-model fallback chain", () => {
     const config = loadConfig({ TAGENT_MODEL: "primary, fallback-a, fallback-b" });
     expect(config.model.modelId).toBe("primary");
@@ -109,7 +91,7 @@ describe("Core service configuration", () => {
 
   it("exposes runtime status without exposing credentials", () => {
     const status = publicRuntimeConfig(loadConfig({ OPENAI_API_KEY: "secret" }));
-    expect(status.releaseVersion).toBe("0.7.0");
+    expect(status.releaseVersion).toBe("0.8.0");
     expect(status.credentialConfigured).toBe(true);
     expect(status).not.toHaveProperty("apiKey");
     expect(JSON.stringify(status)).not.toContain("secret");

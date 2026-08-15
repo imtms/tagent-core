@@ -168,6 +168,7 @@ export class WorkflowLearningService {
       attempt: projection.attemptOrdinal,
       status: projection.outcome as RunStatus,
     };
+    this.recordRunApplications(run);
     const observation = this.projectRun(run, run.status, {
       lifecycle: projection.lifecycle,
       eventSeq: projection.eventSeq,
@@ -207,23 +208,6 @@ export class WorkflowLearningService {
       processed++;
     }
     return processed;
-  }
-
-  drainProjectionOutbox(limit = 100) {
-    const rows = this.persistence.listPendingLearningProjections(limit);
-    for (const row of rows) {
-      try {
-        const snapshot = JSON.parse(row.snapshotJson || "null") as TaskRun | null;
-        const run = snapshot ?? this.persistence.getRun(row.runId);
-        if (run) {
-          const projectedRun: TaskRun = { ...run, attempt: row.attempt, status: row.outcome as RunStatus };
-          this.projectRun(projectedRun, row.outcome as RunStatus, { lifecycle: row.lifecycle, eventSeq: row.eventSeq, payload: JSON.parse(row.payloadJson) as Record<string, unknown> });
-          this.recordCanaryOutcome(projectedRun);
-        }
-        this.persistence.completeLearningProjection(row.id);
-      } catch (error) { this.persistence.failLearningProjection(row.id, error instanceof Error ? error.message : String(error)); }
-    }
-    return rows.length;
   }
 
   enqueueDistillation(scopeId: string, taskSignature: string) {
@@ -721,9 +705,6 @@ export class WorkflowLearningService {
   listRevisions(workflowId: string) { return this.persistence.workflow.listWorkflowRevisionIds(workflowId).map((id) => this.getRevision(id)!); }
   getRevision(id: string): WorkflowRevision | undefined { const row = this.persistence.workflow.getWorkflowRevision(id); if (!row) return undefined; const stored = JSON.parse(row.specJson) as Partial<WorkflowSpec> & { counterexampleIds?: string[] }; return { id: row.id, workflowId: row.workflowId, revision: row.revision, ...sanitizeSpec(stored as WorkflowSpec), sourceType: row.sourceType, sourceEvidenceIds: JSON.parse(row.sourceEvidenceJson) as string[], counterexampleIds: sanitizeIds(stored.counterexampleIds ?? []), confidence: row.confidence, changeSummary: row.changeSummary, createdAt: row.createdAt }; }
 }
-
-/** @deprecated Use WorkflowLearningService. */
-export { WorkflowLearningService as WorkflowService };
 
 function average(values: number[]) { return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0; }
 function distillationEligibility(signature:string,stepCount:number){const normalized=normalize(signature);if(stepCount<2)return{eligible:false,reason:"insufficient_procedure_steps"};if(normalized.length<12||/^(?:回复一下|继续|再试一次|为什么|怎么回事|检查一下|看看|确认一下|reply|continue|retry|why)$/i.test(normalized))return{eligible:false,reason:"underspecified_task_signature"};return{eligible:true,reason:"eligible"};}

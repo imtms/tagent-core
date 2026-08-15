@@ -41,11 +41,11 @@ async function fixture(credentials: ServiceCredential[] = []) {
 }
 
 describe("capability profile registry", () => {
-  it("keeps the closed legacy capability response unchanged and publishes independent profiles", async () => {
+  it("keeps the base capability response closed and publishes independent profiles", async () => {
     const app = await fixture();
-    const legacyResponse = await app.inject({ method: "GET", url: "/api/v1/capabilities" });
-    const legacy = decodeAbi(CoreCapabilitiesResponseSchema, legacyResponse.json());
-    expect(legacy.data).not.toHaveProperty("profiles");
+    const baseResponse = await app.inject({ method: "GET", url: "/api/v1/capabilities" });
+    const baseCapabilities = decodeAbi(CoreCapabilitiesResponseSchema, baseResponse.json());
+    expect(baseCapabilities.data).not.toHaveProperty("profiles");
 
     const response = await app.inject({ method: "GET", url: "/api/v1/capability-profiles" });
     const registry = decodeAbi(CapabilityProfileRegistryResponseSchema, response.json());

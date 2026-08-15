@@ -314,6 +314,3 @@ export type WorkflowLearningRepository =
   & WorkflowApprovalRepository
   & WorkflowLearningReceiptRepository
   & WorkflowLearningQueryRepository;
-
-/** @deprecated Use the responsibility-specific Learning repository ports. */
-export type WorkflowRepository = WorkflowLearningRepository;

@@ -2,7 +2,6 @@ export type SupervisorAction =
   | "observe"
   | "steer"
   | "follow_up"
-  | "request_evidence"
   | "pause_for_approval"
   | "wait_for_runtime"
   | "start_continuation"

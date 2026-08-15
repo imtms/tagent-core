@@ -9,24 +9,6 @@ export type {
   WorkflowGovernanceUnitOfWork,
   WorkflowRevisionMaterializerPort,
 } from "./workflow-governance-port.js";
-export type { GovernanceApprovalAuthoritySwitchEvidencePort } from "./approval-authority-switch-port.js";
-export type {
-  ApprovalIdResolution,
-  ApprovalProjection,
-  ApprovalProjectionReason,
-  ApprovalReadQuery,
-  ApprovalShadowComparison,
-  ApprovalShadowExpectation,
-  ApprovalShadowMismatch,
-  ApprovalShadowSummary,
-  ApprovalUnresolvedCursor,
-  ApprovalUnresolvedPage,
-  ApprovalUnresolvedPageQuery,
-  ApprovalUnresolvedQuery,
-  ApprovalUnresolvedSummary,
-  CanonicalApprovalReadPort,
-  CanonicalApprovalShadowPort,
-} from "./canonical-approval-port.js";
 export type {
   ApprovalAuthorizationCommit,
   ApprovalAuthorizationReceiptInput,

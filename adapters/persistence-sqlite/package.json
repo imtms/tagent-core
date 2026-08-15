@@ -1,6 +1,6 @@
 {
   "name": "@tagent/persistence-sqlite",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "sideEffects": false,
@@ -25,10 +25,6 @@
       "types": "./dist/writer.d.ts",
       "import": "./dist/writer.js"
     },
-    "./migrations": {
-      "types": "./dist/migrations.d.ts",
-      "import": "./dist/migrations.js"
-    },
     "./unit-of-work": {
       "types": "./dist/unit-of-work.d.ts",
       "import": "./dist/unit-of-work.js"
@@ -39,11 +35,11 @@
     "clean": "tsc -b --clean && rm -rf dist"
   },
   "dependencies": {
-    "@tagent/admission": "0.7.0",
-    "@tagent/execution": "0.7.0",
-    "@tagent/governance": "0.7.0",
-    "@tagent/learning": "0.7.0",
-    "@tagent/memory": "0.7.0",
+    "@tagent/admission": "0.8.0",
+    "@tagent/execution": "0.8.0",
+    "@tagent/governance": "0.8.0",
+    "@tagent/learning": "0.8.0",
+    "@tagent/memory": "0.8.0",
     "better-sqlite3": "12.4.1"
   },
   "devDependencies": {

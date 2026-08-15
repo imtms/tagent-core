@@ -60,4 +60,4 @@ P0 intentionally excludes `updatedAfter`, status/search filters, bootstrap aggre
 
 ## Verification
 
-Provider, ABI, Core Client and migration tests cover empty and missing Sessions, tied timestamps, concurrent inserts, cursor replay/mismatch/malformed input, restart continuation, scope failures, latest semantics, public-summary redaction and histories larger than the maximum page size. Schema 41 adds and validates the ordered Session/TaskRun indexes; migration is forward-only and re-entrant.
+Provider, ABI, Core Client and current-schema tests cover empty and missing Sessions, tied timestamps, concurrent inserts, cursor replay/mismatch/malformed input, restart continuation, scope failures, latest semantics, public-summary redaction and histories larger than the maximum page size. The current schema validates the ordered Session/TaskRun indexes as part of its exact shape.

@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { Store, createGuardedLegacyStoreAdapter } from "@tagent/persistence-sqlite";
+import { Store, createGuardedSqlitePersistence } from "@tagent/persistence-sqlite";
 import {
   WorkspaceGoalService,
-  workspaceGoalContentHash,
   type WorkspaceGoalDefinition,
   type WorkspaceGoalRoadmap,
 } from "@tagent/governance";
@@ -11,7 +10,7 @@ import { agentPersistence } from "./support/test-persistence.js";
 import { recordSuccessfulBash, upsertTrustedCheck } from "./support/trusted-evidence.js";
 
 function persistence(store: Store) {
-  return createGuardedLegacyStoreAdapter(store, { run: (work: () => unknown) => work() } as never);
+  return createGuardedSqlitePersistence(store, { run: (work: () => unknown) => work() } as never);
 }
 
 function definition(criteria: WorkspaceGoalDefinition["criteria"] = [
@@ -65,10 +64,10 @@ function addApprovedRoadmap(goals: WorkspaceGoalService, goalId: string, value =
 }
 
 describe("Workspace Goal Roadmap execution", () => {
-  it("opens schema v43 additively and leaves TaskRuns independent when no Goal exists", () => {
+  it("creates the current schema and leaves TaskRuns independent when no Goal exists", () => {
     const store = new Store(":memory:");
     try {
-      expect(store.getSchemaVersion()).toBe(47);
+      expect(store.getSchemaVersion()).toBe(1);
       expect(store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_goal_roadmap_item_progress'").get()).toBeTruthy();
       const workspace = store.createSession("No Goal workspace");
       const run = store.createRun(workspace.id, "ordinary task");
@@ -503,19 +502,6 @@ describe("Workspace Goal Roadmap execution", () => {
         approvedItemIds: ["storage"],
         actorId: "user",
       })).toThrow("outside the active Goal definition");
-    } finally { store.close(); }
-  });
-
-  it("normalizes legacy Roadmap items that predate criterionKeys", () => {
-    const store = new Store(":memory:");
-    try {
-      const { goals, goal } = createApprovedGoal(store);
-      const revision = goals.addRoadmap(goal.id, roadmap([{ id: "legacy", title: "Legacy", outcome: "Works", verification: "Test", criterionKeys: ["stored"] }]), null, "test");
-      const legacyContent = { summary: "Legacy", items: [{ id: "legacy", title: "Legacy", outcome: "Works", verification: "Test" }] };
-      store.db.prepare("UPDATE workspace_goal_revisions SET content_json=?,content_hash=? WHERE id=?").run(JSON.stringify(legacyContent), workspaceGoalContentHash(legacyContent), revision.id);
-      const legacyRevision = goals.get(goal.id)!.roadmap!;
-      expect((legacyRevision.content as WorkspaceGoalRoadmap).items[0].criterionKeys).toEqual([]);
-      expect(() => goals.decide({ goalId: goal.id, targetRevisionId: legacyRevision.id, targetHash: legacyRevision.contentHash, kind: "approve_roadmap", approvedItemIds: ["legacy"], actorId: "user" })).toThrow("create a new revision");
     } finally { store.close(); }
   });
 

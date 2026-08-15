@@ -10,9 +10,9 @@ import type { RuntimeMessage } from "@tagent/execution/ports";
 import type {
   LearningFeatureControl,
   LearningService,
-  WorkflowService,
+  WorkflowLearningService,
 } from "@tagent/learning";
-import type { AccessContext, MemoryFacade, MemoryProvenance } from "@tagent/memory";
+import type { AccessContext, MemoryFacade } from "@tagent/memory";
 
 interface ExecutionCollaborationAdapterOptions {
   persistence: Pick<AgentServicePersistencePort, "events" | "sessions" | "submissions" | "taskRuns">;
@@ -20,7 +20,7 @@ interface ExecutionCollaborationAdapterOptions {
   memoryScopeId: string;
   learningControl?: LearningFeatureControl;
   learningService: LearningService;
-  workflowService: WorkflowService;
+  workflowService: WorkflowLearningService;
   publish<TType extends RunEventType>(runId: string, type: TType, data: RunEventMap[TType]): void;
 }
 
@@ -28,9 +28,7 @@ export function resolveMemorySubjectId(
   persistence: Pick<AgentServicePersistencePort, "submissions">,
   sessionId: string,
 ): string {
-  // Unknown legacy ownership must remain Session-isolated. New Console/Channel
-  // submissions persist a principal before this resolver is used.
-  return persistence.submissions.getSessionPrincipalId?.(sessionId) ?? `session:${sessionId}`;
+  return persistence.submissions.getSessionPrincipalId(sessionId) ?? `session:${sessionId}`;
 }
 
 export interface ExecutionCollaborationAdapters {
@@ -118,7 +116,7 @@ export function createExecutionCollaborationAdapters(
       sourceRefs: [{ sourceType: "transcript", sourceId: run.id, revision: `context-prune:${run.attempt}:${fingerprint}` }],
       content: summary,
       idempotencyKey: `context-prune:${run.id}:${run.attempt}:${fingerprint}`,
-      provenance: userContextSummaryProvenance,
+      captureSource: { kind: "context_summary", role: "user" },
     }).then(({ jobId }) => options.publish(run.id, "memory.capture.queued", {
       jobId,
       sourceType: "user_context_summary",
@@ -132,7 +130,6 @@ export function createExecutionCollaborationAdapters(
     backgroundWork: {
       start() {
         if (!learningEnabled()) return;
-        options.learningService.drainLearningProjectionLedger();
         void options.workflowService.drainSemanticLearningJobs();
         void options.learningService.drainSemanticLearningJobs();
         void options.learningService.drainFeedbackAttribution();
@@ -221,11 +218,7 @@ export function createExecutionCollaborationAdapters(
         const run = options.persistence.taskRuns.getRun(runId);
         if (!run) return;
         try {
-          options.workflowService.recordRunApplications(run);
-          options.workflowService.recordCanaryOutcome(run);
           void options.workflowService.drainSemanticLearningJobs();
-          options.learningService.drainLearningProjectionLedger();
-          options.learningService.projectRun(run);
           void options.learningService.drainSemanticLearningJobs()
             .then(() => options.learningService.drainFeedbackAttribution())
             .catch((error: unknown) => options.publish(runId, "memory.feedback.attribution.failed", {
@@ -318,10 +311,3 @@ function estimateContextTokens(text: string) {
   for (const character of text) if (character.charCodeAt(0) > 127) nonAscii += 1;
   return Math.max(1, Math.ceil(nonAscii * 1.5 + (text.length - nonAscii) * 0.25));
 }
-
-const userContextSummaryProvenance: MemoryProvenance = {
-  evidenceClass: "user_context_summary",
-  trustLevel: "medium",
-  sourceRole: "user",
-  verificationState: "structured",
-};

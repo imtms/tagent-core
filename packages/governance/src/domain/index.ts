@@ -1,5 +1,4 @@
 export * from "./approval.js";
-export * from "./approval-authority.js";
 export * from "./workflow-governance.js";
 export * from "./capability.js";
 export * from "./governance.js";

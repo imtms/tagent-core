@@ -16,33 +16,28 @@ import { assembleHttpMemory } from "./composition/http-memory-adapter.js";
 import {
   DistillationWorker,
   LearningFeatureControl,
+  LearningService,
   LearningWorkflowRevisionMaterializer,
   SemanticJudge,
-  WorkflowService,
+  WorkflowLearningService,
 } from "@tagent/learning";
 import {
   ActiveLearningProjectionWorker,
-  LearningProjectionAuthorityCoordinator,
-  ShadowLearningProjectionWorker,
-  WorkflowServiceActiveProjectionApplier,
+  LearningServicesProjectionApplier,
 } from "@tagent/learning/application";
 import {
   CanaryGovernanceWorker,
   WorkflowGovernanceApplication,
 } from "@tagent/governance/application";
-import {
-  selectGovernanceApprovalAuthority,
-  type GovernanceApprovalAuthoritySwitchEvidence,
-} from "@tagent/governance/domain";
 import type { MemoryRuntime } from "@tagent/memory/composition";
 import {
   Store,
   acquireCoreInstanceLock,
-  createGuardedLegacyStoreAdapter,
+  createGuardedSqlitePersistence,
   claimCoreWriterConnectionWithRetry,
   type CoreInstanceLock,
   type CoreWriterConnection,
-  type LegacyStoreAdapter,
+  type SqlitePersistence,
 } from "@tagent/persistence-sqlite";
 import { resolveRuntimeFactory } from "@tagent/runtime-pi/factory";
 import { createEnvironmentCredentialResolver } from "@tagent/execution/ports";
@@ -72,48 +67,11 @@ const defaultBackgroundWorkerStarter: CoreBackgroundWorkerStarter = Object.freez
   startLearningProjection: (runtime: LearningProjectionRuntime) => runtime.start(),
 });
 
-const CURRENT_RELEASE_GOVERNANCE_APPROVAL_AUTHORITY_EVIDENCE = Object.freeze({
-  unresolved: {
-    complete: true,
-    summary: {
-      total: 0,
-      active: 0,
-      bySource: { legacy_run: 0, legacy_workflow: 0 },
-      activeBySource: { legacy_run: 0, legacy_workflow: 0 },
-      byReason: {},
-    },
-  },
-  comparisons: {
-    complete: true,
-    coverage: { expected: 1, compared: 1 },
-    summary: {
-      total: 1,
-      match: 1,
-      mismatch: 0,
-      unresolved: 0,
-      activeUnresolved: 0,
-      missing: 0,
-    },
-  },
-  handlers: {
-    request: { ready: false, evidence: ["current release canonical request handler is dormant"] },
-    decide: { ready: false, evidence: ["current release canonical decide handler is dormant"] },
-    consume: { ready: false, evidence: ["current release canonical consume handler is dormant"] },
-    execute: { ready: false, evidence: ["current release canonical execute handler is dormant"] },
-  },
-  noBypass: {
-    approved: false,
-    activeBypassCount: 0,
-    evidence: ["current release production no-bypass assessment is not approved"],
-  },
-} satisfies GovernanceApprovalAuthoritySwitchEvidence);
-
 function assembleAgentServicePersistence(
-  persistence: LegacyStoreAdapter,
+  persistence: SqlitePersistence,
 ): AgentServicePersistencePort {
   return Object.freeze({
     attempts: persistence.attempts,
-    attemptAuthority: persistence.attemptAuthority,
     runtimeMutations: persistence.runtimeMutations,
     sessions: persistence.sessions,
     skills: persistence.skills,
@@ -138,7 +96,7 @@ function assembleAgentServicePersistence(
   });
 }
 
-function assembleHttpPersistence(persistence: LegacyStoreAdapter): HttpPersistencePort {
+function assembleHttpPersistence(persistence: SqlitePersistence): HttpPersistencePort {
   return Object.freeze({
     profileContracts: persistence.profileContracts,
     operatorRead: persistence.operatorRead,
@@ -162,10 +120,6 @@ export async function bootstrapCore(
   config: AppConfig = loadConfig(),
   dependencies: CoreBootstrapDependencies = {},
 ): Promise<BootstrappedCore> {
-  selectGovernanceApprovalAuthority({
-    requestedAuthority: config.governanceApprovalAuthority,
-    ...CURRENT_RELEASE_GOVERNANCE_APPROVAL_AUTHORITY_EVIDENCE,
-  });
   await mkdir(config.workspace, { recursive: true });
   await mkdir(path.dirname(path.resolve(config.database)), { recursive: true });
 
@@ -187,7 +141,7 @@ export async function bootstrapCore(
   try {
     instanceLock = await acquireCoreInstanceLock(config.database);
     store = new Store(config.database, {
-      deferPostMigrationRecovery: true,
+      deferStartupRecovery: true,
       defaultModelId: config.model.modelId,
     });
     writerConnection = await claimCoreWriterConnectionWithRetry(store, {
@@ -196,7 +150,7 @@ export async function bootstrapCore(
       host: instanceLock.metadata.host,
     });
     writerConnection.writerGuard.installConnectionGuard();
-    const persistence = createGuardedLegacyStoreAdapter(store, writerConnection.writerGuard);
+    const persistence = createGuardedSqlitePersistence(store, writerConnection.writerGuard);
     const agentPersistence = assembleAgentServicePersistence(persistence);
     const httpPersistence = assembleHttpPersistence(persistence);
 
@@ -256,7 +210,7 @@ export async function bootstrapCore(
       },
     });
     await lifecycle.start();
-    store.runPostMigrationRecovery(writerConnection.writerGuard);
+    store.runStartupRecovery(writerConnection.writerGuard);
 
     const credentialResolver = createEnvironmentCredentialResolver(process.env);
     const learningControl = new LearningFeatureControl(persistence.settings, config.memory.enabled, {
@@ -327,10 +281,16 @@ export async function bootstrapCore(
       config.projectRuleFiles,
       config.toolArtifactMaxBytes,
     );
-    const workflowService = new WorkflowService(
+    const workflowService = new WorkflowLearningService(
       persistence.workflow,
       undefined,
       learningControl,
+      semanticJudge,
+    );
+    const projectionLearningService = new LearningService(
+      persistence.learning,
+      memoryRuntime?.service,
+      config.memory.enabled ? config.memory.workspaceScopeId : "default",
       semanticJudge,
     );
     distillationWorker = new DistillationWorker(workflowService, config.learning.distillationWorkerIntervalMs);
@@ -353,27 +313,21 @@ export async function bootstrapCore(
     );
     const activeLearningProjectionWorker = new ActiveLearningProjectionWorker(
       persistence.learningIntegration,
-      new WorkflowServiceActiveProjectionApplier(workflowService),
+      new LearningServicesProjectionApplier(projectionLearningService, workflowService),
       {
-        owner: `core:${instanceLock.metadata.instanceId}:learning-active-v1`,
+        owner: `core:${instanceLock.metadata.instanceId}:learning-projection-v1`,
         leaseMs: learningProjectionLeaseMs,
       },
     );
     learningProjectionRuntime = new LearningProjectionRuntime(
-      {
-        shadow: new ShadowLearningProjectionWorker(persistence.learningIntegration, {
-          owner: `core:${instanceLock.metadata.instanceId}:learning-shadow-v1`,
-          leaseMs: learningProjectionLeaseMs,
-        }),
-        active: activeLearningProjectionWorker,
-        coordinator: new LearningProjectionAuthorityCoordinator(
-          persistence.learningIntegration,
-          activeLearningProjectionWorker,
-        ),
-      },
+      activeLearningProjectionWorker,
       {
         intervalMs: config.learning.distillationWorkerIntervalMs,
-        authorityHeartbeatMs: Math.floor(learningProjectionLeaseMs / 3),
+        afterApplied: async () => {
+          await workflowService.drainSemanticLearningJobs();
+          await projectionLearningService.drainSemanticLearningJobs();
+          await projectionLearningService.drainFeedbackAttribution();
+        },
       },
     );
     const startLearningProjection = () => backgroundWorkerStarter.startLearningProjection

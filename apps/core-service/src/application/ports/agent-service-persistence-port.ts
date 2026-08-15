@@ -3,7 +3,6 @@ import type {
   CheckpointRepository,
   ContinuationQueue,
   ControlInbox,
-  AttemptAuthorityRepository,
   AttemptRepository,
   FencedRuntimeMutationPort,
   RunEventJournal,
@@ -23,13 +22,12 @@ import type {
 } from "@tagent/governance/ports";
 import type {
   LearningServicePersistencePort,
-  WorkflowServicePersistencePort,
+  WorkflowLearningPersistencePort,
 } from "@tagent/learning/ports";
 
 /** Persistence capabilities owned by AgentService, grouped by domain context. */
 export interface AgentServicePersistencePort {
   readonly attempts: AttemptRepository;
-  readonly attemptAuthority: AttemptAuthorityRepository;
   readonly runtimeMutations: FencedRuntimeMutationPort;
   readonly sessions: SessionRepository;
   readonly skills: SkillRepository;
@@ -49,6 +47,6 @@ export interface AgentServicePersistencePort {
   readonly supervisor: SupervisorPersistencePort;
   readonly workflowGovernance: WorkflowGovernancePersistencePort;
   readonly learning: LearningServicePersistencePort;
-  readonly workflow: WorkflowServicePersistencePort;
+  readonly workflow: WorkflowLearningPersistencePort;
   readonly workspaceGoals: WorkspaceGoalRepository;
 }

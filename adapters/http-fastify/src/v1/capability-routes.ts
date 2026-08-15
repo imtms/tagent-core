@@ -12,22 +12,17 @@ import { authorizeChannel } from "./route-support.js";
 
 export function registerCapabilityV1Routes(app: FastifyInstance, dependencies: ChannelV1Dependencies): void {
   const runtime = dependencies.runtimeConfig;
-  const approvalAuthority = runtime?.governanceApprovalAuthority ?? "legacy";
   app.get("/api/v1/capabilities", { onRequest: authorizeChannel(dependencies.serviceCredentials, "sessions:read") }, async (request) =>
     encodeAbi(CoreCapabilitiesResponseSchema, successEnvelope(request, {
-      releaseVersion: runtime?.releaseVersion?.trim() || "0.7.0",
+      releaseVersion: runtime?.releaseVersion?.trim() || "0.8.0",
       apiVersions: ["channel.v1", "operator.console.v1", "operator.read.v1"],
       eventSpecVersion: "1.0",
-      persistenceSchemaVersion: runtime?.schemaVersion ?? 47,
+      persistenceSchemaVersion: runtime?.schemaVersion ?? 1,
       commandTypes: [...TASK_RUN_COMMAND_TYPES],
       eventTypes: [...PROJECTION_CRITICAL_TASK_RUN_EVENT_TYPES],
       interactions: { approvalResolution: true, userInputSubmission: true },
       operator: { profileVersion: "1.0", endpointIds: [...OPERATOR_PROFILE_ENDPOINT_IDS], workspaceGoals: true, roadmapGenerationIdempotent: true },
-      approval: {
-        authority: approvalAuthority,
-        ready: approvalAuthority === "legacy",
-        canonicalCutoverReady: false,
-      },
+      approval: { ready: true },
       receiptRecovery: {
         protocolVersion: "1.0", exactReplay: true, commandLookup: true,
         interruptedEffectState: "outcome_unknown", automaticUnknownReplay: false,

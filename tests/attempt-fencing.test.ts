@@ -2,26 +2,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ATTEMPT_AUTHORITY_SCENARIOS } from "@tagent/execution/domain";
-import { createGuardedLegacyStoreAdapter, Store } from "@tagent/persistence-sqlite";
+import { createGuardedSqlitePersistence, Store } from "@tagent/persistence-sqlite";
 import { CoreWriterLease, WriterFenceGuard } from "@tagent/persistence-sqlite/writer";
 
 const stores: Store[] = [];
 afterEach(() => stores.splice(0).forEach((store) => { if (store.db.open) store.close(); }));
-
-function approve(adapter: ReturnType<typeof createGuardedLegacyStoreAdapter>, attemptId: string) {
-  const comparisons = Array.from({ length: 1_000 }, (_, index) => ({
-    attemptId,
-    scenario: ATTEMPT_AUTHORITY_SCENARIOS[index % ATTEMPT_AUTHORITY_SCENARIOS.length],
-    legacy: { status: "running" }, projected: { status: "running" }, mismatch: false,
-  }));
-  adapter.attemptAuthority.recordShadowComparisons(comparisons);
-  const receipt = adapter.attemptAuthority.recordAuthorityReceipt({
-    id: "authority-approval", requestedAttemptId: attemptId, decision: "approved",
-    actor: "release-governor", reason: "validated shadow ledger",
-  });
-  return adapter.attemptAuthority.requestAuthority({ requestedAttemptId: attemptId, receiptId: receipt.id });
-}
 
 describe("Attempt terminal fencing", () => {
   it("rejects stale AttemptId, version, lease token, and fence with zero side effects", () => {
@@ -29,7 +14,7 @@ describe("Attempt terminal fencing", () => {
     const store = new Store(filename);
     stores.push(store);
     const lease = CoreWriterLease.claim(store.db, { ownerId: "writer-a", pid: process.pid, host: "test" })!;
-    const adapter = createGuardedLegacyStoreAdapter(store, new WriterFenceGuard(store.db, lease.authority));
+    const adapter = createGuardedSqlitePersistence(store, new WriterFenceGuard(store.db, lease.authority));
     const session = adapter.sessions.createSession();
     const run = adapter.taskRuns.createRun(session.id, "fenced terminal");
     const attempt = adapter.attempts.getActiveAttempt(run.id)!;
@@ -58,8 +43,6 @@ describe("Attempt terminal fencing", () => {
       candidateResponseHash: candidate.responseHash, status: "proposed", error: "",
       createdAt: Date.now(), executedAt: null, evaluator: "system", evaluatorModel: "",
     });
-    approve(adapter, attempt.id);
-
     const snapshot = () => store.db.prepare(`SELECT
       (SELECT COUNT(*) FROM attempt_transition_audit) audit,
       (SELECT COUNT(*) FROM run_events) events,
@@ -68,7 +51,7 @@ describe("Attempt terminal fencing", () => {
       (SELECT status FROM candidate_results WHERE id=?) candidateStatus,
       (SELECT status FROM runs WHERE id=?) runStatus,
       (SELECT status FROM supervisor_decisions WHERE id='decision-1') decisionStatus,
-      (SELECT COUNT(*) FROM learning_projection_outbox) outbox,
+      (SELECT COUNT(*) FROM integration_outbox) outbox,
       (SELECT COUNT(*) FROM messages WHERE role='assistant') assistantMessages`)
       .get(attempt.id, attempt.id, candidate.id, run.id);
     const baseline = snapshot();
@@ -89,7 +72,7 @@ describe("Attempt terminal fencing", () => {
     expect(snapshot()).toEqual(baseline);
 
     store.db.exec(`CREATE TRIGGER reject_attempt_learning_projection
-      BEFORE INSERT ON learning_projection_outbox BEGIN
+      BEFORE INSERT ON integration_outbox BEGIN
         SELECT RAISE(ABORT, 'attempt learning projection rejected');
       END`);
     expect(() => settle({})).toThrow(/learning projection rejected/);
@@ -101,8 +84,9 @@ describe("Attempt terminal fencing", () => {
     expect(store.listEvents(run.id).at(-1)).toMatchObject({ type: "run.completed", seq: 1 });
     expect(adapter.supervisorDecisions.listSupervisorDecisions(run.id)).toMatchObject([{ id: "decision-1", status: "executed" }]);
     expect(adapter.sessions.listMessages(session.id)).toMatchObject([{ role: "assistant", content: "verified result" }]);
-    expect(adapter.learningProjections.listPendingLearningProjections()).toMatchObject([{
-      runId: run.id, attempt: 1, lifecycle: "run.completed", outcome: "completed", eventSeq: 1,
+    expect(store.db.prepare(`SELECT aggregate_id as runId,attempt_ordinal as attempt,
+      aggregate_version as eventSeq FROM integration_outbox`).all()).toEqual([{
+      runId: run.id, attempt: 1, eventSeq: 1,
     }]);
   });
 
@@ -110,7 +94,7 @@ describe("Attempt terminal fencing", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-attempt-writer-")), "writer.db");
     const firstStore = new Store(filename); stores.push(firstStore);
     const firstLease = CoreWriterLease.claim(firstStore.db, { ownerId: "writer-a", pid: process.pid, host: "test" })!;
-    const stale = createGuardedLegacyStoreAdapter(firstStore, new WriterFenceGuard(firstStore.db, firstLease.authority));
+    const stale = createGuardedSqlitePersistence(firstStore, new WriterFenceGuard(firstStore.db, firstLease.authority));
     const session = stale.sessions.createSession();
     const run = stale.taskRuns.createRun(session.id, "stale writer");
     const attempt = stale.attempts.getActiveAttempt(run.id)!;
@@ -130,7 +114,7 @@ describe("Attempt terminal fencing", () => {
     const writer = CoreWriterLease.claim(store.db, {
       ownerId: "writer-blocked", pid: process.pid, host: "test",
     })!;
-    const adapter = createGuardedLegacyStoreAdapter(store, new WriterFenceGuard(store.db, writer.authority));
+    const adapter = createGuardedSqlitePersistence(store, new WriterFenceGuard(store.db, writer.authority));
     const session = adapter.sessions.createSession();
     const run = adapter.taskRuns.createRun(session.id, "blocked canary candidate");
     const attempt = adapter.attempts.getActiveAttempt(run.id)!;
@@ -155,8 +139,6 @@ describe("Attempt terminal fencing", () => {
       candidateResponseHash: candidate.responseHash, status: "proposed", error: "",
       createdAt: Date.now(), executedAt: null, evaluator: "system", evaluatorModel: "",
     });
-    approve(adapter, attempt.id);
-
     expect(adapter.attempts.settleAttempt({
       attemptId: attempt.id,
       expectedVersion: candidate.attemptVersion,
@@ -180,7 +162,7 @@ describe("Attempt terminal fencing", () => {
     const writer = CoreWriterLease.claim(store.db, {
       ownerId: "writer-review", pid: process.pid, host: "test",
     })!;
-    const adapter = createGuardedLegacyStoreAdapter(store, new WriterFenceGuard(store.db, writer.authority));
+    const adapter = createGuardedSqlitePersistence(store, new WriterFenceGuard(store.db, writer.authority));
     const session = adapter.sessions.createSession();
     const run = adapter.taskRuns.createRun(session.id, "long governance review");
     const attempt = adapter.attempts.getActiveAttempt(run.id)!;
@@ -199,8 +181,6 @@ describe("Attempt terminal fencing", () => {
       status: "proposed", error: "", createdAt: 111, executedAt: null,
       evaluator: "system", evaluatorModel: "",
     });
-    approve(adapter, attempt.id);
-
     expect(adapter.attempts.renewExecutionLease({
       attemptId: attempt.id, ownerId: "executor", leaseToken: lease.token,
       fence: lease.fence, leaseMs: 100, timestamp: 119,
@@ -218,7 +198,7 @@ describe("Attempt terminal fencing", () => {
     const writer = CoreWriterLease.claim(store.db, {
       ownerId: "writer-recovery", pid: process.pid, host: "test",
     })!;
-    const adapter = createGuardedLegacyStoreAdapter(store, new WriterFenceGuard(store.db, writer.authority));
+    const adapter = createGuardedSqlitePersistence(store, new WriterFenceGuard(store.db, writer.authority));
     const session = adapter.sessions.createSession();
     const run = adapter.taskRuns.createRun(session.id, "recover execution authority");
     const attempt = adapter.attempts.getActiveAttempt(run.id)!;
@@ -236,7 +216,7 @@ describe("Attempt terminal fencing", () => {
       (SELECT released_at FROM execution_leases WHERE attempt_id=?) releasedAt,
       (SELECT COUNT(*) FROM run_events WHERE run_id=?) events,
       (SELECT COUNT(*) FROM attempt_transition_audit WHERE attempt_id=?) audit,
-      (SELECT COUNT(*) FROM learning_projection_outbox WHERE run_id=?) outbox`)
+      (SELECT COUNT(*) FROM integration_outbox WHERE aggregate_id=?) outbox`)
       .get(run.id, attempt.id, attempt.id, attempt.id, run.id, attempt.id, run.id);
     const baseline = snapshot();
     const recover = (overrides: Record<string, unknown> = {}) => adapter.attempts.recoverInterruptedAttempt({
@@ -255,7 +235,7 @@ describe("Attempt terminal fencing", () => {
     expect(() => recover({ fence: lease.fence + 1 })).toThrow(/fence mismatch/);
     expect(snapshot()).toEqual(baseline);
     store.db.exec(`CREATE TRIGGER reject_recovery_projection
-      BEFORE INSERT ON learning_projection_outbox BEGIN
+      BEFORE INSERT ON integration_outbox BEGIN
         SELECT RAISE(ABORT, 'recovery projection rejected');
       END`);
     expect(() => recover()).toThrow(/recovery projection rejected/);

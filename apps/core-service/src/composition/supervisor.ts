@@ -154,7 +154,7 @@ export class TaskRunSupervisor {
     if (run.completionGate.passed) return undefined;
     const localFailures = run.completionGate.failures;
     // The deterministic completion gate is a floor for routed substantial work with an execution contract.
-    // Legacy/lightweight runs without a contract retain semantic review so discussion-only work is not forced
+    // Lightweight runs without a contract retain semantic review so discussion-only work is not forced
     // into artificial plan/check continuations.
     if (!run.contract && localFailures.some((failure) => failure.kind === "plan" && failure.key === "plan")) return undefined;
     const toFailure = (failure: (typeof localFailures)[number]): GateFailure => ({
@@ -228,7 +228,7 @@ export class TaskRunSupervisor {
     executionPolicy: ReturnType<typeof effectiveTaskExecutionPolicy>,
   ): SupervisorAudit {
     if (executionPolicy.mode !== "external_action"
-      || !["start_continuation", "request_evidence", "wait_for_runtime"].includes(source.action)) return source;
+      || !["start_continuation", "wait_for_runtime"].includes(source.action)) return source;
     const failure: GateFailure = {
       kind: "approval",
       key: "external_action_attempt_authorization",

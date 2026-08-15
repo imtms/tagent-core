@@ -115,8 +115,6 @@ export const EventConsumerCursorSchema = Type.Object({
   generation: Type.Integer({ minimum: 1 }), acknowledgedSequence: Type.Integer({ minimum: 0 }),
   settledAcknowledgedSequence: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
   finalAcknowledgedSequence: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
-  /** @deprecated Use settledAcknowledgedSequence. */
-  terminalAcknowledgedSequence: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
   claimedAt: IsoDateTimeSchema, updatedAt: IsoDateTimeSchema,
 });
 export type EventConsumerCursor = Static<typeof EventConsumerCursorSchema>;

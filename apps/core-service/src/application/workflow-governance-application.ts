@@ -18,7 +18,7 @@ export interface LearningSettingsUpdate {
 }
 
 /**
- * Core-owned compatibility facade for all workflow and feature-policy effects.
+ * Core-owned application facade for all workflow and feature-policy effects.
  * Learning remains available for queries and proposal/approval preparation only.
  */
 export class CoreWorkflowGovernanceApplication {

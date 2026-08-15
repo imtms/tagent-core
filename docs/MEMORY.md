@@ -95,7 +95,7 @@ Before enabling Memory in production:
 
 For shutdown verification, stop Core under a controlled Memory workload and confirm that PostgreSQL connections return to baseline without `Cannot use a pool after calling end on the pool`, `Memory capture tick failed`, or unhandled-rejection logs. A slow shutdown should be investigated as an in-flight worker operation rather than bypassing the drain barrier.
 
-Back up Memory consistently with the SQLite control plane before an upgrade. A SQLite rollback without matching Memory/Cold state may restore obsolete authority or references.
+Back up Memory consistently with the SQLite control plane before release or storage maintenance. Restore SQLite and Memory/Cold state only as one matching recovery set.
 
 ## Relationship to Learning
 

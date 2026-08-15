@@ -1,153 +1,35 @@
 import { createRequestId } from "./id";
-import { createCoreTransport, ConsoleDecode } from "@tagent/core-client";
+import { ConsoleDecode } from "@tagent/core-client";
 import {
   decodeAbi,
+  ArtifactContentResponseSchema,
+  CommandResponseSchema,
   EventConsumerCursorSchema,
-  SuccessEnvelopeSchema,
-  TaskRunEventSchema,
-  type ConsoleV1,
+  OperatorInboxItemResponseSchema,
+  OperatorInboxListResponseSchema,
+  OperatorInboxMutationResponseSchema,
+  ProfileOperationResponseSchema,
+  OperatorSessionListResponseSchema,
+  OperatorSessionTaskRunListResponseSchema,
+  OperatorSessionSettingsResponseSchema,
+  SessionSchema,
+  SubmissionResponseSchema,
+  TaskRunSchema,
+  TranscriptResponseSchema,
+  type OperatorInboxItem,
 } from "@tagent/abi";
+import { createAdminApi } from "./admin-api";
+import { downloadArtifact, request } from "./api-transport";
+import type { EventConsumerCursor, GateProfile, Session, SessionInboxItem, TaskRun } from "./api-types";
 import { createGoalApi } from "./goal-api";
 import { createSkillApi } from "./skill-api";
+export { authenticatedCoreRequest, downloadArtifact } from "./api-transport";
+export { subscribe } from "./event-stream";
+export type * from "./api-types";
 export type { SkillRevision, SkillSummary } from "./skill-api";
 export type { WorkspaceGoal, WorkspaceGoalSummary, WorkspaceGoalDefinition, WorkspaceGoalRoadmap, WorkspaceGoalRoadmapItem, WorkspaceGoalDecision, WorkspaceGoalTaskRunStart } from "./goal-api";
-export type Session = ConsoleV1.ConsoleSession;
-export type GateProfile = "off" | "relaxed" | "strict";
-export type SessionInputAnalysis = ConsoleV1.ConsoleSessionInputAnalysis;
-export type TaskRunContract = ConsoleV1.ConsoleTaskRunContract;
-export type SessionInboxItem = ConsoleV1.ConsoleSessionInboxItem;
-export type Message = ConsoleV1.ConsoleMessage;
-export type ContextManifestItem = ConsoleV1.ConsoleContextManifestItem;
-export type ContextManifest = ConsoleV1.ConsoleContextManifest;
-export type PlanItem = ConsoleV1.ConsolePlanItem;
-export type RunCheck = ConsoleV1.ConsoleRunCheck;
-export type Artifact = ConsoleV1.ConsoleArtifact;
-export type ArtifactContent = ConsoleV1.ConsoleArtifactContent;
-export type UserInputField = ConsoleV1.ConsoleUserInputField;
-export type UserInputRequest = ConsoleV1.ConsoleUserInputRequest;
-export type TaskRun = ConsoleV1.ConsoleTaskRun;
-export type TaskRunSummary = ConsoleV1.ConsoleTaskRunSummary;
-export type EventConsumerCursor = ConsoleV1.ConsoleEventConsumerCursor;
-export type RunEvent = ConsoleV1.ConsoleRunEvent;
-export type TranscriptItem = ConsoleV1.ConsoleTranscriptItem;
-export type LearningFeatureState = ConsoleV1.ConsoleLearningFeatureState;
-export type RuntimeStatus = ConsoleV1.ConsoleRuntimeStatus;
-export type WorkflowRevision = ConsoleV1.ConsoleWorkflowRevision;
-export type WorkflowDefinition = ConsoleV1.ConsoleWorkflowDefinition;
-export type AutonomyApproval = ConsoleV1.ConsoleAutonomyApproval;
-export type LearningCenterData = ConsoleV1.ConsoleLearningCenterData;
-export type MemoryKind = ConsoleV1.ConsoleMemoryKind;
-export type MemoryTier = ConsoleV1.ConsoleMemoryTier;
-export type MemoryStatus = ConsoleV1.ConsoleMemoryStatus;
-export type MemoryScope = ConsoleV1.ConsoleMemoryScope;
-export type MemorySourceRef = ConsoleV1.ConsoleMemorySourceRef;
-export type MemoryRecord = ConsoleV1.ConsoleMemoryRecord;
-export type PreferenceRecord = ConsoleV1.ConsolePreferenceRecord;
-export type WarmMemory = ConsoleV1.ConsoleWarmMemory;
-export type TopicDescriptor = ConsoleV1.ConsoleTopicDescriptor;
-export type ColdTopic = ConsoleV1.ConsoleColdTopic;
-export type CaptureJob = ConsoleV1.ConsoleCaptureJob;
-export type MemoryStatusResult = ConsoleV1.ConsoleMemoryStatusResult;
-export type ReindexJob = ConsoleV1.ConsoleReindexJob;
-export type CoreMemorySnapshot = ConsoleV1.ConsoleCoreMemorySnapshot;
-export type MemoryExport = ConsoleV1.ConsoleMemoryExport;
-export type MemoryCard = ConsoleV1.ConsoleMemoryCard;
-export type RecallResult = ConsoleV1.ConsoleRecallResult;
-const coreClient = createCoreTransport();
-const configuredCoreOrigin = configuredOrigin(import.meta.env.VITE_TAGENT_CORE_ORIGIN);
-const oidcTokenStorageKey = "tagent.oidc.access_token";
 
-function configuredOrigin(value: string | undefined): string {
-  const candidate = value?.trim();
-  if (!candidate) return "";
-  const parsed = new URL(candidate);
-  if (!["http:", "https:"].includes(parsed.protocol)
-    || parsed.origin === "null"
-    || parsed.username
-    || parsed.password
-    || parsed.pathname !== "/"
-    || parsed.search
-    || parsed.hash) {
-    throw new Error("VITE_TAGENT_CORE_ORIGIN must be an http(s) origin without credentials, path, query, or fragment");
-  }
-  return parsed.origin;
-}
-
-function oidcAccessToken(): string | undefined {
-  try {
-    return globalThis.sessionStorage?.getItem(oidcTokenStorageKey)?.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export interface AuthenticatedCoreRequestOptions {
-  origin?: string;
-  accessToken?: string;
-}
-
-export function authenticatedCoreRequest(
-  pathname: string,
-  init: RequestInit = {},
-  options: AuthenticatedCoreRequestOptions = {},
-): { url: string; init: RequestInit } {
-  const origin = options.origin === undefined ? configuredCoreOrigin : configuredOrigin(options.origin);
-  const accessToken = options.accessToken === undefined ? oidcAccessToken() : options.accessToken.trim();
-  const headers = new Headers(init.headers);
-  if (accessToken && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${accessToken}`);
-  return {
-    url: origin ? new URL(pathname, `${origin}/`).toString() : pathname,
-    init: { ...init, credentials: "omit", headers },
-  };
-}
-
-async function authenticatedCoreFetch(
-  pathname: string,
-  init: RequestInit = {},
-  options: AuthenticatedCoreRequestOptions = {},
-): Promise<Response> {
-  const prepared = authenticatedCoreRequest(pathname, init, options);
-  const response = await fetch(prepared.url, prepared.init);
-  if (!response.ok) throw new Error(`Core request failed with HTTP ${response.status}`);
-  return response;
-}
-
-async function request<T>(url: string, init: RequestInit | undefined, decode: (payload: unknown) => T | Promise<T>): Promise<T> {
-  const needsRunControlRequestId = init?.method === "POST" && init.body == null && /^\/api\/v1\/console\/task-runs\/[^/]+\/(cancel|resume|retry-launch)$/.test(url);
-  const headers = new Headers(init?.headers);
-  if (init?.body != null && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  const prepared = authenticatedCoreRequest(url, { ...init, headers });
-  return coreClient.request(prepared.url, {
-    ...prepared.init,
-    decode: (payload) => decode(decodeAbi(SuccessEnvelopeSchema, payload).data),
-    ...(needsRunControlRequestId ? { idempotent: true, json: {}, requestId: createRequestId() } : {}),
-  });
-}
-
-export async function downloadArtifact(
-  runId: string,
-  artifactId: string,
-  filename: string,
-  options: AuthenticatedCoreRequestOptions = {},
-): Promise<void> {
-  const response = await authenticatedCoreFetch(
-    `/api/v1/console/task-runs/${runId}/artifacts/${encodeURIComponent(artifactId)}/download`,
-    {},
-    options,
-  );
-  const objectUrl = URL.createObjectURL(await response.blob());
-  const anchor = document.createElement("a");
-  try {
-    anchor.href = objectUrl;
-    anchor.download = filename.trim() || "artifact";
-    anchor.hidden = true;
-    document.body.append(anchor);
-    anchor.click();
-  } finally {
-    anchor.remove();
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
-  }
-}
+const webOrigin = { surface: "web" as const, gatewayActorId: "local-web", sourceId: "web-console" };
 
 async function decodeEventConsumerClaim(payload: unknown): Promise<EventConsumerCursor> {
   const cursor = decodeAbi(EventConsumerCursorSchema, (payload as { cursor?: unknown })?.cursor);
@@ -156,142 +38,215 @@ async function decodeEventConsumerClaim(payload: unknown): Promise<EventConsumer
     consumerId: cursor.consumerId,
     generation: cursor.generation,
     ackedSeq: cursor.acknowledgedSequence,
-    terminalAckedSeq: cursor.terminalAcknowledgedSequence,
     claimedAt: Date.parse(cursor.claimedAt),
     updatedAt: Date.parse(cursor.updatedAt),
   };
 }
 
+function sessionView(value: {
+  id: string; title: string; modelId: string; reasoningEffort: Session["reasoningEffort"];
+  createdAt: string; updatedAt: string; latestTaskRunStatus: string | null; latestTaskRunPhase: string | null;
+}): Session {
+  return {
+    id: value.id, title: value.title, modelId: value.modelId, reasoningEffort: value.reasoningEffort,
+    createdAt: Date.parse(value.createdAt), updatedAt: Date.parse(value.updatedAt),
+    latestRunStatus: value.latestTaskRunStatus, latestRunPhase: value.latestTaskRunPhase,
+  };
+}
+
+function taskRunView(value: ReturnType<typeof decodeCurrentTaskRun>): TaskRun {
+  const userInputRequests = value.pendingInteractions.userInputs.map((item) => ({
+    id: item.id, runId: item.taskRunId, attempt: item.attempt, prompt: item.prompt, fields: item.fields,
+    status: item.status, response: item.response, requestedAt: Date.parse(item.requestedAt),
+    submittedAt: item.submittedAt === null ? null : Date.parse(item.submittedAt),
+  }));
+  const supervision = value.supervision as TaskRun["supervision"];
+  return {
+    id: value.id, sessionId: value.sessionId, requestId: value.submissionId, status: value.status, phase: value.phase,
+    goal: value.goal, modelId: value.modelId, reasoningEffort: value.reasoningEffort,
+    contract: value.contract ? {
+      ...value.contract,
+      sourceInboxIds: value.contract.sourceSubmissionIds,
+      parentRunId: value.contract.parentTaskRunId,
+      workspaceGoal: value.contract.workspaceGoal ? { ...value.contract.workspaceGoal, attachedAt: Date.parse(value.contract.workspaceGoal.attachedAt) } : null,
+    } as TaskRun["contract"] : null,
+    gateRequired: true, blockedReason: value.blockedReason, lastEventSeq: value.lastEventSequence,
+    attempt: value.attempt, resumedAt: value.resumedAt === null ? null : Date.parse(value.resumedAt),
+    createdAt: Date.parse(value.createdAt), updatedAt: Date.parse(value.updatedAt), completedAt: value.completedAt === null ? null : Date.parse(value.completedAt),
+    usage: value.usage, transcriptCount: value.transcriptCount,
+    checkpoint: value.checkpoint ? {
+      runId: value.checkpoint.taskRunId, attempt: value.checkpoint.attempt, active: value.checkpoint.active,
+      assistantPartial: value.checkpoint.assistantPartial,
+      currentTool: value.checkpoint.currentTool ? {
+        toolCallId: value.checkpoint.currentTool.toolCallId, toolName: value.checkpoint.currentTool.toolName,
+        ...(value.checkpoint.currentTool.startedAt === undefined ? {} : { startedAt: Date.parse(value.checkpoint.currentTool.startedAt) }),
+        ...(value.checkpoint.currentTool.lastActivityAt === undefined ? {} : { lastActivityAt: Date.parse(value.checkpoint.currentTool.lastActivityAt) }),
+      } : null,
+      lastEventSeq: value.checkpoint.lastEventSequence, lastTranscriptSeq: value.checkpoint.lastTranscriptSequence,
+      updatedAt: Date.parse(value.checkpoint.updatedAt),
+    } : null,
+    continuations: value.continuations.map((item) => ({
+      ...item, runId: value.id, notBefore: Date.parse(item.notBefore), createdAt: Date.parse(item.createdAt),
+      startedAt: item.startedAt === null ? null : Date.parse(item.startedAt), completedAt: item.completedAt === null ? null : Date.parse(item.completedAt),
+      leaseOwner: "", leaseUntil: null, heartbeatAt: null,
+    })),
+    plan: value.plan, checks: value.checks.map((item) => ({
+      ...item, observedAt: item.observedAt === null ? null : Date.parse(item.observedAt),
+    })),
+    artifacts: value.artifacts.map(({ id, title, kind, uri }) => ({ id, title, kind, uri })),
+    completionGate: value.completionGate,
+    supervision: {
+      latestDecision: supervision.latestDecision ?? null,
+      latestGates: supervision.latestGates ?? [],
+      progress: supervision.progress ?? null,
+      approvalRequests: supervision.approvalRequests ?? value.pendingInteractions.approvals.map((item) => ({
+        id: item.id, decisionId: item.id, actionType: item.actionType, targetType: item.targetType, targetId: item.targetId,
+        reason: item.reason, metadata: {}, status: item.status, requestedAt: Date.parse(item.requestedAt),
+        resolvedAt: item.resolvedAt === null ? null : Date.parse(item.resolvedAt), resolvedBy: item.resolvedBy, resolution: item.resolution,
+      })),
+      latestContextManifest: supervision.latestContextManifest ?? null,
+    },
+    userInputRequests, pendingUserInput: userInputRequests[0] ?? null,
+    launchRetryable: value.launchRetryable, resumable: value.resumable,
+  };
+}
+
+function decodeCurrentTaskRun(payload: unknown) { return decodeAbi(TaskRunSchema, payload); }
+
+function loadTaskRun(runId: string): Promise<TaskRun> {
+  return request(`/api/v1/task-runs/${encodeURIComponent(runId)}`, undefined, (payload) => taskRunView(decodeCurrentTaskRun(payload)));
+}
+
+async function sendTaskRunCommand(runId: string, type: string, payload: Record<string, unknown>): Promise<TaskRun> {
+  const commandId = createRequestId();
+  const receipt = await request(`/api/v1/task-runs/${encodeURIComponent(runId)}/commands`, {
+    method: "POST",
+    body: JSON.stringify({ commandId, expectedAttemptId: null, type, payload, origin: webOrigin }),
+  }, (value) => decodeAbi(CommandResponseSchema.properties.data, value).receipt);
+  const resultingRunId = typeof receipt.result?.taskRunId === "string" ? receipt.result.taskRunId : runId;
+  return loadTaskRun(resultingRunId);
+}
+
+const inboxCollectionRevisions = new Map<string, number>();
+
+function inboxItemView(item: OperatorInboxItem): SessionInboxItem {
+  return {
+    id: item.id, sessionId: item.sessionId, content: item.content, status: item.status, decision: item.decision,
+    runId: item.runId, position: item.position, createdAt: Date.parse(item.createdAt), updatedAt: Date.parse(item.updatedAt),
+    analysis: {
+      summary: item.summary, intent: item.intent, targetRunId: item.targetRunId, priority: item.priority,
+      urgency: item.urgency, relation: item.relation, acceptanceCriteria: item.acceptanceCriteria,
+      confidence: item.confidence, reason: item.reason,
+    },
+  };
+}
+
+function inboxMutationHeaders(sessionId: string, includeRevision = true): Headers {
+  const headers = new Headers({ "Idempotency-Key": createRequestId() });
+  if (includeRevision) headers.set("If-Match", `"r${inboxCollectionRevisions.get(sessionId) ?? 1}"`);
+  return headers;
+}
+
+async function listInbox(sessionId: string): Promise<SessionInboxItem[]> {
+  return request(`/api/v1/operator/sessions/${encodeURIComponent(sessionId)}/inbox?limit=200`, undefined, (payload) => {
+    const data = decodeAbi(OperatorInboxListResponseSchema.properties.data, payload);
+    inboxCollectionRevisions.set(sessionId, data.collectionRevision);
+    return data.items.filter((item) => item.status === "queued").map(inboxItemView);
+  });
+}
+
+async function mutateInbox(
+  sessionId: string,
+  suffix: string,
+  method: "PUT" | "PATCH" | "POST" | "DELETE",
+  body?: Record<string, unknown>,
+): Promise<SessionInboxItem[]> {
+  return request(`/api/v1/operator/sessions/${encodeURIComponent(sessionId)}/inbox${suffix}`, {
+    method, headers: inboxMutationHeaders(sessionId), ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }, (payload) => {
+    const schema = suffix.includes("/order") || suffix.includes("/merge") || method === "DELETE"
+      ? OperatorInboxMutationResponseSchema.properties.data
+      : OperatorInboxItemResponseSchema.properties.data;
+    const data = decodeAbi(schema, payload);
+    inboxCollectionRevisions.set(sessionId, data.collectionRevision);
+    const items = "items" in data ? data.items : [data.item];
+    return items.filter((item) => item.status === "queued").map(inboxItemView);
+  });
+}
+
+async function runInboxOperation(sessionId: string, path: string): Promise<TaskRun> {
+  const operation = await request(path, { method: "POST", headers: inboxMutationHeaders(sessionId, false) }, (payload) =>
+    decodeAbi(ProfileOperationResponseSchema.properties.data, payload).operation);
+  if (operation.status !== "succeeded" || typeof operation.result?.taskRunId !== "string") {
+    throw new Error(String(operation.error?.code ?? `Inbox operation ${operation.status}`));
+  }
+  return loadTaskRun(operation.result.taskRunId);
+}
+
+async function updateSessionSettings(
+  sessionId: string,
+  settings: Partial<Pick<Session, "title" | "modelId" | "reasoningEffort">>,
+): Promise<Session> {
+  const path = `/api/v1/operator/sessions/${encodeURIComponent(sessionId)}/settings`;
+  const current = await request(path, undefined, (payload) =>
+    decodeAbi(OperatorSessionSettingsResponseSchema.properties.data, payload).settings);
+  const headers = new Headers({ "Idempotency-Key": createRequestId(), "If-Match": `"r${current.revision}"` });
+  await request(path, { method: "PATCH", headers, body: JSON.stringify(settings) }, (payload) =>
+    decodeAbi(OperatorSessionSettingsResponseSchema.properties.data, payload).settings);
+  return request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, undefined, (payload) => sessionView(decodeAbi(SessionSchema, payload)));
+}
+
 export const api = {
-  status: () => request("/api/v1/admin/config/status", undefined, ConsoleDecode.runtimeStatus),
-  learningSettings: () => request("/api/v1/admin/console/learning/settings", undefined, ConsoleDecode.learningFeatureState),
-  updateLearningSettings: (input:Partial<Pick<LearningFeatureState,"memoryEnabled"|"learningEnabled"|"autoExecutionEnabled">>)=>request("/api/v1/admin/console/learning/settings",{method:"PATCH",body:JSON.stringify({...input,reason:"web_ui"})},ConsoleDecode.learningFeatureState),
-  sessions: () => request("/api/v1/console/sessions", undefined, ConsoleDecode.sessions),
-  createSession: (title = "New workspace", requestId = createRequestId()) => request("/api/v1/console/sessions", { method: "POST", body: JSON.stringify({ title, requestId }) }, ConsoleDecode.session),
-  renameSession: (sessionId: string, title: string) => request(`/api/v1/console/sessions/${sessionId}`, { method: "PATCH", body: JSON.stringify({ title }) }, ConsoleDecode.session),
-  updateSession: (sessionId: string, settings: Partial<Pick<Session, "title" | "modelId" | "reasoningEffort">>) => request(`/api/v1/console/sessions/${sessionId}`, { method: "PATCH", body: JSON.stringify(settings) }, ConsoleDecode.session),
+  ...createAdminApi(request),
+  sessions: () => request("/api/v1/operator/sessions?limit=200", undefined, (payload) =>
+    decodeAbi(OperatorSessionListResponseSchema.properties.data, payload).items.map((item) => sessionView({
+      ...item, latestTaskRunStatus: item.latestTaskRunStatus, latestTaskRunPhase: item.latestTaskRunPhase,
+    }))),
+  createSession: (title = "New workspace", requestId = createRequestId()) => request("/api/v1/sessions", {
+    method: "POST", headers: { "Idempotency-Key": requestId }, body: JSON.stringify({ title, origin: webOrigin }),
+  }, (payload) => sessionView(decodeAbi(SessionSchema, payload))),
+  renameSession: (sessionId: string, title: string) => updateSessionSettings(sessionId, { title }),
+  updateSession: updateSessionSettings,
   messages: (sessionId: string, limit = 80, beforeId?: number) => request(`/api/v1/console/sessions/${sessionId}/messages?limit=${limit}${beforeId ? `&beforeId=${beforeId}` : ""}`, undefined, ConsoleDecode.messages),
-  runs: (sessionId: string, limit = 50) => request(`/api/v1/console/sessions/${sessionId}/task-runs?limit=${limit}`, undefined, ConsoleDecode.taskRunSummaries),
-  latestRun: (sessionId: string) => request(`/api/v1/console/sessions/${sessionId}/task-run`, undefined, ConsoleDecode.taskRunOrNull),
-  run: (runId: string) => request(`/api/v1/console/task-runs/${runId}`, undefined, ConsoleDecode.taskRun),
+  runs: (sessionId: string, limit = 50) => request(`/api/v1/operator/sessions/${encodeURIComponent(sessionId)}/task-runs?limit=${limit}`, undefined, (payload) =>
+    decodeAbi(OperatorSessionTaskRunListResponseSchema.properties.data, payload).items.map((item) => ({
+      id: item.id, goal: item.goalSummary, status: item.status, phase: item.phase, attempt: item.attempt,
+      createdAt: Date.parse(item.createdAt), updatedAt: Date.parse(item.updatedAt),
+    }))),
+  run: loadTaskRun,
   contextManifests: (runId: string, limit = 20) => request(`/api/v1/console/task-runs/${runId}/context-manifests?limit=${limit}`, undefined, ConsoleDecode.contextManifests),
-  transcriptView: (runId: string, after?: number, limit = 200) => request(`/api/v1/console/task-runs/${runId}/transcript?limit=${limit}${after === undefined ? "" : `&after=${after}`}`, undefined, ConsoleDecode.transcriptItems),
-  artifactContent: (runId: string, artifactId: string) => request(`/api/v1/console/task-runs/${runId}/artifacts/${encodeURIComponent(artifactId)}/content`, undefined, ConsoleDecode.artifactContent),
+  transcriptView: (runId: string, after?: number, limit = 200) => request(`/api/v1/task-runs/${encodeURIComponent(runId)}/transcript?limit=${limit}${after === undefined ? "" : `&after=${after}`}`, undefined, (payload) =>
+    decodeAbi(TranscriptResponseSchema.properties.data, payload).items.map((item) => ({
+      ...item, seq: item.sequence, index: item.partIndex, createdAt: Date.parse(item.occurredAt),
+    }))),
+  artifactContent: (runId: string, artifactId: string) => request(`/api/v1/task-runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}/content`, undefined, (payload) => {
+    const artifact = decodeAbi(ArtifactContentResponseSchema.properties.data, payload).artifact;
+    return { id: artifact.id, title: artifact.title, kind: artifact.kind, uri: artifact.uri, content: artifact.content, format: artifact.format, bytes: artifact.bytes, source: artifact.source };
+  }),
   downloadArtifact: (runId: string, artifactId: string, filename: string) => downloadArtifact(runId, artifactId, filename),
-  send: (sessionId: string, content: string, gateProfile: GateProfile) => request(`/api/v1/console/sessions/${sessionId}/messages`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId(), gateProfile }) }, ConsoleDecode.submissionResult),
-  inbox: (sessionId: string) => request(`/api/v1/console/sessions/${sessionId}/inbox`, undefined, ConsoleDecode.inboxItems),
-  updateInbox: (sessionId: string, itemId: string, content: string) => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}`, { method: "PATCH", body: JSON.stringify({ content }) }, ConsoleDecode.inboxItem),
-  reorderInbox: (sessionId: string, itemIds: string[]) => request(`/api/v1/console/sessions/${sessionId}/inbox/order`, { method: "PUT", body: JSON.stringify({ itemIds }) }, ConsoleDecode.inboxItems),
-  startInbox: (sessionId: string, itemId: string) => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}/start`, { method: "POST" }, ConsoleDecode.startedRun),
+  send: async (sessionId: string, content: string, gateProfile: GateProfile) => {
+    const idempotencyKey = createRequestId();
+    const receipt = await request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/submissions`, {
+      method: "POST", headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({ content, gateProfile, origin: webOrigin }),
+    }, (payload) => decodeAbi(SubmissionResponseSchema.properties.data, payload).receipt);
+    return { run: receipt.taskRunId ? await loadTaskRun(receipt.taskRunId) : null };
+  },
+  inbox: listInbox,
+  updateInbox: (sessionId: string, itemId: string, content: string) => mutateInbox(sessionId, `/${encodeURIComponent(itemId)}`, "PATCH", { content }),
+  reorderInbox: (sessionId: string, itemIds: string[]) => mutateInbox(sessionId, "/order", "PUT", { itemIds }),
+  startInbox: async (sessionId: string, itemId: string) => ({ status: "started" as const, run: await runInboxOperation(sessionId, `/api/v1/operator/sessions/${encodeURIComponent(sessionId)}/inbox/${encodeURIComponent(itemId)}/start`) }),
   ...createGoalApi(request),
   ...createSkillApi(request),
-  deleteInbox: (sessionId: string, itemId: string) => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}`, { method: "DELETE" }, ConsoleDecode.ok),
-  decideInbox: (sessionId: string, itemId: string, decision: "pending" | "defer") => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}/decision`, { method: "POST", body: JSON.stringify({ decision }) }, ConsoleDecode.ok),
-  mergeInbox: (sessionId: string, itemId: string, targetId: string) => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}/merge`, { method: "POST", body: JSON.stringify({ targetId }) }, ConsoleDecode.ok),
-  cancel: (runId: string) => request(`/api/v1/console/task-runs/${runId}/cancel`, { method: "POST" }, ConsoleDecode.jsonObject),
-  steer: (runId: string, content: string) => request(`/api/v1/console/task-runs/${runId}/steer`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId() }) }, ConsoleDecode.jsonObject),
-  resume: (runId: string) => request(`/api/v1/console/task-runs/${runId}/resume`, { method: "POST" }, ConsoleDecode.taskRun),
-  submitUserInput: (requestId: string, response: Record<string, string>) => request(`/api/v1/console/user-input-requests/${requestId}/submit`, { method: "POST", body: JSON.stringify({ response }) }, ConsoleDecode.taskRun),
-  approveRunApproval: (approvalId: string) => request(`/api/v1/console/approval-requests/${approvalId}/approve`, { method: "POST" }, ConsoleDecode.taskRun),
-  rejectRunApproval: (approvalId: string) => request(`/api/v1/console/approval-requests/${approvalId}/reject`, { method: "POST" }, ConsoleDecode.taskRun),
+  deleteInbox: (sessionId: string, itemId: string) => mutateInbox(sessionId, `/${encodeURIComponent(itemId)}`, "DELETE"),
+  decideInbox: (sessionId: string, itemId: string, decision: "pending" | "defer") => mutateInbox(sessionId, `/${encodeURIComponent(itemId)}/decision`, "POST", { decision }),
+  mergeInbox: (sessionId: string, itemId: string, targetId: string) => mutateInbox(sessionId, `/${encodeURIComponent(itemId)}/merge`, "POST", { targetId }),
+  cancel: (runId: string) => sendTaskRunCommand(runId, "task_run.cancel", { reason: "Stopped from the Web Console" }),
+  resume: (runId: string) => sendTaskRunCommand(runId, "task_run.resume", { reason: "Resumed from the Web Console" }),
+  submitUserInput: (runId: string, requestId: string, response: Record<string, string>) => sendTaskRunCommand(runId, "task_run.submit_user_input", { requestId, response }),
+  resolveRunApproval: (runId: string, approvalRequestId: string, decision: "approved" | "rejected") => sendTaskRunCommand(runId, "task_run.resolve_approval", { approvalRequestId, decision, resolution: `${decision} from the Web Console` }),
   requestParallelStart: (sessionId: string, itemId: string) => request(`/api/v1/console/sessions/${sessionId}/inbox/${itemId}/parallel-start-request`, { method: "POST", body: JSON.stringify({ actor: "session_governor", reason: "Start this queued related task before the parent TaskRun completes" }) }, ConsoleDecode.autonomyApproval),
-  retryLaunch: (runId: string) => request(`/api/v1/console/task-runs/${runId}/retry-launch`, { method: "POST" }, ConsoleDecode.startedRun),
+  retryLaunch: async (runId: string) => ({ status: "started" as const, run: await runInboxOperation((await loadTaskRun(runId)).sessionId, `/api/v1/operator/task-runs/${encodeURIComponent(runId)}/retry-launch`) }),
   claimConsumer: (runId: string, consumerId: string) => request(`/api/v1/task-runs/${runId}/event-consumers/${encodeURIComponent(consumerId)}/claim`, { method: "POST" }, decodeEventConsumerClaim),
   ackConsumer: (runId: string, consumerId: string, generation: number, seq: number) => request(`/api/v1/task-runs/${runId}/event-consumers/${encodeURIComponent(consumerId)}/ack`, { method: "POST", body: JSON.stringify({ generation, sequence: seq }) }, ConsoleDecode.jsonObject),
-  memoryJobs: (scope: MemoryScope) => request("/api/v1/admin/memory/jobs", { method: "POST", body: JSON.stringify({ scopes: [scope], limit: 100 }) }, ConsoleDecode.captureJobs),
-  memoryStatus: (scope: MemoryScope) => request("/api/v1/admin/memory/status", { method: "POST", body: JSON.stringify({ scopes: [scope] }) }, ConsoleDecode.memoryStatus),
-  memoryExport: (scope: MemoryScope, limit = 200) => request("/api/v1/admin/memory/export", { method: "POST", body: JSON.stringify({ scope, limit }) }, ConsoleDecode.memoryExport),
-  memoryRecall: (scope: MemoryScope, cue: string, kinds?: MemoryKind[]) => request("/api/v1/admin/memory/recall-console", { method: "POST", body: JSON.stringify({ scopes: [scope], cue, kinds, maxCards: 12, maxColdTopics: 4 }) }, ConsoleDecode.recallResult),
-  memoryCapture: (scope: MemoryScope, content: string) => request("/api/v1/admin/memory/capture", { method: "POST", body: JSON.stringify({ scope, content, idempotencyKey: createRequestId() }) }, ConsoleDecode.captureJobId),
-  memoryReindex: (scope:MemoryScope)=>request("/api/v1/admin/memory/reindex",{method:"POST",body:JSON.stringify({scope})},ConsoleDecode.reindexJob),
-  memoryReindexJobs: (scope:MemoryScope)=>request("/api/v1/admin/memory/reindex/jobs",{method:"POST",body:JSON.stringify({scopes:[scope],limit:20})},ConsoleDecode.reindexJobs),
-  memoryGovern: (scope:MemoryScope,id:string,action:"approve"|"reject"|"correct"|"resolve",options:Record<string,unknown>={})=>request("/api/v1/admin/memory/govern",{method:"POST",body:JSON.stringify({scope,id,action,...options})},ConsoleDecode.jsonObject),
-  memoryFeedback: (scope:MemoryScope,recordId:string,signal:string)=>request("/api/v1/admin/memory/feedback",{method:"POST",body:JSON.stringify({scope,recordId,signal})},ConsoleDecode.jsonObject),
-  memoryCoreSnapshot: (scope:MemoryScope,options:Record<string,unknown>={})=>request("/api/v1/admin/memory/core-snapshot",{method:"POST",body:JSON.stringify({scope,...options})},ConsoleDecode.coreMemorySnapshot),
-  memoryRestore: (scope:MemoryScope,ids?:string[],topicIds?:string[])=>request("/api/v1/admin/memory/restore",{method:"POST",body:JSON.stringify({scope,ids,topicIds})},ConsoleDecode.jsonObject),
-  memoryForget: (scope: MemoryScope, ids?: string[], topicIds?: string[]) => request("/api/v1/admin/memory/forget", { method: "POST", body: JSON.stringify({ scope, ids, topicIds }) }, ConsoleDecode.forgetResult),
-  learningCenter: (sessionId:string)=>request(`/api/v1/admin/sessions/${sessionId}/learning-center`,undefined,ConsoleDecode.learningCenter),
-  requestWorkflowActivation: (id:string,revisionId?:string)=>request(`/api/v1/admin/workflows/${id}/activation-request`,{method:"POST",body:JSON.stringify({revisionId,actor:"learning_center",reason:"Activate this workflow for future runs"})},ConsoleDecode.autonomyApproval),
-  activateWorkflow: (id:string,approvalId:string,revisionId?:string)=>request(`/api/v1/admin/workflows/${id}/activate`,{method:"POST",body:JSON.stringify({approvalId,revisionId})},ConsoleDecode.workflowDefinition),
-  suspendWorkflow: (id:string)=>request(`/api/v1/admin/workflows/${id}/suspend`,{method:"POST",body:JSON.stringify({reason:"learning_center"})},ConsoleDecode.workflowDefinition),
-  forgetWorkflow: (id:string)=>request(`/api/v1/admin/workflows/${id}`,{method:"DELETE",body:JSON.stringify({reason:"learning_center",gracePeriodMs:2_592_000_000})},ConsoleDecode.ok),
-  restoreWorkflow: (id:string)=>request(`/api/v1/admin/workflows/${id}/restore`,{method:"POST",body:"{}"},ConsoleDecode.workflowDefinition),
-  approveWorkflowProposal: (id:string)=>request(`/api/v1/admin/workflow-proposals/${id}/approve`,{method:"POST",body:JSON.stringify({actor:"learning_center"})},ConsoleDecode.jsonObject),
-  rejectWorkflowProposal: (id:string)=>request(`/api/v1/admin/workflow-proposals/${id}/reject`,{method:"POST",body:JSON.stringify({actor:"learning_center"})},ConsoleDecode.jsonObject),
-  requestWorkflowProposalApplication: (id:string)=>request(`/api/v1/admin/workflow-proposals/${id}/application-request`,{method:"POST",body:JSON.stringify({actor:"learning_center",reason:"Apply approved proposal as a candidate revision"})},ConsoleDecode.autonomyApproval),
-  applyWorkflowProposal: (id:string,approvalId:string)=>request(`/api/v1/admin/workflow-proposals/${id}/apply`,{method:"POST",body:JSON.stringify({actor:"learning_center",approvalId})},ConsoleDecode.jsonObject),
-  approveAutonomy: (id:string)=>request(`/api/v1/admin/autonomy-approvals/${id}/approve`,{method:"POST",body:JSON.stringify({actor:"learning_center_human",reason:"Reviewed evidence, impact, diff and rollback"})},ConsoleDecode.autonomyApproval),
-  rejectAutonomy: (id:string)=>request(`/api/v1/admin/autonomy-approvals/${id}/reject`,{method:"POST",body:JSON.stringify({actor:"learning_center_human",reason:"Rejected after human review"})},ConsoleDecode.autonomyApproval),
-  revokeAutonomy: (id:string)=>request(`/api/v1/admin/autonomy-approvals/${id}/revoke`,{method:"POST",body:JSON.stringify({actor:"learning_center_human",reason:"Approval withdrawn before execution"})},ConsoleDecode.autonomyApproval),
-  executeAutonomy: (id:string)=>request(`/api/v1/admin/autonomy-approvals/${id}/execute`,{method:"POST",body:JSON.stringify({actor:"learning_center_human"})},ConsoleDecode.jsonObject),
-  setLearningPolicy: (runId:string,policy:"allow"|"metadata_only"|"deny")=>request(`/api/v1/admin/task-runs/${runId}/learning-policy`,{method:"POST",body:JSON.stringify({policy,reason:"learning_center"})},ConsoleDecode.jsonObject),
-  setWorkflowApplication: (bindingId:string,status:"exposed"|"adopted"|"partial"|"rejected")=>request(`/api/v1/admin/workflow-bindings/${bindingId}/application`,{method:"POST",body:JSON.stringify({status})},ConsoleDecode.jsonObject),
-  runWorkflowDistiller: ()=>request("/api/v1/admin/workflow-distillation/run",{method:"POST",body:JSON.stringify({owner:"learning_center"})},ConsoleDecode.jsonObject),
-  retryWorkflowDistillation: (id:string)=>request(`/api/v1/admin/workflow-distillation/${id}/retry`,{method:"POST",body:"{}"},ConsoleDecode.jsonObject),
 };
-function sseData(frame: string): string | undefined {
-  const lines = frame.split(/\r?\n/);
-  const values = lines
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).replace(/^ /, ""));
-  return values.length ? values.join("\n") : undefined;
-}
-
-async function consumeEventStream(
-  response: Response,
-  onEvent: (event: RunEvent) => void | Promise<void>,
-  signal: AbortSignal,
-): Promise<void> {
-  if (!response.body) throw new Error("Core event stream has no response body");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    while (!signal.aborted) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
-      let boundary = buffer.match(/\r?\n\r?\n/);
-      while (boundary?.index !== undefined) {
-        const frame = buffer.slice(0, boundary.index);
-        buffer = buffer.slice(boundary.index + boundary[0].length);
-        const data = sseData(frame);
-        if (data !== undefined) {
-          const event = decodeAbi(TaskRunEventSchema, JSON.parse(data) as unknown);
-          await onEvent({
-            runId: event.aggregateId,
-            seq: event.sequence,
-            type: event.type.startsWith("task_run.") ? `run.${event.type.slice(9)}` : event.type,
-            data: event.payload,
-            createdAt: Date.parse(event.occurredAt),
-          });
-        }
-        boundary = buffer.match(/\r?\n\r?\n/);
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  if (!signal.aborted) throw new Error("Core event stream closed unexpectedly");
-}
-
-export function subscribe(
-  runId: string,
-  consumerId: string,
-  generation: number,
-  after: number,
-  onEvent: (event: RunEvent) => void | Promise<void>,
-  onError: (error: Error) => void,
-  options: AuthenticatedCoreRequestOptions = {},
-) {
-  const controller = new AbortController();
-  const pathname = `/api/v1/task-runs/${runId}/events?consumerId=${encodeURIComponent(consumerId)}&generation=${generation}&after=${after}`;
-  void authenticatedCoreFetch(pathname, {
-    headers: { Accept: "text/event-stream" },
-    signal: controller.signal,
-  }, options).then((response) => consumeEventStream(response, onEvent, controller.signal)).catch((cause) => {
-    if (controller.signal.aborted) return;
-    onError(cause instanceof Error ? cause : new Error(String(cause)));
-  });
-  return () => controller.abort();
-}

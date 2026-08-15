@@ -53,7 +53,7 @@ export class AttemptExecutor {
         ? `Run idle for ${limitMs}ms without progress`
         : `Run exceeded ${limitMs}ms absolute hard timeout`;
       const currentAttempt = this.state.persistence.attempts.getAttempt(token.attemptId);
-      if (currentAttempt?.status === "settling" || this.dependencies.settlement.isApprovedCanaryAttempt(token)) {
+      if (currentAttempt?.status === "settling") {
         this.dependencies.settlement.recoverInterruptedAttempt(token, message);
         return;
       }

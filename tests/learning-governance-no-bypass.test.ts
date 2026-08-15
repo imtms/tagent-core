@@ -290,7 +290,7 @@ describe("Learning Governance no-bypass architecture", () => {
 
   it("keeps the Learning workspace free of mutation-authority bypasses", () => {
     const files = productionFiles();
-    expect(files.length).toBeGreaterThan(30);
+    expect(files.length).toBeGreaterThan(25);
     expect(files.flatMap((file) => governanceViolations(file)).map(formatViolation)).toEqual([]);
   });
 

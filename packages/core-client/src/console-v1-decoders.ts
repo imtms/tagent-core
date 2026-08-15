@@ -1,11 +1,9 @@
 import type {
   JsonObject,
-  ConsoleArtifactContent,
   ConsoleAutonomyApproval,
   ConsoleCaptureJob,
   ConsoleContextManifest,
   ConsoleCoreMemorySnapshot,
-  ConsoleEventConsumerCursor,
   ConsoleLearningCenterData,
   ConsoleLearningFeatureState,
   ConsoleMemoryExport,
@@ -13,15 +11,9 @@ import type {
   ConsoleMessage,
   ConsoleRecallResult,
   ConsoleReindexJob,
-  ConsoleRunEvent,
   ConsoleRuntimeStatus,
-  ConsoleSession,
   ConsoleSessionInboxItem,
-  ConsoleSkillRevision,
-  ConsoleSkillSummary,
   ConsoleTaskRun,
-  ConsoleTaskRunSummary,
-  ConsoleTranscriptItem,
   ConsoleWorkflowDefinition,
 } from "@tagent/abi";
 import { loadCoreAbi, type CoreAbi } from "./abi-loader.js";
@@ -46,35 +38,6 @@ async function learningFeatureState(payload: unknown): Promise<ConsoleLearningFe
   return abi.decodeAbi(abi.ConsoleLearningFeatureStateSchema, payload);
 }
 
-async function session(payload: unknown): Promise<ConsoleSession> {
-  const abi = await loadCoreAbi();
-  return abi.decodeAbi(abi.ConsoleSessionSchema, payload);
-}
-
-async function sessions(payload: unknown): Promise<ConsoleSession[]> {
-  const abi = await loadCoreAbi();
-  return arrayPayload(payload).map((item) => abi.decodeAbi(abi.ConsoleSessionSchema, item));
-}
-
-async function skillRevision(payload: unknown): Promise<ConsoleSkillRevision> {
-  const abi = await loadCoreAbi();
-  return abi.decodeAbi(abi.ConsoleSkillRevisionSchema, payload);
-}
-
-async function skillRevisionOrNull(payload: unknown): Promise<ConsoleSkillRevision | null> {
-  return payload === null ? null : skillRevision(payload);
-}
-
-async function skillRevisions(payload: unknown): Promise<ConsoleSkillRevision[]> {
-  const abi = await loadCoreAbi();
-  return arrayPayload(payload).map((item) => abi.decodeAbi(abi.ConsoleSkillRevisionSchema, item));
-}
-
-async function skills(payload: unknown): Promise<ConsoleSkillSummary[]> {
-  const abi = await loadCoreAbi();
-  return arrayPayload(payload).map((item) => abi.decodeAbi(abi.ConsoleSkillSummarySchema, item));
-}
-
 async function messages(payload: unknown): Promise<ConsoleMessage[]> {
   const abi = await loadCoreAbi();
   return arrayPayload(payload).map((item) => abi.decodeAbi(abi.ConsoleMessageSchema, item));
@@ -85,34 +48,9 @@ async function taskRun(payload: unknown): Promise<ConsoleTaskRun> {
   return abi.decodeAbi(abi.ConsoleTaskRunSchema, payload);
 }
 
-async function taskRunOrNull(payload: unknown): Promise<ConsoleTaskRun | null> {
-  if (payload === null) return null;
-  return taskRun(payload);
-}
-
-async function taskRuns(payload: unknown): Promise<ConsoleTaskRun[]> {
-  const abi = await loadCoreAbi();
-  return arrayPayload(payload).map((item) => abi.decodeAbi(abi.ConsoleTaskRunSchema, item));
-}
-
-async function taskRunSummaries(payload: unknown): Promise<ConsoleTaskRunSummary[]> {
-  const abi = await loadCoreAbi();
-  return arrayPayload(payload).map((item) => abi.decodeAbi(abi.ConsoleTaskRunSummarySchema, item));
-}
-
 async function contextManifests(payload: unknown): Promise<ConsoleContextManifest[]> {
   const abi = await loadCoreAbi();
   return arrayPayload(payload).map((item) => abi.decodeAbi(abi.ConsoleContextManifestSchema, item));
-}
-
-async function transcriptItems(payload: unknown): Promise<ConsoleTranscriptItem[]> {
-  const abi = await loadCoreAbi();
-  return arrayPayload(payload).map((item) => abi.decodeAbi(abi.ConsoleTranscriptItemSchema, item));
-}
-
-async function artifactContent(payload: unknown): Promise<ConsoleArtifactContent> {
-  const abi = await loadCoreAbi();
-  return abi.decodeAbi(abi.ConsoleArtifactContentSchema, payload);
 }
 
 async function submissionResult(payload: unknown): Promise<{ item: ConsoleSessionInboxItem; run: ConsoleTaskRun | null }> {
@@ -160,11 +98,6 @@ async function jsonObject(payload: unknown): Promise<JsonObject> {
 async function autonomyApproval(payload: unknown): Promise<ConsoleAutonomyApproval> {
   const abi = await loadCoreAbi();
   return abi.decodeAbi(abi.ConsoleAutonomyApprovalSchema, payload);
-}
-
-async function eventConsumerCursor(payload: unknown): Promise<ConsoleEventConsumerCursor> {
-  const abi = await loadCoreAbi();
-  return abi.decodeAbi(abi.ConsoleEventConsumerCursorSchema, payload);
 }
 
 async function captureJobs(payload: unknown): Promise<ConsoleCaptureJob[]> {
@@ -229,19 +162,12 @@ async function workflowDefinition(payload: unknown): Promise<ConsoleWorkflowDefi
   return abi.decodeAbi(abi.ConsoleWorkflowDefinitionSchema, payload);
 }
 
-async function runEvent(payload: unknown): Promise<ConsoleRunEvent> {
-  const abi = await loadCoreAbi();
-  return abi.decodeAbi(abi.ConsoleRunEventSchema, payload);
-}
-
 export const ConsoleDecode = {
-  artifactContent,
   autonomyApproval,
   captureJobId,
   captureJobs,
   contextManifests,
   coreMemorySnapshot,
-  eventConsumerCursor,
   forgetResult,
   inboxItem,
   inboxItems,
@@ -255,20 +181,9 @@ export const ConsoleDecode = {
   recallResult,
   reindexJob,
   reindexJobs,
-  runEvent,
   runtimeStatus,
-  session,
-  sessions,
-  skillRevision,
-  skillRevisionOrNull,
-  skillRevisions,
-  skills,
   startedRun,
   submissionResult,
   taskRun,
-  taskRunOrNull,
-  taskRunSummaries,
-  taskRuns,
-  transcriptItems,
   workflowDefinition,
 } as const;

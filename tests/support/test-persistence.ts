@@ -1,12 +1,12 @@
 import type { AgentServicePersistencePort } from "@tagent/core-service/application";
 import { httpArtifactContent } from "@tagent/core-service/composition";
 import type { AppDependencies, HttpPersistencePort } from "@tagent/http-fastify";
-import type { LearningServicePersistencePort, SettingsRepository, WorkflowServicePersistencePort } from "@tagent/learning/ports";
-import { LegacyStoreAdapter, type Store } from "@tagent/persistence-sqlite";
+import type { LearningServicePersistencePort, SettingsRepository, WorkflowLearningPersistencePort } from "@tagent/learning/ports";
+import { SqlitePersistence, type Store } from "@tagent/persistence-sqlite";
 import type { SynchronousResult } from "@tagent/persistence-sqlite/unit-of-work";
 
-function testPersistence(store: Store): LegacyStoreAdapter {
-  return new LegacyStoreAdapter(store, {
+function testPersistence(store: Store): SqlitePersistence {
+  return new SqlitePersistence(store, {
     run<T>(work: () => T & SynchronousResult<T>): T {
       return store.db.transaction(work)();
     },
@@ -17,7 +17,7 @@ export function agentPersistence(store: Store): AgentServicePersistencePort {
   return testPersistence(store);
 }
 
-export function workflowPersistence(store: Store): WorkflowServicePersistencePort {
+export function workflowPersistence(store: Store): WorkflowLearningPersistencePort {
   return testPersistence(store).workflow;
 }
 

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CoreWorkflowGovernanceApplication } from "@tagent/core-service/application";
 import { CanaryGovernanceRuntime } from "@tagent/core-service/composition";
 import {
-  LEGACY_WORKFLOW_APPROVAL_SCOPE_TYPE,
+  WORKFLOW_APPROVAL_SCOPE_TYPE,
   CanaryGovernanceWorker,
   WorkflowGovernanceService,
   canaryOutcomeDigest,
@@ -10,8 +10,8 @@ import {
   type WorkflowGovernanceReceipt,
   type WorkflowRevisionMaterializerPort,
 } from "@tagent/governance";
-import { WorkflowService, type LearningFeatureControl } from "@tagent/learning";
-import { LegacyStoreAdapter, Store } from "@tagent/persistence-sqlite";
+import { WorkflowLearningService, type LearningFeatureControl } from "@tagent/learning";
+import { SqlitePersistence, Store } from "@tagent/persistence-sqlite";
 
 const stores: Store[] = [];
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
@@ -35,7 +35,7 @@ function fixture() {
     subject: { kind: "workflow", id: "workflow-1" },
     action: "workflow.activate",
     target: { kind: "workflow_revision", id: "revision-1" },
-    scope: { type: LEGACY_WORKFLOW_APPROVAL_SCOPE_TYPE, id: "scope-1" },
+    scope: { type: WORKFLOW_APPROVAL_SCOPE_TYPE, id: "scope-1" },
     payload: {
       workflowId: "workflow-1",
       revisionId: "revision-1",
@@ -55,7 +55,7 @@ function fixture() {
     "requester", "fixture", 10_000, "request-hash-1", timestamp, timestamp,
     digest, "one_time", 1, 0,
   );
-  const adapter = new LegacyStoreAdapter(store, {
+  const adapter = new SqlitePersistence(store, {
     run<T>(work: () => T): T { return store.db.transaction(work)(); },
   });
   const service = new WorkflowGovernanceService(adapter.workflowGovernance, unusedMaterializer);
@@ -65,7 +65,7 @@ function fixture() {
     scopeId: "scope-1",
     revisionId: "revision-1",
     approval: {
-      ref: { source: "legacy_workflow" as const, id: "approval-1" },
+      ref: { source: "workflow" as const, id: "approval-1" },
       action: "workflow.activate" as const,
       operationDigest: digest,
       risk: "low" as const,
@@ -106,7 +106,7 @@ function seedCanary(store: Store, samplesPerVariant = 5): void {
   }
 }
 
-function directCanarySettlement(adapter: LegacyStoreAdapter, evaluatedAtDelta = 0) {
+function directCanarySettlement(adapter: SqlitePersistence, evaluatedAtDelta = 0) {
   const evidence = adapter.workflowGovernance.reader.getCanaryDecisionEvidence("promotion-1");
   if (!evidence) throw new Error("Canary fixture evidence is missing");
   const outcomes = [...evidence.outcomes].sort((left, right) => left.variant.localeCompare(right.variant)
@@ -237,7 +237,7 @@ describe("SQLite Workflow Governance atomicity", () => {
       detail: {
         scopeId: command.scopeId,
         reason: command.reason,
-        approvalSource: "legacy_workflow",
+        approvalSource: "workflow",
         approvalId: command.approval.ref.id,
         operationDigest: command.approval.operationDigest,
         risk: command.approval.risk,
@@ -305,7 +305,7 @@ describe("SQLite Workflow Governance atomicity", () => {
     expect(JSON.parse(evaluation.evaluationRunIdsJson)).toHaveLength(10);
     expect(JSON.parse(evaluation.checkResultsJson)).toHaveLength(10);
     expect(JSON.parse(evaluation.evidenceJson)).toMatchObject({ promotionId: "promotion-1", outcome: "promoted" });
-    expect(new WorkflowService(adapter.workflow).verifyEvaluationReceipt(
+    expect(new WorkflowLearningService(adapter.workflow).verifyEvaluationReceipt(
       settled.kind === "settled" ? settled.evaluationReceiptId : "",
     )).toBe(true);
   });
@@ -386,7 +386,7 @@ describe("SQLite Workflow Governance atomicity", () => {
 
   it("fails closed on Learning lifecycle and non-boolean feature-policy bypasses", async () => {
     const { store, adapter, service } = fixture();
-    const workflows = new WorkflowService(adapter.workflow);
+    const workflows = new WorkflowLearningService(adapter.workflow);
     const workflowSpec = {
       name: "candidate only", intent: "candidate only", cueTerms: ["candidate"],
       applicability: ["candidate only"], nonApplicability: [], preconditions: [],

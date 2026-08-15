@@ -41,7 +41,6 @@ export interface AttemptSettlementPort {
   ): Promise<boolean>;
   projectWorkflowExperience(runId: RunId): void;
   recoverInterruptedAttempt(token: AttemptExecutionToken, reason: string, supervisorDecisionId?: string): boolean;
-  isApprovedCanaryAttempt(token: AttemptExecutionToken): boolean;
 }
 
 export interface ContinuationControlPort {

@@ -4,7 +4,7 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const repoRoot = process.cwd();
-const forbiddenLegacyMutations = new Set([
+const forbiddenDirectMutations = new Set([
   "transitionRun",
   "finalizeRun",
   "blockRun",
@@ -67,8 +67,8 @@ function visitTaskRunBindings(
   for (const element of pattern.elements) {
     const name = propertyName(element.propertyName ?? element.name);
     const taskRunScope = insideTaskRuns || name === "taskRuns";
-    if (taskRunScope && name && forbiddenLegacyMutations.has(name)) {
-      report(element, `destructures legacy TaskRun mutation '${name}'`);
+    if (taskRunScope && name && forbiddenDirectMutations.has(name)) {
+      report(element, `destructures direct TaskRun mutation '${name}'`);
     }
     if (ts.isObjectBindingPattern(element.name)) {
       visitTaskRunBindings(element.name, report, taskRunScope);
@@ -89,13 +89,13 @@ function productionViolations(relativePath: string, text?: string): ProductionVi
     violations.push({ file: relativePath, line: lineOf(source, node), reason });
   };
   const visit = (node: ts.Node) => {
-    if (ts.isPropertyAccessExpression(node) && forbiddenLegacyMutations.has(node.name.text)) {
-      report(node, `accesses legacy TaskRun mutation '${node.name.text}'`);
+    if (ts.isPropertyAccessExpression(node) && forbiddenDirectMutations.has(node.name.text)) {
+      report(node, `accesses direct TaskRun mutation '${node.name.text}'`);
     }
     if (ts.isElementAccessExpression(node)) {
       const name = literalText(node.argumentExpression);
-      if (name && forbiddenLegacyMutations.has(name)) {
-        report(node, `accesses computed legacy TaskRun mutation '${name}'`);
+      if (name && forbiddenDirectMutations.has(name)) {
+        report(node, `accesses computed direct TaskRun mutation '${name}'`);
       }
     }
     if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name)) {
@@ -136,7 +136,7 @@ function interfaceMethods(relativePath: string, interfaceName: string): string[]
 }
 
 function frozenTaskRunProperties(): string[] {
-  const relativePath = "adapters/persistence-sqlite/src/sqlite/legacy-store-adapter.ts";
+  const relativePath = "adapters/persistence-sqlite/src/sqlite/sqlite-persistence.ts";
   const source = parseSource(relativePath);
   let properties: string[] = [];
   const visit = (node: ts.Node) => {
@@ -195,8 +195,8 @@ function directPortCalls(relativePath: string, method: "transitionRuntime" | "tr
 }
 
 describe("production TaskRun transition authority", () => {
-  it("turns red for legacy taskRuns mutations and direct Store use outside the composition root", () => {
-    expect(productionViolations("packages/execution/src/application/__legacy_probe__.ts", `
+  it("turns red for direct taskRuns mutations and Store use outside the composition root", () => {
+    expect(productionViolations("packages/execution/src/application/__direct_mutation_probe__.ts", `
       import { Store } from "@tagent/persistence-sqlite";
       declare const persistence: { taskRuns: { transitionRun(): void } };
       persistence.taskRuns.transitionRun();
@@ -209,42 +209,42 @@ describe("production TaskRun transition authority", () => {
       finalize();
       export const store = new Store(":memory:");
     `).map((violation) => violation.reason)).toEqual(expect.arrayContaining([
-      "accesses legacy TaskRun mutation 'transitionRun'",
-      "accesses computed legacy TaskRun mutation 'blockRun'",
-      "accesses legacy TaskRun mutation 'resumeRun'",
-      "destructures legacy TaskRun mutation 'transitionRun'",
-      "destructures legacy TaskRun mutation 'finalizeRun'",
+      "accesses direct TaskRun mutation 'transitionRun'",
+      "accesses computed direct TaskRun mutation 'blockRun'",
+      "accesses direct TaskRun mutation 'resumeRun'",
+      "destructures direct TaskRun mutation 'transitionRun'",
+      "destructures direct TaskRun mutation 'finalizeRun'",
       expect.stringContaining("imports Store outside the composition root"),
       "constructs Store outside the composition root",
     ]));
   });
 
-  it("has no legacy TaskRun mutation bypass in production workspaces", () => {
+  it("has no direct TaskRun mutation bypass in production workspaces", () => {
     const files = workspaceProductionFiles();
     expect(files.length).toBeGreaterThan(100);
     expect(files.flatMap((relativePath) => productionViolations(relativePath))).toEqual([]);
     expect(productionViolations("apps/core-service/src/server.ts")).toEqual([]);
   });
 
-  it("removes all six mutations from production TaskRunRepository and LegacyStoreAdapter taskRuns", () => {
+  it("removes all six mutations from production TaskRunRepository and SqlitePersistence taskRuns", () => {
     const taskRunRepository = interfaceMethods(
       "packages/execution/src/ports/task-run-repository.ts",
       "TaskRunRepository",
     );
-    const legacyTaskRuns = frozenTaskRunProperties();
-    for (const method of forbiddenLegacyMutations) {
+    const persistedTaskRuns = frozenTaskRunProperties();
+    for (const method of forbiddenDirectMutations) {
       expect(taskRunRepository, `TaskRunRepository.${method}`).not.toContain(method);
-      expect(legacyTaskRuns, `LegacyStoreAdapter.taskRuns.${method}`).not.toContain(method);
+      expect(persistedTaskRuns, `SqlitePersistence.taskRuns.${method}`).not.toContain(method);
     }
     const store = interfaceMethods("adapters/persistence-sqlite/src/store.ts", "Store");
-    void store; // Store is a class and intentionally remains a persistence compatibility surface.
+    void store; // Store is a class and intentionally remains the internal persistence surface.
   });
 
   it("routes the known production callers through the bounded transition port", () => {
     expect(transitionCalls("packages/execution/src/application/attempt-executor.ts"))
       .toEqual({ runtime: 2, system: 0 });
     expect(transitionCalls("packages/execution/src/application/attempt-settlement-service.ts"))
-      .toEqual({ runtime: 4, system: 0 });
+      .toEqual({ runtime: 0, system: 0 });
     expect(transitionCalls("packages/execution/src/application/runtime-initialization-failure.ts"))
       .toEqual({ runtime: 1, system: 0 });
     expect(transitionCalls("packages/admission/src/application/admission-coordinator.ts"))

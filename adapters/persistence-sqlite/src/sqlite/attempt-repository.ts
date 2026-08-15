@@ -3,27 +3,20 @@ import type Database from "better-sqlite3";
 import { assertAttemptTransition } from "@tagent/execution/domain";
 import type {
   Attempt,
-  AttemptShadowComparison,
   AttemptTransitionAudit,
   CandidateResult,
   ExecutionLease,
 } from "@tagent/execution/domain";
 import type { AttemptRepository } from "@tagent/execution/ports";
 import {
-  appendProjectionPair,
+  appendLearningProjection,
   finalizeProjectionCheckpoint,
-} from "./canonical-integration-event.js";
+} from "./learning-integration-event.js";
 
 type AttemptRow = Omit<Attempt, "active"> & { active: number };
 
 function asAttempt(row: AttemptRow | undefined): Attempt | undefined {
   return row ? { ...row, active: Boolean(row.active) } : undefined;
-}
-
-function parseObject(value: string): Record<string, unknown> {
-  const parsed = JSON.parse(value) as unknown;
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") return {};
-  return parsed as Record<string, unknown>;
 }
 
 export class SqliteAttemptRepository implements AttemptRepository {
@@ -34,29 +27,29 @@ export class SqliteAttemptRepository implements AttemptRepository {
 
   getAttempt(attemptId: string): Attempt | undefined {
     return asAttempt(this.db.prepare(`SELECT id,run_id as runId,ordinal,trigger,status,active,version,
-      legacy_event_seq as legacyEventSeq,started_at as startedAt,updated_at as updatedAt,
-      completed_at as completedAt,reconstruction_state as reconstructionState
+      event_sequence as eventSequence,started_at as startedAt,updated_at as updatedAt,
+      completed_at as completedAt
       FROM attempts WHERE id=?`).get(attemptId) as AttemptRow | undefined);
   }
 
   getAttemptForRun(runId: string, ordinal: number): Attempt | undefined {
     return asAttempt(this.db.prepare(`SELECT id,run_id as runId,ordinal,trigger,status,active,version,
-      legacy_event_seq as legacyEventSeq,started_at as startedAt,updated_at as updatedAt,
-      completed_at as completedAt,reconstruction_state as reconstructionState
+      event_sequence as eventSequence,started_at as startedAt,updated_at as updatedAt,
+      completed_at as completedAt
       FROM attempts WHERE run_id=? AND ordinal=?`).get(runId, ordinal) as AttemptRow | undefined);
   }
 
   getActiveAttempt(runId: string): Attempt | undefined {
     return asAttempt(this.db.prepare(`SELECT id,run_id as runId,ordinal,trigger,status,active,version,
-      legacy_event_seq as legacyEventSeq,started_at as startedAt,updated_at as updatedAt,
-      completed_at as completedAt,reconstruction_state as reconstructionState
+      event_sequence as eventSequence,started_at as startedAt,updated_at as updatedAt,
+      completed_at as completedAt
       FROM attempts WHERE run_id=? AND active=1`).get(runId) as AttemptRow | undefined);
   }
 
   listAttempts(runId: string): Attempt[] {
     return (this.db.prepare(`SELECT id,run_id as runId,ordinal,trigger,status,active,version,
-      legacy_event_seq as legacyEventSeq,started_at as startedAt,updated_at as updatedAt,
-      completed_at as completedAt,reconstruction_state as reconstructionState
+      event_sequence as eventSequence,started_at as startedAt,updated_at as updatedAt,
+      completed_at as completedAt
       FROM attempts WHERE run_id=? ORDER BY ordinal`).all(runId) as AttemptRow[])
       .map((row) => asAttempt(row)!);
   }
@@ -64,42 +57,8 @@ export class SqliteAttemptRepository implements AttemptRepository {
   listTransitionAudit(attemptId: string): AttemptTransitionAudit[] {
     return this.db.prepare(`SELECT id,attempt_id as attemptId,run_id as runId,ordinal,
       from_status as fromStatus,to_status as toStatus,trigger,scenario,reason,version,
-      legacy_event_seq as legacyEventSeq,created_at as createdAt
+      event_sequence as eventSequence,created_at as createdAt
       FROM attempt_transition_audit WHERE attempt_id=? ORDER BY created_at,rowid`).all(attemptId) as AttemptTransitionAudit[];
-  }
-
-  listShadowComparisons(filter: { attemptId?: string; runId?: string } = {}): AttemptShadowComparison[] {
-    const clauses: string[] = [];
-    const parameters: string[] = [];
-    if (filter.attemptId) {
-      clauses.push("comparison.attempt_id=?");
-      parameters.push(filter.attemptId);
-    }
-    if (filter.runId) {
-      clauses.push("attempt.run_id=?");
-      parameters.push(filter.runId);
-    }
-    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    const rows = this.db.prepare(`SELECT comparison.id,comparison.attempt_id as attemptId,
-      comparison.scenario,comparison.legacy_json as legacyJson,
-      comparison.projected_json as projectedJson,comparison.mismatch,
-      comparison.created_at as createdAt FROM attempt_shadow_comparisons comparison
-      JOIN attempts attempt ON attempt.id=comparison.attempt_id ${where}
-      ORDER BY comparison.rowid`).all(...parameters) as Array<{
-        id: string;
-        attemptId: AttemptShadowComparison["attemptId"];
-        scenario: string;
-        legacyJson: string;
-        projectedJson: string;
-        mismatch: number;
-        createdAt: number;
-      }>;
-    return rows.map(({ legacyJson, projectedJson, mismatch, ...row }) => ({
-      ...row,
-      legacy: parseObject(legacyJson),
-      projected: parseObject(projectedJson),
-      mismatch: Boolean(mismatch),
-    }));
   }
 
   acquireExecutionLease(input: {
@@ -244,10 +203,10 @@ export class SqliteAttemptRepository implements AttemptRepository {
         throw new Error(`Candidate result ${input.id} already exists with different content`);
       }
       this.db.prepare(`INSERT INTO attempt_transition_audit
-        (id,attempt_id,run_id,ordinal,from_status,to_status,trigger,scenario,reason,version,legacy_event_seq,created_at)
+        (id,attempt_id,run_id,ordinal,from_status,to_status,trigger,scenario,reason,version,event_sequence,created_at)
         VALUES (?,?,?,?,?,'settling',?,'terminal','candidate_result',?,?,?)`).run(
         randomUUID(), attempt.id, attempt.runId, attempt.ordinal, attempt.status, attempt.trigger,
-        settlingVersion, attempt.legacyEventSeq, timestamp,
+        settlingVersion, attempt.eventSequence, timestamp,
       );
       return candidate;
     })();
@@ -261,16 +220,6 @@ export class SqliteAttemptRepository implements AttemptRepository {
       if (attempt.version !== input.expectedVersion) throw new Error(`Attempt version mismatch for ${input.attemptId}`);
       if (!attempt.active || attempt.status !== "settling") throw new Error(`Attempt ${input.attemptId} is not settling`);
       assertAttemptTransition(attempt.status, input.status);
-      const authority = this.db.prepare(`SELECT mode,status,approved_attempt_id as approvedAttemptId
-        FROM attempt_authority_state WHERE id=1`).get() as {
-          mode: string;
-          status: string;
-          approvedAttemptId: string | null;
-        } | undefined;
-      if (!authority || authority.mode !== "canary" || authority.status !== "approved"
-        || authority.approvedAttemptId !== attempt.id) {
-        throw new Error(`Attempt ${input.attemptId} is not approved for canary settlement`);
-      }
       const executionLease = this.requireLease(input.attemptId, input.leaseToken, input.fence, timestamp);
       if (executionLease.attemptVersion !== attempt.version - 1) {
         throw new Error(`Execution lease Attempt version mismatch for ${input.attemptId}`);
@@ -340,7 +289,7 @@ export class SqliteAttemptRepository implements AttemptRepository {
         timestamp,
       );
       const attemptUpdate = this.db.prepare(`UPDATE attempts SET status=?,active=0,version=version+1,
-        legacy_event_seq=?,updated_at=?,completed_at=?,reconstruction_state='complete'
+        event_sequence=?,updated_at=?,completed_at=?
         WHERE id=? AND version=? AND active=1 AND status='settling'`).run(
         input.status, eventSeq, timestamp, timestamp, attempt.id, attempt.version,
       );
@@ -369,24 +318,12 @@ export class SqliteAttemptRepository implements AttemptRepository {
         timestamp,
       });
       this.db.prepare(`INSERT INTO attempt_transition_audit
-        (id,attempt_id,run_id,ordinal,from_status,to_status,trigger,scenario,reason,version,legacy_event_seq,created_at)
+        (id,attempt_id,run_id,ordinal,from_status,to_status,trigger,scenario,reason,version,event_sequence,created_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         randomUUID(), attempt.id, attempt.runId, attempt.ordinal, attempt.status, input.status,
         attempt.trigger, "terminal", input.reason, attempt.version + 1, eventSeq, timestamp,
       );
-      const comparisonSnapshot = JSON.stringify({
-        runId: attempt.runId,
-        ordinal: attempt.ordinal,
-        status: input.status,
-        legacyEventSeq: eventSeq,
-        active: false,
-      });
-      this.db.prepare(`INSERT INTO attempt_shadow_comparisons
-        (id,attempt_id,scenario,legacy_json,projected_json,mismatch,gate_sample,created_at)
-        VALUES (?,?, 'terminal',?,?,0,0,?)`).run(
-        randomUUID(), attempt.id, comparisonSnapshot, comparisonSnapshot, timestamp,
-      );
-      appendProjectionPair(this.db, {
+      appendLearningProjection(this.db, {
         runId: attempt.runId,
         attemptId: attempt.id,
         attemptOrdinal: attempt.ordinal,
@@ -472,7 +409,7 @@ export class SqliteAttemptRepository implements AttemptRepository {
       };
       this.appendEvent(attempt.runId, "run.interrupted", data, attempt.id, eventSeq, timestamp);
       const attemptUpdate = this.db.prepare(`UPDATE attempts SET status='interrupted',active=0,
-        version=version+1,legacy_event_seq=?,updated_at=?,completed_at=NULL,reconstruction_state='complete'
+        version=version+1,event_sequence=?,updated_at=?,completed_at=NULL
         WHERE id=? AND version=? AND active=1 AND status=?`).run(
         eventSeq, timestamp, attempt.id, attempt.version, attempt.status,
       );
@@ -540,7 +477,7 @@ export class SqliteAttemptRepository implements AttemptRepository {
       const data = { attemptId: attempt.id, reason: input.reason };
       this.appendEvent(attempt.runId, "run.cancelled", data, attempt.id, eventSeq, timestamp);
       const attemptUpdate = this.db.prepare(`UPDATE attempts SET status='cancelled',active=0,
-        version=version+1,legacy_event_seq=?,updated_at=?,completed_at=?,reconstruction_state='complete'
+        version=version+1,event_sequence=?,updated_at=?,completed_at=?
         WHERE id=? AND version=? AND active=1 AND status=?`).run(
         eventSeq, timestamp, timestamp, attempt.id, attempt.version, attempt.status,
       );
@@ -584,25 +521,12 @@ export class SqliteAttemptRepository implements AttemptRepository {
     timestamp: number,
   ): void {
     this.db.prepare(`INSERT INTO attempt_transition_audit
-      (id,attempt_id,run_id,ordinal,from_status,to_status,trigger,scenario,reason,version,legacy_event_seq,created_at)
+      (id,attempt_id,run_id,ordinal,from_status,to_status,trigger,scenario,reason,version,event_sequence,created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       randomUUID(), attempt.id, attempt.runId, attempt.ordinal, attempt.status, status,
       attempt.trigger, status === "interrupted" ? "recovery" : "terminal", reason, version, eventSeq, timestamp,
     );
-    const comparisonSnapshot = JSON.stringify({
-      runId: attempt.runId,
-      ordinal: attempt.ordinal,
-      status,
-      legacyEventSeq: eventSeq,
-      active: false,
-    });
-    this.db.prepare(`INSERT INTO attempt_shadow_comparisons
-      (id,attempt_id,scenario,legacy_json,projected_json,mismatch,gate_sample,created_at)
-      VALUES (?,?,?, ?,?,0,0,?)`).run(
-      randomUUID(), attempt.id, status === "interrupted" ? "recovery" : "terminal",
-      comparisonSnapshot, comparisonSnapshot, timestamp,
-    );
-    appendProjectionPair(this.db, {
+    appendLearningProjection(this.db, {
       runId: attempt.runId,
       attemptId: attempt.id,
       attemptOrdinal: attempt.ordinal,

@@ -33,9 +33,6 @@ import {
 } from "@tagent/core-client";
 import { createApp } from "@tagent/http-fastify";
 import { loadConfig } from "@tagent/core-service/config";
-import { ShadowLearningProjectionWorker } from "@tagent/learning/application";
-import { ATTEMPT_SCHEMA_V30_SQL } from "@tagent/persistence-sqlite/migrations";
-import { createGuardedLegacyStoreAdapter } from "@tagent/persistence-sqlite/sqlite";
 import { Store } from "@tagent/persistence-sqlite/store";
 import {
   acquireCoreInstanceLock,
@@ -82,7 +79,7 @@ function errorResponse(status: number, code: string, details: Record<string, unk
 interface ConsumerState {
   acknowledgedSequence: number;
   generation: number;
-  terminalAcknowledgedSequence: number | null;
+  settledAcknowledgedSequence: number | null;
 }
 
 interface DeliveryContext {
@@ -206,7 +203,7 @@ class FakeCore {
       const next: ConsumerState = {
         acknowledgedSequence: current?.acknowledgedSequence ?? 0,
         generation: (current?.generation ?? 0) + 1,
-        terminalAcknowledgedSequence: current?.terminalAcknowledgedSequence ?? null,
+        settledAcknowledgedSequence: current?.settledAcknowledgedSequence ?? null,
       };
       this.consumers.set(key, next);
       return jsonResponse(encodeAbi(EventConsumerClaimResponseSchema, {
@@ -246,7 +243,7 @@ class FakeCore {
         });
       }
       current.acknowledgedSequence = Math.max(current.acknowledgedSequence, body.sequence);
-      if (event?.type === "task_run.completed") current.terminalAcknowledgedSequence = body.sequence;
+      if (event?.type === "task_run.completed") current.settledAcknowledgedSequence = body.sequence;
       this.acceptedAcks.push(durableReceipt);
       this.gatewayDurability.markAcknowledged(durableReceipt);
       return jsonResponse(encodeAbi(EventConsumerAckResponseSchema, {
@@ -294,9 +291,8 @@ class FakeCore {
       consumerId,
       generation: state.generation,
       acknowledgedSequence: state.acknowledgedSequence,
-      settledAcknowledgedSequence: state.terminalAcknowledgedSequence,
-      finalAcknowledgedSequence: state.terminalAcknowledgedSequence,
-      terminalAcknowledgedSequence: state.terminalAcknowledgedSequence,
+      settledAcknowledgedSequence: state.settledAcknowledgedSequence,
+      finalAcknowledgedSequence: state.settledAcknowledgedSequence,
       claimedAt: timestamp,
       updatedAt: timestamp,
     };
@@ -381,37 +377,9 @@ class FakeGateway {
   }
 }
 
-function createV30DatabaseFixture(filename: string): void {
+function createEmptyDatabaseFixture(filename: string): void {
   const db = new Database(filename);
-  try {
-    db.exec(`
-      CREATE TABLE schema_meta (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        version INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      ${ATTEMPT_SCHEMA_V30_SQL}
-      INSERT INTO schema_meta (id,version,updated_at) VALUES (1,30,1);
-    `);
-  } finally {
-    db.close();
-  }
-}
-
-function schemaInventory(store: Store): Array<{ name: string; type: string; sql: string | null }> {
-  return store.db.prepare(`SELECT name,type,sql FROM sqlite_master
-    WHERE name IN (
-      'attempts',
-      'approval_receipts',
-      'idx_operations_attempt_created',
-      'idx_runs_operator_session_created',
-      'idx_runs_operator_session_updated',
-      'idx_sessions_operator_created',
-      'integration_outbox',
-      'integration_consumer_delivery',
-      'learning_projection_checkpoint',
-      'learning_projection_authority_state'
-    ) ORDER BY name`).all() as Array<{ name: string; type: string; sql: string | null }>;
+  db.close();
 }
 
 function createCoreReleaseFixture(directory: string): void {
@@ -722,7 +690,7 @@ describe("Gateway production readiness", () => {
     );
     expect(core.consumer(submission.taskRunId!, "gateway")).toMatchObject({
       acknowledgedSequence: 1,
-      terminalAcknowledgedSequence: null,
+      settledAcknowledgedSequence: null,
     });
     expect(durability.unacknowledgedReceipts()).toEqual([
       expect.objectContaining({
@@ -747,7 +715,7 @@ describe("Gateway production readiness", () => {
     expect(core.acceptedAcks.map((ack) => ack.sequence)).toEqual([1, 2]);
     expect(core.consumer(submission.taskRunId!, "gateway")).toMatchObject({
       acknowledgedSequence: 2,
-      terminalAcknowledgedSequence: 2,
+      settledAcknowledgedSequence: 2,
     });
 
     for (const accepted of core.acceptedAcks) {
@@ -863,154 +831,7 @@ describe("Gateway production readiness", () => {
     }
   });
 
-  it("opens a real v30 SQLite fixture through Store v47 and rolls authority back with replay", () => {
-    const directory = temporaryDirectory("tagent-gateway-migration-");
-    const databasePath = path.join(directory, "core.sqlite");
-    createV30DatabaseFixture(databasePath);
-
-    const firstOpen = new Store(databasePath);
-    const firstInventory = schemaInventory(firstOpen);
-    expect(firstOpen.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-      .toEqual({ version: 47 });
-    expect(firstInventory.map((entry) => [entry.type, entry.name])).toEqual([
-      ["table", "approval_receipts"],
-      ["table", "attempts"],
-      ["index", "idx_operations_attempt_created"],
-      ["index", "idx_runs_operator_session_created"],
-      ["index", "idx_runs_operator_session_updated"],
-      ["index", "idx_sessions_operator_created"],
-      ["table", "integration_consumer_delivery"],
-      ["table", "integration_outbox"],
-      ["table", "learning_projection_authority_state"],
-      ["table", "learning_projection_checkpoint"],
-    ]);
-    firstOpen.close();
-
-    const store = new Store(databasePath);
-    try {
-      expect(schemaInventory(store)).toEqual(firstInventory);
-      expect(store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-        .toEqual({ version: 47 });
-
-      const writer = CoreWriterLease.claim(store.db, {
-        ownerId: "gateway-authority-test",
-        pid: process.pid,
-        host: "test-host",
-      })!;
-      const adapter = createGuardedLegacyStoreAdapter(
-        store,
-        new WriterFenceGuard(store.db, writer.authority),
-      );
-      const session = adapter.sessions.createSession();
-      for (let index = 0; index < 2; index += 1) {
-        const run = adapter.taskRuns.createRun(session.id, `rollback-${index}`);
-        store.transitionRun(run.id, ["running"], "completed", "run.completed", {}, "done", 1);
-      }
-      const integration = adapter.learningIntegration;
-      const shadow = new ShadowLearningProjectionWorker(integration, {
-        owner: "shadow",
-        leaseMs: 1_000,
-      });
-      expect(shadow.runOnce(100)).toMatchObject({ kind: "matched", watermark: 1 });
-
-      const priorCompatibleGatewaySource = "legacy" as const;
-      const legacy = integration.authority.acquire({
-        source: priorCompatibleGatewaySource,
-        owner: "gateway-authority",
-        leaseMs: 1_000,
-        timestamp: 101,
-      })!;
-      const first = integration.delivery.claimNextActive({
-        consumer: "learning-active-v1",
-        source: priorCompatibleGatewaySource,
-        authority: legacy.fence,
-        owner: "prior-gateway",
-        leaseMs: 10,
-        timestamp: 102,
-      })!;
-      integration.effects.record({
-        logicalConsumer: "learning-active-v1",
-        sourceEventId: first.fence.sourceEventId,
-        effectHash: "prior-gateway-one",
-        timestamp: 103,
-      });
-      integration.delivery.acknowledgeActive({
-        claim: first,
-        effectHash: "prior-gateway-one",
-        timestamp: 104,
-      });
-
-      const switching = integration.authority.prepareCutover({
-        fence: legacy.fence,
-        switchWatermark: 1,
-        timestamp: 105,
-      })!;
-      const activeIntegration = integration.authority.activateIntegration({
-        fence: switching.fence,
-        leaseMs: 1_000,
-        timestamp: 106,
-      })!;
-      const unacknowledged = integration.delivery.claimNextActive({
-        consumer: "learning-active-v1",
-        source: "integration",
-        authority: activeIntegration.fence,
-        owner: "new-gateway",
-        leaseMs: 10,
-        timestamp: 107,
-      })!;
-      expect(unacknowledged.fence.outboxSequence).toBe(2);
-
-      const rollback = integration.authority.prepareRollback({
-        fence: activeIntegration.fence,
-        timestamp: 118,
-      })!;
-      const activeLegacy = integration.authority.activateLegacy({
-        fence: rollback.fence,
-        leaseMs: 1_000,
-        timestamp: 119,
-      })!;
-      expect(integration.delivery.getCheckpoint("learning-active-v1", priorCompatibleGatewaySource)?.watermark)
-        .toBe(1);
-      const replay = integration.delivery.claimNextActive({
-        consumer: "learning-active-v1",
-        source: priorCompatibleGatewaySource,
-        authority: activeLegacy.fence,
-        owner: "prior-gateway",
-        leaseMs: 10,
-        timestamp: 120,
-      })!;
-      expect(replay.fence).toMatchObject({
-        outboxSequence: 2,
-        sourceEventId: unacknowledged.fence.sourceEventId,
-      });
-      integration.effects.record({
-        logicalConsumer: "learning-active-v1",
-        sourceEventId: replay.fence.sourceEventId,
-        effectHash: "prior-gateway-two",
-        timestamp: 121,
-      });
-      integration.delivery.acknowledgeActive({
-        claim: replay,
-        effectHash: "prior-gateway-two",
-        timestamp: 122,
-      });
-      expect(integration.delivery.getCheckpoint("learning-active-v1", priorCompatibleGatewaySource)?.watermark)
-        .toBe(2);
-      expect(integration.authority.getState()).toMatchObject({
-        activeSource: priorCompatibleGatewaySource,
-        status: "legacy_active",
-        rollbackCheckpoint: 1,
-        legacyLastAcked: 2,
-      });
-      expect(store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get())
-        .toEqual({ version: 47 });
-      writer.release();
-    } finally {
-      store.close();
-    }
-  });
-
-  it("executes config, migration, and readiness commands from a representative Core release", async () => {
+  it("executes config, current-schema, and readiness commands from a representative Core release", async () => {
     const directory = temporaryDirectory("tagent-gateway-release-");
     const releaseDirectory = path.join(directory, "release");
     mkdirSync(releaseDirectory, { recursive: true });
@@ -1117,15 +938,16 @@ describe("Gateway production readiness", () => {
     expect(invalidConfig.stderr).toContain("token must be at least 24 characters");
 
     const databasePath = path.join(directory, "release-command.sqlite");
-    createV30DatabaseFixture(databasePath);
+    createEmptyDatabaseFixture(databasePath);
     const schemaCommand = [
       'import { Store } from "@tagent/persistence-sqlite/store";',
       "const store=new Store(process.env.TAGENT_DB);",
-      'const schemaVersion=store.db.prepare("SELECT version FROM schema_meta WHERE id=1").get().version;',
-      'const objects=store.db.prepare("SELECT name FROM sqlite_master WHERE name IN (\'attempts\',\'approval_receipts\',\'idx_continuations_due\',\'idx_operations_attempt_created\',\'idx_runs_operator_session_created\',\'idx_runs_operator_session_updated\',\'idx_sessions_operator_created\',\'integration_outbox\',\'learning_projection_authority_state\') ORDER BY name").all().map((row)=>row.name);',
+      'const schemaVersion=store.getSchemaVersion();',
+      'const schemaId=store.db.prepare("SELECT schema_id AS schemaId FROM core_schema WHERE id=1").get().schemaId;',
+      'const objects=store.db.prepare("SELECT name FROM sqlite_master WHERE name IN (\'attempts\',\'approval_receipts\',\'idx_continuations_due\',\'idx_operations_attempt_created\',\'idx_runs_operator_session_created\',\'idx_runs_operator_session_updated\',\'idx_sessions_operator_created\',\'integration_outbox\',\'integration_consumer_delivery\',\'learning_projection_checkpoint\',\'effect_receipts\') ORDER BY name").all().map((row)=>row.name);',
       'const hasContinuationNotBefore=store.db.prepare("PRAGMA table_info(run_continuations)").all().some((row)=>row.name===\'not_before\');',
       "store.close();",
-      "process.stdout.write(JSON.stringify({schemaVersion,objects,hasContinuationNotBefore}));",
+      "process.stdout.write(JSON.stringify({schemaId,schemaVersion,objects,hasContinuationNotBefore}));",
     ].join("");
     const firstSchemaOpen = spawnSync(
       process.execPath,
@@ -1148,17 +970,20 @@ describe("Gateway production readiness", () => {
     );
     expect(secondSchemaOpen.status, secondSchemaOpen.stderr).toBe(0);
     const schemaEvidence = {
-      schemaVersion: 47,
+      schemaId: "tagent-core/0.8",
+      schemaVersion: 1,
       objects: [
         "approval_receipts",
         "attempts",
+        "effect_receipts",
         "idx_continuations_due",
         "idx_operations_attempt_created",
         "idx_runs_operator_session_created",
         "idx_runs_operator_session_updated",
         "idx_sessions_operator_created",
+        "integration_consumer_delivery",
         "integration_outbox",
-        "learning_projection_authority_state",
+        "learning_projection_checkpoint",
       ],
       hasContinuationNotBefore: true,
     };
@@ -1198,8 +1023,8 @@ describe("Gateway production readiness", () => {
       const ready = JSON.parse(readyProbe.stdout) as Record<string, unknown>;
       expect({
         probeVersion: ready.probeVersion,
+        schemaId: ready.schemaId,
         schemaVersion: ready.schemaVersion,
-        migrationOpenIssues: ready.migrationOpenIssues,
         writerReady: ready.writerReady,
         writerFence: ready.writerFence,
         writerLeaseFresh: ready.writerLeaseFresh,
@@ -1207,15 +1032,15 @@ describe("Gateway production readiness", () => {
         terminalUnacked: ready.terminalUnacked,
         settledUnacked: ready.settledUnacked,
         finalUnacked: ready.finalUnacked,
-        authorityReady: ready.authorityReady,
+        learningProjectionReady: ready.learningProjectionReady,
         ready: ready.ready,
         severity: ready.severity,
         reasons: ready.reasons,
         thresholds: ready.thresholds,
       }).toEqual({
-        probeVersion: 5,
-        schemaVersion: 47,
-        migrationOpenIssues: 0,
+        probeVersion: 6,
+        schemaId: "tagent-core/0.8",
+        schemaVersion: 1,
         writerReady: true,
         writerFence: readinessLease.authority.fence,
         writerLeaseFresh: true,
@@ -1223,7 +1048,7 @@ describe("Gateway production readiness", () => {
         terminalUnacked: 0,
         settledUnacked: 0,
         finalUnacked: 0,
-        authorityReady: true,
+        learningProjectionReady: true,
         ready: true,
         severity: "ready",
         reasons: [],
@@ -1234,16 +1059,6 @@ describe("Gateway production readiness", () => {
           terminalUnackedCriticalAgeMs: 120_000,
           receiptUncertainCriticalAgeMs: 120_000,
         },
-      });
-      expect(ready.authority).toEqual({
-        activeSource: "legacy",
-        status: "legacy_active",
-        generation: 0,
-        switchWatermark: 0,
-        legacyLastAcked: 0,
-        legacyResumePosition: 1,
-        integrationCheckpoint: 0,
-        rollbackCheckpoint: 0,
       });
       expect(ready.watermarks).toEqual([]);
       expect(ready.capabilityProfiles).toMatchObject({
@@ -1354,7 +1169,7 @@ describe("Gateway production readiness", () => {
         severity: rejected.severity,
         reasons: rejected.reasons,
       }).toEqual({
-        schemaVersion: 47,
+        schemaVersion: 1,
         writerReady: false,
         writerLeaseFresh: false,
         consumerLag: 0,

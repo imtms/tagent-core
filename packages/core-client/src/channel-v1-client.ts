@@ -11,11 +11,9 @@ import type {
   SubmissionCreateRequest,
   SubmissionReceipt,
   TaskRun,
-  TaskRunArtifact,
   TaskRunCommand,
   TaskRunEvent,
   TaskRunInteractionsResponse,
-  TranscriptItem,
   TranscriptResponse,
 } from "@tagent/abi";
 import { loadCoreAbi, type CoreAbi } from "./abi-loader.js";
@@ -166,18 +164,6 @@ export class CoreClient extends AdminProfilesClient {
     return this.request(path, { decode: (payload) => abi.decodeAbi(abi.CommandResponseSchema, payload).data.receipt });
   }
 
-  async getTranscript(taskRunId: string): Promise<TranscriptItem[]> {
-    const items: TranscriptItem[] = [];
-    let after: number | undefined;
-    do {
-      const page = await this.getTranscriptPage(taskRunId, { after, limit: 500 });
-      items.push(...page.data.items);
-      after = page.data.pageInfo.nextCursor ?? undefined;
-      if (!page.data.pageInfo.hasMore) break;
-    } while (after !== undefined);
-    return items;
-  }
-
   async getTaskRunInteractions(taskRunId: string, options: { after?: number; limit?: number } = {}): Promise<TaskRunInteractionsResponse> {
     const abi = await loadCoreAbi();
     const query = new URLSearchParams();
@@ -198,18 +184,6 @@ export class CoreClient extends AdminProfilesClient {
     return this.request(path, {
       decode: (payload) => abi.decodeAbi(abi.TranscriptResponseSchema, payload),
     });
-  }
-
-  async listArtifacts(taskRunId: string): Promise<TaskRunArtifact[]> {
-    const items: TaskRunArtifact[] = [];
-    let after: number | undefined;
-    do {
-      const page = await this.getArtifactsPage(taskRunId, { after, limit: 200 });
-      items.push(...page.data.items);
-      after = page.data.pageInfo.nextCursor ?? undefined;
-      if (!page.data.pageInfo.hasMore) break;
-    } while (after !== undefined);
-    return items;
   }
 
   async getArtifactsPage(taskRunId: string, options: { after?: number; limit?: number } = {}): Promise<ArtifactListResponse> {

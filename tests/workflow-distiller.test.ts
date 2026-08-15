@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { WorkflowService } from "@tagent/learning";
+import { WorkflowLearningService } from "@tagent/learning";
 import type { WorkflowSpec } from "@tagent/learning/domain";
 import { Store } from "@tagent/persistence-sqlite";
 import { workflowPersistence } from "./support/test-persistence.js";
 
 const stores: Store[] = [];
-const make = () => { const store = new Store(":memory:"); stores.push(store); return { store, service: new WorkflowService(workflowPersistence(store)) }; };
+const make = () => { const store = new Store(":memory:"); stores.push(store); return { store, service: new WorkflowLearningService(workflowPersistence(store)) }; };
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
 
-function observe(store: Store, service: WorkflowService, scopeId: string, signature: string, summary: string, success = true, failedChecks: string[] = []) {
+function observe(store: Store, service: WorkflowLearningService, scopeId: string, signature: string, summary: string, success = true, failedChecks: string[] = []) {
   const run = store.createRun(scopeId, signature);
   return service.recordExperience({
     scopeId, runId: run.id, attempt: 1, sourceType: success ? "task_experience" : "task_failure",

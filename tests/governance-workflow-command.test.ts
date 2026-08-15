@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { CoreWorkflowGovernanceApplication } from "@tagent/core-service/application";
 import {
-  LEGACY_WORKFLOW_APPROVAL_SCOPE_TYPE,
+  WORKFLOW_APPROVAL_SCOPE_TYPE,
   WorkflowGovernanceApplication,
   WorkflowGovernanceService,
   createWorkflowRevisionDraft,
@@ -14,7 +14,7 @@ import {
   type WorkflowGovernanceState,
   type WorkflowRevisionMaterializerPort,
 } from "@tagent/governance";
-import { LegacyStoreAdapter, Store } from "@tagent/persistence-sqlite";
+import { SqlitePersistence, Store } from "@tagent/persistence-sqlite";
 
 const stores: Store[] = [];
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
@@ -26,7 +26,7 @@ const unusedMaterializer: WorkflowRevisionMaterializerPort = {
 function sqliteService(materializer: WorkflowRevisionMaterializerPort) {
   const store = new Store(":memory:");
   stores.push(store);
-  const adapter = new LegacyStoreAdapter(store, {
+  const adapter = new SqlitePersistence(store, {
     run<T>(work: () => T): T { return store.db.transaction(work)(); },
   });
   return {
@@ -45,7 +45,7 @@ function proposalReplayFixture() {
     subject: { kind: "workflow", id: "workflow-1" },
     action: "workflow.revision.apply",
     target: { kind: "workflow_proposal", id: "proposal-1" },
-    scope: { type: LEGACY_WORKFLOW_APPROVAL_SCOPE_TYPE, id: "scope-1" },
+    scope: { type: WORKFLOW_APPROVAL_SCOPE_TYPE, id: "scope-1" },
     payload: {
       workflowId: "workflow-1",
       revisionId: "revision-1",
@@ -117,7 +117,7 @@ function proposalReplayFixture() {
     proposalId: "proposal-1",
     revisionId: "revision-2",
     approval: {
-      ref: { source: "legacy_workflow" as const, id: "approval-apply" },
+      ref: { source: "workflow" as const, id: "approval-apply" },
       action: "workflow.revision.apply" as const,
       operationDigest: digest,
       risk: "medium" as const,
@@ -244,7 +244,7 @@ describe("Workflow Governance command application", () => {
       proposalId: "proposal-1",
       revisionId: "revision-2",
       approval: {
-        ref: { source: "legacy_workflow", id: "approved" },
+        ref: { source: "workflow", id: "approved" },
         action: "workflow.revision.apply",
         operationDigest: "digest-approved",
         risk: "medium",
@@ -278,7 +278,7 @@ describe("Workflow Governance command application", () => {
       scopeId: "scope-1",
       revisionId: "revision-x",
       approval: {
-        ref: { source: "legacy_workflow", id: "rejected" },
+        ref: { source: "workflow", id: "rejected" },
         action: "workflow.activate",
         operationDigest: "digest-rejected",
         risk: "medium",
@@ -348,7 +348,7 @@ describe("Workflow Governance command application", () => {
       canaryPercent: 10,
       maxFailureDelta: 1.01,
       approval: {
-        ref: { source: "legacy_workflow", id: "approval-apply" },
+        ref: { source: "workflow", id: "approval-apply" },
         action: "workflow.canary.start",
         operationDigest: "digest-invalid",
         risk: "medium",

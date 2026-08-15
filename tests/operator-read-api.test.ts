@@ -49,11 +49,11 @@ function pageUrl(pathname: string, cursor: string | null, limit = 2): string {
 }
 
 describe("Operator Read API", () => {
-  it("publishes a forward-compatible independent profile without extending the legacy allowlist", async () => {
+  it("publishes a forward-compatible independent profile without extending the base allowlist", async () => {
     const { app } = await fixture();
-    const legacy = decodeAbi(CoreCapabilitiesResponseSchema, (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).data;
-    expect(legacy.apiVersions).toContain("operator.read.v1");
-    expect(legacy.operator.endpointIds).not.toContain("operator.sessions.list");
+    const baseCapabilities = decodeAbi(CoreCapabilitiesResponseSchema, (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).data;
+    expect(baseCapabilities.apiVersions).toContain("operator.read.v1");
+    expect(baseCapabilities.operator.endpointIds).not.toContain("operator.sessions.list");
 
     const operator = decodeAbi(
       OperatorReadCapabilitiesResponseSchema,

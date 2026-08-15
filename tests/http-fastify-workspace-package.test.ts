@@ -131,15 +131,15 @@ describe("Fastify HTTP adapter workspace package", () => {
   it("publishes only the compiled root, auth, ports, and v1 package entry points", () => {
     const root = readJson<{ dependencies: Record<string, string>; devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const manifest = readJson<PackageManifest>(`${packageRoot}/package.json`);
-    expect(manifest).toMatchObject({ name: "@tagent/http-fastify", version: "0.7.0", private: true });
+    expect(manifest).toMatchObject({ name: "@tagent/http-fastify", version: "0.8.0", private: true });
     expect(root.devDependencies[manifest.name]).toBe(manifest.version);
     expect(root.dependencies).not.toHaveProperty("fastify");
     expect(Object.keys(manifest.exports).sort()).toEqual([".", "./auth", "./ports", "./v1"]);
     expect(manifest.dependencies).toEqual({
-      "@tagent/abi": "0.7.0",
-      "@tagent/admission": "0.7.0",
-      "@tagent/execution": "0.7.0",
-      "@tagent/governance": "0.7.0",
+      "@tagent/abi": "0.8.0",
+      "@tagent/admission": "0.8.0",
+      "@tagent/execution": "0.8.0",
+      "@tagent/governance": "0.8.0",
       fastify: "^5.10.0",
       typebox: "^1.1.24",
     });
@@ -152,7 +152,7 @@ describe("Fastify HTTP adapter workspace package", () => {
     expect(root.scripts.clean).toContain("@tagent/http-fastify");
   });
 
-  it("has no root HTTP facade or exported legacy scope mapper", () => {
+  it("has no root HTTP facade or removed scope mapper export", () => {
     expect(sourceFiles("src")).toEqual(["src/server.ts"]);
     for (const removed of ["src/app.ts", "src/auth.ts"]) {
       expect(existsSync(path.join(repoRoot, removed)), `${removed} must remain deleted`).toBe(false);
@@ -304,17 +304,6 @@ describe("Fastify HTTP adapter workspace package", () => {
     expect(decodeAbi(AdminConfigStatusResponseSchema, response.json())).toMatchObject({
       data: { runTimeoutMs: 900_000 },
     });
-  });
-
-  it("allows only configured Workspace execution profiles", async () => {
-    const runtimeConfig = { modelId: "gpt-5.6-sol", fallbackModelIds: ["gpt-5.6-luna"] };
-    const app = testApp({ runtimeConfig });
-    const accepted = await app.inject({ method: "PATCH", url: "/api/v1/console/sessions/session", payload: { modelId: "gpt-5.6-luna", reasoningEffort: "xhigh" } });
-    expect(accepted.statusCode).toBe(200);
-    expect(accepted.json()).toMatchObject({ data: { modelId: "gpt-5.6-luna", reasoningEffort: "xhigh" } });
-    const rejected = await app.inject({ method: "PATCH", url: "/api/v1/console/sessions/session", payload: { modelId: "unconfigured" } });
-    expect(rejected.statusCode).toBe(400);
-    expect(rejected.json()).toMatchObject({ error: { code: "session.model_not_allowed" } });
   });
 
   it("exports only current credential helpers and v1 route components", () => {

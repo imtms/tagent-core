@@ -1,9 +1,9 @@
 import { createHash, createHmac } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
-  buildLegacyWorkflowExecutedReceipt,
-  mapLegacyWorkflowApprovalOperation,
-} from "./canonical-approval-mapper.js";
+  buildWorkflowExecutedReceipt,
+  mapWorkflowApprovalOperation,
+} from "./approval-operation-mapper.js";
 import {
   canaryOutcomeDigest,
   stableJson,
@@ -106,7 +106,7 @@ function executedApprovalMetadata(
       || receipt.action !== action
       || receipt.workflowId !== row.workflowId
       || receipt.detail.scopeId !== row.scopeId
-      || receipt.detail.approvalSource !== "legacy_workflow"
+      || receipt.detail.approvalSource !== "workflow"
       || receipt.detail.approvalId !== row.id
       || receipt.detail.operationDigest !== row.operationDigest
       || receipt.detail.risk !== row.riskClass
@@ -191,7 +191,7 @@ function sortedCanaryChecks(evidence: WorkflowCanaryDecisionEvidence) {
     || left.checkKey.localeCompare(right.checkKey));
 }
 
-function legacyAction(action: ApprovedWorkflowGovernanceCommit["command"]["action"]): string {
+function approvalActionType(action: ApprovedWorkflowGovernanceCommit["command"]["action"]): string {
   if (action === "workflow.activate") return "activate_workflow";
   if (action === "workflow.revision.apply") return "apply_revision";
   return "start_canary";
@@ -336,7 +336,7 @@ implements WorkflowGovernanceReaderRepository, WorkflowGovernanceMutationReposit
       : row.actionType === "apply_revision" ? "workflow.revision.apply"
         : row.actionType === "start_canary" ? "workflow.canary.start" : undefined;
     if (!action) return undefined;
-    const canonical = mapLegacyWorkflowApprovalOperation(row);
+    const canonical = mapWorkflowApprovalOperation(row);
     if (canonical.operationDigest !== row.operationDigest) return undefined;
     if (row.status === "executed"
       && (row.reuseMode !== "one_time" || row.maxUses !== 1 || row.usedCount !== 1)) {
@@ -359,7 +359,7 @@ implements WorkflowGovernanceReaderRepository, WorkflowGovernanceMutationReposit
     );
     if (execution === undefined) return undefined;
     return detached({
-      ref: { source: "legacy_workflow", id: row.id },
+      ref: { source: "workflow", id: row.id },
       action,
       status: row.status as WorkflowExecutableApprovalView["status"],
       expiresAt: row.expiresAt,
@@ -367,7 +367,7 @@ implements WorkflowGovernanceReaderRepository, WorkflowGovernanceMutationReposit
       workflowId: row.workflowId,
       revisionId: row.revisionId,
       proposalId: row.proposalId,
-      scope: { type: "legacy_workflow_scope", id: row.scopeId },
+      scope: { type: "workflow_scope", id: row.scopeId },
       operationDigest: row.operationDigest,
       risk: row.riskClass as WorkflowExecutableApprovalView["risk"],
       reuse: {
@@ -554,7 +554,7 @@ implements WorkflowGovernanceReaderRepository, WorkflowGovernanceMutationReposit
     if (!approval || approval.status !== "approved") {
       throw new Error("Approved Workflow request is required");
     }
-    const canonical = mapLegacyWorkflowApprovalOperation(approval);
+    const canonical = mapWorkflowApprovalOperation(approval);
     const proposalBase = command.action === "workflow.revision.apply"
       ? this.db.prepare(`SELECT base_revision_id baseRevisionId FROM workflow_revision_proposals
         WHERE id=? AND workflow_id=?`).get(command.proposalId, command.workflowId) as
@@ -571,7 +571,7 @@ implements WorkflowGovernanceReaderRepository, WorkflowGovernanceMutationReposit
           baselineRevisionId?: string;
         }
       : null;
-    if (approval.actionType !== legacyAction(command.action)
+    if (approval.actionType !== approvalActionType(command.action)
       || approval.workflowId !== command.workflowId
       || approval.scopeId !== command.scopeId
       || approval.revisionId !== expectedRevisionId
@@ -852,7 +852,7 @@ implements WorkflowGovernanceReaderRepository, WorkflowGovernanceMutationReposit
       commandId: command.commandId,
       governanceReceipt: input.receipts.approval,
     });
-    const canonical = buildLegacyWorkflowExecutedReceipt({
+    const canonical = buildWorkflowExecutedReceipt({
       approvalId: approval.id,
       actionType: approval.actionType,
       targetId: approval.targetId,

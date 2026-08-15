@@ -11,10 +11,10 @@ import {
 } from "./task-run-execution-fence.js";
 
 /**
- * Compatibility implementation for legacy Store mutations.
+ * Fenced implementation for Store-backed runtime mutations.
  *
  * Every method validates Attempt identity/version and execution lease token/fence
- * inside the same SQLite transaction that invokes the legacy mutation.
+ * inside the same SQLite transaction that invokes the mutation.
  */
 export class SqliteFencedRuntimeMutationRepository implements FencedRuntimeMutationPort {
   private readonly executionFenceValidator: TaskRunExecutionFenceValidator;
@@ -48,10 +48,8 @@ export class SqliteFencedRuntimeMutationRepository implements FencedRuntimeMutat
       const request = requestUserInputWithInternalHook(this.store, runId, prompt, fields, ({ request: hookedRequest, event: hookedEvent }) => {
         const eventData = hookedEvent.data as { requestId?: string };
         if (eventData.requestId !== hookedRequest.id) throw new Error("Store waiting event request identity mismatch");
-        this.db.prepare(`UPDATE attempts SET legacy_event_seq=? WHERE id=? AND ordinal=? AND status='waiting_input'`).run(hookedEvent.seq, context.attemptId, ordinal);
-        const snapshot = JSON.stringify({ runId, ordinal, status: "waiting_input", legacyEventSeq: hookedEvent.seq, active: false });
-        this.db.prepare(`INSERT INTO attempt_shadow_comparisons (id,attempt_id,scenario,legacy_json,projected_json,mismatch,gate_sample,created_at) VALUES (lower(hex(randomblob(16))),?,'input',?,?,0,0,?)`).run(context.attemptId, snapshot, snapshot, hookedEvent.createdAt);
-        this.db.prepare(`UPDATE attempt_transition_audit SET legacy_event_seq=? WHERE rowid=(SELECT rowid FROM attempt_transition_audit WHERE attempt_id=? AND scenario='input' ORDER BY rowid DESC LIMIT 1)`).run(hookedEvent.seq, context.attemptId);
+        this.db.prepare(`UPDATE attempts SET event_sequence=? WHERE id=? AND ordinal=? AND status='waiting_input'`).run(hookedEvent.seq, context.attemptId, ordinal);
+        this.db.prepare(`UPDATE attempt_transition_audit SET event_sequence=? WHERE rowid=(SELECT rowid FROM attempt_transition_audit WHERE attempt_id=? AND scenario='input' ORDER BY rowid DESC LIMIT 1)`).run(hookedEvent.seq, context.attemptId);
         this.store.completeToolAttempt(runId, ordinal, toolCallId, true);
         capturedEvent = hookedEvent as typeof capturedEvent;
       });

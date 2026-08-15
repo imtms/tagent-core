@@ -88,22 +88,13 @@ describe("critical persistence and replay properties", () => {
     }
   });
 
-  it("keeps the v44-to-v45 request-envelope migration re-entrant across repeated opens", async () => {
+  it("keeps request envelopes and the current schema stable across repeated opens", async () => {
     await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 5 }), fc.jsonValue(), async (reopens, payload) => {
-      const directory = await mkdtemp(path.join(tmpdir(), "tagent-migration-property-"));
+      const directory = await mkdtemp(path.join(tmpdir(), "tagent-current-schema-property-"));
       const filename = path.join(directory, "core.db");
       try {
-        const seed = new Store(filename);
-        seed.db.exec(`
-          DROP INDEX idx_request_envelopes_run;
-          DROP INDEX idx_request_envelopes_attempt_ordinal;
-          DROP TABLE attempt_request_envelopes;
-          UPDATE schema_meta SET version=44 WHERE id=1;
-        `);
-        seed.close();
-
         const migrated = new Store(filename);
-        const run = migrated.createRun(migrated.createSession().id, "migration property");
+        const run = migrated.createRun(migrated.createSession().id, "reopen property");
         const envelope = createAttemptRequestEnvelope({
           runId: run.id,
           attemptId: attemptIdFor(run.id, run.attempt),
@@ -119,7 +110,7 @@ describe("critical persistence and replay properties", () => {
 
         for (let index = 0; index < reopens; index += 1) {
           const reopened = new Store(filename);
-          expect(reopened.getSchemaVersion()).toBe(47);
+          expect(reopened.getSchemaVersion()).toBe(1);
           expect(reopened.db.prepare("SELECT type,name,tbl_name AS tableName,sql FROM sqlite_master WHERE name LIKE '%request_envelope%' ORDER BY type,name").all()).toEqual(schema);
           expect(agentPersistence(reopened).requestEnvelopes.get(envelope.id)).toEqual(envelope);
           reopened.close();

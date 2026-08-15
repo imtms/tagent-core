@@ -47,7 +47,6 @@ function applyProvenance(proposal:{records:WarmMemory[];topics:any[];nodes:any[]
   return{...proposal,records:proposal.records.map((record)=>{const provenance=record.provenance??deriveRecordProvenance(record,request);return{...record,provenance,status:provenance.evidenceClass==="assistant_inference"?"quarantined":record.status,confidence:Math.min(record.confidence,trustCeiling(provenance))};})};
 }
 function deriveRecordProvenance(record:WarmMemory,request:CaptureRequest):MemoryProvenance {
-  if(request.provenance)return request.provenance; // compatibility for trusted structured callers
   const source=request.captureSource;
   if(source?.kind==="context_summary")return{evidenceClass:"user_context_summary",trustLevel:"medium",sourceRole:"user",verificationState:"structured",sourceReliability:.75};
   if(source?.kind==="tool_result")return{evidenceClass:"tool_verified_fact",trustLevel:"high",sourceRole:"tool",verificationState:"verified",sourceReliability:.95};

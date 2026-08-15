@@ -1152,7 +1152,8 @@ export function App() {
     if (submittingUserInputId) return;
     setSubmittingUserInputId(request.id); setError(""); setNotice("");
     try {
-      const resumed = await api.submitUserInput(request.id, values);
+      if (!selectedRun) throw new Error("TaskRun is not selected");
+      const resumed = await api.submitUserInput(selectedRun.id, request.id, values);
       setActiveRun(resumed); setSelectedRun(resumed); setRuns((current) => current.map((item) => item.id === resumed.id ? resumed : item));
       setEvents([]); setStreaming(""); setLiveThinking(""); setNotice("Information submitted. TaskRun resumed."); pinToLatest();
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -1165,9 +1166,8 @@ export function App() {
     const targetSessionId = sessionId;
     setResolvingApprovalId(approval.id); setResolvingApprovalDecision(decision); setError(""); setNotice("");
     try {
-      const updated = decision === "approved"
-        ? await api.approveRunApproval(approval.id)
-        : await api.rejectRunApproval(approval.id);
+      if (!sourceRun) throw new Error("TaskRun is not active");
+      const updated = await api.resolveRunApproval(sourceRun.id, approval.id, decision);
       if (sessionIdRef.current !== targetSessionId) return;
       const refreshedSource = sourceRun && sourceRun.id !== updated.id
         ? await api.run(sourceRun.id)

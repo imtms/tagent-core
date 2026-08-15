@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { LearningFeatureControl, SemanticJudge } from "@tagent/learning";
-import { LegacyStoreAdapter, Store } from "@tagent/persistence-sqlite";
+import { SqlitePersistence, Store } from "@tagent/persistence-sqlite";
 import type { MutationUnitOfWork, SynchronousResult } from "@tagent/persistence-sqlite/unit-of-work";
 
 const stores: Store[] = [];
@@ -17,7 +17,7 @@ function fixture() {
       return store.db.transaction(work)();
     },
   };
-  return { store, adapter: new LegacyStoreAdapter(store, unitOfWork) };
+  return { store, adapter: new SqlitePersistence(store, unitOfWork) };
 }
 
 function clusterResponse() {

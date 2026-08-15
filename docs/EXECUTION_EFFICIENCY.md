@@ -102,5 +102,4 @@ Provider cooldown recovery is separate from completion-gate repair. A provider-s
 - semantic Supervisor review remains enabled;
 - no cumulative Run token limit was introduced;
 - no hard model-call or tool-call budget was introduced;
-- legacy-looking `TAGENT_MAX_RUN_TOKENS`, `TAGENT_DYNAMIC_BUDGET`, `TAGENT_MAX_MODEL_CALLS` and `TAGENT_MAX_TOOL_CALLS` values do not install Run-budget controls;
 - `TAGENT_MAX_TOKENS` remains the per-provider-response output cap, not a cumulative Run budget.

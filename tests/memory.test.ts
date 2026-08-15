@@ -810,12 +810,7 @@ describe("memory safety hardening", () => {
       sourceRefs: [],
       content: "assistant: guessed",
       idempotencyKey: "assistant-inference",
-      provenance: {
-        evidenceClass: "assistant_inference",
-        trustLevel: "untrusted",
-        sourceRole: "assistant",
-        verificationState: "inferred",
-      },
+      captureSource: { kind: "assistant_message", role: "assistant" },
     });
     const worker = new MemoryCaptureWorker(
       adapter,

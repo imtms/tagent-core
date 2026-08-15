@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LearningService, WorkflowService } from "@tagent/learning";
+import { LearningService, WorkflowLearningService } from "@tagent/learning";
+import {
+  decodeIntegrationLearningProjection,
+  type IntegrationLearningProjectionRecord,
+} from "@tagent/learning/domain";
 import type { RecallFeedbackSignal } from "@tagent/memory/domain";
 import { Store } from "@tagent/persistence-sqlite";
 import { createExecutionCollaborationAdapters } from "../apps/core-service/src/composition/execution-collaboration-adapters.js";
@@ -40,13 +44,13 @@ describe("Communication Profile", () => {
     expect(learning.resolveCommunicationProfile("session:s1", [{ type: "session", id: "s1" }]).values.language?.value).toBe("中文");
   });
 
-  it("shares principal-owned global habits across Workspaces and retains legacy Session overrides", async () => {
+  it("shares principal-owned global habits across Workspaces and retains Session overrides", async () => {
     const store = new Store(":memory:"); stores.push(store);
     const first = store.createSessionIdempotent({ title: "First", principalId: "user:1", idempotencyKey: "first", canonicalPayload: "first" }).session;
     const second = store.createSessionIdempotent({ title: "Second", principalId: "user:1", idempotencyKey: "second", canonicalPayload: "second" }).session;
     const persistence = agentPersistence(store);
     const learning = new LearningService(learningPersistence(store));
-    const workflows = new WorkflowService(workflowPersistence(store));
+    const workflows = new WorkflowLearningService(workflowPersistence(store));
     const captureRequests: any[] = [];
     const adapters = createExecutionCollaborationAdapters({
       persistence,
@@ -73,7 +77,7 @@ describe("Communication Profile", () => {
     expect(adapters.contextEnrichment.prepareWithoutRecall(firstRun, "current task").promptSection).toContain("verbosity: 详细");
     expect(adapters.contextEnrichment.prepareWithoutRecall(secondRun, "unrelated task").promptSection).toContain("verbosity: 简洁");
 
-    learning.recordCommunicationPreference({ subjectId: `session:${second.id}`, scopeType: "session", scopeId: second.id, dimension: "language", value: "中文", sourceType: "explicit_user", sourceRef: "legacy" });
+    learning.recordCommunicationPreference({ subjectId: `session:${second.id}`, scopeType: "session", scopeId: second.id, dimension: "language", value: "中文", sourceType: "explicit_user", sourceRef: "session-override" });
     expect(adapters.contextEnrichment.prepareWithoutRecall(secondRun, "unrelated task").promptSection).toContain("language: 中文");
   });
 });
@@ -89,10 +93,17 @@ describe("Learning Event, Outcome Label, and Correction ledgers", () => {
     expect(event.executionTrace).toHaveProperty("continuations");
   });
 
-  it("replays every projection-outbox lifecycle into the generic ledger idempotently", () => {
+  it("replays each integration lifecycle into the generic ledger idempotently", () => {
     const store = new Store(":memory:"); stores.push(store); const session = store.createSession(); const learning = new LearningService(learningPersistence(store)); const run = store.createRun(session.id, "wait for user input");
     store.requestUserInput(run.id, "Need value", [{ key: "v", label: "Value", description: "", inputType: "text", required: true, placeholder: "" }]);
-    learning.drainLearningProjectionLedger(); learning.drainLearningProjectionLedger();
+    const record = store.db.prepare(`SELECT outbox_sequence as outboxSequence,
+      source_event_id as sourceEventId,payload_hash as payloadHash,aggregate_id as aggregateId,
+      aggregate_version as aggregateVersion,run_event_ref as runEventRef,attempt_id as attemptId,
+      attempt_ordinal as attemptOrdinal,payload_json as payloadJson,
+      evidence_snapshot_json as evidenceSnapshotJson FROM integration_outbox`).get() as
+      IntegrationLearningProjectionRecord;
+    const projection = decodeIntegrationLearningProjection(record);
+    learning.applyActiveProjection(projection); learning.applyActiveProjection(projection);
     const events = learning.listLearningEvents(session.id);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ lifecycle: "run.waiting_input", outcome: { status: "waiting_input", success: false } });

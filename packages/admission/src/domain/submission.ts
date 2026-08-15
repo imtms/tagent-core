@@ -27,6 +27,3 @@ export interface Submission {
   analysis: SessionInputAnalysis;
   manualOrder: boolean;
 }
-
-/** @deprecated Use Submission. */
-export type SessionInboxItem = Submission;

@@ -128,7 +128,7 @@ describe("Web workbench state model", () => {
   it("keeps conversation metadata quiet until it is useful", async () => {
     const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
     const message = await readFile(new URL("../apps/web-console/src/ConversationMessage.tsx", import.meta.url), "utf8");
-    const legacy = await readFile(new URL("../apps/web-console/src/styles.css", import.meta.url), "utf8");
+    const baseStyles = await readFile(new URL("../apps/web-console/src/styles.css", import.meta.url), "utf8");
     const design = await readFile(new URL("../apps/web-console/src/design-system.css", import.meta.url), "utf8");
     expect(app).toContain("<ConversationMessage message={message}");
     expect(message).toContain('aria-label={`Message from ${speaker}`}');
@@ -138,8 +138,8 @@ describe("Web workbench state model", () => {
     expect(message).toContain('<BrainCircuit size={11} /><span>{detail}</span>');
     expect(message).toContain('document.execCommand("copy")');
     expect(message).not.toContain('className="message-meta"');
-    expect(legacy).toContain(".message:hover .message-copy");
-    expect(legacy).toContain("@media (hover: none), (pointer: coarse) { .message-copy { opacity: .72; } }");
+    expect(baseStyles).toContain(".message:hover .message-copy");
+    expect(baseStyles).toContain("@media (hover: none), (pointer: coarse) { .message-copy { opacity: .72; } }");
     expect(design).toContain(".message-footer");
     expect(design).toContain(".turn-memory { color: var(--foreground-muted); }");
     expect(design).toMatch(/@media \(max-width: 680px\)[\s\S]*?\.message-copy\s*\{[\s\S]*?opacity: \.58;/);
@@ -162,7 +162,8 @@ describe("Web workbench state model", () => {
     expect(app).toContain("selectedRun?.pendingUserInput");
     expect(app).toContain("api.submitUserInput");
     expect(app).toContain("Submit and resume");
-    expect(api).toContain("/api/v1/console/user-input-requests/${requestId}/submit");
+    expect(api).toContain('"task_run.submit_user_input"');
+    expect(api).toContain("/api/v1/task-runs/${encodeURIComponent(runId)}/commands");
   });
 
   it("puts pending approvals directly above the chat composer instead of in the audit sidebar", async () => {
@@ -176,8 +177,7 @@ describe("Web workbench state model", () => {
     expect(footer).toMatch(/<ApprovalDock[\s\S]*<div className="composer">/);
     expect(footer).toContain("resolvingId={resolvingApprovalId}");
     expect(footer).toContain("resolvingDecision={resolvingApprovalDecision}");
-    expect(app).toContain("await api.approveRunApproval(approval.id)");
-    expect(app).toContain("await api.rejectRunApproval(approval.id)");
+    expect(app).toContain("await api.resolveRunApproval(sourceRun.id, approval.id, decision)");
     expect(app).toContain('resolvingDecision === "rejected" ? "Rejecting…"');
     expect(app).toContain("sourceRun && sourceRun.id !== updated.id");
     expect(app).toContain("await api.run(sourceRun.id)");
@@ -210,6 +210,7 @@ describe("Web workbench state model", () => {
   it("opens text and Markdown artifacts in the Web UI without removing downloads", async () => {
     const app = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
     const api = await readFile(new URL("../apps/web-console/src/api.ts", import.meta.url), "utf8");
+    const transport = await readFile(new URL("../apps/web-console/src/api-transport.ts", import.meta.url), "utf8");
     const styles = await readFile(new URL("../apps/web-console/src/styles.css", import.meta.url), "utf8");
     expect(app).toContain("function ArtifactsPanel");
     expect(app).toContain("api.artifactContent(run.id, artifact.id)");
@@ -218,7 +219,7 @@ describe("Web workbench state model", () => {
     expect(app).toContain("api.downloadArtifact(run.id, artifact.id, artifact.title)");
     expect(app).toContain("<Download size={14} />");
     expect(api).toContain("/artifacts/${encodeURIComponent(artifactId)}/content");
-    expect(api).toContain("/artifacts/${encodeURIComponent(artifactId)}/download");
+    expect(transport).toContain("/artifacts/${encodeURIComponent(artifactId)}/download");
     expect(styles).toContain(".artifact-preview");
   });
 

@@ -1,24 +1,13 @@
-export type { LearningProjectionJob, LearningProjectionQueue } from "./learning-projection-queue.js";
 export type {
   ActiveLearningProjectionEffectApplier,
   ApplyActiveLearningProjectionEffectInput,
 } from "./active-learning-projection-effect.js";
 export type {
-  AcknowledgeActiveLearningProjectionInput,
-  ClaimActiveLearningProjectionInput,
-  ClaimShadowLearningProjectionInput,
-  FailActiveLearningProjectionInput,
+  AcknowledgeLearningProjectionInput,
+  ClaimLearningProjectionInput,
+  FailLearningProjectionInput,
   LearningProjectionDeliveryRepository,
 } from "./learning-projection-delivery-repository.js";
-export type {
-  AcquireLearningProjectionAuthorityInput,
-  LearningProjectionAuthorityRepository,
-  PrepareLearningProjectionCutoverInput,
-  PrepareLearningProjectionRollbackInput,
-  ReleaseLearningProjectionAuthorityInput,
-  RenewLearningProjectionAuthorityInput,
-  RotateLearningProjectionAuthorityInput,
-} from "./learning-projection-authority-repository.js";
 export type {
   LearningEffectRepository,
   RecordLearningEffectReceiptInput,
@@ -28,11 +17,6 @@ export type {
   LearningProjectionUnitOfWork,
 } from "./learning-projection-integration.js";
 export type {
-  CompleteShadowLearningProjectionInput,
-  LearningProjectionPair,
-  LearningProjectionReconciliationRepository,
-} from "./learning-projection-reconciliation-repository.js";
-export type {
   CommunicationProfileRecord,
   CommunicationRevisionRecord,
   CommunicationRevisionWrite,
@@ -40,7 +24,6 @@ export type {
   FeedbackAttributionWorkItem,
   LearningEventWrite,
   LearningLedgerRepository,
-  LearningProjectionLedgerRow,
   LearningServicePersistencePort,
   LearningToolAttemptRow,
 } from "./learning-ledger-repository.js";
@@ -76,12 +59,10 @@ export type {
   WorkflowLearningReceiptRepository,
   WorkflowLearningRepository,
   WorkflowObservationRepository,
-  WorkflowRepository,
   WorkflowRevisionRecord,
   WorkflowRevisionWrite,
 } from "./workflow-learning-repository.js";
 export type {
   WorkflowLearningPersistencePort,
-  WorkflowServicePersistencePort,
   WorkflowUnitOfWork,
 } from "./workflow-learning-persistence.js";

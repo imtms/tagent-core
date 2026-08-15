@@ -20,6 +20,7 @@ const nowSql = "(SELECT value FROM writer_test_clock WHERE id=1)";
 const ATTEMPT_ID = "attempt:run-1:1";
 const connections: Database.Database[] = [];
 const temporaryDirectories: string[] = [];
+let currentClock = 1_000;
 
 interface Fixture {
   db: Database.Database;
@@ -40,6 +41,8 @@ interface ReopenedFixture {
 function open(filename: string): Database.Database {
   const db = new Database(filename);
   db.pragma("busy_timeout=2000");
+  db.exec(`CREATE TEMP TABLE writer_test_clock (id INTEGER PRIMARY KEY CHECK (id=1),value INTEGER NOT NULL);
+    INSERT INTO writer_test_clock VALUES (1,${currentClock})`);
   connections.push(db);
   return db;
 }
@@ -54,13 +57,14 @@ function claim(db: Database.Database, ownerId: string) {
 }
 
 function fixture(): Fixture {
+  currentClock = 1_000;
   const directory = mkdtempSync(path.join(tmpdir(), "tagent-capability-transaction-"));
   temporaryDirectories.push(directory);
   const filename = path.join(directory, "core.sqlite");
   const store = new Store(filename);
   const db = store.db;
   connections.push(db);
-  db.exec(`CREATE TABLE writer_test_clock (id INTEGER PRIMARY KEY CHECK (id=1),value INTEGER NOT NULL);
+  db.exec(`CREATE TEMP TABLE writer_test_clock (id INTEGER PRIMARY KEY CHECK (id=1),value INTEGER NOT NULL);
     INSERT INTO writer_test_clock VALUES (1,1000);
     INSERT INTO sessions (id,title,created_at,updated_at) VALUES ('session-1','session',1,1);
     INSERT INTO runs (id,session_id,request_id,status,phase,goal,created_at,updated_at,attempt)
@@ -69,8 +73,8 @@ function fixture(): Fixture {
       (id,run_id,attempt,checkpoint_seq,trigger,action,reason_code,rationale,confidence,status,created_at)
       VALUES ('decision-1','run-1',1,1,'test','resume','test','test',1,'proposed',1);
     INSERT INTO attempts
-      (id,run_id,ordinal,trigger,status,active,version,started_at,updated_at,reconstruction_state)
-      VALUES ('${ATTEMPT_ID}','run-1',1,'initial','running',1,1,1,1,'complete');
+      (id,run_id,ordinal,trigger,status,active,version,started_at,updated_at)
+      VALUES ('${ATTEMPT_ID}','run-1',1,'initial','running',1,1,1,1);
     INSERT INTO execution_leases
       (attempt_id,owner_id,lease_token,fence,attempt_version,lease_until,heartbeat_at,released_at)
       VALUES ('${ATTEMPT_ID}','runtime','execution-token',7,1,10000,1000,NULL);
@@ -88,7 +92,10 @@ function fixture(): Fixture {
       leaseToken: "execution-token",
       executionFence: 7,
     },
-    setNow: (value) => { db.prepare("UPDATE writer_test_clock SET value=? WHERE id=1").run(value); },
+    setNow: (value) => {
+      currentClock = value;
+      db.prepare("UPDATE writer_test_clock SET value=? WHERE id=1").run(value);
+    },
     connect: () => open(filename),
   };
 }
@@ -97,8 +104,10 @@ function reopenForProductionRecovery(receipt: Fixture): ReopenedFixture {
   const index = connections.indexOf(receipt.db);
   if (index >= 0) connections.splice(index, 1);
   receipt.db.close();
-  const store = new Store(receipt.filename, { deferPostMigrationRecovery: true });
+  const store = new Store(receipt.filename, { deferStartupRecovery: true });
   connections.push(store.db);
+  store.db.exec(`CREATE TEMP TABLE writer_test_clock (id INTEGER PRIMARY KEY CHECK (id=1),value INTEGER NOT NULL);
+    INSERT INTO writer_test_clock VALUES (1,${currentClock})`);
   const guard = new WriterFenceGuard(store.db, receipt.lease.authority, {
     skewMarginMs: 2_000,
     nowSql,
@@ -129,7 +138,7 @@ function request(
   receipt: Fixture,
   approvalId: string,
   command: CapabilityCommand = runCommand(),
-  source: "legacy_run" | "legacy_workflow" = "legacy_run",
+  source: "run" | "workflow" = "run",
 ): CapabilityExecutionRequest {
   return {
     command,
@@ -195,7 +204,7 @@ function workflowCommand(commandId = "workflow-command", input: {
       target: input.target ?? (action === "workflow.execute"
         ? { kind: "workflow_binding", id: bindingId ?? "missing-binding" }
         : { kind: "workflow_revision", id: "revision-1" }),
-      scope: { type: "legacy_workflow_scope", id: "session-1" },
+      scope: { type: "workflow_scope", id: "session-1" },
       payload,
     },
   });
@@ -229,8 +238,8 @@ function insertWorkflowApproval(
     );
 }
 
-function persistedState(db: Database.Database, approvalId: string, source = "legacy_run") {
-  const table = source === "legacy_run" ? "approval_requests" : "autonomy_approval_requests";
+function persistedState(db: Database.Database, approvalId: string, source = "run") {
+  const table = source === "run" ? "approval_requests" : "autonomy_approval_requests";
   return {
     usedCount: (db.prepare(`SELECT used_count value FROM ${table} WHERE id=?`).get(approvalId) as { value: number }).value,
     operations: (db.prepare("SELECT COUNT(*) value FROM operations").get() as { value: number }).value,
@@ -244,7 +253,7 @@ afterEach(() => {
 });
 
 describe("Attempt-bound capability authorization persistence", () => {
-  it("atomically reconciles capability and legacy operations on writer-fenced Store restart", () => {
+  it("atomically reconciles capability and ordinary operations on writer-fenced Store restart", () => {
     const receipt = fixture();
     const runningCommand = runCommand("restart-running-command");
     const authorizedCommand = runCommand("restart-authorized-command");
@@ -259,7 +268,7 @@ describe("Attempt-bound capability authorization persistence", () => {
       WHERE id IN ('restart-running-approval','restart-authorized-approval')`).run();
     receipt.db.prepare(`INSERT INTO operations
       (id,run_id,attempt,attempt_id,operation_type,payload_hash,status,stage,created_at,updated_at)
-      VALUES ('legacy-restart','run-1',1,?,'tool.bash','legacy-hash','running','executing',1,1)`)
+      VALUES ('ordinary-restart','run-1',1,?,'tool.bash','ordinary-hash','running','executing',1,1)`)
       .run(ATTEMPT_ID);
     // Startup reconciliation is a system authority path. It must remain able to
     // conservatively close in-flight effects after runtime Attempt authority is gone.
@@ -272,18 +281,18 @@ describe("Attempt-bound capability authorization persistence", () => {
     reopened.store.db.exec(`CREATE TEMP TRIGGER reject_restart_authorized
       BEFORE UPDATE ON operations WHEN OLD.id='restart-authorized-command'
       BEGIN SELECT RAISE(ABORT,'restart authorization recovery rejected'); END`);
-    expect(() => reopened.store.runPostMigrationRecovery(reopened.guard))
+    expect(() => reopened.store.runStartupRecovery(reopened.guard))
       .toThrow(/restart authorization recovery rejected/);
     expect(reopened.store.db.prepare("SELECT id,status,stage,completed_at as completedAt FROM operations ORDER BY id").all())
       .toEqual([
-        { id: "legacy-restart", status: "running", stage: "executing", completedAt: null },
+        { id: "ordinary-restart", status: "running", stage: "executing", completedAt: null },
         { id: "restart-authorized-command", status: "authorized", stage: "authorization_committed", completedAt: null },
         { id: "restart-running-command", status: "running", stage: "effect_started", completedAt: null },
       ]);
     reopened.store.db.exec("DROP TRIGGER reject_restart_authorized");
 
-    expect(reopened.store.runPostMigrationRecovery(reopened.guard)).toEqual({ operations: 3, controlInbox: 0 });
-    expect(reopened.store.runPostMigrationRecovery(reopened.guard)).toEqual({ operations: 0, controlInbox: 0 });
+    expect(reopened.store.runStartupRecovery(reopened.guard)).toEqual({ operations: 3, controlInbox: 0 });
+    expect(reopened.store.runStartupRecovery(reopened.guard)).toEqual({ operations: 0, controlInbox: 0 });
     const rows = reopened.store.db.prepare(`SELECT id,status,stage,error,completed_at as completedAt
       FROM operations ORDER BY id`).all() as Array<{
         id: string;
@@ -294,7 +303,7 @@ describe("Attempt-bound capability authorization persistence", () => {
       }>;
     expect(rows).toEqual([
       {
-        id: "legacy-restart",
+        id: "ordinary-restart",
         status: "outcome_unknown",
         stage: "service_restart",
         error: "Service restarted before operation outcome was recorded",
@@ -400,10 +409,10 @@ describe("Attempt-bound capability authorization persistence", () => {
     insertWorkflowGraph(receipt.db);
     const command = workflowCommand();
     insertWorkflowApproval(receipt.db, "workflow-approval", command);
-    const input = request(receipt, "workflow-approval", command, "legacy_workflow");
+    const input = request(receipt, "workflow-approval", command, "workflow");
 
     expect(receipt.repository.authorizeAndClaim(input)).toMatchObject({ status: "authorized" });
-    expect(persistedState(receipt.db, "workflow-approval", "legacy_workflow"))
+    expect(persistedState(receipt.db, "workflow-approval", "workflow"))
       .toEqual({ usedCount: 1, operations: 1, receipts: 1 });
   });
 
@@ -420,7 +429,7 @@ describe("Attempt-bound capability authorization persistence", () => {
           UPDATE runs SET session_id='different-scope' WHERE id='run-1';`);
       }
       expect(() => receipt.repository.authorizeAndClaim(
-        request(receipt, `approval-${scenario}`, command, "legacy_workflow"),
+        request(receipt, `approval-${scenario}`, command, "workflow"),
       )).toThrow(/binding|scope/);
       connections.splice(connections.indexOf(receipt.db), 1)[0].close();
     }
@@ -430,7 +439,7 @@ describe("Attempt-bound capability authorization persistence", () => {
     const command = workflowCommand("workflow-activate", { action: "workflow.activate" });
     insertWorkflowApproval(receipt.db, "approval-activate", command, "activate_workflow");
     expect(() => receipt.repository.authorizeAndClaim(
-      request(receipt, "approval-activate", command, "legacy_workflow"),
+      request(receipt, "approval-activate", command, "workflow"),
     )).toThrow(/Learning synchronous unit of work/);
   });
 
@@ -442,7 +451,7 @@ describe("Attempt-bound capability authorization persistence", () => {
     const workflow = workflowCommand("source-collision-workflow");
     insertWorkflowApproval(receipt.db, "same-id", workflow);
 
-    expect(receipt.repository.authorizeAndClaim(request(receipt, "same-id", workflow, "legacy_workflow")))
+    expect(receipt.repository.authorizeAndClaim(request(receipt, "same-id", workflow, "workflow")))
       .toMatchObject({ status: "authorized" });
     expect(receipt.db.prepare("SELECT used_count value FROM approval_requests WHERE id='same-id'").get())
       .toEqual({ value: 0 });

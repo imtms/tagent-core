@@ -1,4 +1,4 @@
-import type { SessionId, SessionInboxItem, SessionInputAnalysis } from "../domain/index.js";
+import type { SessionId, Submission, SessionInputAnalysis } from "../domain/index.js";
 import type { RunId, TaskRun } from "@tagent/execution/domain";
 
 export interface AdmissionRouterPort {
@@ -19,6 +19,6 @@ export interface AdmissionSupervisorPort {
 }
 
 export interface AdmissionDispatchPort {
-  launchClaimedSessionInbox(item: SessionInboxItem, run: TaskRun, retry?: boolean): TaskRun | undefined;
+  launchClaimedSessionInbox(item: Submission, run: TaskRun, retry?: boolean): TaskRun | undefined;
   dispatchSessionInbox(sessionId: SessionId): TaskRun | undefined;
 }

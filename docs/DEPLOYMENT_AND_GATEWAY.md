@@ -10,45 +10,42 @@ Browser -> Web Console static host -> identity Gateway -> private TAgent Core
 
 The Web host may also be the Gateway host, but Web assets and Core remain independent artifacts. Core is API-only and listens on `127.0.0.1:3100` by default.
 
-The schema-47 Channel, legacy Operator, independent Operator Read and eight full-feature capability profiles are ready for Gateway integration. Review [GATEWAY_HANDOFF_STATUS.md](GATEWAY_HANDOFF_STATUS.md) and [GATEWAY_PROFILE_COMPATIBILITY.md](GATEWAY_PROFILE_COMPATIBILITY.md) for the exact Core/Gateway responsibility and version boundary. Production cutover still requires both repositories' release gates; Core readiness cannot prove Gateway-local persistence, identity or external delivery behavior.
+The v1 Channel, base Operator profile, independent Operator Read profile, and eight full-feature capability profiles are ready for Gateway integration. Core readiness cannot prove Gateway-local identity, persistence, routing, or external delivery; both repositories must pass their own release gates.
 
 ## Production prerequisites
 
-- Linux x64, Node.js `24.18.1`, Node ABI 137;
-- one dedicated low-privilege Core OS account;
-- one writable SQLite data directory and one trusted tool workspace;
+- Linux x64 and Node.js `24.18.1` / ABI 137;
+- a dedicated low-privilege Core OS account;
 - a private Core listener inaccessible from the public Internet;
+- a new writable SQLite path and a dedicated tool workspace;
 - a Gateway that validates OIDC and translates identity to opaque scoped Core credentials;
-- an independent static-hosting path for the Web Console;
-- consistent backup for SQLite/WAL/SHM and optional Memory stores.
+- independent static hosting for the Web Console;
+- consistent backup for the current SQLite schema and optional Memory stores.
 
 ## Artifacts
 
-`scripts/build-release.sh` produces:
+The release workflow publishes four version-matched artifacts and their checksums:
 
-- `tagent-core-<release-id>-linux-x64-node24-abi137.tar.gz` plus checksum;
-- `tagent-web-console-<release-id>.tar.gz` plus checksum;
-- `tagent-abi-<version>.tgz` plus checksum;
-- `tagent-core-client-<version>.tgz` plus checksum.
+- `tagent-core-<tag>-linux-x64-node24-abi137.tar.gz`;
+- `tagent-web-console-<tag>.tar.gz`;
+- `tagent-abi-<version>.tgz`;
+- `tagent-core-client-<version>.tgz`.
 
-The Core and Web archives contain a release manifest and commit marker. The Core archive materializes runtime workspaces, rejects symbolic links and unexpected files, and excludes Web assets. The SDK tarballs contain their compiled package exports and versioned package manifests.
-
-The tag-triggered release workflow builds Core, Web Console, ABI SDK and Core Client SDK artifacts in one release job, uploads all artifacts and checksums as a 30-day Actions artifact, and attaches all eight files to the GitHub Release.
+Core and Web archives contain a release manifest and commit marker. The Core archive materializes required runtime workspaces, contains no Web assets or symbolic links, and includes the native SQLite binding. SDK archives contain compiled exports, declarations, source maps, and package metadata.
 
 ## Core configuration
 
-Minimum production boundary:
+Minimum private Channel configuration:
 
 ```env
 HOST=127.0.0.1
 PORT=3100
 TAGENT_DB=/var/lib/tagent/tagent.db
 TAGENT_WORKSPACE=/srv/tagent/workspace
-TAGENT_GOVERNANCE_APPROVAL_AUTHORITY=legacy
 TAGENT_SERVICE_CREDENTIALS=[{"token":"REPLACE_WITH_24_PLUS_CHAR_TOKEN","scopes":["sessions:read","sessions:write","runs:read","runs:control","events:consume"]}]
 ```
 
-If the browser origin reaches Core directly, set an exact allowlist:
+Add the fine-grained Operator/Admin scopes and resource grants only for enabled capability profiles. If a browser origin reaches Core directly, use an exact allowlist:
 
 ```env
 TAGENT_CORS_ALLOWED_ORIGINS=https://console.example.com
@@ -56,49 +53,51 @@ TAGENT_CORS_ALLOWED_ORIGINS=https://console.example.com
 
 Do not put provider keys or Core credentials in the Web artifact.
 
-The current release keeps legacy approval handlers authoritative while schema 31 canonical projections and receipts are validated. Requesting `canonical` fails closed because the release does not declare canonical request/decide/consume/execute handlers ready.
+## Fresh database requirement
+
+Core 0.8 creates one current schema identified by `tagent-core/0.8` and reports numeric schema version `1`. It accepts only an empty database or an exact current-schema database. Earlier Core databases are not upgraded.
+
+Before first start, stop all writers and point `TAGENT_DB` at a nonexistent file or verified empty database. A marker mismatch or schema drift is a deployment failure; create a new database instead of editing the marker or copying rows.
 
 ## Deployment order
 
-Use Core-before-Gateway order:
+Use a Core-before-Gateway order: establish writer readiness, validate replay and ACK watermarks, and only then reopen Gateway traffic.
 
-1. stop new Gateway traffic;
-2. stop the old Core writer and confirm its process/lease is gone;
-3. back up SQLite with WAL/SHM, optional PostgreSQL/Cold state, current artifact, config, and watermarks;
-4. verify the Core archive and checksum;
-5. switch to the new Core artifact and start it;
-6. allow migration to schema 47; if `migration_issues` contains an open row, correct the source data rather than bypassing the ledger;
-7. require `GET /api/v1/health` to report `data.ok=true` and `data.writer.ready=true`;
-8. require `GET /api/v1/capabilities` to report schema 47, the required command/event catalogs, Operator endpoint allowlist, active Approval authority, exact receipt-recovery protocol, retention policy, current limits and `operator.read.v1`; validate `/api/v1/operator/capabilities` and all required `/api/v1/capability-profiles` summaries/details before enabling their features;
-9. start one Gateway consumer, claim a new event-consumer generation, replay, persist, then ACK;
-10. run the readiness probe and require zero lag, no settled/final unacknowledged events, no `outcome_unknown` receipts and no stale `started` receipts;
-11. deploy the matching Web artifact with its Gateway origin;
-12. reopen traffic and monitor writer fence, command/Goal/profile receipt counts and age, consumer lag, Learning authority, and provider errors.
+1. stop new Gateway traffic and all Core writers;
+2. verify Core, Web, ABI, and Core Client checksums and release manifests;
+3. provision a new empty SQLite path and matching optional Memory stores;
+4. validate the production credential and resource-scope configuration;
+5. start Core and require `/api/v1/health` to report `data.ok=true` and `data.writer.ready=true`;
+6. require base capabilities to report schema version `1`, current catalogs, Operator endpoints, ready Approval, receipt recovery, retention, limits, and `operator.read.v1`;
+7. validate Operator Read and every enabled capability-profile summary/detail using the real Gateway principal;
+8. start one Gateway consumer, claim a generation, replay, persist, and then ACK;
+9. run `scripts/gateway-readiness-probe.mjs` and require zero lag/ACK gaps, no unknown or stale receipts, and `learningProjectionReady=true`;
+10. deploy the matching Web artifact with its Gateway/Core origin and reopen traffic.
 
-Use [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for exact gates.
+See [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for exact commands and thresholds.
 
 ## Immutable Core deployment
 
-The Core archive includes `scripts/deploy-release.sh`. The script verifies archive paths, rejects links, verifies the release manifest and runtime, installs an immutable commit directory, switches the `current` symlink, restarts systemd, and probes `/api/v1/health`.
+The Core archive includes `scripts/deploy-release.sh`. It verifies paths, rejects links, verifies the release manifest/runtime, installs an immutable commit directory, switches `current`, restarts systemd, and probes health.
 
 ```bash
 sudo TAGENT_HEALTH_URL=http://127.0.0.1:3100/api/v1/health \
-  /path/to/deploy-release.sh /path/to/tagent-core-COMMIT-linux-x64-node24-abi137.tar.gz
+  /path/to/deploy-release.sh /path/to/tagent-core-v0.8.0-linux-x64-node24-abi137.tar.gz
 ```
 
-The script's service rollback changes the binary pointer only. It does not downgrade a migrated database.
+The script changes the binary pointer only. It does not transform database state.
 
-## Gateway command boundary
+## Gateway command and event boundary
 
-Gateway must persist its own external intent before calling Core, use stable Session/Submission/command/Goal request identities, and query Core receipts after ambiguous network failures. Core never accepts browser identity as authority and never receives Telegram/Feishu SDK objects or platform secrets. Gateway must persist each SSE event before ACK and treat `blocked` as settled but recoverable, not final.
+Gateway persists its external intent before calling Core, uses stable Session/Submission/command/Goal identities, and queries the original receipt after ambiguous network failure. Core never accepts browser identity as authority and never receives channel SDK objects or platform secrets.
 
-Core bounds SSE replay at 256 rows per database read and the replay/live handoff at 1,000 events. A closed slow-consumer stream is reconnected from its durable ACK. The current retention policy does not automatically delete TaskRun events or expire cursors. Gateway uses Operator Read for authoritative initial inventory and rebuild, while its local projection remains disposable.
+Gateway persists each SSE event under the exact consumer generation and event identity before ACK. `blocked` is settled but recoverable, not final. Slow consumers reconnect from durable ACK; Core bounds replay reads at 256 rows and replay/live buffering at 1,000 events. Operator Read provides authoritative inventory for rebuilding a disposable Gateway projection.
 
 ## Backup and rollback
 
-Code rollback within schema 47 requires a binary that understands schema 47 and the current ABI/profile window. Rollback to an older incompatible release requires stopping all writers and restoring the matching pre-upgrade SQLite/WAL/SHM backup plus the matching Memory state.
+Back up only while Core is stopped, copying SQLite with its WAL/SHM files as one recovery set and recording the release tag, commit, checksum, configuration, schema ID, and optional Memory state. Test restore with the identical release artifact.
 
-Never run a schema-46-only or otherwise incompatible binary against schema 47 and never overwrite a live schema 47 database with partial old files. Preserve the last successful capability/profile negotiation, Operator Read profile, readiness snapshot, command/Goal/profile receipts and consumer/learning watermarks before changing Gateway ownership.
+A rollback build may reuse a database only when it accepts the exact `tagent-core/0.8` schema and current ABI/profile tuple. Otherwise keep the current release running or deploy the replacement with a new empty database. Never point an incompatible binary at the current database or overwrite live database files.
 
 ## Web deployment
 
@@ -108,4 +107,4 @@ Build-time configuration:
 VITE_TAGENT_CORE_ORIGIN=https://api.example.com
 ```
 
-Serve the unpacked `dist` directory as immutable static content. Configure HTTPS, cache policy for hashed assets, no-cache for `index.html`, and reviewed browser security headers. The Web Console has no built-in OIDC login/refresh interface; the hosting integration owns those flows.
+Serve the unpacked `dist` directory as immutable static content. Use HTTPS, cache hashed assets, disable caching for `index.html`, and review browser security headers. The Web Console has no built-in OIDC login/refresh interface; the hosting integration owns those flows.

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { DistillationWorker, LearningFeatureControl, WorkflowService } from "@tagent/learning";
+import { DistillationWorker, LearningFeatureControl, WorkflowLearningService } from "@tagent/learning";
 import { Store } from "@tagent/persistence-sqlite";
 import { workflowPersistence } from "./support/test-persistence.js";
 
@@ -13,13 +13,13 @@ describe("Memory/Learning feature gates", () => {
     expect(control.snapshot()).toMatchObject({ memoryEnabled: false, learningEnabled: false, autoExecutionEnabled: false });
     await expect(control.applyCommittedState({ memoryEnabled: true, learningEnabled: true, autoExecutionEnabled: true, updatedAt: Date.now(), reason: "invalid" }))
       .resolves.toMatchObject({ memoryEnabled: false, learningEnabled: false, autoExecutionEnabled: false });
-    expect(() => new WorkflowService(workflowPersistence(store), "", control).teach("scope", { name:"x",intent:"x",cueTerms:["x"],applicability:["x"],nonApplicability:[],preconditions:[],inputContract:[],outputContract:[],steps:[],verification:[],requiredCapabilities:[],riskClass:"low" }, "source")).toThrow("Memory is disabled");
+    expect(() => new WorkflowLearningService(workflowPersistence(store), "", control).teach("scope", { name:"x",intent:"x",cueTerms:["x"],applicability:["x"],nonApplicability:[],preconditions:[],inputContract:[],outputContract:[],steps:[],verification:[],requiredCapabilities:[],riskClass:"low" }, "source")).toThrow("Memory is disabled");
   });
 
   it("persists passive-only mode and requires the auto execution gate before approval creation", async () => {
     const store = new Store(":memory:"); stores.push(store);
     const control = new LearningFeatureControl(store, true, { learningEnabled: true, autoExecutionEnabled: false });
-    const service = new WorkflowService(workflowPersistence(store), "", control);
+    const service = new WorkflowLearningService(workflowPersistence(store), "", control);
     const workflow = service.teach("scope", { name:"safe",intent:"safe task",cueTerms:["safe"],applicability:["safe"],nonApplicability:[],preconditions:[],inputContract:[],outputContract:[],steps:[{stepId:"one",instruction:"observe",required:true}],verification:[],requiredCapabilities:[],riskClass:"low" }, "source");
     expect(() => service.requestActivation(workflow.id, workflow.revision!.id)).toThrow("automatic execution is disabled");
     expect(service.recordExperience({scopeId:"scope",sourceType:"task_experience",taskSignature:"safe task",procedureSummary:"1. observe"})).toBeTruthy();
@@ -38,7 +38,7 @@ describe("Memory/Learning feature gates", () => {
   it("stops the distillation worker when Memory is turned off", async () => {
     const store = new Store(":memory:"); stores.push(store);
     const control = new LearningFeatureControl(store, true, { learningEnabled: true });
-    const worker = new DistillationWorker(new WorkflowService(workflowPersistence(store), "", control), 10);
+    const worker = new DistillationWorker(new WorkflowLearningService(workflowPersistence(store), "", control), 10);
     control.onChange(async state => { if (state.learningEnabled) worker.start(); else await worker.stop(); });
     worker.start();
     expect(worker.snapshot().running).toBe(true);

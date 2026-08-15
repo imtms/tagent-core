@@ -52,7 +52,7 @@ function storeFixture() {
   const directory = mkdtempSync(path.join(tmpdir(), "tagent-writer-connection-"));
   temporaryDirectories.push(directory);
   const filename = path.join(directory, "core.sqlite");
-  const store = new Store(filename, { deferPostMigrationRecovery: true });
+  const store = new Store(filename, { deferStartupRecovery: true });
   databases.push(store.db);
   store.db.exec(`
     CREATE TABLE writer_test_clock (id INTEGER PRIMARY KEY CHECK (id = 1), value INTEGER NOT NULL);

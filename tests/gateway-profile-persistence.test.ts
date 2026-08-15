@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { LegacyStoreAdapter, Store } from "@tagent/persistence-sqlite";
+import { SqlitePersistence, Store } from "@tagent/persistence-sqlite";
 
 const directories: string[] = [];
 
@@ -10,8 +10,8 @@ afterEach(() => {
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
-function adapter(store: Store): LegacyStoreAdapter {
-  return new LegacyStoreAdapter(store, {
+function adapter(store: Store): SqlitePersistence {
+  return new SqlitePersistence(store, {
     run: <T>(work: () => T): T => store.db.transaction(work)(),
   });
 }
@@ -25,39 +25,23 @@ const identity = {
   idempotencyKey: "gw-operation-1",
 };
 
-describe("gateway profile v47 persistence", () => {
-  it("migrates a genuine v46 shape re-entrantly and adds concurrency revisions", () => {
-    const directory = mkdtempSync(path.join(tmpdir(), "tagent-v47-migration-"));
+describe("gateway profile persistence", () => {
+  it("creates and reopens the current concurrency schema", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "tagent-profile-schema-"));
     directories.push(directory);
     const filename = path.join(directory, "core.db");
-    const initial = new Store(filename);
-    initial.db.exec(`
-      DROP TABLE profile_audit_events;
-      DROP TABLE profile_operation_receipts;
-      DROP TABLE profile_mutation_receipts;
-      DROP TABLE workspace_skill_revisions;
-      DROP TABLE session_inbox_revisions;
-      DROP TABLE skill_catalog_state;
-      DROP TABLE profile_resource_revisions;
-      ALTER TABLE sessions DROP COLUMN revision;
-      ALTER TABLE session_supervisor_inbox DROP COLUMN revision;
-      ALTER TABLE skills DROP COLUMN revision;
-      UPDATE schema_meta SET version=46 WHERE id=1;
-    `);
-    initial.close();
-
-    const migrated = new Store(filename);
-    expect(migrated.getSchemaVersion()).toBe(47);
+    const current = new Store(filename);
+    expect(current.getSchemaVersion()).toBe(1);
     for (const table of ["sessions", "session_supervisor_inbox", "skills"]) {
-      const revision = (migrated.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+      const revision = (current.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
         name: string; type: string; notnull: number; dflt_value: string | null;
       }>).find((column) => column.name === "revision");
       expect(revision).toMatchObject({ type: "INTEGER", notnull: 1, dflt_value: "1" });
     }
-    migrated.close();
+    current.close();
 
     const reopened = new Store(filename);
-    expect(reopened.getSchemaVersion()).toBe(47);
+    expect(reopened.getSchemaVersion()).toBe(1);
     reopened.close();
   });
 
