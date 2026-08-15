@@ -5,7 +5,6 @@ export {
   commitWorkspaceFiles,
   listWorkspaceDirectory,
   readWorkspaceFile,
-  resolveWorkspaceExisting,
   writeWorkspaceFile,
 } from "./workspace-path.js";
 

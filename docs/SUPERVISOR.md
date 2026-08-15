@@ -22,9 +22,9 @@ Before a new TaskRun is created, the caller may choose a completion-acceptance `
 | --- | --- | --- |
 | `off` | no deterministic or semantic completion Gate, no Gate evaluations | conversation, direct commands, or work where the operator wants the candidate immediately |
 | `relaxed` | one result-oriented semantic review; no plan/check prerequisite | research, exploration, analysis, drafting, and other open outcomes |
-| `strict` | deterministic prerequisites plus exact/semantic/full review as applicable | coding, releases, migrations, and closed deliverables |
+| `strict` | deterministic prerequisites plus exact/semantic/full review as applicable | coding, releases, database work, and closed deliverables |
 
-An omitted profile means `strict`, preserving historical Runs and API clients. The selected profile is frozen in the Admission execution policy after routing, so the Router/LLM cannot change it. It affects completion acceptance only: external-action approval, Workspace Goal authorization, capability checks, and dangerous-tool policy remain active in every profile. A steer routed into an active Run does not change that Run's profile.
+An omitted profile means `strict`. The selected profile is frozen in the Admission execution policy after routing, so the Router/LLM cannot change it. It affects completion acceptance only: external-action approval, Workspace Goal authorization, capability checks, and dangerous-tool policy remain active in every profile. A steer routed into an active Run does not change that Run's profile.
 
 `external_action` has a separate effect-before-approval boundary. Admission persists a pending request and blocks the first Attempt before Runtime construction. Approval is bound to the next Attempt and atomically consumed by the runtime host before its first mutation-capable tool call; it is not a reusable Run-wide bypass. If settlement or a transient failure would otherwise require another Attempt, Core pauses for a fresh next-Attempt approval instead of automatically launching a retry that cannot inherit authority. LLMs may classify semantic risk but cannot create, approve, or consume this authority.
 
@@ -61,7 +61,7 @@ Semantic delivery uses one compact semantic-lite call containing only the contra
 
 Relaxed review uses one outcome-focused call after the candidate settles. It accepts explicit `unsupported` coverage for secondary uncertainty without automatically continuing. It still rejects a missing core deliverable, material irrelevance or incompleteness, contradiction, a genuine blocker, or actual output truncation. Plans, checks, operation receipts and Artifacts may support the result but are not ceremonial prerequisites.
 
-Full review returns only a compact semantic verdict: delivery quality, one coverage receipt per criterion, and semantic failures. Core owns progress/evidence/contract/completion/continuation gate construction and the single final-action algebra. The obsolete model-authored five-gate/action response is rejected instead of maintaining a second policy path.
+Full review returns only a compact semantic verdict: delivery quality, one coverage receipt per criterion, and semantic failures. Core owns progress/evidence/contract/completion/continuation gate construction and the single final-action algebra.
 
 Acceptance criteria are terminal settlement conditions, not per-operation checkpoints. Open-ended research may accumulate samples, source receipts and draft artifacts across the Attempt; the Full reviewer evaluates sample thresholds, source breadth and the final set of deliverables only after the candidate settles. The review projection carries up to 24 recent artifacts with a shared 48 KB bounded head-tail content budget, byte/line counts and SHA-256 digests; CSV artifacts also expose Core-computed columns, logical data-row counts and quote balance. Multi-file research is therefore not judged from filenames or a truncated prefix alone, while large artifact sets cannot grow the semantic request without bound.
 

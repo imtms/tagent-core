@@ -13,7 +13,7 @@ TAgent exposes one `history_search` tool over the current TaskRun's durable tran
 
 `TranscriptRepository.searchTranscriptLiteral` is the storage-neutral seam. SQLite uses `instr(message_json, ?)` with a JSON-escaped literal, so `%` and `_` have no wildcard meaning and quotes match their durable encoding. Synchronous database work is bracketed by the caller-owned required `AbortSignal`. The workspace tool provider formats bounded results with their sequence, Attempt, role, timestamp, truncation status, and search boundary.
 
-The deterministic offline benchmark in `benchmarks/compaction-summary-loss.json` and `scripts/compaction-summary-loss-benchmark.mjs` is the decision gate. Its fixed RuntimeMessage-shaped corpus covers paths, identifiers, failure codes, decisions, unresolved work, facts in the middle of long tool results, preferences, migration invariants, literal wildcard characters, and test evidence. It measures exact-fact recall and character cost without claiming to estimate a particular provider model.
+The deterministic offline benchmark in `benchmarks/compaction-summary-loss.json` and `scripts/compaction-summary-loss-benchmark.mjs` is the decision gate. Its fixed RuntimeMessage-shaped corpus covers paths, identifiers, failure codes, decisions, unresolved work, facts in the middle of long tool results, preferences, persistence invariants, literal wildcard characters, and test evidence. It measures exact-fact recall and character cost without claiming to estimate a particular provider model.
 
 ## Alternatives considered
 

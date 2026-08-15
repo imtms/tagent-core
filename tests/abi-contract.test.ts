@@ -133,7 +133,7 @@ describe("ABI runtime decoding", () => {
   });
 
   it("decodes unknown input before a typed consumer can use it", () => {
-    const input: unknown = { content: "implement the contract", modelId: "fixture-model" };
+    const input: unknown = { content: "implement the contract" };
     const decoded = decodeAbi(SubmissionCreateRequestSchema, input);
     const consume = (request: SubmissionCreateRequest): string => request.content;
 
@@ -184,7 +184,7 @@ describe("ABI runtime decoding", () => {
       providerMaxRetries: 2,
       runTimeoutMs: 900_000,
       maxContinuations: 3,
-      schemaVersion: 35,
+      schemaVersion: 1,
       memoryEnabled: true,
       memoryBackend: "postgres",
       memoryColdBackend: "s3",
@@ -221,22 +221,18 @@ describe("channel v1 submission idempotency", () => {
     expect(mapSubmissionToExecutionRequest(applicationInput)).toEqual({
       content: "Build the ABI",
       requestId: "submission.fixture-001",
-      modelId: "fixture-model",
     });
   });
 
   it("locks same-payload replay and different-payload conflict fixtures", () => {
     const original = canonicalizeSubmissionRequest(submissionIdempotencyFixtures.originalPayload);
     const replay = canonicalizeSubmissionRequest(submissionIdempotencyFixtures.repeatedCanonicalPayload);
-    const advisoryModelChange = canonicalizeSubmissionRequest(submissionIdempotencyFixtures.advisoryModelPayload);
     const whitespaceVariant = canonicalizeSubmissionRequest({
       content: "  Build the ABI\n",
-      modelId: "whitespace-advisory-model",
     });
     const conflict = canonicalizeSubmissionRequest(submissionIdempotencyFixtures.conflictingPayload);
 
     expect(replay).toBe(original);
-    expect(advisoryModelChange).toBe(original);
     expect(whitespaceVariant).toBe(original);
     expect(conflict).not.toBe(original);
     expect(decodeAbi(SubmissionResponseSchema, submissionIdempotencyFixtures.originalResponse))
@@ -247,15 +243,13 @@ describe("channel v1 submission idempotency", () => {
       .toBe("submission.not_found");
   });
 
-  it("normalizes content while preserving the advisory modelId outside canonical identity", () => {
+  it("normalizes submission content before computing canonical identity", () => {
     const normalized = normalizeSubmissionRequest({
       content: " \tBuild the ABI\n ",
-      modelId: "  advisory-model-is-unchanged  ",
     });
 
     expect(normalized).toEqual({
       content: "Build the ABI",
-      modelId: "  advisory-model-is-unchanged  ",
     });
     expect(canonicalizeSubmissionRequest(normalized)).toBe(JSON.stringify({ content: "Build the ABI" }));
   });
@@ -412,7 +406,6 @@ describe("ABI envelopes and surface separation", () => {
     expect(Abi.ChannelV1).toBe(ChannelV1);
     expect(Abi.AdminV1).toBe(AdminV1);
     expect(Abi.InternalV1).toBe(InternalV1);
-    expect(Abi).not.toHaveProperty("LegacyCompat");
   });
 
   it("provides JSON-serializable schemas for server and client consumers", () => {

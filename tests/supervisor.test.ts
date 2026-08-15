@@ -707,26 +707,6 @@ describe("TaskRunSupervisor LLM audit", () => {
     } finally { globalThis.fetch = original; store.close(); }
   });
 
-  it("rejects the obsolete model-authored gate schema without a second prompt", async () => {
-    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "compact repair");
-    const criterion = "Return a verified explanation";
-    store.db.prepare("UPDATE runs SET contract_json = ? WHERE id = ?").run(JSON.stringify({ sourceInput: run.goal, summary: "S".repeat(1800), objectives: [], acceptanceCriteria: [criterion], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
-    const first = { action: "complete_taskrun", reasonCode: "all_gates_passed", rationale: "Complete.", confidence: 1, gates: {} };
-    const prompts: string[] = [];
-    const original = globalThis.fetch;
-    globalThis.fetch = async (_url, init) => {
-      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
-      prompts.push(body.messages[0].content);
-      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(first) } }] }), { status: 200 });
-    };
-    try {
-      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
-      await expect(new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(run.id)!, response: "A complete standalone explanation.", operations: [], progress: undefined })).rejects.toThrow("no repair LLM was called");
-      expect(prompts).toHaveLength(1);
-      expect(prompts[0]).toContain("TASKRUN_DATA=");
-    } finally { globalThis.fetch = original; store.close(); }
-  });
-
   it("repairs a bounded missing-comma JSON syntax error without rerunning the Agent", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "repair malformed audit JSON");
     const malformed = JSON.stringify(semanticVerdict()).replace(',"criterionCoverage"', '"criterionCoverage"');

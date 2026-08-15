@@ -5,7 +5,7 @@ import {
   type IntegrationLearningProjectionRecord,
 } from "@tagent/learning/domain";
 import { Store } from "@tagent/persistence-sqlite/store";
-import { agentPersistence } from "./support/test-persistence.js";
+import { corePersistence } from "./support/test-persistence.js";
 
 const stores: Store[] = [];
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
@@ -31,7 +31,7 @@ describe("Learning boundary matrix", () => {
     ["run.failed", "failed"],
   ] as const)("projects %s idempotently", (lifecycle, outcome) => {
     const store = new Store(":memory:"); stores.push(store);
-    const service = new WorkflowLearningService(agentPersistence(store).workflow);
+    const service = new WorkflowLearningService(corePersistence(store).workflow);
     const session = store.createSession();
     const run = store.createRun(session.id, lifecycle);
     store.transitionRun(run.id, ["running"], outcome, lifecycle, { reason: lifecycle }, lifecycle, 1);
@@ -85,7 +85,7 @@ describe("Learning boundary matrix", () => {
       expect.objectContaining({ key: "attempt-one-check", status: "passed", evidence: "fresh" }),
     ]);
 
-    const service = new WorkflowLearningService(agentPersistence(store).workflow);
+    const service = new WorkflowLearningService(corePersistence(store).workflow);
     service.applyActiveProjection(projection);
     const observation = store.db.prepare(`SELECT procedure_summary as summary,
       checks_passed_json as checks FROM experience_observations WHERE run_id=? AND attempt=1`)
@@ -104,7 +104,7 @@ describe("Learning boundary matrix", () => {
     }]);
     const interrupted = store.createRun(session.id, "interrupt");
     store.markInterrupted();
-    const service = new WorkflowLearningService(agentPersistence(store).workflow);
+    const service = new WorkflowLearningService(corePersistence(store).workflow);
     projectAll(store, service);
     expect(store.db.prepare("SELECT lifecycle FROM experience_observations WHERE run_id=?").get(waiting.id))
       .toEqual({ lifecycle: "run.waiting_input" });

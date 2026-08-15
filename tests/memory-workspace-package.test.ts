@@ -110,6 +110,9 @@ describe("Memory workspace package", () => {
   it("builds the package schema asset", () => {
     const source = readFileSync(path.join(repoRoot, "packages/memory/src/postgres/schema.sql"));
     expect(readFileSync(path.join(repoRoot, "packages/memory/dist/postgres/schema.sql"))).toEqual(source);
+    const sql = source.toString("utf8");
+    expect(sql).toContain("'tagent-memory/0.8',1");
+    expect(sql).not.toMatch(/ALTER TABLE .* ADD COLUMN/i);
   });
 
   it("resolves every public export through compiled Node ESM", () => {

@@ -11,7 +11,7 @@ The Pi loop converts thrown tool errors to plain text, losing cancellation phase
 
 Execution owns a stable `{ name, code, message }` error shape and a closed code set. Lifecycle and policy use `ABORTED_BEFORE_DISPATCH`, `ABORTED`, `TIMEOUT`, `PATH_REJECTED`, `NOT_AUTHORIZED`, and `UNKNOWN`; optimistic edit failures retain actionable identity through `STALE_STATE`, `PRECONDITION_FAILED`, and `INVALID_ARGUMENT`.
 
-The tool pipeline classifies provider errors and records structured failure evidence on operation receipts. The Pi adapter converts a thrown classified error into result details, forces `isError`, and preserves metadata on tool transcript messages and lifecycle events. Public Channel schemas expose the field optionally for compatibility.
+The tool pipeline classifies provider errors and records structured failure evidence on operation receipts. The Pi adapter converts a thrown classified error into result details, forces `isError`, and preserves metadata on tool transcript messages and lifecycle events. Public Channel schemas expose the field only where a failed tool result carries structured error identity.
 
 ## Alternatives considered
 

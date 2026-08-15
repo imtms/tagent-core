@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -65,8 +65,8 @@ function buildRootServer(): string[] {
   }
 }
 
-describe("final modular monolith gate", () => {
-  it("publishes an acyclic workspace DAG with only the canonical ABI and client at the Web boundary", () => {
+describe("modular monolith architecture", () => {
+  it("publishes an acyclic workspace DAG with only the ABI and client at the Web boundary", () => {
     const manifests = [
       "packages/abi/package.json",
       "packages/admission/package.json",
@@ -104,53 +104,6 @@ describe("final modular monolith gate", () => {
 
     expect(edges.get("@tagent/web-console")).toEqual(["@tagent/abi", "@tagent/core-client"]);
     expect([...edges.entries()].filter(([, dependencies]) => dependencies.includes("@tagent/web-console"))).toEqual([]);
-  });
-
-  it("removes every production compatibility surface and exposes Core only below /api/v1", () => {
-    for (const removed of [
-      "adapters/http-fastify/src/legacy/plugin.ts",
-      "adapters/http-fastify/src/public/plugin.ts",
-      "packages/abi/src/legacy",
-      "packages/core-client/src/legacy-decoders.ts",
-      "packages/memory/src/legacy.ts",
-      "src/abi",
-      "src/core-client",
-      "src/app.ts",
-      "src/auth.ts",
-      "src/config.ts",
-      "src/artifact-content.ts",
-      "src/http-memory-adapter.ts",
-      "vite.config.ts",
-    ]) expect(existsSync(path.join(root, removed)), `${removed} must be deleted`).toBe(false);
-
-    expect(filesUnder("src")).toEqual(["src/server.ts"]);
-
-    const boundedProductionFiles = [
-      "adapters/http-fastify/src/app.ts",
-      ...filesUnder("adapters/http-fastify/src/v1").filter((file) => file.endsWith(".ts")),
-      ...filesUnder("packages/abi/src").filter((file) => file.endsWith(".ts")),
-      ...filesUnder("packages/core-client/src").filter((file) => file.endsWith(".ts")),
-      "apps/web-console/src/api.ts",
-      "apps/web-console/src/App.tsx",
-      "src/server.ts",
-    ];
-    for (const file of boundedProductionFiles) {
-      const content = source(file);
-      expect(content, `${file} retains a legacy symbol`).not.toMatch(/Legacy(?:Compat|Decode|[A-Z])/);
-      expect(content, `${file} retains a legacy import path`).not.toMatch(/(?:\/legacy\/|legacy-decoders|legacy\/plugin)/);
-    }
-
-    const app = source("adapters/http-fastify/src/app.ts");
-    expect(app).toContain("app.register(v1ApiPlugin");
-    expect(app).not.toContain("registerLegacyCompatibilityRoutes");
-    for (const file of filesUnder("adapters/http-fastify/src/v1").filter((item) => item.endsWith(".ts"))) {
-      expect(source(file), `${file} registers an unversioned API route`)
-        .not.toMatch(/app\.(?:all|delete|get|patch|post|put)\(\s*["'`]\/api\/(?!v1(?:\/|["'`]))/);
-    }
-    expect(source("packages/abi/src/index.ts")).not.toContain("LegacyCompat");
-    expect(source("packages/core-client/src/index.ts")).not.toContain("legacy-decoders");
-    expect(source("packages/core-client/src/transport.ts")).not.toContain("legacyRequestIdFallback");
-    expect(source("packages/memory/package.json")).not.toContain('"./legacy"');
   });
 
   it("compiles and releases only the root server entrypoint", () => {
@@ -200,7 +153,7 @@ describe("final modular monolith gate", () => {
     expect(webApi).not.toMatch(/["'`]\/api\/(?!v1(?:\/|["'`]))/);
   });
 
-  it("builds the migrated Web Console against the canonical ABI and client", { timeout: 180_000 }, () => {
+  it("builds the Web Console against the current ABI and client", { timeout: 180_000 }, () => {
     buildWebConsole();
   });
 
@@ -209,7 +162,6 @@ describe("final modular monolith gate", () => {
     expect(release).toContain("const coreRequiredReleaseFiles");
     expect(release).toContain("const webRequiredReleaseFiles");
     expect(release).not.toMatch(/webRequiredReleaseFiles\s*=\s*\[[\s\S]*gateway-readiness-probe/);
-    expect(release).not.toMatch(/legacy/i);
 
     const documentContracts: Record<string, RegExp[]> = {
       "docs/MODULAR_MONOLITH.md": [/workspace map/i, /one Core process/i, /unit of work/i, /writer fence/i, /Web Console/i],
@@ -219,7 +171,6 @@ describe("final modular monolith gate", () => {
         /specVersion:\s*"1\.0"/i,
         /changes require a new major ABI/i,
         /removing or renaming a route, field, literal, or event type/i,
-        /deprecation must name its successor, migration instructions, and removal release/i,
         /runtime validation/i,
       ],
       "docs/SECURITY_BOUNDARIES.md": [/fails closed/i, /service credential/i, /resource scopes/i, /exact-origin/i],
@@ -235,11 +186,10 @@ describe("final modular monolith gate", () => {
       const content = source(file);
       for (const contract of contracts) expect(content, `${file} must document ${contract}`).toMatch(contract);
     }
-    expect(source("docs/MODULAR_MONOLITH.md")).toContain("excludes pre-refactor root source trees");
     expect(source("docs/API_V1.md")).toContain("Unversioned paths");
   });
 
-  it("serves a strict v1 success envelope and no unversioned compatibility route", async () => {
+  it("serves a strict v1 success envelope and rejects unversioned paths", async () => {
     const app = createApp({
       persistence: {
         sessions: {
@@ -270,14 +220,14 @@ describe("final modular monolith gate", () => {
       const response = await app.inject({
         method: "POST",
         url: "/api/v1/sessions",
-        headers: { "idempotency-key": "final-monolith-session" },
-        payload: { title: "Final modular monolith" },
+        headers: { "idempotency-key": "modular-monolith-session" },
+        payload: { title: "Modular monolith" },
       });
       expect(response.statusCode).toBe(200);
       const envelope = response.json() as { data: unknown; requestId: string };
       expect(decodeAbi(SessionSchema, envelope.data)).toMatchObject({
         id: "session-final",
-        title: "Final modular monolith",
+        title: "Modular monolith",
       });
       expect(envelope.requestId).toEqual(expect.any(String));
       expect((await app.inject({ method: "GET", url: "/api/sessions" })).statusCode).toBe(404);

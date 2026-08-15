@@ -54,9 +54,7 @@ These changes may remain in v1 when schemas, fixtures, providers, and current co
 - a new independent route;
 - a new event type that consumers may safely ignore and ACK by contract.
 
-The maintained ABI contains no compatibility namespaces or deprecated response aliases. Removed clients and payload shapes are not accepted by the current release.
-
-Any future deprecation must name its successor, migration instructions, and removal release. A deprecation does not make an otherwise breaking removal compatible within the same major.
+The maintained ABI contains no alternate namespaces or deprecated response aliases. Removed clients and payload shapes are not accepted by the current release.
 
 ## Runtime validation
 
@@ -92,8 +90,8 @@ Gateway may depend only on endpoint IDs returned by the owning profile. Undeclar
 3. Update Fastify request/response mapping.
 4. Update `@tagent/core-client`, including replay/ACK behavior.
 5. Update Web or other current consumers.
-6. Add differential coverage for removed or incompatible routes.
-7. Update `API_V1.md`, the compatibility matrix, and `CHANGELOG.md`.
+6. Add current-contract route and rejection coverage.
+7. Update `API_V1.md`, the release tuple, and `CHANGELOG.md`.
 8. Build and smoke-test the matching ABI and Core Client SDK archives.
 
 Core publishes the schemas, canonical fixtures, typed client, and real-provider contract harness. Gateway owns its Fake Core, network-fault scenarios, and the client-release matrix it promises to support. See [GATEWAY_PROFILE_COMPATIBILITY.md](GATEWAY_PROFILE_COMPATIBILITY.md).

@@ -5,7 +5,7 @@ import { Store } from "@tagent/persistence-sqlite/store";
 import { createRuntimeHost } from "@tagent/core-service/composition";
 import { attemptIdFor } from "@tagent/execution/domain";
 import { createExecutionCollaborationAdapters } from "../apps/core-service/src/composition/execution-collaboration-adapters.js";
-import { agentPersistence, learningPersistence, workflowPersistence } from "./support/test-persistence.js";
+import { corePersistence, learningPersistence, workflowPersistence } from "./support/test-persistence.js";
 
 const testSignal = new AbortController().signal;
 
@@ -25,7 +25,7 @@ function collaborationFixture(principalId = "session:alice", withMemory = true) 
     idempotencyKey: "configured-principal",
     canonicalPayload: "configured-principal",
   }).session;
-  const persistence = agentPersistence(store);
+  const persistence = corePersistence(store);
   const learning = new LearningService(learningPersistence(store));
   const workflows = new WorkflowLearningService(workflowPersistence(store));
   const captureRequests: any[] = [];
@@ -47,7 +47,7 @@ function collaborationFixture(principalId = "session:alice", withMemory = true) 
 }
 
 function runtimeHost(store: Store, sessionId: string, subjectId: string, memory: { recall: ReturnType<typeof vi.fn> }) {
-  const persistence = agentPersistence(store);
+  const persistence = corePersistence(store);
   const run = store.createRun(sessionId, "memory scope regression");
   const attempt = persistence.attempts.getAttemptForRun(run.id, run.attempt)!;
   const ownerId = `issue-36:${run.id}`;

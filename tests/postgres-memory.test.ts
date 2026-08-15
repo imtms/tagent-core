@@ -27,7 +27,7 @@ suite("PostgreSQL memory adapter", () => {
 
   beforeAll(async () => {
     adapter = new PostgresMemoryAdapter(configuredUrl!);
-    await adapter.migrate();
+    await adapter.initializeSchema();
     coldPath = await mkdtemp(path.join(tmpdir(), "tagent-pg-cold-"));
     service = new MemoryService({
       records: adapter,

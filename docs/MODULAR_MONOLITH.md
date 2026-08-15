@@ -63,7 +63,3 @@ This separation prepares multiple future channels to use the same stable ABI and
 All control-plane writes pass through the active SQLite writer fence. Multi-repository changes execute inside a synchronous Unit of Work so state, receipts, and events commit atomically. Background code consumes owned ports and cannot escape the transaction with an async callback.
 
 See [PERSISTENCE_AND_RECOVERY.md](PERSISTENCE_AND_RECOVERY.md) for the lifecycle and recovery contract.
-
-## Unsupported compatibility surfaces
-
-The supported production surface excludes pre-refactor root source trees, unversioned HTTP handlers, Core-hosted Web assets, compatibility ABI namespaces, and compatibility client decoders. Persistence accepts only an empty database or the exact current schema.

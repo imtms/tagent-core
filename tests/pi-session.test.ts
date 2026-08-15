@@ -9,7 +9,7 @@ import { Store } from "@tagent/persistence-sqlite/store";
 import { createRuntimeHost } from "@tagent/core-service/composition";
 import { attemptIdFor, canonicalRequestJson, requestHash, type AttemptRequestEnvelope } from "@tagent/execution/domain";
 import { credentialReference, type AttemptRequestEnvelopeRepository } from "@tagent/execution/ports";
-import { agentPersistence } from "./support/test-persistence.js";
+import { corePersistence } from "./support/test-persistence.js";
 import { RunEventProbe } from "./support/event-probe.js";
 import { seededWireFaultScript, WireFaultServer, type WireFaultStep } from "./support/wire-fault-server.js";
 
@@ -36,15 +36,15 @@ describe("Pi AgentHarness integration", () => {
     options: Omit<PiRuntimeOptions, "token" | "capabilities" | "eventSink">,
     onEvent: (event: import("@tagent/execution/domain").RunEvent) => void = () => undefined,
   ): PiRuntimeOptions {
-    const attempt = agentPersistence(store).attempts.getAttemptForRun(run.id, run.attempt)!;
+    const attempt = corePersistence(store).attempts.getAttemptForRun(run.id, run.attempt)!;
     const ownerId = `pi-test:${run.id}`;
-    const lease = agentPersistence(store).attempts.acquireExecutionLease({ attemptId: attempt.id, expectedVersion: attempt.version, ownerId, leaseMs: 30_000 });
+    const lease = corePersistence(store).attempts.acquireExecutionLease({ attemptId: attempt.id, expectedVersion: attempt.version, ownerId, leaseMs: 30_000 });
     const token = {
       runId: run.id, attemptId: attemptIdFor(run.id, run.attempt), ordinal: run.attempt,
       expectedVersion: attempt.version, ownerId, leaseToken: lease.token, executionFence: lease.fence,
     };
     const host = createRuntimeHost({
-      persistence: agentPersistence(store), token, workspace: options.workspace,
+      persistence: corePersistence(store), token, workspace: options.workspace,
       onActivity: () => undefined, onEvent,
       memoryScopeId: "test", memorySubjectId: `session:${run.sessionId}`,
     });
@@ -55,7 +55,7 @@ describe("Pi AgentHarness integration", () => {
         if (input.toolName === "bash") void host.dispose();
       },
     };
-    return { ...options, token, capabilities: host.capabilities, eventSink, requestEnvelopes: agentPersistence(store).requestEnvelopes };
+    return { ...options, token, capabilities: host.capabilities, eventSink, requestEnvelopes: corePersistence(store).requestEnvelopes };
   }
 
   async function setup(responses: Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0], tokensPerSecond = 10_000) {
@@ -798,7 +798,7 @@ describe("Pi AgentHarness integration", () => {
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("HTTP test server did not bind");
     const store = new Store(":memory:");
-    const persistence = agentPersistence(store);
+    const persistence = corePersistence(store);
     const run = store.createRun(store.createSession().id, "durable envelope");
     const model: Model<"openai-completions"> = {
       id: "envelope-model", name: "envelope-model", api: "openai-completions", provider: "openai-compatible",
@@ -844,7 +844,7 @@ describe("Pi AgentHarness integration", () => {
     if (!address || typeof address === "string") throw new Error("HTTP test server did not bind");
     const store = new Store(":memory:");
     const run = store.createRun(store.createSession().id, "mismatched envelope");
-    const persisted = agentPersistence(store).requestEnvelopes;
+    const persisted = corePersistence(store).requestEnvelopes;
     const tamperingRepository: AttemptRequestEnvelopeRepository = {
       record: (envelope) => persisted.record(envelope),
       get: (id) => {
@@ -1185,7 +1185,7 @@ describe("Pi AgentHarness integration", () => {
       expect(retryBody).not.toContain("poison-partial-output");
       expect(retryBody).not.toContain("poison-incomplete-output");
       expect(store.listTranscript(run.id).filter((message) => message.role === "assistant")).toHaveLength(1);
-      const envelopes = agentPersistence(store).requestEnvelopes.listForAttempt(attemptIdFor(run.id, 1));
+      const envelopes = corePersistence(store).requestEnvelopes.listForAttempt(attemptIdFor(run.id, 1));
       expect(envelopes).toHaveLength(2);
       expect(envelopes[0].providerPayloadHash).toBe(envelopes[1].providerPayloadHash);
     } finally {

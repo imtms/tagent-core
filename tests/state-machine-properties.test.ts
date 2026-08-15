@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Store } from "@tagent/persistence-sqlite/store";
 import { attemptIdFor, canonicalRequestJson, createAttemptRequestEnvelope, requestHash } from "@tagent/execution/domain";
-import { agentPersistence } from "./support/test-persistence.js";
+import { corePersistence } from "./support/test-persistence.js";
 
 const propertySeed = 0x5eed2026;
 
@@ -93,8 +93,8 @@ describe("critical persistence and replay properties", () => {
       const directory = await mkdtemp(path.join(tmpdir(), "tagent-current-schema-property-"));
       const filename = path.join(directory, "core.db");
       try {
-        const migrated = new Store(filename);
-        const run = migrated.createRun(migrated.createSession().id, "reopen property");
+        const opened = new Store(filename);
+        const run = opened.createRun(opened.createSession().id, "reopen property");
         const envelope = createAttemptRequestEnvelope({
           runId: run.id,
           attemptId: attemptIdFor(run.id, run.attempt),
@@ -104,15 +104,15 @@ describe("critical persistence and replay properties", () => {
           model: { id: "model", provider: "test", api: "openai-completions", baseUrl: "https://example.test/v1", contextWindow: 1_000, maxTokens: 100 },
           createdAt: 1,
         });
-        agentPersistence(migrated).requestEnvelopes.record(envelope);
-        const schema = migrated.db.prepare("SELECT type,name,tbl_name AS tableName,sql FROM sqlite_master WHERE name LIKE '%request_envelope%' ORDER BY type,name").all();
-        migrated.close();
+        corePersistence(opened).requestEnvelopes.record(envelope);
+        const schema = opened.db.prepare("SELECT type,name,tbl_name AS tableName,sql FROM sqlite_master WHERE name LIKE '%request_envelope%' ORDER BY type,name").all();
+        opened.close();
 
         for (let index = 0; index < reopens; index += 1) {
           const reopened = new Store(filename);
           expect(reopened.getSchemaVersion()).toBe(1);
           expect(reopened.db.prepare("SELECT type,name,tbl_name AS tableName,sql FROM sqlite_master WHERE name LIKE '%request_envelope%' ORDER BY type,name").all()).toEqual(schema);
-          expect(agentPersistence(reopened).requestEnvelopes.get(envelope.id)).toEqual(envelope);
+          expect(corePersistence(reopened).requestEnvelopes.get(envelope.id)).toEqual(envelope);
           reopened.close();
         }
       } finally {

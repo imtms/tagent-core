@@ -4,10 +4,10 @@ import { createApp } from "@tagent/http-fastify";
 import type { HttpPersistencePort } from "@tagent/http-fastify/ports";
 import { createModel, loadConfig, publicRuntimeConfig, type AppConfig } from "./config.js";
 import { httpArtifactContent } from "./composition/artifact-content.js";
-import { AgentService } from "./application/agent-service.js";
-import type { CoreApplicationPort } from "./application/agent-service-factory.js";
+import { createCoreApplication } from "./application/core-application-factory.js";
+import type { CoreApplicationCoordinator } from "./application/core-application-coordinator.js";
 import { CoreHeartbeatDeadlineError, CoreLifecycle } from "./composition/core-lifecycle.js";
-import type { AgentServicePersistencePort } from "./application/ports/index.js";
+import type { CoreApplicationPersistencePort } from "./application/ports/index.js";
 import { LearningProjectionRuntime } from "./composition/learning-projection-runtime.js";
 import { CanaryGovernanceRuntime } from "./composition/canary-governance-runtime.js";
 import { LearningBackgroundRuntimeCoordinator } from "./composition/learning-background-runtime-coordinator.js";
@@ -67,9 +67,9 @@ const defaultBackgroundWorkerStarter: CoreBackgroundWorkerStarter = Object.freez
   startLearningProjection: (runtime: LearningProjectionRuntime) => runtime.start(),
 });
 
-function assembleAgentServicePersistence(
+function assembleCoreApplicationPersistence(
   persistence: SqlitePersistence,
-): AgentServicePersistencePort {
+): CoreApplicationPersistencePort {
   return Object.freeze({
     attempts: persistence.attempts,
     runtimeMutations: persistence.runtimeMutations,
@@ -134,7 +134,7 @@ export async function bootstrapCore(
   let canaryGovernanceRuntime: CanaryGovernanceRuntime | undefined;
   let learningBackgroundRuntime: LearningBackgroundRuntimeCoordinator | undefined;
   let canaryBackgroundRuntime: LearningBackgroundRuntimeCoordinator | undefined;
-  let service: CoreApplicationPort | undefined;
+  let service: CoreApplicationCoordinator | undefined;
   let unsubscribeLearning: (() => void) | undefined;
   const backgroundWorkerStarter = dependencies.backgroundWorkerStarter ?? defaultBackgroundWorkerStarter;
 
@@ -151,7 +151,7 @@ export async function bootstrapCore(
     });
     writerConnection.writerGuard.installConnectionGuard();
     const persistence = createGuardedSqlitePersistence(store, writerConnection.writerGuard);
-    const agentPersistence = assembleAgentServicePersistence(persistence);
+    const corePersistence = assembleCoreApplicationPersistence(persistence);
     const httpPersistence = assembleHttpPersistence(persistence);
 
     lifecycle = new CoreLifecycle({
@@ -250,8 +250,8 @@ export async function bootstrapCore(
       }, persistence.memory, semanticJudge);
     }
 
-    service = new AgentService(
-      agentPersistence,
+    service = createCoreApplication(
+      corePersistence,
       config.workspace,
       resolveRuntimeFactory(config.runtime),
       {
@@ -429,5 +429,3 @@ export async function runCoreServiceFromCli(): Promise<BootstrappedCore> {
   process.once("SIGINT", () => void closeServer("SIGINT"));
   return core;
 }
-
-export const main = runCoreServiceFromCli;

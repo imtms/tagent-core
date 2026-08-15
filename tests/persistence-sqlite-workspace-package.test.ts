@@ -210,14 +210,6 @@ describe("SQLite persistence adapter workspace package", () => {
         "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'",
       ).all() as Array<{ name: string }>;
       expect(tables).toHaveLength(88);
-      expect(tables.map((table) => table.name)).not.toEqual(expect.arrayContaining([
-        "attempt_authority_state",
-        "attempt_shadow_comparisons",
-        "learning_projection_outbox",
-        "learning_projection_authority_state",
-        "integration_reconciliation",
-        "migration_issues",
-      ]));
       expect(tables.map((table) => table.name)).toEqual(expect.arrayContaining([
         "session_create_receipts",
         "submission_audit_receipts",

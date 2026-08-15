@@ -6,7 +6,7 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "@tagent/http-fastify";
 import { loadConfig, type AppConfig } from "@tagent/core-service/config";
-import { AgentService } from "@tagent/core-service/application";
+import { CoreApplicationCoordinator, createCoreApplication } from "@tagent/core-service/application";
 import {
   CoreHeartbeatDeadlineError,
   CoreLifecycle,
@@ -21,7 +21,7 @@ import {
   type CoreBackgroundWorkerStarter,
 } from "@tagent/core-service";
 import { Store } from "@tagent/persistence-sqlite/store";
-import { agentPersistence, httpPersistence } from "./support/test-persistence.js";
+import { corePersistence, httpPersistence } from "./support/test-persistence.js";
 import { credentialReference } from "@tagent/execution/ports";
 
 const temporaryDirectories: string[] = [];
@@ -296,7 +296,7 @@ describe("Core lifecycle", () => {
     });
     const app = createApp({
       persistence: httpPersistence(store),
-      service: { closeRuntimes: async () => undefined } as unknown as AgentService,
+      service: { closeRuntimes: async () => undefined } as unknown as CoreApplicationCoordinator,
       logger: false,
       writerReadiness: lifecycle,
       onClose: () => lifecycle.close(),
@@ -459,7 +459,7 @@ describe("Core lifecycle", () => {
     const store = new Store(":memory:");
     stores.push(store);
     const serviceClose = vi.fn(async () => undefined);
-    const service = { closeRuntimes: serviceClose } as unknown as AgentService;
+    const service = { closeRuntimes: serviceClose } as unknown as CoreApplicationCoordinator;
     const { lifecycle, counts, failAt } = lifecycleHarness();
     await lifecycle.start();
     lifecycle.markReady();
@@ -658,7 +658,7 @@ describe("Core lifecycle", () => {
         events.push("worker.distillation.close");
         await originalDistillationClose.call(this);
       });
-      const runtimeClose = vi.spyOn(AgentService.prototype, "closeRuntimes").mockImplementation(async () => {
+      const runtimeClose = vi.spyOn(CoreApplicationCoordinator.prototype, "closeRuntimes").mockImplementation(async () => {
         events.push("runtime.close");
         return [];
       });
@@ -758,13 +758,13 @@ describe("Core lifecycle", () => {
     expect(secondHealth.json().data.writer).not.toHaveProperty("fence");
   });
 
-  it("supports explicit deferred AgentService initialization without a writer-specific test bypass", async () => {
+  it("supports explicit deferred Core application initialization without a writer-specific test bypass", async () => {
     const store = new Store(":memory:");
     stores.push(store);
     const interrupted = vi.spyOn(store, "markInterrupted");
     const reviewer = { reviewSettled: vi.fn(async () => ({ action: "accept" })) };
-    const service = new AgentService(
-      agentPersistence(store),
+    const service = createCoreApplication(
+      corePersistence(store),
       process.cwd(),
       undefined,
       { supervisorReviewer: reviewer as never },
@@ -780,14 +780,14 @@ describe("Core lifecycle", () => {
     service.initialize();
     expect(interrupted).toHaveBeenCalledOnce();
 
-    const [lifecycleSource, serverSource, serviceSource] = await Promise.all([
+    const [lifecycleSource, serverSource, applicationSource] = await Promise.all([
       readFile(path.join(process.cwd(), "apps/core-service/src/composition/core-lifecycle.ts"), "utf8"),
       readFile(path.join(process.cwd(), "apps/core-service/src/server.ts"), "utf8"),
-      readFile(path.join(process.cwd(), "apps/core-service/src/application/agent-service.ts"), "utf8"),
+      readFile(path.join(process.cwd(), "apps/core-service/src/application/core-application-factory.ts"), "utf8"),
     ]);
     expect(lifecycleSource).not.toContain("VITEST");
     expect(serverSource).not.toContain("VITEST");
-    expect(serviceSource.match(/process\.env\.VITEST/g) ?? []).toHaveLength(0);
+    expect(applicationSource.match(/process\.env\.VITEST/g) ?? []).toHaveLength(0);
     await service.closeRuntimes();
   });
 });

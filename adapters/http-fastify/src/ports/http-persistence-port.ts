@@ -17,19 +17,19 @@ import type {
 import type { ReasoningEffort } from "@tagent/admission/domain";
 import type { RunPhase, RunStatus } from "@tagent/execution/domain";
 
-export interface HttpOperatorReadPageQuery {
+interface HttpOperatorReadPageQuery {
   snapshotRowId?: number;
   after?: { createdAt: number; id: string };
   limit: number;
 }
 
-export interface HttpOperatorSessionRow {
+interface HttpOperatorSessionRow {
   id: string; title: string; modelId: string; reasoningEffort: ReasoningEffort;
   createdAt: number; updatedAt: number; latestTaskRunId: string | null;
   latestTaskRunStatus: RunStatus | null; latestTaskRunPhase: RunPhase | null; latestActivityAt: number;
 }
 
-export interface HttpOperatorTaskRunRow {
+interface HttpOperatorTaskRunRow {
   id: string; sessionId: string; status: RunStatus; phase: RunPhase; attempt: number;
   goalSummary: string; blockedReason: string | null; pendingApproval: number; pendingUserInput: number;
   lastEventSequence: number; createdAt: number; updatedAt: number; completedAt: number | null; resumable: number;

@@ -1,7 +1,7 @@
 import type { AdmissionCoordinator } from "@tagent/admission";
 import type { ExecutionCoordinator } from "@tagent/execution";
 
-export interface HttpWorkflowStep {
+interface HttpWorkflowStep {
   stepId: string;
   instruction: string;
   required: boolean;
@@ -72,7 +72,7 @@ export interface HttpLearningApplicationPort {
   drainFeedbackAttribution(limit?: number): unknown;
 }
 
-export interface HttpWorkflowGovernanceApplicationPort {
+interface HttpWorkflowGovernanceApplicationPort {
   activateWorkflow(workflowId: string, revisionId?: string, approvalId?: string): unknown;
   suspendWorkflow(workflowId: string, reason?: string): unknown;
   rollbackWorkflow(workflowId: string, revisionId: string, approvalId?: string): unknown;

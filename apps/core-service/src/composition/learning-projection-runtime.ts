@@ -1,4 +1,4 @@
-export interface LearningProjectionTickResult {
+interface LearningProjectionTickResult {
   kind: string;
 }
 

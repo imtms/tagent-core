@@ -15,11 +15,11 @@ import {
   MemoryRecallResponseSchema,
   ProfileOperationResponseSchema,
 } from "@tagent/abi";
-import { AgentService } from "@tagent/core-service/application";
+import { createCoreApplication } from "@tagent/core-service/application";
 import { createApp, type ServiceCredential } from "@tagent/http-fastify";
 import { LearningFeatureControl } from "@tagent/learning";
 import { Store } from "@tagent/persistence-sqlite";
-import { agentPersistence, httpTestResources, learningSettingsPersistence } from "./support/test-persistence.js";
+import { corePersistence, httpTestResources, learningSettingsPersistence } from "./support/test-persistence.js";
 
 const apps: Array<ReturnType<typeof createApp>> = [];
 const directories: string[] = [];
@@ -33,11 +33,11 @@ async function fixture(memory?: Record<string, unknown>, serviceCredentials: Ser
   const workspace = await mkdtemp(path.join(tmpdir(), "tagent-admin-profiles-"));
   directories.push(workspace);
   const store = new Store(":memory:");
-  const persistence = agentPersistence(store);
+  const persistence = corePersistence(store);
   const learningControl = new LearningFeatureControl(learningSettingsPersistence(store), true, {
     learningEnabled: true, autoExecutionEnabled: true,
   });
-  const service = new AgentService(persistence, workspace, () => ({
+  const service = createCoreApplication(persistence, workspace, () => ({
     prompt: async () => undefined, steer: async () => "accepted" as const, followUp: async () => "accepted" as const,
     compact: async () => undefined, abort: () => undefined, dispose: async () => undefined,
     getMessages: () => [], getError: () => undefined,

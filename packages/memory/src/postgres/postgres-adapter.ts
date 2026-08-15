@@ -5,7 +5,26 @@ import { Pool, type PoolConfig } from "pg";
 import type { AuditPort, CoreSnapshotPort, GraphStorePort, JobQueuePort, OperationsStatePort, RecordStorePort, ReindexJobPort, TopicCatalogPort, VectorIndexPort } from "../ports.js";
 import type { CaptureJob, CaptureRequest, ColdRevision, CoreMemorySnapshot, EmbeddingGenerationState, GraphEdge, GraphNode, MemoryGovernanceRequest, MemoryKind, MemoryScope, RecallFeedbackSignal, ReindexJob, TopicDescriptor, VectorDocument, VectorHit, WarmMemory } from "../types.js";
 export class PostgresMemoryAdapter implements RecordStorePort,VectorIndexPort,GraphStorePort,TopicCatalogPort,JobQueuePort,AuditPort,ReindexJobPort,OperationsStatePort,CoreSnapshotPort {
- readonly pool:Pool; private closeTask?:Promise<void>; constructor(config:PoolConfig|string){const supplied=typeof config==="string"?{connectionString:config}:config;this.pool=new Pool({connectionTimeoutMillis:3_000,idleTimeoutMillis:30_000,query_timeout:5_000,statement_timeout:5_000,...supplied});} async migrate(){const sql=await readFile(fileURLToPath(new URL("./schema.sql",import.meta.url)),"utf8");await this.pool.query(sql);} close(){if(!this.closeTask)this.closeTask=this.pool.end();return this.closeTask;}
+ readonly pool:Pool; private closeTask?:Promise<void>; constructor(config:PoolConfig|string){const supplied=typeof config==="string"?{connectionString:config}:config;this.pool=new Pool({connectionTimeoutMillis:3_000,idleTimeoutMillis:30_000,query_timeout:5_000,statement_timeout:5_000,...supplied});}
+ async initializeSchema(){
+  const client=await this.pool.connect();
+  try{
+   await client.query("BEGIN");
+   await client.query("SELECT pg_advisory_xact_lock(hashtext('tagent-memory/0.8'))");
+   const namespace=await client.query("SELECT to_regnamespace('memory') AS oid");
+   if(namespace.rows[0]?.oid===null){
+    const sql=await readFile(fileURLToPath(new URL("./schema.sql",import.meta.url)),"utf8");
+    await client.query(sql);
+   }else{
+    const marker=await client.query("SELECT to_regclass('memory.schema_identity') AS table_name");
+    if(marker.rows[0]?.table_name===null)throw new Error("PostgreSQL Memory accepts only an empty database or schema tagent-memory/0.8");
+    const identity=await client.query("SELECT schema_id AS \"schemaId\",schema_version AS \"schemaVersion\" FROM memory.schema_identity WHERE id=1");
+    if(identity.rows.length!==1||identity.rows[0].schemaId!=="tagent-memory/0.8"||Number(identity.rows[0].schemaVersion)!==1)throw new Error("PostgreSQL Memory schema identity does not match tagent-memory/0.8");
+   }
+   await client.query("COMMIT");
+  }catch(error){await client.query("ROLLBACK");throw error;}finally{client.release();}
+ }
+ close(){if(!this.closeTask)this.closeTask=this.pool.end();return this.closeTask;}
  async upsertRecords(records:WarmMemory[]){
   if(!records.length)return;
   const ordinary=records.filter((record)=>record.kind!=="preference").map((r)=>({id:r.id,kind:r.kind,tier:r.tier,scope_type:r.scope.type,scope_id:r.scope.id,title:r.title,content:r.content,summary:r.summary,topic_ids:r.topicIds,entity_ids:r.entityIds,status:r.status,confidence:r.confidence,importance:r.importance,source_refs:r.sourceRefs,provenance:r.provenance??null,semantic:r.semantic??null,lifecycle:r.lifecycle??null,valid_from:r.validFrom??null,valid_to:r.validTo??null,supersedes_id:r.supersedesId??null,expires_at:r.expiresAt??null,created_at:r.createdAt,updated_at:r.updatedAt}));

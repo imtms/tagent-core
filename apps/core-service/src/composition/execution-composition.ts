@@ -50,7 +50,7 @@ import { createProjectContextSource } from "@tagent/workspace-local/project-cont
 import { createWorkspaceArtifactSink } from "@tagent/workspace-local/artifact-file-sink";
 import { createWorkspaceEditPort } from "@tagent/workspace-local/snapshot-edit";
 import type { AdmissionDispatchPort } from "@tagent/admission/composition";
-import type { AgentServicePersistencePort } from "../application/ports/index.js";
+import type { CoreApplicationPersistencePort } from "../application/ports/index.js";
 import type { MemoryFacade } from "@tagent/memory";
 import type { LearningFeatureControl, SemanticJudge } from "@tagent/learning";
 import type { SupervisorReviewer } from "./supervisor-reviewer.js";
@@ -71,7 +71,7 @@ export type CoreRuntimeDefaults = ExecutionRuntimeDefaults & {
 };
 
 export interface ExecutionCompositionOptions {
-  persistence: AgentServicePersistencePort;
+  persistence: CoreApplicationPersistencePort;
   workspace: string;
   runtimeFactory?: AttemptRuntimeFactory;
   runtimeDefaults?: CoreRuntimeDefaults;

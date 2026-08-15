@@ -11,6 +11,8 @@ Core is a new system with no deployed compatibility obligation, but the reposito
 
 Treat a newly created database and the current public feature set as the only supported state. Core 0.8 creates and structurally validates the complete `tagent-core/0.8` SQLite schema directly and reports public schema version `1`. It rejects non-empty databases without that marker, different schema IDs, and any current-schema drift instead of upgrading or repairing them.
 
+Persistent Memory initializes only an absent PostgreSQL `memory` schema, records `tagent-memory/0.8` with schema version `1`, and rejects an existing unmarked or differently identified schema. Its current schema is expressed directly without column-upgrade statements.
+
 Publish one strict current API and SDK. Approval operations use the workflow-governance repository, Attempt state changes use the TaskRun transition repository, and Learning delivery uses `integration_outbox` with the single `learning-projection-v1` consumer. Historical migrations, compatibility fields and decoders, aggregate client helpers, authority switches, dual writes, shadow comparison, reconciliation, cutover, and upgrade-only recovery paths are not part of the maintained system.
 
 Preserve the current Session, TaskRun, Gateway profile, Skills, Memory, Learning, Workflow, Autonomy, Web, idempotency, recovery, authorization, redaction, pagination, cancellation, and release capabilities. Current implementations use responsibility-based names rather than migration-era `legacy` or `canonical` names.
@@ -25,12 +27,12 @@ Preserve the current Session, TaskRun, Gateway profile, Skills, Memory, Learning
 
 - `npm run check` passed all decision-record, workspace build, server typecheck, test typecheck, and Web typecheck gates.
 - `npm run lint` passed with zero warnings.
-- `npm test` passed 107 test files with 1 environment-gated PostgreSQL file skipped: 1,029 tests passed and 3 skipped. This includes fresh-schema creation and drift rejection, repository authority, recovery, Gateway provider/readiness, architecture, release, SDK, Web, and runtime coverage.
+- `npm test` passed 107 test files with 1 environment-gated PostgreSQL file skipped: 1,026 tests passed and 3 skipped. This includes fresh-schema creation and drift rejection, repository authority, recovery, Gateway provider/readiness, architecture, release, SDK, Web, and runtime coverage.
 - `npm run build` produced the production Core and Web builds.
-- `npm run release:sdk -- <temporary-directory>` produced and smoke-tested the ABI and Core Client 0.8.0 tarballs and portable SHA-256 files.
+- `npm run release:sdk -- <temporary-directory>` produced and smoke-tested the ABI and Core Client 0.8.1 tarballs and portable SHA-256 files.
 - Production-only and complete-tree `npm audit` runs at the high threshold both reported zero vulnerabilities.
 - `npm run benchmark:compaction` passed its deterministic bounded-recall thresholds.
-- `git diff --check` passed, and repository searches found no maintained 0.7.0 version reference or current schema-47/dual-authority symbol; the remaining old-table names are negative assertions that those tables do not exist.
+- `git diff --check` passed, and repository searches found no maintained previous-release version reference, numbered migration schema, dual-authority symbol, or old-table negative assertion.
 
 The immutable Core/Web archive build requires Linux x64, Node 24.18.1, and ABI 137 by construction. The tag-triggered release workflow is the authoritative environment for that platform-specific gate.
 

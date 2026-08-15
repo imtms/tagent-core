@@ -9,7 +9,7 @@ Use this workflow for every substantial development TaskRun using the `strict` G
 3. Treat branch checks and deployment preflight as safety gates, not automatically as final completion evidence.
 4. Complete every operation that can change delivery state before registering final required checks.
 5. A final required check must be bound to a successful Bash receipt from the current Attempt.
-6. After final checks are registered, do not run Bash, mutate files, add plans, change Git state, deploy, migrate, restart services, or otherwise change delivery state.
+6. After final checks are registered, do not run Bash, mutate files, add plans, change Git state, deploy, restart services, or otherwise change delivery state.
 7. Submit the final candidate only after every required plan is terminal, every required check is passed and fresh, and `completionGate.failures` is empty.
 
 ## Standard sequence
@@ -34,7 +34,7 @@ A required plan item must never be abandoned as `pending` or `in_progress` merel
 3. Run targeted checks, then repository checks.
 4. Resolve failures by inspecting retained output and materially changing the approach; never repeat an identical failed Bash command unchanged.
 
-These checks prove that the candidate is safe to deliver. They can become stale after a later commit, merge, artifact build, migration, or deployment and therefore are not necessarily the final TaskRun evidence.
+These checks prove that the candidate is safe to deliver. They can become stale after a later commit, merge, artifact build, or deployment and therefore are not necessarily the final TaskRun evidence.
 
 ### 4. Deliver
 
@@ -48,11 +48,10 @@ Complete every applicable delivery action before finalization:
 6. delete the short-lived branch when appropriate;
 7. back up persistent data;
 8. build and verify immutable artifacts;
-9. rehearse migrations and rollback where required;
+9. rehearse deployment recovery where required;
 10. deploy or switch the release;
-11. run migrations;
-12. restart or reload services;
-13. execute production health, readiness, metrics, API, database, and rollback checks.
+11. restart or reload services;
+12. execute production health, readiness, metrics, API, database, and recovery checks.
 
 If an item is not applicable, record that fact in the delivery report; do not invent an external action.
 
@@ -73,7 +72,7 @@ Run the smallest complete verification set against the actual delivered state. I
 
 - final source quality and tests on the merged commit;
 - final Git/MR/CI and artifact identity;
-- deployed release, migration, service, and production smoke state when deployment is in scope.
+- deployed release, service, and production smoke state when deployment is in scope.
 
 Prefer a small set of orthogonal evidence commands. Avoid redundant required checks such as one aggregate `quality` check plus separate required `lint`, `typecheck`, `build`, and `tests` checks for the same receipt set.
 
@@ -114,7 +113,7 @@ After the final gate audit:
 - do not create or rename plan items;
 - do not register additional checks unless the gate explicitly requires repair.
 
-Submit one complete standalone report containing the delivered result, verification commands and actual results, external delivery/deployment state, rollback or backup information where applicable, and any real failures or deferred items.
+Submit one complete standalone report containing the delivered result, verification commands and actual results, external delivery/deployment state, recovery or backup information where applicable, and any real failures or deferred items.
 
 ## Recovery from a blocked TaskRun
 
@@ -132,7 +131,7 @@ Before doing any work, inspect the original TaskRun and already completed extern
 [ ] Existing plan keys were reused
 [ ] Code and development verification completed
 [ ] Git, MR/PR, CI, and merge completed where applicable
-[ ] Backup, artifact, migration, deployment, and production operations completed where applicable
+[ ] Backup, artifact, deployment, and production operations completed where applicable
 [ ] Every original required plan is done/skipped
 [ ] Final verification ran after every delivery-changing operation
 [ ] Minimal required checks are passed and stale=false

@@ -7,7 +7,7 @@ import {
 import type { RecallFeedbackSignal } from "@tagent/memory/domain";
 import { Store } from "@tagent/persistence-sqlite";
 import { createExecutionCollaborationAdapters } from "../apps/core-service/src/composition/execution-collaboration-adapters.js";
-import { agentPersistence, learningPersistence, workflowPersistence } from "./support/test-persistence.js";
+import { corePersistence, learningPersistence, workflowPersistence } from "./support/test-persistence.js";
 
 const stores: Store[] = [];
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
@@ -48,7 +48,7 @@ describe("Communication Profile", () => {
     const store = new Store(":memory:"); stores.push(store);
     const first = store.createSessionIdempotent({ title: "First", principalId: "user:1", idempotencyKey: "first", canonicalPayload: "first" }).session;
     const second = store.createSessionIdempotent({ title: "Second", principalId: "user:1", idempotencyKey: "second", canonicalPayload: "second" }).session;
-    const persistence = agentPersistence(store);
+    const persistence = corePersistence(store);
     const learning = new LearningService(learningPersistence(store));
     const workflows = new WorkflowLearningService(workflowPersistence(store));
     const captureRequests: any[] = [];

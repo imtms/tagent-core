@@ -1,5 +1,5 @@
 import type { RunEventMap, RunEventType, TaskRun } from "@tagent/execution/domain";
-import type { AgentServicePersistencePort } from "../application/ports/index.js";
+import type { CoreApplicationPersistencePort } from "../application/ports/index.js";
 import type {
   AttemptProjectionPort,
   ContextEnrichmentPort,
@@ -15,7 +15,7 @@ import type {
 import type { AccessContext, MemoryFacade } from "@tagent/memory";
 
 interface ExecutionCollaborationAdapterOptions {
-  persistence: Pick<AgentServicePersistencePort, "events" | "sessions" | "submissions" | "taskRuns">;
+  persistence: Pick<CoreApplicationPersistencePort, "events" | "sessions" | "submissions" | "taskRuns">;
   memory?: MemoryFacade;
   memoryScopeId: string;
   learningControl?: LearningFeatureControl;
@@ -25,7 +25,7 @@ interface ExecutionCollaborationAdapterOptions {
 }
 
 export function resolveMemorySubjectId(
-  persistence: Pick<AgentServicePersistencePort, "submissions">,
+  persistence: Pick<CoreApplicationPersistencePort, "submissions">,
   sessionId: string,
 ): string {
   return persistence.submissions.getSessionPrincipalId(sessionId) ?? `session:${sessionId}`;

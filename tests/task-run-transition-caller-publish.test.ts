@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
 import type { AttemptRuntimePort } from "@tagent/execution/ports";
 import { settleRuntimeInitializationFailure } from "../packages/execution/src/application/runtime-initialization-failure.js";
-import { AgentService } from "@tagent/core-service/application";
+import { createCoreApplication } from "@tagent/core-service/application";
 import {
   TestSupervisorReviewer,
   type SupervisorAudit,
 } from "@tagent/core-service/composition";
 import { Store } from "@tagent/persistence-sqlite/store";
-import { agentPersistence } from "./support/test-persistence.js";
+import { corePersistence } from "./support/test-persistence.js";
 
 const stores: Store[] = [];
 
@@ -89,7 +89,7 @@ describe("TaskRun transition caller publishing", () => {
     const store = new Store(":memory:");
     stores.push(store);
     const runtime = new ControlledRuntime();
-    const service = new AgentService(agentPersistence(store), "/tmp", () => runtime, {
+    const service = createCoreApplication(corePersistence(store), "/tmp", () => runtime, {
       maxContinuations: 0,
       supervisorReviewer: new TestSupervisorReviewer([blockedAudit()]),
     });
@@ -114,7 +114,7 @@ describe("TaskRun transition caller publishing", () => {
   it("does not record an inbox launch error when the authoritative runtime transition fails", () => {
     const store = new Store(":memory:");
     stores.push(store);
-    const persistence = agentPersistence(store);
+    const persistence = corePersistence(store);
     const session = persistence.sessions.createSession();
     const item = persistence.submissions.enqueueSessionInbox(session.id, "initialize", {
       summary: "initialize",

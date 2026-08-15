@@ -1,6 +1,6 @@
 import type { CoreApplicationServices } from "./core-application-services.js";
 
-/** Compatibility/application facade assembled at the outer Core boundary. */
+/** Application coordinator assembled at the outer Core boundary. */
 export class CoreApplicationCoordinator {
   constructor(private readonly services: CoreApplicationServices) {}
 

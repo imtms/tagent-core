@@ -6,7 +6,7 @@ import {
   type WorkspaceGoalDefinition,
   type WorkspaceGoalRoadmap,
 } from "@tagent/governance";
-import { agentPersistence } from "./support/test-persistence.js";
+import { corePersistence } from "./support/test-persistence.js";
 import { recordSuccessfulBash, upsertTrustedCheck } from "./support/trusted-evidence.js";
 
 function persistence(store: Store) {
@@ -284,7 +284,7 @@ describe("Workspace Goal Roadmap execution", () => {
         nextAction: { kind: "resolve_problem" },
         roadmapProgress: [expect.objectContaining({ itemId: "storage", status: "blocked", runId: run.id })],
       });
-      const adapter = agentPersistence(store);
+      const adapter = corePersistence(store);
       const sourceAttempt = adapter.attempts.getAttemptForRun(run.id, run.attempt)!;
       adapter.taskRunTransitions.transitionSystem({
         kind: "resume_manual",

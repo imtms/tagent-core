@@ -27,4 +27,4 @@ Use the same term in domain code, ports, persistence, events, ABI, tests, and do
 - Use ISO 8601 UTC timestamps in the v1 ABI and explicit units in configuration names such as `_MS`.
 - Preserve domain capitalization in prose: Core, Web Console, Memory, Learning, Supervisor, Gateway, TaskRun, Attempt.
 
-Compatibility DTO aliases, unversioned route names, and root-facade import names are not supported naming conventions.
+Public names must identify the single current DTO, versioned route, and responsibility-owned application surface.

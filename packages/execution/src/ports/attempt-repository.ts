@@ -8,7 +8,6 @@ import type {
 } from "../domain/task-run.js";
 import type {
   Attempt,
-  AttemptId,
   AttemptTransitionAudit,
   CandidateResult,
   ExecutionLease,
@@ -162,5 +161,3 @@ export interface FencedRuntimeMutationPort {
     artifact: Omit<Artifact, "runId" | "createdAt">,
   ): Artifact;
 }
-
-export type { AttemptId };

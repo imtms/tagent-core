@@ -11,10 +11,10 @@ export interface AttemptExecutionToken {
   executionFence: number;
 }
 
-export interface RuntimeTextPart { type: "text"; text: string; textSignature?: string }
-export interface RuntimeThinkingPart { type: "thinking"; thinking: string; thinkingSignature?: string; redacted?: boolean }
-export interface RuntimeImagePart { type: "image"; data: string; mimeType: string }
-export interface RuntimeToolCallPart { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown>; thoughtSignature?: string }
+interface RuntimeTextPart { type: "text"; text: string; textSignature?: string }
+interface RuntimeThinkingPart { type: "thinking"; thinking: string; thinkingSignature?: string; redacted?: boolean }
+interface RuntimeImagePart { type: "image"; data: string; mimeType: string }
+interface RuntimeToolCallPart { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown>; thoughtSignature?: string }
 export type RuntimeMessagePart = RuntimeTextPart | RuntimeThinkingPart | RuntimeImagePart | RuntimeToolCallPart;
 
 export interface RuntimeUsage {

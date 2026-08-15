@@ -37,7 +37,7 @@ git diff --check
 - [ ] AgentHarness runtime contracts cover quiescent asynchronous teardown, required cancellation ownership, transcript-invisible retry/fallback, steering/follow-up during retry and compaction, abort queue audit, structured tool failures, current-turn context preservation, provider idle timeout, threshold compaction and context-overflow recovery.
 - [ ] Scripted wire-fault tests cover reset-before-headers, partial reset, missing `[DONE]`, malformed SSE, empty completion, request identity, and failed-partial isolation; fixed-seed state-machine properties remain reproducible.
 - [ ] `npm run benchmark:compaction` reports full exact-fact literal recall within its checked bounded-cost threshold; its synthetic-corpus limitations remain documented.
-- [ ] Differential API tests confirm removed unversioned routes return 404.
+- [ ] API tests confirm unversioned paths return 404.
 - [ ] Core-managed Skill tests prove shared catalog CRUD, immutable revisions, multi-Skill Workspace references, TaskRun snapshot isolation, native `resources.skills`/`AgentHarness.skill()` invocation, and upload rejection for traversal, symlink, malformed ZIP, size, and tampering cases.
 
 ## PostgreSQL Memory gate
@@ -50,6 +50,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 ```
 
 - [ ] The persistent Memory profile passes.
+- [ ] An absent PostgreSQL `memory` schema initializes as `tagent-memory/0.8`, version `1`, reopens successfully, and an unmarked/different schema is rejected.
 - [ ] Memory-disabled startup does not connect to PostgreSQL/Cold storage or start Memory/Learning workers.
 - [ ] Backup/restore and reindex generation behavior were rehearsed for production configuration changes.
 
@@ -83,7 +84,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] Event-consumer replay persists before ACK, reclaims a new generation, reaches zero lag, and settled/final events are acknowledged with the correct boundary.
 - [ ] Transcript, interaction and Artifact metadata pages enforce default/max limits; SSE batch/buffer bounds and HTTP 413 Artifact limits match capabilities.
 - [ ] Operator Session/TaskRun lists enforce scope/default/max limits, tied-key and snapshot pagination, cursor retry/mismatch/restart behavior, empty/latest semantics and public-summary redaction.
-- [ ] Core-owned ABI fixtures and provider/consumer tests pass. Gateway separately proves its fake Core and current/previous-client matrix before its production cutover.
+- [ ] Core-owned ABI fixtures and provider/consumer tests pass. Gateway separately proves its Fake Core against the exact current Core/SDK tuple before production cutover.
 - [ ] `GET /api/v1/capability-profiles` returns all eight profile `1.0` summaries/details for the production principal, with the expected 41 unique endpoint IDs/routes, fine-grained scopes, pagination/retention and exact-replay/durable-receipt recovery semantics.
 - [ ] The real provider harness and canonical fixture suite pass; no Fake Core or Gateway transport simulation has been moved into Core.
 - [ ] `scripts/gateway-readiness-probe.mjs` exits 0 with `ready=true` and no reasons.

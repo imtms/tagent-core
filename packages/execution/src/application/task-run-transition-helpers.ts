@@ -1,8 +1,7 @@
-import type { CanonicalJsonValue, GateEvaluation } from "@tagent/governance/domain";
+import type { CanonicalJsonValue } from "@tagent/governance/domain";
 import type { RunEvent, RunId } from "../domain/task-run.js";
 import type { AttemptExecutionToken } from "../ports/attempt-runtime.js";
 import type {
-  MessageRejectedPrecedingEvent,
   TaskRunTransitionPort,
   TaskRunTransitionOutcome,
   TaskRunTransitionResult,
@@ -18,32 +17,6 @@ function runtimeTransitionFence(token: AttemptExecutionToken) {
   };
 }
 
-export function completeRuntimeTaskRun(
-  transitions: TaskRunTransitionPort,
-  token: AttemptExecutionToken,
-  data: Readonly<Record<string, CanonicalJsonValue>>,
-): TaskRunTransitionOutcome & { event: RunEvent } {
-  return requireTerminalTransition(transitions.transitionRuntime(
-    { kind: "complete", reason: "", data },
-    runtimeTransitionFence(token),
-  ), token.runId);
-}
-
-export function blockRuntimeTaskRun(
-  transitions: TaskRunTransitionPort,
-  token: AttemptExecutionToken,
-  reason: string,
-  data: Readonly<Record<string, CanonicalJsonValue>>,
-  precedingEvents?: readonly MessageRejectedPrecedingEvent[],
-): TaskRunTransitionOutcome & { event: RunEvent } {
-  return requireTerminalTransition(transitions.transitionRuntime({
-    kind: "block",
-    reason,
-    data,
-    ...(precedingEvents ? { precedingEvents } : {}),
-  }, runtimeTransitionFence(token)), token.runId);
-}
-
 export function failRuntimeTaskRun(
   transitions: TaskRunTransitionPort,
   token: AttemptExecutionToken,
@@ -57,30 +30,7 @@ export function failRuntimeTaskRun(
   ), token.runId, cause);
 }
 
-export function canonicalGateEvaluations(gates: readonly GateEvaluation[]): CanonicalJsonValue[] {
-  return gates.map((gate) => ({
-    id: gate.id,
-    runId: gate.runId,
-    attempt: gate.attempt,
-    checkpointSeq: gate.checkpointSeq,
-    gateType: gate.gateType,
-    evaluator: gate.evaluator,
-    evaluatorModel: gate.evaluatorModel,
-    summary: gate.summary,
-    passed: gate.passed,
-    failures: gate.failures.map((failure) => ({ ...failure })),
-    ...(gate.criterionCoverage === undefined ? {} : {
-      criterionCoverage: gate.criterionCoverage.map((criterion) => ({
-        ...criterion,
-        evidenceRefs: [...criterion.evidenceRefs],
-      })),
-    }),
-    inputManifestHash: gate.inputManifestHash,
-    createdAt: gate.createdAt,
-  }));
-}
-
-export function requireTerminalTransition(
+function requireTerminalTransition(
   result: TaskRunTransitionResult,
   runId: RunId,
   cause?: unknown,

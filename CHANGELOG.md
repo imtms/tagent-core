@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.8.1] - 2026-08-15
+
+### Current application surface
+
+- Removed the `AgentService` compatibility facade and its persistence-port aliases; Core composition, tests, and consumers now use `CoreApplicationCoordinator` through the single `createCoreApplication` factory.
+- Removed the unused Submission `modelId` field from the Channel, application, and execution contracts. Model selection remains owned by current Session Settings.
+- Deleted dead transition, workspace, metadata, and Learning integration helpers; narrowed internal-only exports and retained only current HTTP, lifecycle, persistence, and runtime entry points.
+
+### Fresh persistence and maintenance
+
+- Replaced PostgreSQL Memory column-upgrade statements with direct creation and strict identity validation of the `tagent-memory/0.8` schema, serialized by a transaction advisory lock on first initialization.
+- Removed obsolete compatibility, migration, dual-authority, old-route, and facade-only tests while preserving current behavior, security, recovery, architecture, release, and Gateway contract coverage.
+- Updated the ABI, Gateway, Memory, operator, modular-monolith, Skills, Supervisor, finalization, release, and decision-record documentation for the single current system.
+
+### Breaking compatibility and deployment
+
+- This patch intentionally supports only the current `0.8.1` Core, Web Console, ABI, Core Client, and fresh SQLite/PostgreSQL persistence contracts. Older SDKs and existing unmarked or structurally different databases are unsupported.
+- Deploy matching `0.8.1` artifacts against empty persistence. There is no supported in-place upgrade or rollback path, and this release does not change token budgets, pricing, cost controls, or usage accounting.
+
 ## [0.8.0] - 2026-08-15
 
 ### One current Core system

@@ -77,7 +77,7 @@ async function loadS3BlobStore() {
 export async function createMemoryRuntime(config:MemoryRuntimeConfig,source:MemoryRuntimeSourcePort,semanticJudge?:SemanticMemoryJudgePort){
   const postgresModule = config.backend === "postgres" ? await loadPostgresAdapter() : undefined;
   const postgresAdapter = postgresModule ? new postgresModule.PostgresMemoryAdapter(config.postgresUrl!) : undefined;
-  if (postgresAdapter) await postgresAdapter.migrate();
+  if (postgresAdapter) await postgresAdapter.initializeSchema();
   const adapter = postgresAdapter ?? new InMemoryMemoryAdapter();
   const blobs = config.coldBackend === "s3"
     ? new (await loadS3BlobStore()).S3BlobStore({bucket:config.s3Bucket!,prefix:config.s3Prefix,clientConfig:{endpoint:config.s3Endpoint,region:config.s3Region??"us-east-1",forcePathStyle:config.s3ForcePathStyle}})
@@ -95,8 +95,8 @@ export async function createMemoryRuntime(config:MemoryRuntimeConfig,source:Memo
   const capture=new MemoryCaptureWorker(adapter,new PersistenceMemorySourceLoader(source),extractor,policy,service,lifecycle,undefined,(event)=>{for(const ref of event.sourceRefs.filter((x)=>x.sourceType==="run"))if(source.getRun(ref.sourceId))source.appendEvent(ref.sourceId,event.type,event.data);},semanticJudge);
   const semanticConsolidator=config.extractorProvider==="hybrid"?new LlmSemanticConsolidator({baseUrl:config.extractorBaseUrl!,resolveApiKey:config.resolveExtractorApiKey!,model:config.extractorModel!}):undefined;
   const consolidator=new MemoryConsolidator(adapter,adapter,service,{minimumRecords:config.coldMinimumRecords},semanticConsolidator); const reconciler=new ColdStorageReconciler(adapter,blobs);
-  // Backfill durable user messages with the same idempotency key used by live capture.
-  // This repairs upgrades from pre-memory installations without making raw chat the recall source.
+  // Capture explicit profile cues from durable user messages with the live idempotency identity.
+  // This supports enabling Memory after a conversation without making raw chat the recall source.
   const historicalMessages=source.listDurableUserMessages();
   for(const message of historicalMessages)if(isExplicitProfileCue(message.content)){const subjectId=message.principalId??(message.sessionId?`session:${message.sessionId}`:undefined);if(!subjectId)continue;const scopes:AccessContext["scopes"]=message.principalId?[{type:"user",id:message.principalId},{type:"workspace",id:config.workspaceScopeId},...(message.sessionId?[{type:"session" as const,id:message.sessionId}]:[])]:[{type:"session",id:message.sessionId!},{type:"workspace",id:config.workspaceScopeId}];await service.enqueueCapture({access:{subjectId,scopes,purpose:"capture"},sourceRefs:[{sourceType:"message",sourceId:String(message.id),revision:"user"}],content:`user: ${message.content}`,idempotencyKey:`user-message:${message.id}`,captureSource:{kind:"user_message",role:"user",explicitIntent:true}});}
   const reindex=embeddings?new DurableReindexWorker(adapter,adapter,adapter,embeddings,adapter,access,config.embeddingBatchSize):undefined;if(reindex){const scopes=await adapter.listScopes();if(!scopes.some((scope)=>scope.type==="workspace"&&scope.id===config.workspaceScopeId))scopes.push(access.scopes[0]);for(const scope of scopes)await adapter.enqueueReindex(scope,embeddings!.generation);}

@@ -8,11 +8,11 @@
 Browser -> Gateway (OIDC, ACL, audit, projection) -> Core Operator Read API (authority)
 ```
 
-Core owns the authoritative data, runtime-validated ABI, bounded queries, pagination semantics and service-principal scope checks. Gateway owns browser identity, actor-to-resource authorization, northbound REST/WebSocket DTOs, its rebuildable projection, fake-Core implementation and Gateway client compatibility jobs. Gateway must not read Core SQLite, Workspace files, private Store APIs or `/api/v1/console/*` DTOs.
+Core owns the authoritative data, runtime-validated ABI, bounded queries, pagination semantics and service-principal scope checks. Gateway owns browser identity, actor-to-resource authorization, northbound REST/WebSocket DTOs, its rebuildable projection, Fake Core implementation and exact-release integration jobs. Gateway must not read Core SQLite, Workspace files, private Store APIs or `/api/v1/console/*` DTOs.
 
-## Discovery and compatibility
+## Discovery and release identity
 
-`GET /api/v1/capabilities` advertises `operator.read.v1` in `apiVersions`. It deliberately does not add endpoint IDs or fields to the closed `operator.profileVersion=1.0` object because existing strict Gateway decoders reject unknown members.
+`GET /api/v1/capabilities` advertises `operator.read.v1` in `apiVersions`. Endpoint IDs remain in the independently owned `operator.profileVersion=1.0` document so base discovery and Operator Read evolve as separate current contracts.
 
 After discovering the API version, call `GET /api/v1/operator/capabilities`. Its independent `profileVersion=1.0` contract publishes the exact endpoint IDs, orders, cursor guarantees, retention behavior and limits. A Gateway may enable historical discovery only after both checks succeed; failure must not disable unrelated Channel features.
 
@@ -48,7 +48,7 @@ The cursor is opaque, versioned and bound to endpoint kind, resource, filter set
 
 Membership is snapshot-consistent, while summary values are read-committed: an item admitted to the snapshot can expose a newer title, status or latest activity on a later page. This is intentionally not a database-wide historical value snapshot.
 
-Cursors do not expire and survive a normal Core restart against the same compatible database/profile. They are not portable across database restore, table rewrite, `VACUUM`, or an incompatible future profile. Consumers must restart from page one after such maintenance or after `pagination.cursor_invalid`. The `snapshot` value in `pageInfo` is an opaque diagnostic/membership token, not a general read API or an SSE sequence.
+Cursors do not expire and survive a normal Core restart against the same exact current database/profile. They are not portable across database restore, table rewrite, `VACUUM`, or another profile release. Consumers must restart from page one after such maintenance or after `pagination.cursor_invalid`. The `snapshot` value in `pageInfo` is an opaque diagnostic/membership token, not a general read API or an SSE sequence.
 
 Current retention has no automatic deletion and no tombstones. Missing resources therefore use 404. A future expiry, deletion or tombstone policy requires an explicitly negotiated profile change; Core does not emit a synthetic `pagination.cursor_expired` while expiry is disabled.
 

@@ -1,4 +1,4 @@
-import type { AgentServicePersistencePort } from "@tagent/core-service/application";
+import type { CoreApplicationPersistencePort } from "@tagent/core-service/application";
 import { httpArtifactContent } from "@tagent/core-service/composition";
 import type { AppDependencies, HttpPersistencePort } from "@tagent/http-fastify";
 import type { LearningServicePersistencePort, SettingsRepository, WorkflowLearningPersistencePort } from "@tagent/learning/ports";
@@ -13,7 +13,7 @@ function testPersistence(store: Store): SqlitePersistence {
   });
 }
 
-export function agentPersistence(store: Store): AgentServicePersistencePort {
+export function corePersistence(store: Store): CoreApplicationPersistencePort {
   return testPersistence(store);
 }
 

@@ -2,7 +2,7 @@ import type { GraphStorePort, RecordStorePort, TopicCatalogPort, VectorIndexPort
 import type { AccessContext, ExtractionProposal, MemoryKind, MemoryLifecycleState, TopicDescriptor, WarmMemory } from "./types.js";
 import { canonicalFingerprint, canonicalizeTopic, canonicalSPO, isDurableMemory } from "./quality.js";
 
-export interface RetentionPolicy { staleAfterMs:number; deleteAfterMs:number }
+interface RetentionPolicy { staleAfterMs:number; deleteAfterMs:number }
 export interface LifecycleOptions {
   warmAfterMs?:number; hotTtlMs?:number; coldMinimumRecords?:number; minimumColdConfidence?:number;
   candidateTtlMs?:number; deletedGracePeriodMs?:number; retention?:Partial<Record<MemoryKind,RetentionPolicy>>;

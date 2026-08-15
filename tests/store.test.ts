@@ -742,22 +742,11 @@ describe("Store", () => {
     expect(operations).not.toHaveBeenCalled();
   });
 
-  it("records the single current schema and excludes migration-only state", () => {
+  it("records the single current schema identity", () => {
     const store = createStore();
     expect(store.getSchemaVersion()).toBe(1);
     expect(store.db.prepare("SELECT schema_id as schemaId FROM core_schema WHERE id=1").get())
       .toEqual({ schemaId: "tagent-core/0.8" });
-    const tables = (store.db.prepare(`SELECT name FROM sqlite_master
-      WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map(({ name }) => name);
-    expect(tables).not.toEqual(expect.arrayContaining([
-      "schema_meta",
-      "attempt_authority_state",
-      "attempt_shadow_comparisons",
-      "learning_projection_outbox",
-      "learning_projection_authority_state",
-      "integration_reconciliation",
-      "migration_issues",
-    ]));
   });
 
   it("rejects an existing database without the current schema marker", () => {

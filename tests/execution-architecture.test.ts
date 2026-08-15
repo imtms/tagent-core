@@ -117,11 +117,6 @@ describe("execution architecture boundaries", () => {
     expect(sourceText("apps/core-service/src/application/core-application-coordinator.ts")).toContain("CoreApplicationServices");
   });
 
-  it("keeps AgentService as a cohesive application facade under 150 physical lines", () => {
-    const lines = sourceText("apps/core-service/src/application/agent-service.ts").split(/\r?\n/);
-    expect(lines.length, `AgentService has ${lines.length} physical lines`).toBeLessThan(150);
-  });
-
   it("gives each Execution service a compile-time narrowed state capability view", () => {
     const statefulServices = [
       "attempt-executor.ts",
@@ -170,13 +165,13 @@ describe("execution architecture boundaries", () => {
         if (!declared.has(key)) violations.push(`${relativePath} uses undeclared persistence.${key}`);
       }
       if (declared.size > 9) violations.push(`${relativePath} exposes ${declared.size} repositories`);
-      if (sourceText(relativePath).includes("AgentServicePersistencePort")) {
-        violations.push(`${relativePath} imports or names the full AgentServicePersistencePort`);
+      if (sourceText(relativePath).includes("CoreApplicationPersistencePort")) {
+        violations.push(`${relativePath} imports or names the full CoreApplicationPersistencePort`);
       }
     }
     const runtimeHost = sourceText("apps/core-service/src/composition/runtime-host-adapter.ts");
-    expect(runtimeHost).toMatch(/persistence:\s*Pick<\s*AgentServicePersistencePort,/s);
-    expect(runtimeHost).not.toMatch(/persistence:\s*AgentServicePersistencePort/);
+    expect(runtimeHost).toMatch(/persistence:\s*Pick<\s*CoreApplicationPersistencePort,/s);
+    expect(runtimeHost).not.toMatch(/persistence:\s*CoreApplicationPersistencePort/);
     expect(violations).toEqual([]);
   });
 
@@ -221,42 +216,6 @@ describe("execution architecture boundaries", () => {
     }
 
     expect(runtimeFiles.length).toBeGreaterThan(0);
-    expect(violations).toEqual([]);
-  });
-
-  it("makes AgentService delegate injected application interfaces instead of constructing domain services or runtimes", () => {
-    const relativePath = "apps/core-service/src/application/agent-service.ts";
-    const source = sourceFile(relativePath);
-    const violations: string[] = [];
-    const forbiddenConstructors = new Set([
-      "SessionInputRouter",
-      "WorkflowLearningService",
-      "LearningService",
-      "TaskRunSupervisor",
-      "PiRuntime",
-    ]);
-    const forbiddenConcreteModules = /(?:session-input-router|workflow-service|learning-service|supervisor|runtime\/(?:factory|pi-runtime))\.(?:c|m)?js$/;
-    const forbiddenFactories = new Set(["createInProcessRuntime", "resolveRuntimeFactory"]);
-    const report = (node: ts.Node, message: string) => {
-      violations.push(`${relativePath}:${lineOf(source, node)} ${message}`);
-    };
-    const visit = (node: ts.Node) => {
-      if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)
-        && forbiddenConcreteModules.test(node.moduleSpecifier.text)) {
-        report(node, `imports concrete collaborator '${node.moduleSpecifier.text}'`);
-      }
-      if (ts.isNewExpression(node) && ts.isIdentifier(node.expression)
-        && forbiddenConstructors.has(node.expression.text)) {
-        report(node, `constructs ${node.expression.text}`);
-      }
-      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)
-        && forbiddenFactories.has(node.expression.text)) {
-        report(node, `calls concrete runtime factory ${node.expression.text}`);
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(source);
-
     expect(violations).toEqual([]);
   });
 

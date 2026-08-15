@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "@tagent/http-fastify";
-import { AgentService } from "@tagent/core-service/application";
+import { createCoreApplication } from "@tagent/core-service/application";
 import { Store } from "@tagent/persistence-sqlite/store";
 import { InMemoryMemoryAdapter } from "../packages/memory/src/adapters/in-memory.js";
 import { HashEmbeddingAdapter } from "../packages/memory/src/adapters/hash-embedding.js";
@@ -12,7 +12,7 @@ import { DefaultPolicyEngine } from "../packages/memory/src/policy/policy-engine
 import { MemoryService } from "../packages/memory/src/memory-service.js";
 import { composeWorkspaceTools, createLocalSubprocessPort } from "@tagent/workspace-local";
 import type { ToolCapabilityApplicationPort } from "@tagent/execution/ports";
-import { agentPersistence, httpTestResources } from "./support/test-persistence.js";
+import { corePersistence, httpTestResources } from "./support/test-persistence.js";
 
 const testSignal = new AbortController().signal;
 
@@ -88,7 +88,7 @@ describe("GitHub issue regressions #24-#28", () => {
   it("#26 terminalizes a TaskRun when runtime construction throws", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const service = new AgentService(agentPersistence(store), await mkdtemp(path.join(tmpdir(), "tagent-issues-runtime-")), () => { throw new Error("factory exploded"); });
+    const service = createCoreApplication(corePersistence(store), await mkdtemp(path.join(tmpdir(), "tagent-issues-runtime-")), () => { throw new Error("factory exploded"); });
     const result = await service.enqueueSessionInput(session.id, "runtime factory regression", "issue-26");
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(store.getRun(result.run!.id)).toMatchObject({ status: "failed", blockedReason: "factory exploded" });
@@ -101,7 +101,7 @@ describe("GitHub issue regressions #24-#28", () => {
   it("#27 maps malformed current pagination limits to non-retryable HTTP 400", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const service = new AgentService(agentPersistence(store), await mkdtemp(path.join(tmpdir(), "tagent-issues-http-")), () => waitingRuntime());
+    const service = createCoreApplication(corePersistence(store), await mkdtemp(path.join(tmpdir(), "tagent-issues-http-")), () => waitingRuntime());
     const app = createApp({ ...httpTestResources(store), service, logger: false });
     const urls = [
       `/api/v1/console/sessions/${session.id}/messages?limit=abc`,
@@ -121,7 +121,7 @@ describe("GitHub issue regressions #24-#28", () => {
   it("#28 returns the same result for identical retries and deterministic 409 for conflicting sequential/concurrent payloads", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const service = new AgentService(agentPersistence(store), await mkdtemp(path.join(tmpdir(), "tagent-issues-idempotency-")), () => waitingRuntime());
+    const service = createCoreApplication(corePersistence(store), await mkdtemp(path.join(tmpdir(), "tagent-issues-idempotency-")), () => waitingRuntime());
     const app = createApp({ ...httpTestResources(store), service, logger: false });
     const post = (content: string) => app.inject({
       method: "POST",

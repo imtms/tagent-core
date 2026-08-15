@@ -5,13 +5,13 @@ Kind: testing
 
 ## Problem
 
-Critical runtime tests polled durable events with short sleeps or asserted only example traces. The sleeps hid publication/ownership races, slowed healthy runs, and left canonicalization, replay, ordering, and migration state spaces underexplored.
+Critical runtime tests polled durable events with short sleeps or asserted only example traces. The sleeps hid publication/ownership races, slowed healthy runs, and left canonicalization, replay, ordering, and persistence state spaces underexplored.
 
 ## Decision
 
 `RunEventProbe` subscribes to the existing event boundary, remembers already observed events, and resolves predicates directly. A timer is only a failure guard. Pi lifecycle, cancellation, retry, steering, and compaction tests synchronize on events or explicit latches.
 
-Seeded, size-bounded `fast-check` properties cover canonical request equivalence, semantic hash changes, operation and tool-attempt replay, identity conflict rejection, gap-free event sequences, and v44-to-v45 migration re-entry with durable envelope preservation. Database properties reuse one isolated in-memory Store per property instead of rerunning the complete migration chain for every generated case; the filesystem migration property retains independent databases and an explicit 15-second failure guard.
+Seeded, size-bounded `fast-check` properties cover canonical request equivalence, semantic hash changes, operation and tool-attempt replay, identity conflict rejection, gap-free event sequences, and repeated current-schema opens with durable envelope preservation. Database properties reuse one isolated in-memory Store per property; the filesystem reopen property retains an independent database and an explicit 15-second failure guard.
 
 ## Alternatives considered
 

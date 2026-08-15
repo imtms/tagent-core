@@ -61,7 +61,7 @@ export interface WorkflowExecutedReceiptRow {
   created_at: number;
 }
 
-export class ApprovalOperationMappingError extends Error {
+class ApprovalOperationMappingError extends Error {
   constructor(message: string) {
     super(`Canonical approval mapping ${message}`);
     this.name = "ApprovalOperationMappingError";
@@ -72,7 +72,7 @@ function mappingFailure(message: string): never {
   throw new ApprovalOperationMappingError(message);
 }
 
-export function canonicalJsonObject(
+function canonicalJsonObject(
   source: string | Record<string, unknown>,
   field: string,
   id: string,
@@ -90,7 +90,7 @@ export function canonicalJsonObject(
   }
 }
 
-export function optionalCanonicalString(
+function optionalCanonicalString(
   record: Record<string, CanonicalJsonValue>,
   key: string,
 ): string | undefined {
@@ -151,7 +151,7 @@ export function mapRunApprovalOperation(input: RunApprovalSemanticInput): {
   return { operation, operationDigest: operationDigest(operation), metadata };
 }
 
-export function workflowTargetMatches(input: Pick<WorkflowApprovalSemanticInput,
+function workflowTargetMatches(input: Pick<WorkflowApprovalSemanticInput,
 "actionType" | "targetType" | "targetId" | "revisionId" | "proposalId">): boolean {
   if (input.actionType === "activate_workflow" || input.actionType === "start_canary") {
     return input.targetType === "workflow_revision"

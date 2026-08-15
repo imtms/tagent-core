@@ -18,14 +18,14 @@ This directory contains the maintained contracts for the current TAgent Core mai
 
 ## ABI and HTTP
 
-- [API v1](API_V1.md) — route surfaces, envelopes, authentication, idempotency, structured tool failures, SSE, and removed routes.
+- [API v1](API_V1.md) — route surfaces, envelopes, authentication, idempotency, structured tool failures, SSE, and strict versioned routing.
 - [Operator Read API](OPERATOR_READ_API.md) — Gateway discovery, Session/TaskRun inventory, stable cursor semantics, scopes, and responsibility boundary.
-- [ABI versioning](ABI_VERSIONING.md) — package exports, `specVersion`, compatibility rules, and fixtures.
+- [ABI versioning](ABI_VERSIONING.md) — package exports, `specVersion`, strict current-contract rules, and fixtures.
 
 ## Persistence and execution
 
 - [Persistence and recovery](PERSISTENCE_AND_RECOVERY.md) — current SQLite schema, receipts, writer fencing, Unit of Work, lifecycle, and restart recovery.
-- [Gateway profile compatibility](GATEWAY_PROFILE_COMPATIBILITY.md) — Core/profile/SDK release tuple, feature negotiation, CI ownership, and rollout matrix.
+- [Gateway profile release tuple](GATEWAY_PROFILE_COMPATIBILITY.md) — exact Core/profile/SDK identity, feature negotiation, CI ownership, and rollout.
 - [Runtime](RUNTIME.md) — in-process AgentHarness boundary, Pi dependency containment, `TaskRun`/`Attempt` execution, compaction, provider compatibility, timeouts, and tool authority.
 - [Execution reliability and efficiency](EXECUTION_EFFICIENCY.md) — snapshot edits, Artifact spill, project context, batching, context projection, Bash repeat protection, and continuation stalls.
 - [Supervisor](SUPERVISOR.md) — trusted Bash evidence, bounded LLM review, approvals, candidate delivery, and continuations.
@@ -47,4 +47,4 @@ This directory contains the maintained contracts for the current TAgent Core mai
 ## Release
 
 - [Release checklist](RELEASE_CHECKLIST.md) — toolchain, tests, audits, current-schema checks, artifacts, and publication.
-- [Changelog](../CHANGELOG.md) — release-level changes and upgrade notices.
+- [Changelog](../CHANGELOG.md) — release-level changes and deployment or breaking notices.

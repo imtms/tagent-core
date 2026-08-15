@@ -20,7 +20,7 @@ function MemoryExtraction({ job }: { job: CaptureJob | null | undefined }) {
   return <div className={`turn-memory ${completed ? "completed" : empty ? "empty" : failed ? "failed" : job.status}`} title={`Memory extraction · capture job ${job.id}`}><BrainCircuit size={11} /><span>{detail}</span></div>;
 }
 
-function legacyCopyText(content: string): boolean {
+function copyTextWithSelection(content: string): boolean {
   const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const textarea = document.createElement("textarea");
   textarea.value = content;
@@ -39,7 +39,7 @@ function legacyCopyText(content: string): boolean {
 async function copyText(content: string): Promise<boolean> {
   // Keep the synchronous fallback inside the click's user-activation window.
   // Local control planes and embedded browsers may deny the asynchronous API.
-  if (legacyCopyText(content)) return true;
+  if (copyTextWithSelection(content)) return true;
   try {
     if (!navigator.clipboard?.writeText) return false;
     await navigator.clipboard.writeText(content);

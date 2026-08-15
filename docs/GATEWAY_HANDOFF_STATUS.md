@@ -7,7 +7,7 @@ This document records the Core team's responsibility decision for the Gateway ha
 | Item | Value |
 | --- | --- |
 | Review date | 2026-08-15 |
-| Target release | `0.8.0` |
+| Target release | `0.8.1` |
 | SQLite schema | ID `tagent-core/0.8`, numeric version `1` |
 | Channel API | `/api/v1` |
 | Operator Read | `operator.read.v1` |
@@ -17,7 +17,7 @@ This document records the Core team's responsibility decision for the Gateway ha
 
 The Gateway requests are reasonable when they protect the REST/SSE/ABI boundary or expose Core-owned durable authority. Core therefore owns Session and TaskRun state, command and interaction receipts, event-consumer generations/ACKs, public inventory, capability discovery, and the eight bounded feature profiles.
 
-Browser identity, actor ACL policy, channel routing, local projections, persist-before-ACK storage, outbox, northbound delivery, and Gateway release compatibility remain Gateway-owned. A passing Core probe cannot prove those behaviors.
+Browser identity, actor ACL policy, channel routing, local projections, persist-before-ACK storage, outbox, northbound delivery, and exact-tuple Gateway integration remain Gateway-owned. A passing Core probe cannot prove those behaviors.
 
 ## Core-ready contracts
 
@@ -54,7 +54,7 @@ This gives Gateway deterministic reconciliation without pretending cross-service
 Gateway must implement and test:
 
 - Fake Core and network-failure scenarios in Gateway CI;
-- the current/previous client combinations Gateway promises to support;
+- the exact current Core/ABI/Core Client tuple;
 - browser OIDC/PKCE/session handling and removal of browser tokens before Core;
 - channel SDK adapters, account registry, and peer/thread-to-Session routing;
 - inbound deduplication, conversation binding, projection, outbox, and external delivery receipts;

@@ -11,7 +11,7 @@ Shared Skills center
   -> Pi can select a matching Skill; one-Skill Workspaces keep explicit invocation
 ```
 
-Core does not flatten Skill instructions into the system prompt. With one referenced Skill it invokes `AgentHarness.skill(name, prompt)` explicitly for compatibility with the 0.6 behavior. With multiple referenced Skills it supplies the frozen set to `AgentHarness.resources.skills`; Pi sees their names, descriptions and locations and applies the matching Skill. No modification to `pi-agent-core` is required.
+Core does not flatten Skill instructions into the system prompt. With one referenced Skill it invokes `AgentHarness.skill(name, prompt)` explicitly for deterministic selection. With multiple referenced Skills it supplies the frozen set to `AgentHarness.resources.skills`; Pi sees their names, descriptions and locations and applies the matching Skill. No modification to `pi-agent-core` is required.
 
 ## Managing the shared catalog
 

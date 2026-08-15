@@ -49,7 +49,7 @@ function methodReceiver(source: ts.SourceFile, methodName: string): string | und
 }
 
 describe("Core workflow Governance delegation", () => {
-  it("routes every compatibility effect through services.governance", () => {
+  it("routes every governance effect through services.governance", () => {
     const source = parsedSource("apps/core-service/src/application/core-application-coordinator.ts");
     const effects = [
       "activateWorkflow",
@@ -66,7 +66,7 @@ describe("Core workflow Governance delegation", () => {
       .toEqual(Object.fromEntries(effects.map((method) => [method, "this.services.governance"])));
   });
 
-  it("preserves the rollback approvalId through the compatibility coordinator", () => {
+  it("preserves the rollback approvalId through the Core coordinator", () => {
     const rollbackWorkflow = vi.fn(() => "rolled-back");
     const coordinator = new CoreApplicationCoordinator({
       governance: { rollbackWorkflow },

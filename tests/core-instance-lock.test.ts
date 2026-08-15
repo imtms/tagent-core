@@ -296,12 +296,12 @@ describe("Core instance lock", () => {
     await expect(lock.assertHeld()).rejects.toThrow("no longer refers to the acquired file");
   });
 
-  it("releases startup ownership after migration failure so the next startup can acquire it", async () => {
+  it("releases startup ownership after initialization failure so the next startup can acquire it", async () => {
     const { databasePath, options } = await fixture();
-    const start = async (instanceId: string, migrate: () => void) => {
+    const start = async (instanceId: string, initialize: () => void) => {
       const lock = await acquire(databasePath, options({ instanceId }));
       try {
-        migrate();
+        initialize();
         return lock;
       } catch (error) {
         await lock.release();
@@ -310,8 +310,8 @@ describe("Core instance lock", () => {
     };
 
     await expect(start("failed-startup", () => {
-      throw new Error("simulated migration failure");
-    })).rejects.toThrow("simulated migration failure");
+      throw new Error("simulated initialization failure");
+    })).rejects.toThrow("simulated initialization failure");
 
     const restarted = await start("restarted", () => undefined);
     expect(restarted.metadata.instanceId).toBe("restarted");

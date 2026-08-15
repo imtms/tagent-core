@@ -20,9 +20,9 @@ import {
   TranscriptResponseSchema,
 } from "@tagent/abi";
 import { createApp } from "@tagent/http-fastify";
-import { AgentService } from "@tagent/core-service/application";
+import { createCoreApplication } from "@tagent/core-service/application";
 import { Store } from "@tagent/persistence-sqlite/store";
-import { agentPersistence, httpTestResources } from "./support/test-persistence.js";
+import { corePersistence, httpTestResources } from "./support/test-persistence.js";
 
 const apps: Array<ReturnType<typeof createApp>> = [];
 const temporaryDirectories: string[] = [];
@@ -56,7 +56,7 @@ async function fixture(
   const workspace = await mkdtemp(path.join(tmpdir(), "tagent-v1-api-"));
   temporaryDirectories.push(workspace);
   const store = new Store(":memory:");
-  const service = new AgentService(agentPersistence(store), workspace, () => new WaitingRuntime(), { controlInboxCapacity });
+  const service = createCoreApplication(corePersistence(store), workspace, () => new WaitingRuntime(), { controlInboxCapacity });
   const app = createApp({
     ...httpTestResources(store),
     service,
@@ -122,7 +122,7 @@ describe("v1 API contracts", () => {
     expect(decodeAbi(SessionSchema, decodeAbi(SuccessEnvelopeSchema, read.json()).data)).toEqual(session);
     const capabilities = decodeAbi(CoreCapabilitiesResponseSchema, (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).data;
     expect(capabilities).toMatchObject({
-      releaseVersion: "0.8.0",
+      releaseVersion: "0.8.1",
       persistenceSchemaVersion: 1,
       interactions: { approvalResolution: true, userInputSubmission: true },
       operator: { roadmapGenerationIdempotent: true },
@@ -153,7 +153,7 @@ describe("v1 API contracts", () => {
       method: "POST",
       url: `/api/v1/sessions/${v1Session.id}/submissions`,
       headers,
-      payload: { content: " original v1 content ", modelId: "advisory-model-a" },
+      payload: { content: " original v1 content " },
     });
     expect(first.statusCode).toBe(200);
     const firstEnvelope = decodeAbi(SubmissionResponseSchema, first.json());
@@ -162,7 +162,7 @@ describe("v1 API contracts", () => {
       method: "POST",
       url: `/api/v1/sessions/${v1Session.id}/submissions`,
       headers: { ...headers, "x-request-id": "v1-submission-retry" },
-      payload: { content: "original v1 content", modelId: "advisory-model-b" },
+      payload: { content: "original v1 content" },
     });
     expect(decodeAbi(SubmissionResponseSchema, sameCanonicalPayload.json()).data.receipt).toEqual(firstEnvelope.data.receipt);
 

@@ -48,6 +48,25 @@ function expectTypedDynamicParameters(call: { text: string; values?: unknown[] }
 
 
 describe("PostgreSQL memory query shape", () => {
+  it("accepts only the current PostgreSQL Memory schema identity", async () => {
+    const connect = (identity?: { schemaId: string; schemaVersion: number }) => async () => ({
+      async query(text: string) {
+        if (text.includes("to_regnamespace")) return { rows: [{ oid: "1" }] };
+        if (text.includes("to_regclass")) return { rows: [{ table_name: identity ? "memory.schema_identity" : null }] };
+        if (text.includes("FROM memory.schema_identity")) return { rows: [identity] };
+        return { rows: [] };
+      },
+      release() {},
+    });
+    const current = new PostgresMemoryAdapter({});
+    (current as unknown as { pool: { connect: ReturnType<typeof connect> } }).pool = { connect: connect({ schemaId: "tagent-memory/0.8", schemaVersion: 1 }) };
+    await expect(current.initializeSchema()).resolves.toBeUndefined();
+
+    const unmarked = new PostgresMemoryAdapter({});
+    (unmarked as unknown as { pool: { connect: ReturnType<typeof connect> } }).pool = { connect: connect() };
+    await expect(unmarked.initializeSchema()).rejects.toThrow("accepts only an empty database");
+  });
+
   it("keeps direct recall and status query counts constant as requested cardinality grows", async () => {
     const counter = new QueryCounter();
     const adapter = adapterWith(counter);

@@ -1,6 +1,5 @@
 export {
   bootstrapCore,
-  main,
   runCoreServiceFromCli,
 } from "./server.js";
 export type {

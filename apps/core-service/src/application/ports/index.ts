@@ -1,1 +1,1 @@
-export type { AgentServicePersistencePort } from "./agent-service-persistence-port.js";
+export type { CoreApplicationPersistencePort } from "./core-application-persistence-port.js";

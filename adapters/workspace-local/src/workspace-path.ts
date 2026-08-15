@@ -68,15 +68,6 @@ async function runHelper(operation: "read" | "write" | "list" | "commit-batch", 
   }
 }
 
-/** Existing-path compatibility result; actual I/O must use the descriptor-relative helpers below. */
-export async function resolveWorkspaceExisting(root: string, target: string, signal: AbortSignal) {
-  const normalized = validateTarget(target);
-  // Listing through the pinned directory descriptor proves the complete path is an existing,
-  // non-symlink directory. Callers must not use the returned display path for subsequent I/O.
-  await runHelper("list", root, normalized, { signal });
-  return { root: path.resolve(root), path: path.resolve(root, normalized), relative: normalized };
-}
-
 export async function listWorkspaceDirectory(root: string, target: string, signal: AbortSignal, env?: NodeJS.ProcessEnv) {
   const buffer = await runHelper("list", root, target, { signal, env });
   return JSON.parse(buffer.toString("utf8")) as Array<{ name: string; directory: boolean; symlink: boolean }>;

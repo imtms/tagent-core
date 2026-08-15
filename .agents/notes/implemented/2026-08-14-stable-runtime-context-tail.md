@@ -11,7 +11,7 @@ The system prompt embedded mutable TaskRun state, execution policy, Workspace Go
 
 `RunContextService.buildSystemPrompt` accepts no TaskRun or Memory arguments. Its fixed content is limited to Core instructions, the Workspace path, and the selected project-rule snapshot. `buildRuntimeDynamicContext` owns current TaskRun, policy, Workspace Goal, and recalled-Memory projection.
 
-Immediately before every Pi provider request, the Harness context hook reloads current durable state and appends that projection as one ephemeral final user message after projected history. Context assembly reserves the tail's token budget. The real provider payload and schema-45 request envelope include the tail, but the Harness Session and durable transcript do not persist it.
+Immediately before every Pi provider request, the Harness context hook reloads current durable state and appends that projection as one ephemeral final user message after projected history. Context assembly reserves the tail's token budget. The real provider payload and durable request envelope include the tail, but the Harness Session and durable transcript do not persist it.
 
 ## Alternatives considered
 

@@ -21,10 +21,6 @@ export type SubmissionCreateHeaders = Static<typeof SubmissionCreateHeadersSchem
 
 export const SubmissionCreateRequestSchema = Type.Object({
   content: Type.String({ minLength: 1, maxLength: MAX_SUBMISSION_CONTENT_CHARS }),
-  modelId: Type.Optional(Type.String({
-    minLength: 1,
-    description: "Advisory compatibility hint; excluded from v1 idempotency and execution semantics.",
-  })),
   gateProfile: Type.Optional(GateProfileSchema),
   origin: Type.Optional(GatewayProvenanceSchema),
 }, { additionalProperties: false });
@@ -33,7 +29,6 @@ export type SubmissionCreateRequest = Static<typeof SubmissionCreateRequestSchem
 export const SubmissionApplicationInputSchema = Type.Object({
   idempotencyKey: IdempotencyKeySchema,
   content: Type.String({ minLength: 1, maxLength: MAX_SUBMISSION_CONTENT_CHARS }),
-  modelId: Type.Optional(Type.String({ minLength: 1 })),
   gateProfile: Type.Optional(GateProfileSchema),
   origin: Type.Optional(GatewayProvenanceSchema),
 }, { additionalProperties: false });
@@ -42,7 +37,6 @@ export type SubmissionApplicationInput = Static<typeof SubmissionApplicationInpu
 export const SubmissionExecutionRequestSchema = Type.Object({
   content: Type.String({ minLength: 1, maxLength: MAX_SUBMISSION_CONTENT_CHARS }),
   requestId: RequestIdSchema,
-  modelId: Type.Optional(Type.String({ minLength: 1 })),
   gateProfile: Type.Optional(GateProfileSchema),
 }, { additionalProperties: false });
 export type SubmissionExecutionRequest = Static<typeof SubmissionExecutionRequestSchema>;
@@ -87,7 +81,6 @@ export function mapSubmissionToExecutionRequest(input: SubmissionApplicationInpu
   return {
     content: input.content,
     requestId: input.idempotencyKey,
-    ...(input.modelId === undefined ? {} : { modelId: input.modelId }),
     ...(input.gateProfile === undefined ? {} : { gateProfile: input.gateProfile }),
   };
 }
@@ -95,7 +88,6 @@ export function mapSubmissionToExecutionRequest(input: SubmissionApplicationInpu
 export function normalizeSubmissionRequest(request: SubmissionCreateRequest): SubmissionCreateRequest {
   return {
     content: request.content.trim(),
-    ...(request.modelId === undefined ? {} : { modelId: request.modelId }),
     ...(request.gateProfile === undefined ? {} : { gateProfile: request.gateProfile }),
     ...(request.origin === undefined ? {} : { origin: request.origin }),
   };

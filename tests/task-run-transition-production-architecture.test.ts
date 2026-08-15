@@ -163,8 +163,6 @@ function transitionCalls(relativePath: string): { runtime: number; system: numbe
   const source = parseSource(relativePath);
   const result = { runtime: 0, system: 0 };
   const runtimeMethods = new Set([
-    "blockRuntimeTaskRun",
-    "completeRuntimeTaskRun",
     "failRuntimeTaskRun",
     "settleRuntimeInitializationFailure",
   ]);
@@ -260,7 +258,7 @@ describe("production TaskRun transition authority", () => {
       .filter(({ calls }) => calls > 0))
       .toEqual([{
         file: "packages/execution/src/application/task-run-transition-helpers.ts",
-        calls: 3,
+        calls: 1,
       }]);
   });
 });

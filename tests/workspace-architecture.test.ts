@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = process.cwd();
 const workspaceGroups = ["packages", "adapters", "apps"] as const;
-const internalVersion = "0.8.0";
+const internalVersion = "0.8.1";
 const expectedInternalGraph = {
   "@tagent/abi": [],
   "@tagent/core-client": ["@tagent/abi"],
@@ -520,7 +520,7 @@ describe("workspace architecture", () => {
     ]);
     const serverText = readFileSync(serverPath, "utf8");
     expect(serverText).toContain("if (entry === import.meta.url)");
-    expect(serverText).not.toMatch(/\b(?:Store|AgentService|CoreLifecycle|TaskRunSupervisor|createApp)\b/);
+    expect(serverText).not.toMatch(/\b(?:Store|CoreLifecycle|TaskRunSupervisor|createApp)\b/);
   });
 
   it("keeps Web on the channel ABI and Core client without backend source reach-through", () => {

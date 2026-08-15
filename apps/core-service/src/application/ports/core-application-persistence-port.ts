@@ -25,8 +25,8 @@ import type {
   WorkflowLearningPersistencePort,
 } from "@tagent/learning/ports";
 
-/** Persistence capabilities owned by AgentService, grouped by domain context. */
-export interface AgentServicePersistencePort {
+/** Persistence capabilities required by the Core application, grouped by domain context. */
+export interface CoreApplicationPersistencePort {
   readonly attempts: AttemptRepository;
   readonly runtimeMutations: FencedRuntimeMutationPort;
   readonly sessions: SessionRepository;

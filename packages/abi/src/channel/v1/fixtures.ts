@@ -14,14 +14,12 @@ const fixtureTime = "2026-08-04T12:34:56.789Z";
 
 export const submissionIdempotencyFixtures = {
   headers: { "idempotency-key": "submission.fixture-001" } satisfies SubmissionCreateHeaders,
-  originalPayload: { content: "Build the ABI", modelId: "fixture-model" } satisfies SubmissionCreateRequest,
-  repeatedCanonicalPayload: { content: "Build the ABI", modelId: "fixture-model" } satisfies SubmissionCreateRequest,
-  advisoryModelPayload: { content: "Build the ABI", modelId: "different-advisory-model" } satisfies SubmissionCreateRequest,
+  originalPayload: { content: "Build the ABI" } satisfies SubmissionCreateRequest,
+  repeatedCanonicalPayload: { content: "Build the ABI" } satisfies SubmissionCreateRequest,
   conflictingPayload: { content: "Change the ABI" } satisfies SubmissionCreateRequest,
   applicationInput: {
     idempotencyKey: "submission.fixture-001",
     content: "Build the ABI",
-    modelId: "fixture-model",
   } satisfies SubmissionApplicationInput,
   originalResponse: {
     data: {
@@ -91,7 +89,7 @@ export const commandResponseFixture = {
 
 export const coreCapabilitiesFixture = {
   data: {
-    releaseVersion: "0.8.0", apiVersions: ["channel.v1", "operator.console.v1", "operator.read.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 1,
+    releaseVersion: "0.8.1", apiVersions: ["channel.v1", "operator.console.v1", "operator.read.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 1,
     commandTypes: taskRunCommandFixtures.map((command) => command.type),
     eventTypes: ["task_run.started", "task_run.completed", "diagnostic.internal"],
     interactions: { approvalResolution: true, userInputSubmission: true },

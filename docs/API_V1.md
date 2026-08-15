@@ -169,7 +169,7 @@ Failed tool transcript items and `tool.completed`/`tool.failed` events may inclu
 }
 ```
 
-The closed code set is `ABORTED_BEFORE_DISPATCH`, `ABORTED`, `TIMEOUT`, `PATH_REJECTED`, `STALE_STATE`, `PRECONDITION_FAILED`, `INVALID_ARGUMENT`, `NOT_AUTHORIZED`, and `UNKNOWN`. Consumers should route by `code`, not parse `message`. The field is optional so previous persisted items and compatible clients remain valid; `ABORTED_BEFORE_DISPATCH` means the tool body was not invoked, while `ABORTED` means effects may have started and must be reconciled through the durable receipt/state model.
+The closed code set is `ABORTED_BEFORE_DISPATCH`, `ABORTED`, `TIMEOUT`, `PATH_REJECTED`, `STALE_STATE`, `PRECONDITION_FAILED`, `INVALID_ARGUMENT`, `NOT_AUTHORIZED`, and `UNKNOWN`. Consumers should route by `code`, not parse `message`. The field is present only for failed tool results with structured error identity; `ABORTED_BEFORE_DISPATCH` means the tool body was not invoked, while `ABORTED` means effects may have started and must be reconciled through the durable receipt/state model.
 
 ## Authentication and scopes
 
@@ -216,11 +216,11 @@ curl -fsS -X POST http://127.0.0.1:3100/api/v1/sessions/SESSION_ID/submissions \
 
 Session creation scopes the key to the authenticated Core principal. Its canonical body trims `title`, maps an omitted/blank title to `New workspace`, and includes `origin` when supplied. The same key and canonical body returns the original Session after retries or restart; a changed body returns `session.idempotency_conflict`. `GET /api/v1/sessions/:sessionId` validates a recovered Gateway binding.
 
-Submission reuse with the same canonical content, optional `gateProfile` (`off`, `relaxed`, or `strict`) and `origin` returns the existing submission state and its first audit chain. Different canonical content, Gate profile or provenance returns `submission.idempotency_conflict`, because the Gate profile changes execution semantics. An omitted profile defaults conservatively to `strict`. The optional `modelId` is advisory and excluded from idempotency semantics.
+Submission reuse with the same canonical content, optional `gateProfile` (`off`, `relaxed`, or `strict`) and `origin` returns the existing submission state and its first audit chain. Different canonical content, Gate profile or provenance returns `submission.idempotency_conflict`, because the Gate profile changes execution semantics. An omitted profile defaults conservatively to `strict`.
 
 ### Gateway provenance
 
-`GatewayProvenanceSchema` is channel-neutral and never grants authority. Session creation, Submission and TaskRun commands accept it. Schema 40 persists the Submission's first Core principal and canonical provenance in `submission_audit_receipts`; Submission and command receipts expose `{ principalId, origin }` without leaking raw channel payloads. Authentication and resource scope always come from the configured Core credential, never from provenance.
+`GatewayProvenanceSchema` is channel-neutral and never grants authority. Session creation, Submission and TaskRun commands accept it. The current schema persists the Submission's first Core principal and canonical provenance in `submission_audit_receipts`; Submission and command receipts expose `{ principalId, origin }` without leaking raw channel payloads. Authentication and resource scope always come from the configured Core credential, never from provenance.
 
 ## TaskRun commands and interactions
 

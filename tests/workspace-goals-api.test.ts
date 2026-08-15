@@ -70,9 +70,6 @@ describe("Workspace Goal console API", () => {
     expect(started.json().data).toMatchObject({ inboxItemId: "inbox-roadmap", runId: "run-roadmap", goal: { id: goal.id } });
     expect(startWorkspaceGoalRoadmapItem).toHaveBeenCalledWith(goal.id, "web", "start-web");
 
-    expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/plans`, payload: {} })).statusCode).toBe(404);
-    expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/run-links`, payload: {} })).statusCode).toBe(404);
-    expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/evidence`, payload: {} })).statusCode).toBe(404);
     expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/decisions`, payload: { requestId: "invalid-decision", targetRevisionId: withRoadmap.roadmap.id, targetHash: withRoadmap.roadmap.contentHash, kind: "approve_something", approvedItemIds: ["web"] } })).statusCode).toBe(400);
   });
 

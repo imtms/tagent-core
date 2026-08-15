@@ -7,7 +7,7 @@ import { HashEmbeddingAdapter } from "../packages/memory/src/adapters/hash-embed
 import { LocalBlobStore } from "../packages/memory/src/storage/local-blob-store.js";
 import { DefaultPolicyEngine } from "../packages/memory/src/policy/policy-engine.js";
 import { MemoryService } from "../packages/memory/src/memory-service.js";
-import { agentPersistence } from "./support/test-persistence.js";
+import { corePersistence } from "./support/test-persistence.js";
 const scope = { type: "workspace" as const, id: "w1" };
 const access = {
   subjectId: "u1",
@@ -600,7 +600,7 @@ describe("local memory lifecycle", () => {
   });
 });
 
-describe("AgentService memory capture boundaries", () => {
+describe("Core application memory capture boundaries", () => {
   it("captures only durable user messages and never assistant run outcomes", async () => {
     const { service: memoryService } = await fixture();
     const requests: import("../packages/memory/src/types.js").CaptureRequest[] = [];
@@ -635,7 +635,7 @@ describe("AgentService memory capture boundaries", () => {
       status: memoryService.status.bind(memoryService),
       readiness: memoryService.readiness.bind(memoryService),
     };
-    const { AgentService } = await import("@tagent/core-service/application");
+    const { createCoreApplication } = await import("@tagent/core-service/application");
     const { Store } = await import("@tagent/persistence-sqlite");
     const store = new Store(":memory:");
     const session = store.createSession();
@@ -672,8 +672,8 @@ describe("AgentService memory capture boundaries", () => {
         ] as never,
       getError: () => undefined,
     };
-    const agent = new AgentService(
-      agentPersistence(store),
+    const agent = createCoreApplication(
+      corePersistence(store),
       "/tmp",
       () => runtime,
       {},

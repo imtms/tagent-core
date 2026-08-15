@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { AgentService } from "@tagent/core-service/application";
+import { createCoreApplication } from "@tagent/core-service/application";
 import type { WorkspaceGoalRoadmapGenerator } from "@tagent/core-service/application";
 import { WorkspaceGoalService } from "@tagent/governance";
 import { Store } from "@tagent/persistence-sqlite";
 import type { AttemptRuntimeFactory, AttemptRuntimePort, AttemptRuntimeSpec } from "@tagent/execution/ports";
-import { agentPersistence } from "./support/test-persistence.js";
+import { corePersistence } from "./support/test-persistence.js";
 
 class DeferredRuntime implements AttemptRuntimePort {
   private resolvePrompt?: () => void;
@@ -32,7 +32,7 @@ function definition() {
 
 function createApprovedGoal(store: Store) {
   const workspace = store.createSession("Goal execution");
-  const goals = new WorkspaceGoalService(agentPersistence(store).workspaceGoals);
+  const goals = new WorkspaceGoalService(corePersistence(store).workspaceGoals);
   const goal = goals.create({ workspaceId: workspace.id, definition: definition(), createdBy: "test" });
   goals.decide({ goalId: goal.id, targetRevisionId: goal.definition!.id, targetHash: goal.definition!.contentHash, kind: "approve_goal", actorId: "user" });
   return { workspace, goals, goal };
@@ -83,7 +83,7 @@ describe("Workspace Goal Core execution", () => {
       };
     });
     const generator: WorkspaceGoalRoadmapGenerator = { model: "roadmap-light", generate };
-    const service = new AgentService(agentPersistence(store), "/tmp", () => new DeferredRuntime(), { workspaceGoalRoadmapGenerator: generator });
+    const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime(), { workspaceGoalRoadmapGenerator: generator });
     try {
       const [first, duplicate] = await Promise.all([
         service.generateWorkspaceGoalRoadmap(goal.id, "user"),
@@ -127,7 +127,7 @@ describe("Workspace Goal Core execution", () => {
     const generate = vi.fn(() => new Promise<Awaited<ReturnType<WorkspaceGoalRoadmapGenerator["generate"]>>>((resolve) => {
       resolveGeneration = resolve;
     }));
-    const service = new AgentService(agentPersistence(store), "/tmp", () => new DeferredRuntime(), {
+    const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime(), {
       workspaceGoalRoadmapGenerator: { model: "roadmap-light", generate },
     });
     try {
@@ -161,7 +161,7 @@ describe("Workspace Goal Core execution", () => {
     const item = { id: "persist", title: "Persist", outcome: "State is stored", verification: "Run storage tests", criterionKeys: ["stored"] };
     const roadmap = goals.addRoadmap(goal.id, { summary: "Persist safely", items: [item] }, null, "user");
     goals.decide({ goalId: goal.id, targetRevisionId: roadmap.id, targetHash: roadmap.contentHash, kind: "approve_roadmap", approvedItemIds: [item.id], actorId: "user" });
-    const service = new AgentService(agentPersistence(store), "/tmp", () => new DeferredRuntime());
+    const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime());
     try {
       enqueueUnlinkedRoadmapItem(store, { workspaceId: workspace.id, goalId: goal.id, goalOutcome: definition().outcome, item, requestId: "repair-roadmap-link" });
       const started = service.startWorkspaceGoalRoadmapItem(goal.id, item.id, "repair-roadmap-link");
@@ -176,7 +176,7 @@ describe("Workspace Goal Core execution", () => {
   it("fails closed when recovery finds a Roadmap submission without durable authorization", async () => {
     const store = new Store(":memory:");
     const { workspace, goals, goal } = createApprovedGoal(store);
-    const service = new AgentService(agentPersistence(store), "/tmp", () => new DeferredRuntime());
+    const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime());
     try {
       const item = { id: "orphan", title: "Orphan", outcome: "State is stored", verification: "Run storage tests" };
       enqueueUnlinkedRoadmapItem(store, { workspaceId: workspace.id, goalId: goal.id, goalOutcome: definition().outcome, item, requestId: "orphan-roadmap-link" });
@@ -200,7 +200,7 @@ describe("Workspace Goal Core execution", () => {
     }, null, "user");
     const specs: AttemptRuntimeSpec[] = [];
     const runtimeFactory: AttemptRuntimeFactory = (spec) => { specs.push(spec); return new DeferredRuntime(); };
-    const service = new AgentService(agentPersistence(store), "/tmp", runtimeFactory);
+    const service = createCoreApplication(corePersistence(store), "/tmp", runtimeFactory);
     try {
       const admitted = await service.enqueueSessionInput(workspace.id, "Fix the bounded user-facing bug", "manual-goal-task");
       expect(admitted.run?.contract?.workspaceGoal).toMatchObject({
@@ -213,7 +213,7 @@ describe("Workspace Goal Core execution", () => {
       });
       expect(admitted.run?.contract?.acceptanceCriteria.some((criterion) => criterion.startsWith("[Workspace Goal criterion"))).toBe(false);
       expect(goals.get(goal.id)?.runLinks).toContainEqual(expect.objectContaining({ runId: admitted.run!.id, mode: "workspace" }));
-      expect(agentPersistence(store).workspaceGoals.authorizeRunMutation(admitted.run!.id).allowed).toBe(true);
+      expect(corePersistence(store).workspaceGoals.authorizeRunMutation(admitted.run!.id).allowed).toBe(true);
       expect(specs[0].systemPrompt).not.toContain("user-started TaskRun");
       expect(specs[0].dynamicContext?.()).toContain("user-started TaskRun");
       expect(specs[0].dynamicContext?.()).toContain("do not treat this Run as responsible for completing every Goal criterion");

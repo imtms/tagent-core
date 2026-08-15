@@ -1,6 +1,6 @@
 import type { TaskRun } from "./api";
 
-export type OperationState = "running" | "waiting" | "stalled" | "interrupted" | "completed" | "blocked" | "failed";
+type OperationState = "running" | "waiting" | "stalled" | "interrupted" | "completed" | "blocked" | "failed";
 
 export interface CurrentOperation {
   state: OperationState;

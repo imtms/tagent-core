@@ -3,14 +3,14 @@ import { providerRetryAfterHeaderMs } from "./provider-errors.js";
 
 const DISABLED_SDK_TIMEOUT_MS = 2_147_483_647;
 
-export class ProviderIdleTimeoutError extends Error {
+class ProviderIdleTimeoutError extends Error {
   constructor(readonly idleTimeoutMs: number) {
     super(`Provider stream was idle for ${idleTimeoutMs}ms`);
     this.name = "ProviderIdleTimeoutError";
   }
 }
 
-export class ProviderIncompleteStreamError extends Error {
+class ProviderIncompleteStreamError extends Error {
   constructor() {
     super("OpenAI-compatible SSE stream ended without a data: [DONE] sentinel");
     this.name = "ProviderIncompleteStreamError";

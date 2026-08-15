@@ -83,7 +83,7 @@ export function mapProfileOperationReceipt(receipt: ProfileOperationReceiptRecor
   };
 }
 
-export function revisionFromEtag(etag: string): number {
+function revisionFromEtag(etag: string): number {
   const match = /^"r([1-9][0-9]*)"$/.exec(etag);
   if (!match) throw new V1HttpError(400, "request.validation_failed", "If-Match revision is invalid", "validation");
   const revision = Number(match[1]);
@@ -91,7 +91,7 @@ export function revisionFromEtag(etag: string): number {
   return revision;
 }
 
-export function revisionEtag(revision: number): string {
+function revisionEtag(revision: number): string {
   return `"r${revision}"`;
 }
 

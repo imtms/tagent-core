@@ -2,51 +2,13 @@ import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { stableJson } from "@tagent/governance";
 
-export const LEARNING_INTEGRATION_TOPIC = "learning.projection";
-export const INTEGRATION_TOPIC = LEARNING_INTEGRATION_TOPIC;
-export const LEARNING_INTEGRATION_SCHEMA_VERSION = 1;
+const LEARNING_INTEGRATION_TOPIC = "learning.projection";
+const LEARNING_INTEGRATION_SCHEMA_VERSION = 1;
 
 function sha256(value: unknown): string {
   return createHash("sha256")
     .update(typeof value === "string" ? value : stableJson(value), "utf8")
     .digest("hex");
-}
-
-export const canonicalSha256 = sha256;
-
-export function canonicalPayloadHash(input: {
-  topic: string;
-  aggregateId: string;
-  aggregateVersion: number;
-  runEventRef: string | null;
-  attemptId: string | null;
-  ordinal: number;
-  evidenceSnapshotJson: string;
-  payload: unknown;
-}): string {
-  return sha256({
-    schema_version: LEARNING_INTEGRATION_SCHEMA_VERSION,
-    topic: input.topic,
-    aggregate_id: input.aggregateId,
-    aggregate_version: input.aggregateVersion,
-    run_event_ref: input.runEventRef,
-    attempt_id: input.attemptId,
-    ordinal: input.ordinal,
-    evidence_snapshot_json: input.evidenceSnapshotJson,
-    payload: input.payload,
-  });
-}
-
-export function canonicalIntegrationEventId(
-  sourceEventId: string,
-  topic: string,
-  hash: string,
-): string {
-  return `integration:${sha256({
-    source_event_id: sourceEventId,
-    topic,
-    payload_hash: hash,
-  })}`;
 }
 
 function payloadHash(input: {

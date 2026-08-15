@@ -1,4 +1,4 @@
-import type { AgentServicePersistencePort } from "../application/ports/index.js";
+import type { CoreApplicationPersistencePort } from "../application/ports/index.js";
 import type { RunEvent, RunEventMap, RunEventType, TaskRun } from "@tagent/execution/domain";
 import type {
   ArtifactSinkPort,
@@ -17,7 +17,7 @@ import { createLocalSubprocessPort } from "@tagent/workspace-local/local-subproc
 
 export interface RuntimeHostOptions {
   persistence: Pick<
-    AgentServicePersistencePort,
+    CoreApplicationPersistencePort,
     "attempts" | "runtime" | "runtimeMutations" | "taskRuns" | "workspaceGoals"
     | "approvals" | "transcript"
   >;

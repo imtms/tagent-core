@@ -1,6 +1,4 @@
 import type { ExecutionServices } from "./execution-services.js";
-export type { ExecutionCoordinatorStartupOptions } from "./execution-state.js";
-
 /** Public Execution application surface; contains no Admission or Learning facade. */
 export class ExecutionCoordinator {
   constructor(private readonly services: ExecutionServices) {}

@@ -7,10 +7,10 @@ import {
   ErrorEnvelopeSchema,
   OperatorSessionSettingsResponseSchema,
 } from "@tagent/abi";
-import { AgentService } from "@tagent/core-service/application";
+import { createCoreApplication } from "@tagent/core-service/application";
 import { createApp, type ServiceCredential } from "@tagent/http-fastify";
 import { Store } from "@tagent/persistence-sqlite";
-import { agentPersistence, httpTestResources } from "./support/test-persistence.js";
+import { corePersistence, httpTestResources } from "./support/test-persistence.js";
 
 const apps: Array<ReturnType<typeof createApp>> = [];
 const directories: string[] = [];
@@ -24,7 +24,7 @@ async function fixture(credentials: ServiceCredential[] = []) {
   const workspace = await mkdtemp(path.join(tmpdir(), "tagent-session-settings-"));
   directories.push(workspace);
   const store = new Store(":memory:", { defaultModelId: "model-primary" });
-  const service = new AgentService(agentPersistence(store), workspace, () => ({
+  const service = createCoreApplication(corePersistence(store), workspace, () => ({
     prompt: async () => undefined, steer: async () => "accepted" as const, followUp: async () => "accepted" as const,
     compact: async () => undefined, abort: () => undefined, dispose: async () => undefined,
     getMessages: () => [], getError: () => undefined,
