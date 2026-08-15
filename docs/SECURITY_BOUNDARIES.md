@@ -29,6 +29,8 @@ admin:autonomy:execute           admin:operations:read
 
 A credential may bind a subject and `user`, `workspace`, `project`, or `session` resource scopes. Core takes these values only from server configuration. Profile mutation headers may carry delegated actor/request identifiers for audit correlation, but they grant no scope and cannot replace the authenticated principal.
 
+`runs:read` includes the unified TaskRun transcript. Transcript items preserve model reasoning, commands, paths, tool arguments, and tool results without a Web-only or Console-only projection, so grant this scope only to principals allowed to inspect complete execution history.
+
 ## Gateway boundary
 
 Core does not validate OIDC/JWT tokens. The public Gateway owns browser authentication and must replace the browser token with a minimal Core service credential. Core must remain inaccessible from the public network.

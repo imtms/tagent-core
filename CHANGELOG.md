@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Unified TaskRun transcript
+
+- Removed transcript redaction from the stable Channel projection. The single `/api/v1/task-runs/:taskRunId/transcript` response now preserves durable model reasoning, tool arguments, and complete tool results for the Web Console and every other `runs:read` client.
+- Kept one transcript contract instead of adding a Web- or Console-specific endpoint, and documented `runs:read` as execution-sensitive authority.
+
 ## [0.8.4] - 2026-08-15
 
 ### Single mutation authorities

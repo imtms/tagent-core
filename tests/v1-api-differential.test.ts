@@ -422,6 +422,36 @@ describe("v1 API contracts", () => {
     expect(second).toMatchObject({ items: [{ sequence: 3, text: "three" }], pageInfo: { nextCursor: null, hasMore: false, limit: 2 } });
   });
 
+  it("returns the complete durable execution trace through the unified transcript API", async () => {
+    const { app, store } = await fixture();
+    const run = store.createRun(store.createSession().id, "console transcript visibility");
+    store.appendTranscript(run.id, 1, {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "inspect the private execution state" },
+        { type: "toolCall", id: "bash-1", name: "bash", arguments: { command: "printf complete" } },
+      ],
+      api: "openai-completions", provider: "test", model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "toolUse", timestamp: 1,
+    });
+    store.appendTranscript(run.id, 1, {
+      role: "toolResult", toolCallId: "bash-1", toolName: "bash",
+      content: [{ type: "text", text: "complete" }], details: {}, isError: false, timestamp: 2,
+    });
+
+    const transcript = decodeAbi(TranscriptResponseSchema, (await app.inject({
+      method: "GET", url: `/api/v1/task-runs/${run.id}/transcript`,
+    })).json()).data.items;
+    expect(transcript).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "thinking", text: "inspect the private execution state", redacted: false }),
+      expect.objectContaining({ kind: "tool", arguments: { command: "printf complete" }, result: "complete" }),
+    ]));
+    expect((await app.inject({
+      method: "GET", url: `/api/v1/console/task-runs/${run.id}/transcript`,
+    })).statusCode).toBe(404);
+  });
+
   it("pages Artifact metadata with a bounded stable cursor", async () => {
     const { app, store } = await fixture();
     const run = store.createRun(store.createSession().id, "paged artifacts");

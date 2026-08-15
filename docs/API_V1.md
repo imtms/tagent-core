@@ -38,7 +38,7 @@ POST /api/v1/task-runs/:taskRunId/event-consumers/:consumerId/ack
 GET  /api/v1/capabilities
 ```
 
-Use the exported schemas for the complete route payload inventory. Console projections are richer than channel resources and are not a substitute for the stable channel contract.
+Use the exported schemas for the complete route payload inventory. The Web Console uses the same stable Channel transcript route as every other client; there is no Console-only transcript projection.
 
 Submission bodies and `task_run.steer`/`task_run.follow_up` command content are non-empty and limited to 200,000 characters. The first-party Console message, Inbox-edit and steer routes enforce the same limit; the application and SQLite persistence boundaries recheck it so alternate in-process callers cannot bypass the cap.
 
@@ -236,7 +236,7 @@ An interrupted command or Goal operation with no provable terminal receipt becom
 
 ## Bounded reads and artifacts
 
-Transcript pages are ordered by durable transcript sequence. `after` is exclusive, `limit` defaults to 100 and is capped at 500; `pageInfo.nextCursor` is supplied only when `hasMore=true`. `CoreClient.getTranscriptPage()` exposes the bounded page.
+Transcript pages are ordered by durable transcript sequence. `after` is exclusive, `limit` defaults to 100 and is capped at 500; `pageInfo.nextCursor` is supplied only when `hasMore=true`. `CoreClient.getTranscriptPage()` exposes the bounded page. The unified response contains persisted model reasoning, complete tool arguments, and complete tool results; `runs:read` therefore grants access to execution-sensitive transcript data.
 
 Artifact metadata is ordered by `createdAt` then `id`. Its offset cursor `after` defaults to 0, `limit` defaults to 100 and is capped at 200; `CoreClient.getArtifactsPage()` is the client method. Artifact preview is capped at 5 MiB and download at 50 MiB. Oversize content returns HTTP 413 `artifact.too_large`; unavailable content remains a 503. Interaction history uses the same default/max 100/200 bounded offset-page shape.
 

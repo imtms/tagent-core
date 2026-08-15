@@ -110,12 +110,12 @@ The Web Console surfaces pending TaskRun approvals directly above the chat compo
 
 ## Inspection
 
-The Web Console reads versioned console projections:
+The Web Console reads the stable TaskRun and transcript contracts, plus the Console-only context-manifest projection:
 
 ```text
-GET /api/v1/console/task-runs/:id
+GET /api/v1/task-runs/:id
+GET /api/v1/task-runs/:id/transcript
 GET /api/v1/console/task-runs/:id/context-manifests
-GET /api/v1/console/task-runs/:id/transcript
 ```
 
-Channel integrations should use the stable TaskRun, transcript, artifact, and event-consumer routes documented in [API_V1.md](API_V1.md).
+Every client uses the same TaskRun transcript response; there is no separate Web Console transcript route. Channel integrations should use the stable TaskRun, transcript, artifact, and event-consumer routes documented in [API_V1.md](API_V1.md).
