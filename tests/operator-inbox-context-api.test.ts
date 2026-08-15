@@ -104,12 +104,22 @@ describe("Operator Inbox and Context Manifest profiles", () => {
     const changedBody = decodeAbi(OperatorInboxItemResponseSchema, changed.json());
     expect(changedBody.data).toMatchObject({ item: { decision: "defer" }, collectionRevision: revision + 1 });
 
+    const advanced = await app.inject({
+      method: "POST", url: decisionUrl,
+      headers: mutationHeaders(revision + 1, "inbox-decision-advance"),
+      payload: { decision: "pending" },
+    });
+    expect(decodeAbi(OperatorInboxItemResponseSchema, advanced.json()).data).toMatchObject({
+      item: { decision: "pending" }, collectionRevision: revision + 2,
+    });
+
     const replay = await app.inject({
       method: "POST", url: decisionUrl,
       headers: mutationHeaders(revision, "inbox-decision-1"),
       payload: { decision: "defer" },
     });
     expect(replay.headers["idempotency-replayed"]).toBe("true");
+    expect(replay.headers.etag).toBe(changed.headers.etag);
     expect(decodeAbi(OperatorInboxItemResponseSchema, replay.json()).data).toEqual(changedBody.data);
 
     const payloadConflict = await app.inject({

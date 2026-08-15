@@ -34,6 +34,33 @@ async function fixture() {
   return { adapter, service };
 }
 describe("memory platform", () => {
+  it("pages every record beyond 500 without mutable update-order skips", async () => {
+    const { adapter, service } = await fixture();
+    const records = Array.from({ length: 501 }, (_, index) => ({
+      id: `page-record-${String(index).padStart(3, "0")}`,
+      kind: "fact" as const, tier: "warm" as const, scope,
+      title: `Page ${index}`, content: `Page content ${index}`, summary: "",
+      topicIds: [], entityIds: [], status: "active" as const, confidence: 1, importance: 1,
+      sourceRefs: [], createdAt: index + 1, updatedAt: index + 1,
+    }));
+    await adapter.upsertRecords(records);
+    const ids: string[] = [];
+    let snapshotCreatedAt: number | undefined;
+    let after: { createdAt: number; id: string } | undefined;
+    do {
+      const page = await service.listRecordsPage(access, scope, { snapshotCreatedAt, after, limit: 201 });
+      snapshotCreatedAt = page.snapshotCreatedAt;
+      const items = page.records.slice(0, 200);
+      ids.push(...items.map((record) => record.id));
+      if (ids.length === 200) await adapter.upsertRecords([{ ...records[0], updatedAt: 10_000 }]);
+      const last = items.at(-1);
+      after = page.records.length > 200 && last ? { createdAt: last.createdAt, id: last.id } : undefined;
+    } while (after);
+    expect(ids).toHaveLength(501);
+    expect(new Set(ids).size).toBe(501);
+    expect(ids).toContain(records[0].id);
+  });
+
   it("propagates the required caller signal into embedding recall and rejects cancellation", async () => {
     const adapter = new InMemoryMemoryAdapter();
     const blobs = new LocalBlobStore(await mkdtemp(path.join(tmpdir(), "tagent-memory-cancel-")));
@@ -632,6 +659,7 @@ describe("Core application memory capture boundaries", () => {
       forget: memoryService.forget.bind(memoryService),
       restore: memoryService.restore.bind(memoryService),
       export: memoryService.export.bind(memoryService),
+      listRecordsPage: memoryService.listRecordsPage.bind(memoryService),
       status: memoryService.status.bind(memoryService),
       readiness: memoryService.readiness.bind(memoryService),
     };

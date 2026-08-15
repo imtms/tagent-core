@@ -55,6 +55,7 @@ import type {
 import { assertControlContent } from "@tagent/execution/domain";
 import type {
   ProfileInboxMutationValue,
+  ProfileInboxItemRecord,
   ProfileMutationContext,
   ProfileMutationResult,
   ProfilePageQuery,
@@ -739,18 +740,23 @@ export class Store {
   listProfileSkillsPage(query: ProfilePageQuery): ProfileSkillCatalogPage {
     const snapshotRowId = query.snapshotRowId ?? Number(this.db.prepare("SELECT COALESCE(MAX(rowid),0) FROM skills").pluck().get());
     const afterClause = query.after
-      ? "AND (s.updated_at < @afterCreatedAt OR (s.updated_at = @afterCreatedAt AND s.id < @afterId))"
+      ? "AND (s.created_at < @afterCreatedAt OR (s.created_at = @afterCreatedAt AND s.id < @afterId))"
       : "";
-    const items = this.db.prepare(`SELECT s.id,s.name,r.revision AS latestRevision,r.id AS latestRevisionId,
+    const rows = this.db.prepare(`SELECT s.id,s.name,r.revision AS latestRevision,r.id AS latestRevisionId,
       r.description,r.sha256,(SELECT COUNT(*) FROM workspace_skill_bindings bindings WHERE bindings.skill_id=s.id) AS workspaceCount,
-      s.updated_at AS updatedAt FROM skills s JOIN skill_revisions r ON r.skill_id=s.id
+      s.updated_at AS updatedAt,s.created_at AS orderCreatedAt FROM skills s JOIN skill_revisions r ON r.skill_id=s.id
       WHERE s.rowid<=@snapshotRowId AND r.revision=(SELECT MAX(latest.revision) FROM skill_revisions latest WHERE latest.skill_id=s.id)
-      ${afterClause} ORDER BY s.updated_at DESC,s.id DESC LIMIT @limit`).all({
+      ${afterClause} ORDER BY s.created_at DESC,s.id DESC LIMIT @limit`).all({
       snapshotRowId,
       limit: query.limit,
       ...(query.after ? { afterCreatedAt: query.after.createdAt, afterId: query.after.id } : {}),
-    }) as SkillSummary[];
-    return { items, snapshotRowId, collectionRevision: this.getCatalogRevision() };
+    }) as Array<SkillSummary & { orderCreatedAt: number }>;
+    return {
+      items: rows.map(({ orderCreatedAt: _orderCreatedAt, ...item }) => item),
+      orderKeys: rows.map((item) => ({ createdAt: item.orderCreatedAt, id: item.id })),
+      snapshotRowId,
+      collectionRevision: this.getCatalogRevision(),
+    };
   }
 
   listProfileSkillRevisionsPage(skillId: string, query: ProfilePageQuery): ProfileSkillRevisionPage | undefined {
@@ -779,19 +785,25 @@ export class Store {
       "SELECT COALESCE(MAX(rowid),0) FROM workspace_skill_bindings WHERE session_id=?",
     ).pluck().get(workspaceId));
     const afterClause = query.after
-      ? "AND (revisions.created_at < @afterCreatedAt OR (revisions.created_at = @afterCreatedAt AND revisions.id < @afterId))"
+      ? "AND (bindings.bound_at < @afterCreatedAt OR (bindings.bound_at = @afterCreatedAt AND bindings.skill_id < @afterId))"
       : "";
-    const rows = this.db.prepare(`SELECT revisions.id FROM workspace_skill_bindings bindings
+    const rows = this.db.prepare(`SELECT revisions.id,bindings.bound_at AS orderCreatedAt,bindings.skill_id AS orderId
+      FROM workspace_skill_bindings bindings
       JOIN skill_revisions revisions ON revisions.skill_id=bindings.skill_id
       WHERE bindings.session_id=@workspaceId AND bindings.rowid<=@snapshotRowId AND revisions.revision=(
         SELECT MAX(latest.revision) FROM skill_revisions latest WHERE latest.skill_id=bindings.skill_id
-      ) ${afterClause} ORDER BY revisions.created_at DESC,revisions.id DESC LIMIT @limit`).all({
+      ) ${afterClause} ORDER BY bindings.bound_at DESC,bindings.skill_id DESC LIMIT @limit`).all({
       workspaceId,
       snapshotRowId,
       limit: query.limit,
       ...(query.after ? { afterCreatedAt: query.after.createdAt, afterId: query.after.id } : {}),
-    }) as Array<{ id: string }>;
-    return { items: rows.map((row) => this.getSkillRevision(row.id)!), snapshotRowId, bindingRevision };
+    }) as Array<{ id: string; orderCreatedAt: number; orderId: string }>;
+    return {
+      items: rows.map((row) => this.getSkillRevision(row.id)!),
+      orderKeys: rows.map((row) => ({ createdAt: row.orderCreatedAt, id: row.orderId })),
+      snapshotRowId,
+      bindingRevision,
+    };
   }
 
   getSkill(skillId: string): SkillRevision | undefined {
@@ -866,9 +878,10 @@ export class Store {
       currentRevision: () => skillId ? this.getSkillResourceRevision(skillId) : this.getCatalogRevision(),
       perform: () => {
         const skill = this.createSkillRevision(input);
+        const resourceRevision = this.getSkillResourceRevision(skill.skillId)!;
         return {
-          value: { skill, catalogRevision: this.getCatalogRevision() },
-          resultingRevision: skillId ? this.getSkillResourceRevision(skillId)! : this.getCatalogRevision(),
+          value: { skill, resourceRevision, catalogRevision: this.getCatalogRevision() },
+          resultingRevision: skillId ? resourceRevision : this.getCatalogRevision(),
         };
       },
     });
@@ -1199,7 +1212,9 @@ export class Store {
       if (!itemIds) return { status: "state_conflict" };
       const resultingRevision = (this.db.prepare("SELECT revision FROM session_inbox_revisions WHERE session_id=?")
         .get(input.sessionId) as { revision: number }).revision;
-      const value = { itemIds, collectionRevision: resultingRevision };
+      const items = itemIds.map((itemId) => this.getProfileInboxItem(input.sessionId, itemId))
+        .filter((item): item is ProfileInboxItemRecord => Boolean(item));
+      const value = { items, collectionRevision: resultingRevision };
       const timestamp = now();
       this.db.prepare(`INSERT INTO profile_mutation_receipts
         (principal_id,profile_id,endpoint_id,resource_type,resource_id,idempotency_key,payload_hash,
@@ -1224,6 +1239,26 @@ export class Store {
       );
       return { status: "succeeded", value, replayed: false };
     })();
+  }
+
+  private getProfileInboxItem(sessionId: SessionId, itemId: string): ProfileInboxItemRecord | undefined {
+    const row = this.db.prepare(`SELECT id,session_id AS sessionId,content,status,decision,run_id AS runId,
+      position,summary,intent,target_run_id AS targetRunId,priority,urgency,relation,
+      acceptance_json AS acceptanceCriteriaJson,confidence,decision_reason AS reason,
+      execution_policy_json AS executionPolicyJson,revision,created_at AS createdAt,updated_at AS updatedAt
+      FROM session_supervisor_inbox WHERE session_id=? AND id=?`).get(sessionId, itemId) as
+      (Omit<ProfileInboxItemRecord, "executionPolicy" | "acceptanceCriteria"> & {
+        executionPolicyJson: string; acceptanceCriteriaJson: string;
+      }) | undefined;
+    if (!row) return undefined;
+    const { executionPolicyJson, acceptanceCriteriaJson, ...item } = row;
+    return {
+      ...item,
+      acceptanceCriteria: JSON.parse(acceptanceCriteriaJson || "[]") as string[],
+      executionPolicy: executionPolicyJson
+        ? JSON.parse(executionPolicyJson) as ProfileInboxItemRecord["executionPolicy"]
+        : null,
+    };
   }
 
   updateSessionInboxItemProfile(input: {

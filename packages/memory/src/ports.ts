@@ -20,6 +20,15 @@ export interface MemorySourceViewPort {
 export interface MemoryRunEventSinkPort {
   appendEvent(runId: string, type: string, data: Record<string, unknown>): void;
 }
+export interface MemoryRecordPageQuery {
+  snapshotCreatedAt?: number;
+  after?: { createdAt: number; id: string };
+  limit: number;
+}
+export interface MemoryRecordPage {
+  records: WarmMemory[];
+  snapshotCreatedAt: number;
+}
 export type MemoryRuntimeSourcePort = MemorySourceViewPort & MemoryRunEventSinkPort;
 export type MemorySourceRepository = MemoryRuntimeSourcePort;
 export interface RecordStorePort {
@@ -29,6 +38,7 @@ export interface RecordStorePort {
   getAnyByIds?(ids: string[], scopes: MemoryScope[]): Promise<WarmMemory[]>;
   getByTopicIds(topicIds: string[], scopes: MemoryScope[], kinds: MemoryKind[], limit: number): Promise<WarmMemory[]>;
   list(scopes: MemoryScope[], kinds?: MemoryKind[], limit?: number): Promise<WarmMemory[]>;
+  listPage?(scopes: MemoryScope[], kinds: MemoryKind[] | undefined, query: MemoryRecordPageQuery): Promise<MemoryRecordPage>;
   listScopes?(): Promise<MemoryScope[]>;
   countSummary?(scopes: MemoryScope[]): Promise<{ hot: number; warm: number; candidate: number; active: number; disputed: number }>;
   forget(scopes: MemoryScope[], ids?: string[], topicIds?: string[], options?: { reason?: string; purgeAfter?: number }): Promise<number>;

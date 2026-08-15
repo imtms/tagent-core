@@ -7,7 +7,7 @@ This document records the Core team's responsibility decision for the Gateway ha
 | Item | Value |
 | --- | --- |
 | Review date | 2026-08-15 |
-| Target release | `0.8.1` |
+| Target release | `0.8.2` |
 | SQLite schema | ID `tagent-core/0.8`, numeric version `1` |
 | Channel API | `/api/v1` |
 | Operator Read | `operator.read.v1` |
@@ -31,8 +31,8 @@ Browser identity, actor ACL policy, channel routing, local projections, persist-
 | Base capabilities | Release/schema/catalogs, endpoint IDs, ready Approval, receipt recovery, retention, and enforced limits. |
 | Operator Read | Bounded Session inventory, complete per-Session TaskRun inventory, latest TaskRun, public redaction, dual-scope checks, stable cursors. |
 | Workspace Goals | Create/revise/approve/generate/start/recover operations with canonical request identities and durable receipts. |
-| Feature profiles | Session Settings, Inbox, Context Manifest, Skills, Memory, Learning, Workflow, and Autonomy profile `1.0` summaries/details. |
-| Profile persistence | Resource revisions, exact mutation receipts, durable operation receipts, audit identity separation, collection revisions, restart uncertainty. |
+| Feature profiles | Session Settings, Inbox, Context Manifest, Skills, Memory, Learning, Workflow, and Autonomy profile `1.0` summaries/details. Snapshot lists page on immutable membership/order keys and storage-backed `limit + 1` queries. |
+| Profile persistence | Resource revisions, receipt-first exact replay with immutable response projections/ETags, durable operation receipts, audit identity separation, collection revisions, and restart uncertainty. |
 | SDK evidence | Version-matched ABI/Core Client archives, canonical fixtures, and a real Core provider contract harness. |
 
 Core exposes one Approval contract with `ready=true`; Gateway does not choose an internal implementation. Run and Workflow approvals are mapped into the same canonical capability authorization boundary.
@@ -79,6 +79,7 @@ Before traffic, Gateway must validate:
 - schema version `1` and the required base command/event catalogs;
 - the base Operator endpoint list and ready Approval contract;
 - exact replay, durable receipt lookup, no blind replay, no pruning, and matching limits;
+- complete cursor traversal beyond 500 members and stable snapshot membership when unread resources are updated;
 - `operator.read.v1` and its dedicated capabilities when inventory is enabled;
 - each enabled full-feature profile using the actual authenticated Gateway principal.
 

@@ -86,6 +86,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] Operator Session/TaskRun lists enforce scope/default/max limits, tied-key and snapshot pagination, cursor retry/mismatch/restart behavior, empty/latest semantics and public-summary redaction.
 - [ ] Core-owned ABI fixtures and provider/consumer tests pass. Gateway separately proves its Fake Core against the exact current Core/SDK tuple before production cutover.
 - [ ] `GET /api/v1/capability-profiles` returns all eight profile `1.0` summaries/details for the production principal, with the expected 41 unique endpoint IDs/routes, fine-grained scopes, pagination/retention and exact-replay/durable-receipt recovery semantics.
+- [ ] Profile exact replay precedes mutable validation/live/Router/filesystem work and returns the stored projection/ETag after later changes; snapshot traversal survives unread-member updates and reaches every member in 501-row Memory and Autonomy collections.
 - [ ] The real provider harness and canonical fixture suite pass; no Fake Core or Gateway transport simulation has been moved into Core.
 - [ ] `scripts/gateway-readiness-probe.mjs` exits 0 with `ready=true` and no reasons.
 - [ ] Web is served from its independent artifact and targets the Gateway/Core origin; Core serves no static Web content.

@@ -362,7 +362,36 @@ export class SqliteWorkflowLearningRepository implements WorkflowLearningReposit
       decided_by as decidedBy,decision_reason as decisionReason,decided_at as decidedAt,
       executed_at as executedAt,execution_receipt_json as executionReceiptJson,request_hash as requestHash,
       created_at as createdAt,updated_at as updatedAt FROM autonomy_approval_requests
-      WHERE scope_id=? ORDER BY created_at DESC LIMIT ?`).all(scopeId, limit) as AutonomyApprovalRequest[];
+      WHERE scope_id=? ORDER BY created_at DESC,id DESC LIMIT ?`).all(scopeId, limit) as AutonomyApprovalRequest[];
+  }
+
+  listApprovalsPage(scopeId: string, query: {
+    snapshotCreatedAt?: number;
+    after?: { createdAt: number; id: string };
+    limit: number;
+  }): { items: AutonomyApprovalRequest[]; snapshotCreatedAt: number } {
+    const snapshotCreatedAt = query.snapshotCreatedAt ?? Number(this.db.prepare(
+      "SELECT COALESCE(MAX(created_at),0) FROM autonomy_approval_requests WHERE scope_id=?",
+    ).pluck().get(scopeId));
+    const afterClause = query.after
+      ? "AND (created_at < @afterCreatedAt OR (created_at = @afterCreatedAt AND id < @afterId))"
+      : "";
+    const items = this.db.prepare(`SELECT id,scope_id as scopeId,action_type as actionType,target_type as targetType,
+      target_id as targetId,workflow_id as workflowId,revision_id as revisionId,proposal_id as proposalId,
+      binding_id as bindingId,status,risk_class as riskClass,impact_scope_json as impactScopeJson,
+      evidence_json as evidenceJson,diff_json as diffJson,rollback_json as rollbackJson,
+      requested_by as requestedBy,request_reason as requestReason,expires_at as expiresAt,
+      decided_by as decidedBy,decision_reason as decisionReason,decided_at as decidedAt,
+      executed_at as executedAt,execution_receipt_json as executionReceiptJson,request_hash as requestHash,
+      created_at as createdAt,updated_at as updatedAt FROM autonomy_approval_requests
+      WHERE scope_id=@scopeId AND created_at<=@snapshotCreatedAt ${afterClause}
+      ORDER BY created_at DESC,id DESC LIMIT @limit`).all({
+      scopeId,
+      snapshotCreatedAt,
+      limit: query.limit,
+      ...(query.after ? { afterCreatedAt: query.after.createdAt, afterId: query.after.id } : {}),
+    }) as AutonomyApprovalRequest[];
+    return { items, snapshotCreatedAt };
   }
 
   decideApproval(input: { id: string; decision: "approved" | "rejected"; actor: string; reason: string; timestamp: number; audit: AutonomyAuditWrite }): void {

@@ -141,24 +141,24 @@ export function registerAdminMemoryProfileV1Routes(app: FastifyInstance, depende
     const resourceId = `${scope.type}:${scope.id}`;
     const state: { snapshotRowId?: number; after?: { createdAt: number; id: string } } = query.cursor
       ? decodeProfileCursor(query.cursor, { kind: "admin_collection", resourceId }) : {};
-    const exported = object(await memory(request, dependencies).export(access(request, [scope], "memory_admin"), scope, 500));
-    const all = (Array.isArray(exported.records) ? exported.records : []).map(mapRecord)
-      .filter((item): item is AdminMemoryRecord => Boolean(item)).sort((left, right) =>
-        Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || right.id.localeCompare(left.id));
-    const snapshotRowId = state.snapshotRowId ?? Math.max(0, ...all.map((item) => Date.parse(item.updatedAt)));
-    const eligible = all.filter((item) => {
-      const timestamp = Date.parse(item.updatedAt);
-      if (timestamp > snapshotRowId) return false;
-      return !state.after || timestamp < state.after.createdAt || timestamp === state.after.createdAt && item.id < state.after.id;
-    });
-    const items = eligible.slice(0, limit);
-    const hasMore = eligible.length > limit;
+    const page = object(await memory(request, dependencies).listRecordsPage(
+      access(request, [scope], "memory_admin"), scope, {
+        snapshotCreatedAt: state.snapshotRowId,
+        after: state.after,
+        limit: limit + 1,
+      },
+    ));
+    const all = (Array.isArray(page.records) ? page.records : []).map(mapRecord)
+      .filter((item): item is AdminMemoryRecord => Boolean(item));
+    const snapshotRowId = Number(page.snapshotCreatedAt ?? state.snapshotRowId ?? 0);
+    const items = all.slice(0, limit);
+    const hasMore = all.length > limit;
     const last = items.at(-1);
     return encodeAbi(AdminMemoryRecordsResponseSchema, successEnvelope(request, {
       items,
       pageInfo: {
         nextCursor: hasMore && last ? encodeProfileCursor({ kind: "admin_collection", resourceId, snapshotRowId,
-          after: { createdAt: Date.parse(last.updatedAt), id: last.id } }) : null,
+          after: { createdAt: Date.parse(last.createdAt), id: last.id } }) : null,
         hasMore, limit,
         snapshot: encodeProfileSnapshot({ kind: "admin_collection", resourceId, snapshotRowId }),
       },
@@ -173,7 +173,7 @@ export function registerAdminMemoryProfileV1Routes(app: FastifyInstance, depende
     const scoped = access(request, [body.scope], "capture");
     const operation = await runAdminProfileOperation(request, reply, dependencies, {
       profileId: "admin.memory.v1", endpointId: "admin.memory.capture", resourceType: "memory_scope",
-      resourceId: `${body.scope.type}:${body.scope.id}`, operation: "capture", payload: body,
+      resourceId: body.scope.id, operation: "capture", payload: body,
       effect: async () => object(await memory(request, dependencies).enqueueCapture({
         access: scoped,
         sourceRefs: [{ sourceType: "manual", sourceId: `profile:${principalOf(request).subjectId}` }],

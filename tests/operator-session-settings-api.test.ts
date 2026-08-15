@@ -20,10 +20,13 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-async function fixture(credentials: ServiceCredential[] = []) {
+async function fixture(credentials: ServiceCredential[] = [], options: {
+  filename?: string;
+  runtimeConfig?: { modelId: string; fallbackModelIds: string[] };
+} = {}) {
   const workspace = await mkdtemp(path.join(tmpdir(), "tagent-session-settings-"));
   directories.push(workspace);
-  const store = new Store(":memory:", { defaultModelId: "model-primary" });
+  const store = new Store(options.filename ?? ":memory:", { defaultModelId: "model-primary" });
   const service = createCoreApplication(corePersistence(store), workspace, () => ({
     prompt: async () => undefined, steer: async () => "accepted" as const, followUp: async () => "accepted" as const,
     compact: async () => undefined, abort: () => undefined, dispose: async () => undefined,
@@ -31,7 +34,7 @@ async function fixture(credentials: ServiceCredential[] = []) {
   }));
   const app = createApp({
     ...httpTestResources(store), service, workspaceRoot: workspace, logger: false, serviceCredentials: credentials,
-    runtimeConfig: { modelId: "model-primary", fallbackModelIds: ["model-fallback"] },
+    runtimeConfig: options.runtimeConfig ?? { modelId: "model-primary", fallbackModelIds: ["model-fallback"] },
   });
   apps.push(app);
   return { app, store };
@@ -135,5 +138,32 @@ describe("Operator Session Settings profile", () => {
     });
     expect(missingHeaders.statusCode).toBe(400);
     expect(decodeAbi(ErrorEnvelopeSchema, missingHeaders.json()).error.code).toBe("request.validation_failed");
+  });
+
+  it("replays the durable response before applying a changed runtime model allowlist", async () => {
+    const databaseDirectory = await mkdtemp(path.join(tmpdir(), "tagent-session-settings-db-"));
+    directories.push(databaseDirectory);
+    const filename = path.join(databaseDirectory, "core.db");
+    const first = await fixture([], { filename });
+    const session = first.store.createSession("Restart replay");
+    const url = `/api/v1/operator/sessions/${session.id}/settings`;
+    const headers = { "idempotency-key": "settings-restart-replay", "if-match": '"r1"' };
+    const payload = { modelId: "model-fallback" };
+    const changed = await first.app.inject({ method: "PATCH", url, headers, payload });
+    expect(changed.statusCode).toBe(200);
+    const expected = decodeAbi(OperatorSessionSettingsResponseSchema, changed.json()).data;
+    expect(changed.headers.etag).toBe('"r2"');
+    await first.app.close();
+    first.store.close();
+
+    const restarted = await fixture([], {
+      filename,
+      runtimeConfig: { modelId: "model-other", fallbackModelIds: [] },
+    });
+    const replay = await restarted.app.inject({ method: "PATCH", url, headers, payload });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.headers.etag).toBe('"r2"');
+    expect(replay.headers["idempotency-replayed"]).toBe("true");
+    expect(decodeAbi(OperatorSessionSettingsResponseSchema, replay.json()).data).toEqual(expected);
   });
 });

@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.8.2] - 2026-08-15
+
+### Gateway profile correctness
+
+- Made Session Settings, Inbox, and Skill exact replay consult durable mutation receipts before mutable model validation, live Inbox/Router work, or Skill bundle parsing and filesystem staging.
+- Persisted complete immutable Inbox mutation projections and Skill resource revisions so replay returns the original item/revision/catalog body and ETag after later state changes.
+- Kept the public Memory capture resource ID within its declared 256-character bound by returning the original scope ID instead of an internal composite key.
+
+### Snapshot and large-collection pagination
+
+- Replaced mutable Skill, Workspace Skill, Workflow, and Admin Memory cursor order with immutable creation/binding keys so updating an unread member cannot move it past an existing snapshot cursor.
+- Added storage-backed `limit + 1` pagination for Memory records in both in-memory and PostgreSQL adapters and for SQLite Autonomy approvals, removing the profile routes' silent 500-member truncation.
+- Added regressions for configuration-changing restart replay, advanced-state exact replay, 256-character Memory scopes, update-between-pages traversal, and complete 501-member Memory/Autonomy traversal.
+
+### Compatibility and deployment
+
+- Updated the Gateway handoff, compatibility tuple, API guidance, release checklist evidence, README, and owning architecture decision for the corrected `0.8.2` contract.
+- This patch supports only the matching `0.8.2` Core, Web Console, ABI, Core Client, and fresh `tagent-core/0.8` persistence contract. Deploy matching artifacts against empty persistence; older release tuples and stored mutation projections are unsupported.
+
 ## [0.8.1] - 2026-08-15
 
 ### Current application surface

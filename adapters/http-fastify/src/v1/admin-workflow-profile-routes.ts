@@ -113,10 +113,10 @@ export function registerAdminWorkflowProfileV1Routes(app: FastifyInstance, depen
         "admin.workflow.v1", "workflow", String(workflow.id),
       ));
     })
-      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || right.id.localeCompare(left.id));
-    const snapshotRowId = state.snapshotRowId ?? Math.max(0, ...all.map((item) => Date.parse(item.updatedAt)));
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt) || right.id.localeCompare(left.id));
+    const snapshotRowId = state.snapshotRowId ?? Math.max(0, ...all.map((item) => Date.parse(item.createdAt)));
     const eligible = all.filter((item) => {
-      const timestamp = Date.parse(item.updatedAt);
+      const timestamp = Date.parse(item.createdAt);
       return timestamp <= snapshotRowId && (!state.after || timestamp < state.after.createdAt
         || timestamp === state.after.createdAt && item.id < state.after.id);
     });
@@ -125,7 +125,7 @@ export function registerAdminWorkflowProfileV1Routes(app: FastifyInstance, depen
     const last = items.at(-1);
     return encodeAbi(AdminWorkflowsResponseSchema, successEnvelope(request, { items, pageInfo: {
       nextCursor: hasMore && last ? encodeProfileCursor({ kind: "admin_collection", resourceId, snapshotRowId,
-        after: { createdAt: Date.parse(last.updatedAt), id: last.id } }) : null,
+        after: { createdAt: Date.parse(last.createdAt), id: last.id } }) : null,
       hasMore, limit, snapshot: encodeProfileSnapshot({ kind: "admin_collection", resourceId, snapshotRowId }),
     } }));
   });

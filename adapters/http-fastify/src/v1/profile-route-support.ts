@@ -114,6 +114,14 @@ export function profileMutationContext(request: FastifyRequest, headers: Profile
   };
 }
 
+export function replayProfileMutation<T>(
+  dependencies: ChannelV1Dependencies,
+  identity: { profileId: string; endpointId: string; resourceType: string; resourceId: string },
+  mutation: ProfileMutationContext,
+): ProfileMutationResult<T> | undefined {
+  return dependencies.persistence.profileContracts.replaySynchronousMutation<T>({ ...identity, mutation });
+}
+
 export function profileMutationValue<T>(result: ProfileMutationResult<T>): { value: T; replayed: boolean } {
   switch (result.status) {
     case "succeeded": return result;

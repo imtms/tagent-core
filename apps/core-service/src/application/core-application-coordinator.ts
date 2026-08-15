@@ -78,6 +78,7 @@ export class CoreApplicationCoordinator {
   requestWorkflowPromotion(...args: Parameters<CoreApplicationServices["learning"]["requestWorkflowPromotion"]>) { return this.services.learning.requestWorkflowPromotion(...args); }
   promoteWorkflow(...args: Parameters<CoreApplicationServices["governance"]["promoteWorkflow"]>) { return this.services.governance.promoteWorkflow(...args); }
   listAutonomyApprovals(...args: Parameters<CoreApplicationServices["learning"]["listAutonomyApprovals"]>) { return this.services.learning.listAutonomyApprovals(...args); }
+  listAutonomyApprovalsPage(...args: Parameters<CoreApplicationServices["learning"]["listAutonomyApprovalsPage"]>) { return this.services.learning.listAutonomyApprovalsPage(...args); }
   getAutonomyApproval(...args: Parameters<CoreApplicationServices["learning"]["getAutonomyApproval"]>) { return this.services.learning.getAutonomyApproval(...args); }
   decideAutonomyApproval(...args: Parameters<CoreApplicationServices["learning"]["decideAutonomyApproval"]>) { return this.services.learning.decideAutonomyApproval(...args); }
   revokeAutonomyApproval(...args: Parameters<CoreApplicationServices["learning"]["revokeAutonomyApproval"]>) { return this.services.learning.revokeAutonomyApproval(...args); }

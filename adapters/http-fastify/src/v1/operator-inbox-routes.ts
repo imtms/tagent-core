@@ -13,7 +13,7 @@ import {
   OperatorInboxUpdateRequestSchema,
   type OperatorInboxItem,
 } from "@tagent/abi";
-import type { ProfileInboxItemRecord } from "@tagent/admission/ports";
+import type { ProfileInboxItemRecord, ProfileInboxMutationValue } from "@tagent/admission/ports";
 import type { ChannelV1Dependencies } from "./dependencies.js";
 import { successEnvelope, V1HttpError } from "./errors.js";
 import { decodeProfileCursor, encodeProfileCursor, encodeProfileSnapshot } from "./profile-cursor.js";
@@ -25,6 +25,7 @@ import {
   profileMutationContext,
   profileMutationHeaders,
   profileMutationValue,
+  replayProfileMutation,
   setRevisionEtag,
 } from "./profile-route-support.js";
 
@@ -98,13 +99,15 @@ export function registerOperatorInboxV1Routes(app: FastifyInstance, dependencies
     assertProfileResourceScope(request, "session", sessionId);
     const body = decodeAbi(OperatorInboxReorderRequestSchema, request.body);
     const headers = profileMutationHeaders(request);
-    const result = profileMutationValue(dependencies.service.reorderSessionInputsProfile(
-      sessionId,
-      body.itemIds,
-      profileMutationContext(request, headers, body),
+    const mutation = profileMutationContext(request, headers, body);
+    const replay = replayProfileMutation<ProfileInboxMutationValue>(dependencies, {
+      profileId: "operator.session-inbox.v1", endpointId: "operator.session_inbox.reorder",
+      resourceType: "session_inbox", resourceId: sessionId,
+    }, mutation);
+    const result = profileMutationValue(replay ?? dependencies.service.reorderSessionInputsProfile(
+      sessionId, body.itemIds, mutation,
     ));
-    const items = result.value.itemIds.map((itemId) => dependencies.persistence.profileContracts.getInboxItem(sessionId, itemId))
-      .filter((item): item is ProfileInboxItemRecord => Boolean(item)).map(mapItem);
+    const items = result.value.items.map(mapItem);
     setRevisionEtag(reply, result.value.collectionRevision);
     if (result.replayed) reply.header("Idempotency-Replayed", "true");
     return encodeAbi(OperatorInboxMutationResponseSchema, successEnvelope(request, {
@@ -123,14 +126,16 @@ export function registerOperatorInboxV1Routes(app: FastifyInstance, dependencies
     const body = decodeAbi(OperatorInboxUpdateRequestSchema, request.body);
     const normalized = { content: body.content.trim() };
     const headers = profileMutationHeaders(request);
-    const result = profileMutationValue(await dependencies.service.updateSessionInputProfile(
-      sessionId,
-      itemId,
-      normalized.content,
-      profileMutationContext(request, headers, normalized),
+    const mutation = profileMutationContext(request, headers, normalized);
+    const replay = replayProfileMutation<ProfileInboxMutationValue>(dependencies, {
+      profileId: "operator.session-inbox.v1", endpointId: "operator.session_inbox.update",
+      resourceType: "session_inbox", resourceId: sessionId,
+    }, mutation);
+    const result = profileMutationValue(replay ?? await dependencies.service.updateSessionInputProfile(
+      sessionId, itemId, normalized.content, mutation,
     ));
-    const item = dependencies.persistence.profileContracts.getInboxItem(sessionId, itemId);
-    if (!item) throw new V1HttpError(404, "resource.not_found", "Inbox item not found", "not_found");
+    const item = result.value.items.find((candidate) => candidate.id === itemId);
+    if (!item) throw new V1HttpError(500, "inbox.snapshot_missing", "Inbox mutation response is incomplete", "internal");
     setRevisionEtag(reply, result.value.collectionRevision);
     if (result.replayed) reply.header("Idempotency-Replayed", "true");
     return encodeAbi(OperatorInboxItemResponseSchema, successEnvelope(request, {
@@ -147,14 +152,16 @@ export function registerOperatorInboxV1Routes(app: FastifyInstance, dependencies
     assertProfileResourceScope(request, "session", sessionId);
     const body = decodeAbi(OperatorInboxDecisionRequestSchema, request.body);
     const headers = profileMutationHeaders(request);
-    const result = profileMutationValue(dependencies.service.decideSessionInputProfile(
-      sessionId,
-      itemId,
-      body.decision,
-      profileMutationContext(request, headers, body),
+    const mutation = profileMutationContext(request, headers, body);
+    const replay = replayProfileMutation<ProfileInboxMutationValue>(dependencies, {
+      profileId: "operator.session-inbox.v1", endpointId: "operator.session_inbox.decide",
+      resourceType: "session_inbox", resourceId: sessionId,
+    }, mutation);
+    const result = profileMutationValue(replay ?? dependencies.service.decideSessionInputProfile(
+      sessionId, itemId, body.decision, mutation,
     ));
-    const item = dependencies.persistence.profileContracts.getInboxItem(sessionId, itemId);
-    if (!item) throw new V1HttpError(404, "resource.not_found", "Inbox item not found", "not_found");
+    const item = result.value.items.find((candidate) => candidate.id === itemId);
+    if (!item) throw new V1HttpError(500, "inbox.snapshot_missing", "Inbox mutation response is incomplete", "internal");
     setRevisionEtag(reply, result.value.collectionRevision);
     if (result.replayed) reply.header("Idempotency-Replayed", "true");
     return encodeAbi(OperatorInboxItemResponseSchema, successEnvelope(request, {
@@ -171,14 +178,15 @@ export function registerOperatorInboxV1Routes(app: FastifyInstance, dependencies
     assertProfileResourceScope(request, "session", sessionId);
     const body = decodeAbi(OperatorInboxMergeRequestSchema, request.body);
     const headers = profileMutationHeaders(request);
-    const result = profileMutationValue(dependencies.service.mergeSessionInputsProfile(
-      sessionId,
-      itemId,
-      body.targetId,
-      profileMutationContext(request, headers, body),
+    const mutation = profileMutationContext(request, headers, body);
+    const replay = replayProfileMutation<ProfileInboxMutationValue>(dependencies, {
+      profileId: "operator.session-inbox.v1", endpointId: "operator.session_inbox.merge",
+      resourceType: "session_inbox", resourceId: sessionId,
+    }, mutation);
+    const result = profileMutationValue(replay ?? dependencies.service.mergeSessionInputsProfile(
+      sessionId, itemId, body.targetId, mutation,
     ));
-    const items = result.value.itemIds.map((candidateId) => dependencies.persistence.profileContracts.getInboxItem(sessionId, candidateId))
-      .filter((item): item is ProfileInboxItemRecord => Boolean(item)).map(mapItem);
+    const items = result.value.items.map(mapItem);
     setRevisionEtag(reply, result.value.collectionRevision);
     if (result.replayed) reply.header("Idempotency-Replayed", "true");
     return encodeAbi(OperatorInboxMutationResponseSchema, successEnvelope(request, {
@@ -195,13 +203,15 @@ export function registerOperatorInboxV1Routes(app: FastifyInstance, dependencies
     const { sessionId, itemId } = request.params as { sessionId: string; itemId: string };
     assertProfileResourceScope(request, "session", sessionId);
     const headers = profileMutationHeaders(request);
-    const result = profileMutationValue(dependencies.service.deleteSessionInputProfile(
-      sessionId,
-      itemId,
-      profileMutationContext(request, headers, {}),
+    const mutation = profileMutationContext(request, headers, {});
+    const replay = replayProfileMutation<ProfileInboxMutationValue>(dependencies, {
+      profileId: "operator.session-inbox.v1", endpointId: "operator.session_inbox.delete",
+      resourceType: "session_inbox", resourceId: sessionId,
+    }, mutation);
+    const result = profileMutationValue(replay ?? dependencies.service.deleteSessionInputProfile(
+      sessionId, itemId, mutation,
     ));
-    const item = dependencies.persistence.profileContracts.getInboxItem(sessionId, itemId);
-    const items = item ? [mapItem(item)] : [];
+    const items = result.value.items.map(mapItem);
     setRevisionEtag(reply, result.value.collectionRevision);
     if (result.replayed) reply.header("Idempotency-Replayed", "true");
     return encodeAbi(OperatorInboxMutationResponseSchema, successEnvelope(request, {

@@ -191,6 +191,11 @@ interface WorkflowLearningStorageContract {
   createApproval(input: { approval: Omit<AutonomyApprovalRequest, "decidedAt" | "executedAt"> & { decidedAt?: number | null; executedAt?: number | null }; audit: AutonomyAuditWrite }): void;
   getApproval(id: string): AutonomyApprovalRequest | undefined;
   listApprovals(scopeId: string, limit: number): AutonomyApprovalRequest[];
+  listApprovalsPage(scopeId: string, query: {
+    snapshotCreatedAt?: number;
+    after?: { createdAt: number; id: string };
+    limit: number;
+  }): { items: AutonomyApprovalRequest[]; snapshotCreatedAt: number };
   decideApproval(input: { id: string; decision: "approved" | "rejected"; actor: string; reason: string; timestamp: number; audit: AutonomyAuditWrite }): void;
   revokeApproval(input: { id: string; actor: string; reason: string; timestamp: number; audit: AutonomyAuditWrite }): void;
   expireApprovals(
@@ -272,6 +277,7 @@ export type WorkflowApprovalRepository = Pick<WorkflowLearningStorageContract,
   | "createApproval"
   | "getApproval"
   | "listApprovals"
+  | "listApprovalsPage"
   | "decideApproval"
   | "revokeApproval"
   | "expireApprovals">;

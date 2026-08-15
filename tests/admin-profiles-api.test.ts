@@ -14,6 +14,8 @@ import {
   ErrorEnvelopeSchema,
   MemoryRecallResponseSchema,
   ProfileOperationResponseSchema,
+  type AdminAutonomyApprovalsResponse,
+  type AdminMemoryRecordsResponse,
 } from "@tagent/abi";
 import { createCoreApplication } from "@tagent/core-service/application";
 import { createApp, type ServiceCredential } from "@tagent/http-fastify";
@@ -64,6 +66,13 @@ describe("Admin capability profiles", () => {
         metadata: { prompt: "secret", privateToolArguments: { token: "secret" } },
         createdAt: 10, updatedAt: 20,
       }], topics: [] }),
+      listRecordsPage: async () => ({ records: [{
+        id: "memory-1", kind: "fact", tier: "warm", scope: { type: "workspace", id: "*" },
+        title: "Title", content: "Content", summary: "Summary", status: "active", confidence: 0.8,
+        sourceRefs: [{ sourceType: "artifact", sourceId: "/private/absolute/path" }],
+        metadata: { prompt: "secret", privateToolArguments: { token: "secret" } },
+        createdAt: 10, updatedAt: 20,
+      }], snapshotCreatedAt: 10 }),
       enqueueCapture: async (request: unknown) => { captureRequests.push(request); return { jobId: "capture-job-1" }; },
       forget: async () => ({ records: 1 }), restore: async () => ({}), upsert: async () => ({}),
       getColdTopic: async () => null,
@@ -228,5 +237,119 @@ describe("Admin capability profiles", () => {
     });
     expect(allowed.statusCode).toBe(200);
     expect(decodeAbi(ProfileOperationResponseSchema, allowed.json()).data.operation.status).toBe("succeeded");
+  });
+
+  it("returns schema-valid durable Memory operations for a maximum-length scope ID", async () => {
+    const captureRequests: unknown[] = [];
+    const { app } = await fixture({
+      readiness: async () => ({ ready: true, degraded: false, reasons: [] }),
+      enqueueCapture: async (request: unknown) => { captureRequests.push(request); return { jobId: "long-scope-job" }; },
+    });
+    const scopeId = "s".repeat(256);
+    const headers = { "idempotency-key": "memory-long-scope" };
+    const payload = { scope: { type: "workspace", id: scopeId }, content: "Durable boundary fact" };
+    const first = await app.inject({ method: "POST", url: "/api/v1/admin/profiles/memory/captures", headers, payload });
+    const expected = decodeAbi(ProfileOperationResponseSchema, first.json()).data;
+    expect(first.statusCode).toBe(200);
+    expect(expected.operation.resource).toEqual({ type: "memory_scope", id: scopeId });
+
+    const replay = await app.inject({ method: "POST", url: "/api/v1/admin/profiles/memory/captures", headers, payload });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.headers["idempotency-replayed"]).toBe("true");
+    expect(decodeAbi(ProfileOperationResponseSchema, replay.json()).data).toEqual(expected);
+    const lookup = await app.inject({ method: "GET", url: "/api/v1/admin/operations/memory-long-scope" });
+    expect(decodeAbi(ProfileOperationResponseSchema, lookup.json()).data).toEqual(expected);
+    expect(captureRequests).toHaveLength(1);
+  });
+
+  it("traverses all Memory and Autonomy snapshot members beyond 500", async () => {
+    const memoryRecords = Array.from({ length: 501 }, (_, index) => ({
+      id: `memory-${String(index).padStart(3, "0")}`,
+      kind: "fact", tier: "warm", scope: { type: "workspace", id: "memory-large" },
+      title: `Title ${index}`, content: `Content ${index}`, summary: "", status: "active", confidence: 0.8,
+      sourceRefs: [], createdAt: index + 1, updatedAt: index + 1,
+    }));
+    const requestedLimits: number[] = [];
+    const memory = {
+      readiness: async () => ({ ready: true, degraded: false, reasons: [] }),
+      listRecordsPage: async (_access: unknown, _scope: unknown, query: {
+        snapshotCreatedAt?: number; after?: { createdAt: number; id: string }; limit: number;
+      }) => {
+        requestedLimits.push(query.limit);
+        const snapshotCreatedAt = query.snapshotCreatedAt ?? Math.max(...memoryRecords.map((record) => record.createdAt));
+        const records = memoryRecords.filter((record) => record.createdAt <= snapshotCreatedAt && (!query.after
+          || record.createdAt < query.after.createdAt
+          || record.createdAt === query.after.createdAt && record.id < query.after.id))
+          .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))
+          .slice(0, query.limit);
+        return { records, snapshotCreatedAt };
+      },
+    };
+    const { app, store } = await fixture(memory);
+    const memoryIds: string[] = [];
+    let memoryCursor: string | null = null;
+    let memoryPageCount = 0;
+    do {
+      const response: AdminMemoryRecordsResponse["data"] = decodeAbi(AdminMemoryRecordsResponseSchema, (await app.inject({
+        method: "GET",
+        url: `/api/v1/admin/profiles/memory/records?scopeType=workspace&scopeId=memory-large&limit=200${memoryCursor ? `&cursor=${encodeURIComponent(memoryCursor)}` : ""}`,
+      })).json()).data;
+      memoryIds.push(...response.items.map((item) => item.id));
+      memoryCursor = response.pageInfo.nextCursor;
+      memoryPageCount += 1;
+      if (memoryPageCount === 1) memoryRecords[0].updatedAt = 1_000_000;
+    } while (memoryCursor);
+    expect(memoryIds).toHaveLength(501);
+    expect(new Set(memoryIds).size).toBe(501);
+    expect(requestedLimits).toEqual([201, 201, 201]);
+
+    const session = store.createSession("Large autonomy scope");
+    const insert = store.db.prepare(`INSERT INTO autonomy_approval_requests
+      (id,scope_id,action_type,target_type,target_id,status,risk_class,requested_by,expires_at,request_hash,created_at,updated_at)
+      VALUES (?,?, 'execute_workflow','workflow',?,'pending','low','test',?,?,?,?)`);
+    store.db.transaction(() => {
+      for (let index = 0; index < 501; index += 1) {
+        const id = `approval-${String(index).padStart(3, "0")}`;
+        insert.run(id, session.id, `target-${index}`, Date.now() + 86_400_000, `hash-${index}`, index + 1, index + 1);
+      }
+    })();
+    const approvalIds: string[] = [];
+    let approvalCursor: string | null = null;
+    do {
+      const response: AdminAutonomyApprovalsResponse["data"] = decodeAbi(AdminAutonomyApprovalsResponseSchema, (await app.inject({
+        method: "GET",
+        url: `/api/v1/admin/profiles/autonomy/approvals?scopeId=${session.id}&limit=200${approvalCursor ? `&cursor=${encodeURIComponent(approvalCursor)}` : ""}`,
+      })).json()).data;
+      approvalIds.push(...response.items.map((item) => item.id));
+      approvalCursor = response.pageInfo.nextCursor;
+    } while (approvalCursor);
+    expect(approvalIds).toHaveLength(501);
+    expect(new Set(approvalIds).size).toBe(501);
+  });
+
+  it("keeps Workflow snapshot traversal stable when an unread member is updated", async () => {
+    const { app, service, store } = await fixture();
+    const session = store.createSession("Workflow snapshot");
+    const teach = (name: string) => service.teachWorkflow(session.id, {
+      name, intent: name, cueTerms: [name], applicability: [name], nonApplicability: [], preconditions: [],
+      inputContract: [], outputContract: [], steps: [{ stepId: "check", instruction: "Check", required: true }],
+      verification: [], requiredCapabilities: [], riskClass: "low",
+    }, `source:${name}`) as { id: string };
+    const workflows = [teach("snapshot-a"), teach("snapshot-b")];
+    const firstPage = decodeAbi(AdminWorkflowsResponseSchema, (await app.inject({
+      method: "GET", url: `/api/v1/admin/profiles/workflows?scopeId=${session.id}&limit=1`,
+    })).json()).data;
+    const unread = workflows.find((workflow) => workflow.id !== firstPage.items[0].id)!;
+    const changed = await app.inject({
+      method: "POST", url: `/api/v1/admin/profiles/workflows/${unread.id}/suspend`,
+      headers: { "idempotency-key": "suspend-unread-workflow", "if-match": '"r1"' },
+      payload: { reason: "snapshot regression" },
+    });
+    expect(changed.statusCode).toBe(200);
+    const secondPage = decodeAbi(AdminWorkflowsResponseSchema, (await app.inject({
+      method: "GET",
+      url: `/api/v1/admin/profiles/workflows?scopeId=${session.id}&limit=1&cursor=${encodeURIComponent(firstPage.pageInfo.nextCursor!)}`,
+    })).json()).data;
+    expect(secondPage.items.map((workflow) => workflow.id)).toEqual([unread.id]);
   });
 });

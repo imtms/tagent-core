@@ -25,6 +25,7 @@ export type {
   ProfileOperationStatus,
   ProfileSessionSettingsRecord,
   ProfileSynchronousMutationInput,
+  ProfileSynchronousMutationReplayInput,
 } from "./profile-contract-repository.js";
 export type {
   ClaimedSubmission,

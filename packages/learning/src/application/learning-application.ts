@@ -35,6 +35,7 @@ export class LearningApplication {
   verifyWorkflowEvaluation(id: string) { return this.workflowService.verifyEvaluationReceipt(id); }
   requestWorkflowPromotion(workflowId: string, revisionId: string, canaryPercent?: number, maxFailureDelta?: number, actor?: string) { return this.workflowService.requestPromotion(workflowId, revisionId, canaryPercent, maxFailureDelta, actor); }
   listAutonomyApprovals(scopeId: string, limit?: number) { return this.workflowService.listApprovals(scopeId, limit); }
+  listAutonomyApprovalsPage(scopeId: string, query: Parameters<WorkflowLearningService["listApprovalsPage"]>[1]) { return this.workflowService.listApprovalsPage(scopeId, query); }
   getAutonomyApproval(id: string) { return this.workflowService.getApproval(id); }
   decideAutonomyApproval(id: string, decision: "approved" | "rejected", actor: string, reason?: string) { return this.workflowService.decideApproval(id, decision, actor, reason); }
   revokeAutonomyApproval(id: string, actor: string, reason?: string) { return this.workflowService.revokeApproval(id, actor, reason); }

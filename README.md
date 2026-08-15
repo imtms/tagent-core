@@ -4,7 +4,7 @@
 
 TAgent Core is a durable, self-hosted control plane for a single agent instance. It turns routed user intent into a persistent `TaskRun`, supervises bounded `Attempt`s, owns authoritative state, evidence, approvals, recovery, Memory, and Learning, and produces verifiable delivery results.
 
-The current 0.7 release adds independently negotiated Gateway capability profiles for Session Settings, Inbox, Context Manifest, Skills, Memory, Learning, Workflow, and Autonomy. It retains Core-managed Skills, governed Workspace Goals, trusted execution receipts, durable Gateway contracts, optional Memory and Learning, the contained `pi-agent-core` runtime, and the 0.6 reliability work. Core remains API-only and `TaskRun` remains the only execution runtime.
+The current 0.8 release is one fresh-schema Core system with independently negotiated Gateway capability profiles for Session Settings, Inbox, Context Manifest, Skills, Memory, Learning, Workflow, and Autonomy. Profile mutations replay immutable stored responses before mutable validation or side effects, and snapshot lists use stable storage-backed pagination without a 500-member ceiling. Core retains managed Skills, governed Workspace Goals, trusted execution receipts, optional Memory and Learning, and the contained `pi-agent-core` runtime. Core remains API-only and `TaskRun` remains the only execution runtime.
 
 ## Supported boundary
 

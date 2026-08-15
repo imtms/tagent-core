@@ -4,7 +4,7 @@ import type {
   SessionInputAnalysis,
 } from "../domain/index.js";
 import type { RunId, TaskRun } from "@tagent/execution/domain";
-import type { ProfileMutationContext, ProfileMutationResult } from "./profile-contract-repository.js";
+import type { ProfileInboxItemRecord, ProfileMutationContext, ProfileMutationResult } from "./profile-contract-repository.js";
 
 export type ClaimedSubmission = { item: Submission; run: TaskRun };
 
@@ -37,7 +37,7 @@ export type SubmissionRetryResult =
   | ({ status: "started" } & ClaimedSubmission);
 
 export interface ProfileInboxMutationValue {
-  itemIds: string[];
+  items: ProfileInboxItemRecord[];
   collectionRevision: number;
 }
 

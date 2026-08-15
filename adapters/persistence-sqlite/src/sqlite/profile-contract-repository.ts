@@ -11,6 +11,7 @@ import type {
   ProfileOperationReceiptRecord,
   ProfileSessionSettingsRecord,
   ProfileSynchronousMutationInput,
+  ProfileSynchronousMutationReplayInput,
 } from "@tagent/admission/ports";
 
 type OperationRow = Omit<ProfileOperationReceiptRecord, "result" | "error"> & {
@@ -20,6 +21,28 @@ type OperationRow = Omit<ProfileOperationReceiptRecord, "result" | "error"> & {
 
 export class SqliteProfileContractRepository implements ProfileContractRepository {
   constructor(private readonly db: Database.Database) {}
+
+  replaySynchronousMutation<T>(input: ProfileSynchronousMutationReplayInput): ProfileMutationResult<T> | undefined {
+    const identity = {
+      principalId: input.mutation.principalId,
+      profileId: input.profileId,
+      endpointId: input.endpointId,
+      resourceType: input.resourceType,
+      resourceId: input.resourceId,
+      idempotencyKey: input.mutation.idempotencyKey,
+    };
+    const existing = this.db.prepare(`SELECT payload_hash AS payloadHash,expected_revision AS expectedRevision,
+      result_json AS resultJson FROM profile_mutation_receipts
+      WHERE principal_id=@principalId AND profile_id=@profileId AND endpoint_id=@endpointId
+        AND resource_type=@resourceType AND resource_id=@resourceId AND idempotency_key=@idempotencyKey`)
+      .get(identity) as { payloadHash: string; expectedRevision: number; resultJson: string } | undefined;
+    if (!existing) return undefined;
+    const payloadHash = createHash("sha256").update(input.mutation.canonicalPayload).digest("hex");
+    if (existing.payloadHash !== payloadHash || existing.expectedRevision !== input.mutation.expectedRevision) {
+      return { status: "idempotency_conflict" };
+    }
+    return { status: "succeeded", value: JSON.parse(existing.resultJson) as T, replayed: true };
+  }
 
   getProfileResourceRevision(profileId: string, resourceType: string, resourceId: string): number {
     return (this.db.prepare(`SELECT revision FROM profile_resource_revisions
@@ -47,17 +70,8 @@ export class SqliteProfileContractRepository implements ProfileContractRepositor
     };
     const payloadHash = createHash("sha256").update(input.mutation.canonicalPayload).digest("hex");
     return this.db.transaction((): ProfileMutationResult<T> => {
-      const existing = this.db.prepare(`SELECT payload_hash AS payloadHash,expected_revision AS expectedRevision,
-        result_json AS resultJson FROM profile_mutation_receipts
-        WHERE principal_id=@principalId AND profile_id=@profileId AND endpoint_id=@endpointId
-          AND resource_type=@resourceType AND resource_id=@resourceId AND idempotency_key=@idempotencyKey`)
-        .get(identity) as { payloadHash: string; expectedRevision: number; resultJson: string } | undefined;
-      if (existing) {
-        if (existing.payloadHash !== payloadHash || existing.expectedRevision !== input.mutation.expectedRevision) {
-          return { status: "idempotency_conflict" };
-        }
-        return { status: "succeeded", value: JSON.parse(existing.resultJson) as T, replayed: true };
-      }
+      const replay = this.replaySynchronousMutation<T>(input);
+      if (replay) return replay;
       const currentRevision = input.readRevision();
       if (currentRevision === undefined) return { status: "not_found" };
       if (currentRevision !== input.mutation.expectedRevision) {
@@ -202,6 +216,7 @@ export class SqliteProfileContractRepository implements ProfileContractRepositor
       reasoningEffort?: ProfileSessionSettingsRecord["reasoningEffort"];
     };
     mutation: ProfileMutationContext;
+    validate?(): void;
   }): ProfileMutationResult<ProfileSessionSettingsRecord> {
     const identity = {
       principalId: input.mutation.principalId,
@@ -233,6 +248,7 @@ export class SqliteProfileContractRepository implements ProfileContractRepositor
       if (current.revision !== input.mutation.expectedRevision) {
         return { status: "concurrency_conflict", currentRevision: current.revision };
       }
+      input.validate?.();
       const timestamp = Date.now();
       const changed = this.db.prepare(`UPDATE sessions SET title=?,model_id=?,reasoning_effort=?,revision=revision+1,updated_at=?
         WHERE id=? AND revision=?`).run(

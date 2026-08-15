@@ -9,7 +9,7 @@ import {
   workflowSpecHash as specHash,
   workflowSpecPatchPaths as patchPaths,
 } from "./domain/workflow-spec.js";
-import type { WorkflowLearningPersistencePort } from "./ports/index.js";
+import type { WorkflowLearningPersistencePort, WorkflowLearningRepository } from "./ports/index.js";
 import type { SemanticJudge } from "./semantic-judge.js";
 import type {
   AutonomyActionType,
@@ -431,6 +431,11 @@ export class WorkflowLearningService {
   listApprovals(scopeId: string, limit = 200) {
     this.expireApprovals();
     return this.persistence.workflow.listApprovals(scopeId, limit);
+  }
+
+  listApprovalsPage(scopeId: string, query: Parameters<WorkflowLearningRepository["listApprovalsPage"]>[1]) {
+    this.expireApprovals();
+    return this.persistence.workflow.listApprovalsPage(scopeId, query);
   }
 
   decideApproval(id: string, decision: "approved" | "rejected", actor: string, reason = "") {

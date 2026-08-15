@@ -18,6 +18,7 @@ import {
   profileMutationContext,
   profileMutationHeaders,
   profileMutationValue,
+  replayProfileMutation,
   setRevisionEtag,
 } from "./profile-route-support.js";
 
@@ -70,12 +71,15 @@ export function registerOperatorSessionSettingsV1Routes(app: FastifyInstance, de
       ...(body.modelId === undefined ? {} : { modelId: body.modelId.trim() }),
       ...(body.reasoningEffort === undefined ? {} : { reasoningEffort: body.reasoningEffort }),
     };
-    validateModel(dependencies, normalized.modelId);
     const headers = profileMutationHeaders(request);
-    const result = profileMutationValue(dependencies.persistence.profileContracts.updateSessionSettings({
-      sessionId,
-      settings: normalized,
-      mutation: profileMutationContext(request, headers, normalized),
+    const mutation = profileMutationContext(request, headers, normalized);
+    const replay = replayProfileMutation<ProfileSessionSettingsRecord>(dependencies, {
+      profileId: "operator.session-settings.v1", endpointId: "operator.session_settings.update",
+      resourceType: "session", resourceId: sessionId,
+    }, mutation);
+    const result = profileMutationValue(replay ?? dependencies.persistence.profileContracts.updateSessionSettings({
+      sessionId, settings: normalized, mutation,
+      validate: () => validateModel(dependencies, normalized.modelId),
     }));
     setRevisionEtag(reply, result.value.revision);
     if (result.replayed) reply.header("Idempotency-Replayed", "true");

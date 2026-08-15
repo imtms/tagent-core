@@ -38,6 +38,14 @@ export interface ProfileSynchronousMutationInput<T> {
   perform(): { value: T; resultingRevision: number };
 }
 
+export interface ProfileSynchronousMutationReplayInput {
+  profileId: string;
+  endpointId: string;
+  resourceType: string;
+  resourceId: string;
+  mutation: ProfileMutationContext;
+}
+
 export interface ProfileMutationContext {
   principalId: string;
   grantedScopes: readonly string[];
@@ -114,6 +122,7 @@ export interface ProfileContractRepository {
   getProfileResourceRevision(profileId: string, resourceType: string, resourceId: string): number;
   bumpProfileResourceRevision(profileId: string, resourceType: string, resourceId: string): number;
   runSynchronousMutation<T>(input: ProfileSynchronousMutationInput<T>): ProfileMutationResult<T>;
+  replaySynchronousMutation<T>(input: ProfileSynchronousMutationReplayInput): ProfileMutationResult<T> | undefined;
   getInboxCollectionRevision(sessionId: string): number | undefined;
   getInboxItem(sessionId: string, itemId: string): ProfileInboxItemRecord | undefined;
   listInboxPage(sessionId: string, query: ProfilePageQuery): {
@@ -135,6 +144,7 @@ export interface ProfileContractRepository {
       reasoningEffort?: ProfileSessionSettingsRecord["reasoningEffort"];
     };
     mutation: ProfileMutationContext;
+    validate?(): void;
   }): ProfileMutationResult<ProfileSessionSettingsRecord>;
   claimOperation(input: ProfileOperationIdentity & {
     canonicalPayload: string;

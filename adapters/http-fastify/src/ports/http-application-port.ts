@@ -55,6 +55,11 @@ export interface HttpLearningApplicationPort {
   verifyWorkflowEvaluation(id: string): unknown;
   requestWorkflowPromotion(workflowId: string, revisionId: string, canaryPercent?: number, maxFailureDelta?: number, actor?: string): unknown;
   listAutonomyApprovals(scopeId: string, limit?: number): unknown;
+  listAutonomyApprovalsPage(scopeId: string, query: {
+    snapshotCreatedAt?: number;
+    after?: { createdAt: number; id: string };
+    limit: number;
+  }): { items: unknown[]; snapshotCreatedAt: number };
   getAutonomyApproval(id: string): unknown;
   decideAutonomyApproval(id: string, decision: "approved" | "rejected", actor: string, reason?: string): unknown;
   revokeAutonomyApproval(id: string, actor: string, reason?: string): unknown;

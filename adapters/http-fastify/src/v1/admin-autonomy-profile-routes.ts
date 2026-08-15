@@ -84,21 +84,20 @@ export function registerAdminAutonomyProfileV1Routes(app: FastifyInstance, depen
     const resourceId = `autonomy:${raw.scopeId}`;
     const state: { snapshotRowId?: number; after?: { createdAt: number; id: string } } = query.cursor
       ? decodeProfileCursor(query.cursor, { kind: "admin_collection", resourceId }) : {};
-    const all = (dependencies.service.listAutonomyApprovals(raw.scopeId, 500) as unknown[]).map((item) => {
+    const page = dependencies.service.listAutonomyApprovalsPage(raw.scopeId, {
+      snapshotCreatedAt: state.snapshotRowId,
+      after: state.after,
+      limit: limit + 1,
+    });
+    const all = (page.items as unknown[]).map((item) => {
       const approval = object(item);
       return mapApproval(item, dependencies.persistence.profileContracts.getProfileResourceRevision(
         "admin.autonomy.v1", "autonomy_approval", String(approval.id),
       ));
-    })
-      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt) || right.id.localeCompare(left.id));
-    const snapshotRowId = state.snapshotRowId ?? Math.max(0, ...all.map((item) => Date.parse(item.createdAt)));
-    const eligible = all.filter((item) => {
-      const timestamp = Date.parse(item.createdAt);
-      return timestamp <= snapshotRowId && (!state.after || timestamp < state.after.createdAt
-        || timestamp === state.after.createdAt && item.id < state.after.id);
     });
-    const items = eligible.slice(0, limit);
-    const hasMore = eligible.length > limit;
+    const snapshotRowId = page.snapshotCreatedAt;
+    const items = all.slice(0, limit);
+    const hasMore = all.length > limit;
     const last = items.at(-1);
     return encodeAbi(AdminAutonomyApprovalsResponseSchema, successEnvelope(request, { items, pageInfo: {
       nextCursor: hasMore && last ? encodeProfileCursor({ kind: "admin_collection", resourceId, snapshotRowId,

@@ -31,6 +31,11 @@ export interface HttpMemoryPort {
   getColdTopic(access: HttpMemoryAccess, topicId: string): Promise<unknown | null>;
   upsert(access: HttpMemoryAccess, records: unknown[], topics?: unknown[]): Promise<unknown>;
   export(access: HttpMemoryAccess, scope: HttpMemoryScope, limit?: number): Promise<unknown>;
+  listRecordsPage(access: HttpMemoryAccess, scope: HttpMemoryScope, query: {
+    snapshotCreatedAt?: number;
+    after?: { createdAt: number; id: string };
+    limit: number;
+  }): Promise<unknown>;
   forget(request: unknown): Promise<unknown>;
   restore(request: unknown): Promise<unknown>;
   enqueueReindex?(access: HttpMemoryAccess): Promise<unknown>;

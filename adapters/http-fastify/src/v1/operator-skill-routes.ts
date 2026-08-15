@@ -35,6 +35,7 @@ import {
   profileMutationContext,
   profileMutationHeaders,
   profileMutationValue,
+  replayProfileMutation,
   setRevisionEtag,
 } from "./profile-route-support.js";
 
@@ -115,19 +116,19 @@ export function registerOperatorSkillV1Routes(app: FastifyInstance, dependencies
     const { limit, state } = pageState(request, "skills", "catalog");
     const page = dependencies.service.listSkillsProfile({ ...state, limit: limit + 1 }) as ProfileSkillCatalogPage;
     const rawItems = page.items.slice(0, limit);
+    const lastOrderKey = page.orderKeys.slice(0, limit).at(-1);
     const items = rawItems.map((item) => {
       const detail = dependencies.service.getSkillProfile(item.id) as { resourceRevision: number };
       return mapSummary(item, detail.resourceRevision);
     });
     const hasMore = page.items.length > limit;
-    const last = rawItems.at(-1);
     setRevisionEtag(reply, page.collectionRevision);
     return encodeAbi(OperatorSkillCatalogResponseSchema, successEnvelope(request, {
       items,
       collectionRevision: page.collectionRevision,
       pageInfo: pageInfo({
         kind: "skills", resourceId: "catalog", snapshotRowId: page.snapshotRowId, limit, hasMore,
-        ...(last ? { last: { id: last.id, createdAt: last.updatedAt } } : {}),
+        ...(lastOrderKey ? { last: lastOrderKey } : {}),
       }),
     }));
   });
@@ -182,17 +183,19 @@ export function registerOperatorSkillV1Routes(app: FastifyInstance, dependencies
     assertProfileResourceScope(request, "workspace", "*");
     const body = decodeAbi(OperatorSkillUploadRequestSchema, request.body);
     const headers = profileMutationHeaders(request);
+    const mutationContext = profileMutationContext(request, headers, body);
     try {
-      const mutation = await dependencies.service.uploadSkillProfile(
-        body,
-        profileMutationContext(request, headers, body),
+      const replay = replayProfileMutation<ProfileSkillMutationValue>(dependencies, {
+        profileId: "operator.skills.v1", endpointId: "operator.skills.create", resourceType: "skill_catalog", resourceId: "catalog",
+      }, mutationContext);
+      const mutation = replay ?? await dependencies.service.uploadSkillProfile(
+        body, mutationContext,
       ) as ProfileMutationResult<ProfileSkillMutationValue>;
       const result = profileMutationValue(mutation);
-      const resourceRevision = (dependencies.service.getSkillProfile(result.value.skill.skillId) as { resourceRevision: number }).resourceRevision;
-      setRevisionEtag(reply, resourceRevision);
+      setRevisionEtag(reply, result.value.resourceRevision);
       if (result.replayed) reply.header("Idempotency-Replayed", "true");
       return encodeAbi(OperatorSkillResponseSchema, successEnvelope(request, {
-        skill: mapRevision(result.value.skill), resourceRevision, catalogRevision: result.value.catalogRevision,
+        skill: mapRevision(result.value.skill), resourceRevision: result.value.resourceRevision, catalogRevision: result.value.catalogRevision,
       }));
     } catch (error) {
       if (error instanceof V1HttpError) throw error;
@@ -208,16 +211,19 @@ export function registerOperatorSkillV1Routes(app: FastifyInstance, dependencies
     const { skillId } = request.params as { skillId: string };
     const body = decodeAbi(OperatorSkillUpdateRequestSchema, request.body);
     const headers = profileMutationHeaders(request);
+    const mutationContext = profileMutationContext(request, headers, body);
     try {
-      const mutation = await dependencies.service.updateSkillProfile(
-        skillId, body, profileMutationContext(request, headers, body),
+      const replay = replayProfileMutation<ProfileSkillMutationValue>(dependencies, {
+        profileId: "operator.skills.v1", endpointId: "operator.skills.update", resourceType: "skill", resourceId: skillId,
+      }, mutationContext);
+      const mutation = replay ?? await dependencies.service.updateSkillProfile(
+        skillId, body, mutationContext,
       ) as ProfileMutationResult<ProfileSkillMutationValue>;
       const result = profileMutationValue(mutation);
-      const resourceRevision = (dependencies.service.getSkillProfile(skillId) as { resourceRevision: number }).resourceRevision;
-      setRevisionEtag(reply, resourceRevision);
+      setRevisionEtag(reply, result.value.resourceRevision);
       if (result.replayed) reply.header("Idempotency-Replayed", "true");
       return encodeAbi(OperatorSkillResponseSchema, successEnvelope(request, {
-        skill: mapRevision(result.value.skill), resourceRevision, catalogRevision: result.value.catalogRevision,
+        skill: mapRevision(result.value.skill), resourceRevision: result.value.resourceRevision, catalogRevision: result.value.catalogRevision,
       }));
     } catch (error) {
       if (error instanceof V1HttpError) throw error;
@@ -251,15 +257,15 @@ export function registerOperatorSkillV1Routes(app: FastifyInstance, dependencies
     try {
       const page = dependencies.service.listWorkspaceSkillsProfile(workspaceId, { ...state, limit: limit + 1 }) as ProfileWorkspaceSkillPage;
       const rawItems = page.items.slice(0, limit);
+      const lastOrderKey = page.orderKeys.slice(0, limit).at(-1);
       const hasMore = page.items.length > limit;
-      const last = rawItems.at(-1);
       setRevisionEtag(reply, page.bindingRevision);
       return encodeAbi(OperatorWorkspaceSkillsResponseSchema, successEnvelope(request, {
         items: rawItems.map(mapRevision),
         bindingRevision: page.bindingRevision,
         pageInfo: pageInfo({
           kind: "workspace_skills", resourceId: workspaceId, snapshotRowId: page.snapshotRowId, limit, hasMore,
-          ...(last ? { last: { id: last.id, createdAt: last.createdAt } } : {}),
+          ...(lastOrderKey ? { last: lastOrderKey } : {}),
         }),
       }));
     } catch (error) { return skillError(error); }

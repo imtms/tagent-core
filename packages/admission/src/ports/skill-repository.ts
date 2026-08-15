@@ -3,6 +3,7 @@ import type { ProfileMutationContext, ProfileMutationResult, ProfilePageQuery } 
 
 export interface ProfileSkillCatalogPage {
   items: SkillSummary[];
+  orderKeys: Array<{ createdAt: number; id: string }>;
   snapshotRowId: number;
   collectionRevision: number;
 }
@@ -15,12 +16,14 @@ export interface ProfileSkillRevisionPage {
 
 export interface ProfileWorkspaceSkillPage {
   items: SkillRevision[];
+  orderKeys: Array<{ createdAt: number; id: string }>;
   snapshotRowId: number;
   bindingRevision: number;
 }
 
 export interface ProfileSkillMutationValue {
   skill: SkillRevision;
+  resourceRevision: number;
   catalogRevision: number;
 }
 

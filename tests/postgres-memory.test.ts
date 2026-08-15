@@ -107,4 +107,32 @@ suite("PostgreSQL memory adapter", () => {
     expect(graph.edges.length).toBeGreaterThan(0);
     expect((await lifecycle.topicCandidates(access)).length).toBeGreaterThan(0);
   });
+
+  it("pages every record beyond 500 with immutable creation-order cursors", async () => {
+    const base = Date.now();
+    const records = Array.from({ length: 501 }, (_, index) => ({
+      id: crypto.randomUUID(), kind: "fact" as const, tier: "warm" as const, scope,
+      title: `Paged record ${index}`, content: `Paged content ${index}`, summary: `Paged ${index}`,
+      topicIds: [], entityIds: [], status: "active" as const, confidence: 1, importance: 1,
+      sourceRefs: [], createdAt: base + index, updatedAt: base + index,
+    }));
+    await adapter.upsertRecords(records);
+    const ids: string[] = [];
+    let snapshotCreatedAt: number | undefined;
+    let after: { createdAt: number; id: string } | undefined;
+    do {
+      const page = await service.listRecordsPage(access, scope, { snapshotCreatedAt, after, limit: 201 });
+      snapshotCreatedAt = page.snapshotCreatedAt;
+      const items = page.records.slice(0, 200);
+      ids.push(...items.map((record) => record.id));
+      if (ids.length === 200) {
+        await adapter.upsertRecords([{ ...records[0], updatedAt: base + 10_000 }]);
+      }
+      const last = items.at(-1);
+      after = page.records.length > 200 && last ? { createdAt: last.createdAt, id: last.id } : undefined;
+    } while (after);
+    expect(ids).toHaveLength(501);
+    expect(new Set(ids).size).toBe(501);
+    expect(ids).toContain(records[0].id);
+  });
 });

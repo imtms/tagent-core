@@ -80,6 +80,22 @@ describe("Operator Skills profile", () => {
     const updated = decodeAbi(OperatorSkillResponseSchema, updatedResponse.json()).data;
     expect(updated).toMatchObject({ resourceRevision: 2, catalogRevision: 3, skill: { revision: 2, disableModelInvocation: true } });
 
+    const advancedResponse = await app.inject({
+      method: "PATCH", url: `${catalogUrl}/${created.skill.skillId}`,
+      headers: { "idempotency-key": "skill-update-advance", "if-match": '"r2"' },
+      payload: { name: "gateway-check", description: "Advanced", content: "Advanced contract checks." },
+    });
+    expect(decodeAbi(OperatorSkillResponseSchema, advancedResponse.json()).data).toMatchObject({
+      resourceRevision: 3, catalogRevision: 4, skill: { revision: 3 },
+    });
+    const updateReplay = await app.inject({
+      method: "PATCH", url: `${catalogUrl}/${created.skill.skillId}`, headers: updateHeaders,
+      payload: { name: "gateway-check", description: "Updated", content: "Updated contract checks.", disableModelInvocation: true },
+    });
+    expect(updateReplay.headers["idempotency-replayed"]).toBe("true");
+    expect(updateReplay.headers.etag).toBe(updatedResponse.headers.etag);
+    expect(decodeAbi(OperatorSkillResponseSchema, updateReplay.json()).data).toEqual(updated);
+
     const stale = await app.inject({
       method: "PATCH", url: `${catalogUrl}/${created.skill.skillId}`,
       headers: { "idempotency-key": "skill-update-stale", "if-match": '"r1"' },
@@ -95,10 +111,65 @@ describe("Operator Skills profile", () => {
       payload: { skillIds: [created.skill.skillId] },
     });
     expect(decodeAbi(OperatorWorkspaceSkillsResponseSchema, binding.json()).data).toMatchObject({
-      bindingRevision: 2, items: [{ skillId: created.skill.skillId, revision: 2 }],
+      bindingRevision: 2, items: [{ skillId: created.skill.skillId, revision: 3 }],
     });
     expect(store.db.prepare("SELECT COUNT(*) AS count FROM profile_audit_events WHERE profile_id='operator.skills.v1'").get())
-      .toEqual({ count: 3 });
+      .toEqual({ count: 4 });
+  });
+
+  it("keeps catalog and Workspace snapshot traversal stable when an unread Skill is updated", async () => {
+    const { app, store } = await fixture();
+    const create = async (name: string, revision: number) => decodeAbi(OperatorSkillResponseSchema, (await app.inject({
+      method: "POST", url: "/api/v1/operator/skills",
+      headers: { "idempotency-key": `create-${name}`, "if-match": `"r${revision}"` },
+      payload: {
+        filename: "SKILL.md",
+        contentBase64: Buffer.from(skillSource(name, `${name} body.`)).toString("base64"),
+      },
+    })).json()).data.skill;
+    const first = await create("snapshot-first", 1);
+    const second = await create("snapshot-second", 2);
+    const skills = [first, second];
+
+    const firstCatalogPage = decodeAbi(OperatorSkillCatalogResponseSchema, (await app.inject({
+      method: "GET", url: "/api/v1/operator/skills?limit=1",
+    })).json());
+    const unreadCatalog = skills.find((skill) => skill.skillId !== firstCatalogPage.data.items[0].id)!;
+    await app.inject({
+      method: "PATCH", url: `/api/v1/operator/skills/${unreadCatalog.skillId}`,
+      headers: { "idempotency-key": "update-unread-catalog", "if-match": '"r1"' },
+      payload: { name: unreadCatalog.name, description: "Updated unread", content: "Updated unread body." },
+    });
+    const secondCatalogPage = decodeAbi(OperatorSkillCatalogResponseSchema, (await app.inject({
+      method: "GET",
+      url: `/api/v1/operator/skills?limit=1&cursor=${encodeURIComponent(firstCatalogPage.data.pageInfo.nextCursor!)}`,
+    })).json());
+    expect(secondCatalogPage.data.items.map((item) => item.id)).toEqual([unreadCatalog.skillId]);
+
+    const session = store.createSession("Snapshot bindings");
+    const bindingsUrl = `/api/v1/operator/workspaces/${session.id}/skills`;
+    await app.inject({
+      method: "PUT", url: bindingsUrl,
+      headers: { "idempotency-key": "bind-snapshot-skills", "if-match": '"r1"' },
+      payload: { skillIds: skills.map((skill) => skill.skillId) },
+    });
+    const firstBindingPage = decodeAbi(OperatorWorkspaceSkillsResponseSchema, (await app.inject({
+      method: "GET", url: `${bindingsUrl}?limit=1`,
+    })).json());
+    const unreadBinding = skills.find((skill) => skill.skillId !== firstBindingPage.data.items[0].skillId)!;
+    const current = decodeAbi(OperatorSkillResponseSchema, (await app.inject({
+      method: "GET", url: `/api/v1/operator/skills/${unreadBinding.skillId}`,
+    })).json()).data;
+    await app.inject({
+      method: "PATCH", url: `/api/v1/operator/skills/${unreadBinding.skillId}`,
+      headers: { "idempotency-key": "update-unread-binding", "if-match": `"r${current.resourceRevision}"` },
+      payload: { name: unreadBinding.name, description: "Binding update", content: "Binding update body." },
+    });
+    const secondBindingPage = decodeAbi(OperatorWorkspaceSkillsResponseSchema, (await app.inject({
+      method: "GET",
+      url: `${bindingsUrl}?limit=1&cursor=${encodeURIComponent(firstBindingPage.data.pageInfo.nextCursor!)}`,
+    })).json());
+    expect(secondBindingPage.data.items.map((item) => item.skillId)).toEqual([unreadBinding.skillId]);
   });
 
   it("requires wildcard workspace authority for the global catalog and explicit authority for bindings", async () => {
