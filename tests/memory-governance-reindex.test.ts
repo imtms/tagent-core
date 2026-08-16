@@ -49,6 +49,39 @@ describe("memory 0.1.5 governance", () => {
     const [again] = await a.listReindexJobs([scope]);
     expect(again.checkpoint.skipped).toBe(1);
   });
+  it("fences vector writes from a reindex worker after its lease is reclaimed", async () => {
+    const a = new InMemoryMemoryAdapter();
+    await a.upsertRecords([{ ...record(), title: "old", summary: "old" }]);
+    let releaseStaleEmbedding!: () => void;
+    let staleEmbeddingStarted!: () => void;
+    const staleEmbeddingGate = new Promise<void>((resolve) => { releaseStaleEmbedding = resolve; });
+    const staleEmbeddingReady = new Promise<void>((resolve) => { staleEmbeddingStarted = resolve; });
+    const staleEmbeddings = {
+      generation: "lease-fenced",
+      async embed() {
+        staleEmbeddingStarted();
+        await staleEmbeddingGate;
+        return [[1]];
+      },
+    };
+    const freshEmbeddings = { generation: "lease-fenced", async embed() { return [[2]]; } };
+    const staleWorker = new DurableReindexWorker(a, a, a, staleEmbeddings, a, access, 1, 20);
+    const freshWorker = new DurableReindexWorker(a, a, a, freshEmbeddings, a, access, 1, 20);
+    await staleWorker.enqueue();
+    const staleRun = staleWorker.runOnce("worker-a");
+    await staleEmbeddingReady;
+
+    const running = [...a.reindexJobs.values()][0];
+    running.leaseUntil = Date.now() - 1;
+    await a.upsertRecords([{ ...record(), title: "new", summary: "new", updatedAt: Date.now() + 1 }]);
+    await expect(freshWorker.runOnce("worker-b")).resolves.toBe(true);
+    expect(a.vectors.get(`warm_record:${record().id}:lease-fenced`)?.vector).toEqual([2]);
+
+    releaseStaleEmbedding();
+    await expect(staleRun).rejects.toThrow("reindex_lease_lost");
+    expect(a.vectors.get(`warm_record:${record().id}:lease-fenced`)?.vector).toEqual([2]);
+    expect((await a.getGeneration(scope, "lease-fenced"))?.status).toBe("active");
+  });
   it("tombstones and restores topics without deleting revisions", async () => {
     const a = new InMemoryMemoryAdapter(),
       now = Date.now(),

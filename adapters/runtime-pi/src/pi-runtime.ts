@@ -42,14 +42,17 @@ import {
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const RETRY_DELAY_SAFETY_MARGIN_MS = 1;
 
-export function providerRetryDelayMs(retryAttempt: number, runTimeoutMs?: number, runHardTimeoutMs?: number) {
+export function providerRetryDelayMs(retryAttempt: number, runTimeoutMs?: number, runHardTimeoutMs?: number, retryAfterMs?: number) {
   const idleBudget = runTimeoutMs === undefined ? Number.POSITIVE_INFINITY : Math.max(0, runTimeoutMs - RETRY_DELAY_SAFETY_MARGIN_MS);
   const hardBudget = runHardTimeoutMs === undefined ? Number.POSITIVE_INFINITY : Math.max(0, runHardTimeoutMs - RETRY_DELAY_SAFETY_MARGIN_MS);
   const cap = Math.min(MAX_TIMER_DELAY_MS, idleBudget, hardBudget);
   if (cap <= 0) return 0;
   const exponent = Math.max(0, Math.floor(retryAttempt) - 1);
-  if (exponent >= 31) return cap;
-  return Math.min(1_000 * 2 ** exponent, cap);
+  const localBackoff = exponent >= 31 ? cap : Math.min(1_000 * 2 ** exponent, cap);
+  const providerWindow = retryAfterMs !== undefined && Number.isFinite(retryAfterMs) && retryAfterMs > 0
+    ? Math.ceil(retryAfterMs)
+    : 0;
+  return Math.min(Math.max(localBackoff, providerWindow), cap);
 }
 
 export interface PiRuntimeOptions extends AttemptRuntimeSpec {
@@ -484,8 +487,14 @@ export class PiRuntime implements AttemptRuntimePort {
           continue;
         }
         if (failure && isRetryableProviderFailure(failure) && retryAttempt < maxRetries) {
-          retryAttempt += 1;
-          const delayMs = providerRetryDelayMs(retryAttempt, this.options.runTimeoutMs, this.options.runHardTimeoutMs);
+          const nextRetryAttempt = retryAttempt + 1;
+          const retryAfterMs = this.lastProviderFailure?.kind === failure ? this.lastProviderFailure.retryAfterMs : undefined;
+          const delayMs = providerRetryDelayMs(nextRetryAttempt, this.options.runTimeoutMs, this.options.runHardTimeoutMs, retryAfterMs);
+          // Never send an inline retry before a provider-supplied window. If the
+          // window cannot fit the remaining watchdog budget, the durable
+          // continuation scheduler applies it outside this Attempt instead.
+          if (retryAfterMs !== undefined && delayMs < retryAfterMs) break;
+          retryAttempt = nextRetryAttempt;
           const summary = (assistant.errorMessage ?? "").replace(/\s+/g, " ").slice(0, 500);
           // Establish cancellation ownership before publishing the observable
           // retry state. A controller installed after the event creates a race

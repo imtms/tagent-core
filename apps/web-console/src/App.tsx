@@ -1,7 +1,7 @@
 import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { createPortal } from "react-dom";
 import { Activity, ArrowDown, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FileText, GripVertical, HelpCircle, Keyboard, Menu, Moon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Search, Send, Settings2, ShieldAlert, ShieldCheck, Square, Sun, Target, Terminal, Trash2, Upload, WandSparkles, X } from "lucide-react";
-import { api, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type GateProfile, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type SkillRevision, type SkillSummary, type ContextManifest, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
+import { api, drainTranscriptView, subscribe, type Artifact, type ArtifactContent, type CaptureJob, type GateProfile, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type SkillRevision, type SkillSummary, type ContextManifest, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
 import { Markdown, preloadMarkdown } from "./LazyMarkdown";
 import { LiveText } from "./LiveText";
 import { createRequestId } from "./id";
@@ -43,6 +43,7 @@ type WorkspaceSnapshot = {
   active: TaskRun | null;
   latest: TaskRun | null;
   transcript: TranscriptItem[];
+  transcriptAfter: number;
 };
 
 async function loadWorkspaceSnapshot(sessionId: string): Promise<WorkspaceSnapshot> {
@@ -54,10 +55,11 @@ async function loadWorkspaceSnapshot(sessionId: string): Promise<WorkspaceSnapsh
   const hydrated = new Map(await Promise.all(runIds.map(async (runId) => [runId, await api.run(runId)] as const)));
   const latest = latestSummary ? hydrated.get(latestSummary.id) ?? null : null;
   const active = activeSummary ? hydrated.get(activeSummary.id) ?? null : null;
-  const transcript = latest ? await api.transcriptView(latest.id) : [];
+  const transcriptView = latest ? await drainTranscriptView(latest.id, latest.transcriptCount) : { items: [] as TranscriptItem[], after: 0 };
+  const transcript = transcriptView.items;
   const transcriptHasRichText = transcript.some((item) => (item.kind === "assistant" || item.kind === "thinking") && item.text.trim());
   if (transcriptHasRichText) void preloadMarkdown().catch(() => undefined);
-  return { sessionId, history, runHistory, queued, active, latest, transcript };
+  return { sessionId, history, runHistory, queued, active, latest, transcript, transcriptAfter: transcriptView.after };
 }
 
 function storedBoolean(key: string, fallback = false): boolean {
@@ -533,7 +535,7 @@ export function App() {
     setStreaming(snapshot.active?.checkpoint?.active ? snapshot.active.checkpoint.assistantPartial : ""); setLiveThinking("");
     setEvents(snapshot.active?.checkpoint?.active && snapshot.active.checkpoint.currentTool ? [{ runId: snapshot.active.id, seq: snapshot.active.checkpoint.lastEventSeq, type: "tool.started", data: snapshot.active.checkpoint.currentTool, createdAt: snapshot.active.checkpoint.updatedAt }] : []);
     transcriptRunIdRef.current = snapshot.latest?.id ?? "";
-    transcriptAfterRef.current = snapshot.latest?.transcriptCount ?? 0;
+    transcriptAfterRef.current = snapshot.transcriptAfter;
     setTranscript(snapshot.transcript);
   }, []);
 
@@ -769,24 +771,26 @@ export function App() {
         setSessions(sessionItems);
         const active = findActiveRun(runHistory);
         if (active?.id && active.id !== activeRunIdRef.current) {
-          const [hydrated, view, history] = await Promise.all([api.run(active.id), api.transcriptView(active.id), api.messages(targetSessionId)]);
+          const [hydrated, history] = await Promise.all([api.run(active.id), api.messages(targetSessionId)]);
+          const view = await drainTranscriptView(active.id, hydrated.transcriptCount);
           if (closed || sessionIdRef.current !== targetSessionId) return;
           replaceStreamingOnNextDeltaRef.current = false;
           setMessages(history); setHasOlderMessages(history.length === 80);
           setActiveRun(hydrated); setSelectedRun(hydrated); setExpandedRunId(hydrated.id);
           transcriptRunIdRef.current = hydrated.id;
-          transcriptAfterRef.current = hydrated.transcriptCount;
-          setTranscript(view); setStreaming(hydrated.checkpoint?.active ? hydrated.checkpoint.assistantPartial : ""); setLiveThinking("");
+          transcriptAfterRef.current = view.after;
+          setTranscript(view.items); setStreaming(hydrated.checkpoint?.active ? hydrated.checkpoint.assistantPartial : ""); setLiveThinking("");
           setEvents(hydrated.checkpoint?.active && hydrated.checkpoint.currentTool ? [{ runId: hydrated.id, seq: hydrated.checkpoint.lastEventSeq, type: "tool.started", data: hydrated.checkpoint.currentTool, createdAt: hydrated.checkpoint.updatedAt }] : []);
           setError("");
         } else if (!active && activeRunIdRef.current) {
           const endedRunId = activeRunIdRef.current;
-          const [history, ended, view] = await Promise.all([api.messages(targetSessionId), api.run(endedRunId), api.transcriptView(endedRunId)]);
+          const [history, ended] = await Promise.all([api.messages(targetSessionId), api.run(endedRunId)]);
+          const view = await drainTranscriptView(endedRunId, ended.transcriptCount);
           if (closed || sessionIdRef.current !== targetSessionId || activeRunIdRef.current !== endedRunId) return;
           replaceStreamingOnNextDeltaRef.current = false;
           transcriptRunIdRef.current = ended.id;
-          transcriptAfterRef.current = ended.transcriptCount;
-          setMessages(history); setHasOlderMessages(history.length === 80); setSelectedRun(ended); setTranscript(view);
+          transcriptAfterRef.current = view.after;
+          setMessages(history); setHasOlderMessages(history.length === 80); setSelectedRun(ended); setTranscript(view.items);
           setActiveRun(null); setStreaming(""); setLiveThinking(""); setEvents([]);
         } else if (active) {
           const currentRun = await api.run(active.id);
@@ -794,13 +798,13 @@ export function App() {
           if (shouldRefreshContent) {
             const refreshSelectedTranscript = transcriptRunIdRef.current === active.id;
             const [view, history] = await Promise.all([
-              refreshSelectedTranscript ? api.transcriptView(active.id) : Promise.resolve(undefined),
+              refreshSelectedTranscript ? drainTranscriptView(active.id, currentRun.transcriptCount) : Promise.resolve(undefined),
               api.messages(targetSessionId),
             ]);
             if (closed || sessionIdRef.current !== targetSessionId) return;
             if (view && refreshSelectedTranscript && transcriptRunIdRef.current === active.id) {
-              transcriptAfterRef.current = currentRun.transcriptCount;
-              setTranscript(view);
+              transcriptAfterRef.current = view.after;
+              setTranscript(view.items);
             }
             setMessages(history); setHasOlderMessages(history.length === 80);
           }
@@ -875,10 +879,10 @@ export function App() {
         if (transcriptRunIdRef.current !== runId) return;
         const after = transcriptAfterRef.current;
         if (!Number.isSafeInteger(throughSeq) || throughSeq <= after) return;
-        const delta = await api.transcriptView(runId, after);
+        const delta = await drainTranscriptView(runId, throughSeq, after);
         if (closed || sessionIdRef.current !== sessionId || activeRunIdRef.current !== runId || transcriptRunIdRef.current !== runId) return;
-        transcriptAfterRef.current = throughSeq;
-        setTranscript((current) => mergeTranscriptItems(current, delta));
+        transcriptAfterRef.current = delta.after;
+        setTranscript((current) => mergeTranscriptItems(current, delta.items));
         setStreaming(""); setLiveThinking("");
       });
       transcriptRefreshTaskRef.current = refresh.catch(() => undefined);
@@ -912,8 +916,9 @@ export function App() {
         if (closed || sessionIdRef.current !== sessionId) return;
       }
       if (["run.completed", "run.blocked", "run.failed", "run.cancelled", "run.interrupted", "run.waiting_for_input"].includes(event.type)) {
+        const updatedTask = api.run(runId);
         const [updated, runHistory, history, queued, view, sessionItems] = await Promise.all([
-          api.run(runId), api.runs(sessionId), api.messages(sessionId), api.inbox(sessionId), api.transcriptView(runId), api.sessions(),
+          updatedTask, api.runs(sessionId), api.messages(sessionId), api.inbox(sessionId), updatedTask.then((run) => drainTranscriptView(runId, run.transcriptCount)), api.sessions(),
         ]);
         if (closed || sessionIdRef.current !== sessionId) return;
         const nextActiveSummary = findActiveRun(runHistory);
@@ -931,7 +936,7 @@ export function App() {
         setRuns(runHistory); setMessages((current) => {
           const older = current.filter((message) => !history.some((latest) => latest.id === message.id) && message.id < (history[0]?.id ?? Number.MAX_SAFE_INTEGER));
           return [...older, ...history];
-        }); setInbox(queued); transcriptRunIdRef.current = updated.id; transcriptAfterRef.current = updated.transcriptCount; setTranscript(view); setSessions(sessionItems);
+        }); setInbox(queued); transcriptRunIdRef.current = updated.id; transcriptAfterRef.current = view.after; setTranscript(view.items); setSessions(sessionItems);
       } else if (event.type === "run.updated" || event.type.startsWith("continuation.") || event.type.startsWith("supervisor.")) {
         const updated = await api.run(runId);
         if (closed || sessionIdRef.current !== sessionId) return;
@@ -1350,7 +1355,7 @@ export function App() {
         return <section className={`run-history-item ${expanded ? "expanded" : ""}`} key={item.id}>
           <button className="run-history-toggle" onClick={async () => {
             if (expanded) { setExpandedRunId(""); return; }
-            const selected = await api.run(item.id); const view = await api.transcriptView(item.id); transcriptRunIdRef.current = selected.id; transcriptAfterRef.current = selected.transcriptCount; setSelectedRun(selected); setExpandedRunId(item.id); setTranscript(view);
+            const selected = await api.run(item.id); const view = await drainTranscriptView(item.id, selected.transcriptCount); transcriptRunIdRef.current = selected.id; transcriptAfterRef.current = view.after; setSelectedRun(selected); setExpandedRunId(item.id); setTranscript(view.items);
           }} aria-expanded={expanded}>
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
             <span className={`history-status ${item.status}`} />
@@ -1363,7 +1368,7 @@ export function App() {
     </aside>}
     {runtimeStatus?.memoryEnabled && memoryOpen && <Suspense fallback={null}><MemoryPanel runtime={runtimeStatus} onClose={() => setMemoryOpen(false)} /></Suspense>}
     {learningOpen && sessionId && learningSettings?.learningEnabled && <Suspense fallback={null}><LearningCenter sessionId={sessionId} onClose={() => setLearningOpen(false)} /></Suspense>}
-    {goalsOpen && sessionId && <Suspense fallback={null}><GoalsPanel workspaceId={sessionId} onClose={() => setGoalsOpen(false)} onOpenRun={(runId) => { void api.run(runId).then(async (run) => { const view = await api.transcriptView(run.id); transcriptRunIdRef.current = run.id; transcriptAfterRef.current = run.transcriptCount; setSelectedRun(run); setExpandedRunId(run.id); setTranscript(view); setGoalsOpen(false); setRightOpen(true); }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }} /></Suspense>}
+    {goalsOpen && sessionId && <Suspense fallback={null}><GoalsPanel workspaceId={sessionId} onClose={() => setGoalsOpen(false)} onOpenRun={(runId) => { void api.run(runId).then(async (run) => { const view = await drainTranscriptView(run.id, run.transcriptCount); transcriptRunIdRef.current = run.id; transcriptAfterRef.current = view.after; setSelectedRun(run); setExpandedRunId(run.id); setTranscript(view.items); setGoalsOpen(false); setRightOpen(true); }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }} /></Suspense>}
     <button ref={mobileBackdropRef} className={`backdrop mobile-only ${leftOpen || rightOpen ? "visible" : ""}`} onClick={() => { setLeftOpen(false); setRightOpen(false); }} aria-label="Close panel" aria-hidden={leftOpen || rightOpen ? undefined : "true"} tabIndex={leftOpen || rightOpen ? 0 : -1} />
   </div>;
 }

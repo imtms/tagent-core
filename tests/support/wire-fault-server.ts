@@ -2,6 +2,7 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 
 export type WireFaultStep =
   | { kind: "reset_before_headers" }
+  | { kind: "rate_limit"; retryAfterSeconds: number }
   | { kind: "partial_sse_reset"; content: string }
   | { kind: "clean_eof_without_done"; content: string }
   | { kind: "malformed_sse"; data?: string }
@@ -10,6 +11,7 @@ export type WireFaultStep =
 
 export interface WireRequestRecord {
   ordinal: number;
+  receivedAt: number;
   method: string;
   url: string;
   headers: Readonly<Record<string, string | string[] | undefined>>;
@@ -40,6 +42,11 @@ function sseHeaders(response: ServerResponse) {
 function applyStep(step: WireFaultStep, response: ServerResponse) {
   if (step.kind === "reset_before_headers") {
     response.socket?.destroy();
+    return;
+  }
+  if (step.kind === "rate_limit") {
+    response.writeHead(429, { "content-type": "application/json", "retry-after": String(step.retryAfterSeconds) });
+    response.end(JSON.stringify({ error: { message: "rate limit exceeded" } }));
     return;
   }
   sseHeaders(response);
@@ -91,7 +98,7 @@ export class WireFaultServer {
         const step = this.script[Math.min(ordinal - 1, this.script.length - 1)];
         let json: unknown;
         try { json = JSON.parse(body); } catch { json = undefined; }
-        this.requests.push({ ordinal, method: request.method ?? "", url: request.url ?? "", headers: { ...request.headers }, body, json, step });
+        this.requests.push({ ordinal, receivedAt: Date.now(), method: request.method ?? "", url: request.url ?? "", headers: { ...request.headers }, body, json, step });
         applyStep(step, response);
       });
     });

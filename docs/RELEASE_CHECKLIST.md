@@ -34,8 +34,8 @@ git diff --check
 - [ ] Architecture tests confirm the 13-workspace DAG, package exports, API-only Core, and Web dependency boundary.
 - [ ] `pi-coding-agent` is absent from source, manifests, lockfile, release archive and `npm ls`; production `pi-agent-core`/`pi-ai` imports exist only in `adapters/runtime-pi`.
 - [ ] `.agents` decision records pass `npm run check:agents`, have one owner per non-trivial decision, and match the shipped paths and verification commands.
-- [ ] AgentHarness runtime contracts cover quiescent asynchronous teardown, required cancellation ownership, transcript-invisible retry/fallback, steering/follow-up during retry and compaction, abort queue audit, structured tool failures, current-turn context preservation, provider idle timeout, threshold compaction and context-overflow recovery.
-- [ ] Scripted wire-fault tests cover reset-before-headers, partial reset, missing `[DONE]`, malformed SSE, empty completion, request identity, and failed-partial isolation; fixed-seed state-machine properties remain reproducible.
+- [ ] AgentHarness runtime contracts cover quiescent asynchronous teardown, required cancellation ownership, transcript-invisible retry/fallback, provider `Retry-After`, steering/follow-up during retry and compaction, abort queue audit, structured tool failures, current-turn context preservation, provider idle timeout, threshold compaction and context-overflow recovery.
+- [ ] Scripted wire-fault tests cover reset-before-headers, partial reset, missing `[DONE]`, malformed SSE, empty completion, rate-limit windows, request identity, and failed-partial isolation; fixed-seed state-machine properties remain reproducible.
 - [ ] `npm run benchmark:compaction` reports full exact-fact literal recall within its checked bounded-cost threshold; its synthetic-corpus limitations remain documented.
 - [ ] API tests confirm unversioned paths return 404.
 - [ ] Core-managed Skill tests prove shared catalog CRUD, immutable revisions, multi-Skill Workspace references, TaskRun snapshot isolation, native `resources.skills`/`AgentHarness.skill()` invocation, and upload rejection for traversal, symlink, malformed ZIP, size, and tampering cases.
@@ -52,6 +52,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] The persistent Memory profile passes.
 - [ ] An absent PostgreSQL `memory` schema initializes as `tagent-memory/0.8`, version `1`, reopens successfully, and an unmarked/different schema is rejected.
 - [ ] Memory-disabled startup does not connect to PostgreSQL/Cold storage or start Memory/Learning workers.
+- [ ] Reindex vector writes atomically require the current unexpired lease and fencing token; a reclaimed worker cannot overwrite the newer worker's generation.
 - [ ] Backup/restore and reindex generation behavior were rehearsed for production configuration changes.
 
 ## Current schema and recovery gate

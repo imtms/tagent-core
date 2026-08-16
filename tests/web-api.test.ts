@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, subscribe } from "../apps/web-console/src/api.js";
+import { api, drainTranscriptView, subscribe } from "../apps/web-console/src/api.js";
 import { CoreClientError } from "@tagent/core-client";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -119,9 +119,45 @@ describe("Web API request headers", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(api.runs("session")).resolves.toEqual([consoleRunSummary()]);
-    await expect(api.transcriptView("run", 41)).resolves.toEqual([]);
+    await expect(api.transcriptView("run", 41)).resolves.toEqual({
+      items: [], pageInfo: { nextCursor: null, hasMore: false, limit: 200 },
+    });
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/operator/sessions/session/task-runs?limit=50", expect.any(Object));
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/task-runs/run/transcript?limit=200&after=41", expect.any(Object));
+  });
+
+  it("drains every Transcript page before advancing the consumed cursor", async () => {
+    const item = (sequence: number) => ({
+      sequence, attempt: 1, occurredAt: "2026-08-16T00:00:00.000Z" as const,
+      kind: "user" as const, text: `message ${sequence}`,
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({
+        items: Array.from({ length: 200 }, (_, index) => item(index + 1)),
+        pageInfo: { nextCursor: 200, hasMore: true, limit: 200 },
+      })), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({
+        items: [item(201)], pageInfo: { nextCursor: null, hasMore: false, limit: 200 },
+      })), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const transcript = await drainTranscriptView("run", 201);
+
+    expect(transcript.after).toBe(201);
+    expect(transcript.items.map((entry) => entry.seq)).toEqual(Array.from({ length: 201 }, (_, index) => index + 1));
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/task-runs/run/transcript?limit=200&after=0", expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/task-runs/run/transcript?limit=200&after=200", expect.any(Object));
+  });
+
+  it("consumes an empty terminal Transcript page created by tool hydration", async () => {
+    const first = { sequence: 1, attempt: 1, occurredAt: "2026-08-16T00:00:00.000Z", kind: "tool", toolCallId: "split", toolName: "read", arguments: {}, result: "done", isError: false, status: "completed" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ items: [first], pageInfo: { nextCursor: 1, hasMore: true, limit: 1 } })), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ items: [], pageInfo: { nextCursor: null, hasMore: false, limit: 1 } })), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(drainTranscriptView("run", 2, 0, 1)).resolves.toMatchObject({ after: 2, items: [expect.objectContaining({ seq: 1, toolCallId: "split" })] });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("renames a workspace through the Session API", async () => {
@@ -226,7 +262,8 @@ describe("Web API request headers", () => {
   it("hydrates a newly discovered active Run during Session polling", async () => {
     const source = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
     expect(source).toContain("active.id !== activeRunIdRef.current");
-    expect(source).toContain("const [hydrated, view, history] = await Promise.all([api.run(active.id), api.transcriptView(active.id), api.messages(targetSessionId)])");
+    expect(source).toContain("const [hydrated, history] = await Promise.all([api.run(active.id), api.messages(targetSessionId)])");
+    expect(source).toContain("const view = await drainTranscriptView(active.id, hydrated.transcriptCount)");
     expect(source).toContain("api.messages(targetSessionId)");
     expect(source).toContain("setSelectedRun(hydrated)");
     expect(source).toContain("setExpandedRunId(hydrated.id)");

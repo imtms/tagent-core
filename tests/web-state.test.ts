@@ -240,7 +240,7 @@ describe("Web workbench state model", () => {
     const lazyMarkdown = await readFile(new URL("../apps/web-console/src/LazyMarkdown.tsx", import.meta.url), "utf8");
     expect(message).toContain("<Markdown>{message.content}</Markdown>");
     expect(app).toContain("<details className={`tool-call");
-    expect(app).toContain("api.transcriptView");
+    expect(app).toContain("drainTranscriptView");
     expect(markdown).toContain("html: false");
     expect(markdown).toContain("dangerouslySetInnerHTML");
     expect(markdown).toContain('tokens[index].attrSet("target", "_blank")');
@@ -330,7 +330,8 @@ describe("Web workbench state model", () => {
     expect(source).toContain('if (event.type === "transcript.updated")');
     expect(source).toContain("if (replaceStreamingOnNextDeltaRef.current)");
     expect(source).toContain('if (event.type === "message.completed")');
-    expect(source).toContain("const [history, ended, view] = await Promise.all");
+    expect(source).toContain("const [history, ended] = await Promise.all");
+    expect(source).toContain("const view = await drainTranscriptView(endedRunId, ended.transcriptCount)");
     expect(source).not.toContain("earlier draft");
     expect(source).not.toContain("setProvisionalDrafts");
   });
@@ -385,8 +386,8 @@ describe("Web workbench state model", () => {
     expect(source).toContain("const refresh = transcriptRefreshTaskRef.current.catch(() => undefined).then(async () => {");
     expect(source).toContain("const after = transcriptAfterRef.current;");
     expect(source).toContain("if (transcriptRunIdRef.current !== runId) return;");
-    expect(source).toContain("const delta = await api.transcriptView(runId, after);");
-    expect(source).toContain("setTranscript((current) => mergeTranscriptItems(current, delta));");
+    expect(source).toContain("const delta = await drainTranscriptView(runId, throughSeq, after);");
+    expect(source).toContain("setTranscript((current) => mergeTranscriptItems(current, delta.items));");
     expect(source).toContain("await refreshTranscriptThrough(Number(event.data.transcriptSeq));");
     expect(source).not.toContain("if (event.type === \"transcript.updated\") setTranscript(await api.transcriptView(runId))");
   });
@@ -402,7 +403,7 @@ describe("Web workbench state model", () => {
     expect(source).toContain('document.addEventListener("visibilitychange", reconnect)');
     expect(source).toContain('window.addEventListener("online", reconnect)');
     expect(source).toContain('const shouldRefreshContent = currentRun.lastEventSeq !== activeRunRef.current?.lastEventSeq');
-    expect(source).toContain('refreshSelectedTranscript ? api.transcriptView(active.id) : Promise.resolve(undefined)');
+    expect(source).toContain('refreshSelectedTranscript ? drainTranscriptView(active.id, currentRun.transcriptCount) : Promise.resolve(undefined)');
     expect(source).toContain('setStreamGeneration((value) => value + 1)');
   });
 

@@ -132,7 +132,7 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
     const hasMore = entries.length > limit;
     const boundary = pageEntries.at(-1)?.seq ?? null;
     const view = transcript.listTranscriptView(taskRunId, { after, limit });
-    const items = boundary === null ? [] : view.filter((item) => item.seq <= boundary).map(mapTranscriptItem);
+    const items = boundary === null ? [] : view.filter((item) => item.seq > after && item.seq <= boundary).map(mapTranscriptItem);
     return encodeAbi(
       TranscriptResponseSchema,
       successEnvelope(request, { items, pageInfo: { nextCursor: hasMore ? boundary : null, hasMore, limit } }),

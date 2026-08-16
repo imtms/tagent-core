@@ -20,7 +20,7 @@ import {
 } from "@tagent/abi";
 import { createAdminApi } from "./admin-api";
 import { downloadArtifact, request } from "./api-transport";
-import type { EventConsumerCursor, GateProfile, Session, SessionInboxItem, TaskRun } from "./api-types";
+import type { EventConsumerCursor, GateProfile, Session, SessionInboxItem, TaskRun, TranscriptItem } from "./api-types";
 import { createGoalApi } from "./goal-api";
 import { createSkillApi } from "./skill-api";
 export { authenticatedCoreRequest, downloadArtifact } from "./api-transport";
@@ -196,6 +196,44 @@ async function updateSessionSettings(
   return request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, undefined, (payload) => sessionView(decodeAbi(SessionSchema, payload)));
 }
 
+export interface TranscriptViewPage {
+  items: TranscriptItem[];
+  pageInfo: { nextCursor: number | null; hasMore: boolean; limit: number };
+}
+
+async function transcriptViewPage(runId: string, after = 0, limit = 200): Promise<TranscriptViewPage> {
+  return request(`/api/v1/task-runs/${encodeURIComponent(runId)}/transcript?limit=${limit}&after=${after}`, undefined, (payload) => {
+    const data = decodeAbi(TranscriptResponseSchema.properties.data, payload);
+    return {
+      items: data.items.map((item) => ({
+        ...item, seq: item.sequence, index: item.partIndex, createdAt: Date.parse(item.occurredAt),
+      })),
+      pageInfo: data.pageInfo,
+    };
+  });
+}
+
+export async function drainTranscriptView(runId: string, through: number, after = 0, limit = 200) {
+  if (!Number.isSafeInteger(through) || through < 0 || !Number.isSafeInteger(after) || after < 0) {
+    throw new Error("Transcript cursors must be non-negative safe integers");
+  }
+  if (through <= after) return { items: [] as TranscriptItem[], after };
+  const items: TranscriptItem[] = [];
+  let cursor = after;
+  while (cursor < through) {
+    const page = await transcriptViewPage(runId, cursor, limit);
+    items.push(...page.items);
+    if (!page.pageInfo.hasMore) {
+      cursor = through;
+      break;
+    }
+    const nextCursor = page.pageInfo.nextCursor;
+    if (nextCursor === null || nextCursor <= cursor) throw new Error("Transcript pagination did not advance");
+    cursor = nextCursor;
+  }
+  return { items, after: cursor };
+}
+
 export const api = {
   ...createAdminApi(request),
   sessions: () => request("/api/v1/operator/sessions?limit=200", undefined, (payload) =>
@@ -215,10 +253,7 @@ export const api = {
     }))),
   run: loadTaskRun,
   contextManifests: (runId: string, limit = 20) => request(`/api/v1/console/task-runs/${runId}/context-manifests?limit=${limit}`, undefined, ConsoleDecode.contextManifests),
-  transcriptView: (runId: string, after?: number, limit = 200) => request(`/api/v1/task-runs/${encodeURIComponent(runId)}/transcript?limit=${limit}${after === undefined ? "" : `&after=${after}`}`, undefined, (payload) =>
-    decodeAbi(TranscriptResponseSchema.properties.data, payload).items.map((item) => ({
-      ...item, seq: item.sequence, index: item.partIndex, createdAt: Date.parse(item.occurredAt),
-    }))),
+  transcriptView: transcriptViewPage,
   artifactContent: (runId: string, artifactId: string) => request(`/api/v1/task-runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}/content`, undefined, (payload) => {
     const artifact = decodeAbi(ArtifactContentResponseSchema.properties.data, payload).artifact;
     return { id: artifact.id, title: artifact.title, kind: artifact.kind, uri: artifact.uri, content: artifact.content, format: artifact.format, bytes: artifact.bytes, source: artifact.source };

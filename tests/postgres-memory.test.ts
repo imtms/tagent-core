@@ -46,7 +46,7 @@ suite("PostgreSQL memory adapter", () => {
     try {
       await pool.query("BEGIN");
       await pool.query("UPDATE memory.topics SET current_cold_revision=NULL WHERE scope_type=$1 AND scope_id=$2", [scope.type, scope.id]);
-      for (const table of ["cold_revisions", "embeddings", "edges", "entities", "preferences", "records", "topics"]) {
+      for (const table of ["cold_revisions", "embeddings", "edges", "entities", "preferences", "records", "topics", "reindex_jobs", "embedding_generations"]) {
         await pool.query(`DELETE FROM memory.${table} WHERE scope_type=$1 AND scope_id=$2`, [scope.type, scope.id]);
       }
       await pool.query("DELETE FROM memory.capture_jobs WHERE request->'access'->'scopes' @> $1::jsonb", [JSON.stringify([scope])]);
@@ -135,5 +135,25 @@ suite("PostgreSQL memory adapter", () => {
     expect(ids).toHaveLength(existing.length + records.length);
     expect(new Set(ids).size).toBe(existing.length + records.length);
     expect(records.every((record) => ids.includes(record.id))).toBe(true);
+  });
+
+  it("atomically rejects PostgreSQL vector writes from a reclaimed reindex lease", async () => {
+    const generation = `fenced-${crypto.randomUUID()}`;
+    const job = await adapter.enqueueReindex(scope, generation);
+    const stale = await adapter.claimReindex("worker-a", 60_000);
+    expect(stale?.id).toBe(job.id);
+    await adapter.pool.query("UPDATE memory.reindex_jobs SET lease_until=$2 WHERE id=$1", [job.id, Date.now() - 1]);
+    const fresh = await adapter.claimReindex("worker-b", 60_000);
+    expect(fresh).toMatchObject({ id: job.id, fencingToken: stale!.fencingToken + 1 });
+    const document = {
+      refType: "warm_record" as const, refId: crypto.randomUUID(), scope, kind: "fact" as const,
+      text: "fresh", vector: [2], generation, contentHash: "fresh-hash",
+    };
+
+    await expect(adapter.upsertReindexVectors(job.id, "worker-b", fresh!.leaseToken!, fresh!.fencingToken, [document])).resolves.toBe(true);
+    await expect(adapter.upsertReindexVectors(job.id, "worker-a", stale!.leaseToken!, stale!.fencingToken, [{ ...document, text: "stale", vector: [1], contentHash: "stale-hash" }])).resolves.toBe(false);
+
+    const persisted = await adapter.pool.query("SELECT content_hash FROM memory.embeddings WHERE ref_type=$1 AND ref_id=$2 AND generation=$3", [document.refType, document.refId, generation]);
+    expect(persisted.rows).toEqual([{ content_hash: "fresh-hash" }]);
   });
 });

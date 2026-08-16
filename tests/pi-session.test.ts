@@ -24,6 +24,8 @@ describe("Pi AgentHarness integration", () => {
     expect(providerRetryDelayMs(12, 1_200_000, 86_400_000)).toBe(1_199_999);
     expect(providerRetryDelayMs(23)).toBe(2_147_483_647);
     expect(providerRetryDelayMs(1_000, 1_200_000, 86_400_000)).toBe(1_199_999);
+    expect(providerRetryDelayMs(1, 10_000, 10_000, 5_000)).toBe(5_000);
+    expect(providerRetryDelayMs(1, 1_200, 10_000, 5_000)).toBe(1_199);
   });
   function fauxModels(faux: ReturnType<typeof fauxProvider>) {
     const models = createModels();
@@ -58,14 +60,14 @@ describe("Pi AgentHarness integration", () => {
     return { ...options, token, capabilities: host.capabilities, eventSink, requestEnvelopes: corePersistence(store).requestEnvelopes };
   }
 
-  async function setup(responses: Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0], tokensPerSecond = 10_000) {
+  async function setup(responses: Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0], tokensPerSecond = 10_000, runtimeOverrides: Partial<PiRuntimeOptions> = {}) {
     const faux = fauxProvider({ models: [{ id: "faux-session", contextWindow: 32_000, maxTokens: 2_000 }], tokensPerSecond });
     faux.setResponses(responses);
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "sdk session");
     const eventProbe = new RunEventProbe();
-    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [], providerMaxRetries: 1 }, eventProbe.observe));
+    const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [], providerMaxRetries: 1, ...runtimeOverrides }, eventProbe.observe));
     return { faux, store, run, runtime, eventProbe };
   }
 
@@ -293,6 +295,19 @@ describe("Pi AgentHarness integration", () => {
     ]);
     expect(retryContext?.messages.filter((message) => message.role === "assistant" && message.stopReason === "error")).toHaveLength(0);
     expect(JSON.stringify(retryContext?.messages)).not.toContain("TAgent internal continuation");
+    await runtime.dispose();
+    store.close();
+  });
+
+  it("does not retry before a provider window that exceeds the Attempt watchdog budget", async () => {
+    const { faux, store, run, runtime } = await setup([
+      fauxAssistantMessage([], { stopReason: "error", errorMessage: "429 rate limit exceeded; Retry-After: 5" }),
+      fauxAssistantMessage("must not run inside this Attempt"),
+    ], 10_000, { runTimeoutMs: 1_200, runHardTimeoutMs: 10_000 });
+    await runtime.prompt("defer an oversized provider window");
+    expect(faux.state.callCount).toBe(1);
+    expect(runtime.getProviderFailure()).toEqual({ kind: "rate_limit", retryable: true, retryAfterMs: 5_000 });
+    expect(store.listEvents(run.id).some((event) => event.type === "provider.retry")).toBe(false);
     await runtime.dispose();
     store.close();
   });
@@ -1142,6 +1157,42 @@ describe("Pi AgentHarness integration", () => {
     ];
     expect(seededWireFaultScript(42, candidates, 12)).toEqual(seededWireFaultScript(42, candidates, 12));
     expect(seededWireFaultScript(42, candidates, 12)).not.toEqual(seededWireFaultScript(43, candidates, 12));
+  });
+
+  it("honors Retry-After for an inline provider retry", async () => {
+    const wire = new WireFaultServer([
+      { kind: "rate_limit", retryAfterSeconds: 1.2 },
+      { kind: "success", content: "rate limit recovered" },
+    ]);
+    const baseUrl = await wire.start();
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "provider Retry-After");
+    const model: Model<"openai-completions"> = {
+      id: "wire-model", name: "wire-model", api: "openai-completions", provider: "openai-compatible",
+      baseUrl, reasoning: false, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 2_000,
+    };
+    const runtime = new PiRuntime(runtimeSpec(store, run, {
+      workspace: process.cwd(), systemPrompt: "Controlled prompt", model,
+      credential: testCredential("wire-test-key"), initialMessages: [],
+      providerMaxRetries: 1, providerTimeoutMs: 5_000, runTimeoutMs: 5_000, runHardTimeoutMs: 10_000,
+    }));
+    try {
+      await runtime.prompt("respect the provider window");
+      expect(wire.requests).toHaveLength(2);
+      expect(wire.requests[1].receivedAt - wire.requests[0].receivedAt).toBeGreaterThanOrEqual(1_150);
+      expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "provider.failure", data: expect.objectContaining({ kind: "rate_limit", retryAfterMs: 1_200 }) }),
+        expect.objectContaining({ type: "provider.retry", data: expect.objectContaining({ delayMs: 1_200 }) }),
+      ]));
+      expect(runtime.getMessages().at(-1)).toMatchObject({
+        role: "assistant", content: [{ type: "text", text: "rate limit recovered" }],
+      });
+    } finally {
+      await runtime.dispose();
+      store.close();
+      await wire.close();
+    }
   });
 
   it.each([

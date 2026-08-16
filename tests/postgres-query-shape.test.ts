@@ -255,4 +255,24 @@ describe("PostgreSQL memory query shape", () => {
     expect(counter.calls.every((call) => call.text.includes("jsonb_to_recordset"))).toBe(true);
     expect(counter.calls.every((call) => typeof call.values?.[0] === "string" && JSON.parse(call.values[0] as string).length === 1_000)).toBe(true);
   });
+
+  it("guards reindex vector upserts with the current unexpired lease in one statement", async () => {
+    const counter = new QueryCounter();
+    const adapter = adapterWith(counter);
+    const documents: VectorDocument[] = [{
+      refType: "warm_record", refId: "record-1", scope, kind: "fact", text: "fresh",
+      vector: [1, 2], generation: "g1", contentHash: "fresh-hash",
+    }];
+
+    await expect(adapter.upsertReindexVectors("job-1", "worker-a", "lease-token", 7, documents)).resolves.toBe(false);
+
+    expect(counter.calls).toHaveLength(1);
+    const [call] = counter.calls;
+    expect(call.text).toContain("lease_until>=floor(extract(epoch from clock_timestamp())*1000)::bigint");
+    expect(call.text).toContain("FOR UPDATE");
+    expect(call.text).toContain("FROM input CROSS JOIN valid");
+    expect(call.values?.slice(0, 4)).toEqual(["job-1", "worker-a", "lease-token", 7]);
+    expect(JSON.parse(call.values?.[4] as string)).toEqual([expect.objectContaining({ generation: "g1", content_hash: "fresh-hash" })]);
+    expectValidParameters(call);
+  });
 });

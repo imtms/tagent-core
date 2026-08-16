@@ -422,6 +422,37 @@ describe("v1 API contracts", () => {
     expect(second).toMatchObject({ items: [{ sequence: 3, text: "three" }], pageInfo: { nextCursor: null, hasMore: false, limit: 2 } });
   });
 
+  it("keeps hydrated tool context behind the exclusive Transcript cursor", async () => {
+    const { app, store } = await fixture();
+    const run = store.createRun(store.createSession().id, "exclusive tool transcript cursor");
+    store.appendTranscript(run.id, 1, {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "split-tool", name: "read", arguments: { path: "a.txt" } }],
+      api: "openai-completions", provider: "test", model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "toolUse", timestamp: 1,
+    });
+    store.appendTranscript(run.id, 1, {
+      role: "toolResult", toolCallId: "split-tool", toolName: "read",
+      content: [{ type: "text", text: "file contents" }], details: {}, isError: false, timestamp: 2,
+    });
+
+    const first = decodeAbi(TranscriptResponseSchema, (await app.inject({
+      method: "GET", url: `/api/v1/task-runs/${run.id}/transcript?after=0&limit=1`,
+    })).json()).data;
+    expect(first).toMatchObject({
+      items: [expect.objectContaining({ sequence: 1, kind: "tool", toolCallId: "split-tool" })],
+      pageInfo: { nextCursor: 1, hasMore: true, limit: 1 },
+    });
+
+    const second = decodeAbi(TranscriptResponseSchema, (await app.inject({
+      method: "GET", url: `/api/v1/task-runs/${run.id}/transcript?after=1&limit=1`,
+    })).json()).data;
+    expect(second.items).toEqual([]);
+    expect(second.items.every((item) => item.sequence > 1)).toBe(true);
+    expect(second.pageInfo).toEqual({ nextCursor: null, hasMore: false, limit: 1 });
+  });
+
   it("returns the complete durable execution trace through the unified transcript API", async () => {
     const { app, store } = await fixture();
     const run = store.createRun(store.createSession().id, "console transcript visibility");
