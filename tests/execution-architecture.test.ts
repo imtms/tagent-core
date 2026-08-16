@@ -113,7 +113,6 @@ describe("execution architecture boundaries", () => {
     const coordinator = sourceText("packages/execution/src/application/execution-coordinator.ts");
     expect(coordinator).toContain("constructor(private readonly services: ExecutionServices)");
     expect(coordinator).not.toContain("AdmissionCoordinator");
-    expect(coordinator).not.toContain("LearningApplication");
     expect(sourceText("apps/core-service/src/application/core-application-coordinator.ts")).toContain("CoreApplicationServices");
   });
 
@@ -319,11 +318,11 @@ describe("execution architecture boundaries", () => {
   });
 
   it("keeps composition and global facades outside Execution implementation", () => {
-    expect(sourceText("packages/execution/src/application/execution-services.ts")).not.toMatch(/Admission|Learning|ServiceDependencies/);
+    expect(sourceText("packages/execution/src/application/execution-services.ts")).not.toMatch(/Admission|ServiceDependencies/);
     const composition = sourceText("apps/core-service/src/composition/execution-composition.ts");
     expect(composition).not.toMatch(/mutableServices|as\s+ExecutionServices/);
     expect(composition.match(/createOneShotPort</g)?.length).toBe(6);
-    for (const forbidden of ["SessionInputRouter", "TaskRunSupervisor", "WorkflowLearningService", "LearningService", "MemoryFacade", "@earendil-works/pi-"]) {
+    for (const forbidden of ["SessionInputRouter", "TaskRunSupervisor", "MemoryFacade", "@earendil-works/pi-"]) {
       expect(sourceText("packages/execution/src/application/execution-state.ts")).not.toContain(forbidden);
     }
   });

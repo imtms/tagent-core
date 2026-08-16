@@ -179,7 +179,6 @@ describe("SqlitePersistence", () => {
       { seq: 2, type: "run.failed" },
     ]);
     expect(adapter.checkpoints.getCheckpoint(run.id)).toMatchObject({ active: false });
-    expect(store.db.prepare("SELECT COUNT(*) count FROM integration_outbox").get()).toEqual({ count: 0 });
   });
 
   it("preserves consumer generations and ACK validation", () => {

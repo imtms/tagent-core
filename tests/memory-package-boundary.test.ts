@@ -15,7 +15,6 @@ const forbiddenDomains = new Set([
   "core",
   "execution",
   "governance",
-  "learning",
   "persistence",
   "runtime",
   "store",

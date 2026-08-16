@@ -5,7 +5,7 @@ Kind: architecture
 
 ## Problem
 
-Core is a persistent execution product with immutable release activation and rollback, but SQLite accepts only an empty database or one exact `sqlite_master` snapshot. Any structural change therefore requires discarding durable TaskRuns, receipts, goals, skills, and learning state. The single generated schema string contains almost ninety tables and does not preserve an executable upgrade history or a safe compatibility decision for Host rollback.
+Core is a persistent execution product with immutable release activation and rollback, but SQLite accepts only an empty database or one exact `sqlite_master` snapshot. Any structural change therefore requires discarding durable TaskRuns, receipts, goals, skills, and other persisted state. The single generated schema string contains almost ninety tables and does not preserve an executable upgrade history or a safe compatibility decision for Host rollback.
 
 ## Decision
 

@@ -7,7 +7,7 @@ The later evolvable-current-state decision supersedes only this decision's fresh
 
 ## Problem
 
-Core is a new system with no deployed compatibility obligation, but the repository retained historical HTTP and DTO aliases, aggregate compatibility clients, schema-30-through-47 migrations, legacy/canonical dual authorities, Learning dual-write and shadow cutover machinery, and tests and runbooks whose only purpose was upgrading or rolling back older builds. Those paths enlarged the security and recovery surface, obscured the current authority, and made a fresh database execute historical transformations before it could start.
+Core retained historical HTTP and DTO aliases, aggregate compatibility clients, schema-30-through-47 migrations, legacy/canonical dual authorities, shadow cutover machinery, and tests and runbooks whose only purpose was upgrading or rolling back older builds. Those paths enlarged the security and recovery surface, obscured the current authority, and made a fresh database execute historical transformations before it could start.
 
 ## Decision
 
@@ -15,9 +15,9 @@ Treat the current public feature set as the only supported application system. C
 
 Persistent Memory initializes only an absent PostgreSQL `memory` schema, records `tagent-memory/0.8` with schema version `1`, and rejects an existing unmarked or differently identified schema. Its current schema is expressed directly without column-upgrade statements.
 
-Publish one strict current API and SDK. Workflow lifecycle, approved proposal, canary, and feature-policy effects use the Workflow Governance repository. Runtime completion, blocking, and failure use the fenced TaskRun transition repository, while cancellation uses the Attempt repository. Learning stores observations, proposals, approval preparation, application receipts, and feedback without retaining shadow Governance mutations; binding mode changes only with an application receipt. Session Inbox collection mutations use the receipt-backed capability-profile path without a parallel application facade. Learning delivery uses `integration_outbox` with the single `learning-projection-v1` consumer. Historical migrations, compatibility fields and decoders, aggregate client helpers, authority switches, dual writes, shadow comparison, reconciliation, cutover, tests-only terminal shortcuts, and upgrade-only recovery paths are not part of the maintained system.
+Publish one strict current API and SDK. Runtime completion, blocking, and failure use the fenced TaskRun transition repository, while cancellation uses the Attempt repository. Session Inbox collection mutations use the receipt-backed capability-profile path without a parallel application facade. Historical application authorities, compatibility fields and decoders, aggregate client helpers, authority switches, dual writes, shadow comparison, reconciliation, cutover, tests-only terminal shortcuts, and upgrade-only recovery paths are not part of the maintained system.
 
-Preserve the current Session, TaskRun, Gateway profile, Skills, Memory, Learning, Workflow, Autonomy, Web, idempotency, recovery, authorization, redaction, pagination, cancellation, and release capabilities. Current implementations use responsibility-based names rather than migration-era `legacy` or `canonical` names.
+Preserve the current Session, TaskRun, Workspace Goal, Gateway profile, Skills, Memory, Web, idempotency, recovery, authorization, redaction, pagination, cancellation, and release capabilities. Current implementations use responsibility-based names rather than migration-era `legacy` or `canonical` names.
 
 ## Alternatives considered
 
@@ -36,7 +36,7 @@ Preserve the current Session, TaskRun, Gateway profile, Skills, Memory, Learning
 - Production-only and complete-tree `npm audit` runs at the high threshold both reported zero vulnerabilities.
 - `npm run benchmark:compaction` passed its deterministic bounded-recall thresholds.
 - `git diff --check` passed, and repository searches found no maintained previous-release version reference, numbered migration schema, dual-authority symbol, or old-table negative assertion.
-- Architecture searches and tests confirm that production code exposes no direct TaskRun terminal shortcut, Learning settings writer, Workflow Learning governance mutation shadow, standalone binding-mode setter, or non-profile Session Inbox collection facade. Tests drive terminal fixtures through the same TaskRun/Attempt authority as production.
+- Architecture searches and tests confirm that production code exposes no direct TaskRun terminal shortcut or non-profile Session Inbox collection facade. Tests drive terminal fixtures through the same TaskRun/Attempt authority as production.
 
 The immutable Core/Web archive build requires Linux x64, Node 24.18.1, and ABI 137 by construction. The tag-triggered release workflow is the authoritative environment for that platform-specific gate.
 

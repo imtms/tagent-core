@@ -147,7 +147,7 @@ describe("Pi runtime adapter workspace package", () => {
         }
       }
       const text = readFileSync(path.join(repoRoot, relativePath), "utf8");
-      if (/\b(?:Admission|Governance|MemoryFacade|LearningService|Store|ToolCapabilityApplicationPort)\b|better-sqlite3|fastify|persistence\/sqlite/.test(text)) {
+      if (/\b(?:Admission|Governance|MemoryFacade|Store|ToolCapabilityApplicationPort)\b|better-sqlite3|fastify|persistence\/sqlite/.test(text)) {
         violations.push(`${relativePath} contains a forbidden concrete dependency`);
       }
     }

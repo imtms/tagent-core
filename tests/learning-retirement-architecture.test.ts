@@ -34,6 +34,8 @@ describe("retired Learning architecture", () => {
       const source = readFileSync(path.join(root, filename), "utf8");
       expect(source, filename).not.toMatch(/TAGENT_LEARNING|@tagent\/learning|admin\.(?:learning|workflow|autonomy)\.v1/);
       expect(source, filename).not.toMatch(/\/api\/v1\/(?:admin\/(?:learning|workflows|autonomy)|internal\/workflows)/);
+      expect(source, filename).not.toMatch(/\b(?:LearningApplication|LearningFeatureState|LearningService|WorkflowLearningService)\b/);
+      expect(source, filename).not.toMatch(/\b(?:autonomy_(?:approval_requests|audit_events)|communication_profiles|experience_observations|integration_outbox|learning_events|run_learning_policies|semantic_learning_jobs|workflow_(?:bindings|definitions|distillation_jobs|evaluations|promotions|revisions))\b/);
     }
 
     expect(readFileSync(path.join(root, ".env.example"), "utf8")).not.toContain("TAGENT_LEARNING");

@@ -82,7 +82,7 @@ export interface SubmissionQueue {
   getSessionSubmission(sessionId: SessionId, requestId: string): Submission | undefined;
   recordSubmissionAudit(item: Submission, audit: SubmissionAuditInput): SubmissionAuditReceipt;
   getSubmissionAudit(sessionId: SessionId, requestId: string): SubmissionAuditReceipt | undefined;
-  /** Stable owner identity for user-level Memory/Learning; anonymous Sessions may not have one. */
+  /** Stable owner identity for user-level Memory; anonymous Sessions may not have one. */
   getSessionPrincipalId(sessionId: SessionId): string | undefined;
   listSessionInbox(sessionId: SessionId, includeTerminal?: boolean): Submission[];
   routeSessionInboxItem(

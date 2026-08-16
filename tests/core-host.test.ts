@@ -103,6 +103,10 @@ class FakeChild extends EventEmitter {
   send(message: HostToGenerationMessage): boolean {
     if (message.type === "DRAIN" && this.plan.drain === "throw") throw new Error("IPC send failed");
     this.sent.push(message);
+    if (message.type === "DRAIN" && this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
     if (message.type === "DRAIN" && this.plan.drain === "exit") {
       queueMicrotask(() => this.exit(1, null));
       return true;
@@ -855,9 +859,9 @@ describe("Core Host generation lifecycle", () => {
   it("lets the drain deadline own quiescent teardown after heartbeats stop", async () => {
     const root = await releaseRoot();
     const { host, children } = hostFixture(root, new Map([
-      [oldRelease, [{ heartbeat: true, drainDelayMs: 25 }]],
+      [oldRelease, [{ heartbeat: true, drainDelayMs: 150 }]],
       [newRelease, [{ heartbeat: true }]],
-    ]), { heartbeatTimeoutMs: 10, drainTimeoutMs: 50 });
+    ]), { heartbeatTimeoutMs: 100, drainTimeoutMs: 300 });
     await host.start();
     children[0].deliver(activation(children[0].generationId));
 

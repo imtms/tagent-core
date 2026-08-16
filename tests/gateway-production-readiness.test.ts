@@ -463,7 +463,7 @@ function runChild(
 }
 
 describe("Gateway production readiness", () => {
-  it("preserves a scoped production principal while retired internal Learning routes stay unavailable", async () => {
+  it("preserves a scoped production principal while unknown internal routes stay unavailable", async () => {
     const token = "gateway-production-internal-token";
     const config = loadConfig({
       TAGENT_API_BASE: "https://models.internal/v1",
@@ -498,7 +498,7 @@ describe("Gateway production readiness", () => {
       const headers = { authorization: `Bearer ${token}`, "x-request-id": "gateway-request-1" };
       const retired = await app.inject({
         method: "POST",
-        url: "/api/v1/internal/workflows/workflow-1/evaluate",
+        url: "/api/v1/internal/not-mounted",
         headers,
         payload: {},
       });
@@ -887,7 +887,7 @@ describe("Gateway production readiness", () => {
       "const store=new Store(process.env.TAGENT_DB);",
       'const schemaVersion=store.getSchemaVersion();',
       'const schemaId=store.db.prepare("SELECT schema_id AS schemaId FROM core_schema WHERE id=1").get().schemaId;',
-      'const objects=store.db.prepare("SELECT name FROM sqlite_master WHERE name IN (\'attempts\',\'approval_receipts\',\'idx_continuations_due\',\'idx_operations_attempt_created\',\'idx_runs_operator_session_created\',\'idx_runs_operator_session_updated\',\'idx_sessions_operator_created\',\'integration_outbox\',\'integration_consumer_delivery\',\'learning_projection_checkpoint\',\'effect_receipts\') ORDER BY name").all().map((row)=>row.name);',
+      'const objects=store.db.prepare("SELECT name FROM sqlite_master WHERE name IN (\'attempts\',\'approval_receipts\',\'task_run_command_receipts\',\'workspace_goal_operation_receipts\',\'profile_operation_receipts\',\'idx_continuations_due\',\'idx_operations_attempt_created\',\'idx_runs_operator_session_created\',\'idx_runs_operator_session_updated\',\'idx_sessions_operator_created\') ORDER BY name").all().map((row)=>row.name);',
       'const hasContinuationNotBefore=store.db.prepare("PRAGMA table_info(run_continuations)").all().some((row)=>row.name===\'not_before\');',
       "store.close();",
       "process.stdout.write(JSON.stringify({schemaId,schemaVersion,objects,hasContinuationNotBefore}));",
@@ -918,15 +918,14 @@ describe("Gateway production readiness", () => {
       objects: [
         "approval_receipts",
         "attempts",
-        "effect_receipts",
         "idx_continuations_due",
         "idx_operations_attempt_created",
         "idx_runs_operator_session_created",
         "idx_runs_operator_session_updated",
         "idx_sessions_operator_created",
-        "integration_consumer_delivery",
-        "integration_outbox",
-        "learning_projection_checkpoint",
+        "profile_operation_receipts",
+        "task_run_command_receipts",
+        "workspace_goal_operation_receipts",
       ],
       hasContinuationNotBefore: true,
     };

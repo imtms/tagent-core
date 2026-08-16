@@ -43,17 +43,17 @@ import { Store } from "@tagent/persistence-sqlite/store";
 const store = new Store(process.env.TAGENT_DB);
 const schemaId = store.db.prepare("SELECT schema_id AS schemaId FROM core_schema WHERE id=1").get().schemaId;
 const schemaVersion = store.getSchemaVersion();
-const learningTables = ["integration_outbox", "integration_consumer_delivery", "learning_projection_checkpoint", "effect_receipts"]
+const activeTables = ["attempts", "approval_receipts", "task_run_command_receipts", "workspace_goal_operation_receipts", "profile_operation_receipts"]
   .every((name) => store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
 store.close();
-process.stdout.write(JSON.stringify({ schemaId, schemaVersion, learningTables }));
+process.stdout.write(JSON.stringify({ schemaId, schemaVersion, activeTables }));
 NODE
 ```
 
 Both opens must exit `0` and return:
 
 ```json
-{"schemaId":"tagent-core/0.8","schemaVersion":2,"learningTables":true}
+{"schemaId":"tagent-core/0.8","schemaVersion":2,"activeTables":true}
 ```
 
 The second open proves idempotent migration and exact current-shape validation. A different marker, unsupported revision, journal mismatch, or any `sqlite_master` drift blocks deployment and requires recovery from backup.
@@ -81,7 +81,7 @@ Exit codes:
 | `1` | Probe ran and one or more gates failed; `reasons` is authoritative. |
 | `2` | Probe could not run, for example because the database is missing or unreadable. |
 
-The current output has `probeVersion: 6`, `schemaId: "tagent-core/0.8"`, and `schemaVersion: 2`. The probe reads the actual SQLite `PRAGMA user_version`; important fields are:
+The current output has `probeVersion: 7`, `schemaId: "tagent-core/0.8"`, and `schemaVersion: 2`. The probe reads the actual SQLite `PRAGMA user_version`; important fields are:
 
 | Field | Meaning |
 | --- | --- |
@@ -120,10 +120,6 @@ FROM runs AS r
 LEFT JOIN event_consumers AS ec
   ON ec.run_id = r.id AND ec.consumer_id = 'gateway-production'
 ORDER BY r.updated_at, r.id;
-
-SELECT consumer, watermark, generation, updated_at
-FROM learning_projection_checkpoint
-ORDER BY consumer;
 
 SELECT status, COUNT(*) AS count, MIN(updated_at) AS oldest_updated_at
 FROM task_run_command_receipts

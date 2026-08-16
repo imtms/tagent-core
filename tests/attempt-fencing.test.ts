@@ -51,7 +51,6 @@ describe("Attempt terminal fencing", () => {
       (SELECT status FROM candidate_results WHERE id=?) candidateStatus,
       (SELECT status FROM runs WHERE id=?) runStatus,
       (SELECT status FROM supervisor_decisions WHERE id='decision-1') decisionStatus,
-      (SELECT COUNT(*) FROM integration_outbox) outbox,
       (SELECT COUNT(*) FROM messages WHERE role='assistant') assistantMessages`)
       .get(attempt.id, attempt.id, candidate.id, run.id);
     const baseline = snapshot();
@@ -84,7 +83,6 @@ describe("Attempt terminal fencing", () => {
     expect(store.listEvents(run.id).at(-1)).toMatchObject({ type: "run.completed", seq: 1 });
     expect(adapter.supervisorDecisions.listSupervisorDecisions(run.id)).toMatchObject([{ id: "decision-1", status: "executed" }]);
     expect(adapter.sessions.listMessages(session.id)).toMatchObject([{ role: "assistant", content: "verified result" }]);
-    expect(store.db.prepare("SELECT COUNT(*) count FROM integration_outbox").get()).toEqual({ count: 0 });
   });
 
   it("keeps Attempt mutations behind the stale-writer guard", () => {
@@ -212,9 +210,8 @@ describe("Attempt terminal fencing", () => {
       (SELECT version FROM attempts WHERE id=?) attemptVersion,
       (SELECT released_at FROM execution_leases WHERE attempt_id=?) releasedAt,
       (SELECT COUNT(*) FROM run_events WHERE run_id=?) events,
-      (SELECT COUNT(*) FROM attempt_transition_audit WHERE attempt_id=?) audit,
-      (SELECT COUNT(*) FROM integration_outbox WHERE aggregate_id=?) outbox`)
-      .get(run.id, attempt.id, attempt.id, attempt.id, run.id, attempt.id, run.id);
+      (SELECT COUNT(*) FROM attempt_transition_audit WHERE attempt_id=?) audit`)
+      .get(run.id, attempt.id, attempt.id, attempt.id, run.id, attempt.id);
     const baseline = snapshot();
     const recover = (overrides: Record<string, unknown> = {}) => adapter.attempts.recoverInterruptedAttempt({
       attemptId: attempt.id,

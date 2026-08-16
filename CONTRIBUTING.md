@@ -15,7 +15,7 @@ Place code in the workspace that owns the behavior:
 
 - `packages/abi`: versioned wire contracts and runtime codecs;
 - `packages/core-client`: typed Core transport client;
-- `packages/{admission,execution,governance,memory,learning}`: domain and application policy;
+- `packages/{admission,execution,governance,memory}`: domain and application policy;
 - `adapters/{http-fastify,persistence-sqlite,runtime-pi,workspace-local}`: infrastructure implementations;
 - `apps/core-service`: composition and lifecycle only;
 - `apps/web-console`: browser application only.

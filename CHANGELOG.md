@@ -45,20 +45,15 @@
 
 ## [0.8.4] - 2026-08-15
 
-### Single mutation authorities
-
-- Removed the duplicate Workflow lifecycle, approved-proposal, canary, approval-settlement, and feature-policy mutation implementations from the Learning repository; Workflow Governance remains the only authority for those effects.
-- Removed standalone Learning settings and Workflow binding-mode writers. Runtime settings now flow only through governed feature-policy commits, while binding mode changes only with a durable Workflow application receipt.
-
 ### TaskRun and Session Inbox boundaries
 
 - Removed the tests-only `Store.finalizeRun`, `Store.blockRun`, and `Store.completeWithGate` shortcuts. Test fixtures now exercise the same fenced TaskRun transition or Attempt cancellation authority as production.
 - Removed the unmounted, unreceipted Session Inbox collection facade and narrowed application/persistence ports to the mounted `operator.session-inbox.v1` profile mutations with idempotency and collection-revision enforcement.
-- Retained the negative architecture tests that prevent direct TaskRun, Learning settings, Workflow Governance, and Inbox mutation bypasses from being reintroduced.
+- Retained the negative architecture tests that prevent direct TaskRun and Inbox mutation bypasses from being reintroduced.
 
 ### Verification and compatibility
 
-- Updated the modular-monolith, Learning, API, Gateway compatibility, deployment, release, and owning decision-record documentation for the single-authority design.
+- Updated the modular-monolith, API, Gateway compatibility, deployment, release, and owning decision-record documentation for the single-authority design.
 - This patch preserves the current `tagent-core/0.8` and `tagent-memory/0.8` schema identities and public feature set. Deploy the matching `0.8.4` Core, Web Console, ABI, and Core Client artifacts against fresh persistence; older release tuples remain unsupported.
 
 ## [0.8.2] - 2026-08-15
@@ -71,9 +66,9 @@
 
 ### Snapshot and large-collection pagination
 
-- Replaced mutable Skill, Workspace Skill, Workflow, and Admin Memory cursor order with immutable creation/binding keys so updating an unread member cannot move it past an existing snapshot cursor.
-- Added storage-backed `limit + 1` pagination for Memory records in both in-memory and PostgreSQL adapters and for SQLite Autonomy approvals, removing the profile routes' silent 500-member truncation.
-- Added regressions for configuration-changing restart replay, advanced-state exact replay, 256-character Memory scopes, update-between-pages traversal, and complete 501-member Memory/Autonomy traversal.
+- Replaced mutable Skill, Workspace Skill, and Admin Memory cursor order with immutable creation/binding keys so updating an unread member cannot move it past an existing snapshot cursor.
+- Added storage-backed `limit + 1` pagination for Memory records in both in-memory and PostgreSQL adapters, removing the profile routes' silent 500-member truncation.
+- Added regressions for configuration-changing restart replay, advanced-state exact replay, 256-character Memory scopes, update-between-pages traversal, and complete 501-member Memory traversal.
 
 ### Compatibility and deployment
 
@@ -86,7 +81,7 @@
 
 - Removed the `AgentService` compatibility facade and its persistence-port aliases; Core composition, tests, and consumers now use `CoreApplicationCoordinator` through the single `createCoreApplication` factory.
 - Removed the unused Submission `modelId` field from the Channel, application, and execution contracts. Model selection remains owned by current Session Settings.
-- Deleted dead transition, workspace, metadata, and Learning integration helpers; narrowed internal-only exports and retained only current HTTP, lifecycle, persistence, and runtime entry points.
+- Deleted dead transition, workspace, metadata, and integration helpers; narrowed internal-only exports and retained only current HTTP, lifecycle, persistence, and runtime entry points.
 
 ### Fresh persistence and maintenance
 
@@ -104,27 +99,26 @@
 ### One current Core system
 
 - Replaced the schema-30-through-47 migration chain with direct creation and strict structural validation of the single `tagent-core/0.8` SQLite schema, exposed to clients as persistence schema version `1`.
-- Removed migration ledgers, upgrade repair paths, compatibility aliases and decoders, aggregate helpers, and the Approval, Attempt, and Learning dual-authority, shadow, reconciliation, and cutover machinery.
-- Consolidated Learning delivery on the durable `integration_outbox` with the single `learning-projection-v1` consumer while retaining idempotent recovery, fencing, authorization, redaction, pagination, cancellation, and durable receipts.
+- Removed migration ledgers, upgrade repair paths, compatibility aliases and decoders, aggregate helpers, and the Approval and Attempt dual-authority, shadow, reconciliation, and cutover machinery.
 
 ### Gateway, operator, and maintainability
 
 - Completed the current Gateway capability-profile, operator inbox/read, command receipt, delegated audit, pagination, conditional mutation, and readiness contracts across the ABI, Core Client, HTTP adapter, persistence, and executable probes.
 - Simplified the Console HTTP surface and split the Web Console API transport, types, event stream, and administration modules without changing the current user-visible feature set.
-- Removed historical migration-only tests, obsolete routes and actions, stale recovery terminology, and upgrade documentation; synchronized current persistence, Gateway, Learning, security, architecture, deployment, and release documentation.
+- Removed historical migration-only tests, obsolete routes and actions, stale recovery terminology, and upgrade documentation; synchronized current persistence, Gateway, security, architecture, deployment, and release documentation.
 
 ### Breaking compatibility and deployment
 
 - This release intentionally supports only newly created 0.8 databases and matching 0.8 ABI/Core Client consumers. Existing databases, databases without the 0.8 schema marker, structurally drifted databases, and older Gateway or SDK clients are rejected rather than upgraded.
 - Deploy by creating an empty database and using the matching 0.8.0 Core, Web Console, ABI, and Core Client artifacts. There is no supported in-place database upgrade or rollback to an older binary.
-- Synchronized Core, Web Console, all 13 private workspace manifests, internal dependency pins, fixtures, tests, documentation, and the lockfile at 0.8.0. This release does not change token budgets, pricing, cost controls, or usage accounting.
+- Synchronized Core, Web Console, private workspace manifests, internal dependency pins, fixtures, tests, documentation, and the lockfile at 0.8.0. This release does not change token budgets, pricing, cost controls, or usage accounting.
 
 ## [0.7.0] - 2026-08-15
 
 ### Gateway capability profiles
 
-- Added the independent `GET /api/v1/capability-profiles` registry and detail documents for Session Settings, Session Inbox, Context Manifest, Skills, Memory, Learning, Workflow, and Autonomy without changing the closed legacy `/api/v1/capabilities` shape.
-- Added ABI-owned DTOs and canonical fixtures, typed Core Client methods, bounded opaque-cursor reads, resource-scoped authorization, conditional exact-replay mutations, durable operation receipt lookup, redacted public projections, and separated Core/delegated audit identity for all eight profiles.
+- Added the independent `GET /api/v1/capability-profiles` registry and detail documents without changing the closed legacy `/api/v1/capabilities` shape.
+- Added ABI-owned DTOs and canonical fixtures, typed Core Client methods, bounded opaque-cursor reads, resource-scoped authorization, conditional exact-replay mutations, durable operation receipt lookup, redacted public projections, and separated Core/delegated audit identity for the profile registry.
 - Added SQLite schema 47 with durable profile revisions, mutation and operation receipts, audit events, Inbox/catalog collection revisions, and idempotent fail-closed migration validation.
 - Added a real Core provider contract harness and independent `@tagent/abi` and `@tagent/core-client` release tarballs containing JavaScript, declarations, JS/declaration source maps, portable SHA-256 files, and isolated install smoke tests.
 
@@ -132,7 +126,7 @@
 
 - Removed stale current-release, schema, test-fixture, and two-artifact documentation left from the 0.6 line while retaining the legacy v1 capabilities shape, first-party Console routes, and historical migration tests required for compatibility and upgrade coverage.
 - Extended the production readiness probe, CORS contract, compatibility matrix, deployment/upgrade runbooks, and release checklist for profile negotiation, delegated audit headers, revision ETags, durable profile receipts, and all four release artifacts.
-- Synchronized Core, Web Console, all 13 private workspace manifests, internal dependency pins, capability metadata, fixtures, tests, documentation, and the lockfile at 0.7.0.
+- Synchronized Core, Web Console, private workspace manifests, internal dependency pins, capability metadata, fixtures, tests, documentation, and the lockfile at 0.7.0.
 
 ### Compatibility and upgrade
 
@@ -491,17 +485,17 @@
 
 ### Web Console design system
 
-- Reworked the independent Web Console around semantic color, surface, border, radius, shadow, spacing, and motion tokens shared by the conversation workbench, Audit panel, Memory Center, and Learning Center.
+- Reworked the independent Web Console around semantic color, surface, border, radius, shadow, spacing, and motion tokens shared by the conversation workbench, Audit panel, and Memory Center.
 - Replaced the broad green-tinted surfaces with warm neutral backgrounds; green is now reserved for primary actions, selected states, and compact operational signals.
 - Added persistent light and dark themes with system-preference fallback, early theme initialization, synchronized browser chrome color, and complete reduced-motion behavior.
-- Refined the three-column desktop workbench, collapsible rails, message hierarchy, execution trace, Supervisor composer, empty states, dialogs, and governed Memory/Learning surfaces without changing Console ABI or runtime behavior.
+- Refined the three-column desktop workbench, collapsible rails, message hierarchy, execution trace, Supervisor composer, empty states, dialogs, and governed Memory surfaces without changing Console ABI or runtime behavior.
 
 ### Responsive and accessible operation
 
 - Added a two-row mobile header that keeps Workspace model and reasoning controls readable at narrow widths.
-- Added a compact mobile Workspace tools menu so theme, Memory, Learning, and Learning-execution controls remain available without crowding navigation.
+- Added a compact mobile Workspace tools menu so theme and Memory controls remain available without crowding navigation.
 - Reflowed the Memory toolbar and full-screen centers for narrow devices, preserved drawer-based Workspace/Audit navigation, and verified the interface at 390-by-844 pixels.
-- Added explicit accessible names for icon actions, model/reasoning controls, center refresh/close actions, and the Learning execution switch, with consistent `focus-visible`, hover, active, and disabled states.
+- Added explicit accessible names for icon actions, model/reasoning controls, and center refresh/close actions, with consistent `focus-visible`, hover, active, and disabled states.
 - Added regression coverage for theme persistence, semantic tokens, responsive tools, reduced motion, and protected Console entry points.
 
 ### Compatibility
@@ -584,7 +578,6 @@
 - Added schema 30 `Attempt` authority and restart classification.
 - Added schema 31 canonical Governance projections and approval receipts.
 - Added schema 32 capability-authorization uniqueness, indexing, and immutable identity constraints.
-- Added schema 33 Learning integration events, delivery fencing, checkpoints, reconciliation, authority state, effect receipts, and migration issue ledger.
 - Added an OS instance lock, single-writer lease and fence enforcement, synchronous Unit of Work, connection-level mutation guards, writer readiness, and fail-closed recovery.
 
 ### Build and deployment
@@ -623,35 +616,12 @@
 
 ## [0.1.11] - 2026-08-03
 
-### LLM-semantic Memory and Learning
+### LLM-semantic Memory
 
-- Added a shared, schema-validated LLM Semantic Judge for durable Memory capture intent and quality, natural-language corrections and communication preferences, reusable Learning sample selection, counterexample judgment, cross-language experience clustering, supported Workflow step/verification distillation, and conservative Memory feedback attribution.
-- Kept deterministic safety, provenance, Required Check freshness, independent-Run support, risk/capability policy, Learning feature controls and human approval authoritative; invalid, timed-out or low-confidence semantic judgments are withheld or use the conservative deterministic fallback.
+- Added a shared, schema-validated LLM Semantic Judge for durable Memory capture intent and quality, natural-language corrections and communication preferences, and conservative Memory feedback attribution.
+- Kept deterministic safety, provenance, Required Check freshness, independent-Run support, risk/capability policy, and human approval authoritative; invalid, timed-out or low-confidence semantic judgments are withheld or use the conservative deterministic fallback.
 - Added a durable Schema v23 semantic-judgment cache with TTL, call-rate budget, confidence threshold, timeout, token/cost and latency metrics, plus Capture diagnostics separating extractor-zero from quality-filtered results.
-- Hardened Workflow distillation so candidates require shared steps and common verification across independent successful Runs, while waiting-input/interruption outcomes without concrete failed checks are not treated as counterexamples.
-- Added reproducible semantic evaluation tooling and release documentation with labeled Memory, correction and cross-language clustering results.
-
-## [0.1.10] - 2026-08-02
-
-### Release audit evidence
-
-- Added a compact, line-addressable Memory/Learning implementation, documentation, test, release and 3220 restart evidence index for operator and release review.
-
-## [0.1.9] - 2026-08-02
-
-### Learning release boundary certification
-
-- Added a reviewable acceptance-coverage matrix and focused tests for Memory-off API families, worker/scheduler/distiller shutdown, passive observation/distillation/evolution, active-operation denial, top-bar UI messaging and release documentation topics.
-- Made the automatic-execution gate run before object lookup and governance validation for Workflow application records, Revision application and Canary promotion, giving every active operation family one consistent passive-mode denial.
-
-## [0.1.8] - 2026-08-02
-
-### Memory-dependent Learning release integration
-
-- Added a persisted Schema v22 feature-control state enforcing `Memory off => Learning off => automatic execution off` across APIs, runtime Workflow recall, Learning projection and the Distillation Worker.
-- Added a top-bar Learning execution switch. Off keeps passive observation, evidence capture, distillation and candidate evolution running while blocking Workflow injection and every active path; on allows execution participation but never bypasses human approval.
-- Added Learning mode/status APIs, health visibility, restart persistence, automatic Worker stop/start, dependency diagnostics and detailed operations, migration and rollback documentation.
-- Integrated Communication Profiles, Learning Events, corrections, conservative feedback attribution, durable Experience Distillation, governed Workflow evolution, trusted evaluation and guarded Canary support into the release build.
+- Added reproducible semantic evaluation tooling and release documentation with labeled Memory and correction results.
 
 ## [0.1.7] - 2026-08-02
 
@@ -667,16 +637,6 @@
 - Added durable `waiting_input` TaskRun pauses with typed in-chat forms; required user information is persisted and resumes the same TaskRun attempt chain after submission.
 - Added direct in-browser preview for inline and local text/Markdown Artifacts, safe Markdown rendering, independent scrolling, source/size metadata, and retained download support.
 - Added per-turn memory extraction status and persisted-memory counts while memory is enabled.
-
-### Controlled workflow learning
-
-- Added versioned workflow definitions, revisions, bindings, application receipts, feedback, learning policies, rollback, suspension, deletion, and explicit teaching/governance APIs.
-- Active workflows can be recalled into Context Manifests with applicability, capability, confidence, and provenance controls; recalled workflows grant no additional capability or approval.
-- Successful and failed task experience is projected separately, repeated evidence can distill only a candidate workflow, harmful feedback suspends active workflows, and deny-learning plus secret redaction protect sensitive tasks.
-
-### Compatibility
-
-- Advances the SQLite schema from version 15 to 16 for workflow-learning records. Back up the SQLite database, WAL, and SHM together before deployment; code rollback requires restoring a matching pre-upgrade database backup.
 
 ## [0.1.6] - 2026-08-02
 

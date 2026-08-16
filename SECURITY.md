@@ -39,7 +39,7 @@ The Web Console has no built-in OIDC login or refresh UI. Its hosting shell may 
 
 Writer fencing, synchronous Unit of Work, connection-level mutation guards, event-consumer generations, resource scopes, approval authority, trusted Bash/check bindings, and internal evaluation receipts are server-side boundaries. Callers cannot assert them through headers or payloads.
 
-Memory and Learning policy reduce accidental persistence and unsafe promotion, but do not replace storage encryption, access control, backup protection, or human review. Active Learning actions remain approval-gated.
+Memory policy reduces accidental persistence, but does not replace storage encryption, access control, backup protection, or human review.
 
 ## Reporting a vulnerability
 

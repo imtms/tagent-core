@@ -72,7 +72,7 @@ describe("Web API request headers", () => {
     const types = await readFile(new URL("../apps/web-console/src/api-types.ts", import.meta.url), "utf8");
     expect(types).toContain('type { ConsoleV1 }');
     expect(source).toContain('import { ConsoleDecode } from "@tagent/core-client"');
-    expect(source).not.toMatch(/export interface (?:TaskRun|LearningFeatureState|MemoryRecord)\b/);
+    expect(source).not.toMatch(/export interface (?:TaskRun|MemoryRecord)\b/);
   });
 
   it("does not send JSON content type for bodyless consumer claims", async () => {
