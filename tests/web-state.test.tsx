@@ -17,6 +17,7 @@ import { createEventAcknowledger } from "../apps/web-console/src/event-acknowled
 import { IntentPrefetchCache } from "../apps/web-console/src/intent-prefetch-cache.js";
 import { canResumeRun, findActiveRun, isActiveRunStatus } from "../apps/web-console/src/run-state.js";
 import { mergeTranscriptItems } from "../apps/web-console/src/transcript-projection.js";
+import { createStreamingDeltaBatcher, type FrameScheduler } from "../apps/web-console/src/streaming-delta-batcher.js";
 import { loadWorkspaceSnapshot } from "../apps/web-console/src/workspace-controller.js";
 import { storedGateProfiles, storedStringLists, storedStringRecord } from "../apps/web-console/src/workspace-preferences.js";
 
@@ -81,6 +82,51 @@ describe("Web workbench behavior", () => {
     const assistant = { seq: 3, index: 0, attempt: 1, kind: "assistant", text: "done", createdAt: 3 } satisfies TranscriptItem;
     const user = { seq: 1, attempt: 1, kind: "user", text: "start", createdAt: 1 } satisfies TranscriptItem;
     expect(mergeTranscriptItems([assistant], [user, assistant])).toEqual([user, assistant]);
+  });
+
+  it("linearly merges an interleaved delta and keeps the last value for duplicate keys", () => {
+    const first = { seq: 1, attempt: 1, kind: "user", text: "first", createdAt: 1 } satisfies TranscriptItem;
+    const stale = { seq: 3, index: 0, attempt: 1, kind: "assistant", text: "stale", createdAt: 3 } satisfies TranscriptItem;
+    const current = { ...stale, text: "current" } satisfies TranscriptItem;
+    const middle = { seq: 2, index: 0, attempt: 1, kind: "assistant", text: "middle", createdAt: 2 } satisfies TranscriptItem;
+
+    expect(mergeTranscriptItems([first, stale, current], [middle])).toEqual([first, middle, current]);
+  });
+
+  it("coalesces streaming token deltas into one update per animation frame", () => {
+    const callbacks = new Map<number, () => void>();
+    let nextHandle = 1;
+    const scheduler: FrameScheduler = {
+      request(callback) { const handle = nextHandle++; callbacks.set(handle, callback); return handle; },
+      cancel(handle) { callbacks.delete(handle as number); },
+    };
+    const apply = vi.fn();
+    const batcher = createStreamingDeltaBatcher(apply, scheduler);
+
+    for (let index = 0; index < 100; index += 1) batcher.appendOutput("x");
+    batcher.appendThinking("reasoning");
+    expect(callbacks).toHaveLength(1);
+    expect(apply).not.toHaveBeenCalled();
+    callbacks.values().next().value!();
+    expect(apply).toHaveBeenCalledWith("x".repeat(100), "reasoning");
+  });
+
+  it("flushes or discards a pending streaming frame deterministically", () => {
+    const callbacks = new Map<number, () => void>();
+    const scheduler: FrameScheduler = {
+      request(callback) { callbacks.set(1, callback); return 1; },
+      cancel(handle) { callbacks.delete(handle as number); },
+    };
+    const apply = vi.fn();
+    const batcher = createStreamingDeltaBatcher(apply, scheduler);
+    batcher.appendOutput("visible");
+    batcher.flush();
+    expect(apply).toHaveBeenLastCalledWith("visible", "");
+    expect(callbacks).toHaveLength(0);
+    batcher.appendOutput("stale");
+    batcher.discard();
+    expect(callbacks).toHaveLength(0);
+    expect(apply).toHaveBeenCalledTimes(1);
   });
 
   it("coalesces acknowledgements and flushes the highest cursor on time", () => {

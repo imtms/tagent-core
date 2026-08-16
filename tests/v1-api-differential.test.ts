@@ -787,12 +787,11 @@ describe("v1 API contracts", () => {
       method: "POST",
       url: `/api/v1/task-runs/${run.id}/event-consumers/gap-client/claim`,
     })).json()).data.cursor;
-    const originalGetRun = service.getRun.bind(service);
-    let getRunCalls = 0;
-    vi.spyOn(service, "getRun").mockImplementation((runId) => {
-      getRunCalls += 1;
-      if (runId === run.id && getRunCalls === 2) store.appendEvent(run.id, "run.updated", { step: 2 });
-      return originalGetRun(runId);
+    const originalSubscribe = service.subscribe.bind(service);
+    vi.spyOn(service, "subscribe").mockImplementation((runId, listener) => {
+      const unsubscribe = originalSubscribe(runId, listener);
+      if (runId === run.id) store.appendEvent(run.id, "run.updated", { step: 2 });
+      return unsubscribe;
     });
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
     const controller = new AbortController();

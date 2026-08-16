@@ -18,6 +18,7 @@ import type {
   EventConsumerCursor as DomainEventConsumerCursor,
   RunEvent,
   TaskRun,
+  TaskRunReadView,
   TaskRunCommandReceipt as DomainTaskRunCommandReceipt,
 } from "@tagent/execution/domain";
 import { publicEventProjection, publicIdentifier, publicToolError } from "./event-mappers.js";
@@ -63,7 +64,7 @@ export function mapSubmissionReceipt(item: Submission, audit?: SubmissionAuditRe
 }
 
 export function mapArtifact(
-  artifact: Pick<TaskRun["artifacts"][number], "id" | "runId" | "kind" | "title" | "uri" | "createdAt">,
+  artifact: TaskRunReadView["artifacts"][number],
 ): TaskRunArtifact {
   return {
     id: artifact.id,
@@ -75,7 +76,7 @@ export function mapArtifact(
   };
 }
 
-export function mapTaskRun(run: TaskRun): V1TaskRun {
+export function mapTaskRun(run: TaskRunReadView): V1TaskRun {
   return {
     id: run.id,
     sessionId: run.sessionId,

@@ -468,6 +468,35 @@ describe("Store", () => {
     expect(store.getEventConsumer(run.id, "web-client")).toMatchObject({ ackedSeq: 2, settledAckedSeq: 2 });
   });
 
+  it("advances terminal ACK watermarks from only the newly acknowledged event range", () => {
+    const store = createStore();
+    const run = store.createRun(store.createSession().id, "incremental consumer ack");
+    store.appendEvent(run.id, "message.delta", { delta: "before blocked", ordinal: 1 });
+    store.appendEvent(run.id, "run.blocked", {});
+    store.appendEvent(run.id, "message.delta", { delta: "after blocked", ordinal: 2 });
+    store.appendEvent(run.id, "run.completed", {});
+    const cursor = store.claimEventConsumer(run.id, "incremental-client");
+
+    expect(store.ackEventConsumer(run.id, "incremental-client", cursor.generation, 2)).toBe("accepted");
+    expect(store.getEventConsumer(run.id, "incremental-client")).toMatchObject({
+      ackedSeq: 2,
+      settledAckedSeq: 2,
+      finalAckedSeq: null,
+    });
+    expect(store.ackEventConsumer(run.id, "incremental-client", cursor.generation, 3)).toBe("accepted");
+    expect(store.getEventConsumer(run.id, "incremental-client")).toMatchObject({
+      ackedSeq: 3,
+      settledAckedSeq: 2,
+      finalAckedSeq: null,
+    });
+    expect(store.ackEventConsumer(run.id, "incremental-client", cursor.generation, 4)).toBe("accepted");
+    expect(store.getEventConsumer(run.id, "incremental-client")).toMatchObject({
+      ackedSeq: 4,
+      settledAckedSeq: 4,
+      finalAckedSeq: 4,
+    });
+  });
+
   it("does not renew an already expired continuation lease", () => {
     const store = createStore();
     const session = store.createSession();

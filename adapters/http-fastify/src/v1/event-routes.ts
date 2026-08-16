@@ -31,14 +31,14 @@ function yieldToEventLoop(): Promise<void> {
 
 export function registerEventV1Routes(app: FastifyInstance, dependencies: ChannelV1Dependencies): void {
   const { persistence, service, serviceCredentials } = dependencies;
-  const { eventConsumers } = persistence;
+  const { eventConsumers, taskRuns } = persistence;
 
   app.post("/api/v1/task-runs/:taskRunId/event-consumers/:consumerId/claim", {
     onRequest: authorizeChannel(serviceCredentials, "events:consume"),
     schema: { params: EventConsumerParamsSchema },
   }, async (request) => {
     const { taskRunId, consumerId } = request.params as EventConsumerParams;
-    if (!service.getRun(taskRunId)) throw missing("task_run");
+    if (!taskRuns.hasRun(taskRunId)) throw missing("task_run");
     return encodeAbi(
       EventConsumerClaimResponseSchema,
       successEnvelope(request, {
@@ -58,7 +58,7 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
       generation: Number(rawQuery.generation),
       ...(rawQuery.after === undefined ? {} : { after: Number(rawQuery.after) }),
     });
-    if (!service.getRun(taskRunId)) throw missing("task_run");
+    if (!taskRuns.hasRun(taskRunId)) throw missing("task_run");
     const cursor = eventConsumers.getEventConsumer(taskRunId, query.consumerId);
     if (!cursor || cursor.generation !== query.generation) throw conflict("event_consumer.stale_generation", "Consumer generation is stale");
     if (query.after !== undefined && query.after > cursor.ackedSeq) {
@@ -70,7 +70,6 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
     // The durable acknowledgement is authoritative. An older local cursor may
     // replay duplicates, but a client may never skip unacknowledged events.
     const replayAfter = cursor.ackedSeq;
-    const replayHighWatermark = service.getRun(taskRunId)!.lastEventSeq;
     reply.hijack();
     const response = reply.raw;
     response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no", "X-Request-Id": requestIdOf(request) });
@@ -149,6 +148,12 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
         try { unsubscribe(); } catch { /* stream closure must remain deterministic */ }
         return;
       }
+      const runState = taskRuns.getRunExecutionState(taskRunId);
+      if (!runState) {
+        closeStream();
+        return;
+      }
+      const replayHighWatermark = runState.lastEventSeq;
       let deliveredSequence = replayAfter;
       while (deliveredSequence < replayHighWatermark) {
         const batch = service.replay(taskRunId, deliveredSequence, EVENT_REPLAY_BATCH_SIZE)

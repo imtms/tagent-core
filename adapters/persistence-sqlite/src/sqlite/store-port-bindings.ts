@@ -107,6 +107,7 @@ export function createStoreBackedPorts(
       createRun: mutate(store.createRun.bind(store)),
       hasRun: query(store.hasRun.bind(store)),
       getRun: query(store.getRun.bind(store)),
+      getRunReadView: query(store.getRunReadView.bind(store)),
       getRunExecutionState: query(store.getRunExecutionState.bind(store)),
       getRunByRequestId: query(store.getRunByRequestId.bind(store)),
       listRuns: query(store.listRuns.bind(store)),
@@ -260,4 +261,3 @@ export function createStoreBackedPorts(
 
   };
 }
-

@@ -76,6 +76,7 @@ const summaryBytes = Buffer.byteLength(JSON.stringify(runSummaries));
 const fullRunHistoryMs = measureMilliseconds(() => JSON.stringify(store.listRuns(session.id, 50)), 3);
 const summaryHistoryMs = measureMilliseconds(() => JSON.stringify(store.listRunSummaries(session.id, 50)), 50);
 const fullRunStateMs = measureMilliseconds(() => store.getRun(representativeRun.id), 100);
+const readRunViewMs = measureMilliseconds(() => store.getRunReadView(representativeRun.id), 500);
 const executionStateMs = measureMilliseconds(() => store.getRunExecutionState(representativeRun.id), 1_000);
 
 const transcriptRun = store.createRun(session.id, "transcript benchmark");
@@ -86,6 +87,39 @@ const fullTranscript = store.listTranscriptView(transcriptRun.id);
 const transcriptDelta = store.listTranscriptView(transcriptRun.id, { after: 999, limit: 200 });
 const fullTranscriptMs = measureMilliseconds(() => JSON.stringify(store.listTranscriptView(transcriptRun.id)), 3);
 const transcriptDeltaMs = measureMilliseconds(() => JSON.stringify(store.listTranscriptView(transcriptRun.id, { after: 999, limit: 200 })), 100);
+const transcriptCountScan = store.db.prepare("SELECT COUNT(*) as value FROM run_transcript WHERE run_id=?");
+const transcriptSequenceLookup = store.db.prepare("SELECT COALESCE(MAX(seq),0) as value FROM run_transcript WHERE run_id=?");
+const transcriptCountScanMs = measureMilliseconds(() => transcriptCountScan.get(transcriptRun.id), 500);
+const transcriptSequenceLookupMs = measureMilliseconds(() => transcriptSequenceLookup.get(transcriptRun.id), 2_000);
+
+const acknowledgementRun = store.createRun(session.id, "event acknowledgement benchmark");
+const acknowledgementEventCount = 10_000;
+const insertAcknowledgementEvent = store.db.prepare(
+  "INSERT INTO run_events(run_id,seq,attempt_id,type,data,created_at) VALUES(?,?,?,?,?,?)",
+);
+store.db.transaction(() => {
+  for (let sequence = 1; sequence <= acknowledgementEventCount; sequence += 1) {
+    insertAcknowledgementEvent.run(acknowledgementRun.id, sequence, null, "message.delta", "{}", sequence);
+  }
+})();
+const terminalTypes = ["run.completed", "run.blocked", "run.failed", "run.cancelled"];
+const fullAcknowledgementScan = store.db.prepare(`SELECT seq FROM run_events WHERE run_id=? AND seq<=?
+  AND type IN (?,?,?,?) ORDER BY seq DESC LIMIT 1`);
+const incrementalAcknowledgementScan = store.db.prepare(`SELECT seq FROM run_events WHERE run_id=? AND seq>? AND seq<=?
+  AND type IN (?,?,?,?) ORDER BY seq DESC LIMIT 1`);
+const fullAcknowledgementMs = measureMilliseconds(
+  () => fullAcknowledgementScan.get(acknowledgementRun.id, acknowledgementEventCount, ...terminalTypes),
+  50,
+);
+const incrementalAcknowledgementMs = measureMilliseconds(
+  () => incrementalAcknowledgementScan.get(
+    acknowledgementRun.id,
+    acknowledgementEventCount - 10,
+    acknowledgementEventCount,
+    ...terminalTypes,
+  ),
+  500,
+);
 const ratio = (beforeValue, afterValue) => Number((beforeValue / Math.max(afterValue, 0.000_001)).toFixed(1));
 
 console.log(JSON.stringify({
@@ -102,10 +136,30 @@ console.log(JSON.stringify({
       fullMilliseconds: fullRunStateMs, lightweightMilliseconds: executionStateMs,
       speedup: ratio(fullRunStateMs, executionStateMs),
     },
+    runReadView: {
+      fullMilliseconds: fullRunStateMs,
+      metadataMilliseconds: readRunViewMs,
+      speedup: ratio(fullRunStateMs, readRunViewMs),
+      fullBytes: Buffer.byteLength(JSON.stringify(store.getRun(representativeRun.id))),
+      metadataBytes: Buffer.byteLength(JSON.stringify(store.getRunReadView(representativeRun.id))),
+    },
     transcriptUpdate: {
       fullMilliseconds: fullTranscriptMs, incrementalMilliseconds: transcriptDeltaMs,
       speedup: ratio(fullTranscriptMs, transcriptDeltaMs),
       fullBytes: Buffer.byteLength(JSON.stringify(fullTranscript)), incrementalBytes: Buffer.byteLength(JSON.stringify(transcriptDelta)),
+    },
+    transcriptCount: {
+      entries: 1_000,
+      fullCountMilliseconds: transcriptCountScanMs,
+      lastSequenceMilliseconds: transcriptSequenceLookupMs,
+      speedup: ratio(transcriptCountScanMs, transcriptSequenceLookupMs),
+    },
+    eventAcknowledgement: {
+      events: acknowledgementEventCount,
+      newlyAcknowledgedEvents: 10,
+      fullHistoryMilliseconds: fullAcknowledgementMs,
+      incrementalMilliseconds: incrementalAcknowledgementMs,
+      speedup: ratio(fullAcknowledgementMs, incrementalAcknowledgementMs),
     },
   },
 }, null, 2));

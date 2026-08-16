@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:f
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { decodeAbi, SessionSchema } from "@tagent/abi";
 import { createApp } from "@tagent/http-fastify";
@@ -27,6 +28,7 @@ function buildWebConsole(): void {
     execFileSync("npm", ["run", "build", "-w", "@tagent/web-console"], {
       cwd: root,
       encoding: "utf8",
+      env: { ...process.env, NODE_ENV: "production" },
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 120_000,
     });
@@ -157,6 +159,12 @@ describe("modular monolith architecture", () => {
 
   it("builds the Web Console against the current ABI and client", { timeout: 180_000 }, () => {
     buildWebConsole();
+    const html = source("apps/web-console/dist/index.html");
+    const entry = html.match(/<script type="module"[^>]+src="\/([^"]+)"/)?.[1];
+    expect(entry, "Web Console build must publish one module entry").toBeDefined();
+    const entrySource = readFileSync(path.join(root, "apps/web-console/dist", entry!));
+    expect(entrySource.byteLength, "initial Web Console JS exceeds 400 KB").toBeLessThanOrEqual(400_000);
+    expect(gzipSync(entrySource).byteLength, "initial Web Console gzip JS exceeds 120 KB").toBeLessThanOrEqual(120_000);
   });
 
   it("keeps Core and Web release artifacts separate and documents the final contracts", () => {

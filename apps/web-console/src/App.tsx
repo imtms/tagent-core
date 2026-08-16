@@ -32,6 +32,7 @@ import {
 } from "./AppPanels";
 import { mergeTranscriptItems } from "./transcript-projection";
 import { createEventAcknowledger, type EventAcknowledger } from "./event-acknowledger";
+import { createStreamingDeltaBatcher } from "./streaming-delta-batcher";
 import { loadWorkspaceSnapshot, type WorkspaceSnapshot } from "./workspace-controller";
 import {
   storedBoolean,
@@ -98,6 +99,10 @@ export function App() {
   const [mutatingInboxId, setMutatingInboxId] = useState("");
   const [streaming, setStreaming] = useState("");
   const [liveThinking, setLiveThinking] = useState("");
+  const [streamingDeltaBatcher] = useState(() => createStreamingDeltaBatcher((outputDelta, thinkingDelta) => {
+    if (outputDelta) setStreaming((current) => current + outputDelta);
+    if (thinkingDelta) setLiveThinking((current) => current + thinkingDelta);
+  }));
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [leftOpen, setLeftOpen] = useState(false);
@@ -157,6 +162,7 @@ export function App() {
   const { viewportRef: messageScrollRef, contentRef: messageFeedRef, pinnedToLatest, hasNewActivity, handleScroll: handleMessageScroll, jumpToLatest: scrollToLatest, pinToLatest } = useStickyConversation(sessionId, conversationActivityKey, conversationStageRef);
 
   const applyWorkspaceSnapshot = useCallback((snapshot: WorkspaceSnapshot) => {
+    streamingDeltaBatcher.discard();
     replaceStreamingOnNextDeltaRef.current = false;
     setMessages(snapshot.history); setHasOlderMessages(snapshot.history.length === 80); setRuns(snapshot.runHistory); setInbox(snapshot.queued); setActiveRun(snapshot.active); setSelectedRun(snapshot.latest); setExpandedRunId(snapshot.latest?.id ?? "");
     setStreaming(snapshot.active?.checkpoint?.active ? snapshot.active.checkpoint.assistantPartial : ""); setLiveThinking("");
@@ -164,7 +170,7 @@ export function App() {
     transcriptRunIdRef.current = snapshot.latest?.id ?? "";
     transcriptAfterRef.current = snapshot.transcriptAfter;
     setTranscript(snapshot.transcript);
-  }, []);
+  }, [streamingDeltaBatcher]);
 
   const prefetchWorkspace = useCallback((targetSessionId: string) => {
     if (!targetSessionId || targetSessionId === sessionIdRef.current) return;
@@ -511,25 +517,36 @@ export function App() {
       unsubscribe = subscribe(runId, consumerId, cursor.generation, cursor.ackedSeq, async (event) => {
         if (event.seq <= checkpointAfter) { acknowledger?.schedule(event.seq); return; }
         setEvents((current) => [...current.slice(-39), event]);
-        if (event.type === "message.started") { replaceStreamingOnNextDeltaRef.current = true; setLiveThinking(""); }
-        if (event.type === "message.thinking.delta") setLiveThinking((current) => current + String(event.data.delta ?? ""));
-      if (event.type === "message.delta") setStreaming((current) => {
+        if (event.type === "message.started") {
+          streamingDeltaBatcher.flush();
+          replaceStreamingOnNextDeltaRef.current = true;
+          setLiveThinking("");
+        }
+        if (event.type === "message.thinking.delta") {
+          streamingDeltaBatcher.appendThinking(String(event.data.delta ?? ""));
+        }
+      if (event.type === "message.delta") {
         const delta = String(event.data.delta ?? "");
         if (replaceStreamingOnNextDeltaRef.current) {
+          streamingDeltaBatcher.flush();
           replaceStreamingOnNextDeltaRef.current = false;
-          return delta;
+          setStreaming(delta);
+        } else {
+          streamingDeltaBatcher.appendOutput(delta);
         }
-        return current + delta;
-      });
+      }
       if (event.type === "message.completed") {
+        streamingDeltaBatcher.flush();
         const content = String(event.data.content ?? "");
         if (content.trim()) { replaceStreamingOnNextDeltaRef.current = false; setStreaming(content); }
       }
       if (event.type === "transcript.updated") {
         await refreshTranscriptThrough(Number(event.data.transcriptSeq));
         if (closed || sessionIdRef.current !== sessionId) return;
+        streamingDeltaBatcher.discard();
       }
       if (["run.completed", "run.blocked", "run.failed", "run.cancelled", "run.interrupted", "run.waiting_for_input"].includes(event.type)) {
+        streamingDeltaBatcher.flush();
         const updatedTask = api.run(runId);
         const [updated, runHistory, history, queued, view, sessionItems] = await Promise.all([
           updatedTask, api.runs(sessionId), api.messages(sessionId), api.inbox(sessionId), updatedTask.then((run) => drainTranscriptView(runId, run.transcriptCount)), api.sessions(),
@@ -565,7 +582,7 @@ export function App() {
         window.setTimeout(() => { if (!closed && document.visibilityState === "visible" && navigator.onLine) setStreamGeneration((value) => value + 1); }, 1_000);
       });
     }).catch((cause) => { if (!closed) setError(cause instanceof Error ? cause.message : String(cause)); });
-    return () => { acknowledger?.close(); closed = true; unsubscribe(); };
+    return () => { acknowledger?.close(); closed = true; streamingDeltaBatcher.discard(); unsubscribe(); };
   }, [activeRun?.id, activeRun?.status, sessionId, loadSessions, streamGeneration]);
 
   const jumpToLatest = useCallback(() => {

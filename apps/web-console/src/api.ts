@@ -1,25 +1,8 @@
 import { createRequestId } from "./id";
 import { ConsoleDecode } from "@tagent/core-client";
-import {
-  decodeAbi,
-  ArtifactContentResponseSchema,
-  CommandResponseSchema,
-  EventConsumerCursorSchema,
-  OperatorInboxItemResponseSchema,
-  OperatorInboxListResponseSchema,
-  OperatorInboxMutationResponseSchema,
-  ProfileOperationResponseSchema,
-  OperatorSessionListResponseSchema,
-  OperatorSessionTaskRunListResponseSchema,
-  OperatorSessionSettingsResponseSchema,
-  SessionSchema,
-  SubmissionResponseSchema,
-  TaskRunSchema,
-  TranscriptResponseSchema,
-  type OperatorInboxItem,
-} from "@tagent/abi";
+import type { OperatorInboxItem, TaskRun as AbiTaskRun } from "@tagent/abi";
 import { createAdminApi } from "./admin-api";
-import { downloadArtifact, request } from "./api-transport";
+import { downloadArtifact, request, withCoreAbi } from "./api-transport";
 import type { EventConsumerCursor, GateProfile, Session, SessionInboxItem, TaskRun, TranscriptItem } from "./api-types";
 import { createGoalApi } from "./goal-api";
 import { createSkillApi } from "./skill-api";
@@ -32,7 +15,8 @@ export type { WorkspaceGoal, WorkspaceGoalSummary, WorkspaceGoalDefinition, Work
 const webOrigin = { surface: "web" as const, gatewayActorId: "local-web", sourceId: "web-console" };
 
 async function decodeEventConsumerClaim(payload: unknown): Promise<EventConsumerCursor> {
-  const cursor = decodeAbi(EventConsumerCursorSchema, (payload as { cursor?: unknown })?.cursor);
+  const cursor = await withCoreAbi((abi) =>
+    abi.decodeAbi(abi.EventConsumerCursorSchema, (payload as { cursor?: unknown })?.cursor));
   return {
     runId: cursor.taskRunId,
     consumerId: cursor.consumerId,
@@ -54,7 +38,7 @@ function sessionView(value: {
   };
 }
 
-function taskRunView(value: ReturnType<typeof decodeCurrentTaskRun>): TaskRun {
+function taskRunView(value: AbiTaskRun): TaskRun {
   const userInputRequests = value.pendingInteractions.userInputs.map((item) => ({
     id: item.id, runId: item.taskRunId, attempt: item.attempt, prompt: item.prompt, fields: item.fields,
     status: item.status, response: item.response, requestedAt: Date.parse(item.requestedAt),
@@ -111,10 +95,13 @@ function taskRunView(value: ReturnType<typeof decodeCurrentTaskRun>): TaskRun {
   };
 }
 
-function decodeCurrentTaskRun(payload: unknown) { return decodeAbi(TaskRunSchema, payload); }
+function decodeCurrentTaskRun(payload: unknown): Promise<AbiTaskRun> {
+  return withCoreAbi((abi) => abi.decodeAbi(abi.TaskRunSchema, payload));
+}
 
 function loadTaskRun(runId: string): Promise<TaskRun> {
-  return request(`/api/v1/task-runs/${encodeURIComponent(runId)}`, undefined, (payload) => taskRunView(decodeCurrentTaskRun(payload)));
+  return request(`/api/v1/task-runs/${encodeURIComponent(runId)}`, undefined, async (payload) =>
+    taskRunView(await decodeCurrentTaskRun(payload)));
 }
 
 async function sendTaskRunCommand(runId: string, type: string, payload: Record<string, unknown>): Promise<TaskRun> {
@@ -122,7 +109,7 @@ async function sendTaskRunCommand(runId: string, type: string, payload: Record<s
   const receipt = await request(`/api/v1/task-runs/${encodeURIComponent(runId)}/commands`, {
     method: "POST",
     body: JSON.stringify({ commandId, expectedAttemptId: null, type, payload, origin: webOrigin }),
-  }, (value) => decodeAbi(CommandResponseSchema.properties.data, value).receipt);
+  }, (value) => withCoreAbi((abi) => abi.decodeAbi(abi.CommandResponseSchema.properties.data, value).receipt));
   const resultingRunId = typeof receipt.result?.taskRunId === "string" ? receipt.result.taskRunId : runId;
   return loadTaskRun(resultingRunId);
 }
@@ -148,11 +135,11 @@ function inboxMutationHeaders(sessionId: string, includeRevision = true): Header
 }
 
 async function listInbox(sessionId: string): Promise<SessionInboxItem[]> {
-  return request(`/api/v1/operator/sessions/${encodeURIComponent(sessionId)}/inbox?limit=200`, undefined, (payload) => {
-    const data = decodeAbi(OperatorInboxListResponseSchema.properties.data, payload);
+  return request(`/api/v1/operator/sessions/${encodeURIComponent(sessionId)}/inbox?limit=200`, undefined, (payload) => withCoreAbi((abi) => {
+    const data = abi.decodeAbi(abi.OperatorInboxListResponseSchema.properties.data, payload);
     inboxCollectionRevisions.set(sessionId, data.collectionRevision);
     return data.items.filter((item) => item.status === "queued").map(inboxItemView);
-  });
+  }));
 }
 
 async function mutateInbox(
@@ -163,20 +150,20 @@ async function mutateInbox(
 ): Promise<SessionInboxItem[]> {
   return request(`/api/v1/operator/sessions/${encodeURIComponent(sessionId)}/inbox${suffix}`, {
     method, headers: inboxMutationHeaders(sessionId), ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }, (payload) => {
+  }, (payload) => withCoreAbi((abi) => {
     const schema = suffix.includes("/order") || suffix.includes("/merge") || method === "DELETE"
-      ? OperatorInboxMutationResponseSchema.properties.data
-      : OperatorInboxItemResponseSchema.properties.data;
-    const data = decodeAbi(schema, payload);
+      ? abi.OperatorInboxMutationResponseSchema.properties.data
+      : abi.OperatorInboxItemResponseSchema.properties.data;
+    const data = abi.decodeAbi(schema, payload);
     inboxCollectionRevisions.set(sessionId, data.collectionRevision);
     const items = "items" in data ? data.items : [data.item];
     return items.filter((item) => item.status === "queued").map(inboxItemView);
-  });
+  }));
 }
 
 async function runInboxOperation(sessionId: string, path: string): Promise<TaskRun> {
   const operation = await request(path, { method: "POST", headers: inboxMutationHeaders(sessionId, false) }, (payload) =>
-    decodeAbi(ProfileOperationResponseSchema.properties.data, payload).operation);
+    withCoreAbi((abi) => abi.decodeAbi(abi.ProfileOperationResponseSchema.properties.data, payload).operation));
   if (operation.status !== "succeeded" || typeof operation.result?.taskRunId !== "string") {
     throw new Error(String(operation.error?.code ?? `Inbox operation ${operation.status}`));
   }
@@ -189,11 +176,12 @@ async function updateSessionSettings(
 ): Promise<Session> {
   const path = `/api/v1/operator/sessions/${encodeURIComponent(sessionId)}/settings`;
   const current = await request(path, undefined, (payload) =>
-    decodeAbi(OperatorSessionSettingsResponseSchema.properties.data, payload).settings);
+    withCoreAbi((abi) => abi.decodeAbi(abi.OperatorSessionSettingsResponseSchema.properties.data, payload).settings));
   const headers = new Headers({ "Idempotency-Key": createRequestId(), "If-Match": `"r${current.revision}"` });
   await request(path, { method: "PATCH", headers, body: JSON.stringify(settings) }, (payload) =>
-    decodeAbi(OperatorSessionSettingsResponseSchema.properties.data, payload).settings);
-  return request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, undefined, (payload) => sessionView(decodeAbi(SessionSchema, payload)));
+    withCoreAbi((abi) => abi.decodeAbi(abi.OperatorSessionSettingsResponseSchema.properties.data, payload).settings));
+  return request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, undefined, (payload) =>
+    withCoreAbi((abi) => sessionView(abi.decodeAbi(abi.SessionSchema, payload))));
 }
 
 export interface TranscriptViewPage {
@@ -202,15 +190,15 @@ export interface TranscriptViewPage {
 }
 
 async function transcriptViewPage(runId: string, after = 0, limit = 200): Promise<TranscriptViewPage> {
-  return request(`/api/v1/task-runs/${encodeURIComponent(runId)}/transcript?limit=${limit}&after=${after}`, undefined, (payload) => {
-    const data = decodeAbi(TranscriptResponseSchema.properties.data, payload);
+  return request(`/api/v1/task-runs/${encodeURIComponent(runId)}/transcript?limit=${limit}&after=${after}`, undefined, (payload) => withCoreAbi((abi) => {
+    const data = abi.decodeAbi(abi.TranscriptResponseSchema.properties.data, payload);
     return {
       items: data.items.map((item) => ({
         ...item, seq: item.sequence, index: item.partIndex, createdAt: Date.parse(item.occurredAt),
       })),
       pageInfo: data.pageInfo,
     };
-  });
+  }));
 }
 
 export async function drainTranscriptView(runId: string, through: number, after = 0, limit = 200) {
@@ -236,35 +224,35 @@ export async function drainTranscriptView(runId: string, through: number, after 
 
 export const api = {
   ...createAdminApi(request),
-  sessions: () => request("/api/v1/operator/sessions?limit=200", undefined, (payload) =>
-    decodeAbi(OperatorSessionListResponseSchema.properties.data, payload).items.map((item) => sessionView({
+  sessions: () => request("/api/v1/operator/sessions?limit=200", undefined, (payload) => withCoreAbi((abi) =>
+    abi.decodeAbi(abi.OperatorSessionListResponseSchema.properties.data, payload).items.map((item) => sessionView({
       ...item, latestTaskRunStatus: item.latestTaskRunStatus, latestTaskRunPhase: item.latestTaskRunPhase,
-    }))),
+    })))),
   createSession: (title = "New workspace", requestId = createRequestId()) => request("/api/v1/sessions", {
     method: "POST", headers: { "Idempotency-Key": requestId }, body: JSON.stringify({ title, origin: webOrigin }),
-  }, (payload) => sessionView(decodeAbi(SessionSchema, payload))),
+  }, (payload) => withCoreAbi((abi) => sessionView(abi.decodeAbi(abi.SessionSchema, payload)))),
   renameSession: (sessionId: string, title: string) => updateSessionSettings(sessionId, { title }),
   updateSession: updateSessionSettings,
   messages: (sessionId: string, limit = 80, beforeId?: number) => request(`/api/v1/console/sessions/${sessionId}/messages?limit=${limit}${beforeId ? `&beforeId=${beforeId}` : ""}`, undefined, ConsoleDecode.messages),
-  runs: (sessionId: string, limit = 50) => request(`/api/v1/operator/sessions/${encodeURIComponent(sessionId)}/task-runs?limit=${limit}`, undefined, (payload) =>
-    decodeAbi(OperatorSessionTaskRunListResponseSchema.properties.data, payload).items.map((item) => ({
+  runs: (sessionId: string, limit = 50) => request(`/api/v1/operator/sessions/${encodeURIComponent(sessionId)}/task-runs?limit=${limit}`, undefined, (payload) => withCoreAbi((abi) =>
+    abi.decodeAbi(abi.OperatorSessionTaskRunListResponseSchema.properties.data, payload).items.map((item) => ({
       id: item.id, goal: item.goalSummary, status: item.status, phase: item.phase, attempt: item.attempt,
       createdAt: Date.parse(item.createdAt), updatedAt: Date.parse(item.updatedAt),
-    }))),
+    })))),
   run: loadTaskRun,
   contextManifests: (runId: string, limit = 20) => request(`/api/v1/console/task-runs/${runId}/context-manifests?limit=${limit}`, undefined, ConsoleDecode.contextManifests),
   transcriptView: transcriptViewPage,
-  artifactContent: (runId: string, artifactId: string) => request(`/api/v1/task-runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}/content`, undefined, (payload) => {
-    const artifact = decodeAbi(ArtifactContentResponseSchema.properties.data, payload).artifact;
+  artifactContent: (runId: string, artifactId: string) => request(`/api/v1/task-runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}/content`, undefined, (payload) => withCoreAbi((abi) => {
+    const artifact = abi.decodeAbi(abi.ArtifactContentResponseSchema.properties.data, payload).artifact;
     return { id: artifact.id, title: artifact.title, kind: artifact.kind, uri: artifact.uri, content: artifact.content, format: artifact.format, bytes: artifact.bytes, source: artifact.source };
-  }),
+  })),
   downloadArtifact: (runId: string, artifactId: string, filename: string) => downloadArtifact(runId, artifactId, filename),
   send: async (sessionId: string, content: string, gateProfile: GateProfile) => {
     const idempotencyKey = createRequestId();
     const receipt = await request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/submissions`, {
       method: "POST", headers: { "Idempotency-Key": idempotencyKey },
       body: JSON.stringify({ content, gateProfile, origin: webOrigin }),
-    }, (payload) => decodeAbi(SubmissionResponseSchema.properties.data, payload).receipt);
+    }, (payload) => withCoreAbi((abi) => abi.decodeAbi(abi.SubmissionResponseSchema.properties.data, payload).receipt));
     return { run: receipt.taskRunId ? await loadTaskRun(receipt.taskRunId) : null };
   },
   inbox: listInbox,

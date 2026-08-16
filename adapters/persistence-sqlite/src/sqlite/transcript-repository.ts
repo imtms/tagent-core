@@ -17,7 +17,7 @@ export class SqliteTranscriptRepository {
   }
 
   getTranscriptCount(runId: RunId): number {
-    return (this.db.prepare("SELECT COUNT(*) as count FROM run_transcript WHERE run_id = ?")
+    return (this.db.prepare("SELECT COALESCE(MAX(seq), 0) as count FROM run_transcript WHERE run_id = ?")
       .get(runId) as { count: number }).count;
   }
 

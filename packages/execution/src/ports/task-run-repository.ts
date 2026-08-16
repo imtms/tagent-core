@@ -3,6 +3,7 @@ import type {
   RunPhase,
   ExecutionSessionRef,
   TaskRun,
+  TaskRunReadView,
   TaskRunExecutionState,
   TaskRunSummary,
   TaskRunEdge,
@@ -24,7 +25,8 @@ export interface TaskRunRepository {
   createRun(sessionId: ExecutionSessionRef, goal: string, requestId?: string, contract?: TaskRunContractSnapshot | null): TaskRun;
   hasRun(id: RunId): boolean;
   getRun(id: RunId): TaskRun | undefined;
-  getRunExecutionState?(id: RunId): TaskRunExecutionState | undefined;
+  getRunReadView(id: RunId): TaskRunReadView | undefined;
+  getRunExecutionState(id: RunId): TaskRunExecutionState | undefined;
   getRunByRequestId(requestId: string): TaskRun | undefined;
   listRuns(sessionId: ExecutionSessionRef, limit?: number): TaskRun[];
   listRunSummaries?(sessionId: ExecutionSessionRef, limit?: number): TaskRunSummary[];

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Bounded hot paths
+
+- Limited event-consumer terminal watermark detection to the newly acknowledged sequence range and replaced Transcript row counting with indexed last-sequence lookup.
+- Added an Artifact-metadata-only TaskRun read view for HTTP and lightweight SSE watermark reads while retaining full Artifact content for internal governance.
+- Switched Web Transcript updates to linear delta merge, coalesced streaming tokens to one state update per animation frame, and moved ABI/TypeBox validation into one cached dynamic chunk.
+- Added benchmark coverage for ACK, Transcript count, and TaskRun read projections plus an enforced 400 KB / 120 KB gzip initial Web entry budget.
+
 ### Evolvable current state
 
 - Split the deterministic SQLite schema into responsibility-focused SQL fragments and added an ordered, checksummed, append-only migration journal at public schema revision 2.

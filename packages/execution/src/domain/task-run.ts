@@ -212,6 +212,11 @@ export interface TaskRun {
   resumable: boolean;
 }
 
+/** Read projection for transports that expose Artifact metadata through a separate content endpoint. */
+export type TaskRunReadView = Omit<TaskRun, "artifacts"> & {
+  artifacts: Array<Omit<Artifact, "content">>;
+};
+
 export type TaskRunSummary = Pick<
   TaskRun,
   "id" | "goal" | "status" | "phase" | "contract" | "attempt" | "createdAt" | "updatedAt"

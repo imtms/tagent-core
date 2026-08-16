@@ -120,7 +120,7 @@ export function registerAdminLearningConsoleV1Routes(app: FastifyInstance, depen
   app.post("/api/v1/admin/task-runs/:id/learning-policy", { onRequest: govern }, async (request) => {
     const { id } = request.params as { id: string };
     const body = request.body as { policy?: "allow" | "metadata_only" | "deny"; reason?: string };
-    if (!taskRuns.getRun(id)) throw consoleError(404, "task_run.not_found", "TaskRun not found");
+    if (!taskRuns.hasRun(id)) throw consoleError(404, "task_run.not_found", "TaskRun not found");
     if (!body.policy) throw consoleError(400, "learning.policy_required", "policy is required");
     return successEnvelope(request, service.setRunLearningPolicy(id, body.policy, body.reason));
   });

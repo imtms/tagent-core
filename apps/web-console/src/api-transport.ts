@@ -1,5 +1,4 @@
-import { decodeAbi, SuccessEnvelopeSchema } from "@tagent/abi";
-import { createCoreClient } from "@tagent/core-client";
+import { createCoreClient, loadCoreAbi, type CoreAbi } from "@tagent/core-client";
 import type { RunEvent } from "./api-types";
 
 const configuredCoreOrigin = normalizeCoreOrigin(import.meta.env.VITE_TAGENT_CORE_ORIGIN);
@@ -78,13 +77,17 @@ export type ApiRequest = <T>(
   decode: (payload: unknown) => T | Promise<T>,
 ) => Promise<T>;
 
+export async function withCoreAbi<T>(decode: (abi: CoreAbi) => T | Promise<T>): Promise<T> {
+  return decode(await loadCoreAbi());
+}
+
 export const request: ApiRequest = async (url, init, decode) => {
   const headers = new Headers(init?.headers);
   if (init?.body != null && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const prepared = authenticatedCoreRequest(url, { ...init, headers });
   return coreClient.request(prepared.url, {
     ...prepared.init,
-    decode: (payload) => decode(decodeAbi(SuccessEnvelopeSchema, payload).data),
+    decode: (payload) => withCoreAbi((abi) => decode(abi.decodeAbi(abi.SuccessEnvelopeSchema, payload).data)),
   });
 };
 

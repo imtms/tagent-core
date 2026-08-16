@@ -38,6 +38,7 @@ import type {
   RunPhase,
   RunStatus,
   TaskRun,
+  TaskRunReadView,
   TaskRunCommandReceipt,
   TaskRunContractSnapshot,
   TaskRunEdge,
@@ -1279,6 +1280,17 @@ ${source.content}`;
   }
 
   getRun(id: RunId): TaskRun | undefined {
+    return this.hydrateRun<Artifact>(id, true);
+  }
+
+  getRunReadView(id: RunId): TaskRunReadView | undefined {
+    return this.hydrateRun<Omit<Artifact, "content">>(id, false);
+  }
+
+  private hydrateRun<TArtifact extends Omit<Artifact, "content">>(
+    id: RunId,
+    includeArtifactContent: boolean,
+  ): (Omit<TaskRun, "artifacts"> & { artifacts: TArtifact[] }) | undefined {
     type RunRow = Omit<TaskRun, "plan" | "checks" | "artifacts" | "continuations" | "completionGate" | "gateRequired" | "usage" | "transcriptCount" | "checkpoint" | "supervision" | "userInputRequests" | "pendingUserInput"> & {
       gateRequired: number;
       usageInput: number;
@@ -1299,7 +1311,7 @@ ${source.content}`;
              usage_input as usageInput, usage_output as usageOutput,
              usage_cache_read as usageCacheRead, usage_cache_write as usageCacheWrite,
              usage_total_tokens as usageTotalTokens, usage_cost as usageCost,
-             (SELECT COUNT(*) FROM run_transcript t WHERE t.run_id = runs.id) as transcriptCount
+             (SELECT COALESCE(MAX(t.seq), 0) FROM run_transcript t WHERE t.run_id = runs.id) as transcriptCount
       FROM runs WHERE id = ?
     `).get(id) as RunRow | undefined;
     if (!row) return undefined;
@@ -1309,10 +1321,15 @@ ${source.content}`;
       FROM run_checks WHERE run_id = ? ORDER BY check_key`).all(id) as Array<Omit<RunCheck, "required" | "stale"> & { required: number; stale: number }>;
     const plan = planRows.map((item) => ({ ...item, required: Boolean(item.required) }));
     const checks = checkRows.map((item) => ({ ...item, required: Boolean(item.required), stale: Boolean(item.stale) }));
-    const artifacts = this.db.prepare(`SELECT id, run_id as runId, kind, title, content, uri, created_at as createdAt FROM artifacts WHERE run_id = ? ORDER BY created_at`).all(id) as Artifact[];
+    const artifactColumns = includeArtifactContent
+      ? "id, run_id as runId, kind, title, content, uri, created_at as createdAt"
+      : "id, run_id as runId, kind, title, uri, created_at as createdAt";
+    const artifacts = this.db.prepare(`SELECT ${artifactColumns} FROM artifacts WHERE run_id = ? ORDER BY created_at`)
+      .all(id) as TArtifact[];
     const continuations = this.listContinuations(id);
+    const userInputRequests = this.listUserInputRequests(id);
     const { usageInput, usageOutput, usageCacheRead, usageCacheWrite, usageTotalTokens, usageCost, transcriptCount, contractJson, ...runRow } = row as RunRow & { contractJson: string };
-    const task: TaskRun = {
+    const task: Omit<TaskRun, "artifacts"> & { artifacts: TArtifact[] } = {
       ...runRow,
       contract: contractJson ? JSON.parse(contractJson) as TaskRunContractSnapshot : null,
       gateRequired: Boolean(row.gateRequired),
@@ -1325,8 +1342,8 @@ ${source.content}`;
       artifacts,
       completionGate: { passed: true, failures: [] },
       supervision: { latestDecision: this.listSupervisorDecisions(id).at(-1) ?? null, latestGates: this.listLatestGateEvaluations(id), progress: this.getProgressSnapshot(id) ?? null, approvalRequests: this.listApprovalRequests(id), latestContextManifest: this.getLatestContextManifest(id) ?? null },
-      userInputRequests: this.listUserInputRequests(id),
-      pendingUserInput: this.getPendingUserInputRequest(id) ?? null,
+      userInputRequests,
+      pendingUserInput: userInputRequests.find((item) => item.status === "pending") ?? null,
       launchRetryable: this.isInboxLaunchRetryable(id),
       resumable: this.isRunResumable(id),
     };
@@ -2333,10 +2350,12 @@ ${source.content}`;
       const cursor = this.getEventConsumer(runId, consumerId);
       if (!cursor || cursor.generation !== generation) return "stale" as const;
       if (!Number.isSafeInteger(seq) || seq < cursor.ackedSeq || seq > run.lastEventSeq) return "invalid" as const;
-      const settled = this.db.prepare(`SELECT seq FROM run_events WHERE run_id = ? AND seq <= ?
-        AND type IN ('run.completed','run.blocked','run.failed','run.cancelled') ORDER BY seq DESC LIMIT 1`).get(runId, seq) as { seq: number } | undefined;
-      const final = this.db.prepare(`SELECT seq FROM run_events WHERE run_id = ? AND seq <= ?
-        AND type IN ('run.completed','run.cancelled') ORDER BY seq DESC LIMIT 1`).get(runId, seq) as { seq: number } | undefined;
+      const settled = this.db.prepare(`SELECT seq FROM run_events WHERE run_id = ? AND seq > ? AND seq <= ?
+        AND type IN ('run.completed','run.blocked','run.failed','run.cancelled') ORDER BY seq DESC LIMIT 1`)
+        .get(runId, cursor.ackedSeq, seq) as { seq: number } | undefined;
+      const final = this.db.prepare(`SELECT seq FROM run_events WHERE run_id = ? AND seq > ? AND seq <= ?
+        AND type IN ('run.completed','run.cancelled') ORDER BY seq DESC LIMIT 1`)
+        .get(runId, cursor.ackedSeq, seq) as { seq: number } | undefined;
       this.db.prepare(`UPDATE event_consumers SET acked_seq = ?,
         settled_acked_seq = COALESCE(?, settled_acked_seq),
         final_acked_seq = COALESCE(?, final_acked_seq), updated_at = ?
