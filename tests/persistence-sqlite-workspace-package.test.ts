@@ -125,7 +125,7 @@ describe("SQLite persistence adapter workspace package", () => {
       expect(target.import).toMatch(/^\.\/dist\/.+\.js$/);
       expect(`${target.types}\n${target.import}`).not.toContain("/src/");
     }
-    expect(root.scripts["build:packages"]).toContain("adapters/persistence-sqlite");
+    expect(root.scripts["build:packages"]).toContain("npm run build -w @tagent/persistence-sqlite");
     expect(root.scripts.clean).toContain("@tagent/persistence-sqlite");
   });
 

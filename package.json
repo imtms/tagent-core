@@ -17,7 +17,7 @@
     "dev": "npm run build:packages && concurrently -k \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "TAGENT_RELEASE_ROOT=. tsx watch apps/core-service/src/cli.ts",
     "dev:web": "npm run dev -w @tagent/web-console",
-    "build:packages": "tsc -b packages/abi packages/core-client packages/governance packages/execution packages/admission && npm run build -w @tagent/memory && tsc -b packages/learning adapters/runtime-pi adapters/persistence-sqlite adapters/http-fastify && npm run build -w @tagent/workspace-local && npm run build -w @tagent/core-service",
+    "build:packages": "tsc -b packages/abi packages/core-client packages/governance packages/execution packages/admission && npm run build -w @tagent/memory && tsc -b packages/learning adapters/runtime-pi && npm run build -w @tagent/persistence-sqlite && tsc -b adapters/http-fastify && npm run build -w @tagent/workspace-local && npm run build -w @tagent/core-service",
     "build": "npm run build:packages && rm -rf dist && tsc -p tsconfig.server.json && mkdir -p dist/memory/postgres && cp packages/memory/dist/postgres/schema.sql dist/memory/postgres/schema.sql && npm run build -w @tagent/web-console",
     "start": "node dist/host.js",
     "test": "npm run build:packages && vitest run",
