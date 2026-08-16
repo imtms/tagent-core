@@ -34,7 +34,7 @@ const webRequiredReleaseFiles = [
 ];
 const coreContract = Object.freeze({
   hostProtocolVersion: 1,
-  stateProtocol: "tagent-core/state-0.8",
+  stateProtocol: "tagent-core/state-0.8-r2",
   generationEntry: "node_modules/@tagent/core-service/dist/generation-entry.js",
 });
 

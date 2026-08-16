@@ -62,11 +62,11 @@ TAGENT_CORS_ALLOWED_ORIGINS=https://console.example.com
 
 Do not put provider keys or Core credentials in the Web artifact.
 
-## Fresh database requirement
+## Database revision gate
 
-Core 0.8 creates one current schema identified by `tagent-core/0.8` and reports numeric schema version `1`. It accepts only an empty database or an exact current-schema database. Earlier Core databases are not upgraded.
+Core 0.8 keeps schema ID `tagent-core/0.8` and reports numeric revision `2`. It creates an empty database through the ordered migration runner and upgrades the exact legacy revision-1 (including pre-`user_version`) 0.8 shape without losing rows. The append-only migration journal, checksums, revision, and complete schema shape are verified on every open.
 
-Before first start, stop all writers and point `TAGENT_DB` at a nonexistent file or verified empty database. A marker mismatch or schema drift is a deployment failure; create a new database instead of editing the marker or copying rows.
+Before the first revision-2 start, stop all writers and back up SQLite together with WAL/SHM files. A marker mismatch, newer revision, journal mismatch, or schema drift is a deployment failure; restore a verified backup instead of editing metadata or copying rows.
 
 ## Deployment order
 
@@ -74,10 +74,10 @@ Use a Core-before-Gateway order: establish writer readiness, validate replay and
 
 1. stop new Gateway traffic and all Core writers;
 2. verify Core, Web, ABI, and Core Client checksums and release manifests;
-3. provision a new empty SQLite path and matching optional Memory stores;
+3. back up and validate the existing exact revision-1 database, or provision an empty SQLite path, plus matching optional Memory stores;
 4. validate the production credential and resource-scope configuration;
 5. start Core and require `/api/v1/health` to report `data.ok=true` and `data.writer.ready=true`;
-6. require base capabilities to report schema version `1`, current catalogs, Operator endpoints, ready Approval, receipt recovery, retention, limits, and `operator.read.v1`;
+6. require base capabilities to report schema version `2`, current catalogs, Operator endpoints, ready Approval, receipt recovery, retention, limits, and `operator.read.v1`;
 7. validate Operator Read and every enabled capability-profile summary/detail using the real Gateway principal;
 8. start one Gateway consumer, claim a generation, replay, persist, and then ACK;
 9. run `scripts/gateway-readiness-probe.mjs` and require zero lag/ACK gaps, no unknown or stale receipts, and `learningProjectionReady=true`;
@@ -146,7 +146,7 @@ Gateway persists each SSE event under the exact consumer generation and event id
 
 Back up only while Core is stopped, copying SQLite with its WAL/SHM files as one recovery set and recording the release tag, commit, checksum, configuration, schema ID, and optional Memory state. Test restore with the identical release artifact.
 
-A rollback build may reuse a database only when its release manifest declares `tagent-core/state-0.8` and it accepts the exact `tagent-core/0.8` schema and current ABI/profile tuple. Otherwise keep the current release running or deploy the replacement with a new empty database. Never point an incompatible binary at the current database or overwrite live database files.
+A rollback build may reuse the migrated database only when its release manifest declares `tagent-core/state-0.8-r2` and it accepts `tagent-core/0.8` revision 2 plus the current ABI/profile tuple. The first r2 deployment requires a full Host/service restart; after migration the Host rejects old r1 release manifests. To return to r1, stop the service and restore the matching pre-upgrade backup. Never point an incompatible binary at the current database or overwrite live database files.
 
 ## Web deployment
 

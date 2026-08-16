@@ -1,5 +1,6 @@
 export { createCoreApplication } from "./application/core-application-factory.js";
-export { CoreApplicationCoordinator } from "./application/core-application-coordinator.js";
+export { createCoreApplicationCoordinator } from "./application/core-application-coordinator.js";
+export type { CoreApplicationCoordinator } from "./application/core-application-coordinator.js";
 export type { CoreApplicationServices } from "./application/core-application-services.js";
 export { CoreWorkflowGovernanceApplication } from "./application/workflow-governance-application.js";
 export type { LearningSettingsUpdate } from "./application/workflow-governance-application.js";

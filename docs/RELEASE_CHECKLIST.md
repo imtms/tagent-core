@@ -58,7 +58,8 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 ## Current schema and recovery gate
 
 - [ ] An empty database creates the complete current schema in one transaction and reopens successfully.
-- [ ] `core_schema.schema_id` is `tagent-core/0.8`, `Store.getSchemaVersion()` is `1`, and exact `sqlite_master` drift validation fails closed.
+- [ ] `core_schema.schema_id` is `tagent-core/0.8`, `Store.getSchemaVersion()` and `PRAGMA user_version` are `2`, the migration journal/checksums are exact and append-only, and `sqlite_master` drift validation fails closed.
+- [ ] The Core manifest declares `tagent-core/state-0.8-r2`; an r1 manifest is rejected after migration, and the pre-upgrade SQLite/WAL/SHM recovery set has been tested.
 - [ ] A nonempty unmarked database, another schema ID, and missing/extra/changed schema objects are rejected with instructions to recreate the database.
 - [ ] A second Core process is rejected by the OS lock/writer authority.
 - [ ] The stable Host imports no application composition or persistence, supervises one Generation, rejects malformed/stale/incompatible IPC and release paths, and uses its own trusted verifier for candidates.

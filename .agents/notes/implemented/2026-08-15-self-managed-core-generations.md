@@ -27,7 +27,7 @@ Unexpected Generation exit restarts the same committed release with bounded expo
 
 Automatic crash recovery also requires no `outcome_unknown` TaskRun command, running tool attempt, or existing queued/running Continuation, and is limited to two recoveries per Run. Parent IPC loss has a bounded Generation fail-stop fallback. Crash timestamps are persisted before another restart is attempted; inability to persist the budget fails the Host closed.
 
-The Host commits `current` only after the target Generation reports ready with a writer fence strictly higher than the prior Generation. A target that fails readiness or reports a non-advancing fence is replaced by the previous release, whose fence must advance again. Automatic binary rollback is allowed only while the state contract is unchanged. Phase one declares `tagent-core/state-0.8` and requires the exact current SQLite schema; it performs no schema migration.
+The Host commits `current` only after the target Generation reports ready with a writer fence strictly higher than the prior Generation. A target that fails readiness or reports a non-advancing fence is replaced by the previous release, whose fence must advance again. Automatic binary rollback is allowed only while the state contract is unchanged. The later state-evolution decision advances the manifest contract to `tagent-core/state-0.8-r2`; the first r2 migration requires a full Host/service restart, and the Host thereafter rejects automatic rollback to r1 binaries.
 
 SQLite stays behind the existing application persistence ports and entirely inside the Generation. Phase one does not introduce another state-provider abstraction merely for the Host because the Host has no application-state need. A later decision may add read-only `inspect`, idempotent `prepare`, monotonic state-format upgrades, and Provider replacement. Such work must explicitly supersede the current no-upgrade decision and prohibit automatic old-binary rollback after an irreversible state change.
 
@@ -51,7 +51,7 @@ SQLite stays behind the existing application persistence ports and entirely insi
 
 `tests/tool-pipeline.test.ts` proves explicit approval, post-receipt dispatch order, replay suppression, and no dispatch on settlement failure. `tests/store.test.ts` proves idempotent activation receipt/handoff/result recovery, conflicting-terminal rejection, every crash-recovery exclusion, and the two-Continuation limit. `tests/release-deploy.test.ts` proves the Host/state manifest contract, private Host/Generation modules, stage-only deployment, first-install bootstrap, tampered-release rejection, and no systemd/health ownership. The focused TypeScript, lifecycle, release, Gateway, architecture, and persistence suites plus repository `lint`, `check`, full test, and diff gates are the release evidence.
 
-The implementation does not modify `current-schema.ts` or add a table. Release manifests declare `tagent-core/state-0.8`, `hostProtocolVersion: 1`, and the unexported `node_modules/@tagent/core-service/dist/generation-entry.js` as the Generation child entry.
+The original phase added no application table. The later revision-2 migration adds only the append-only schema journal and advances release manifests to `tagent-core/state-0.8-r2`; `hostProtocolVersion: 1` and the unexported `node_modules/@tagent/core-service/dist/generation-entry.js` child entry remain unchanged.
 
 ## Consequences
 

@@ -22,16 +22,20 @@ describe("Gateway profile provider harness", () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-profile-provider-"));
     directories.push(workspace);
     const store = new Store(":memory:");
-    const service = createCoreApplication(corePersistence(store), workspace, () => ({
-      prompt: async () => undefined,
-      steer: async () => "accepted" as const,
-      followUp: async () => "accepted" as const,
-      compact: async () => undefined,
-      abort: () => undefined,
-      dispose: async () => undefined,
-      getMessages: () => [],
-      getError: () => undefined,
-    }));
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: workspace,
+      runtimeFactory: () => ({
+        prompt: async () => undefined,
+        steer: async () => "accepted" as const,
+        followUp: async () => "accepted" as const,
+        compact: async () => undefined,
+        abort: () => undefined,
+        dispose: async () => undefined,
+        getMessages: () => [],
+        getError: () => undefined,
+      })
+    });
     const app = createApp({ ...httpTestResources(store), service, workspaceRoot: workspace, logger: false });
     apps.push(app);
     const address = await app.listen({ host: "127.0.0.1", port: 0 });

@@ -17,7 +17,7 @@ export function registerCapabilityV1Routes(app: FastifyInstance, dependencies: C
       releaseVersion: runtime?.releaseVersion?.trim() || "0.8.5",
       apiVersions: ["channel.v1", "operator.console.v1", "operator.read.v1"],
       eventSpecVersion: "1.0",
-      persistenceSchemaVersion: runtime?.schemaVersion ?? 1,
+      persistenceSchemaVersion: runtime?.schemaVersion ?? 2,
       commandTypes: [...TASK_RUN_COMMAND_TYPES],
       eventTypes: [...PROJECTION_CRITICAL_TASK_RUN_EVENT_TYPES],
       interactions: { approvalResolution: true, userInputSubmission: true },

@@ -48,10 +48,5 @@ export function settleRuntimeFactoryFailure(input: RuntimeFactoryFailureInput): 
       leaseToken: token.leaseToken,
       fence: token.executionFence,
     });
-    setImmediate(() => {
-      try {
-        if (!state.closing) input.postAttempt.attemptFinalized(run);
-      } catch { /* Persistence resources may already be closed during shutdown. */ }
-    });
   }
 }

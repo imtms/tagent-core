@@ -266,7 +266,7 @@ describe("Core service application workspace package", () => {
       "memoryRuntime = await createMemoryRuntime({",
       "resolveEmbeddingApiKey: embeddingCredentialReference",
       "resolveExtractorApiKey: extractorCredentialReference",
-      "service = createCoreApplication(\n      corePersistence",
+      "service = createCoreApplication({\n      persistence: corePersistence",
       "persistence: httpPersistence",
       "memory: memoryRuntime?.service ? assembleHttpMemory(memoryRuntime.service) : undefined",
       "artifacts: httpArtifactContent",
@@ -309,7 +309,7 @@ describe("Core service application workspace package", () => {
       const config = await import("@tagent/core-service/config");
       const host = await import("@tagent/core-service/host");
       if (typeof root.bootstrapCore !== "function" || root.runCoreServiceFromCli !== undefined) process.exit(1);
-      if (typeof application.createCoreApplication !== "function" || typeof application.CoreApplicationCoordinator !== "function") process.exit(1);
+      if (typeof application.createCoreApplication !== "function" || typeof application.createCoreApplicationCoordinator !== "function" || application.CoreApplicationCoordinator !== undefined) process.exit(1);
       if (typeof composition.CoreLifecycle !== "function" || typeof composition.TaskRunSupervisor !== "function") process.exit(1);
       if (typeof config.loadConfig !== "function" || typeof config.publicRuntimeConfig !== "function") process.exit(1);
       if (typeof host.runCoreHostFromCli !== "function" || typeof host.CoreHost !== "function") process.exit(1);

@@ -18,6 +18,7 @@ import type { ChannelV1Dependencies } from "./dependencies.js";
 import { requestIdOf, successEnvelope, V1HttpError } from "./errors.js";
 import { mapEventConsumerCursor, mapTaskRunEvent } from "./mappers.js";
 import { authorizeChannel, conflict, decodeQuery, missing } from "./route-support.js";
+import { SseWritePump } from "./sse-write-pump.js";
 
 const EVENT_REPLAY_BATCH_SIZE = 256;
 const EVENT_REPLAY_BUFFER_LIMIT = 1_000;
@@ -76,51 +77,49 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
     let unsubscribe = () => {};
     let closed = false;
     let replaying = true;
-    let backpressured = false;
     const buffered: ReturnType<typeof service.replay> = [];
     let bufferedOffset = 0;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
-    const clearBackpressure = (): void => { backpressured = false; };
+    let writer: SseWritePump | undefined;
     const closeStream = (): void => {
       if (closed) return;
       closed = true;
+      writer?.stop();
       if (heartbeat) clearInterval(heartbeat);
       try { unsubscribe(); } catch { /* stream closure must remain deterministic */ }
-      response.off("drain", clearBackpressure);
       if (!response.writableEnded) response.end();
     };
+    writer = new SseWritePump(response, {
+      maxPending: EVENT_REPLAY_BUFFER_LIMIT,
+      onError: closeStream,
+      onOverflow: closeStream,
+    });
     response.once("close", closeStream);
     response.on("error", closeStream);
-    response.on("drain", clearBackpressure);
     const generationIsCurrent = (): boolean =>
       eventConsumers.getEventConsumer(taskRunId, query.consumerId)?.generation === query.generation;
-    const send = (event: ReturnType<typeof service.replay>[number]): boolean => {
-      try {
-        const publicEvent = mapTaskRunEvent(event);
-        const schema = ProjectionCriticalTaskRunEventSchemaByType[publicEvent.type as KnownTaskRunEventType];
-        if (!schema) throw new Error(`Unsupported public TaskRun event type: ${publicEvent.type}`);
-        const projected = encodeAbi(schema, publicEvent as never);
-        const mapped = encodeAbi(TaskRunEventSchema, projected as never);
-        const accepted = response.write(`id: ${mapped.eventId}\ndata: ${JSON.stringify(mapped)}\n\n`);
-        if (!accepted) backpressured = true;
-        return !closed;
-      } catch {
-        closeStream();
-        return false;
-      }
+    const frame = (event: ReturnType<typeof service.replay>[number]): string => {
+      const publicEvent = mapTaskRunEvent(event);
+      const schema = ProjectionCriticalTaskRunEventSchemaByType[publicEvent.type as KnownTaskRunEventType];
+      if (!schema) throw new Error(`Unsupported public TaskRun event type: ${publicEvent.type}`);
+      const projected = encodeAbi(schema, publicEvent as never);
+      const mapped = encodeAbi(TaskRunEventSchema, projected as never);
+      return `id: ${mapped.eventId}\ndata: ${JSON.stringify(mapped)}\n\n`;
     };
-    const sendLive = (event: ReturnType<typeof service.replay>[number]): boolean => {
-      try {
+    const send = (event: ReturnType<typeof service.replay>[number], live = false): Promise<boolean> => writer!.enqueue(() => {
+      if (live) {
         if (!generationIsCurrent()) {
           closeStream();
-          return false;
+          return undefined;
         }
-        return send(event);
+      }
+      try {
+        return frame(event);
       } catch {
         closeStream();
-        return false;
+        return undefined;
       }
-    };
+    });
     let sliceEventCount = 0;
     let sliceStartedAt = performance.now();
     const yieldReplaySlice = async (): Promise<boolean> => {
@@ -143,7 +142,7 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
           if (buffered.length - bufferedOffset >= EVENT_REPLAY_BUFFER_LIMIT) return closeStream();
           buffered.push(event);
         }
-        else sendLive(event);
+        else void send(event, true);
       });
       unsubscribe = subscribed;
       if (closed) {
@@ -156,7 +155,7 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
           .filter((event) => event.seq <= replayHighWatermark);
         if (!batch.length) break;
         for (const event of batch) {
-          if (!send(event)) return;
+          if (!await send(event)) return;
           deliveredSequence = event.seq;
           if (!await yieldReplaySlice()) return;
         }
@@ -164,7 +163,7 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
       while (bufferedOffset < buffered.length) {
         const event = buffered[bufferedOffset++]!;
         if (event.seq > deliveredSequence) {
-          if (!send(event)) return;
+          if (!await send(event)) return;
           deliveredSequence = event.seq;
           if (!await yieldReplaySlice()) return;
         }
@@ -183,8 +182,8 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
     heartbeat = setInterval(() => {
       try {
         if (!generationIsCurrent()) return closeStream();
-        if (closed || backpressured) return;
-        if (!response.write(": heartbeat\n\n")) backpressured = true;
+        if (closed || writer!.backpressured || writer!.pendingCount > 0) return;
+        void writer!.enqueue(() => ": heartbeat\n\n");
       } catch {
         closeStream();
       }

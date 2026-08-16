@@ -124,7 +124,8 @@ export interface RunContextPort {
 
 /** Cross-domain follow-up owned by the composition root, not by Execution. */
 export interface PostAttemptPort {
-  attemptFinalized(run: TaskRun): void;
+  attemptFinalized(run: TaskRun, context: { shuttingDown: boolean }): void;
+  continuationStarted(runId: RunId): void;
   attemptLaunchFailed(input: { inboxItemId: string; runId: RunId; message: string }): void;
 }
 

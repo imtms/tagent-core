@@ -6,25 +6,25 @@ The stable Core Host is deliberately outside this boundary. It never imports `St
 
 ## Supported database contract
 
-Core 0.8 supports one database shape:
+Core 0.8 supports one current database shape and a monotonic revision history:
 
 | Field | Value |
 | --- | --- |
 | Durable marker | `core_schema.schema_id = 'tagent-core/0.8'` |
-| Public numeric schema version | `1` |
-| Creation source | `adapters/persistence-sqlite/src/current-schema.ts` |
-| Upgrade support | none; only an empty database or the exact current schema is accepted |
+| Public numeric schema version | `2` |
+| Creation source | deterministic SQL fragments under `adapters/persistence-sqlite/src/schema` |
+| Upgrade support | exact revision 1 and pre-`user_version` 0.8 databases migrate transactionally to revision 2 |
 
-An empty database is created in one transaction. Every subsequent open builds the reference schema in memory and compares the ordered `sqlite_master` table, index, and trigger definitions with the persisted database. A missing marker, another schema ID, an extra or missing object, or changed SQL fails startup. Core does not repair, backfill, or upgrade an earlier database.
+An empty database is created from the revision-1 baseline and upgraded through the same ordered migration runner used for existing databases. Revision 2 adds the append-only `core_schema_migrations` journal and records SHA-256 checksums for the exact baseline and migration SQL. `PRAGMA user_version`, the journal, marker, and ordered `sqlite_master` definitions must all agree. Migration execution uses one `BEGIN IMMEDIATE` transaction; a failure leaves the prior revision intact. A missing marker, unsupported/newer revision, changed journal, or structural drift fails startup instead of attempting ad-hoc repair.
 
-For a new deployment, point `TAGENT_DB` at a nonexistent file or a verified empty database. If Core reports an unsupported schema or schema drift, stop it and create a new database. Do not copy rows or edit the marker to bypass validation.
+For a new deployment, point `TAGENT_DB` at a nonexistent file, a verified empty database, or an exact revision-1 0.8 database. Back up the database and WAL/SHM recovery set before the first revision-2 start. If Core reports an unsupported schema, checksum mismatch, or structural drift, restore/repair from a verified backup. Do not copy rows or edit markers, revisions, or the journal to bypass validation.
 
 ## Generation startup order
 
 Production startup is ordered so no runtime can mutate before writer ownership is established:
 
 1. acquire the OS instance lock;
-2. open SQLite, create or validate the exact current schema, and surface interrupted durable profile operations as `outcome_unknown`;
+2. open SQLite, transactionally create or upgrade the supported exact shape, validate the current revision/journal, and surface interrupted durable profile operations as `outcome_unknown`;
 3. claim the `core_writer_lease` and monotonic fence;
 4. install connection-level mutation guards;
 5. create `SqlitePersistence` and the domain services;
@@ -112,6 +112,6 @@ For same-release disaster recovery:
 4. back up PostgreSQL and cold storage consistently when Memory is enabled;
 5. test the restore with the identical release artifact in an isolated location.
 
-Backups from an earlier schema ID are not upgrade inputs for Core 0.8. A release rollback is safe only when it accepts `tagent-core/0.8`; otherwise deploy with a new empty database or keep the current release running.
+Backups from another schema ID are not upgrade inputs for Core 0.8. A release rollback is safe only when it accepts both `tagent-core/0.8` revision 2 and the declared state protocol; otherwise restore the matching pre-upgrade backup or keep the current release running.
 
-Generation self-management does not migrate SQLite or optional Memory state. Release manifests must declare `tagent-core/state-0.8`; automatic binary rollback is allowed only inside that unchanged state protocol. A future state-provider upgrade needs a separate decision with idempotent prepare/commit recovery and must disable old-binary rollback after an irreversible state change.
+Generation self-management does not run an in-band state-protocol transition. Revision 2 release manifests declare `tagent-core/state-0.8-r2`; the stable Host rejects revision-1 manifests, preventing automatic rollback to a binary that cannot read the migrated database. The first r2 deployment therefore requires a full Host/service restart after backup. Later automatic activation rollback is allowed only among releases declaring the same r2 protocol. Optional Memory remains unchanged.

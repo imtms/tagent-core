@@ -24,7 +24,7 @@ import type { EventConsumerCursor, GateProfile, Session, SessionInboxItem, TaskR
 import { createGoalApi } from "./goal-api";
 import { createSkillApi } from "./skill-api";
 export { authenticatedCoreRequest, downloadArtifact } from "./api-transport";
-export { subscribe } from "./event-stream";
+export { subscribe } from "./api-transport";
 export type * from "./api-types";
 export type { SkillRevision, SkillSummary } from "./skill-api";
 export type { WorkspaceGoal, WorkspaceGoalSummary, WorkspaceGoalDefinition, WorkspaceGoalRoadmap, WorkspaceGoalRoadmapItem, WorkspaceGoalDecision, WorkspaceGoalTaskRunStart } from "./goal-api";

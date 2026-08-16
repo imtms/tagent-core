@@ -48,4 +48,4 @@ Gateway CI must run the exact current Gateway client against the declared Core r
 
 ## Rollout
 
-Deploy Core before Gateway. Require schema ID `tagent-core/0.8`, version `1`, profile readiness with the production credential, zero unresolved `profile_operation_receipts` in `outcome_unknown`, and no stale `started` profile receipt. After an ambiguous operation response, look up the original receipt using the same principal and `Idempotency-Key`; never automatically repeat an unknown effect.
+Deploy Core before Gateway. Require schema ID `tagent-core/0.8`, revision `2`, state protocol `tagent-core/state-0.8-r2`, profile readiness with the production credential, zero unresolved `profile_operation_receipts` in `outcome_unknown`, and no stale `started` profile receipt. After an ambiguous operation response, look up the original receipt using the same principal and `Idempotency-Key`; never automatically repeat an unknown effect.

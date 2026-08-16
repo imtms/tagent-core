@@ -1,5 +1,5 @@
 export const CORE_HOST_PROTOCOL_VERSION = 1 as const;
-export const CORE_STATE_PROTOCOL = "tagent-core/state-0.8" as const;
+export const CORE_STATE_PROTOCOL = "tagent-core/state-0.8-r2" as const;
 
 const RELEASE_ID = /^[0-9a-f]{40}$/;
 const MAX_IPC_BYTES = 32 * 1024;

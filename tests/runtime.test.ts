@@ -190,11 +190,16 @@ describe("Core application runtime boundary", () => {
     store.replaceWorkspaceSkills(session.id, [skill.skillId]);
     let captured: Parameters<RuntimeFactory>[0] | undefined;
     let runtime: SkillRuntime | undefined;
-    const service = createCoreApplication(corePersistence(store), "/tmp", (options) => {
-      captured = options;
-      runtime = new SkillRuntime(assistantMessage("skill executed"));
-      return runtime;
-    }, { supervisorReviewer: reviewer(passingTestAudit()) });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => {
+        captured = options;
+        runtime = new SkillRuntime(assistantMessage("skill executed"));
+        return runtime;
+      },
+      runtimeDefaults: { supervisorReviewer: reviewer(passingTestAudit()) }
+    });
 
     const run = await service.start(session.id, "Check release 1.2.3");
     await vi.waitFor(() => expect(runtime?.invoked).toHaveLength(1));
@@ -212,7 +217,14 @@ describe("Core application runtime boundary", () => {
     let finishRecall!: (value: Awaited<ReturnType<MemoryFacade["recall"]>>) => void;
     const recall = new Promise<Awaited<ReturnType<MemoryFacade["recall"]>>>((resolve) => { finishRecall = resolve; });
     const memory = { recall: vi.fn(() => recall), enqueueCapture: vi.fn(async () => ({ jobId: "capture-1" })) } as unknown as MemoryFacade;
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime(), {}, memory, "test-scope");
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime(),
+      runtimeDefaults: {},
+      memory: memory,
+      memoryScopeId: "test-scope"
+    });
 
     const admitted = await service.enqueueSessionInput(session.id, "visible immediately", "async-memory-admission");
 
@@ -251,7 +263,14 @@ describe("Core application runtime boundary", () => {
       enqueueCapture: vi.fn(async () => ({ jobId: "capture-cancel" })),
     } as unknown as MemoryFacade;
     const runtimeFactory = vi.fn(() => new DeferredRuntime());
-    const service = createCoreApplication(corePersistence(store), "/tmp", runtimeFactory, {}, memory, "test-scope");
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: runtimeFactory,
+      runtimeDefaults: {},
+      memory: memory,
+      memoryScopeId: "test-scope"
+    });
 
     const admitted = await service.enqueueSessionInput(session.id, "cancel during memory recall", "cancel-preparation");
     expect(service.cancel(admitted.run!.id)).toBe(true);
@@ -275,7 +294,14 @@ describe("Core application runtime boundary", () => {
       enqueueCapture: vi.fn(async () => ({ jobId: "capture-close" })),
     } as unknown as MemoryFacade;
     const runtimeFactory = vi.fn(() => new DeferredRuntime());
-    const service = createCoreApplication(corePersistence(store), "/tmp", runtimeFactory, {}, memory, "test-scope");
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: runtimeFactory,
+      runtimeDefaults: {},
+      memory: memory,
+      memoryScopeId: "test-scope"
+    });
 
     const admitted = await service.enqueueSessionInput(session.id, "close during memory recall", "close-preparation");
     await service.closeRuntimes();
@@ -346,9 +372,14 @@ describe("Core application runtime boundary", () => {
       };
       return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(analysis) } }] }), { headers: { "content-type": "application/json" } });
     });
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime(), {
-      routerModel: { id: "router-test", api: "openai-completions", baseUrl: "https://router.test/v1", maxTokens: 321 } as never,
-      credential: { reference: credentialReference("TEST_API_KEY"), resolver: createEnvironmentCredentialResolver({ TEST_API_KEY: "test-key" }) },
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime(),
+      runtimeDefaults: {
+        routerModel: { id: "router-test", api: "openai-completions", baseUrl: "https://router.test/v1", maxTokens: 321 } as never,
+        credential: { reference: credentialReference("TEST_API_KEY"), resolver: createEnvironmentCredentialResolver({ TEST_API_KEY: "test-key" }) },
+      }
     });
     try {
       await service.enqueueSessionInput(session.id, "Analyze and optimize this runtime end to end, including all performance-sensitive paths and verification evidence. ".repeat(5), "router-budget");
@@ -364,7 +395,12 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new InboxRuntime();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => runtime, { controlInboxCapacity: 4 });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => runtime,
+      runtimeDefaults: { controlInboxCapacity: 4 }
+    });
     const first = await service.enqueueSessionInput(session.id, "发布 0.1.4", "route-base");
     const routed = await service.enqueueSessionInput(session.id, "不要重启服务，端口改成 3220", "route-steer");
     await new Promise((resolve) => setImmediate(resolve));
@@ -376,7 +412,11 @@ describe("Core application runtime boundary", () => {
 
   it("splits compound active input into steer, follow-up, and parallel governance actions", async () => {
     const store = new Store(":memory:"); const session = store.createSession();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime());
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime()
+    });
     const first = await service.enqueueSessionInput(session.id, "修复 Supervisor", "compound-base");
     const active = first.run!;
     const routed = await service.enqueueSessionInput(session.id, "先不要部署。完成后更新文档。同时并行检查另一个仓库", "compound-route");
@@ -391,7 +431,11 @@ describe("Core application runtime boundary", () => {
   it("keeps explicit postponed work deferred", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime());
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime()
+    });
     const routed = await service.enqueueSessionInput(session.id, "暂时不做", "defer-one");
     expect(routed.run).toBeNull();
     expect(routed.item).toMatchObject({ decision: "defer", analysis: { intent: "defer" } });
@@ -402,7 +446,11 @@ describe("Core application runtime boundary", () => {
   it("keeps explicit parallel input as a related queued Session Inbox task", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime());
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime()
+    });
     const first = await service.enqueueSessionInput(session.id, "修复 Web UI", "parallel-base");
     const routed = await service.enqueueSessionInput(session.id, "同时并行设计另一个独立的移动端客户端", "parallel-child");
     expect(store.listRuns(session.id)).toHaveLength(1);
@@ -415,10 +463,14 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtimes: ControlledRuntime[] = [];
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => {
-      const runtime = new ControlledRuntime([assistantMessage(runtimes.length === 0 ? "The first task is complete. The requested first task was executed and its result was verified; there are no remaining blockers or incomplete acceptance criteria." : "The second task is now running and will produce its own complete verified result before TaskRun completion.")]);
-      runtimes.push(runtime);
-      return runtime;
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => {
+        const runtime = new ControlledRuntime([assistantMessage(runtimes.length === 0 ? "The first task is complete. The requested first task was executed and its result was verified; there are no remaining blockers or incomplete acceptance criteria." : "The second task is now running and will produce its own complete verified result before TaskRun completion.")]);
+        runtimes.push(runtime);
+        return runtime;
+      }
     });
     const first = await service.enqueueSessionInput(session.id, "first task", "inbox-1");
     const second = await service.enqueueSessionInput(session.id, "second task", "inbox-2");
@@ -440,11 +492,16 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtimes: ControlledRuntime[] = [];
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => {
-      const runtime = new ControlledRuntime([assistantMessage("not complete")]);
-      runtimes.push(runtime);
-      return runtime;
-    }, { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit()) });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => {
+        const runtime = new ControlledRuntime([assistantMessage("not complete")]);
+        runtimes.push(runtime);
+        return runtime;
+      },
+      runtimeDefaults: { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit()) }
+    });
     await service.enqueueSessionInput(session.id, "blocked task", "blocked-1");
     await service.enqueueSessionInput(session.id, "later task", "blocked-2");
     runtimes[0].resolve();
@@ -465,7 +522,11 @@ describe("Core application runtime boundary", () => {
       scope: "recover me", nonGoals: [], confidence: 1, reason: "test", routerVersion: "test",
     }, "recover-inbox");
     transitionTaskRun(store, blocking.id, "complete");
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime());
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime()
+    });
     expect(service.recoverSessionInbox()).toHaveLength(1);
     expect(store.getActiveRun(session.id)?.goal).toBe("recover me");
     await service.closeRuntimes();
@@ -476,7 +537,12 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let runtime!: InboxRuntime;
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => runtime = new InboxRuntime(), { controlInboxCapacity: 4 });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => runtime = new InboxRuntime(),
+      runtimeDefaults: { controlInboxCapacity: 4 }
+    });
     const run = await service.start(session.id, "durable controls");
     const [first, duplicate, second] = await Promise.all([
       service.steer(run.id, "change direction", "control-1"),
@@ -503,7 +569,11 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new BlockingControlRuntime();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => runtime);
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => runtime
+    });
     const run = await service.start(session.id, "cancel a delivering control");
     const delivery = service.steer(run.id, "late steering", "late-control");
     for (let index = 0; index < 100 && !runtime.steerStarted; index += 1) {
@@ -530,9 +600,13 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let runtime!: BlockingSupervisorSteerRuntime;
-    const service = createCoreApplication(corePersistence(store), "/tmp", (options) => {
-      runtime = new BlockingSupervisorSteerRuntime(options);
-      return runtime;
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => {
+        runtime = new BlockingSupervisorSteerRuntime(options);
+        return runtime;
+      }
     });
     const run = await service.start(session.id, "cancel a Supervisor steer");
     for (let index = 1; index <= 3; index += 1) {
@@ -567,7 +641,11 @@ describe("Core application runtime boundary", () => {
   it("requires unified approval before a related parallel Inbox task can start", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime());
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime()
+    });
     const parent = await service.enqueueSessionInput(session.id, "parent", "parallel-approval-parent");
     const related = await service.enqueueSessionInput(session.id, "同时并行处理独立子任务", "parallel-approval-child");
     expect(service.startSessionInputNow(session.id, related.item.id)).toMatchObject({ status: "approval_required", runId: parent.run!.id });
@@ -584,9 +662,13 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let runtimeOptions: Parameters<RuntimeFactory>[0] | undefined;
-    const service = createCoreApplication(corePersistence(store), "/tmp", (options) => {
-      runtimeOptions = options;
-      return new DeferredRuntime();
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => {
+        runtimeOptions = options;
+        return new DeferredRuntime();
+      }
     });
     const admitted = await service.enqueueSessionInput(session.id, "请部署到生产环境。", "external-pre-effect-approval");
     const runId = admitted.run!.id;
@@ -609,7 +691,11 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let launched = false;
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => { launched = true; return new DeferredRuntime(); });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => { launched = true; return new DeferredRuntime(); }
+    });
     const admitted = await service.enqueueSessionInput(session.id, "请部署到生产环境。", "external-gate-off", undefined, "off");
     const run = store.getRun(admitted.run!.id)!;
     expect(run).toMatchObject({ status: "blocked", gateRequired: false, contract: { executionPolicy: { mode: "external_action", gateProfile: "off" } } });
@@ -625,7 +711,11 @@ describe("Core application runtime boundary", () => {
     const analysis = { summary: "external task", objectives: [{ id: "o1", summary: "external task", timing: "current" as const, kind: "other" as const }], intent: "new_task" as const, targetRunId: null, priority: 500, urgency: "normal" as const, relation: "independent" as const, acceptanceCriteria: ["complete"], scope: "external", nonGoals: [], confidence: 1, reason: "test", routerVersion: "test", executionPolicy: inconsistentPolicy };
     store.enqueueSessionInbox(session.id, "external action", analysis, "external-risk");
     let launched = false;
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => { launched = true; return new DeferredRuntime(); });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => { launched = true; return new DeferredRuntime(); }
+    });
     expect(service.recoverSessionInbox()).toHaveLength(1);
     const run = store.listRuns(session.id)[0]!;
     expect(run).toMatchObject({ status: "blocked" });
@@ -639,9 +729,13 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let runtimeCalls = 0;
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => {
-      runtimeCalls += 1;
-      return new FakeRuntime([assistantMessage("External action needs more work.")]);
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => {
+        runtimeCalls += 1;
+        return new FakeRuntime([assistantMessage("External action needs more work.")]);
+      }
     });
     const admitted = await service.enqueueSessionInput(session.id, "请部署到生产环境。", "external-reapproval");
     const runId = admitted.run!.id;
@@ -662,7 +756,11 @@ describe("Core application runtime boundary", () => {
     const writes = vi.spyOn(store, "upsertCheckpoint");
     const session = store.createSession();
     let runtime!: CheckpointRuntime;
-    const service = createCoreApplication(corePersistence(store), "/tmp", (options) => runtime = new CheckpointRuntime(options));
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => runtime = new CheckpointRuntime(options)
+    });
     const run = await service.start(session.id, "checkpoint stream");
     expect(writes).toHaveBeenCalledTimes(1);
     runtime.emit("runtime.queue", { pendingMessageCount: 0 });
@@ -706,7 +804,7 @@ describe("Core application runtime boundary", () => {
         upsertTrustedCheck(store, active.id, { key: "verify", title: "Verify", command: "npm test", output: "regression test passed" });
         options.eventSink.publish("message.started", { ordinal: 1 });
         options.eventSink.publish("message.delta", { ordinal: 1, delta: complete });
-        options.eventSink.publish("message.completed", { ordinal: 1, content: complete });
+        options.eventSink.publish("message.completed", { ordinal: 1, content: complete, willRetry: false });
       },
       async steer() { return "accepted" as const; },
       abort() {},
@@ -714,7 +812,11 @@ describe("Core application runtime boundary", () => {
       getMessages() { return [assistantMessage(complete), assistantMessage("")]; },
       getError() { return undefined; },
     });
-    const service = createCoreApplication(corePersistence(store), "/tmp", runtimeFactory);
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: runtimeFactory
+    });
     const run = await service.start(session.id, "find and fix the missing final response");
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(store.getRun(run.id)?.status).toBe("completed");
@@ -726,7 +828,11 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let runtime!: CheckpointRuntime;
-    const service = createCoreApplication(corePersistence(store), "/tmp", (options) => runtime = new CheckpointRuntime(options));
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => runtime = new CheckpointRuntime(options)
+    });
     const run = await service.start(session.id, "multi-message stream");
     runtime.emit("message.started", { ordinal: 1 });
     runtime.emit("message.delta", { delta: "first answer", ordinal: 1 });
@@ -750,7 +856,11 @@ describe("Core application runtime boundary", () => {
     firstStore.close();
 
     const secondStore = new Store(filename);
-    const service = createCoreApplication(corePersistence(secondStore), "/tmp", () => new DeferredRuntime());
+    const service = createCoreApplication({
+      persistence: corePersistence(secondStore),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime()
+    });
     expect(secondStore.getRun(run.id)).toMatchObject({ status: "interrupted", checkpoint: { active: false, assistantPartial: "", currentTool: null, attempt: 1 } });
     const resumed = await service.resume(run.id);
     expect(resumed).toMatchObject({ status: "running", attempt: 2, checkpoint: { active: true, assistantPartial: "", currentTool: null, attempt: 2 } });
@@ -763,7 +873,12 @@ describe("Core application runtime boundary", () => {
     const session = store.createSession();
     const runtime = new FakeRuntime([assistantMessage("done")]);
     const factory: RuntimeFactory = vi.fn(() => runtime);
-    const service = createCoreApplication(corePersistence(store), "/tmp", factory, { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit()) });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: factory,
+      runtimeDefaults: { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit()) }
+    });
     const run = await service.start(session.id, "test factory");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(factory).toHaveBeenCalledOnce();
@@ -778,13 +893,18 @@ describe("Core application runtime boundary", () => {
     const session = store.createSession();
     const systemPrompts: string[] = [];
     const dynamicContexts: string[] = [];
-    const service = createCoreApplication(corePersistence(store), "/tmp", (options) => {
-      systemPrompts.push(options.systemPrompt);
-      dynamicContexts.push(options.dynamicContext?.() ?? "");
-      return new CallbackRuntime(assistantMessage("candidate"), () => {
-        store.upsertPlanItem(options.token.runId, { key: "work", title: "Work", status: "done", required: true, position: 1 });
-      });
-    }, { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit(), passingTestAudit()) });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => {
+        systemPrompts.push(options.systemPrompt);
+        dynamicContexts.push(options.dynamicContext?.() ?? "");
+        return new CallbackRuntime(assistantMessage("candidate"), () => {
+          store.upsertPlanItem(options.token.runId, { key: "work", title: "Work", status: "done", required: true, position: 1 });
+        });
+      },
+      runtimeDefaults: { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit(), passingTestAudit()) }
+    });
 
     const run = await service.start(session.id, "stable-prefix-regression-marker");
     await vi.waitFor(() => expect(store.getRun(run.id)?.status).toBe("blocked"));
@@ -806,10 +926,15 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let runtimeCalls = 0;
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => {
-      runtimeCalls += 1;
-      return new CooldownRuntime([]);
-    }, { maxContinuations: 2 });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => {
+        runtimeCalls += 1;
+        return new CooldownRuntime([]);
+      },
+      runtimeDefaults: { maxContinuations: 2 }
+    });
 
     const run = await service.start(session.id, "provider cooldown recovery");
     await vi.waitFor(() => expect(store.listContinuations(run.id)).toHaveLength(1));
@@ -828,7 +953,11 @@ describe("Core application runtime boundary", () => {
     const run = store.createRun(store.createSession().id, "manual cooldown override");
     transitionTaskRun(store, run.id, "block", "model_cooldown");
     const delayed = store.queueContinuation(run.id, "delayed provider retry", Date.now() + 60_000);
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime());
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime()
+    });
 
     await service.resume(run.id);
     expect(store.getRun(run.id)).toMatchObject({ status: "running", attempt: 2 });
@@ -845,13 +974,19 @@ describe("Core application runtime boundary", () => {
     store.queueContinuation(run.id, "gate");
     let oldRuntime!: ControlledRuntime;
     let calls = 0;
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => {
-      calls += 1;
-      if (calls === 1) return oldRuntime = new ControlledRuntime([assistantMessage("late")]);
-      return new CallbackRuntime(assistantMessage("new owner"), () => {
-        store.upsertPlanItem(run.id, { key: "recover", title: "Recover", status: "done", required: true, position: 1 });
-      });
-    }, { maxContinuations: 1 });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => {
+        calls += 1;
+        if (calls === 1)
+          return oldRuntime = new ControlledRuntime([assistantMessage("late")]);
+        return new CallbackRuntime(assistantMessage("new owner"), () => {
+          store.upsertPlanItem(run.id, { key: "recover", title: "Recover", status: "done", required: true, position: 1 });
+        });
+      },
+      runtimeDefaults: { maxContinuations: 1 }
+    });
     service.recoverContinuations();
     await new Promise((resolve) => setTimeout(resolve, 0));
     const active = store.listContinuations(run.id)[0];
@@ -868,7 +1003,11 @@ describe("Core application runtime boundary", () => {
   it("runs Supervisor restart reconciliation only once per service instance", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime());
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime()
+    });
     service.recoverContinuations();
     const run = store.createRun(session.id, "active supervisor decision");
     const decision = new TaskRunSupervisor(store, reviewer(passingTestAudit()), { repeatedFailureThreshold: 1, maxSteersPerAttempt: 1, minEventsBetweenInterventions: 1 }).reviewCheckpoint(run.id, { runId: run.id, seq: 1, type: "tool.completed", data: { toolName: "bash", isError: true }, createdAt: Date.now() });
@@ -887,10 +1026,15 @@ describe("Core application runtime boundary", () => {
     const old = store.claimContinuation(run.id, "dead-owner", 30_000)!;
     store.db.prepare("UPDATE run_continuations SET lease_until = ? WHERE id = ?").run(Date.now() + 25, old.continuation.id);
     let calls = 0;
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new CallbackRuntime(assistantMessage("recovered"), () => {
-      calls += 1;
-      store.upsertPlanItem(run.id, { key: "recover", title: "Recover", status: "done", required: true, position: 1 });
-    }), { maxContinuations: 1 });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new CallbackRuntime(assistantMessage("recovered"), () => {
+        calls += 1;
+        store.upsertPlanItem(run.id, { key: "recover", title: "Recover", status: "done", required: true, position: 1 });
+      }),
+      runtimeDefaults: { maxContinuations: 1 }
+    });
     expect(service.recoverContinuations()).toEqual([]);
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(calls).toBe(1);
@@ -904,7 +1048,11 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new SlowAbortRuntime();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => runtime);
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => runtime
+    });
     await service.start(session.id, "graceful close");
     const closing = service.closeRuntimes();
     expect(runtime.settled).toBe(false);
@@ -918,7 +1066,11 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new LatchingDisposeRuntime();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => runtime);
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => runtime
+    });
     await service.start(session.id, "quiescent close");
 
     let closed = false;
@@ -941,7 +1093,11 @@ describe("Core application runtime boundary", () => {
     transitionTaskRun(store, run.id, "block", "gate");
     store.queueContinuation(run.id, "gate");
     const runtime = new SlowAbortRuntime();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => runtime);
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => runtime
+    });
     service.recoverContinuations();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(store.listContinuations(run.id)[0].status).toBe("running");
@@ -955,7 +1111,11 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new RejectingAbortRuntime();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => runtime);
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => runtime
+    });
     const run = await service.start(session.id, "async abort failure");
     expect(service.cancel(run.id)).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -973,7 +1133,12 @@ describe("Core application runtime boundary", () => {
     });
     batch();
     let options: Parameters<RuntimeFactory>[0] | undefined;
-    const service = createCoreApplication(corePersistence(store), "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, maxContextTurns: 2 });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); },
+      runtimeDefaults: { maxContinuations: 0, maxContextTurns: 2 }
+    });
     await service.start(session.id, "latest?");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(options?.initialMessages?.at(-1)).toMatchObject({ role: "user", content: "message-10001" });
@@ -992,7 +1157,12 @@ describe("Core application runtime boundary", () => {
 
     const secondStore = new Store(filename);
     let options: Parameters<RuntimeFactory>[0] | undefined;
-    const service = createCoreApplication(corePersistence(secondStore), "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("stable")]); }, { maxContinuations: 0 });
+    const service = createCoreApplication({
+      persistence: corePersistence(secondStore),
+      workspace: "/tmp",
+      runtimeFactory: (value) => { options = value; return new FakeRuntime([assistantMessage("stable")]); },
+      runtimeDefaults: { maxContinuations: 0 }
+    });
     await service.start(session.id, "Which release channel did we choose?");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -1008,7 +1178,12 @@ describe("Core application runtime boundary", () => {
     store.appendMessage(session.id, "assistant", "The project codename is Atlas.");
     let options: Parameters<RuntimeFactory>[0] | undefined;
     const runtime = new FakeRuntime([assistantMessage("Atlas")]);
-    const service = createCoreApplication(corePersistence(store), "/tmp", (value) => { options = value; return runtime; }, { maxContinuations: 0 });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (value) => { options = value; return runtime; },
+      runtimeDefaults: { maxContinuations: 0 }
+    });
 
     const run = await service.start(session.id, "What is the project codename?");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1036,7 +1211,12 @@ describe("Core application runtime boundary", () => {
     store.appendMessage(session.id, "user", "latest user fact");
     store.appendMessage(session.id, "assistant", "latest assistant answer");
     let options: Parameters<RuntimeFactory>[0] | undefined;
-    const service = createCoreApplication(corePersistence(store), "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 2_000, maxContextTurns: 1, model: { contextWindow: 2_000, maxTokens: 200 } as never });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); },
+      runtimeDefaults: { maxContinuations: 0, contextWindow: 2000, maxContextTurns: 1, model: { contextWindow: 2000, maxTokens: 200 } as never }
+    });
 
     const run = await service.start(session.id, "follow up");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1057,7 +1237,12 @@ describe("Core application runtime boundary", () => {
       options.push(runtimeOptions);
       return options.length === 1 ? first : second;
     });
-    const service = createCoreApplication(corePersistence(store), "/tmp", factory, { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit(), continuationAudit()) });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: factory,
+      runtimeDefaults: { maxContinuations: 0, supervisorReviewer: reviewer(continuationAudit(), continuationAudit()) }
+    });
     const started = await service.start(session.id, "resume goal", "stable-request");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(store.getRun(started.id)?.status).toBe("blocked");
@@ -1092,7 +1277,11 @@ describe("Core application runtime boundary", () => {
     transitionTaskRun(store, run.id, "block", "gate");
     let options: Parameters<RuntimeFactory>[0] | undefined;
     const runtime = new FakeRuntime([assistantMessage("done")]);
-    const service = createCoreApplication(corePersistence(store), "/tmp", (value) => { options = value; return runtime; });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (value) => { options = value; return runtime; }
+    });
     await service.resume(run.id);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(options?.initialMessages).toEqual([user, assistant]);
@@ -1128,9 +1317,14 @@ describe("Core application runtime boundary", () => {
     const continuation = store.queueContinuation(run.id, "plan missing");
     store.updateContinuation(continuation.id, "running");
     store.resumeRun(run.id);
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new CallbackRuntime(assistantMessage("recovered"), () => {
-      store.upsertPlanItem(run.id, { key: "recover", title: "Recover", status: "done", required: true, position: 1 });
-    }), { maxContinuations: 2 });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new CallbackRuntime(assistantMessage("recovered"), () => {
+        store.upsertPlanItem(run.id, { key: "recover", title: "Recover", status: "done", required: true, position: 1 });
+      }),
+      runtimeDefaults: { maxContinuations: 2 }
+    });
     expect(service.recoverContinuations()).toEqual([run.id]);
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(store.getRun(run.id)).toMatchObject({ status: "completed", attempt: 3 });
@@ -1146,15 +1340,20 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let calls = 0;
-    const service = createCoreApplication(corePersistence(store), workspace, () => {
-      calls += 1;
-      return new CallbackRuntime(assistantMessage("first candidate"), () => {
-        if (calls === 1) {
-          unlinkSync(`${workspace}/AGENTS.md`);
-          symlinkSync("missing-rules.md", `${workspace}/AGENTS.md`);
-        }
-      });
-    }, { maxContinuations: 2, supervisorReviewer: reviewer(continuationAudit()) });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: workspace,
+      runtimeFactory: () => {
+        calls += 1;
+        return new CallbackRuntime(assistantMessage("first candidate"), () => {
+          if (calls === 1) {
+            unlinkSync(`${workspace}/AGENTS.md`);
+            symlinkSync("missing-rules.md", `${workspace}/AGENTS.md`);
+          }
+        });
+      },
+      runtimeDefaults: { maxContinuations: 2, supervisorReviewer: reviewer(continuationAudit()) }
+    });
     const run = await service.start(session.id, "prepare continuation safely");
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(calls).toBe(1);
@@ -1174,7 +1373,12 @@ describe("Core application runtime boundary", () => {
     transitionTaskRun(store, run.id, "block", "semantic correction required");
     store.queueContinuation(run.id, "semantic correction required");
     let prompt = "";
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new CallbackRuntime(assistantMessage("translated"), (value) => { prompt = value; }), { maxContinuations: 1 });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new CallbackRuntime(assistantMessage("translated"), (value) => { prompt = value; }),
+      runtimeDefaults: { maxContinuations: 1 }
+    });
     service.recoverContinuations();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(prompt).toContain("no-side-effect semantic delivery");
@@ -1193,7 +1397,12 @@ describe("Core application runtime boundary", () => {
     transitionTaskRun(store, run.id, "block", "research: Required plan item is pending");
     store.queueContinuation(run.id, "research: Required plan item is pending");
     let prompt = "";
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new CallbackRuntime(assistantMessage("done"), (value) => { prompt = value; }), { maxContinuations: 0 });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new CallbackRuntime(assistantMessage("done"), (value) => { prompt = value; }),
+      runtimeDefaults: { maxContinuations: 0 }
+    });
     service.recoverContinuations();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(prompt).toContain("Semantic contract coverage has not been evaluated yet");
@@ -1212,7 +1421,12 @@ describe("Core application runtime boundary", () => {
     for (const message of [oldUser, oldAssistant, newUser, newAssistant]) store.appendTranscript(run.id, 1, message);
     transitionTaskRun(store, run.id, "block", "gate");
     let options: Parameters<RuntimeFactory>[0] | undefined;
-    const service = createCoreApplication(corePersistence(store), "/tmp", (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); }, { maxContinuations: 0, contextWindow: 1_000, maxContextTurns: 1, model: { contextWindow: 1_000, maxTokens: 100 } as never });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); },
+      runtimeDefaults: { maxContinuations: 0, contextWindow: 1000, maxContextTurns: 1, model: { contextWindow: 1000, maxTokens: 100 } as never }
+    });
     await service.resume(run.id);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(options?.initialMessages).toEqual([newUser, newAssistant]);
@@ -1226,17 +1440,22 @@ describe("Core application runtime boundary", () => {
     let runId = "";
     let calls = 0;
     const runtimes: CallbackRuntime[] = [];
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => {
-      calls += 1;
-      const runtime = new CallbackRuntime(assistantMessage(calls === 1 ? "blocked" : "done"), () => {
-        if (calls === 2) {
-          store.upsertPlanItem(runId, { key: "work", title: "Finish work", status: "done", required: true, position: 1 });
-          upsertTrustedCheck(store, runId, { key: "verify", title: "Verify work", command: "test", output: "1 test passed" });
-        }
-      });
-      runtimes.push(runtime);
-      return runtime;
-    }, { maxContinuations: 2, supervisorReviewer: reviewer(continuationAudit(), passingTestAudit()) });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => {
+        calls += 1;
+        const runtime = new CallbackRuntime(assistantMessage(calls === 1 ? "blocked" : "done"), () => {
+          if (calls === 2) {
+            store.upsertPlanItem(runId, { key: "work", title: "Finish work", status: "done", required: true, position: 1 });
+            upsertTrustedCheck(store, runId, { key: "verify", title: "Verify work", command: "test", output: "1 test passed" });
+          }
+        });
+        runtimes.push(runtime);
+        return runtime;
+      },
+      runtimeDefaults: { maxContinuations: 2, supervisorReviewer: reviewer(continuationAudit(), passingTestAudit()) }
+    });
     const run = await service.start(session.id, "auto continue");
     runId = run.id;
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -1253,7 +1472,11 @@ describe("Core application runtime boundary", () => {
   it("keeps a parallel approval pending when the approved launch cannot be claimed", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new DeferredRuntime());
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime()
+    });
     const parent = await service.start(session.id, "parent task");
     const queued = await service.enqueueSessionInput(session.id, "parallel task", "parallel-launch-failure");
     store.db.prepare("UPDATE session_supervisor_inbox SET relation='parallel', target_run_id=? WHERE id=?").run(parent.id, queued.item.id);
@@ -1271,13 +1494,19 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let calls = 0;
-    const service = createCoreApplication(corePersistence(store), "/tmp", (options) => {
-      calls += 1;
-      if (calls === 2) throw new Error("continuation factory unavailable");
-      return new CallbackRuntime(assistantMessage("blocked"), () => {
-        store.upsertPlanItem(options.token.runId, { key: "work", title: "Finish work", status: "pending", required: true, position: 1 });
-      });
-    }, { maxContinuations: 1, supervisorReviewer: reviewer(continuationAudit()) });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => {
+        calls += 1;
+        if (calls === 2)
+          throw new Error("continuation factory unavailable");
+        return new CallbackRuntime(assistantMessage("blocked"), () => {
+          store.upsertPlanItem(options.token.runId, { key: "work", title: "Finish work", status: "pending", required: true, position: 1 });
+        });
+      },
+      runtimeDefaults: { maxContinuations: 1, supervisorReviewer: reviewer(continuationAudit()) }
+    });
     const run = await service.start(session.id, "continuation factory failure");
     for (let index = 0; index < 100 && store.listContinuations(run.id)[0]?.status !== "failed"; index += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1296,19 +1525,25 @@ describe("Core application runtime boundary", () => {
     const session = store.createSession();
     let calls = 0;
     const captured: Array<Parameters<RuntimeFactory>[0]> = [];
-    const service = createCoreApplication(corePersistence(store), "/tmp", (options) => {
-      captured.push(options);
-      calls += 1;
-      return new CallbackRuntime(assistantMessage(calls === 1 ? "needs one repair" : "repaired and verified"), () => {
-        if (calls === 1) {
-          store.appendTranscript(options.token.runId, 1, { role: "user", content: "old attempt detail", timestamp: 1 });
-          store.appendTranscript(options.token.runId, 1, assistantMessage("latest failed candidate"));
-        } else {
-          store.upsertPlanItem(options.token.runId, { key: "work", title: "Work", status: "done", required: true, position: 1 });
-          upsertTrustedCheck(store, options.token.runId, { key: "verify", title: "Verify", command: "test", output: "passed" });
-        }
-      });
-    }, { maxContinuations: 1, supervisorReviewer: reviewer(continuationAudit(), passingTestAudit()) });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => {
+        captured.push(options);
+        calls += 1;
+        return new CallbackRuntime(assistantMessage(calls === 1 ? "needs one repair" : "repaired and verified"), () => {
+          if (calls === 1) {
+            store.appendTranscript(options.token.runId, 1, { role: "user", content: "old attempt detail", timestamp: 1 });
+            store.appendTranscript(options.token.runId, 1, assistantMessage("latest failed candidate"));
+          }
+          else {
+            store.upsertPlanItem(options.token.runId, { key: "work", title: "Work", status: "done", required: true, position: 1 });
+            upsertTrustedCheck(store, options.token.runId, { key: "verify", title: "Verify", command: "test", output: "passed" });
+          }
+        });
+      },
+      runtimeDefaults: { maxContinuations: 1, supervisorReviewer: reviewer(continuationAudit(), passingTestAudit()) }
+    });
     const run = await service.start(session.id, "continuation delta");
     // Historical attempt zero data must not be replayed into attempt two.
     store.appendTranscript(run.id, 0, { role: "user", content: "ancient unrelated transcript", timestamp: 0 });
@@ -1324,7 +1559,12 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let calls = 0;
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => { calls += 1; return new CallbackRuntime(assistantMessage("continue")); }, { maxContinuations: 64, runTimeoutMs: 60_000, supervisorReviewer: reviewer(continuationAudit(), continuationAudit(), continuationAudit()) });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => { calls += 1; return new CallbackRuntime(assistantMessage("continue")); },
+      runtimeDefaults: { maxContinuations: 64, runTimeoutMs: 60000, supervisorReviewer: reviewer(continuationAudit(), continuationAudit(), continuationAudit()) }
+    });
     const run = await service.start(session.id, "stalled durable run");
     for (let index = 0; index < 100 && !store.listEvents(run.id).some((event) => event.type === "continuation.stalled"); index += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     expect(calls).toBe(3);
@@ -1339,12 +1579,18 @@ describe("Core application runtime boundary", () => {
     const session = store.createSession();
     let calls = 0;
     let runId = "";
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => {
-      calls += 1;
-      return new CallbackRuntime(assistantMessage("continue"), () => {
-        if (calls === 2) store.upsertPlanItem(runId, { key: "progress", title: "Progress", status: "done", required: false, position: 2 });
-      });
-    }, { maxContinuations: 3, supervisorReviewer: reviewer(continuationAudit(), continuationAudit(), continuationAudit(), continuationAudit()) });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => {
+        calls += 1;
+        return new CallbackRuntime(assistantMessage("continue"), () => {
+          if (calls === 2)
+            store.upsertPlanItem(runId, { key: "progress", title: "Progress", status: "done", required: false, position: 2 });
+        });
+      },
+      runtimeDefaults: { maxContinuations: 3, supervisorReviewer: reviewer(continuationAudit(), continuationAudit(), continuationAudit(), continuationAudit()) }
+    });
     const run = await service.start(session.id, "changing durable state");
     runId = run.id;
     for (let index = 0; index < 120 && calls < 4; index += 1) await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1358,7 +1604,12 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let calls = 0;
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => { calls += 1; return new CallbackRuntime(assistantMessage("blocked")); }, { maxContinuations: 1, supervisorReviewer: reviewer(continuationAudit(), continuationAudit()) });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => { calls += 1; return new CallbackRuntime(assistantMessage("blocked")); },
+      runtimeDefaults: { maxContinuations: 1, supervisorReviewer: reviewer(continuationAudit(), continuationAudit()) }
+    });
     const run = await service.start(session.id, "stay blocked");
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(calls).toBe(2);
@@ -1371,8 +1622,13 @@ describe("Core application runtime boundary", () => {
   it("keeps token use observational and does not install Core token controls", async () => {
     const store = new Store(":memory:"); const session = store.createSession(); let captured: Parameters<RuntimeFactory>[0] | undefined;
     const config = loadConfig({ TAGENT_MAX_RUN_TOKENS: "1", TAGENT_DYNAMIC_BUDGET: "true", TAGENT_MAX_MODEL_CALLS: "1", TAGENT_MAX_TOOL_CALLS: "1" });
-    const service = createCoreApplication(corePersistence(store), "/tmp", (options) => { captured = options; return new CallbackRuntime(assistantMessage("observed usage only")); }, {
-      model: { id: config.model.modelId, provider: config.model.provider, api: config.model.api, baseUrl: config.model.baseUrl, contextWindow: config.model.contextWindow, maxTokens: config.model.maxTokens },
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => { captured = options; return new CallbackRuntime(assistantMessage("observed usage only")); },
+      runtimeDefaults: {
+        model: { id: config.model.modelId, provider: config.model.provider, api: config.model.api, baseUrl: config.model.baseUrl, contextWindow: config.model.contextWindow, maxTokens: config.model.maxTokens },
+      }
     });
     await service.start(session.id, "observe token usage"); await new Promise((resolve) => setTimeout(resolve, 20));
     expect(captured).not.toHaveProperty("maxRunTokens"); expect(captured).not.toHaveProperty("softRunTokens");
@@ -1388,7 +1644,12 @@ describe("Core application runtime boundary", () => {
     let captured: Parameters<RuntimeFactory>[0] | undefined;
     const primary = { id: "primary-model", provider: "test", api: "openai-responses", baseUrl: "https://example.test/v1", reasoning: true, contextWindow: 10_000, maxTokens: 1_000 };
     const fallback = { ...primary, id: "fallback-model" };
-    const service = createCoreApplication(corePersistence(store), "/tmp", (options) => { captured = options; return new CallbackRuntime(assistantMessage("profile applied")); }, { model: primary, fallbackModels: [fallback] });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => { captured = options; return new CallbackRuntime(assistantMessage("profile applied")); },
+      runtimeDefaults: { model: primary, fallbackModels: [fallback] }
+    });
     await service.start(session.id, "use workspace profile");
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(captured).toMatchObject({ model: { id: "fallback-model" }, fallbackModels: [{ id: "primary-model" }], reasoningEffort: "xhigh" });
@@ -1401,7 +1662,12 @@ describe("Core application runtime boundary", () => {
       const store = new Store(":memory:");
       const session = store.createSession();
       const runtime = new DeferredRuntime();
-      const service = createCoreApplication(corePersistence(store), "/tmp", () => runtime, { runTimeoutMs: loadConfig({}).runTimeoutMs, runHardTimeoutMs: 86_400_000 });
+      const service = createCoreApplication({
+        persistence: corePersistence(store),
+        workspace: "/tmp",
+        runtimeFactory: () => runtime,
+        runtimeDefaults: { runTimeoutMs: loadConfig({}).runTimeoutMs, runHardTimeoutMs: 86400000 }
+      });
       const run = await service.start(session.id, "default timeout");
 
       await vi.advanceTimersByTimeAsync(119_999);
@@ -1421,7 +1687,12 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new DeferredRuntime();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => runtime, { runTimeoutMs: 10, runHardTimeoutMs: 1_000 });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => runtime,
+      runtimeDefaults: { runTimeoutMs: 10, runHardTimeoutMs: 1000 }
+    });
     const run = await service.start(session.id, "timeout");
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(runtime.aborted).toBe(true);
@@ -1436,7 +1707,12 @@ describe("Core application runtime boundary", () => {
     const first = new SlowAbortRuntime();
     const second = new DeferredRuntime();
     let calls = 0;
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => ++calls === 1 ? first : second, { runTimeoutMs: 10, runHardTimeoutMs: 1_000 });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => ++calls === 1 ? first : second,
+      runtimeDefaults: { runTimeoutMs: 10, runHardTimeoutMs: 1000 }
+    });
     const run = await service.start(session.id, "timeout then resume");
     await new Promise((resolve) => setTimeout(resolve, 15));
     expect(store.getRun(run.id)).toMatchObject({ status: "failed", resumable: true });
@@ -1463,7 +1739,12 @@ describe("Core application runtime boundary", () => {
       },
       async reviewAttemptFailure() { return { action: "block_taskrun", reasonCode: "failed", rationale: "failed", confidence: 1 }; },
     };
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new CallbackRuntime(assistantMessage("complete candidate")), { runTimeoutMs: 10, runHardTimeoutMs: 1_000, supervisorReviewer: slowReviewer });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new CallbackRuntime(assistantMessage("complete candidate")),
+      runtimeDefaults: { runTimeoutMs: 10, runHardTimeoutMs: 1000, supervisorReviewer: slowReviewer }
+    });
     const run = await service.start(session.id, "slow bounded review");
     await new Promise((resolve) => setTimeout(resolve, 70));
     expect(store.getRun(run.id)).toMatchObject({ status: "completed", blockedReason: "" });
@@ -1476,10 +1757,15 @@ describe("Core application runtime boundary", () => {
     const session = store.createSession();
     let runtime!: ActiveDeferredRuntime;
     let activityCount = 0;
-    const service = createCoreApplication(corePersistence(store), "/tmp", (options) => {
-      runtime = new ActiveDeferredRuntime(() => { activityCount += 1; options.eventSink.activity(); }, 5);
-      return runtime;
-    }, { runTimeoutMs: 40, runHardTimeoutMs: 1_000 });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => {
+        runtime = new ActiveDeferredRuntime(() => { activityCount += 1; options.eventSink.activity(); }, 5);
+        return runtime;
+      },
+      runtimeDefaults: { runTimeoutMs: 40, runHardTimeoutMs: 1000 }
+    });
     const run = await service.start(session.id, "active long run");
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(runtime.aborted).toBe(false);
@@ -1494,10 +1780,15 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     let runtime!: ActiveDeferredRuntime;
-    const service = createCoreApplication(corePersistence(store), "/tmp", (options) => {
-      runtime = new ActiveDeferredRuntime(() => options.eventSink.activity(), 5);
-      return runtime;
-    }, { runTimeoutMs: 40, runHardTimeoutMs: 70 });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => {
+        runtime = new ActiveDeferredRuntime(() => options.eventSink.activity(), 5);
+        return runtime;
+      },
+      runtimeDefaults: { runTimeoutMs: 40, runHardTimeoutMs: 70 }
+    });
     const run = await service.start(session.id, "hard timeout");
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(runtime.aborted).toBe(true);
@@ -1510,7 +1801,11 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new DeferredRuntime();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => runtime);
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => runtime
+    });
     const run = await service.start(session.id, "cancel race");
     expect(service.cancel(run.id)).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1524,7 +1819,11 @@ describe("Core application runtime boundary", () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const runtime = new DeferredRuntime();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => runtime);
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => runtime
+    });
     const run = await service.start(session.id, "cancel repair");
     store.appendTranscript(run.id, 1, {
       role: "assistant", content: [{ type: "toolCall", id: "pending-call", name: "read", arguments: { path: "a.txt" } }], api: "openai-completions", provider: "test", model: "test",
@@ -1550,7 +1849,11 @@ describe("Core application runtime boundary", () => {
     const decision = (await new TaskRunSupervisor(store, reviewer(approvalAudit)).reviewSettled(store.getRun(run.id)!, 1, "waiting")).decision;
     transitionTaskRun(store, run.id, "block", decision.rationale);
     const approval = store.ensureApprovalRequest(run.id, decision.id, decision.rationale);
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => new ApprovalRuntime());
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new ApprovalRuntime()
+    });
     await expect(service.resume(run.id)).rejects.toThrow(/approval decision/);
     store.resolveApprovalRequest(approval.id, "rejected", "user", "not now");
     expect(store.getRun(run.id)?.supervision.approvalRequests).toEqual([expect.objectContaining({ status: "rejected" })]);
@@ -1568,7 +1871,12 @@ describe("Core application runtime boundary", () => {
       async reviewSettled() { throw new SupervisorReviewError("invalid structured audit"); },
       async reviewAttemptFailure() { throw new Error("Supervisor review failures must not be reclassified as Agent runtime failures"); },
     };
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => { runtimeCalls += 1; return new FakeRuntime([assistantMessage("candidate result")]); }, { maxContinuations: 8, supervisorReviewer: failedReviewer });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => { runtimeCalls += 1; return new FakeRuntime([assistantMessage("candidate result")]); },
+      runtimeDefaults: { maxContinuations: 8, supervisorReviewer: failedReviewer }
+    });
     const run = await service.start(session.id, "Explain audit failure isolation.");
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(runtimeCalls).toBe(1);
@@ -1593,7 +1901,12 @@ describe("Core application runtime boundary", () => {
       async reviewSettled() { return passingTestAudit(); },
       async reviewAttemptFailure() { classificationCalls += 1; throw new Error("failure classifier unavailable"); },
     };
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => runtime = new ControlledRuntime([]), { maxContinuations: 8, supervisorReviewer: failedReviewer });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => runtime = new ControlledRuntime([]),
+      runtimeDefaults: { maxContinuations: 8, supervisorReviewer: failedReviewer }
+    });
     const run = await service.start(session.id, "opaque runtime failure");
     runtime.reject(new Error("opaque provider explosion"));
     await new Promise((resolve) => setTimeout(resolve, 30));

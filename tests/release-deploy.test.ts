@@ -132,7 +132,7 @@ async function releaseDirectory(root: string, commit: string, corrupt: "native" 
     artifact: "core",
     commit,
     runtime: { node: "24.18.1", abi: "137", platform: "linux", arch: "x64" },
-    core: { hostProtocolVersion: 1, stateProtocol: "tagent-core/state-0.8", generationEntry: "node_modules/@tagent/core-service/dist/generation-entry.js" },
+    core: { hostProtocolVersion: 1, stateProtocol: "tagent-core/state-0.8-r2", generationEntry: "node_modules/@tagent/core-service/dist/generation-entry.js" },
     files,
   }));
   return directory;

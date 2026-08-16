@@ -171,13 +171,6 @@ describe("dormant capability execution architecture", () => {
     expect(taskRunCommandHandler.text).toContain('case "task_run.resolve_approval"');
     expect(taskRunCommandHandler.text).toContain("service.approveRunApproval");
     expect(taskRunCommandHandler.text).toContain("service.rejectRunApproval");
-
-    const coordinator = readFileSync(
-      path.join(repoRoot, "apps/core-service/src/application/core-application-coordinator.ts"),
-      "utf8",
-    );
-    expect(coordinator).toContain("this.services.admission.approveRunApproval");
-    expect(coordinator).toContain("this.services.execution.rejectRunApproval");
   });
 
   it("keeps Workflow autonomy commands on the versioned Admin surface", () => {
@@ -189,12 +182,5 @@ describe("dormant capability execution architecture", () => {
     expect(adminRoutes).toContain('action === "execute" ? service.executeAutonomyApproval');
     expect(adminRoutes).toContain("service.decideAutonomyApproval");
     expect(adminRoutes).not.toContain('/api/autonomy-approvals/');
-
-    const coordinator = readFileSync(
-      path.join(repoRoot, "apps/core-service/src/application/core-application-coordinator.ts"),
-      "utf8",
-    );
-    expect(coordinator).toContain("this.services.learning.decideAutonomyApproval");
-    expect(coordinator).toContain("this.services.governance.executeAutonomyApproval");
   });
 });

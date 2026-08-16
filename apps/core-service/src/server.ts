@@ -268,11 +268,11 @@ export async function bootstrapCore(
       }, persistence.memory, semanticJudge);
     }
 
-    service = createCoreApplication(
-      corePersistence,
-      config.workspace,
-      resolveRuntimeFactory(config.runtime),
-      {
+    service = createCoreApplication({
+      persistence: corePersistence,
+      workspace: config.workspace,
+      runtimeFactory: resolveRuntimeFactory(config.runtime),
+      runtimeDefaults: {
         model: createModel(config.model),
         fallbackModels: config.fallbackModels.map(createModel),
         routerModel: createModel(config.routerModel),
@@ -291,15 +291,15 @@ export async function bootstrapCore(
         historicalTaskRunReceiptChars: config.historicalTaskRunReceiptChars,
         controlInboxCapacity: config.controlInboxCapacity,
       },
-      memoryRuntime?.service,
-      config.memory.enabled ? config.memory.workspaceScopeId : "default",
-      learningControl,
-      semanticJudge,
-      { startupMode: "deferred" },
-      config.projectRuleFiles,
-      config.toolArtifactMaxBytes,
-      managedGeneration?.toolProviderFactory(),
-    );
+      memory: memoryRuntime?.service,
+      memoryScopeId: config.memory.enabled ? config.memory.workspaceScopeId : "default",
+      learningControl: learningControl,
+      semanticJudge: semanticJudge,
+      startupOptions: { startupMode: "deferred" },
+      projectRuleFiles: config.projectRuleFiles,
+      toolArtifactMaxBytes: config.toolArtifactMaxBytes,
+      additionalToolProviders: managedGeneration?.toolProviderFactory(),
+    });
     managedGeneration?.bindRecovery(() => {
       service?.recoverContinuations();
       service?.recoverSessionInbox();

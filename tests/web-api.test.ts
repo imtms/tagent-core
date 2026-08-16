@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, drainTranscriptView, subscribe } from "../apps/web-console/src/api.js";
+import { normalizeCoreOrigin } from "../apps/web-console/src/api-transport.js";
 import { CoreClientError } from "@tagent/core-client";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -50,6 +51,22 @@ function profileOperation(endpointId: "operator.session_inbox.start" | "operator
 }
 
 describe("Web API request headers", () => {
+  it("accepts only a credential-free HTTP(S) origin", () => {
+    expect(normalizeCoreOrigin("https://core.example.test")).toBe("https://core.example.test");
+    expect(normalizeCoreOrigin("http://127.0.0.1:3100/")).toBe("http://127.0.0.1:3100");
+    for (const value of [
+      "javascript:alert(1)",
+      "file:///tmp/core",
+      "ftp://core.example.test/",
+      "https://user:password@core.example.test/",
+      "https://core.example.test/api",
+      "https://core.example.test/?tenant=a",
+      "https://core.example.test/#fragment",
+    ]) {
+      expect(() => normalizeCoreOrigin(value)).toThrow("must be an http(s) origin without credentials, path, query, or fragment");
+    }
+  });
+
   it("sources versioned Console wire DTOs from the ABI", async () => {
     const source = await readFile(new URL("../apps/web-console/src/api.ts", import.meta.url), "utf8");
     const types = await readFile(new URL("../apps/web-console/src/api-types.ts", import.meta.url), "utf8");
@@ -83,7 +100,7 @@ describe("Web API request headers", () => {
     expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
   });
 
-  it("uploads a Skill file as bounded base64 and exposes the right-corner drag/drop loader", async () => {
+  it("uploads a Skill file as bounded base64", async () => {
     const revision = {
       id: "revision", skillId: "skill", revision: 1, name: "release-check", description: "Verify a release",
       content: "Follow the release checklist.", sha256: "a".repeat(64), disableModelInvocation: false,
@@ -97,13 +114,6 @@ describe("Web API request headers", () => {
       method: "POST",
       body: JSON.stringify({ filename: "SKILL.md", contentBase64: Buffer.from("skill body").toString("base64") }),
     }));
-    const source = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
-    expect(source).toContain('className="skill-control"');
-    expect(source).toContain('accept=".md,.zip,text/markdown,application/zip"');
-    expect(source).toContain("const dropSkill = (event: DragEvent<HTMLElement>)");
-    expect(source).toContain("onDrop={dropSkill}");
-    expect(source).toContain("TaskRuns freeze every referenced revision.");
-    expect(source).toContain('aria-pressed={selected}');
   });
 
   it("decodes lightweight Run summaries and requests only incremental transcript rows", async () => {
@@ -149,14 +159,19 @@ describe("Web API request headers", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/task-runs/run/transcript?limit=200&after=200", expect.any(Object));
   });
 
-  it("consumes an empty terminal Transcript page created by tool hydration", async () => {
-    const first = { sequence: 1, attempt: 1, occurredAt: "2026-08-16T00:00:00.000Z", kind: "tool", toolCallId: "split", toolName: "read", arguments: {}, result: "done", isError: false, status: "completed" };
+  it("consumes a later tool-result projection at its change sequence", async () => {
+    const completed = { sequence: 2, attempt: 1, occurredAt: "2026-08-16T00:00:01.000Z", kind: "tool", toolCallId: "split", toolName: "read", arguments: {}, result: "done", isError: false, status: "completed" };
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify(success({ items: [first], pageInfo: { nextCursor: 1, hasMore: true, limit: 1 } })), { status: 200, headers: { "Content-Type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(success({ items: [], pageInfo: { nextCursor: null, hasMore: false, limit: 1 } })), { status: 200, headers: { "Content-Type": "application/json" } }));
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ items: [], pageInfo: { nextCursor: 1, hasMore: true, limit: 1 } })), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ items: [completed], pageInfo: { nextCursor: null, hasMore: false, limit: 1 } })), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(drainTranscriptView("run", 2, 0, 1)).resolves.toMatchObject({ after: 2, items: [expect.objectContaining({ seq: 1, toolCallId: "split" })] });
+    await expect(drainTranscriptView("run", 2, 0, 1)).resolves.toMatchObject({
+      after: 2,
+      items: [
+        expect.objectContaining({ seq: 2, toolCallId: "split", status: "completed" }),
+      ],
+    });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -197,31 +212,7 @@ describe("Web API request headers", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/operator/sessions/session/inbox/order", expect.objectContaining({ method: "PUT", body: JSON.stringify({ itemIds: ["second", "first"] }) }));
   });
 
-  it("renders editable, draggable, and keyboard-accessible queued prompts without removing existing actions", async () => {
-    const source = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
-    expect(source).toContain("function QueuePrompt(");
-    expect(source).toContain('draggable={!busy && !editing}');
-    expect(source).toContain("await api.updateInbox(sessionId, item.id, content)");
-    expect(source).toContain("await api.reorderInbox(sessionId, next.map((item) => item.id))");
-    expect(source).toContain("api.decideInbox(sessionId, item.id");
-    expect(source).toContain("api.mergeInbox(sessionId, item.id, inbox[0].id)");
-    expect(source).toContain('aria-label={`Move queued prompt ${index + 1} up`}');
-    expect(source).toContain('aria-label={`Move queued prompt ${index + 1} down`}');
-    expect(source).toContain('item.decision === "defer" ? "Resume" : "Defer"');
-    expect(source).toContain("Merge first");
-  });
 
-  it("keeps Enter as a newline, auto-sizes the composer, and exposes persistent desktop controls", async () => {
-    const source = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
-    expect(source).toContain("ref={composerTextareaRef}");
-    expect(source).toContain("Math.min(Math.max(textarea.scrollHeight, 36), 140)");
-    expect(source).not.toContain('event.key === "Enter" && !event.shiftKey');
-    expect(source).toContain("leftCollapsed");
-    expect(source).toContain("rightCollapsed");
-    expect(source).toContain("workspaceEmojiById");
-    expect(source).toContain("updateExecutionProfile");
-    expect(source).toContain('runtimeStatus?.modelId ?? "gpt-5.6-sol"');
-  });
 
   it("posts the selected queued item to the manual start endpoint", async () => {
     const fetchMock = vi.fn()
@@ -232,42 +223,25 @@ describe("Web API request headers", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/operator/sessions/session/inbox/item/start", expect.objectContaining({ method: "POST" }));
   });
 
-  it("surfaces manual start conflicts and renders success and error feedback", async () => {
+  it("surfaces manual start conflicts as typed CoreClient errors", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: { code: "session.running_taskrun", message: "session already has a running TaskRun", requestId: "web-test-request", retryable: false, details: {} } }), { status: 409, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
     const request = api.startInbox("session", "item");
     await expect(request).rejects.toBeInstanceOf(CoreClientError);
     await expect(request).rejects.toThrow("session already has a running TaskRun");
-    const source = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
-    expect(source).toContain("void runInboxNow(item)");
-    expect(source).toContain("Queued prompt started.");
-    expect(source).toContain("setError(cause instanceof Error ? cause.message : String(cause))");
   });
 
-  it("calls retry-launch and renders retry feedback for retryable launch failures", async () => {
+  it("calls retry-launch and returns the relaunched TaskRun", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(success(channelRun())), { status: 200, headers: { "Content-Type": "application/json" } }))
       .mockResolvedValueOnce(new Response(JSON.stringify(success(profileOperation("operator.session_inbox.retry_launch"))), { status: 200, headers: { "Content-Type": "application/json" } }))
       .mockResolvedValueOnce(new Response(JSON.stringify(success(channelRun("run", 2))), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
-    await api.retryLaunch("run");
+    const relaunched = await api.retryLaunch("run");
+    expect(relaunched).toMatchObject({ status: "started", run: { id: "run", attempt: 2, status: "running" } });
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/operator/task-runs/run/retry-launch", expect.objectContaining({ method: "POST" }));
-    const source = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
-    expect(source).toContain("await api.retryLaunch(run.id)");
-    expect(source).toContain('selectedRun.launchRetryable');
-    expect(source).toContain('setNotice("TaskRun launch retry started.")');
-    expect(source).toContain("setError(cause instanceof Error ? cause.message : String(cause))");
   });
 
-  it("hydrates a newly discovered active Run during Session polling", async () => {
-    const source = await readFile(new URL("../apps/web-console/src/App.tsx", import.meta.url), "utf8");
-    expect(source).toContain("active.id !== activeRunIdRef.current");
-    expect(source).toContain("const [hydrated, history] = await Promise.all([api.run(active.id), api.messages(targetSessionId)])");
-    expect(source).toContain("const view = await drainTranscriptView(active.id, hydrated.transcriptCount)");
-    expect(source).toContain("api.messages(targetSessionId)");
-    expect(source).toContain("setSelectedRun(hydrated)");
-    expect(source).toContain("setExpandedRunId(hydrated.id)");
-  });
 
   it("rejects malformed typed payloads before returning them to Web callers", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([{

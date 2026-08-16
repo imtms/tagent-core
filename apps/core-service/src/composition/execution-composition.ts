@@ -55,7 +55,10 @@ import type { MemoryFacade } from "@tagent/memory";
 import type { LearningFeatureControl, SemanticJudge } from "@tagent/learning";
 import type { SupervisorReviewer } from "./supervisor-reviewer.js";
 import { createExecutionCollaborationAdapters, resolveMemorySubjectId } from "./execution-collaboration-adapters.js";
-import { CoreApplicationCoordinator } from "../application/core-application-coordinator.js";
+import {
+  createCoreApplicationCoordinator,
+  type CoreApplicationCoordinator,
+} from "../application/core-application-coordinator.js";
 import { CoreWorkflowGovernanceApplication } from "../application/workflow-governance-application.js";
 import { CoreWorkspaceGoalApplication, type WorkspaceGoalRoadmapGenerator } from "../application/workspace-goal-application.js";
 import { OpenAiWorkspaceGoalRoadmapGenerator } from "./workspace-goal-roadmap-generator.js";
@@ -227,13 +230,14 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
       attemptLaunchFailed: ({ inboxItemId, runId, message }) => {
         options.persistence.submissions.recordSessionInboxLaunchFailure(inboxItemId, runId, message);
       },
-      attemptFinalized: (run) => {
+      attemptFinalized: (run, context) => {
         const current = options.persistence.taskRuns.getRun(run.id);
         if (current) options.persistence.workspaceGoals.recordRunOutcome(current.id);
-        continuationRef.port.startQueuedContinuation(run.id);
-        const continued = options.persistence.taskRuns.getRun(run.id);
+        if (!context.shuttingDown) admissionRef.port.dispatchSessionInbox(run.sessionId);
+      },
+      continuationStarted: (runId) => {
+        const continued = options.persistence.taskRuns.getRun(runId);
         if (continued?.status === "running") options.persistence.workspaceGoals.recordRunOutcome(continued.id);
-        admissionRef.port.dispatchSessionInbox(run.sessionId);
       },
     },
     requestEnvelopes: options.persistence.requestEnvelopes,
@@ -318,7 +322,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     eventHub,
     runtimeRegistry,
   }));
-  const coordinator = new CoreApplicationCoordinator(Object.freeze({
+  const coordinator = createCoreApplicationCoordinator(Object.freeze({
     admission,
     execution,
     governance,

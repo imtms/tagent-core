@@ -76,7 +76,7 @@ Gateway must implement and test:
 
 Before traffic, Gateway must validate:
 
-- schema version `1` and the required base command/event catalogs;
+- schema version `2` and the required base command/event catalogs;
 - the base Operator endpoint list and ready Approval contract;
 - exact replay, durable receipt lookup, no blind replay, no pruning, and matching limits;
 - complete cursor traversal beyond 500 members and stable snapshot membership when unread resources are updated;

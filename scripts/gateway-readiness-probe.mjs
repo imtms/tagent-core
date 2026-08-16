@@ -11,7 +11,7 @@ const TERMINAL_UNACKED_CRITICAL_AGE_MS = 120_000;
 const RECEIPT_UNCERTAIN_CRITICAL_AGE_MS = 120_000;
 const SETTLED_STATUSES = ["completed", "failed", "cancelled", "blocked"];
 const FINAL_STATUSES = ["completed", "cancelled"];
-const EXPECTED_SCHEMA_VERSION = 1;
+const EXPECTED_SCHEMA_VERSION = 2;
 const EXPECTED_SCHEMA_ID = "tagent-core/0.8";
 const REQUIRED_COMMANDS = ["task_run.steer", "task_run.follow_up", "task_run.cancel", "task_run.resume", "task_run.compact", "task_run.submit_user_input", "task_run.resolve_approval"];
 const REQUIRED_EVENTS = ["task_run.started", "task_run.waiting_input", "task_run.blocked", "task_run.resumed", "task_run.completed", "task_run.failed", "task_run.cancelled", "approval.requested", "approval.resolved", "user_input.submitted"];
@@ -84,7 +84,8 @@ function tableExists(db, name) {
 function readSchemaVersion(db) {
   if (!tableExists(db, "core_schema")) return { schemaId: null, schemaVersion: null };
   const schemaId = db.prepare("SELECT schema_id AS schemaId FROM core_schema WHERE id=1").get()?.schemaId ?? null;
-  return { schemaId, schemaVersion: schemaId === EXPECTED_SCHEMA_ID ? EXPECTED_SCHEMA_VERSION : null };
+  const schemaVersion = db.pragma("user_version", { simple: true });
+  return { schemaId, schemaVersion: schemaId === EXPECTED_SCHEMA_ID ? schemaVersion : null };
 }
 
 function readWriter(db, now) {

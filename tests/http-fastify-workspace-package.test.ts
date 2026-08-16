@@ -140,6 +140,7 @@ describe("Fastify HTTP adapter workspace package", () => {
       "@tagent/admission": "0.8.5",
       "@tagent/execution": "0.8.5",
       "@tagent/governance": "0.8.5",
+      "@tagent/learning": "0.8.5",
       fastify: "^5.10.0",
       typebox: "^1.1.24",
     });

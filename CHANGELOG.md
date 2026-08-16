@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Evolvable current state
+
+- Split the deterministic SQLite schema into responsibility-focused SQL fragments and added an ordered, checksummed, append-only migration journal at public schema revision 2.
+- Added transactional, restart-safe migration of exact legacy 0.8 databases with data-preservation, idempotent reopen, drift, newer-revision, immutable-journal, and failure-rollback coverage.
+- Advanced the Core state protocol to `tagent-core/state-0.8-r2`, requiring one full Host restart for the first revision-2 deployment and preventing automatic rollback to an incompatible revision-1 binary.
+
 ## [0.8.5] - 2026-08-15
 
 ### Self-managed Core generations

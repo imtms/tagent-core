@@ -88,7 +88,11 @@ describe("GitHub issue regressions #24-#28", () => {
   it("#26 terminalizes a TaskRun when runtime construction throws", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const service = createCoreApplication(corePersistence(store), await mkdtemp(path.join(tmpdir(), "tagent-issues-runtime-")), () => { throw new Error("factory exploded"); });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: await mkdtemp(path.join(tmpdir(), "tagent-issues-runtime-")),
+      runtimeFactory: () => { throw new Error("factory exploded"); }
+    });
     const result = await service.enqueueSessionInput(session.id, "runtime factory regression", "issue-26");
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(store.getRun(result.run!.id)).toMatchObject({ status: "failed", blockedReason: "factory exploded" });
@@ -101,7 +105,11 @@ describe("GitHub issue regressions #24-#28", () => {
   it("#27 maps malformed current pagination limits to non-retryable HTTP 400", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const service = createCoreApplication(corePersistence(store), await mkdtemp(path.join(tmpdir(), "tagent-issues-http-")), () => waitingRuntime());
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: await mkdtemp(path.join(tmpdir(), "tagent-issues-http-")),
+      runtimeFactory: () => waitingRuntime()
+    });
     const app = createApp({ ...httpTestResources(store), service, logger: false });
     const urls = [
       `/api/v1/console/sessions/${session.id}/messages?limit=abc`,
@@ -121,7 +129,11 @@ describe("GitHub issue regressions #24-#28", () => {
   it("#28 returns the same result for identical retries and deterministic 409 for conflicting sequential/concurrent payloads", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
-    const service = createCoreApplication(corePersistence(store), await mkdtemp(path.join(tmpdir(), "tagent-issues-idempotency-")), () => waitingRuntime());
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: await mkdtemp(path.join(tmpdir(), "tagent-issues-idempotency-")),
+      runtimeFactory: () => waitingRuntime()
+    });
     const app = createApp({ ...httpTestResources(store), service, logger: false });
     const post = (content: string) => app.inject({
       method: "POST",

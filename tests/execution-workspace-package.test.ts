@@ -91,10 +91,11 @@ describe("Execution workspace package", () => {
       ...sourceFiles("packages/execution/src/domain"),
       ...sourceFiles("packages/execution/src/ports"),
     ];
-    expect(implementationFiles).toHaveLength(59);
+    expect(implementationFiles).toHaveLength(60);
     expect(implementationFiles).toEqual(expect.arrayContaining([
       "packages/execution/src/application/attempt-execution-failure.ts",
       "packages/execution/src/application/context-token-estimate.ts",
+      "packages/execution/src/application/post-attempt-finalizer.ts",
       "packages/execution/src/application/project-context-projection.ts",
       "packages/execution/src/application/runtime-factory-failure.ts",
       "packages/execution/src/application/runtime-initialization-failure.ts",

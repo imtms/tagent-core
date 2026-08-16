@@ -205,12 +205,13 @@ describe("SQLite persistence adapter workspace package", () => {
   it("creates the single current SQLite shape", () => {
     const store = new Store(":memory:");
     try {
-      expect(store.getSchemaVersion()).toBe(1);
+      expect(store.getSchemaVersion()).toBe(2);
       const tables = store.db.prepare(
         "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'",
       ).all() as Array<{ name: string }>;
-      expect(tables).toHaveLength(88);
+      expect(tables).toHaveLength(89);
       expect(tables.map((table) => table.name)).toEqual(expect.arrayContaining([
+        "core_schema_migrations",
         "session_create_receipts",
         "submission_audit_receipts",
         "task_run_command_receipts",

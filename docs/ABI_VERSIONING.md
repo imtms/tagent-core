@@ -32,7 +32,8 @@ Core 0.8 publishes one coordinated contract tuple:
 | HTTP major | `/api/v1` |
 | Durable resource/event version | `specVersion: "1.0"` where declared |
 | SQLite schema ID | `tagent-core/0.8` |
-| Public persistence schema version | `1` |
+| Public persistence schema version | `2` |
+| Core state protocol | `tagent-core/state-0.8-r2` |
 | Capability profile version | `1.0` |
 | SDK package version | same as the Core release |
 

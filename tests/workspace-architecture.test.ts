@@ -24,7 +24,7 @@ const expectedInternalGraph = {
   "@tagent/runtime-pi": ["@tagent/execution"],
   "@tagent/persistence-sqlite": ["@tagent/admission", "@tagent/execution", "@tagent/governance", "@tagent/learning", "@tagent/memory"],
   "@tagent/workspace-local": ["@tagent/execution"],
-  "@tagent/http-fastify": ["@tagent/abi", "@tagent/admission", "@tagent/execution", "@tagent/governance"],
+  "@tagent/http-fastify": ["@tagent/abi", "@tagent/admission", "@tagent/execution", "@tagent/governance", "@tagent/learning"],
   "@tagent/core-service": [
     "@tagent/admission",
     "@tagent/execution",

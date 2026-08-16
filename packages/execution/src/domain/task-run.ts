@@ -109,11 +109,16 @@ export interface ContextManifest { id: string; runId: RunId; attempt: number; so
 
 export interface RunContinuation { id: string; runId: RunId; ordinal: number; status: "queued" | "running" | "completed" | "blocked" | "failed" | "cancelled"; reason: string; error: string; notBefore: number; createdAt: number; startedAt: number | null; completedAt: number | null; leaseOwner: string; leaseUntil: number | null; heartbeatAt: number | null }
 type RunEventPayload = Record<string, unknown>;
+type MessageStartedEvent = RunEventPayload & { ordinal: number };
 type MessageDeltaEvent = RunEventPayload & { delta: string; ordinal: number };
+type MessageCompletedEvent = RunEventPayload & { content: string; willRetry: boolean; ordinal: number };
+type TranscriptUpdatedEvent = RunEventPayload & { transcriptSeq: number; role: string; ordinal?: number };
 type ToolLifecycleEvent = RunEventPayload & {
   toolCallId: string;
   toolName: string;
-  isError?: boolean;
+};
+type ToolCompletedEvent = ToolLifecycleEvent & {
+  isError: boolean;
   error?: { name: string; code: string; message: string };
 };
 type ProviderFailureEvent = RunEventPayload & {
@@ -121,6 +126,7 @@ type ProviderFailureEvent = RunEventPayload & {
   retryable: boolean;
   summary: string;
   stopReason: string;
+  retryAfterMs?: number;
 };
 type RequestEnvelopePersistedEvent = RunEventPayload & {
   envelopeId: string;
@@ -140,8 +146,8 @@ export interface RunEventMap {
   "control.accepted": RunEventPayload; "control.delivered": RunEventPayload; "control.delivering": RunEventPayload;
   "control.duplicate": RunEventPayload; "control.rejected": RunEventPayload;
   "memory.capture.failed": RunEventPayload; "memory.capture.queued": RunEventPayload; "memory.feedback.attribution.failed": RunEventPayload;
-  "memory.recall.degraded": RunEventPayload; "message.completed": RunEventPayload; "message.delta": MessageDeltaEvent;
-  "message.rejected": RunEventPayload; "message.retrying": RunEventPayload; "message.started": RunEventPayload; "message.thinking.delta": RunEventPayload;
+  "memory.recall.degraded": RunEventPayload; "message.completed": MessageCompletedEvent; "message.delta": MessageDeltaEvent;
+  "message.rejected": RunEventPayload; "message.retrying": RunEventPayload; "message.started": MessageStartedEvent; "message.thinking.delta": MessageDeltaEvent;
   "provider.failure": ProviderFailureEvent; "provider.fallback": RunEventPayload; "provider.retry": RunEventPayload; "provider.retry.completed": RunEventPayload;
   "request.envelope.persisted": RequestEnvelopePersistedEvent; "run.cancelled": RunEventPayload; "run.input.submitted": RunEventPayload;
   "run.interrupted": RunEventPayload; "run.launch.retrying": RunEventPayload; "run.resumed": RunEventPayload; "run.started": RunEventPayload; "run.updated": RunEventPayload;
@@ -149,12 +155,12 @@ export interface RunEventMap {
   "runtime.abort.failed": RunEventPayload; "runtime.initialized": RunEventPayload; "runtime.queue": RunEventPayload; "runtime.queue.cleared": RunEventPayload; "runtime.settled": RunEventPayload;
   "session.inbox.related.queued": RunEventPayload; "skill.invoked": RunEventPayload;
   "supervisor.approval.approved": RunEventPayload; "supervisor.approval.rejected": RunEventPayload; "supervisor.approval.requested": RunEventPayload; "supervisor.decision": RunEventPayload;
-  "tool.bash.composite": RunEventPayload; "tool.bash.timed_out": RunEventPayload; "tool.completed": ToolLifecycleEvent;
-  "tool.failed": ToolLifecycleEvent; "tool.guard.blocked": RunEventPayload; "tool.output.spilled": RunEventPayload; "tool.progress": ToolLifecycleEvent; "tool.started": ToolLifecycleEvent;
+  "tool.bash.composite": RunEventPayload; "tool.bash.timed_out": RunEventPayload; "tool.completed": ToolCompletedEvent;
+  "tool.failed": ToolCompletedEvent & { reason?: string }; "tool.guard.blocked": RunEventPayload; "tool.output.spilled": RunEventPayload; "tool.progress": ToolLifecycleEvent; "tool.started": ToolLifecycleEvent;
   "restart.interruption": RunEventPayload;
   "maintenance.activation.dispatch_failed": RunEventPayload; "maintenance.handoff.prepared": RunEventPayload;
   "maintenance.activation.succeeded": RunEventPayload; "maintenance.activation.failed": RunEventPayload;
-  "transcript.repaired": RunEventPayload; "transcript.updated": RunEventPayload; "workflow.learning.failed": RunEventPayload;
+  "transcript.repaired": RunEventPayload; "transcript.updated": TranscriptUpdatedEvent; "workflow.learning.failed": RunEventPayload;
   "workspace.edit.completed": RunEventPayload; "workspace.edit.rejected": RunEventPayload;
 }
 export type RunEventType = keyof RunEventMap;

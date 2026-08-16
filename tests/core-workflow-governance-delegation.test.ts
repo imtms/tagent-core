@@ -1,9 +1,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import {
-  CoreApplicationCoordinator,
+  createCoreApplicationCoordinator,
   CoreWorkflowGovernanceApplication,
   type CoreApplicationServices,
 } from "@tagent/core-service/application";
@@ -18,39 +17,22 @@ import type { LearningFeatureControl } from "@tagent/learning";
 
 const repoRoot = process.cwd();
 
-function parsedSource(relativePath: string) {
-  return ts.createSourceFile(
-    relativePath,
-    readFileSync(path.join(repoRoot, relativePath), "utf8"),
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
-}
-
-function methodReceiver(source: ts.SourceFile, methodName: string): string | undefined {
-  let receiver: string | undefined;
-  const visit = (node: ts.Node) => {
-    if (ts.isMethodDeclaration(node)
-      && ts.isIdentifier(node.name)
-      && node.name.text === methodName) {
-      const call = node.body?.statements
-        .filter(ts.isReturnStatement)
-        .map((statement) => statement.expression)
-        .find((node): node is ts.CallExpression => node !== undefined && ts.isCallExpression(node));
-      if (call && ts.isPropertyAccessExpression(call.expression)) {
-        receiver = call.expression.expression.getText(source);
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return receiver;
+function applicationServices(overrides: Partial<Record<keyof CoreApplicationServices, object>> = {}) {
+  const group = (implementation: object = {}) => new Proxy(implementation, {
+    get: (target, property) => Reflect.has(target, property) ? Reflect.get(target, property) : vi.fn(),
+  });
+  return {
+    admission: group(overrides.admission),
+    execution: group(overrides.execution),
+    governance: group(overrides.governance),
+    learning: group(overrides.learning),
+    workspaceGoals: group(overrides.workspaceGoals),
+    skills: group(overrides.skills),
+  } as unknown as CoreApplicationServices;
 }
 
 describe("Core workflow Governance delegation", () => {
-  it("routes every governance effect through services.governance", () => {
-    const source = parsedSource("apps/core-service/src/application/core-application-coordinator.ts");
+  it("binds every governance effect to the governance application", () => {
     const effects = [
       "activateWorkflow",
       "suspendWorkflow",
@@ -62,15 +44,14 @@ describe("Core workflow Governance delegation", () => {
       "executeAutonomyApproval",
       "updateLearningSettings",
     ];
-    expect(Object.fromEntries(effects.map((method) => [method, methodReceiver(source, method)])))
-      .toEqual(Object.fromEntries(effects.map((method) => [method, "this.services.governance"])));
+    const calls = Object.fromEntries(effects.map((method) => [method, vi.fn(() => method)]));
+    const coordinator = createCoreApplicationCoordinator(applicationServices({ governance: calls }));
+    for (const effect of effects) expect((coordinator as unknown as Record<string, () => unknown>)[effect]()).toBe(effect);
   });
 
   it("preserves the rollback approvalId through the Core coordinator", () => {
     const rollbackWorkflow = vi.fn(() => "rolled-back");
-    const coordinator = new CoreApplicationCoordinator({
-      governance: { rollbackWorkflow },
-    } as unknown as CoreApplicationServices);
+    const coordinator = createCoreApplicationCoordinator(applicationServices({ governance: { rollbackWorkflow } }));
 
     expect(coordinator.rollbackWorkflow("workflow-1", "revision-1", "approval-1"))
       .toBe("rolled-back");

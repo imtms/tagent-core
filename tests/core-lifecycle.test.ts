@@ -6,7 +6,8 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "@tagent/http-fastify";
 import { loadConfig, type AppConfig } from "@tagent/core-service/config";
-import { CoreApplicationCoordinator, createCoreApplication } from "@tagent/core-service/application";
+import { createCoreApplication, type CoreApplicationCoordinator } from "@tagent/core-service/application";
+import { ExecutionCoordinator } from "@tagent/execution";
 import {
   CoreHeartbeatDeadlineError,
   CoreLifecycle,
@@ -588,7 +589,7 @@ describe("Core lifecycle", () => {
     seed.db.exec("DROP TABLE core_schema");
     seed.close();
 
-    await expect(bootstrapCore(config)).rejects.toThrow("accepts only an empty database");
+    await expect(bootstrapCore(config)).rejects.toThrow("requires tagent-core/0.8 or an empty database");
     await assertInstanceLockReleased(config.database);
     expect(readLease(config.database)).toBeUndefined();
   });
@@ -662,7 +663,7 @@ describe("Core lifecycle", () => {
         events.push("worker.distillation.close");
         await originalDistillationClose.call(this);
       });
-      const runtimeClose = vi.spyOn(CoreApplicationCoordinator.prototype, "closeRuntimes").mockImplementation(async () => {
+      const runtimeClose = vi.spyOn(ExecutionCoordinator.prototype, "closeRuntimes").mockImplementation(async () => {
         events.push("runtime.close");
         return [];
       });
@@ -767,17 +768,17 @@ describe("Core lifecycle", () => {
     stores.push(store);
     const interrupted = vi.spyOn(store, "markInterrupted");
     const reviewer = { reviewSettled: vi.fn(async () => ({ action: "accept" })) };
-    const service = createCoreApplication(
-      corePersistence(store),
-      process.cwd(),
-      undefined,
-      { supervisorReviewer: reviewer as never },
-      undefined,
-      "default",
-      undefined,
-      undefined,
-      { startupMode: "deferred" },
-    );
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: process.cwd(),
+      runtimeFactory: undefined,
+      runtimeDefaults: { supervisorReviewer: reviewer as never },
+      memory: undefined,
+      memoryScopeId: "default",
+      learningControl: undefined,
+      semanticJudge: undefined,
+      startupOptions: { startupMode: "deferred" },
+    });
 
     expect(interrupted).not.toHaveBeenCalled();
     service.initialize();

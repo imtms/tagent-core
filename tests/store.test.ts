@@ -2,7 +2,14 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import Database from "better-sqlite3";
 import { Store } from "@tagent/persistence-sqlite";
+import {
+  BASE_SCHEMA_SQL,
+  CURRENT_SCHEMA_VERSION,
+  MIGRATION_JOURNAL_SCHEMA_SQL,
+} from "../adapters/persistence-sqlite/src/current-schema.js";
+import { applySqliteMigrations } from "../adapters/persistence-sqlite/src/schema-migrations.js";
 import { cancelTaskRun, transitionTaskRun } from "./support/test-persistence.js";
 import { recordSuccessfulBash, upsertTrustedCheck } from "./support/trusted-evidence.js";
 
@@ -637,7 +644,7 @@ describe("Store", () => {
       expect.objectContaining({ kind: "tool", toolName: "read", arguments: { path: "a.txt" }, result: "file contents", status: "completed" }),
     ]);
     expect(store.listTranscriptView(run.id, { after: 1, limit: 20 })).toEqual([
-      expect.objectContaining({ seq: 1, kind: "tool", toolName: "read", result: "file contents", status: "completed" }),
+      expect.objectContaining({ seq: 2, kind: "tool", toolName: "read", result: "file contents", status: "completed" }),
     ]);
   });
 
@@ -697,8 +704,8 @@ describe("Store", () => {
     const store = createStore();
     const session = store.createSession();
     const run = store.createRun(session.id, "test");
-    expect(store.appendEvent(run.id, "message.started", {}).seq).toBe(1);
-    expect(store.appendEvent(run.id, "message.completed", {}).seq).toBe(2);
+    expect(store.appendEvent(run.id, "message.started", { ordinal: 1 }).seq).toBe(1);
+    expect(store.appendEvent(run.id, "message.completed", { ordinal: 1, content: "done", willRetry: false }).seq).toBe(2);
   });
 
   it("blocks completion until required plan and checks pass", () => {
@@ -743,9 +750,80 @@ describe("Store", () => {
 
   it("records the single current schema identity", () => {
     const store = createStore();
-    expect(store.getSchemaVersion()).toBe(1);
+    expect(store.getSchemaVersion()).toBe(CURRENT_SCHEMA_VERSION);
     expect(store.db.prepare("SELECT schema_id as schemaId FROM core_schema WHERE id=1").get())
       .toEqual({ schemaId: "tagent-core/0.8" });
+    expect(store.db.prepare("SELECT version,description FROM core_schema_migrations ORDER BY version").all())
+      .toEqual([
+        { version: 1, description: "baseline exact tagent-core/0.8 schema" },
+        { version: 2, description: "add append-only schema migration journal" },
+      ]);
+  });
+
+  it.each([0, 1])("upgrades legacy revision %i without losing data and only once", (legacyVersion) => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), `tagent-legacy-v${legacyVersion}-`)), "core.db");
+    const legacy = new Database(filename);
+    legacy.exec(BASE_SCHEMA_SQL);
+    legacy.pragma(`user_version = ${legacyVersion}`);
+    legacy.prepare(`INSERT INTO sessions
+      (id,title,model_id,reasoning_effort,created_at,updated_at,revision)
+      VALUES ('legacy-session','Legacy','gpt-5.6-sol','high',1,1,1)`).run();
+    legacy.close();
+
+    const upgraded = new Store(filename);
+    expect(upgraded.getSchemaVersion()).toBe(CURRENT_SCHEMA_VERSION);
+    expect(upgraded.listSessions()).toEqual([
+      expect.objectContaining({ id: "legacy-session", title: "Legacy" }),
+    ]);
+    const journal = upgraded.db.prepare(
+      "SELECT version,description,checksum,applied_at AS appliedAt FROM core_schema_migrations ORDER BY version",
+    ).all();
+    expect(journal).toHaveLength(2);
+    expect(journal).toEqual([
+      expect.objectContaining({ version: 1, checksum: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+      expect.objectContaining({ version: 2, checksum: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+    ]);
+    upgraded.close();
+
+    const reopened = new Store(filename);
+    expect(reopened.db.prepare("SELECT * FROM core_schema_migrations ORDER BY version").all()).toEqual(journal.map((row) => ({
+      version: (row as { version: number }).version,
+      description: (row as { description: string }).description,
+      checksum: (row as { checksum: string }).checksum,
+      applied_at: (row as { appliedAt: number }).appliedAt,
+    })));
+    reopened.close();
+  });
+
+  it("keeps the migration journal append-only", () => {
+    const store = createStore();
+    expect(() => store.db.prepare("UPDATE core_schema_migrations SET description='changed' WHERE version=1").run())
+      .toThrow("core_schema_migrations is append-only");
+    expect(() => store.db.prepare("DELETE FROM core_schema_migrations WHERE version=1").run())
+      .toThrow("core_schema_migrations is append-only");
+  });
+
+  it("rolls back an entire failed migration", () => {
+    const db = new Database(":memory:");
+    db.exec(BASE_SCHEMA_SQL);
+    db.pragma("user_version = 1");
+    expect(() => applySqliteMigrations(db, [{
+      version: 2,
+      description: "deliberately failing migration",
+      sql: `${MIGRATION_JOURNAL_SCHEMA_SQL}\nCREATE TABLE rollback_probe (id INTEGER);\nSELECT * FROM missing_table;`,
+    }], 1)).toThrow();
+    expect(db.pragma("user_version", { simple: true })).toBe(1);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name IN ('core_schema_migrations','rollback_probe')").all())
+      .toEqual([]);
+    db.close();
+  });
+
+  it("rejects a schema revision newer than this binary", () => {
+    const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-newer-schema-")), "core.db");
+    const current = new Store(filename);
+    current.db.pragma(`user_version = ${CURRENT_SCHEMA_VERSION + 1}`);
+    current.close();
+    expect(() => new Store(filename)).toThrow(`newer than supported revision ${CURRENT_SCHEMA_VERSION}`);
   });
 
   it("rejects an existing database without the current schema marker", () => {
@@ -753,7 +831,7 @@ describe("Store", () => {
     const initial = new Store(filename);
     initial.db.exec("DROP TABLE core_schema");
     initial.close();
-    expect(() => new Store(filename)).toThrow(/accepts only an empty database.*discard/i);
+    expect(() => new Store(filename)).toThrow(/requires tagent-core\/0\.8 or an empty database/i);
   });
 
   it("fails closed when the current schema drifts", () => {

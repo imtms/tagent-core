@@ -74,10 +74,16 @@ import type {
   SubmissionAuditInput,
   SubmissionAuditReceipt,
 } from "@tagent/admission/ports";
-import { CURRENT_SCHEMA_ID, CURRENT_SCHEMA_SQL } from "./current-schema.js";
+import {
+  getSqliteSchemaVersion,
+  initializeSqliteSchema,
+} from "./schema-migrations.js";
 import { mapRunApprovalOperation } from "./sqlite/approval-operation-mapper.js";
 import { appendLearningProjection, finalizeProjectionCheckpoint } from "./sqlite/learning-integration-event.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
+import { SqliteTranscriptRepository } from "./sqlite/transcript-repository.js";
+import { SqliteSemanticLearningRepository } from "./sqlite/semantic-learning-repository.js";
+import { SqliteSkillRepository } from "./sqlite/skill-repository.js";
 
 const now = () => Date.now();
 const MAX_SUBMISSION_CONTENT_CHARS = 200_000;
@@ -142,10 +148,16 @@ export interface OperatorReadPageQuery {
 export class Store {
   readonly db: Database.Database;
   private readonly defaultModelId: string;
+  private readonly transcriptRepository: SqliteTranscriptRepository;
+  private readonly semanticLearningRepository: SqliteSemanticLearningRepository;
+  private readonly skillRepository: SqliteSkillRepository;
 
   constructor(filename = process.env.TAGENT_DB ?? "./data/tagent.db", options: StoreOptions = {}) {
     this.defaultModelId = options.defaultModelId?.trim() || "gpt-5.6-sol";
     this.db = new Database(filename);
+    this.transcriptRepository = new SqliteTranscriptRepository(this.db, (runId) => this.getRun(runId));
+    this.semanticLearningRepository = new SqliteSemanticLearningRepository(this.db);
+    this.skillRepository = new SqliteSkillRepository(this.db);
     try {
       this.db.pragma("busy_timeout = 5000");
       this.db.pragma("journal_mode = WAL");
@@ -161,11 +173,11 @@ export class Store {
   }
 
   getLastTranscriptSeq(runId: RunId) {
-    return (this.db.prepare("SELECT COALESCE(MAX(seq), 0) as seq FROM run_transcript WHERE run_id = ?").get(runId) as { seq: number }).seq;
+    return this.transcriptRepository.getLastTranscriptSeq(runId);
   }
 
   getTranscriptCount(runId: RunId) {
-    return (this.db.prepare("SELECT COUNT(*) as count FROM run_transcript WHERE run_id = ?").get(runId) as { count: number }).count;
+    return this.transcriptRepository.getTranscriptCount(runId);
   }
 
   getCheckpoint(runId: RunId): RunCheckpoint | null {
@@ -254,12 +266,7 @@ export class Store {
   }
 
   private initializeSchema(): void {
-    const objectCount = (this.db.prepare(`SELECT COUNT(*) AS count FROM sqlite_master
-      WHERE name NOT LIKE 'sqlite_%'`).get() as { count: number }).count;
-    if (objectCount === 0) {
-      this.db.transaction(() => this.db.exec(CURRENT_SCHEMA_SQL))();
-    }
-    this.assertCurrentSchema();
+    initializeSqliteSchema(this.db);
 
     // A process restart loses the executor for operations that only reached started.
     // Surface uncertainty explicitly; never replay an effect that may have escaped Core.
@@ -267,33 +274,6 @@ export class Store {
     this.db.prepare("UPDATE workspace_goal_operation_receipts SET status='outcome_unknown',updated_at=? WHERE status='started'").run(now());
     this.db.prepare(`UPDATE profile_operation_receipts SET status='outcome_unknown',updated_at=?,completed_at=?
       WHERE status='started'`).run(now(), now());
-  }
-
-  private assertCurrentSchema(): void {
-    let marker: { schemaId: string } | undefined;
-    try {
-      marker = this.db.prepare("SELECT schema_id AS schemaId FROM core_schema WHERE id=1")
-        .get() as { schemaId: string } | undefined;
-    } catch {
-      marker = undefined;
-    }
-    if (marker?.schemaId !== CURRENT_SCHEMA_ID) {
-      throw new Error(`Unsupported SQLite schema. Core accepts only an empty database or ${CURRENT_SCHEMA_ID}; discard the existing database instead of upgrading it.`);
-    }
-
-    const snapshot = (db: Database.Database) => db.prepare(`SELECT type,name,tbl_name AS tableName,sql
-      FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND sql IS NOT NULL
-      ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'trigger' THEN 2 ELSE 3 END,name`).all();
-    const reference = new Database(":memory:");
-    try {
-      reference.pragma("foreign_keys = ON");
-      reference.exec(CURRENT_SCHEMA_SQL);
-      if (JSON.stringify(snapshot(this.db)) !== JSON.stringify(snapshot(reference))) {
-        throw new Error(`SQLite schema does not match ${CURRENT_SCHEMA_ID}; recreate the database from the current Core release.`);
-      }
-    } finally {
-      reference.close();
-    }
   }
 
   private attemptId(runId: string, ordinal: number) {
@@ -398,7 +378,7 @@ export class Store {
   }
 
   getSchemaVersion(): number {
-    return 1;
+    return getSqliteSchemaVersion(this.db);
   }
 
   createSession(title = "New workspace", requestId?: string): Session {
@@ -673,241 +653,73 @@ export class Store {
   }
 
   createSkillRevision(input: CreateSkillRevisionInput): SkillRevision {
-    return this.db.transaction(() => {
-      const timestamp = now();
-      let skill = input.skillId
-        ? this.db.prepare("SELECT id,name FROM skills WHERE id=?").get(input.skillId) as { id: string; name: string } | undefined
-        : this.db.prepare("SELECT id,name FROM skills WHERE name=?").get(input.name) as { id: string; name: string } | undefined;
-      const createdSkill = !skill;
-      if (input.skillId && !skill) throw new Error("Skill not found");
-      if (!skill) {
-        skill = { id: randomUUID(), name: input.name };
-        this.db.prepare("INSERT INTO skills (id,name,created_at,updated_at) VALUES (?,?,?,?)")
-          .run(skill.id, input.name, timestamp, timestamp);
-      }
-      const duplicate = this.db.prepare("SELECT id FROM skill_revisions WHERE skill_id=? AND sha256=?")
-        .get(skill.id, input.sha256) as { id: string } | undefined;
-      if (duplicate) {
-        if (skill.name !== input.name) {
-          this.db.prepare("UPDATE skills SET name=?,revision=revision+1,updated_at=? WHERE id=?")
-            .run(input.name, timestamp, skill.id);
-          this.touchSkillCatalogRevision(timestamp);
-        }
-        return this.getSkillRevision(duplicate.id)!;
-      }
-      if (skill.name !== input.name) {
-        this.db.prepare("UPDATE skills SET name=?,updated_at=? WHERE id=?").run(input.name, timestamp, skill.id);
-      }
-      const revision = (this.db.prepare("SELECT COALESCE(MAX(revision),0)+1 AS revision FROM skill_revisions WHERE skill_id=?")
-        .get(skill.id) as { revision: number }).revision;
-      const id = randomUUID();
-      this.db.prepare(`INSERT INTO skill_revisions
-        (id,skill_id,revision,description,content,file_path,sha256,disable_model_invocation,source_filename,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
-        id, skill.id, revision, input.description, input.content, input.filePath, input.sha256,
-        Number(input.disableModelInvocation ?? false), input.sourceFilename, timestamp,
-      );
-      this.db.prepare(`UPDATE skills SET revision=revision+?,updated_at=? WHERE id=?`)
-        .run(createdSkill ? 0 : 1, timestamp, skill.id);
-      this.touchSkillCatalogRevision(timestamp);
-      return this.getSkillRevision(id)!;
-    })();
+    return this.skillRepository.createSkillRevision(input);
   }
 
   getSkillRevision(revisionId: string): SkillRevision | undefined {
-    const row = this.db.prepare(`SELECT r.id,r.skill_id AS skillId,r.revision,s.name,r.description,r.content,
-      r.file_path AS filePath,r.sha256,r.disable_model_invocation AS disableModelInvocation,
-      r.source_filename AS sourceFilename,r.created_at AS createdAt
-      FROM skill_revisions r JOIN skills s ON s.id=r.skill_id WHERE r.id=?`).get(revisionId) as
-      (Omit<SkillRevision, "disableModelInvocation"> & { disableModelInvocation: number }) | undefined;
-    return row ? { ...row, disableModelInvocation: Boolean(row.disableModelInvocation) } : undefined;
+    return this.skillRepository.getSkillRevision(revisionId);
   }
 
   listSkills(): SkillSummary[] {
-    return this.db.prepare(`SELECT s.id,s.name,r.revision AS latestRevision,r.id AS latestRevisionId,
-      r.description,r.sha256,(SELECT COUNT(*) FROM workspace_skill_bindings bindings WHERE bindings.skill_id=s.id) AS workspaceCount,
-      s.updated_at AS updatedAt FROM skills s JOIN skill_revisions r ON r.skill_id=s.id
-      WHERE r.revision=(SELECT MAX(latest.revision) FROM skill_revisions latest WHERE latest.skill_id=s.id)
-      ORDER BY s.updated_at DESC,s.name`).all() as SkillSummary[];
+    return this.skillRepository.listSkills();
   }
 
   getCatalogRevision(): number {
-    return Number(this.db.prepare("SELECT revision FROM skill_catalog_state WHERE id=1").pluck().get());
+    return this.skillRepository.getCatalogRevision();
   }
 
   getSkillResourceRevision(skillId: string): number | undefined {
-    return (this.db.prepare("SELECT revision FROM skills WHERE id=?").get(skillId) as { revision: number } | undefined)?.revision;
+    return this.skillRepository.getSkillResourceRevision(skillId);
   }
 
   getWorkspaceSkillRevision(workspaceId: string): number | undefined {
-    return (this.db.prepare("SELECT revision FROM workspace_skill_revisions WHERE workspace_id=?").get(workspaceId) as
-      { revision: number } | undefined)?.revision;
+    return this.skillRepository.getWorkspaceSkillRevision(workspaceId);
   }
 
   listProfileSkillsPage(query: ProfilePageQuery): ProfileSkillCatalogPage {
-    const snapshotRowId = query.snapshotRowId ?? Number(this.db.prepare("SELECT COALESCE(MAX(rowid),0) FROM skills").pluck().get());
-    const afterClause = query.after
-      ? "AND (s.created_at < @afterCreatedAt OR (s.created_at = @afterCreatedAt AND s.id < @afterId))"
-      : "";
-    const rows = this.db.prepare(`SELECT s.id,s.name,r.revision AS latestRevision,r.id AS latestRevisionId,
-      r.description,r.sha256,(SELECT COUNT(*) FROM workspace_skill_bindings bindings WHERE bindings.skill_id=s.id) AS workspaceCount,
-      s.updated_at AS updatedAt,s.created_at AS orderCreatedAt FROM skills s JOIN skill_revisions r ON r.skill_id=s.id
-      WHERE s.rowid<=@snapshotRowId AND r.revision=(SELECT MAX(latest.revision) FROM skill_revisions latest WHERE latest.skill_id=s.id)
-      ${afterClause} ORDER BY s.created_at DESC,s.id DESC LIMIT @limit`).all({
-      snapshotRowId,
-      limit: query.limit,
-      ...(query.after ? { afterCreatedAt: query.after.createdAt, afterId: query.after.id } : {}),
-    }) as Array<SkillSummary & { orderCreatedAt: number }>;
-    return {
-      items: rows.map(({ orderCreatedAt: _orderCreatedAt, ...item }) => item),
-      orderKeys: rows.map((item) => ({ createdAt: item.orderCreatedAt, id: item.id })),
-      snapshotRowId,
-      collectionRevision: this.getCatalogRevision(),
-    };
+    return this.skillRepository.listProfileSkillsPage(query);
   }
 
   listProfileSkillRevisionsPage(skillId: string, query: ProfilePageQuery): ProfileSkillRevisionPage | undefined {
-    const resourceRevision = this.getSkillResourceRevision(skillId);
-    if (resourceRevision === undefined) return undefined;
-    const snapshotRowId = query.snapshotRowId ?? Number(this.db.prepare(
-      "SELECT COALESCE(MAX(rowid),0) FROM skill_revisions WHERE skill_id=?",
-    ).pluck().get(skillId));
-    const afterClause = query.after
-      ? "AND (created_at < @afterCreatedAt OR (created_at = @afterCreatedAt AND id < @afterId))"
-      : "";
-    const rows = this.db.prepare(`SELECT id FROM skill_revisions WHERE skill_id=@skillId AND rowid<=@snapshotRowId
-      ${afterClause} ORDER BY created_at DESC,id DESC LIMIT @limit`).all({
-      skillId,
-      snapshotRowId,
-      limit: query.limit,
-      ...(query.after ? { afterCreatedAt: query.after.createdAt, afterId: query.after.id } : {}),
-    }) as Array<{ id: string }>;
-    return { items: rows.map((row) => this.getSkillRevision(row.id)!), snapshotRowId, resourceRevision };
+    return this.skillRepository.listProfileSkillRevisionsPage(skillId, query);
   }
 
   listProfileWorkspaceSkillsPage(workspaceId: string, query: ProfilePageQuery): ProfileWorkspaceSkillPage | undefined {
-    const bindingRevision = this.getWorkspaceSkillRevision(workspaceId);
-    if (bindingRevision === undefined) return undefined;
-    const snapshotRowId = query.snapshotRowId ?? Number(this.db.prepare(
-      "SELECT COALESCE(MAX(rowid),0) FROM workspace_skill_bindings WHERE session_id=?",
-    ).pluck().get(workspaceId));
-    const afterClause = query.after
-      ? "AND (bindings.bound_at < @afterCreatedAt OR (bindings.bound_at = @afterCreatedAt AND bindings.skill_id < @afterId))"
-      : "";
-    const rows = this.db.prepare(`SELECT revisions.id,bindings.bound_at AS orderCreatedAt,bindings.skill_id AS orderId
-      FROM workspace_skill_bindings bindings
-      JOIN skill_revisions revisions ON revisions.skill_id=bindings.skill_id
-      WHERE bindings.session_id=@workspaceId AND bindings.rowid<=@snapshotRowId AND revisions.revision=(
-        SELECT MAX(latest.revision) FROM skill_revisions latest WHERE latest.skill_id=bindings.skill_id
-      ) ${afterClause} ORDER BY bindings.bound_at DESC,bindings.skill_id DESC LIMIT @limit`).all({
-      workspaceId,
-      snapshotRowId,
-      limit: query.limit,
-      ...(query.after ? { afterCreatedAt: query.after.createdAt, afterId: query.after.id } : {}),
-    }) as Array<{ id: string; orderCreatedAt: number; orderId: string }>;
-    return {
-      items: rows.map((row) => this.getSkillRevision(row.id)!),
-      orderKeys: rows.map((row) => ({ createdAt: row.orderCreatedAt, id: row.orderId })),
-      snapshotRowId,
-      bindingRevision,
-    };
+    return this.skillRepository.listProfileWorkspaceSkillsPage(workspaceId, query);
   }
 
   getSkill(skillId: string): SkillRevision | undefined {
-    const row = this.db.prepare("SELECT id FROM skill_revisions WHERE skill_id=? ORDER BY revision DESC LIMIT 1")
-      .get(skillId) as { id: string } | undefined;
-    return row ? this.getSkillRevision(row.id) : undefined;
+    return this.skillRepository.getSkill(skillId);
   }
 
   listSkillRevisions(skillId: string): SkillRevision[] {
-    const rows = this.db.prepare("SELECT id FROM skill_revisions WHERE skill_id=? ORDER BY revision DESC")
-      .all(skillId) as Array<{ id: string }>;
-    return rows.map((row) => this.getSkillRevision(row.id)!);
+    return this.skillRepository.listSkillRevisions(skillId);
   }
 
   listWorkspaceSkills(workspaceId: string): SkillRevision[] {
-    const rows = this.db.prepare(`SELECT revisions.id FROM workspace_skill_bindings bindings
-      JOIN skill_revisions revisions ON revisions.skill_id=bindings.skill_id
-      WHERE bindings.session_id=? AND revisions.revision=(
-        SELECT MAX(latest.revision) FROM skill_revisions latest WHERE latest.skill_id=bindings.skill_id
-      ) ORDER BY bindings.bound_at,bindings.skill_id`).all(workspaceId) as Array<{ id: string }>;
-    return rows.map((row) => this.getSkillRevision(row.id)!);
+    return this.skillRepository.listWorkspaceSkills(workspaceId);
   }
 
   replaceWorkspaceSkills(workspaceId: string, skillIds: readonly string[]): SkillRevision[] | undefined {
-    return this.db.transaction(() => {
-      if (!this.getSession(workspaceId)) return undefined;
-      const uniqueIds = [...new Set(skillIds)];
-      for (const skillId of uniqueIds) if (!this.getSkill(skillId)) return undefined;
-      this.db.prepare("DELETE FROM workspace_skill_bindings WHERE session_id=?").run(workspaceId);
-      const insert = this.db.prepare("INSERT INTO workspace_skill_bindings (session_id,skill_id,bound_at) VALUES (?,?,?)");
-      const timestamp = now();
-      uniqueIds.forEach((skillId, index) => insert.run(workspaceId, skillId, timestamp + index));
-      this.db.prepare(`INSERT INTO workspace_skill_revisions (workspace_id,revision,updated_at) VALUES (?,2,?)
-        ON CONFLICT(workspace_id) DO UPDATE SET revision=workspace_skill_revisions.revision+1,updated_at=excluded.updated_at`)
-        .run(workspaceId, timestamp);
-      this.touchSession(workspaceId);
-      return this.listWorkspaceSkills(workspaceId);
-    })();
+    return this.skillRepository.replaceWorkspaceSkills(workspaceId, skillIds);
   }
 
   deleteSkill(skillId: string): SkillRevision[] | undefined {
-    return this.db.transaction(() => {
-      const revisions = this.listSkillRevisions(skillId);
-      if (!revisions.length) return undefined;
-      const workspaceIds = (this.db.prepare("SELECT session_id AS workspaceId FROM workspace_skill_bindings WHERE skill_id=?")
-        .all(skillId) as Array<{ workspaceId: string }>).map((row) => row.workspaceId);
-      this.db.prepare("DELETE FROM workspace_skill_bindings WHERE skill_id=?").run(skillId);
-      this.db.prepare("DELETE FROM skill_revisions WHERE skill_id=?").run(skillId);
-      this.db.prepare("DELETE FROM skills WHERE id=?").run(skillId);
-      const timestamp = now();
-      this.touchSkillCatalogRevision(timestamp);
-      for (const workspaceId of workspaceIds) {
-        this.db.prepare("UPDATE workspace_skill_revisions SET revision=revision+1,updated_at=? WHERE workspace_id=?")
-          .run(timestamp, workspaceId);
-        this.touchSession(workspaceId);
-      }
-      return revisions;
-    })();
+    return this.skillRepository.deleteSkill(skillId);
   }
 
   createRevisionProfile(
     input: CreateSkillRevisionInput,
     mutation: ProfileMutationContext,
   ): ProfileMutationResult<ProfileSkillMutationValue> {
-    const skillId = input.skillId;
-    return this.runSkillProfileMutation({
-      mutation,
-      endpointId: skillId ? "operator.skills.update" : "operator.skills.create",
-      resourceType: skillId ? "skill" : "skill_catalog",
-      resourceId: skillId ?? "catalog",
-      operation: skillId ? "update" : "create",
-      currentRevision: () => skillId ? this.getSkillResourceRevision(skillId) : this.getCatalogRevision(),
-      perform: () => {
-        const skill = this.createSkillRevision(input);
-        const resourceRevision = this.getSkillResourceRevision(skill.skillId)!;
-        return {
-          value: { skill, resourceRevision, catalogRevision: this.getCatalogRevision() },
-          resultingRevision: skillId ? resourceRevision : this.getCatalogRevision(),
-        };
-      },
-    });
+    return this.skillRepository.createRevisionProfile(input, mutation);
   }
 
-  deleteSkillProfile(skillId: string, mutation: ProfileMutationContext): ProfileMutationResult<ProfileSkillDeleteValue> {
-    return this.runSkillProfileMutation({
-      mutation,
-      endpointId: "operator.skills.delete",
-      resourceType: "skill",
-      resourceId: skillId,
-      operation: "delete",
-      currentRevision: () => this.getSkillResourceRevision(skillId),
-      perform: () => {
-        if (!this.deleteSkill(skillId)) throw new Error("Skill disappeared during deletion");
-        const catalogRevision = this.getCatalogRevision();
-        return { value: { ok: true, skillId, catalogRevision }, resultingRevision: catalogRevision };
-      },
-    });
+  deleteSkillProfile(
+    skillId: string,
+    mutation: ProfileMutationContext,
+  ): ProfileMutationResult<ProfileSkillDeleteValue> {
+    return this.skillRepository.deleteSkillProfile(skillId, mutation);
   }
 
   replaceWorkspaceSkillsProfile(
@@ -915,92 +727,11 @@ export class Store {
     skillIds: readonly string[],
     mutation: ProfileMutationContext,
   ): ProfileMutationResult<ProfileWorkspaceSkillsMutationValue> {
-    return this.runSkillProfileMutation({
-      mutation,
-      endpointId: "operator.workspace_skills.replace",
-      resourceType: "workspace",
-      resourceId: workspaceId,
-      operation: "replace",
-      currentRevision: () => this.getWorkspaceSkillRevision(workspaceId),
-      perform: () => {
-        const skills = this.replaceWorkspaceSkills(workspaceId, skillIds);
-        if (!skills) throw new Error("Workspace Skill replacement became invalid");
-        const bindingRevision = this.getWorkspaceSkillRevision(workspaceId)!;
-        return { value: { skills, bindingRevision }, resultingRevision: bindingRevision };
-      },
-    }, () => skillIds.some((skillId) => !this.getSkill(skillId)) ? "state_conflict" : undefined);
-  }
-
-  private runSkillProfileMutation<T>(input: {
-    mutation: ProfileMutationContext;
-    endpointId: string;
-    resourceType: string;
-    resourceId: string;
-    operation: string;
-    currentRevision: () => number | undefined;
-    perform: () => { value: T; resultingRevision: number };
-  }, precondition?: () => "state_conflict" | undefined): ProfileMutationResult<T> {
-    const identity = {
-      principalId: input.mutation.principalId,
-      profileId: "operator.skills.v1",
-      endpointId: input.endpointId,
-      resourceType: input.resourceType,
-      resourceId: input.resourceId,
-      idempotencyKey: input.mutation.idempotencyKey,
-    };
-    const payloadHash = createHash("sha256").update(input.mutation.canonicalPayload).digest("hex");
-    return this.db.transaction((): ProfileMutationResult<T> => {
-      const existing = this.db.prepare(`SELECT payload_hash AS payloadHash,expected_revision AS expectedRevision,
-        result_json AS resultJson FROM profile_mutation_receipts
-        WHERE principal_id=@principalId AND profile_id=@profileId AND endpoint_id=@endpointId
-          AND resource_type=@resourceType AND resource_id=@resourceId AND idempotency_key=@idempotencyKey`)
-        .get(identity) as { payloadHash: string; expectedRevision: number; resultJson: string } | undefined;
-      if (existing) {
-        if (existing.payloadHash !== payloadHash || existing.expectedRevision !== input.mutation.expectedRevision) {
-          return { status: "idempotency_conflict" };
-        }
-        return { status: "succeeded", value: JSON.parse(existing.resultJson) as T, replayed: true };
-      }
-      const currentRevision = input.currentRevision();
-      if (currentRevision === undefined) return { status: "not_found" };
-      if (currentRevision !== input.mutation.expectedRevision) {
-        return { status: "concurrency_conflict", currentRevision };
-      }
-      const rejected = precondition?.();
-      if (rejected) return { status: rejected };
-      const timestamp = now();
-      const result = input.perform();
-      this.db.prepare(`INSERT INTO profile_mutation_receipts
-        (principal_id,profile_id,endpoint_id,resource_type,resource_id,idempotency_key,payload_hash,
-         expected_revision,resulting_revision,result_json,created_at,updated_at)
-        VALUES (@principalId,@profileId,@endpointId,@resourceType,@resourceId,@idempotencyKey,@payloadHash,
-          @expectedRevision,@resultingRevision,@resultJson,@timestamp,@timestamp)`).run({
-        ...identity,
-        payloadHash,
-        expectedRevision: input.mutation.expectedRevision,
-        resultingRevision: result.resultingRevision,
-        resultJson: JSON.stringify(result.value),
-        timestamp,
-      });
-      this.db.prepare(`INSERT INTO profile_audit_events
-        (id,principal_id,granted_scopes_json,delegated_actor_id,delegated_request_id,request_id,profile_id,
-         endpoint_id,resource_type,resource_id,operation,outcome,error_code,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,'succeeded','',?)`).run(
-        randomUUID(), input.mutation.principalId, JSON.stringify([...input.mutation.grantedScopes]),
-        input.mutation.delegatedActorId ?? null, input.mutation.delegatedRequestId ?? null,
-        input.mutation.requestId, identity.profileId, identity.endpointId, identity.resourceType,
-        identity.resourceId, input.operation, timestamp,
-      );
-      return { status: "succeeded", value: result.value, replayed: false };
-    })();
+    return this.skillRepository.replaceWorkspaceSkillsProfile(workspaceId, skillIds, mutation);
   }
 
   private touchSession(id: SessionId) {
     this.db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(now(), id);
-  }
-
-  private touchSkillCatalogRevision(timestamp = now()) {
-    this.db.prepare("UPDATE skill_catalog_state SET revision=revision+1,updated_at=? WHERE id=1").run(timestamp);
   }
 
   private initializeSessionProfileRevisions(id: SessionId, timestamp: number) {
@@ -2090,181 +1821,27 @@ ${source.content}`;
   }
 
   appendTranscript(runId: RunId, attempt: number, message: AgentMessage) {
-    const transaction = this.db.transaction(() => {
-      const row = this.db.prepare("SELECT COALESCE(MAX(seq), 0) + 1 as seq FROM run_transcript WHERE run_id = ?").get(runId) as { seq: number };
-      this.db.prepare("INSERT INTO run_transcript (run_id, seq, attempt, attempt_id, role, message_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .run(runId, row.seq, attempt, this.attemptId(runId, attempt), message.role, JSON.stringify(message), now());
-      if (message.role === "assistant") {
-        this.db.prepare(`UPDATE runs SET
-          usage_input = usage_input + ?, usage_output = usage_output + ?,
-          usage_cache_read = usage_cache_read + ?, usage_cache_write = usage_cache_write + ?,
-          usage_total_tokens = usage_total_tokens + ?, usage_cost = usage_cost + ?, updated_at = ?
-          WHERE id = ?`).run(
-          message.usage.input, message.usage.output, message.usage.cacheRead, message.usage.cacheWrite,
-          message.usage.totalTokens, message.usage.cost.total, now(), runId,
-        );
-      }
-      return row.seq;
-    });
-    return transaction();
+    return this.transcriptRepository.appendTranscript(runId, attempt, message);
   }
 
   listTranscriptEntries(runId: RunId, options: { limit?: number; attempt?: number; after?: number } = {}) {
-    const limit = options.limit === undefined ? undefined : Math.max(1, Math.floor(options.limit));
-    const rows = options.after !== undefined
-      ? options.attempt === undefined
-        ? limit === undefined
-          ? this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? AND seq > ? ORDER BY seq").all(runId, options.after)
-          : this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? AND seq > ? ORDER BY seq LIMIT ?").all(runId, options.after, limit)
-        : limit === undefined
-          ? this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? AND attempt = ? AND seq > ? ORDER BY seq").all(runId, options.attempt, options.after)
-          : this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? AND attempt = ? AND seq > ? ORDER BY seq LIMIT ?").all(runId, options.attempt, options.after, limit)
-      : options.attempt === undefined
-      ? limit === undefined
-        ? this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? ORDER BY seq").all(runId)
-        : this.db.prepare(`SELECT * FROM (SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt
-          FROM run_transcript WHERE run_id = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq`).all(runId, limit)
-      : limit === undefined
-        ? this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? AND attempt = ? ORDER BY seq").all(runId, options.attempt)
-        : this.db.prepare(`SELECT * FROM (SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt
-          FROM run_transcript WHERE run_id = ? AND attempt = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq`).all(runId, options.attempt, limit);
-    return (rows as Array<{ seq: number; attempt: number; role: string; messageJson: string; createdAt: number }>).map(({ messageJson, ...row }) => ({ ...row, message: JSON.parse(messageJson) as AgentMessage }));
+    return this.transcriptRepository.listTranscriptEntries(runId, options);
   }
 
   searchTranscriptLiteral(runId: RunId, query: string, options: { limit?: number; snippetChars?: number; beforeSeq?: number } = {}) {
-    if (!query) throw new Error("Transcript literal search query cannot be empty");
-    const limit = Math.min(20, Math.max(1, Math.floor(options.limit ?? 8)));
-    const snippetChars = Math.min(1_000, Math.max(80, Math.floor(options.snippetChars ?? 320)));
-    const encodedQuery = JSON.stringify(query).slice(1, -1);
-    const beforeSeq = options.beforeSeq ?? Number.MAX_SAFE_INTEGER;
-    const rows = this.db.prepare(`SELECT seq,attempt,role,message_json as messageJson,created_at as createdAt
-      FROM run_transcript
-      WHERE run_id=? AND seq < ? AND instr(message_json, ?) > 0
-      ORDER BY seq DESC LIMIT ?`).all(runId, beforeSeq, encodedQuery, limit + 1) as Array<{
-        seq: number; attempt: number; role: string; messageJson: string; createdAt: number;
-      }>;
-    const matches = rows.slice(0, limit).map(({ messageJson, ...row }) => {
-      const index = messageJson.indexOf(encodedQuery);
-      const available = Math.max(0, snippetChars - encodedQuery.length);
-      let start = Math.max(0, index - Math.floor(available / 2));
-      let end = Math.min(messageJson.length, start + snippetChars);
-      start = Math.max(0, end - snippetChars);
-      return {
-        ...row,
-        snippet: `${start > 0 ? "…" : ""}${messageJson.slice(start, end)}${end < messageJson.length ? "…" : ""}`,
-      };
-    });
-    return { matches, truncated: rows.length > limit };
+    return this.transcriptRepository.searchTranscriptLiteral(runId, query, options);
   }
 
   listTranscript(runId: RunId): AgentMessage[] {
-    return this.listTranscriptEntries(runId).map((entry) => entry.message);
+    return this.transcriptRepository.listTranscript(runId);
   }
 
   repairTranscript(runId: RunId, reason: "cancelled" | "resume" | "continuation") {
-    const transaction = this.db.transaction(() => {
-      const run = this.getRun(runId);
-      if (!run) throw new Error(`Unknown run ${runId}`);
-      const pending = new Map<string, string>();
-      for (const message of this.listTranscript(runId)) {
-        if (message.role === "assistant") {
-          for (const part of message.content) if (part.type === "toolCall") pending.set(part.id, part.name);
-        } else if (message.role === "toolResult") {
-          pending.delete(message.toolCallId);
-        }
-      }
-      const repaired: Array<{ toolCallId: string; toolName: string }> = [];
-      for (const [toolCallId, toolName] of pending) {
-        const message: AgentMessage = {
-          role: "toolResult", toolCallId, toolName,
-          content: [{ type: "text", text: `Tool result synthesized by TAgent Core because the ${reason} boundary interrupted this call.` }],
-          details: { synthetic: true, reason }, isError: true,
-          error: { name: "ToolExecutionError", code: "ABORTED", message: `Tool call interrupted by ${reason} boundary` },
-          timestamp: now(),
-        };
-        this.appendTranscript(runId, run.attempt, message);
-        repaired.push({ toolCallId, toolName });
-      }
-      return repaired;
-    });
-    return transaction();
+    return this.transcriptRepository.repairTranscript(runId, reason);
   }
 
   listTranscriptView(runId: RunId, options: { limit?: number; attempt?: number; after?: number } = {}) {
-    type TranscriptViewItem =
-      | { seq: number; index?: number; attempt: number; kind: "user" | "assistant"; text: string; createdAt: number }
-      | { seq: number; index: number; attempt: number; kind: "thinking"; text: string; redacted: boolean; createdAt: number }
-      | { seq: number; index: number; attempt: number; kind: "tool"; toolCallId: string; toolName: string; arguments: unknown; result: string; isError: boolean; error?: Extract<AgentMessage, { role: "toolResult" }>["error"]; status: "pending" | "completed" | "failed"; createdAt: number };
-    const toolResults = new Map<string, { content: string; isError: boolean; error?: Extract<AgentMessage, { role: "toolResult" }>["error"]; toolName: string }>();
-    const entries = [...this.listTranscriptEntries(runId, options)];
-    const supplementalEntrySeqs = new Set<number>();
-    const toolCallIds = new Set<string>();
-    const completedToolCallIds = new Set<string>();
-    for (const entry of entries) {
-      const message = entry.message;
-      if (message.role === "assistant") {
-        for (const part of message.content) if (part.type === "toolCall") toolCallIds.add(part.id);
-      }
-      if (message.role !== "toolResult") continue;
-      completedToolCallIds.add(message.toolCallId);
-      const content = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
-      toolResults.set(message.toolCallId, { content, isError: message.isError, error: message.error, toolName: message.toolName });
-    }
-    const missingToolCallSources = [...completedToolCallIds].filter((id) => !toolCallIds.has(id));
-    if (missingToolCallSources.length) {
-      const rows = this.db.prepare(`SELECT DISTINCT t.seq,t.attempt,t.role,t.message_json as messageJson,t.created_at as createdAt
-        FROM run_transcript t, json_each(t.message_json,'$.content') part
-        WHERE t.run_id=? AND t.role='assistant'
-          AND json_extract(part.value,'$.type')='toolCall'
-          AND json_extract(part.value,'$.id') IN (SELECT value FROM json_each(?))`)
-        .all(runId, JSON.stringify(missingToolCallSources)) as Array<{ seq: number; attempt: number; role: string; messageJson: string; createdAt: number }>;
-      const existingSeq = new Set(entries.map((entry) => entry.seq));
-      for (const { messageJson, ...row } of rows) {
-        if (existingSeq.has(row.seq)) continue;
-        entries.push({ ...row, message: JSON.parse(messageJson) as AgentMessage });
-        supplementalEntrySeqs.add(row.seq);
-        existingSeq.add(row.seq);
-        const message = JSON.parse(messageJson) as Extract<AgentMessage, { role: "assistant" }>;
-        for (const part of message.content) if (part.type === "toolCall") toolCallIds.add(part.id);
-      }
-      entries.sort((left, right) => left.seq - right.seq);
-    }
-    const missingToolCallIds = [...toolCallIds].filter((id) => !toolResults.has(id));
-    if (missingToolCallIds.length) {
-      const rows = this.db.prepare(`SELECT message_json as messageJson FROM run_transcript
-        WHERE run_id=? AND role='toolResult'
-          AND json_extract(message_json,'$.toolCallId') IN (SELECT value FROM json_each(?))`)
-        .all(runId, JSON.stringify(missingToolCallIds)) as Array<{ messageJson: string }>;
-      for (const row of rows) {
-        const message = JSON.parse(row.messageJson) as Extract<AgentMessage, { role: "toolResult" }>;
-        const content = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
-        toolResults.set(message.toolCallId, { content, isError: message.isError, error: message.error, toolName: message.toolName });
-      }
-    }
-    const view: TranscriptViewItem[] = [];
-    for (const entry of entries) {
-      const message = entry.message;
-      if (message.role === "user") {
-        view.push({ seq: entry.seq, attempt: entry.attempt, kind: "user", text: typeof message.content === "string" ? message.content : "", createdAt: entry.createdAt });
-        continue;
-      }
-      if (message.role !== "assistant") continue;
-      for (const [index, part] of message.content.entries()) {
-        if (supplementalEntrySeqs.has(entry.seq) && (part.type !== "toolCall" || !completedToolCallIds.has(part.id))) continue;
-        if (part.type === "text" && part.text) {
-          view.push({ seq: entry.seq, index, attempt: entry.attempt, kind: "assistant", text: part.text, createdAt: entry.createdAt });
-          continue;
-        }
-        if (part.type === "thinking" && (part.thinking || part.redacted)) {
-          view.push({ seq: entry.seq, index, attempt: entry.attempt, kind: "thinking", text: part.redacted ? "Reasoning was redacted by the model provider." : part.thinking, redacted: Boolean(part.redacted), createdAt: entry.createdAt });
-          continue;
-        }
-        if (part.type !== "toolCall") continue;
-        const result = toolResults.get(part.id);
-        view.push({ seq: entry.seq, index, attempt: entry.attempt, kind: "tool", toolCallId: part.id, toolName: part.name, arguments: part.arguments, result: result?.content ?? "", isError: result?.isError ?? false, error: result?.error, status: result ? (result.isError ? "failed" : "completed") : "pending", createdAt: entry.createdAt });
-      }
-    }
-    return view;
+    return this.transcriptRepository.listTranscriptView(runId, options);
   }
 
   private canonicalHash(payload: unknown) {
@@ -3136,121 +2713,53 @@ ${source.content}`;
     return transaction();
   }
 
-  getLearningSettings(): {
-    memoryEnabled: boolean;
-    learningEnabled: boolean;
-    autoExecutionEnabled: boolean;
-    updatedAt: number;
-    reason: string;
-  } | undefined {
-    const row = this.db.prepare(`SELECT memory_enabled as memoryEnabled,
-      learning_enabled as learningEnabled, auto_execution_enabled as autoExecutionEnabled,
-      updated_at as updatedAt, reason FROM learning_feature_settings WHERE id = 1`).get() as {
-        memoryEnabled: number;
-        learningEnabled: number;
-        autoExecutionEnabled: number;
-        updatedAt: number;
-        reason: string;
-      } | undefined;
-    return row ? {
-      ...row,
-      memoryEnabled: Boolean(row.memoryEnabled),
-      learningEnabled: Boolean(row.learningEnabled),
-      autoExecutionEnabled: Boolean(row.autoExecutionEnabled),
-    } : undefined;
+  getLearningSettings() {
+    return this.semanticLearningRepository.getLearningSettings();
   }
 
-  getSemanticCacheEntry(cacheKey: string, timestamp = now()): {
-    cacheKey: string;
-    task: string;
-    inputHash: string;
-    model: string;
-    result: unknown;
-    createdAt: number;
-    expiresAt: number;
-  } | undefined {
-    const row = this.db.prepare(`SELECT cache_key as cacheKey, task, input_hash as inputHash,
-      model, result_json as resultJson, created_at as createdAt, expires_at as expiresAt
-      FROM semantic_judgment_cache WHERE cache_key = ?`).get(cacheKey) as {
-        cacheKey: string;
-        task: string;
-        inputHash: string;
-        model: string;
-        resultJson: string;
-        createdAt: number;
-        expiresAt: number;
-      } | undefined;
-    if (!row || row.expiresAt <= timestamp) return undefined;
-    try {
-      const { resultJson, ...entry } = row;
-      return { ...entry, result: JSON.parse(resultJson) as unknown };
-    } catch {
-      return undefined;
-    }
+  getSemanticCacheEntry(cacheKey: string, timestamp = now()) {
+    return this.semanticLearningRepository.getSemanticCacheEntry(cacheKey, timestamp);
   }
 
-  putSemanticCacheEntry(entry: {
-    cacheKey: string;
-    task: string;
-    inputHash: string;
-    model: string;
-    result: unknown;
-    createdAt: number;
-    expiresAt: number;
-  }): void {
-    this.db.prepare(`INSERT INTO semantic_judgment_cache
-      (cache_key, task, input_hash, model, result_json, created_at, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(cache_key) DO UPDATE SET result_json = excluded.result_json,
-        created_at = excluded.created_at, expires_at = excluded.expires_at`).run(
-      entry.cacheKey,
-      entry.task,
-      entry.inputHash,
-      entry.model,
-      JSON.stringify(entry.result),
-      entry.createdAt,
-      entry.expiresAt,
-    );
+  putSemanticCacheEntry(entry: Parameters<SqliteSemanticLearningRepository["putSemanticCacheEntry"]>[0]): void {
+    this.semanticLearningRepository.putSemanticCacheEntry(entry);
   }
 
   deleteExpiredSemanticCacheEntries(timestamp = now(), limit = 1_000): number {
-    return this.db.prepare(`DELETE FROM semantic_judgment_cache WHERE cache_key IN
-      (SELECT cache_key FROM semantic_judgment_cache WHERE expires_at <= ? LIMIT ?)`).run(timestamp, limit).changes;
+    return this.semanticLearningRepository.deleteExpiredSemanticCacheEntries(timestamp, limit);
   }
 
-  enqueueSemanticLearningJob(kind: "user_message" | "workflow_eligibility" | "feedback_attribution", payload: Record<string, unknown>, idempotencyKey: string, runId?: RunId, attempt?: number) {
-    const timestamp = now();
-    this.db.prepare(`INSERT OR IGNORE INTO semantic_learning_jobs
-      (id,kind,run_id,attempt,idempotency_key,payload_json,status,attempts,next_retry_at,error,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,'pending',0,0,'',?,?)`).run(randomUUID(), kind, runId ?? null, attempt ?? null, idempotencyKey, JSON.stringify(payload), timestamp, timestamp);
-    return this.db.prepare("SELECT * FROM semantic_learning_jobs WHERE idempotency_key=?").get(idempotencyKey);
+  enqueueSemanticLearningJob(
+    kind: "user_message" | "workflow_eligibility" | "feedback_attribution",
+    payload: Record<string, unknown>,
+    idempotencyKey: string,
+    runId?: RunId,
+    attempt?: number,
+  ) {
+    return this.semanticLearningRepository.enqueueSemanticLearningJob(
+      kind, payload, idempotencyKey, runId, attempt,
+    );
   }
 
-  claimSemanticLearningJobs(owner: string, kinds: Array<"user_message" | "workflow_eligibility" | "feedback_attribution">, limit = 100, leaseMs = 30_000) {
-    if (!kinds.length || limit <= 0) return [];
-    const timestamp = now(); const claimed: Array<{id:string;kind:"user_message"|"workflow_eligibility"|"feedback_attribution";runId?:string;attempt?:number;idempotencyKey:string;payloadJson:string;status:string;attempts:number;nextRetryAt:number;error:string;createdAt:number;updatedAt:number;leaseOwner:string;leaseToken:string;leaseUntil:number;fence:number}> = [];
-    const claim = this.db.transaction(() => {
-      const rows = this.db.prepare(`SELECT id FROM semantic_learning_jobs WHERE kind IN (${kinds.map(()=>"?").join(",")}) AND next_retry_at<=?
-        AND (status IN ('pending','failed') OR (status='processing' AND (lease_until IS NULL OR lease_until<=?))) ORDER BY created_at LIMIT ?`).all(...kinds, timestamp, timestamp, limit) as Array<{id:string}>;
-      const select = this.db.prepare(`SELECT id,kind,run_id as runId,attempt,idempotency_key as idempotencyKey,payload_json as payloadJson,status,attempts,next_retry_at as nextRetryAt,error,created_at as createdAt,updated_at as updatedAt,lease_owner as leaseOwner,lease_token as leaseToken,lease_until as leaseUntil,fence FROM semantic_learning_jobs WHERE id=?`);
-      for (const row of rows) {
-        const token = randomUUID();
-        const changed = this.db.prepare(`UPDATE semantic_learning_jobs SET status='processing',attempts=attempts+1,lease_owner=?,lease_token=?,lease_until=?,fence=fence+1,updated_at=? WHERE id=?
-          AND (status IN ('pending','failed') OR (status='processing' AND (lease_until IS NULL OR lease_until<=?)))`).run(owner, token, timestamp + leaseMs, timestamp, row.id, timestamp).changes;
-        if (changed) claimed.push(select.get(row.id) as typeof claimed[number]);
-      }
-    });
-    claim(); return claimed;
+  claimSemanticLearningJobs(
+    owner: string,
+    kinds: Array<"user_message" | "workflow_eligibility" | "feedback_attribution">,
+    limit = 100,
+    leaseMs = 30_000,
+  ) {
+    return this.semanticLearningRepository.claimSemanticLearningJobs(owner, kinds, limit, leaseMs);
   }
 
-  renewSemanticLearningJob(id:string, owner:string, token:string, fence:number, leaseMs=30_000) { const timestamp=now(); return this.db.prepare(`UPDATE semantic_learning_jobs SET lease_until=?,updated_at=? WHERE id=? AND status='processing' AND lease_owner=? AND lease_token=? AND fence=? AND lease_until>?`).run(timestamp+leaseMs,timestamp,id,owner,token,fence,timestamp).changes===1; }
+  renewSemanticLearningJob(id: string, owner: string, token: string, fence: number, leaseMs = 30_000) {
+    return this.semanticLearningRepository.renewSemanticLearningJob(id, owner, token, fence, leaseMs);
+  }
 
-  completeSemanticLearningJob(id:string, owner:string, token:string, fence:number) { const timestamp=now(); return this.db.prepare(`UPDATE semantic_learning_jobs SET status='completed',error='',completed_at=?,lease_owner='',lease_token='',lease_until=NULL,updated_at=? WHERE id=? AND status='processing' AND lease_owner=? AND lease_token=? AND fence=?`).run(timestamp,timestamp,id,owner,token,fence).changes===1; }
+  completeSemanticLearningJob(id: string, owner: string, token: string, fence: number) {
+    return this.semanticLearningRepository.completeSemanticLearningJob(id, owner, token, fence);
+  }
 
-  failSemanticLearningJob(id:string, owner:string, token:string, fence:number, attempts:number, error:string) {
-    const status=attempts>=5?"dead_letter":"failed",timestamp=now(),retryAt=status==="dead_letter"?0:timestamp+Math.min(60*60_000,2**attempts*5_000);
-    const changed=this.db.prepare(`UPDATE semantic_learning_jobs SET status=?,next_retry_at=?,error=?,lease_owner='',lease_token='',lease_until=NULL,updated_at=? WHERE id=? AND status='processing' AND lease_owner=? AND lease_token=? AND fence=?`).run(status,retryAt,error.slice(0,4000),timestamp,id,owner,token,fence).changes;
-    return {attempts,status,nextRetryAt:retryAt,changed:changed===1};
+  failSemanticLearningJob(id: string, owner: string, token: string, fence: number, attempts: number, error: string) {
+    return this.semanticLearningRepository.failSemanticLearningJob(id, owner, token, fence, attempts, error);
   }
 
   evaluateGate(run: GovernanceCompletionRunView): CompletionGate {

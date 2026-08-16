@@ -77,6 +77,7 @@ const workspaceBoundaries = [
     "@tagent/admission",
     "@tagent/execution",
     "@tagent/governance",
+    "@tagent/learning",
   ], ["fastify"]),
   workspaceBoundary("core-service", ["apps/core-service/src/**/*.{ts,tsx}"], [
     "@tagent/admission",

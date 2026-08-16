@@ -8,6 +8,7 @@ import { settleRuntimeFactoryFailure } from "./runtime-factory-failure.js";
 import { settleAttemptExecutionFailure } from "./attempt-execution-failure.js";
 import { selectRuntimeModel } from "./runtime-model-selection.js";
 import { runtimeSkillsFor } from "./runtime-skill.js";
+import { finalizePostAttempt } from "./post-attempt-finalizer.js";
 import type { AttemptSettlementPort, ContinuationControlPort, ControlCommandPort, PostAttemptPort, RecoveryControlPort, RunContextPort, RunEventPublisherPort, RuntimeControlPort, RuntimeHostFactoryPort, SupervisorPort } from "./collaboration-ports.js";
 type AttemptExecutorState = ExecutionStateView<
   | "checkpointDrafts" | "checkpointTimers" | "checkpointTokens" | "closing" | "continuationOwner" | "executionOwner" | "executionTasks"
@@ -186,7 +187,10 @@ export class AttemptExecutor {
       settleRuntimeFactoryFailure({ state: this.state, run, token, continuationId, continuationOwner: this.state.continuationOwner, launchOptions, error,
         settlement: this.dependencies.settlement, postAttempt: this.dependencies.postAttempt, eventHub: this.dependencies.eventHub });
       let failureTask!: Promise<void>;
-      failureTask = Promise.resolve(runtimeHost.dispose?.()).then(() => undefined, () => undefined).finally(() => {
+      failureTask = Promise.resolve(runtimeHost.dispose?.()).then(() => undefined, () => undefined).then(() => {
+        finalizePostAttempt({ closing: this.state.closing, continuation: this.dependencies.continuation,
+          eventHub: this.dependencies.eventHub, persistence: this.state.persistence, postAttempt: this.dependencies.postAttempt }, run);
+      }).finally(() => {
         if (this.state.executionTasks.get(run.id) === failureTask) this.state.executionTasks.delete(run.id);
       });
       this.state.executionTasks.set(run.id, failureTask);
@@ -285,15 +289,11 @@ export class AttemptExecutor {
         leaseToken: token.leaseToken,
         fence: token.executionFence,
       });
+      finalizePostAttempt({ closing: this.state.closing, continuation: this.dependencies.continuation,
+        eventHub: this.dependencies.eventHub, persistence: this.state.persistence, postAttempt: this.dependencies.postAttempt }, run);
       if (this.state.executionTasks.get(run.id) === execution) this.state.executionTasks.delete(run.id);
-      setImmediate(() => {
-        try {
-          if (this.state.closing) return;
-          this.dependencies.postAttempt.attemptFinalized(run);
-          this.dependencies.continuation.startQueuedContinuation(run.id);
-        } catch { /* Persistence resources may already be closed during shutdown. */ }
-      });
     });
     this.state.executionTasks.set(run.id, execution);
   }
+
 }

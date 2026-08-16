@@ -30,10 +30,14 @@ async function fixture(credentials: ServiceCredential[] = [], filename = ":memor
   const workspace = await mkdtemp(path.join(tmpdir(), "tagent-operator-read-"));
   directories.push(workspace);
   const store = new Store(filename);
-  const service = createCoreApplication(corePersistence(store), workspace, () => ({
-    prompt: async () => undefined, steer: async () => "accepted" as const, followUp: async () => "accepted" as const,
-    compact: async () => undefined, abort: () => undefined, dispose: async () => undefined, getMessages: () => [], getError: () => undefined,
-  }));
+  const service = createCoreApplication({
+    persistence: corePersistence(store),
+    workspace: workspace,
+    runtimeFactory: () => ({
+      prompt: async () => undefined, steer: async () => "accepted" as const, followUp: async () => "accepted" as const,
+      compact: async () => undefined, abort: () => undefined, dispose: async () => undefined, getMessages: () => [], getError: () => undefined,
+    })
+  });
   const app = createApp({
     ...httpTestResources(store), service, workspaceRoot: workspace, logger: false, serviceCredentials: credentials,
     runtimeConfig: { releaseVersion: "test", schemaVersion: store.getSchemaVersion() },

@@ -700,14 +700,14 @@ describe("Core application memory capture boundaries", () => {
         ] as never,
       getError: () => undefined,
     };
-    const agent = createCoreApplication(
-      corePersistence(store),
-      "/tmp",
-      () => runtime,
-      {},
-      memory,
-      "test-scope",
-    );
+    const agent = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => runtime,
+      runtimeDefaults: {},
+      memory: memory,
+      memoryScopeId: "test-scope",
+    });
     await agent.start(session.id, "记住我叫TMs", "capture-user");
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(

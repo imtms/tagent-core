@@ -7,5 +7,5 @@
     "noEmit": true,
     "types": ["node", "vitest/globals", "vite/client"]
   },
-  "include": ["tests/**/*.test.ts"]
+  "include": ["tests/**/*.test.ts", "tests/**/*.test.tsx"]
 }

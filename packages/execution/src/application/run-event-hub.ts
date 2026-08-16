@@ -18,19 +18,20 @@ export class RunEventHub {
     if (!relevant) return;
     draft.lastEventSeq = Math.max(draft.lastEventSeq, event.seq);
     if (event.type === "message.started") draft.assistantPartial = "";
-    if (event.type === "message.delta") draft.assistantPartial += String((event.data as { delta?: unknown }).delta ?? "");
+    if (event.type === "message.delta") draft.assistantPartial += event.data.delta;
     if (event.type === "message.retrying") draft.assistantPartial = "";
     if (event.type === "tool.started") draft.currentTool = {
-      toolCallId: String((event.data as { toolCallId?: unknown }).toolCallId ?? ""),
-      toolName: String((event.data as { toolName?: unknown }).toolName ?? "tool"),
+      toolCallId: String(event.data.toolCallId),
+      toolName: String(event.data.toolName),
       startedAt: event.createdAt,
       lastActivityAt: event.createdAt,
     };
-    if (event.type === "tool.progress" && draft.currentTool?.toolCallId === String((event.data as { toolCallId?: unknown }).toolCallId ?? "")) {
-      draft.currentTool.lastActivityAt = event.createdAt;
+    const currentTool = draft.currentTool;
+    if (event.type === "tool.progress" && currentTool && currentTool.toolCallId === event.data.toolCallId) {
+      currentTool.lastActivityAt = event.createdAt;
     }
     if (event.type === "provider.failure" && draft.currentTool) draft.currentTool.lastActivityAt = event.createdAt;
-    if (event.type === "tool.completed" && draft.currentTool?.toolCallId === String((event.data as { toolCallId?: unknown }).toolCallId ?? "")) draft.currentTool = null;
+    if (event.type === "tool.completed" && draft.currentTool?.toolCallId === event.data.toolCallId) draft.currentTool = null;
     const transcriptBoundary = event.type === "tool.completed" || event.type === "message.completed";
     if (transcriptBoundary) this.state.lastCheckpointTranscriptSeq.set(event.runId, this.state.persistence.transcript.getLastTranscriptSeq(event.runId));
     // Streaming text remains recoverable through the debounced checkpoint. Persist

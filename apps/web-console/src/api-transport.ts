@@ -1,11 +1,11 @@
 import { decodeAbi, SuccessEnvelopeSchema } from "@tagent/abi";
-import { createCoreTransport } from "@tagent/core-client";
+import { createCoreClient } from "@tagent/core-client";
+import type { RunEvent } from "./api-types";
 
-const coreClient = createCoreTransport();
-const configuredCoreOrigin = configuredOrigin(import.meta.env.VITE_TAGENT_CORE_ORIGIN);
+const configuredCoreOrigin = normalizeCoreOrigin(import.meta.env.VITE_TAGENT_CORE_ORIGIN);
 const oidcTokenStorageKey = "tagent.oidc.access_token";
 
-function configuredOrigin(value: string | undefined): string {
+export function normalizeCoreOrigin(value: string | undefined): string {
   const candidate = value?.trim();
   if (!candidate) return "";
   const parsed = new URL(candidate);
@@ -29,6 +29,18 @@ function oidcAccessToken(): string | undefined {
   }
 }
 
+async function coreFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const accessToken = oidcAccessToken();
+  if (accessToken && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${accessToken}`);
+  return fetch(input, { ...init, credentials: "omit", headers });
+}
+
+export const coreClient = createCoreClient({
+  baseUrl: configuredCoreOrigin,
+  fetch: coreFetch,
+});
+
 export interface AuthenticatedCoreRequestOptions {
   origin?: string;
   accessToken?: string;
@@ -39,7 +51,7 @@ export function authenticatedCoreRequest(
   init: RequestInit = {},
   options: AuthenticatedCoreRequestOptions = {},
 ): { url: string; init: RequestInit } {
-  const origin = options.origin === undefined ? configuredCoreOrigin : configuredOrigin(options.origin);
+  const origin = options.origin === undefined ? configuredCoreOrigin : normalizeCoreOrigin(options.origin);
   const accessToken = options.accessToken === undefined ? oidcAccessToken() : options.accessToken.trim();
   const headers = new Headers(init.headers);
   if (accessToken && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${accessToken}`);
@@ -55,7 +67,7 @@ export async function authenticatedCoreFetch(
   options: AuthenticatedCoreRequestOptions = {},
 ): Promise<Response> {
   const prepared = authenticatedCoreRequest(pathname, init, options);
-  const response = await fetch(prepared.url, prepared.init);
+  const response = await coreFetch(prepared.url, prepared.init);
   if (!response.ok) throw new Error(`Core request failed with HTTP ${response.status}`);
   return response;
 }
@@ -75,6 +87,31 @@ export const request: ApiRequest = async (url, init, decode) => {
     decode: (payload) => decode(decodeAbi(SuccessEnvelopeSchema, payload).data),
   });
 };
+
+export function subscribe(
+  runId: string,
+  consumerId: string,
+  generation: number,
+  after: number,
+  onEvent: (event: RunEvent) => void | Promise<void>,
+  onError: (error: Error) => void,
+) {
+  const subscription = coreClient.subscribeTaskRunEvents(runId, {
+    consumerId,
+    generation,
+    after,
+    onMessage: async (event) => onEvent({
+      runId: event.aggregateId,
+      seq: event.sequence,
+      type: event.type.startsWith("task_run.") ? `run.${event.type.slice(9)}` : event.type,
+      data: event.payload,
+      createdAt: Date.parse(event.occurredAt),
+    }),
+    onError,
+  });
+  void subscription.completed.catch(() => undefined);
+  return subscription.close;
+}
 
 export async function downloadArtifact(
   runId: string,

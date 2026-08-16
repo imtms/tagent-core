@@ -56,7 +56,12 @@ async function fixture(
   const workspace = await mkdtemp(path.join(tmpdir(), "tagent-v1-api-"));
   temporaryDirectories.push(workspace);
   const store = new Store(":memory:");
-  const service = createCoreApplication(corePersistence(store), workspace, () => new WaitingRuntime(), { controlInboxCapacity });
+  const service = createCoreApplication({
+    persistence: corePersistence(store),
+    workspace: workspace,
+    runtimeFactory: () => new WaitingRuntime(),
+    runtimeDefaults: { controlInboxCapacity }
+  });
   const app = createApp({
     ...httpTestResources(store),
     service,
@@ -123,7 +128,7 @@ describe("v1 API contracts", () => {
     const capabilities = decodeAbi(CoreCapabilitiesResponseSchema, (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).data;
     expect(capabilities).toMatchObject({
       releaseVersion: "0.8.5",
-      persistenceSchemaVersion: 1,
+      persistenceSchemaVersion: 2,
       interactions: { approvalResolution: true, userInputSubmission: true },
       operator: { roadmapGenerationIdempotent: true },
       approval: { ready: true },
@@ -422,7 +427,7 @@ describe("v1 API contracts", () => {
     expect(second).toMatchObject({ items: [{ sequence: 3, text: "three" }], pageInfo: { nextCursor: null, hasMore: false, limit: 2 } });
   });
 
-  it("keeps hydrated tool context behind the exclusive Transcript cursor", async () => {
+  it("delivers a later tool result through the exclusive Transcript cursor", async () => {
     const { app, store } = await fixture();
     const run = store.createRun(store.createSession().id, "exclusive tool transcript cursor");
     store.appendTranscript(run.id, 1, {
@@ -432,23 +437,31 @@ describe("v1 API contracts", () => {
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
       stopReason: "toolUse", timestamp: 1,
     });
-    store.appendTranscript(run.id, 1, {
-      role: "toolResult", toolCallId: "split-tool", toolName: "read",
-      content: [{ type: "text", text: "file contents" }], details: {}, isError: false, timestamp: 2,
-    });
-
     const first = decodeAbi(TranscriptResponseSchema, (await app.inject({
       method: "GET", url: `/api/v1/task-runs/${run.id}/transcript?after=0&limit=1`,
     })).json()).data;
     expect(first).toMatchObject({
       items: [expect.objectContaining({ sequence: 1, kind: "tool", toolCallId: "split-tool" })],
-      pageInfo: { nextCursor: 1, hasMore: true, limit: 1 },
+      pageInfo: { nextCursor: null, hasMore: false, limit: 1 },
+    });
+
+    store.appendTranscript(run.id, 1, {
+      role: "toolResult", toolCallId: "split-tool", toolName: "read",
+      content: [{ type: "text", text: "file contents" }], details: {}, isError: false, timestamp: 2,
     });
 
     const second = decodeAbi(TranscriptResponseSchema, (await app.inject({
       method: "GET", url: `/api/v1/task-runs/${run.id}/transcript?after=1&limit=1`,
     })).json()).data;
-    expect(second.items).toEqual([]);
+    expect(second.items).toEqual([
+      expect.objectContaining({
+        sequence: 2,
+        kind: "tool",
+        toolCallId: "split-tool",
+        result: "file contents",
+        status: "completed",
+      }),
+    ]);
     expect(second.items.every((item) => item.sequence > 1)).toBe(true);
     expect(second.pageInfo).toEqual({ nextCursor: null, hasMore: false, limit: 1 });
   });

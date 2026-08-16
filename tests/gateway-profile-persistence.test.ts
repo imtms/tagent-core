@@ -31,7 +31,7 @@ describe("gateway profile persistence", () => {
     directories.push(directory);
     const filename = path.join(directory, "core.db");
     const current = new Store(filename);
-    expect(current.getSchemaVersion()).toBe(1);
+    expect(current.getSchemaVersion()).toBe(2);
     for (const table of ["sessions", "session_supervisor_inbox", "skills"]) {
       const revision = (current.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
         name: string; type: string; notnull: number; dflt_value: string | null;
@@ -41,7 +41,7 @@ describe("gateway profile persistence", () => {
     current.close();
 
     const reopened = new Store(filename);
-    expect(reopened.getSchemaVersion()).toBe(1);
+    expect(reopened.getSchemaVersion()).toBe(2);
     reopened.close();
   });
 

@@ -39,11 +39,19 @@ async function fixture(memory?: Record<string, unknown>, serviceCredentials: Ser
   const learningControl = new LearningFeatureControl(learningSettingsPersistence(store), true, {
     learningEnabled: true, autoExecutionEnabled: true,
   });
-  const service = createCoreApplication(persistence, workspace, () => ({
-    prompt: async () => undefined, steer: async () => "accepted" as const, followUp: async () => "accepted" as const,
-    compact: async () => undefined, abort: () => undefined, dispose: async () => undefined,
-    getMessages: () => [], getError: () => undefined,
-  }), undefined, undefined, undefined, learningControl);
+  const service = createCoreApplication({
+    persistence: persistence,
+    workspace: workspace,
+    runtimeFactory: () => ({
+      prompt: async () => undefined, steer: async () => "accepted" as const, followUp: async () => "accepted" as const,
+      compact: async () => undefined, abort: () => undefined, dispose: async () => undefined,
+      getMessages: () => [], getError: () => undefined,
+    }),
+    runtimeDefaults: undefined,
+    memory: undefined,
+    memoryScopeId: undefined,
+    learningControl: learningControl
+  });
   const app = createApp({
     ...httpTestResources(store), service, workspaceRoot: workspace, logger: false, learningControl, serviceCredentials,
     ...(memory ? { memory: memory as never } : {}),

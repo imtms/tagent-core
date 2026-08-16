@@ -54,6 +54,7 @@ import { SqliteLearningProjectionDeliveryRepository } from "./sqlite-learning-pr
 import { SqliteWorkspaceGoalRepository } from "./workspace-goal-repository.js";
 import { SqliteAttemptRequestEnvelopeRepository } from "./attempt-request-envelope-repository.js";
 import { SqliteProfileContractRepository } from "./profile-contract-repository.js";
+import { createStoreBackedPorts } from "./store-port-bindings.js";
 
 type Operation<Args extends unknown[], Result> = (...args: Args) => Result;
 type SynchronousOperation<Args extends unknown[], Result> = (...args: Args) => Result & SynchronousResult<Result>;
@@ -249,234 +250,32 @@ export class SqlitePersistence {
       }),
     });
 
-    this.sessions = Object.freeze({
-      createSession: mutate(store.createSession.bind(store)),
-      createSessionIdempotent: mutate(store.createSessionIdempotent.bind(store)),
-      listSessions: query(store.listSessions.bind(store)),
-      getSession: query(store.getSession.bind(store)),
-      updateSession: mutate(store.updateSession.bind(store)),
-      renameSession: mutate(store.renameSession.bind(store)),
-      listMessages: query(store.listMessages.bind(store)),
-      listRecentMessages: query(store.listRecentMessages.bind(store)),
-      appendMessage: mutate(store.appendMessage.bind(store)),
-    });
-
-    this.skills = Object.freeze({
-      createRevision: mutate(store.createSkillRevision.bind(store)),
-      listSkills: query(store.listSkills.bind(store)),
-      getSkill: query(store.getSkill.bind(store)),
-      listRevisions: query(store.listSkillRevisions.bind(store)),
-      getRevision: query(store.getSkillRevision.bind(store)),
-      listWorkspaceSkills: query(store.listWorkspaceSkills.bind(store)),
-      replaceWorkspaceSkills: mutate(store.replaceWorkspaceSkills.bind(store)),
-      deleteSkill: mutate(store.deleteSkill.bind(store)),
-      getCatalogRevision: query(store.getCatalogRevision.bind(store)),
-      getSkillResourceRevision: query(store.getSkillResourceRevision.bind(store)),
-      getWorkspaceSkillRevision: query(store.getWorkspaceSkillRevision.bind(store)),
-      listProfileSkillsPage: query(store.listProfileSkillsPage.bind(store)),
-      listProfileSkillRevisionsPage: query(store.listProfileSkillRevisionsPage.bind(store)),
-      listProfileWorkspaceSkillsPage: query(store.listProfileWorkspaceSkillsPage.bind(store)),
-      createRevisionProfile: mutate(store.createRevisionProfile.bind(store)),
-      deleteSkillProfile: mutate(store.deleteSkillProfile.bind(store)),
-      replaceWorkspaceSkillsProfile: mutate(store.replaceWorkspaceSkillsProfile.bind(store)),
-    });
-
-    this.operatorRead = Object.freeze({
-      listSessionsPage: query(store.listOperatorSessionsPage.bind(store)),
-      listSessionTaskRunsPage: query(store.listOperatorSessionTaskRunsPage.bind(store)),
-      getLatestSessionTaskRun: query(store.getLatestOperatorSessionTaskRun.bind(store)),
-    });
-
-    this.taskRunCommands = Object.freeze({
-      claimTaskRunCommand: mutate(store.claimTaskRunCommand.bind(store)),
-      getTaskRunCommand: query(store.getTaskRunCommand.bind(store)),
-      settleTaskRunCommand: mutate(store.settleTaskRunCommand.bind(store)),
-    });
-
-    this.messageSources = Object.freeze({
-      getMessageSource: query(store.getMessageSource.bind(store)),
-      listDurableUserMessages: query(store.listDurableUserMessages.bind(store)),
-    });
-
-    this.submissions = Object.freeze({
-      updateSessionInboxItemProfile: mutate(store.updateSessionInboxItemProfile.bind(store)),
-      reorderSessionInboxProfile: mutate(store.reorderSessionInboxProfile.bind(store)),
-      deleteSessionInboxItemProfile: mutate(store.deleteSessionInboxItemProfile.bind(store)),
-      decideSessionInboxItemProfile: mutate(store.decideSessionInboxItemProfile.bind(store)),
-      mergeSessionInboxItemsProfile: mutate(store.mergeSessionInboxItemsProfile.bind(store)),
-      enqueueSessionInbox: mutate(store.enqueueSessionInbox.bind(store)),
-      getSessionInboxItem: query(store.getSessionInboxItem.bind(store)),
-      getSessionSubmission: query(store.getSessionSubmission.bind(store)),
-      recordSubmissionAudit: mutate(store.recordSubmissionAudit.bind(store)),
-      getSubmissionAudit: query(store.getSubmissionAudit.bind(store)),
-      getSessionPrincipalId: query(store.getSessionPrincipalId.bind(store)),
-      listSessionInbox: query(store.listSessionInbox.bind(store)),
-      routeSessionInboxItem: mutate(store.routeSessionInboxItem.bind(store)),
-      findMergeCandidate: query(store.findMergeCandidate.bind(store)),
-      markSessionInboxDuplicate: mutate(store.markSessionInboxDuplicate.bind(store)),
-      discardSessionInboxItem: mutate(store.discardSessionInboxItem.bind(store)),
-      decideSessionInboxItem: mutate(store.decideSessionInboxItem.bind(store)),
-      claimNextSessionInbox: mutate(store.claimNextSessionInbox.bind(store)),
-      claimSessionInboxNow: mutate(store.claimSessionInboxNow.bind(store)),
-      recordSessionInboxLaunchFailure: mutate(store.recordSessionInboxLaunchFailure.bind(store)),
-      retryInboxLaunch: mutate(store.retryInboxLaunch.bind(store)),
-      listSessionsWithQueuedInbox: query(store.listSessionsWithQueuedInbox.bind(store)),
-    });
-
-    this.taskRuns = Object.freeze({
-      createRun: mutate(store.createRun.bind(store)),
-      hasRun: query(store.hasRun.bind(store)),
-      getRun: query(store.getRun.bind(store)),
-      getRunExecutionState: query(store.getRunExecutionState.bind(store)),
-      getRunByRequestId: query(store.getRunByRequestId.bind(store)),
-      listRuns: query(store.listRuns.bind(store)),
-      listRunSummaries: query(store.listRunSummaries.bind(store)),
-      getLatestRun: query(store.getLatestRun.bind(store)),
-      getActiveRun: query(store.getActiveRun.bind(store)),
-      getPendingUserInputRequest: query(store.getPendingUserInputRequest.bind(store)),
-      getPendingUserInputRequestById: query(store.getPendingUserInputRequestById.bind(store)),
-      requestUserInput: mutate(store.requestUserInput.bind(store)),
-      submitUserInput: mutate(store.submitUserInput.bind(store)),
-      recordModelUsage: mutate(store.recordModelUsage.bind(store)),
-      setRunPhase: mutate(store.setRunPhase.bind(store)),
-      advanceRunPhase: mutate(store.advanceRunPhase.bind(store)),
-      listTaskRunEdges: query(store.listTaskRunEdges.bind(store)),
-      isRunResumable: query(store.isRunResumable.bind(store)),
-    });
-
-    this.continuations = Object.freeze({
-      nextContinuationLeaseExpiry: query(store.nextContinuationLeaseExpiry.bind(store)),
-      ownsContinuationLease: query(store.ownsContinuationLease.bind(store)),
-      queueSafeCrashRecoveryContinuations: mutate(store.queueSafeCrashRecoveryContinuations.bind(store)),
-      recoverContinuationsAfterRestart: mutate(store.recoverContinuationsAfterRestart.bind(store)),
-      releaseContinuationLease: mutate(store.releaseContinuationLease.bind(store)),
-      releaseContinuationLeases: mutate(store.releaseContinuationLeases.bind(store)),
-      renewContinuationLease: mutate(store.renewContinuationLease.bind(store)),
-      listContinuations: query(store.listContinuations.bind(store)),
-      queueContinuation: mutate(store.queueContinuation.bind(store)),
-      claimContinuation: mutate(store.claimContinuation.bind(store)),
-      updateContinuation: mutate(store.updateContinuation.bind(store)),
-      cancelQueuedContinuations: mutate(store.cancelQueuedContinuations.bind(store)),
-    });
-
-    this.controlInbox = Object.freeze({
-      enqueueControl: mutate(store.enqueueControl.bind(store)),
-      getControlItem: query(store.getControlItem.bind(store)),
-      listControlInbox: query(store.listControlInbox.bind(store)),
-      claimControlItem: mutate(store.claimControlItem.bind(store)),
-      completeControlItem: mutate(store.completeControlItem.bind(store)),
-    });
-
-    this.events = Object.freeze({
-      appendEvent: ((runId, type, data) => mutationUnitOfWork.run(() => store.appendEvent(runId, type, data))) as RunEventJournal["appendEvent"],
-      listEvents: query(store.listEvents.bind(store)),
-    });
-
-    this.transcript = Object.freeze({
-      getLastTranscriptSeq: query(store.getLastTranscriptSeq.bind(store)),
-      getTranscriptCount: query(store.getTranscriptCount.bind(store)),
-      appendTranscript: mutate(store.appendTranscript.bind(store)),
-      listTranscriptEntries: query(store.listTranscriptEntries.bind(store)),
-      searchTranscriptLiteral: query(store.searchTranscriptLiteral.bind(store)),
-      listTranscript: query(store.listTranscript.bind(store)),
-      repairTranscript: mutate(store.repairTranscript.bind(store)),
-      listTranscriptView: query(store.listTranscriptView.bind(store)),
-    });
-
-    this.checkpoints = Object.freeze({
-      getCheckpoint: query(store.getCheckpoint.bind(store)),
-      upsertCheckpoint: mutate(store.upsertCheckpoint.bind(store)),
-    });
-
-    this.eventConsumers = Object.freeze({
-      claimEventConsumer: mutate(store.claimEventConsumer.bind(store)),
-      getEventConsumer: query(store.getEventConsumer.bind(store)),
-      ackEventConsumer: mutate(store.ackEventConsumer.bind(store)),
-    });
-
-    this.operations = Object.freeze({
-      claimOperation: mutate(store.claimOperation.bind(store)),
-      updateOperation: mutate(store.updateOperation.bind(store)),
-      getOperation: query(store.getOperation.bind(store)),
-      listOperations: query(store.listOperations.bind(store)),
-      recordToolAttempt: mutate(store.recordToolAttempt.bind(store)),
-      completeToolAttempt: mutate(store.completeToolAttempt.bind(store)),
-    });
-
-    this.evidence = Object.freeze({
-      upsertPlanItem: mutate(store.upsertPlanItem.bind(store)),
-      markChecksStale: mutate(store.markChecksStale.bind(store)),
-      upsertCheck: mutate(store.upsertCheck.bind(store)),
-      getArtifact: query(store.getArtifact.bind(store)),
-      listArtifacts: query(store.listArtifacts.bind(store)),
-      addArtifact: mutate(store.addArtifact.bind(store)),
-    });
-
-    this.gates = Object.freeze({
-      recordGateEvaluation: mutate(store.recordGateEvaluation.bind(store)),
-      listLatestGateEvaluations: query(store.listLatestGateEvaluations.bind(store)),
-      evaluateGate: query(store.evaluateGate.bind(store)),
-    });
-
-    this.progress = Object.freeze({
-      getProgressSnapshot: query(store.getProgressSnapshot.bind(store)),
-      updateProgressSnapshot: mutate(store.updateProgressSnapshot.bind(store)),
-    });
-
-    this.contextManifests = Object.freeze({
-      recordContextManifest: mutate(store.recordContextManifest.bind(store)),
-      listContextManifests: query(store.listContextManifests.bind(store)),
-      getLatestContextManifest: query(store.getLatestContextManifest.bind(store)),
-      getContextManifestForAttempt: query(store.getContextManifestForAttempt.bind(store)),
-    });
-    this.requestEnvelopes = Object.freeze({
-      record: mutate(sqliteRequestEnvelopes.record.bind(sqliteRequestEnvelopes)),
-      get: query(sqliteRequestEnvelopes.get.bind(sqliteRequestEnvelopes)),
-      listForAttempt: query(sqliteRequestEnvelopes.listForAttempt.bind(sqliteRequestEnvelopes)),
-    });
-
-    this.generationMaintenance = Object.freeze({
-      listPendingGenerationActivations: query(store.listPendingGenerationActivations.bind(store)),
-      prepareGenerationHandoff: mutate(store.prepareGenerationHandoff.bind(store)),
-      recordGenerationActivationResult: mutate(store.recordGenerationActivationResult.bind(store)),
-    });
-
-    this.approvals = Object.freeze({
-      ensureApprovalRequest: mutate(store.ensureApprovalRequest.bind(store)),
-      getApprovalRequest: query(store.getApprovalRequest.bind(store)),
-      listApprovalRequests: query(store.listApprovalRequests.bind(store)),
-      resolveApprovalRequest: mutate(store.resolveApprovalRequest.bind(store)),
-      hasPendingApproval: query(store.hasPendingApproval.bind(store)),
-      authorizeExternalAction: mutate(store.authorizeExternalAction.bind(store)),
-    });
-
-    this.supervisorDecisions = Object.freeze({
-      recordSupervisorDecision: mutate(store.recordSupervisorDecision.bind(store)),
-      listSupervisorDecisions: query(store.listSupervisorDecisions.bind(store)),
-      updateSupervisorDecision: mutate(store.updateSupervisorDecision.bind(store)),
-      listSupervisorContinuationsNeedingReconcile: query(
-        store.listSupervisorContinuationsNeedingReconcile.bind(store),
-      ),
-      reconcileSupervisorDecisionStatuses: mutate(store.reconcileSupervisorDecisionStatuses.bind(store)),
-    });
-
-    this.settings = Object.freeze({
-      getLearningSettings: query(store.getLearningSettings.bind(store)),
-    });
-
-    this.semanticCache = Object.freeze({
-      getSemanticCacheEntry: query(store.getSemanticCacheEntry.bind(store)),
-      putSemanticCacheEntry: mutate(store.putSemanticCacheEntry.bind(store)),
-      deleteExpiredSemanticCacheEntries: mutate(store.deleteExpiredSemanticCacheEntries.bind(store)),
-    });
-
-    this.semanticLearningJobs = Object.freeze({
-      enqueueSemanticLearningJob: mutate(store.enqueueSemanticLearningJob.bind(store)),
-      claimSemanticLearningJobs: mutate(store.claimSemanticLearningJobs.bind(store)),
-      renewSemanticLearningJob: mutate(store.renewSemanticLearningJob.bind(store)),
-      completeSemanticLearningJob: mutate(store.completeSemanticLearningJob.bind(store)),
-      failSemanticLearningJob: mutate(store.failSemanticLearningJob.bind(store)),
-    });
+    const storePorts = createStoreBackedPorts(store, mutationUnitOfWork, sqliteRequestEnvelopes);
+    this.sessions = storePorts.sessions;
+    this.skills = storePorts.skills;
+    this.operatorRead = storePorts.operatorRead;
+    this.taskRunCommands = storePorts.taskRunCommands;
+    this.messageSources = storePorts.messageSources;
+    this.submissions = storePorts.submissions;
+    this.taskRuns = storePorts.taskRuns;
+    this.continuations = storePorts.continuations;
+    this.controlInbox = storePorts.controlInbox;
+    this.events = storePorts.events;
+    this.transcript = storePorts.transcript;
+    this.checkpoints = storePorts.checkpoints;
+    this.eventConsumers = storePorts.eventConsumers;
+    this.operations = storePorts.operations;
+    this.evidence = storePorts.evidence;
+    this.gates = storePorts.gates;
+    this.progress = storePorts.progress;
+    this.contextManifests = storePorts.contextManifests;
+    this.requestEnvelopes = storePorts.requestEnvelopes;
+    this.generationMaintenance = storePorts.generationMaintenance;
+    this.approvals = storePorts.approvals;
+    this.supervisorDecisions = storePorts.supervisorDecisions;
+    this.settings = storePorts.settings;
+    this.semanticCache = storePorts.semanticCache;
+    this.semanticLearningJobs = storePorts.semanticLearningJobs;
 
     const learningLedger: LearningLedgerRepository = Object.freeze({
       updateCommunicationProfile: mutate(learningLedgerRepository.updateCommunicationProfile.bind(learningLedgerRepository)),

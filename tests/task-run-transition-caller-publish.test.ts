@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
 import type { AttemptRuntimePort } from "@tagent/execution/ports";
+import { finalizePostAttempt } from "../packages/execution/src/application/post-attempt-finalizer.js";
 import { settleRuntimeInitializationFailure } from "../packages/execution/src/application/runtime-initialization-failure.js";
 import { createCoreApplication } from "@tagent/core-service/application";
 import {
@@ -85,13 +86,56 @@ async function waitFor(predicate: () => boolean) {
 }
 
 describe("TaskRun transition caller publishing", () => {
+  it("settles every post-attempt phase and audits failures without rejecting tracked execution", () => {
+    const store = new Store(":memory:");
+    stores.push(store);
+    const persistence = corePersistence(store);
+    const run = persistence.taskRuns.createRun(persistence.sessions.createSession().id, "finalize safely");
+    const published: string[] = [];
+    const startQueuedContinuation = vi.fn(() => { throw new Error("continuation start failed"); });
+    const continuationStarted = vi.fn();
+
+    expect(() => finalizePostAttempt({
+      closing: false,
+      continuation: {
+        captureUserMessage() {},
+        queueContinuation() {},
+        startQueuedContinuation,
+      },
+      eventHub: {
+        publish: (event) => { published.push(event.type); },
+        updateCheckpoint() {},
+        flushCheckpoint() {},
+      },
+      persistence: { events: persistence.events, taskRuns: persistence.taskRuns },
+      postAttempt: {
+        attemptLaunchFailed() {},
+        attemptFinalized() { throw new Error("outcome projection failed"); },
+        continuationStarted,
+      },
+    }, run)).not.toThrow();
+
+    expect(startQueuedContinuation).toHaveBeenCalledOnce();
+    expect(continuationStarted).not.toHaveBeenCalled();
+    expect(published).toEqual(["run.updated", "run.updated"]);
+    expect(persistence.events.listEvents(run.id).slice(-2).map((event) => event.data)).toEqual([
+      expect.objectContaining({ action: "post_attempt_failed", phase: "attempt_finalized" }),
+      expect.objectContaining({ action: "post_attempt_failed", phase: "continuation_start" }),
+    ]);
+  });
+
   it("publishes the atomic message rejection before the blocked terminal event", async () => {
     const store = new Store(":memory:");
     stores.push(store);
     const runtime = new ControlledRuntime();
-    const service = createCoreApplication(corePersistence(store), "/tmp", () => runtime, {
-      maxContinuations: 0,
-      supervisorReviewer: new TestSupervisorReviewer([blockedAudit()]),
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => runtime,
+      runtimeDefaults: {
+        maxContinuations: 0,
+        supervisorReviewer: new TestSupervisorReviewer([blockedAudit()]),
+      }
     });
     const run = await service.start(store.createSession().id, "publish blocked transition in order");
     const published: string[] = [];
@@ -171,7 +215,7 @@ describe("TaskRun transition caller publishing", () => {
         projectWorkflowExperience() {},
         recoverInterruptedAttempt: () => false,
       },
-      postAttempt: { attemptLaunchFailed, attemptFinalized() {} },
+      postAttempt: { attemptLaunchFailed, attemptFinalized() {}, continuationStarted() {} },
       eventHub: {
         publish: (event) => { published.push(event.type); },
         updateCheckpoint() {},

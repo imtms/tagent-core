@@ -27,11 +27,15 @@ async function fixture(credentials: ServiceCredential[] = []) {
   directories.push(workspace);
   const store = new Store(":memory:");
   const persistence = corePersistence(store);
-  const service = createCoreApplication(persistence, workspace, () => ({
-    prompt: async () => undefined, steer: async () => "accepted" as const, followUp: async () => "accepted" as const,
-    compact: async () => undefined, abort: () => undefined, dispose: async () => undefined,
-    getMessages: () => [], getError: () => undefined,
-  }));
+  const service = createCoreApplication({
+    persistence: persistence,
+    workspace: workspace,
+    runtimeFactory: () => ({
+      prompt: async () => undefined, steer: async () => "accepted" as const, followUp: async () => "accepted" as const,
+      compact: async () => undefined, abort: () => undefined, dispose: async () => undefined,
+      getMessages: () => [], getError: () => undefined,
+    })
+  });
   const app = createApp({ ...httpTestResources(store), service, workspaceRoot: workspace, logger: false, serviceCredentials: credentials });
   apps.push(app);
   return { app, store };
