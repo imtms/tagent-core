@@ -1,7 +1,7 @@
 import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { createPortal } from "react-dom";
 import { Activity, ArrowDown, BrainCircuit, Check, ChevronDown, ChevronRight, Keyboard, Menu, Moon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Search, Send, Settings2, ShieldCheck, Square, Sun, Target, Trash2, Upload, WandSparkles, X } from "lucide-react";
-import { api, drainTranscriptView, subscribe, type CaptureJob, type GateProfile, type LearningFeatureState, type Message, type RunEvent, type RuntimeStatus, type Session, type SkillRevision, type SkillSummary, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
+import { api, drainTranscriptView, subscribe, type CaptureJob, type GateProfile, type Message, type RunEvent, type RuntimeStatus, type Session, type SkillRevision, type SkillSummary, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
 import { preloadMarkdown } from "./LazyMarkdown";
 import { createRequestId, getOrCreateEventConsumerId } from "./id";
 import { IntentPrefetchCache } from "./intent-prefetch-cache";
@@ -46,7 +46,6 @@ import {
   type Theme,
 } from "./workspace-preferences";
 const MemoryPanel = lazy(() => import("./MemoryPanel").then((module) => ({ default: module.MemoryPanel })));
-const LearningCenter = lazy(() => import("./LearningCenter").then((module) => ({ default: module.LearningCenter })));
 const GoalsPanel = lazy(() => import("./GoalsPanel").then((module) => ({ default: module.GoalsPanel })));
 
 const workspaceEmojis = ["💬", "🧠", "🛠️", "🚀", "📚", "🔬", "🎨", "📦", "🧭", "⚙️"] as const;
@@ -64,8 +63,6 @@ export function App() {
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [conversationLoading, setConversationLoading] = useState(true);
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
-  const [learningSettings, setLearningSettings] = useState<LearningFeatureState | null>(null);
-  const [learningToggleBusy, setLearningToggleBusy] = useState(false);
   const [retryingRunId, setRetryingRunId] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [renamingSessionId, setRenamingSessionId] = useState("");
@@ -130,7 +127,6 @@ export function App() {
   const [skillUploading, setSkillUploading] = useState(false);
   const [skillDragActive, setSkillDragActive] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
-  const [learningOpen, setLearningOpen] = useState(false);
   const [goalsOpen, setGoalsOpen] = useState(false);
   const [memoryJobs, setMemoryJobs] = useState<CaptureJob[]>([]);
   const [memoryJobsLoaded, setMemoryJobsLoaded] = useState(false);
@@ -181,7 +177,7 @@ export function App() {
   useDrawerFocus(rightOpen, runPanelRef);
   useMobileDrawerSwipe({
     open: leftOpen,
-    enabled: !rightOpen && !workspaceSwitcherOpen && !shortcutHelpOpen && !workspaceMenuOpen && !memoryOpen && !learningOpen && !goalsOpen,
+    enabled: !rightOpen && !workspaceSwitcherOpen && !shortcutHelpOpen && !workspaceMenuOpen && !memoryOpen && !goalsOpen,
     drawerRef: sessionRailRef,
     backdropRef: mobileBackdropRef,
     onOpenChange: setLeftOpen,
@@ -299,7 +295,7 @@ export function App() {
     } finally { setSessionsLoading(false); }
   }, []);
 
-  useEffect(() => { void loadSessions(); void api.status().then(setRuntimeStatus); void api.learningSettings().then(setLearningSettings); }, [loadSessions]);
+  useEffect(() => { void loadSessions(); void api.status().then(setRuntimeStatus); }, [loadSessions]);
   useEffect(() => {
     if (!sessionId) { setWorkspaceSkills([]); return; }
     let closed = false;
@@ -360,13 +356,6 @@ export function App() {
     const file = event.dataTransfer.files[0];
     if (file) void uploadSkill(file);
     else setSkillDragActive(false);
-  };
-  const toggleLearningAutoExecution = async () => {
-    if (!learningSettings || learningToggleBusy) return;
-    setLearningToggleBusy(true); setError(""); setNotice("");
-    try { const updated = await api.updateLearningSettings({ autoExecutionEnabled: !learningSettings.autoExecutionEnabled }); setLearningSettings(updated); setNotice(updated.autoExecutionEnabled ? "Learning execution participation enabled. Every active action still requires human approval." : "Learning is now passive-only: observe, learn, distill and evolve candidates without active application."); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setLearningToggleBusy(false); }
   };
   useEffect(() => {
     if (!runtimeStatus?.memoryEnabled || !sessionId) { setMemoryJobs([]); setMemoryJobsLoaded(false); return; }
@@ -922,9 +911,7 @@ export function App() {
             <button onClick={() => { setShortcutHelpOpen(true); setWorkspaceMenuOpen(false); }}><Keyboard size={15} /><span>Keyboard shortcuts</span><small>?</small></button>
             <button onClick={() => { setTheme((current) => current === "dark" ? "light" : "dark"); setWorkspaceMenuOpen(false); }}>{theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}<span>{theme === "dark" ? "Light theme" : "Dark theme"}</span></button>
             {sessionId && <button onClick={() => { setGoalsOpen(true); setWorkspaceMenuOpen(false); }}><Target size={15} /><span>Workspace Goals</span></button>}
-            {sessionId && <button aria-label="Open learning center" onClick={() => { setLearningOpen(true); setWorkspaceMenuOpen(false); }} disabled={!learningSettings?.learningEnabled}><ShieldCheck size={15} /><span>Learning center</span></button>}
             {runtimeStatus?.memoryEnabled && <button aria-label="Open memory center" onClick={() => { setMemoryOpen(true); setWorkspaceMenuOpen(false); }}><BrainCircuit size={15} /><span>Memory center</span></button>}
-            {learningSettings && <button onClick={() => { setWorkspaceMenuOpen(false); void toggleLearningAutoExecution(); }} disabled={!learningSettings.learningEnabled || learningToggleBusy}><Activity size={15} /><span>Learning execution</span><small>{learningSettings.autoExecutionEnabled ? "on" : "off"}</small></button>}
           </div></>}
         </div>
       </header>
@@ -998,7 +985,6 @@ export function App() {
       })}</div>}
     </aside>}
     {runtimeStatus?.memoryEnabled && memoryOpen && <Suspense fallback={null}><MemoryPanel runtime={runtimeStatus} onClose={() => setMemoryOpen(false)} /></Suspense>}
-    {learningOpen && sessionId && learningSettings?.learningEnabled && <Suspense fallback={null}><LearningCenter sessionId={sessionId} onClose={() => setLearningOpen(false)} /></Suspense>}
     {goalsOpen && sessionId && <Suspense fallback={null}><GoalsPanel workspaceId={sessionId} onClose={() => setGoalsOpen(false)} onOpenRun={(runId) => { void api.run(runId).then(async (run) => { const view = await drainTranscriptView(run.id, run.transcriptCount); transcriptRunIdRef.current = run.id; transcriptAfterRef.current = view.after; setSelectedRun(run); setExpandedRunId(run.id); setTranscript(view.items); setGoalsOpen(false); setRightOpen(true); }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }} /></Suspense>}
     <button ref={mobileBackdropRef} className={`backdrop mobile-only ${leftOpen || rightOpen ? "visible" : ""}`} onClick={() => { setLeftOpen(false); setRightOpen(false); }} aria-label="Close panel" aria-hidden={leftOpen || rightOpen ? undefined : "true"} tabIndex={leftOpen || rightOpen ? 0 : -1} />
   </div>;

@@ -5,8 +5,7 @@ import { ProfilePageInfoSchema } from "../../profiles/v1/schemas.js";
 export const PublicContextManifestItemKindSchema = Type.Union([
   Type.Literal("system_prompt"), Type.Literal("taskrun_contract"), Type.Literal("workspace_goal"),
   Type.Literal("skill"), Type.Literal("session_message"), Type.Literal("transcript_message"),
-  Type.Literal("core_memory"), Type.Literal("memory_card"), Type.Literal("cold_topic"),
-  Type.Literal("workflow_revision"), Type.Literal("communication_profile"), Type.Literal("project_rule"),
+  Type.Literal("core_memory"), Type.Literal("memory_card"), Type.Literal("cold_topic"), Type.Literal("project_rule"),
   Type.Literal("user_prompt"),
 ]);
 

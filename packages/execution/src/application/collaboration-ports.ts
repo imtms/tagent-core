@@ -39,7 +39,6 @@ export interface AttemptSettlementPort {
     continuationId?: string,
     onRuntimeSettled?: () => void,
   ): Promise<boolean>;
-  projectWorkflowExperience(runId: RunId): void;
   recoverInterruptedAttempt(token: AttemptExecutionToken, reason: string, supervisorDecisionId?: string): boolean;
 }
 
@@ -127,10 +126,6 @@ export interface PostAttemptPort {
   attemptFinalized(run: TaskRun, context: { shuttingDown: boolean }): void;
   continuationStarted(runId: RunId): void;
   attemptLaunchFailed(input: { inboxItemId: string; runId: RunId; message: string }): void;
-}
-
-export interface AttemptProjectionPort {
-  project(runId: RunId): void;
 }
 
 export interface ExecutionBackgroundWorkPort {

@@ -17,8 +17,6 @@ export function createApp({
   memory,
   artifacts = unavailableArtifactContent,
   closeResources,
-  distillationWorker,
-  learningControl,
   writerReadiness,
   generationStatus,
   onClose,
@@ -58,10 +56,8 @@ export function createApp({
     artifacts,
     memory,
     runtimeConfig,
-    learningControl,
     writerReadiness,
     generationStatus,
-    distillationWorker,
   });
   app.addHook("onClose", async () => {
     if (onClose) return onClose();

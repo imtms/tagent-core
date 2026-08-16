@@ -79,8 +79,6 @@ export interface GovernanceContextManifestView {
       | "core_memory"
       | "memory_card"
       | "cold_topic"
-      | "workflow_revision"
-      | "communication_profile"
       | "project_rule"
       | "user_prompt";
     sourceId: string;

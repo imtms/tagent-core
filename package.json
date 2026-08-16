@@ -17,7 +17,7 @@
     "dev": "npm run build:packages && concurrently -k \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "TAGENT_RELEASE_ROOT=. tsx watch apps/core-service/src/cli.ts",
     "dev:web": "npm run dev -w @tagent/web-console",
-    "build:packages": "tsc -b packages/abi packages/core-client packages/governance packages/execution packages/admission && npm run build -w @tagent/memory && tsc -b packages/learning adapters/runtime-pi && npm run build -w @tagent/persistence-sqlite && tsc -b adapters/http-fastify && npm run build -w @tagent/workspace-local && npm run build -w @tagent/core-service",
+    "build:packages": "tsc -b packages/abi packages/core-client packages/governance packages/execution packages/admission && npm run build -w @tagent/memory && tsc -b adapters/runtime-pi && npm run build -w @tagent/persistence-sqlite && tsc -b adapters/http-fastify && npm run build -w @tagent/workspace-local && npm run build -w @tagent/core-service",
     "build": "npm run build:packages && rm -rf dist && tsc -p tsconfig.server.json && mkdir -p dist/memory/postgres && cp packages/memory/dist/postgres/schema.sql dist/memory/postgres/schema.sql && npm run build -w @tagent/web-console",
     "start": "node dist/host.js",
     "test": "npm run build:packages && vitest run",
@@ -31,7 +31,7 @@
     "release:manifest": "node scripts/release-manifest.mjs",
     "release:sdk": "node scripts/build-sdk-release.mjs",
     "release:build": "bash scripts/build-release.sh",
-    "clean": "rm -rf dist && npm run clean -w @tagent/web-console && npm run clean -w @tagent/core-service && npm run clean -w @tagent/http-fastify && npm run clean -w @tagent/workspace-local && npm run clean -w @tagent/persistence-sqlite && npm run clean -w @tagent/learning && npm run clean -w @tagent/memory && npm run clean -w @tagent/runtime-pi && npm run clean -w @tagent/admission && npm run clean -w @tagent/execution && npm run clean -w @tagent/governance && npm run clean -w @tagent/core-client && npm run clean -w @tagent/abi"
+    "clean": "rm -rf dist && npm run clean -w @tagent/web-console && npm run clean -w @tagent/core-service && npm run clean -w @tagent/http-fastify && npm run clean -w @tagent/workspace-local && npm run clean -w @tagent/persistence-sqlite && npm run clean -w @tagent/memory && npm run clean -w @tagent/runtime-pi && npm run clean -w @tagent/admission && npm run clean -w @tagent/execution && npm run clean -w @tagent/governance && npm run clean -w @tagent/core-client && npm run clean -w @tagent/abi"
   },
   "dependencies": {
     "@tagent/core-service": "0.8.5",
@@ -52,7 +52,6 @@
     "@tagent/execution": "0.8.5",
     "@tagent/governance": "0.8.5",
     "@tagent/http-fastify": "0.8.5",
-    "@tagent/learning": "0.8.5",
     "@tagent/memory": "0.8.5",
     "@tagent/persistence-sqlite": "0.8.5",
     "@tagent/runtime-pi": "0.8.5",

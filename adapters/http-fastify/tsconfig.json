@@ -15,7 +15,6 @@
     { "path": "../../packages/abi" },
     { "path": "../../packages/admission" },
     { "path": "../../packages/execution" },
-    { "path": "../../packages/governance" },
-    { "path": "../../packages/learning" }
+    { "path": "../../packages/governance" }
   ]
 }

@@ -1,20 +1,9 @@
 import type {
-  AdminAutonomyApprovalResponse,
-  AdminAutonomyApprovalsResponse,
-  AdminAutonomyDecisionRequest,
-  AdminAutonomyRevokeRequest,
-  AdminLearningCenterResponse,
-  AdminLearningSettingsResponse,
   AdminMemoryCaptureRequest,
   AdminMemoryForgetRequest,
   AdminMemoryGovernRequest,
   AdminMemoryRecordsResponse,
   AdminMemoryStatusResponse,
-  AdminTaskRunLearningPolicyRequest,
-  AdminTaskRunLearningPolicyResponse,
-  AdminWorkflowResponse,
-  AdminWorkflowsResponse,
-  LearningSettingsUpdateRequest,
   MemoryRecallResponse,
   MemoryScope,
   PrincipalMemoryRecallRequest,
@@ -56,17 +45,6 @@ export class AdminProfilesClient extends OperatorSkillsClient {
     });
   }
 
-  private async conditional<T>(path: string, method: "POST" | "PUT" | "DELETE", revision: number,
-    idempotencyKey: string, body: unknown, requestSchema: SchemaName, responseSchema: SchemaName,
-    options: CoreCallOptions = {}): Promise<T> {
-    const payload = await this.validated(method, path, requestSchema, body);
-    const headers = new Headers(options.headers);
-    headers.set("If-Match", `"r${revision}"`);
-    return this.profileRequest(path, responseSchema, {
-      ...options, headers, idempotencyKey, idempotent: true, json: payload, method,
-    });
-  }
-
   getAdminMemoryStatus(options: CoreCallOptions = {}): Promise<AdminMemoryStatusResponse> {
     return this.profileRequest("/api/v1/admin/profiles/memory/status", "AdminMemoryStatusResponseSchema", options);
   }
@@ -94,83 +72,6 @@ export class AdminProfilesClient extends OperatorSkillsClient {
   forgetAdminMemory(memoryId: string, input: AdminMemoryForgetRequest, idempotencyKey: string, options: CoreCallOptions = {}) {
     return this.operation(`/api/v1/admin/profiles/memory/records/${encodeURIComponent(memoryId)}`, "DELETE", idempotencyKey,
       input, "AdminMemoryForgetRequestSchema", options);
-  }
-
-  getAdminLearningSettings(options: CoreCallOptions = {}): Promise<AdminLearningSettingsResponse> {
-    return this.profileRequest("/api/v1/admin/profiles/learning/settings", "AdminLearningSettingsResponseSchema", options);
-  }
-
-  updateAdminLearningSettings(input: LearningSettingsUpdateRequest, idempotencyKey: string, options: CoreCallOptions = {}) {
-    return this.operation("/api/v1/admin/profiles/learning/settings", "PATCH", idempotencyKey,
-      input, "LearningSettingsUpdateRequestSchema", options);
-  }
-
-  getAdminLearningCenter(sessionId: string, options: CoreCallOptions = {}): Promise<AdminLearningCenterResponse> {
-    return this.profileRequest(`/api/v1/admin/profiles/learning/sessions/${encodeURIComponent(sessionId)}`,
-      "AdminLearningCenterResponseSchema", options);
-  }
-
-  updateAdminTaskRunLearningPolicy(taskRunId: string, revision: number, idempotencyKey: string,
-    input: AdminTaskRunLearningPolicyRequest, options: CoreCallOptions = {}): Promise<AdminTaskRunLearningPolicyResponse> {
-    return this.conditional(`/api/v1/admin/profiles/learning/task-runs/${encodeURIComponent(taskRunId)}/policy`, "PUT",
-      revision, idempotencyKey, input, "AdminTaskRunLearningPolicyRequestSchema", "AdminTaskRunLearningPolicyResponseSchema", options);
-  }
-
-  listAdminWorkflows(scopeId: string, query: ProfileListQuery = {}, options: CoreCallOptions = {}): Promise<AdminWorkflowsResponse> {
-    return this.profileRequest(`/api/v1/admin/profiles/workflows${queryString({ scopeId, ...query })}`, "AdminWorkflowsResponseSchema", options);
-  }
-
-  requestAdminWorkflowActivation(workflowId: string, input: { revisionId?: string; reason: string }, idempotencyKey: string,
-    options: CoreCallOptions = {}) {
-    return this.operation(`/api/v1/admin/profiles/workflows/${encodeURIComponent(workflowId)}/activation-requests`, "POST",
-      idempotencyKey, input, "AdminWorkflowActivationRequestSchema", options);
-  }
-
-  private workflowMutation(workflowId: string, suffix: string, method: "POST" | "DELETE", revision: number,
-    idempotencyKey: string, input: unknown, schema: SchemaName, options: CoreCallOptions): Promise<AdminWorkflowResponse> {
-    return this.conditional(`/api/v1/admin/profiles/workflows/${encodeURIComponent(workflowId)}${suffix}`, method,
-      revision, idempotencyKey, input, schema, "AdminWorkflowResponseSchema", options);
-  }
-
-  activateAdminWorkflow(workflowId: string, revision: number, idempotencyKey: string,
-    input: { revisionId?: string; approvalId: string }, options: CoreCallOptions = {}) {
-    return this.workflowMutation(workflowId, "/activate", "POST", revision, idempotencyKey, input, "AdminWorkflowActivateRequestSchema", options);
-  }
-
-  suspendAdminWorkflow(workflowId: string, revision: number, idempotencyKey: string,
-    input: { reason: string }, options: CoreCallOptions = {}) {
-    return this.workflowMutation(workflowId, "/suspend", "POST", revision, idempotencyKey, input, "AdminWorkflowSuspendRequestSchema", options);
-  }
-
-  deleteAdminWorkflow(workflowId: string, revision: number, idempotencyKey: string,
-    input: { reason: string; gracePeriodMs?: number }, options: CoreCallOptions = {}) {
-    return this.workflowMutation(workflowId, "", "DELETE", revision, idempotencyKey, input, "AdminWorkflowDeleteRequestSchema", options);
-  }
-
-  restoreAdminWorkflow(workflowId: string, revision: number, idempotencyKey: string, options: CoreCallOptions = {}) {
-    return this.workflowMutation(workflowId, "/restore", "POST", revision, idempotencyKey, {}, "AdminEmptyRequestSchema", options);
-  }
-
-  listAdminAutonomyApprovals(scopeId: string, query: ProfileListQuery = {}, options: CoreCallOptions = {}): Promise<AdminAutonomyApprovalsResponse> {
-    return this.profileRequest(`/api/v1/admin/profiles/autonomy/approvals${queryString({ scopeId, ...query })}`,
-      "AdminAutonomyApprovalsResponseSchema", options);
-  }
-
-  decideAdminAutonomyApproval(approvalId: string, revision: number, idempotencyKey: string,
-    input: AdminAutonomyDecisionRequest, options: CoreCallOptions = {}): Promise<AdminAutonomyApprovalResponse> {
-    return this.conditional(`/api/v1/admin/profiles/autonomy/approvals/${encodeURIComponent(approvalId)}/decision`, "POST",
-      revision, idempotencyKey, input, "AdminAutonomyDecisionRequestSchema", "AdminAutonomyApprovalResponseSchema", options);
-  }
-
-  revokeAdminAutonomyApproval(approvalId: string, revision: number, idempotencyKey: string,
-    input: AdminAutonomyRevokeRequest, options: CoreCallOptions = {}): Promise<AdminAutonomyApprovalResponse> {
-    return this.conditional(`/api/v1/admin/profiles/autonomy/approvals/${encodeURIComponent(approvalId)}/revoke`, "POST",
-      revision, idempotencyKey, input, "AdminAutonomyRevokeRequestSchema", "AdminAutonomyApprovalResponseSchema", options);
-  }
-
-  executeAdminAutonomyApproval(approvalId: string, idempotencyKey: string, options: CoreCallOptions = {}) {
-    return this.operation(`/api/v1/admin/profiles/autonomy/approvals/${encodeURIComponent(approvalId)}/execute`, "POST",
-      idempotencyKey, {}, "AdminEmptyRequestSchema", options);
   }
 
   getAdminOperation(requestId: string, options: CoreCallOptions = {}): Promise<ProfileOperationResponse> {

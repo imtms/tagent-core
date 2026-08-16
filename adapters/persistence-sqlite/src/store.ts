@@ -80,10 +80,9 @@ import {
   initializeSqliteSchema,
 } from "./schema-migrations.js";
 import { mapRunApprovalOperation } from "./sqlite/approval-operation-mapper.js";
-import { appendLearningProjection, finalizeProjectionCheckpoint } from "./sqlite/learning-integration-event.js";
+import { finalizeAttemptProjectionCheckpoint } from "./sqlite/attempt-projection-checkpoint.js";
 import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-input-coordinator.js";
 import { SqliteTranscriptRepository } from "./sqlite/transcript-repository.js";
-import { SqliteSemanticLearningRepository } from "./sqlite/semantic-learning-repository.js";
 import { SqliteSkillRepository } from "./sqlite/skill-repository.js";
 
 const now = () => Date.now();
@@ -150,14 +149,12 @@ export class Store {
   readonly db: Database.Database;
   private readonly defaultModelId: string;
   private readonly transcriptRepository: SqliteTranscriptRepository;
-  private readonly semanticLearningRepository: SqliteSemanticLearningRepository;
   private readonly skillRepository: SqliteSkillRepository;
 
   constructor(filename = process.env.TAGENT_DB ?? "./data/tagent.db", options: StoreOptions = {}) {
     this.defaultModelId = options.defaultModelId?.trim() || "gpt-5.6-sol";
     this.db = new Database(filename);
     this.transcriptRepository = new SqliteTranscriptRepository(this.db, (runId) => this.getRun(runId));
-    this.semanticLearningRepository = new SqliteSemanticLearningRepository(this.db);
     this.skillRepository = new SqliteSkillRepository(this.db);
     try {
       this.db.pragma("busy_timeout = 5000");
@@ -1505,9 +1502,8 @@ ${source.content}`;
         runId, ordinal: run.attempt, trigger: "input", status: "waiting_input", scenario: "input",
         reason: prompt, eventSequence: seq, timestamp: request.requestedAt,
       });
-      finalizeProjectionCheckpoint(this.db, { runId, attemptId: this.attemptId(runId, run.attempt), attemptOrdinal: run.attempt, eventSeq: seq, timestamp: request.requestedAt });
+      finalizeAttemptProjectionCheckpoint(this.db, { runId, attemptId: this.attemptId(runId, run.attempt), attemptOrdinal: run.attempt, eventSeq: seq, timestamp: request.requestedAt });
       internalHook?.({ request, event: { runId, seq, type: "run.waiting_for_input", data: { requestId: request.id, prompt, fields }, createdAt: request.requestedAt } });
-      this.enqueueLearningProjection(runId, run.attempt, "run.waiting_input", "waiting_input", seq, { requestId: request.id, prompt }, request.requestedAt, "run.waiting_for_input");
       return request;
     });
     return transaction();
@@ -1631,22 +1627,13 @@ ${source.content}`;
           eventSequence: seq,
           timestamp,
         });
-        finalizeProjectionCheckpoint(this.db, {
+        finalizeAttemptProjectionCheckpoint(this.db, {
           runId: run.id,
           attemptId: this.attemptId(run.id, run.attempt),
           attemptOrdinal: run.attempt,
           eventSeq: seq,
           timestamp,
         });
-        this.enqueueLearningProjection(
-          run.id,
-          run.attempt,
-          "continuation.queued",
-          "blocked",
-          seq,
-          { continuationId: id, ordinal, reason: "safe_crash_recovery", interruptionSeq: run.interruptionSeq },
-          timestamp,
-        );
         recovered.push({ id, runId: run.id, ordinal });
       }
       return recovered;
@@ -2000,22 +1987,13 @@ ${source.content}`;
         eventSequence: seq,
         timestamp,
       });
-      finalizeProjectionCheckpoint(this.db, {
+      finalizeAttemptProjectionCheckpoint(this.db, {
         runId: request.runId,
         attemptId: this.attemptId(request.runId, run.attempt),
         attemptOrdinal: run.attempt,
         eventSeq: seq,
         timestamp,
       });
-      this.enqueueLearningProjection(
-        request.runId,
-        run.attempt,
-        "maintenance.handoff.prepared",
-        "blocked",
-        seq,
-        eventData,
-        timestamp,
-      );
       return { continuationId, created };
     }).immediate();
   }
@@ -2667,19 +2645,10 @@ ${source.content}`;
         scenario: nextStatus === "running" ? "recovery" : "terminal",
         reason, eventSequence: seq, timestamp: createdAt,
       });
-      finalizeProjectionCheckpoint(this.db, { runId, attemptId: this.attemptId(runId, row.attempt), attemptOrdinal: row.attempt, eventSeq: seq, timestamp: createdAt });
-      this.enqueueLearningProjection(runId, row.attempt, type, nextStatus, seq, { ...data, reason }, createdAt);
+      finalizeAttemptProjectionCheckpoint(this.db, { runId, attemptId: this.attemptId(runId, row.attempt), attemptOrdinal: row.attempt, eventSeq: seq, timestamp: createdAt });
       return { runId, seq, type, data, createdAt } as RunEvent;
     });
     return transaction();
-  }
-
-  private enqueueLearningProjection(runId: RunId, attempt: number, lifecycle: string, outcome: string, eventSeq: number, payload: Record<string, unknown>, timestamp = now(), runEventType = lifecycle) {
-    if (eventSeq <= 0) throw new Error("New Learning projections require a real run event");
-    const run = this.getRun(runId);
-    if (!run) throw new Error(`Run ${runId} not found for Learning projection`);
-    appendLearningProjection(this.db, { runId, attemptId: this.attemptId(runId, attempt), attemptOrdinal: attempt,
-      lifecycle, outcome, eventSeq, payload, taskRunSnapshot: run as unknown as Record<string, unknown>, timestamp, runEventType });
   }
 
   markInterrupted() {
@@ -2695,8 +2664,7 @@ ${source.content}`;
           runId: run.id, ordinal: run.attempt, trigger: "recovery", status: "interrupted", scenario: "recovery",
           reason: "service_restart", eventSequence: seq, timestamp,
         });
-        finalizeProjectionCheckpoint(this.db, { runId: run.id, attemptId: this.attemptId(run.id, run.attempt), attemptOrdinal: run.attempt, eventSeq: seq, timestamp });
-        this.enqueueLearningProjection(run.id, run.attempt, "restart.interruption", "interrupted", seq, { reason: "service_restart" }, timestamp);
+        finalizeAttemptProjectionCheckpoint(this.db, { runId: run.id, attemptId: this.attemptId(run.id, run.attempt), attemptOrdinal: run.attempt, eventSeq: seq, timestamp });
       }
       this.db.prepare(`UPDATE runs SET blocked_reason = COALESCE((SELECT prompt FROM user_input_requests input WHERE input.run_id = runs.id AND input.status = 'pending'), blocked_reason),
         phase = 'waiting_input', updated_at = ? WHERE status = 'waiting_input'`).run(timestamp);
@@ -2730,55 +2698,6 @@ ${source.content}`;
       return this.getRun(runId)!;
     });
     return transaction();
-  }
-
-  getLearningSettings() {
-    return this.semanticLearningRepository.getLearningSettings();
-  }
-
-  getSemanticCacheEntry(cacheKey: string, timestamp = now()) {
-    return this.semanticLearningRepository.getSemanticCacheEntry(cacheKey, timestamp);
-  }
-
-  putSemanticCacheEntry(entry: Parameters<SqliteSemanticLearningRepository["putSemanticCacheEntry"]>[0]): void {
-    this.semanticLearningRepository.putSemanticCacheEntry(entry);
-  }
-
-  deleteExpiredSemanticCacheEntries(timestamp = now(), limit = 1_000): number {
-    return this.semanticLearningRepository.deleteExpiredSemanticCacheEntries(timestamp, limit);
-  }
-
-  enqueueSemanticLearningJob(
-    kind: "user_message" | "workflow_eligibility" | "feedback_attribution",
-    payload: Record<string, unknown>,
-    idempotencyKey: string,
-    runId?: RunId,
-    attempt?: number,
-  ) {
-    return this.semanticLearningRepository.enqueueSemanticLearningJob(
-      kind, payload, idempotencyKey, runId, attempt,
-    );
-  }
-
-  claimSemanticLearningJobs(
-    owner: string,
-    kinds: Array<"user_message" | "workflow_eligibility" | "feedback_attribution">,
-    limit = 100,
-    leaseMs = 30_000,
-  ) {
-    return this.semanticLearningRepository.claimSemanticLearningJobs(owner, kinds, limit, leaseMs);
-  }
-
-  renewSemanticLearningJob(id: string, owner: string, token: string, fence: number, leaseMs = 30_000) {
-    return this.semanticLearningRepository.renewSemanticLearningJob(id, owner, token, fence, leaseMs);
-  }
-
-  completeSemanticLearningJob(id: string, owner: string, token: string, fence: number) {
-    return this.semanticLearningRepository.completeSemanticLearningJob(id, owner, token, fence);
-  }
-
-  failSemanticLearningJob(id: string, owner: string, token: string, fence: number, attempts: number, error: string) {
-    return this.semanticLearningRepository.failSemanticLearningJob(id, owner, token, fence, attempts, error);
   }
 
   evaluateGate(run: GovernanceCompletionRunView): CompletionGate {

@@ -109,7 +109,7 @@ export interface ProfileContextManifestRecord {
   source: "session" | "transcript";
   items: Array<{
     kind: "system_prompt" | "taskrun_contract" | "workspace_goal" | "skill" | "session_message" | "transcript_message"
-      | "core_memory" | "memory_card" | "cold_topic" | "workflow_revision" | "communication_profile" | "project_rule" | "user_prompt";
+      | "core_memory" | "memory_card" | "cold_topic" | "project_rule" | "user_prompt";
     sourceId: string;
     selected: boolean;
     estimatedTokens: number;

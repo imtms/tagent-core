@@ -20,17 +20,15 @@ const expectedInternalGraph = {
   "@tagent/execution": ["@tagent/governance"],
   "@tagent/admission": ["@tagent/execution", "@tagent/governance"],
   "@tagent/memory": [],
-  "@tagent/learning": ["@tagent/admission", "@tagent/execution", "@tagent/governance", "@tagent/memory"],
   "@tagent/runtime-pi": ["@tagent/execution"],
-  "@tagent/persistence-sqlite": ["@tagent/admission", "@tagent/execution", "@tagent/governance", "@tagent/learning", "@tagent/memory"],
+  "@tagent/persistence-sqlite": ["@tagent/admission", "@tagent/execution", "@tagent/governance", "@tagent/memory"],
   "@tagent/workspace-local": ["@tagent/execution"],
-  "@tagent/http-fastify": ["@tagent/abi", "@tagent/admission", "@tagent/execution", "@tagent/governance", "@tagent/learning"],
+  "@tagent/http-fastify": ["@tagent/abi", "@tagent/admission", "@tagent/execution", "@tagent/governance"],
   "@tagent/core-service": [
     "@tagent/admission",
     "@tagent/execution",
     "@tagent/governance",
     "@tagent/http-fastify",
-    "@tagent/learning",
     "@tagent/memory",
     "@tagent/persistence-sqlite",
     "@tagent/runtime-pi",
@@ -352,7 +350,6 @@ describe("workspace architecture", () => {
       "packages/core-client",
       "packages/execution",
       "packages/governance",
-      "packages/learning",
       "packages/memory",
     ]);
     for (const workspace of workspaces) {

@@ -9,7 +9,9 @@ const BASE_SCHEMA_FILES = [
   "10-execution.sql",
   "20-admission.sql",
   "30-governance.sql",
-  "40-learning.sql",
+  // Retired Learning tables remain byte-for-byte in the immutable v1 baseline so
+  // existing databases keep their data and exact-schema verification stays safe.
+  "40-retired-learning.sql",
   "50-workspace-goals.sql",
   "60-profiles-and-skills.sql",
   "80-indexes.sql",

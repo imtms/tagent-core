@@ -1,5 +1,5 @@
 import type { ExecutionServices } from "./execution-services.js";
-/** Public Execution application surface; contains no Admission or Learning facade. */
+/** Public Execution application surface; contains no Admission facade. */
 export class ExecutionCoordinator {
   constructor(private readonly services: ExecutionServices) {}
 

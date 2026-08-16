@@ -46,10 +46,6 @@ export {
 } from "./composition/openai-sse.js";
 export type { OpenAiUsage } from "./composition/openai-sse.js";
 export {
-  OpenAiSemanticJudgeModelAdapter,
-} from "./composition/semantic-judge-model-adapter.js";
-export type { OpenAiSemanticJudgeModelOptions } from "./composition/semantic-judge-model-adapter.js";
-export {
   OpenAiSupervisorReviewer,
   SupervisorReviewError,
   TestSupervisorReviewer,
@@ -74,7 +70,3 @@ export {
   loadArtifactSource,
 } from "./composition/artifact-content.js";
 export { assembleHttpMemory } from "./composition/http-memory-adapter.js";
-export { CanaryGovernanceRuntime } from "./composition/canary-governance-runtime.js";
-export type { CanaryGovernanceRuntimeOptions } from "./composition/canary-governance-runtime.js";
-export { LearningBackgroundRuntimeCoordinator } from "./composition/learning-background-runtime-coordinator.js";
-export type { LearningBackgroundRuntime } from "./composition/learning-background-runtime-coordinator.js";

@@ -60,7 +60,7 @@ TAGENT_MEMORY_EXTRACTOR_PROVIDER=hybrid
 
 Capture is proposal-based. Source classification, model-egress policy, secret/prompt-injection checks, quality thresholds, scope, provenance, and conflict handling run before durable publication. A user message is not automatically a durable fact.
 
-The optional shared Semantic Judge may improve intent, quality, correction, preference, and Learning evidence classification. Invalid, timed-out, rate-limited, or low-confidence output is withheld or follows conservative deterministic fallback; it cannot grant capability or bypass approval.
+Memory extraction and quality policy remain conservative: invalid, timed-out, or low-confidence provider output is withheld or follows deterministic fallback, and cannot grant capability or bypass approval.
 
 ## Recall
 
@@ -99,6 +99,6 @@ For shutdown verification, stop Core under a controlled Memory workload and conf
 
 Back up Memory consistently with the SQLite control plane before release or storage maintenance. Restore SQLite and Memory/Cold state only as one matching recovery set.
 
-## Relationship to Learning
+## Retired Learning integration
 
-Learning depends on Memory. Disabling Memory forces Learning and automatic execution off. See [LEARNING.md](LEARNING.md).
+The former Learning integration is not part of `main`; its complete implementation is preserved in the `learning-archive` branch. Memory now installs and operates independently.

@@ -8,7 +8,6 @@ import {
   capabilityOperationDigest,
   capabilityPayloadHash,
   createCapabilityCommand,
-  type CanonicalJsonValue,
   type CapabilityCommand,
 } from "@tagent/governance";
 import { SqliteFencedCapabilityAuthorizationRepository } from "@tagent/persistence-sqlite/sqlite";
@@ -138,12 +137,11 @@ function request(
   receipt: Fixture,
   approvalId: string,
   command: CapabilityCommand = runCommand(),
-  source: "run" | "workflow" = "run",
 ): CapabilityExecutionRequest {
   return {
     command,
     fence: receipt.fence,
-    approvalRef: { source, id: approvalId },
+    approvalRef: { source: "run", id: approvalId },
     actorId: "human-1",
     details: { channel: "test" },
   };
@@ -169,79 +167,9 @@ function insertRunApproval(
   );
 }
 
-function insertWorkflowGraph(db: Database.Database, bindingId = "binding-1"): void {
-  db.exec(`INSERT INTO workflow_definitions
-      (id,scope_id,status,created_at,updated_at) VALUES ('workflow-1','session-1','active',1,1);
-    INSERT INTO workflow_revisions
-      (id,workflow_id,revision,spec_json,source_type,confidence,created_at)
-      VALUES ('revision-1','workflow-1',1,'{}','explicit_user',1,1);
-  `);
-  db.prepare(`INSERT INTO workflow_bindings
-    (id,run_id,attempt,workflow_id,revision_id,selector_version,relevance_score,created_at)
-    VALUES (?,'run-1',1,'workflow-1','revision-1','test',1,1)`).run(bindingId);
-}
-
-function workflowCommand(commandId = "workflow-command", input: {
-  action?: string;
-  target?: { kind: string; id: string };
-  bindingId?: string | null;
-} = {}): CapabilityCommand {
-  const action = input.action ?? "workflow.execute";
-  const bindingId = input.bindingId === undefined ? "binding-1" : input.bindingId;
-  const payload: Record<string, CanonicalJsonValue> = {
-    workflowId: "workflow-1",
-    impactScope: {},
-    diff: {},
-    rollback: {},
-    revisionId: "revision-1",
-  };
-  if (bindingId) payload.bindingId = bindingId;
-  return createCapabilityCommand({
-    commandId,
-    operation: {
-      subject: { kind: "workflow", id: "workflow-1" },
-      action,
-      target: input.target ?? (action === "workflow.execute"
-        ? { kind: "workflow_binding", id: bindingId ?? "missing-binding" }
-        : { kind: "workflow_revision", id: "revision-1" }),
-      scope: { type: "workflow_scope", id: "session-1" },
-      payload,
-    },
-  });
-}
-
-function insertWorkflowApproval(
-  db: Database.Database,
-  id: string,
-  command: CapabilityCommand,
-  actionType = "execute_workflow",
-): void {
-  const payload = command.operation.payload as Record<string, CanonicalJsonValue>;
-  db.prepare(`INSERT INTO autonomy_approval_requests
-    (id,scope_id,action_type,target_type,target_id,workflow_id,revision_id,binding_id,status,risk_class,
-     impact_scope_json,evidence_json,diff_json,rollback_json,requested_by,expires_at,request_hash,
-     created_at,updated_at,operation_digest,reuse_mode,max_uses,used_count)
-    VALUES (?,'session-1',?,?,?,?,? ,?,'approved','high',?,'[]',?,?,'human',10000,?,1,1,?,'one_time',1,0)`)
-    .run(
-      id,
-      actionType,
-      command.operation.target.kind,
-      command.operation.target.id,
-      "workflow-1",
-      "revision-1",
-      typeof payload.bindingId === "string" ? payload.bindingId : null,
-      JSON.stringify(payload.impactScope),
-      JSON.stringify(payload.diff),
-      JSON.stringify(payload.rollback),
-      `request-hash:${id}`,
-      capabilityOperationDigest(command),
-    );
-}
-
-function persistedState(db: Database.Database, approvalId: string, source = "run") {
-  const table = source === "run" ? "approval_requests" : "autonomy_approval_requests";
+function persistedState(db: Database.Database, approvalId: string) {
   return {
-    usedCount: (db.prepare(`SELECT used_count value FROM ${table} WHERE id=?`).get(approvalId) as { value: number }).value,
+    usedCount: (db.prepare("SELECT used_count value FROM approval_requests WHERE id=?").get(approvalId) as { value: number }).value,
     operations: (db.prepare("SELECT COUNT(*) value FROM operations").get() as { value: number }).value,
     receipts: (db.prepare("SELECT COUNT(*) value FROM approval_receipts WHERE outcome='allow'").get() as { value: number }).value,
   };
@@ -402,61 +330,6 @@ describe("Attempt-bound capability authorization persistence", () => {
         .toThrow(message);
       expect(persistedState(receipt.db, "approval-binding")).toEqual({ usedCount: 0, operations: 0, receipts: 0 });
     }
-  });
-
-  it("requires a digest-bound Workflow binding for the exact Workflow/run/Attempt/scope", () => {
-    const receipt = fixture();
-    insertWorkflowGraph(receipt.db);
-    const command = workflowCommand();
-    insertWorkflowApproval(receipt.db, "workflow-approval", command);
-    const input = request(receipt, "workflow-approval", command, "workflow");
-
-    expect(receipt.repository.authorizeAndClaim(input)).toMatchObject({ status: "authorized" });
-    expect(persistedState(receipt.db, "workflow-approval", "workflow"))
-      .toEqual({ usedCount: 1, operations: 1, receipts: 1 });
-  });
-
-  it("rejects a missing, wrong-Attempt, or wrong-scope Workflow binding and non-execute Workflow actions", () => {
-    for (const scenario of ["missing", "attempt", "scope"] as const) {
-      const receipt = fixture();
-      insertWorkflowGraph(receipt.db);
-      const command = workflowCommand(`workflow-${scenario}`, scenario === "missing" ? { bindingId: null } : {});
-      insertWorkflowApproval(receipt.db, `approval-${scenario}`, command);
-      if (scenario === "attempt") receipt.db.prepare("UPDATE workflow_bindings SET attempt=2 WHERE id='binding-1'").run();
-      if (scenario === "scope") {
-        receipt.db.exec(`INSERT INTO sessions (id,title,created_at,updated_at)
-          VALUES ('different-scope','different',1,1);
-          UPDATE runs SET session_id='different-scope' WHERE id='run-1';`);
-      }
-      expect(() => receipt.repository.authorizeAndClaim(
-        request(receipt, `approval-${scenario}`, command, "workflow"),
-      )).toThrow(/binding|scope/);
-      connections.splice(connections.indexOf(receipt.db), 1)[0].close();
-    }
-
-    const receipt = fixture();
-    insertWorkflowGraph(receipt.db);
-    const command = workflowCommand("workflow-activate", { action: "workflow.activate" });
-    insertWorkflowApproval(receipt.db, "approval-activate", command, "activate_workflow");
-    expect(() => receipt.repository.authorizeAndClaim(
-      request(receipt, "approval-activate", command, "workflow"),
-    )).toThrow(/Learning synchronous unit of work/);
-  });
-
-  it("routes source-qualified colliding IDs without consuming the other authority", () => {
-    const receipt = fixture();
-    const run = runCommand("source-collision");
-    insertRunApproval(receipt.db, "same-id", run);
-    insertWorkflowGraph(receipt.db);
-    const workflow = workflowCommand("source-collision-workflow");
-    insertWorkflowApproval(receipt.db, "same-id", workflow);
-
-    expect(receipt.repository.authorizeAndClaim(request(receipt, "same-id", workflow, "workflow")))
-      .toMatchObject({ status: "authorized" });
-    expect(receipt.db.prepare("SELECT used_count value FROM approval_requests WHERE id='same-id'").get())
-      .toEqual({ value: 0 });
-    expect(receipt.db.prepare("SELECT used_count value FROM autonomy_approval_requests WHERE id='same-id'").get())
-      .toEqual({ value: 1 });
   });
 
   it("rolls back consume, claim, and receipt when any authorization phase write fails", () => {

@@ -31,7 +31,6 @@ export function settleAttemptExecutionFailure(input: AttemptExecutionFailureInpu
       );
       input.persistence.sessions.appendMessage(input.run.sessionId, "assistant", `Run failed: ${message}`);
       publishTransitionOutcome(input.eventHub, transition);
-      input.settlement.projectWorkflowExperience(input.run.id);
     } catch {
       input.settlement.recoverInterruptedAttempt(input.token, message);
     }

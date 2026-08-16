@@ -71,23 +71,20 @@ describe("Attempt terminal fencing", () => {
     expect(() => settle({ fence: executionLease.fence + 1 })).toThrow(/fence/);
     expect(snapshot()).toEqual(baseline);
 
-    store.db.exec(`CREATE TRIGGER reject_attempt_learning_projection
-      BEFORE INSERT ON integration_outbox BEGIN
-        SELECT RAISE(ABORT, 'attempt learning projection rejected');
+    store.db.exec(`CREATE TRIGGER reject_attempt_checkpoint
+      BEFORE INSERT ON run_checkpoints BEGIN
+        SELECT RAISE(ABORT, 'attempt checkpoint rejected');
       END`);
-    expect(() => settle({})).toThrow(/learning projection rejected/);
+    expect(() => settle({})).toThrow(/checkpoint rejected/);
     expect(snapshot()).toEqual(baseline);
-    store.db.exec("DROP TRIGGER reject_attempt_learning_projection");
+    store.db.exec("DROP TRIGGER reject_attempt_checkpoint");
 
     expect(settle({})).toMatchObject({ status: "completed", active: false, version: candidate.attemptVersion + 1 });
     expect(store.getRun(run.id)).toMatchObject({ status: "completed" });
     expect(store.listEvents(run.id).at(-1)).toMatchObject({ type: "run.completed", seq: 1 });
     expect(adapter.supervisorDecisions.listSupervisorDecisions(run.id)).toMatchObject([{ id: "decision-1", status: "executed" }]);
     expect(adapter.sessions.listMessages(session.id)).toMatchObject([{ role: "assistant", content: "verified result" }]);
-    expect(store.db.prepare(`SELECT aggregate_id as runId,attempt_ordinal as attempt,
-      aggregate_version as eventSeq FROM integration_outbox`).all()).toEqual([{
-      runId: run.id, attempt: 1, eventSeq: 1,
-    }]);
+    expect(store.db.prepare("SELECT COUNT(*) count FROM integration_outbox").get()).toEqual({ count: 0 });
   });
 
   it("keeps Attempt mutations behind the stale-writer guard", () => {
@@ -108,7 +105,7 @@ describe("Attempt terminal fencing", () => {
     expect(currentLease.release()).toBe(true);
   });
 
-  it("rejects the CandidateResult when Governance blocks the canary Attempt", () => {
+  it("rejects the CandidateResult when Governance blocks the review Attempt", () => {
     const store = new Store(":memory:");
     stores.push(store);
     const writer = CoreWriterLease.claim(store.db, {
@@ -116,7 +113,7 @@ describe("Attempt terminal fencing", () => {
     })!;
     const adapter = createGuardedSqlitePersistence(store, new WriterFenceGuard(store.db, writer.authority));
     const session = adapter.sessions.createSession();
-    const run = adapter.taskRuns.createRun(session.id, "blocked canary candidate");
+    const run = adapter.taskRuns.createRun(session.id, "blocked review candidate");
     const attempt = adapter.attempts.getActiveAttempt(run.id)!;
     const lease = adapter.attempts.acquireExecutionLease({
       attemptId: attempt.id,
@@ -234,13 +231,13 @@ describe("Attempt terminal fencing", () => {
     expect(snapshot()).toEqual(baseline);
     expect(() => recover({ fence: lease.fence + 1 })).toThrow(/fence mismatch/);
     expect(snapshot()).toEqual(baseline);
-    store.db.exec(`CREATE TRIGGER reject_recovery_projection
-      BEFORE INSERT ON integration_outbox BEGIN
-        SELECT RAISE(ABORT, 'recovery projection rejected');
+    store.db.exec(`CREATE TRIGGER reject_recovery_checkpoint
+      BEFORE INSERT ON run_checkpoints BEGIN
+        SELECT RAISE(ABORT, 'recovery checkpoint rejected');
       END`);
-    expect(() => recover()).toThrow(/recovery projection rejected/);
+    expect(() => recover()).toThrow(/recovery checkpoint rejected/);
     expect(snapshot()).toEqual(baseline);
-    store.db.exec("DROP TRIGGER reject_recovery_projection");
+    store.db.exec("DROP TRIGGER reject_recovery_checkpoint");
 
     const recovered = recover();
     expect(recovered).toMatchObject({

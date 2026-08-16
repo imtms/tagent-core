@@ -16,7 +16,6 @@
     { "path": "../../packages/execution" },
     { "path": "../../packages/governance" },
     { "path": "../../packages/memory" },
-    { "path": "../../packages/learning" },
     { "path": "../../adapters/runtime-pi" },
     { "path": "../../adapters/persistence-sqlite" },
     { "path": "../../adapters/workspace-local" },

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Retired Learning subsystem
+
+- Preserved the complete former implementation in the `learning-archive` branch and removed its workspace, runtime composition, APIs, ABI profiles, Core Client methods, Web Console UI, configuration, workers, and active persistence repositories from `main`.
+- Reduced the capability registry from eight profiles to five and kept TaskRun approvals, Workspace Goals, Memory, managed Generation activation, and recovery independent of the retired subsystem.
+- Kept the former SQLite tables and indexes as inert immutable-baseline objects so existing databases retain historical rows; current runtime code no longer reads or writes them.
+
 ### Bounded hot paths
 
 - Limited event-consumer terminal watermark detection to the newly acknowledged sequence range and replaced Transcript row counting with indexed last-sequence lookup.

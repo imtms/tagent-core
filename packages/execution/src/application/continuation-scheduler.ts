@@ -166,7 +166,6 @@ export class ContinuationScheduler {
     }
     if (!cancellation.cancelled || !cancellation.event) return false;
     this.dependencies.eventHub.publish(cancellation.event);
-    this.dependencies.settlement.projectWorkflowExperience(runId);
     this.state.preparationTasks.get(runId)?.controller.abort(new Error("Cancelled by user"));
     if (runtime) void this.dependencies.runtimeRegistry.abortRuntime(runtime, runId);
     return true;

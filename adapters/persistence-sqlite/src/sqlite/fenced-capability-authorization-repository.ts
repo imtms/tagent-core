@@ -7,7 +7,6 @@ import {
   capabilityPayloadHash,
   stableJson,
   type ApprovalRef,
-  type ApprovalSource,
   type AuthorizationReceipt,
   type AuthorizationReceiptReadPort,
   type CanonicalJsonValue,
@@ -23,9 +22,7 @@ import type {
 } from "@tagent/execution/ports";
 import {
   mapRunApprovalOperation,
-  mapWorkflowApprovalOperation,
   type RunApprovalSemanticInput,
-  type WorkflowApprovalSemanticInput,
 } from "./approval-operation-mapper.js";
 import { SQLITE_DB_TIME_MS } from "./core-writer-lease.js";
 import {
@@ -45,10 +42,6 @@ interface ApprovalUseRow {
 interface RunApprovalRow extends RunApprovalSemanticInput {
   scopeType: string | null;
   scopeId: string | null;
-  storedDigest: string | null;
-}
-
-interface WorkflowApprovalRow extends WorkflowApprovalSemanticInput {
   storedDigest: string | null;
 }
 
@@ -104,10 +97,6 @@ const CAPABILITY_STAGE_BY_STATUS: Readonly<Record<CapabilityExecutionStatus, str
   cancelled: "cancelled",
 };
 
-function approvalTable(source: ApprovalSource): "approval_requests" | "autonomy_approval_requests" {
-  return source === "run" ? "approval_requests" : "autonomy_approval_requests";
-}
-
 function sameApprovalRef(left: ApprovalRef | null, right: ApprovalRef): boolean {
   return left?.source === right.source && left.id === right.id;
 }
@@ -133,7 +122,7 @@ function parseCanonicalJson(source: string, name: string): CanonicalJsonValue {
 }
 
 function hydrateReceipt(row: ApprovalReceiptRow): AuthorizationReceipt {
-  if (row.approvalSource !== "run" && row.approvalSource !== "workflow") {
+  if (row.approvalSource !== "run") {
     throw new Error(`Approval receipt ${row.id} has an unknown approval source`);
   }
   if (row.outcome !== "allow" && row.outcome !== "require_approval" && row.outcome !== "deny") {
@@ -321,8 +310,8 @@ implements CapabilityExecutionPersistencePort, AuthorizationReceiptReadPort {
       throw new TypeError("Capability command schema is unsupported");
     }
     assertNonEmpty(request.command.commandId, "command.commandId");
-    if (request.approvalRef.source !== "run" && request.approvalRef.source !== "workflow") {
-      throw new TypeError("approvalRef.source must identify run or workflow approval authority");
+    if (request.approvalRef.source !== "run") {
+      throw new TypeError("approvalRef.source must identify run approval authority");
     }
     assertNonEmpty(request.approvalRef.id, "approvalRef.id");
     assertNonEmpty(request.actorId, "actorId");
@@ -344,25 +333,15 @@ implements CapabilityExecutionPersistencePort, AuthorizationReceiptReadPort {
   }
 
   private bindApproval(request: CapabilityExecutionRequest, scope: TaskRunExecutionScope): BoundApproval {
-    const mapped = request.approvalRef.source === "run"
-      ? this.mapRunApproval(request.approvalRef.id)
-      : this.mapWorkflowApproval(request.approvalRef.id);
+    const mapped = this.mapRunApproval(request.approvalRef.id);
     this.assertCommandMatchesMappedOperation(request.command, mapped.operation);
     const commandDigest = capabilityOperationDigest(request.command);
     if (mapped.operationDigest !== commandDigest) {
       throw new Error(`Approval ${request.approvalRef.source}:${request.approvalRef.id} operation digest mismatch`);
     }
 
-    if (mapped.operation.subject.kind === "task_run") {
-      if (mapped.operation.subject.id !== scope.runId || mapped.operation.scope.id !== scope.sessionId) {
-        throw new Error(`TaskRun approval ${request.approvalRef.id} does not belong to fenced Attempt ${scope.attemptId}`);
-      }
-    }
-    if (mapped.operation.subject.kind === "workflow" && mapped.operation.action !== "workflow.execute") {
-      throw new Error(`Workflow action ${mapped.operation.action} is owned by the Learning synchronous unit of work`);
-    }
-    if (mapped.operation.action === "workflow.execute") {
-      this.assertWorkflowExecutionBinding(mapped.operation, scope);
+    if (mapped.operation.subject.id !== scope.runId || mapped.operation.scope.id !== scope.sessionId) {
+      throw new Error(`TaskRun approval ${request.approvalRef.id} does not belong to fenced Attempt ${scope.attemptId}`);
     }
     return { ref: request.approvalRef, operationDigest: mapped.operationDigest };
   }
@@ -381,21 +360,6 @@ implements CapabilityExecutionPersistencePort, AuthorizationReceiptReadPort {
     if (row.scopeType !== mapped.operation.scope.type || row.scopeId !== mapped.operation.scope.id
       || row.storedDigest !== mapped.operationDigest) {
       throw new Error(`Approval run:${id} canonical binding is stale`);
-    }
-    return mapped;
-  }
-
-  private mapWorkflowApproval(id: string): { operation: CanonicalOperationInput; operationDigest: string } {
-    const row = this.db.prepare(`SELECT id,scope_id as scopeId,action_type as actionType,
-      target_type as targetType,target_id as targetId,workflow_id as workflowId,
-      revision_id as revisionId,proposal_id as proposalId,binding_id as bindingId,
-      impact_scope_json as impactScopeJson,diff_json as diffJson,rollback_json as rollbackJson,
-      operation_digest as storedDigest FROM autonomy_approval_requests WHERE id=?`)
-      .get(id) as WorkflowApprovalRow | undefined;
-    if (!row) throw new Error(`Approval workflow:${id} does not exist`);
-    const mapped = mapWorkflowApprovalOperation(row);
-    if (row.storedDigest !== mapped.operationDigest) {
-      throw new Error(`Approval workflow:${id} canonical binding is stale`);
     }
     return mapped;
   }
@@ -423,41 +387,13 @@ implements CapabilityExecutionPersistencePort, AuthorizationReceiptReadPort {
     );
   }
 
-  private assertWorkflowExecutionBinding(operation: CanonicalOperationInput, scope: TaskRunExecutionScope): void {
-    if (operation.subject.kind !== "workflow") {
-      throw new Error("workflow.execute requires a Workflow subject");
-    }
-    const payload = operation.payload;
-    if (payload === null || Array.isArray(payload) || typeof payload !== "object") {
-      throw new Error("workflow.execute requires a digest-bound bindingId payload");
-    }
-    const bindingId = (payload as { readonly [key: string]: CanonicalJsonValue }).bindingId;
-    if (typeof bindingId !== "string" || !bindingId) {
-      throw new Error("workflow.execute requires a digest-bound bindingId payload");
-    }
-    const binding = this.db.prepare(`SELECT 1 FROM workflow_bindings binding
-      JOIN runs run ON run.id=binding.run_id
-      WHERE binding.id=? AND binding.workflow_id=? AND binding.run_id=? AND binding.attempt=?
-        AND run.session_id=?`).get(
-      bindingId,
-      operation.subject.id,
-      scope.runId,
-      scope.ordinal,
-      operation.scope.id,
-    );
-    if (!binding) {
-      throw new Error(`Workflow binding ${bindingId} does not match fenced Workflow/run/Attempt/scope`);
-    }
-  }
-
   private consumeApproval(
     transaction: Database.Database,
     ref: ApprovalRef,
     operationDigest: string,
     timestamp: number,
   ): void {
-    const table = approvalTable(ref.source);
-    const changed = transaction.prepare(`UPDATE ${table} SET used_count=used_count+1
+    const changed = transaction.prepare(`UPDATE approval_requests SET used_count=used_count+1
       WHERE id=? AND status='approved' AND operation_digest=? AND used_count>=0
       AND ((reuse_mode='one_time' AND max_uses=1)
         OR (reuse_mode='reusable' AND (max_uses IS NULL OR max_uses>0)))
@@ -469,7 +405,7 @@ implements CapabilityExecutionPersistencePort, AuthorizationReceiptReadPort {
 
   private readApprovalUse(transaction: Database.Database, ref: ApprovalRef): ApprovalUseRow {
     const row = transaction.prepare(`SELECT status,reuse_mode as reuseMode,max_uses as maxUses,
-      used_count as usedCount,expires_at as expiresAt FROM ${approvalTable(ref.source)} WHERE id=?`)
+      used_count as usedCount,expires_at as expiresAt FROM approval_requests WHERE id=?`)
       .get(ref.id) as ApprovalUseRow | undefined;
     if (!row || !Number.isSafeInteger(row.usedCount) || row.usedCount < 0
       || row.maxUses !== null && (!Number.isSafeInteger(row.maxUses) || row.maxUses <= 0)) {

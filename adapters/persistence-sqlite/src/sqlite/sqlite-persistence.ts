@@ -25,32 +25,16 @@ import type {
   ProgressRepository,
   SupervisorDecisionJournal,
   SupervisorPersistencePort,
-  WorkflowGovernancePersistencePort,
   WorkspaceGoalRepository,
   WorkspaceGoalOperationRepository,
 } from "@tagent/governance/ports";
-import type {
-  LearningLedgerRepository,
-  LearningProjectionIntegrationPersistencePort,
-  LearningServicePersistencePort,
-  SemanticLearningJobQueue,
-  SemanticCacheRepository,
-  SettingsRepository,
-  WorkflowLearningRepository,
-  WorkflowLearningPersistencePort,
-} from "@tagent/learning/ports";
 import type { MemorySourceRepository } from "@tagent/memory/ports";
 import type { Store } from "../store.js";
 import type { MutationUnitOfWork, SynchronousResult } from "../unit-of-work.js";
 import type { WriterFenceGuard } from "./writer-fence-guard.js";
-import { SqliteLearningLedgerRepository } from "./learning-ledger-repository.js";
-import { SqliteWorkflowLearningRepository } from "./workflow-repository.js";
 import { SqliteAttemptRepository } from "./attempt-repository.js";
 import { SqliteFencedRuntimeMutationRepository } from "./attempt-runtime-mutation-repository.js";
 import { SqliteTaskRunTransitionRepository } from "./task-run-transition-repository.js";
-import { SqliteWorkflowGovernanceRepository } from "./sqlite-workflow-governance-repository.js";
-import { SqliteLearningEffectRepository } from "./sqlite-learning-effect-repository.js";
-import { SqliteLearningProjectionDeliveryRepository } from "./sqlite-learning-projection-delivery-repository.js";
 import { SqliteWorkspaceGoalRepository } from "./workspace-goal-repository.js";
 import { SqliteAttemptRequestEnvelopeRepository } from "./attempt-request-envelope-repository.js";
 import { SqliteProfileContractRepository } from "./profile-contract-repository.js";
@@ -100,13 +84,6 @@ export class SqlitePersistence {
   readonly requestEnvelopes: AttemptRequestEnvelopeRepository;
   readonly approvals: ApprovalRepository;
   readonly supervisorDecisions: SupervisorDecisionJournal;
-  readonly semanticLearningJobs: SemanticLearningJobQueue;
-  readonly settings: SettingsRepository;
-  readonly semanticCache: SemanticCacheRepository;
-  readonly learning: LearningServicePersistencePort;
-  readonly learningIntegration: LearningProjectionIntegrationPersistencePort;
-  readonly workflow: WorkflowLearningPersistencePort;
-  readonly workflowGovernance: WorkflowGovernancePersistencePort;
   readonly runtime: RuntimePersistencePort;
   readonly tools: ToolPersistencePort;
   readonly supervisor: SupervisorPersistencePort;
@@ -128,14 +105,9 @@ export class SqlitePersistence {
   constructor(store: Store, mutationUnitOfWork: MutationUnitOfWork) {
     const mutate = <Args extends unknown[], Result>(operation: SynchronousOperation<Args, Result>) =>
       mutation(mutationUnitOfWork, operation);
-    const learningLedgerRepository = new SqliteLearningLedgerRepository(store.db);
-    const workflowLearning = new SqliteWorkflowLearningRepository(store.db);
-    const sqliteAttempts = new SqliteAttemptRepository(store.db, store.getRun.bind(store));
+    const sqliteAttempts = new SqliteAttemptRepository(store.db);
     const sqliteRuntimeMutations = new SqliteFencedRuntimeMutationRepository(store.db, store);
     const sqliteTaskRunTransitions = new SqliteTaskRunTransitionRepository(store.db, store);
-    const sqliteWorkflowGovernance = new SqliteWorkflowGovernanceRepository(store.db);
-    const sqliteLearningEffects = new SqliteLearningEffectRepository(store.db);
-    const sqliteLearningProjectionDelivery = new SqliteLearningProjectionDeliveryRepository(store.db);
     const sqliteWorkspaceGoals = new SqliteWorkspaceGoalRepository(store.db);
     const sqliteRequestEnvelopes = new SqliteAttemptRequestEnvelopeRepository(store.db);
     const sqliteProfileContracts = new SqliteProfileContractRepository(store.db);
@@ -179,20 +151,6 @@ export class SqlitePersistence {
       settleWorkspaceGoalOperation: mutate(store.settleWorkspaceGoalOperation.bind(store)),
     });
 
-    this.learningIntegration = Object.freeze({
-      unitOfWork: mutationUnitOfWork,
-      delivery: Object.freeze({
-        getCheckpoint: query(sqliteLearningProjectionDelivery.getCheckpoint.bind(sqliteLearningProjectionDelivery)),
-        claimNext: mutate(sqliteLearningProjectionDelivery.claimNext.bind(sqliteLearningProjectionDelivery)),
-        acknowledge: mutate(sqliteLearningProjectionDelivery.acknowledge.bind(sqliteLearningProjectionDelivery)),
-        fail: mutate(sqliteLearningProjectionDelivery.fail.bind(sqliteLearningProjectionDelivery)),
-      }),
-      effects: Object.freeze({
-        get: query(sqliteLearningEffects.get.bind(sqliteLearningEffects)),
-        record: mutate(sqliteLearningEffects.record.bind(sqliteLearningEffects)),
-      }),
-    });
-
     this.attempts = Object.freeze({
       getAttempt: query(sqliteAttempts.getAttempt.bind(sqliteAttempts)),
       getAttemptForRun: query(sqliteAttempts.getAttemptForRun.bind(sqliteAttempts)),
@@ -233,23 +191,6 @@ export class SqlitePersistence {
       transitionSystem: mutate(sqliteTaskRunTransitions.transitionSystem.bind(sqliteTaskRunTransitions)),
     });
 
-    this.workflowGovernance = Object.freeze({
-      unitOfWork: mutationUnitOfWork,
-      reader: Object.freeze({
-        getState: query(sqliteWorkflowGovernance.getState.bind(sqliteWorkflowGovernance)),
-        getReceipt: query(sqliteWorkflowGovernance.getReceipt.bind(sqliteWorkflowGovernance)),
-        getApprovedProposal: query(sqliteWorkflowGovernance.getApprovedProposal.bind(sqliteWorkflowGovernance)),
-        getRevision: query(sqliteWorkflowGovernance.getRevision.bind(sqliteWorkflowGovernance)),
-        getExecutableApproval: query(sqliteWorkflowGovernance.getExecutableApproval.bind(sqliteWorkflowGovernance)),
-        listCanaryDecisionCandidates: query(sqliteWorkflowGovernance.listCanaryDecisionCandidates.bind(sqliteWorkflowGovernance)),
-        getCanaryDecisionEvidence: query(sqliteWorkflowGovernance.getCanaryDecisionEvidence.bind(sqliteWorkflowGovernance)),
-      }),
-      mutations: Object.freeze({
-        commitApprovedEffect: mutate(sqliteWorkflowGovernance.commitApprovedEffect.bind(sqliteWorkflowGovernance)),
-        commitOwnedEffect: mutate(sqliteWorkflowGovernance.commitOwnedEffect.bind(sqliteWorkflowGovernance)),
-      }),
-    });
-
     const storePorts = createStoreBackedPorts(store, mutationUnitOfWork, sqliteRequestEnvelopes);
     this.sessions = storePorts.sessions;
     this.skills = storePorts.skills;
@@ -273,110 +214,6 @@ export class SqlitePersistence {
     this.generationMaintenance = storePorts.generationMaintenance;
     this.approvals = storePorts.approvals;
     this.supervisorDecisions = storePorts.supervisorDecisions;
-    this.settings = storePorts.settings;
-    this.semanticCache = storePorts.semanticCache;
-    this.semanticLearningJobs = storePorts.semanticLearningJobs;
-
-    const learningLedger: LearningLedgerRepository = Object.freeze({
-      updateCommunicationProfile: mutate(learningLedgerRepository.updateCommunicationProfile.bind(learningLedgerRepository)),
-      findCommunicationProfile: query(learningLedgerRepository.findCommunicationProfile.bind(learningLedgerRepository)),
-      setCommunicationProfileLocked: mutate(learningLedgerRepository.setCommunicationProfileLocked.bind(learningLedgerRepository)),
-      listCommunicationProfileIds: query(learningLedgerRepository.listCommunicationProfileIds.bind(learningLedgerRepository)),
-      getCommunicationProfile: query(learningLedgerRepository.getCommunicationProfile.bind(learningLedgerRepository)),
-      getCommunicationRevision: query(learningLedgerRepository.getCommunicationRevision.bind(learningLedgerRepository)),
-      recordCorrection: mutate(learningLedgerRepository.recordCorrection.bind(learningLedgerRepository)),
-      listLearningToolAttempts: query(learningLedgerRepository.listLearningToolAttempts.bind(learningLedgerRepository)),
-      countRunCorrections: query(learningLedgerRepository.countRunCorrections.bind(learningLedgerRepository)),
-      getRunLearningPolicyRecord: query(learningLedgerRepository.getRunLearningPolicyRecord.bind(learningLedgerRepository)),
-      recordLearningEvent: mutate(learningLedgerRepository.recordLearningEvent.bind(learningLedgerRepository)),
-      correctionReferencesRecord: query(learningLedgerRepository.correctionReferencesRecord.bind(learningLedgerRepository)),
-      listCorrectionContents: query(learningLedgerRepository.listCorrectionContents.bind(learningLedgerRepository)),
-      recordFeedbackAttributionReceipt: mutate(learningLedgerRepository.recordFeedbackAttributionReceipt.bind(learningLedgerRepository)),
-      listFeedbackAttributionWork: query(learningLedgerRepository.listFeedbackAttributionWork.bind(learningLedgerRepository)),
-      completeFeedbackAttribution: mutate(learningLedgerRepository.completeFeedbackAttribution.bind(learningLedgerRepository)),
-      failFeedbackAttribution: mutate(learningLedgerRepository.failFeedbackAttribution.bind(learningLedgerRepository)),
-      getLearningEventRow: query(learningLedgerRepository.getLearningEventRow.bind(learningLedgerRepository)),
-      listLearningEventIds: query(learningLedgerRepository.listLearningEventIds.bind(learningLedgerRepository)),
-      listCorrectionRows: query(learningLedgerRepository.listCorrectionRows.bind(learningLedgerRepository)),
-      listFeedbackAttributionRows: query(learningLedgerRepository.listFeedbackAttributionRows.bind(learningLedgerRepository)),
-    });
-    this.learning = Object.freeze({
-      getRun: this.taskRuns.getRun,
-      listMessages: this.sessions.listMessages,
-      getContextManifestForAttempt: this.contextManifests.getContextManifestForAttempt,
-      ...this.semanticLearningJobs,
-      learningLedger,
-    });
-
-    const workflowRepository: WorkflowLearningRepository = Object.freeze({
-      upsertRunLearningPolicy: mutate(workflowLearning.upsertRunLearningPolicy.bind(workflowLearning)),
-      getRunLearningPolicy: query(workflowLearning.getRunLearningPolicy.bind(workflowLearning)),
-      recordExperienceObservation: mutate(workflowLearning.recordExperienceObservation.bind(workflowLearning)),
-      enqueueDistillationJob: mutate(workflowLearning.enqueueDistillationJob.bind(workflowLearning)),
-      claimDistillationJob: mutate(workflowLearning.claimDistillationJob.bind(workflowLearning)),
-      renewDistillationLease: mutate(workflowLearning.renewDistillationLease.bind(workflowLearning)),
-      checkpointDistillationJob: mutate(workflowLearning.checkpointDistillationJob.bind(workflowLearning)),
-      updateDistillationCheckpoint: mutate(workflowLearning.updateDistillationCheckpoint.bind(workflowLearning)),
-      getDistillationCheckpoint: query(workflowLearning.getDistillationCheckpoint.bind(workflowLearning)),
-      completeDistillationJob: mutate(workflowLearning.completeDistillationJob.bind(workflowLearning)),
-      failDistillationJob: mutate(workflowLearning.failDistillationJob.bind(workflowLearning)),
-      listExperienceCandidates: query(workflowLearning.listExperienceCandidates.bind(workflowLearning)),
-      findDistilledWorkflow: query(workflowLearning.findDistilledWorkflow.bind(workflowLearning)),
-      recordDistillationConflict: mutate(workflowLearning.recordDistillationConflict.bind(workflowLearning)),
-      createWorkflow: mutate(workflowLearning.createWorkflow.bind(workflowLearning)),
-      createWorkflowRevision: mutate(workflowLearning.createWorkflowRevision.bind(workflowLearning)),
-      listWorkflowDefinitions: query(workflowLearning.listWorkflowDefinitions.bind(workflowLearning)),
-      getWorkflowDefinition: query(workflowLearning.getWorkflowDefinition.bind(workflowLearning)),
-      listWorkflowRevisionIds: query(workflowLearning.listWorkflowRevisionIds.bind(workflowLearning)),
-      getWorkflowRevision: query(workflowLearning.getWorkflowRevision.bind(workflowLearning)),
-      findActiveApprovalByHash: query(workflowLearning.findActiveApprovalByHash.bind(workflowLearning)),
-      createApproval: mutate(workflowLearning.createApproval.bind(workflowLearning)),
-      getApproval: query(workflowLearning.getApproval.bind(workflowLearning)),
-      listApprovals: query(workflowLearning.listApprovals.bind(workflowLearning)),
-      listApprovalsPage: query(workflowLearning.listApprovalsPage.bind(workflowLearning)),
-      decideApproval: mutate(workflowLearning.decideApproval.bind(workflowLearning)),
-      revokeApproval: mutate(workflowLearning.revokeApproval.bind(workflowLearning)),
-      expireApprovals: mutate(workflowLearning.expireApprovals.bind(workflowLearning)),
-      recordApplication: mutate(workflowLearning.recordApplication.bind(workflowLearning)),
-      getApplicationReceipt: query(workflowLearning.getApplicationReceipt.bind(workflowLearning)),
-      listRunBindings: query(workflowLearning.listRunBindings.bind(workflowLearning)),
-      recordRunApplication: mutate(workflowLearning.recordRunApplication.bind(workflowLearning)),
-      recordFeedback: mutate(workflowLearning.recordFeedback.bind(workflowLearning)),
-      workflowQuality: query(workflowLearning.workflowQuality.bind(workflowLearning)),
-      recordSelectorReceipt: mutate(workflowLearning.recordSelectorReceipt.bind(workflowLearning)),
-      getCanaryPromotion: query(workflowLearning.getCanaryPromotion.bind(workflowLearning)),
-      recordCanaryAssignment: mutate(workflowLearning.recordCanaryAssignment.bind(workflowLearning)),
-      recordWorkflowBinding: mutate(workflowLearning.recordWorkflowBinding.bind(workflowLearning)),
-      listBindings: query(workflowLearning.listBindings.bind(workflowLearning)),
-      listFeedback: query(workflowLearning.listFeedback.bind(workflowLearning)),
-      createProposal: mutate(workflowLearning.createProposal.bind(workflowLearning)),
-      listProposals: query(workflowLearning.listProposals.bind(workflowLearning)),
-      getProposal: query(workflowLearning.getProposal.bind(workflowLearning)),
-      decideProposal: mutate(workflowLearning.decideProposal.bind(workflowLearning)),
-      listDistillationJobs: query(workflowLearning.listDistillationJobs.bind(workflowLearning)),
-      listRunLearningPolicies: query(workflowLearning.listRunLearningPolicies.bind(workflowLearning)),
-      listWorkflowQuality: query(workflowLearning.listWorkflowQuality.bind(workflowLearning)),
-      listEvaluations: query(workflowLearning.listEvaluations.bind(workflowLearning)),
-      listCanaryBindings: query(workflowLearning.listCanaryBindings.bind(workflowLearning)),
-      getDistillationMetrics: query(workflowLearning.getDistillationMetrics.bind(workflowLearning)),
-      listAutonomyAudit: query(workflowLearning.listAutonomyAudit.bind(workflowLearning)),
-      recordAutonomyAudit: mutate(workflowLearning.recordAutonomyAudit.bind(workflowLearning)),
-      getEvaluationReceipt: query(workflowLearning.getEvaluationReceipt.bind(workflowLearning)),
-      recordEvaluationReceipt: mutate(workflowLearning.recordEvaluationReceipt.bind(workflowLearning)),
-      hasWorkflowBinding: query(workflowLearning.hasWorkflowBinding.bind(workflowLearning)),
-      listPassedEvaluations: query(workflowLearning.listPassedEvaluations.bind(workflowLearning)),
-      listPendingCanaryBindings: query(workflowLearning.listPendingCanaryBindings.bind(workflowLearning)),
-      recordCanaryOutcome: mutate(workflowLearning.recordCanaryOutcome.bind(workflowLearning)),
-      retryDistillationJob: mutate(workflowLearning.retryDistillationJob.bind(workflowLearning)),
-      listDeadLetterJobs: query(workflowLearning.listDeadLetterJobs.bind(workflowLearning)),
-    });
-    this.workflow = Object.freeze({
-      getRun: this.taskRuns.getRun,
-      ...this.semanticLearningJobs,
-      unitOfWork: mutationUnitOfWork,
-      workflow: workflowRepository,
-    });
-
     this.tools = Object.freeze({
       getRun: this.taskRuns.getRun,
       advanceRunPhase: this.taskRuns.advanceRunPhase,

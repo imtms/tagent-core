@@ -540,7 +540,6 @@ export class AdmissionCoordinator {
     if (!transition?.event) throw new Error(`TaskRun ${run.id} launch failure returned no terminal event`);
     this.dependencies.eventHub.publish(transition.event);
     this.state.persistence.workspaceGoals.recordRunOutcome(run.id);
-    this.dependencies.settlement.projectWorkflowExperience(run.id);
     setImmediate(() => { if (!this.state.closing) this.dispatchSessionInbox(run.sessionId); });
     return undefined;
   }

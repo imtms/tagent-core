@@ -15,7 +15,6 @@
     { "path": "./adapters/runtime-pi" },
     { "path": "./packages/admission" },
     { "path": "./packages/memory" },
-    { "path": "./packages/learning" },
     { "path": "./adapters/persistence-sqlite" },
     { "path": "./adapters/workspace-local" },
     { "path": "./adapters/http-fastify" },

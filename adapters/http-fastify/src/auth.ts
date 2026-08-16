@@ -2,14 +2,11 @@ import { timingSafeEqual } from "node:crypto";
 
 export const SERVICE_SCOPES = [
   "sessions:read", "sessions:write", "runs:read", "runs:control", "events:consume",
-  "workflows:teach", "workflows:govern", "workflows:approve", "admin", "internal",
+  "admin", "internal",
   "operator:session-settings:read", "operator:session-settings:write",
   "operator:inbox:read", "operator:inbox:write", "operator:inbox:control",
   "operator:context-manifests:read", "operator:skills:read", "operator:skills:write",
   "admin:memory:read", "admin:memory:write",
-  "admin:learning:read", "admin:learning:write",
-  "admin:workflow:read", "admin:workflow:write",
-  "admin:autonomy:read", "admin:autonomy:decide", "admin:autonomy:execute",
   "admin:operations:read",
 ] as const;
 export type ServiceScope = typeof SERVICE_SCOPES[number];

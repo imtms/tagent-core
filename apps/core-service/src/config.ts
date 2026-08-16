@@ -38,19 +38,6 @@ export interface AppConfig {
   routerModel: ModelConfig;
   supervisorModel: ModelConfig;
   memory: MemoryConfig;
-  learning: {
-    enabledByDefault: boolean;
-    autoExecutionEnabledByDefault: boolean;
-    distillationWorkerIntervalMs: number;
-    semanticJudgeEnabled: boolean;
-    semanticJudgeBaseUrl?: string;
-    semanticJudgeCredentialReference?: CredentialReference;
-    semanticJudgeModel?: string;
-    semanticJudgeTimeoutMs: number;
-    semanticJudgeMinimumConfidence: number;
-    semanticJudgeCacheTtlMs: number;
-    semanticJudgeMaxCallsPerMinute: number;
-  };
 }
 
 export type MemoryConfig =
@@ -308,19 +295,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     controlInboxCapacity: positiveInteger(env.TAGENT_CONTROL_INBOX_CAPACITY, 32, "TAGENT_CONTROL_INBOX_CAPACITY"),
     serviceCredentials,
     memory: loadMemoryConfig(env),
-    learning: {
-      enabledByDefault: enabled(env.TAGENT_LEARNING_ENABLED, "TAGENT_LEARNING_ENABLED"),
-      autoExecutionEnabledByDefault: enabled(env.TAGENT_LEARNING_AUTO_EXECUTION_ENABLED, "TAGENT_LEARNING_AUTO_EXECUTION_ENABLED"),
-      distillationWorkerIntervalMs: positiveInteger(env.TAGENT_DISTILLATION_WORKER_INTERVAL_MS, 1_000, "TAGENT_DISTILLATION_WORKER_INTERVAL_MS"),
-      semanticJudgeEnabled: enabled(env.TAGENT_LEARNING_SEMANTIC_JUDGE_ENABLED, "TAGENT_LEARNING_SEMANTIC_JUDGE_ENABLED"),
-      semanticJudgeBaseUrl: referencedEnvValue(env, "TAGENT_LEARNING_SEMANTIC_JUDGE_BASE_URL") || env.TAGENT_ROUTER_API_BASE?.trim() || env.TAGENT_API_BASE?.trim() || undefined,
-      semanticJudgeCredentialReference: referencedCredential(env, "TAGENT_LEARNING_SEMANTIC_JUDGE_API_KEY", "OPENAI_API_KEY"),
-      semanticJudgeModel: referencedEnvValue(env, "TAGENT_LEARNING_SEMANTIC_JUDGE_MODEL") || env.TAGENT_ROUTER_MODEL?.trim() || env.TAGENT_MODEL?.trim() || undefined,
-      semanticJudgeTimeoutMs: positiveInteger(env.TAGENT_LEARNING_SEMANTIC_JUDGE_TIMEOUT_MS, 8_000, "TAGENT_LEARNING_SEMANTIC_JUDGE_TIMEOUT_MS"),
-      semanticJudgeMinimumConfidence: probability(env.TAGENT_LEARNING_SEMANTIC_JUDGE_MIN_CONFIDENCE, .72, "TAGENT_LEARNING_SEMANTIC_JUDGE_MIN_CONFIDENCE"),
-      semanticJudgeCacheTtlMs: positiveInteger(env.TAGENT_LEARNING_SEMANTIC_JUDGE_CACHE_TTL_MS, 86_400_000, "TAGENT_LEARNING_SEMANTIC_JUDGE_CACHE_TTL_MS"),
-      semanticJudgeMaxCallsPerMinute: positiveInteger(env.TAGENT_LEARNING_SEMANTIC_JUDGE_MAX_CALLS_PER_MINUTE, 120, "TAGENT_LEARNING_SEMANTIC_JUDGE_MAX_CALLS_PER_MINUTE"),
-    },
     ...(() => {
       const ids = modelIds(env.TAGENT_MODEL, "gpt-5.6-sol");
       const base = {
@@ -383,10 +357,6 @@ export interface PublicRuntimeConfig {
   memoryWorkspaceScopeId?: string;
   memoryBackend?: "memory" | "postgres";
   memoryColdBackend?: "local" | "s3";
-  learningEnabled: boolean;
-  learningAutoExecutionEnabled: boolean;
-  learningRequiresMemory: true;
-  learningActiveExecutionRequiresApproval: true;
 }
 
 export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): PublicRuntimeConfig {
@@ -418,10 +388,6 @@ export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): 
     memoryWorkspaceScopeId: config.memory.enabled ? config.memory.workspaceScopeId : undefined,
     memoryBackend: config.memory.enabled ? config.memory.backend : undefined,
     memoryColdBackend: config.memory.enabled ? config.memory.coldBackend : undefined,
-    learningEnabled: config.memory.enabled && config.learning.enabledByDefault,
-    learningAutoExecutionEnabled: config.memory.enabled && config.learning.enabledByDefault && config.learning.autoExecutionEnabledByDefault,
-    learningRequiresMemory: true,
-    learningActiveExecutionRequiresApproval: true,
   };
 }
 

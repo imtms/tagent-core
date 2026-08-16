@@ -212,7 +212,6 @@ describe("TaskRun transition caller publishing", () => {
       },
       settlement: {
         execute: async () => false,
-        projectWorkflowExperience() {},
         recoverInterruptedAttempt: () => false,
       },
       postAttempt: { attemptLaunchFailed, attemptFinalized() {}, continuationStarted() {} },

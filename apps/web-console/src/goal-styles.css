@@ -1,4 +1,4 @@
-/* Workspace Goals — follows the Console's Memory/Learning center visual language. */
+/* Workspace Goals — follows the Console's Memory center visual language. */
 .goal-center{width:min(1240px,100%);height:min(860px,100%);grid-template-rows:auto minmax(0,1fr)}
 .goal-header .memory-heading-icon{background:var(--accent)}
 .goal-shell{min-height:0;display:grid;grid-template-columns:252px minmax(0,1fr)}

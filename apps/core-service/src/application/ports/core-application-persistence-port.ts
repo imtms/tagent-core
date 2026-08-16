@@ -17,13 +17,8 @@ import type {
   ContextManifestRepository,
   SupervisorDecisionJournal,
   SupervisorPersistencePort,
-  WorkflowGovernancePersistencePort,
   WorkspaceGoalRepository,
 } from "@tagent/governance/ports";
-import type {
-  LearningServicePersistencePort,
-  WorkflowLearningPersistencePort,
-} from "@tagent/learning/ports";
 
 /** Persistence capabilities required by the Core application, grouped by domain context. */
 export interface CoreApplicationPersistencePort {
@@ -45,8 +40,5 @@ export interface CoreApplicationPersistencePort {
   readonly supervisorDecisions: SupervisorDecisionJournal;
   readonly runtime: RuntimePersistencePort;
   readonly supervisor: SupervisorPersistencePort;
-  readonly workflowGovernance: WorkflowGovernancePersistencePort;
-  readonly learning: LearningServicePersistencePort;
-  readonly workflow: WorkflowLearningPersistencePort;
   readonly workspaceGoals: WorkspaceGoalRepository;
 }

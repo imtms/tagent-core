@@ -10,9 +10,6 @@ export const CAPABILITY_PROFILE_IDS = [
   "operator.context-manifest.v1",
   "operator.skills.v1",
   "admin.memory.v1",
-  "admin.learning.v1",
-  "admin.workflow.v1",
-  "admin.autonomy.v1",
 ] as const;
 
 export const CapabilityProfileIdSchema = Type.Union([
@@ -21,9 +18,6 @@ export const CapabilityProfileIdSchema = Type.Union([
   Type.Literal("operator.context-manifest.v1"),
   Type.Literal("operator.skills.v1"),
   Type.Literal("admin.memory.v1"),
-  Type.Literal("admin.learning.v1"),
-  Type.Literal("admin.workflow.v1"),
-  Type.Literal("admin.autonomy.v1"),
 ]);
 export type CapabilityProfileId = Static<typeof CapabilityProfileIdSchema>;
 
@@ -33,9 +27,6 @@ export const PROFILE_SERVICE_SCOPES = [
   "operator:context-manifests:read",
   "operator:skills:read", "operator:skills:write",
   "admin:memory:read", "admin:memory:write",
-  "admin:learning:read", "admin:learning:write",
-  "admin:workflow:read", "admin:workflow:write",
-  "admin:autonomy:read", "admin:autonomy:decide", "admin:autonomy:execute",
   "admin:operations:read",
 ] as const;
 
@@ -45,9 +36,6 @@ export const ProfileServiceScopeSchema = Type.Union([
   Type.Literal("operator:context-manifests:read"),
   Type.Literal("operator:skills:read"), Type.Literal("operator:skills:write"),
   Type.Literal("admin:memory:read"), Type.Literal("admin:memory:write"),
-  Type.Literal("admin:learning:read"), Type.Literal("admin:learning:write"),
-  Type.Literal("admin:workflow:read"), Type.Literal("admin:workflow:write"),
-  Type.Literal("admin:autonomy:read"), Type.Literal("admin:autonomy:decide"), Type.Literal("admin:autonomy:execute"),
   Type.Literal("admin:operations:read"),
 ]);
 export type ProfileServiceScope = Static<typeof ProfileServiceScopeSchema>;
@@ -84,7 +72,6 @@ export const CapabilityProfileEndpointSchema = Type.Object({
   resourceScope: Type.Union([
     Type.Literal("none"), Type.Literal("principal"), Type.Literal("workspace"),
     Type.Literal("session"), Type.Literal("task_run"), Type.Literal("memory"),
-    Type.Literal("workflow"), Type.Literal("autonomy"),
   ]),
   recovery: ProfileWriteRecoverySchema,
 }, { additionalProperties: false });

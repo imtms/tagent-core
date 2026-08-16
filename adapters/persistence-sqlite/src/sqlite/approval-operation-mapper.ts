@@ -1,5 +1,4 @@
 import {
-  WORKFLOW_APPROVAL_SCOPE_TYPE,
   RUN_APPROVAL_SCOPE_TYPE,
   canonicalApprovalActionForSource,
   operationDigest,
@@ -23,42 +22,6 @@ export interface RunApprovalSemanticInput {
   metadata: string | Record<string, unknown>;
   runSessionId: string | null;
   enforceScopeConsistency?: boolean;
-}
-
-export interface WorkflowApprovalSemanticInput {
-  id: string;
-  scopeId: string;
-  actionType: string;
-  targetType: string;
-  targetId: string;
-  workflowId: string | null;
-  revisionId: string | null;
-  proposalId: string | null;
-  bindingId: string | null;
-  impactScopeJson: string;
-  diffJson: string;
-  rollbackJson: string;
-}
-
-export interface WorkflowExecutionReceiptInput {
-  approvalId: string;
-  actionType: string;
-  targetId: string;
-  operationDigest: string;
-  executedAt: number;
-  receiptJson: string;
-}
-
-export interface WorkflowExecutedReceiptRow {
-  id: string;
-  approval_source: "workflow";
-  approval_id: string;
-  operation_id: string;
-  operation_digest: string;
-  outcome: "executed";
-  actor_id: string;
-  details_json: string;
-  created_at: number;
 }
 
 class ApprovalOperationMappingError extends Error {
@@ -149,79 +112,4 @@ export function mapRunApprovalOperation(input: RunApprovalSemanticInput): {
     payload,
   };
   return { operation, operationDigest: operationDigest(operation), metadata };
-}
-
-function workflowTargetMatches(input: Pick<WorkflowApprovalSemanticInput,
-"actionType" | "targetType" | "targetId" | "revisionId" | "proposalId">): boolean {
-  if (input.actionType === "activate_workflow" || input.actionType === "start_canary") {
-    return input.targetType === "workflow_revision"
-      && Boolean(input.revisionId)
-      && input.targetId === input.revisionId;
-  }
-  if (input.actionType === "apply_revision") {
-    return input.targetType === "workflow_proposal"
-      && Boolean(input.proposalId)
-      && input.targetId === input.proposalId;
-  }
-  return Boolean(input.targetType && input.targetId);
-}
-
-export function mapWorkflowApprovalOperation(input: WorkflowApprovalSemanticInput): {
-  operation: ApprovalOperation;
-  operationDigest: string;
-  payload: Record<string, CanonicalJsonValue>;
-} {
-  const action = canonicalApprovalActionForSource("workflow", input.actionType);
-  if (!action) return mappingFailure(`found unknown Workflow action for ${input.id}`);
-  if (!input.scopeId) return mappingFailure(`found missing Workflow scope for ${input.id}`);
-  if (!input.workflowId) return mappingFailure(`found missing Workflow subject for ${input.id}`);
-  if (!input.targetType || !input.targetId || !workflowTargetMatches(input)) {
-    return mappingFailure(`found conflicting Workflow target for ${input.id}`);
-  }
-  const payload: Record<string, CanonicalJsonValue> = {
-    workflowId: input.workflowId,
-    impactScope: canonicalJsonObject(input.impactScopeJson, "impact_scope_json", input.id),
-    diff: canonicalJsonObject(input.diffJson, "diff_json", input.id),
-    rollback: canonicalJsonObject(input.rollbackJson, "rollback_json", input.id),
-  };
-  if (input.revisionId) payload.revisionId = input.revisionId;
-  if (input.proposalId) payload.proposalId = input.proposalId;
-  if (input.bindingId) payload.bindingId = input.bindingId;
-  const operation: ApprovalOperation = {
-    subject: { kind: "workflow", id: input.workflowId },
-    action,
-    target: { kind: input.targetType, id: input.targetId },
-    scope: { type: WORKFLOW_APPROVAL_SCOPE_TYPE, id: input.scopeId },
-    payload,
-  };
-  return { operation, operationDigest: operationDigest(operation), payload };
-}
-
-export function buildWorkflowExecutedReceipt(
-  input: WorkflowExecutionReceiptInput,
-): WorkflowExecutedReceiptRow {
-  if (!Number.isSafeInteger(input.executedAt)) {
-    return mappingFailure(`found missing execution timestamp for ${input.approvalId}`);
-  }
-  const details = canonicalJsonObject(input.receiptJson, "execution_receipt_json", input.approvalId);
-  const actorId = optionalCanonicalString(details, "executedBy");
-  const actionType = optionalCanonicalString(details, "actionType");
-  const targetId = optionalCanonicalString(details, "targetId");
-  if (!actorId
-    || actionType !== input.actionType
-    || targetId !== input.targetId
-    || details.executedAt !== input.executedAt) {
-    return mappingFailure(`found mismatched execution receipt for ${input.approvalId}`);
-  }
-  return {
-    id: `approval-receipt:workflow:${input.approvalId}:executed`,
-    approval_source: "workflow",
-    approval_id: input.approvalId,
-    operation_id: `workflow-approval:${input.approvalId}`,
-    operation_digest: input.operationDigest,
-    outcome: "executed",
-    actor_id: actorId,
-    details_json: stableJson(details),
-    created_at: input.executedAt,
-  };
 }

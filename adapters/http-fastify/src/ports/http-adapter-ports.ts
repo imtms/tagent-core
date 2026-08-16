@@ -8,18 +8,6 @@ export type HttpRuntimeConfig = object & {
   schemaVersion?: number;
 };
 
-export interface HttpLearningFeatureState {
-  memoryEnabled: boolean;
-  learningEnabled: boolean;
-  autoExecutionEnabled: boolean;
-  [key: string]: unknown;
-}
-
-export interface HttpLearningControlPort {
-  requireLearning(): void;
-  snapshot(): HttpLearningFeatureState;
-}
-
 export interface HttpMemoryScope { type: "user" | "workspace" | "project" | "session"; id: string }
 export interface HttpMemoryAccess { subjectId: string; scopes: HttpMemoryScope[]; purpose: "agent_recall" | "memory_admin" | "capture" }
 

@@ -114,8 +114,8 @@ function validateOperation(value: unknown): CapabilityOperation {
   assertExactKeys(operation, ["subject", "action", "target", "scope", "payload"], "CapabilityCommand.operation");
   const subject = asRecord(operation.subject, "CapabilityCommand.operation.subject");
   assertExactKeys(subject, ["kind", "id"], "CapabilityCommand.operation.subject");
-  if (subject.kind !== "task_run" && subject.kind !== "workflow") {
-    throw new TypeError("CapabilityCommand.operation.subject.kind must be task_run or workflow");
+  if (subject.kind !== "task_run") {
+    throw new TypeError("CapabilityCommand.operation.subject.kind must be task_run");
   }
   assertNonEmpty(subject.id, "CapabilityCommand.operation.subject.id");
   assertNonEmpty(operation.action, "CapabilityCommand.operation.action");

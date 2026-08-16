@@ -8,14 +8,14 @@ This document records the Core team's responsibility decision for the Gateway ha
 | --- | --- |
 | Review date | 2026-08-15 |
 | Target release | `0.8.5` |
-| SQLite schema | ID `tagent-core/0.8`, numeric version `1` |
+| SQLite schema | ID `tagent-core/0.8`, numeric version `2` |
 | Channel API | `/api/v1` |
 | Operator Read | `operator.read.v1` |
-| Full-feature profiles | eight profile `1.0` contracts |
+| Full-feature profiles | five profile `1.0` contracts |
 
 ## Decision
 
-The Gateway requests are reasonable when they protect the REST/SSE/ABI boundary or expose Core-owned durable authority. Core therefore owns Session and TaskRun state, command and interaction receipts, event-consumer generations/ACKs, public inventory, capability discovery, and the eight bounded feature profiles.
+The Gateway requests are reasonable when they protect the REST/SSE/ABI boundary or expose Core-owned durable authority. Core therefore owns Session and TaskRun state, command and interaction receipts, event-consumer generations/ACKs, public inventory, capability discovery, and the five bounded feature profiles.
 
 Browser identity, actor ACL policy, channel routing, local projections, persist-before-ACK storage, outbox, northbound delivery, and exact-tuple Gateway integration remain Gateway-owned. A passing Core probe cannot prove those behaviors.
 
@@ -31,11 +31,11 @@ Browser identity, actor ACL policy, channel routing, local projections, persist-
 | Base capabilities | Release/schema/catalogs, endpoint IDs, ready Approval, receipt recovery, retention, and enforced limits. |
 | Operator Read | Bounded Session inventory, complete per-Session TaskRun inventory, latest TaskRun, public redaction, dual-scope checks, stable cursors. |
 | Workspace Goals | Create/revise/approve/generate/start/recover operations with canonical request identities and durable receipts. |
-| Feature profiles | Session Settings, Inbox, Context Manifest, Skills, Memory, Learning, Workflow, and Autonomy profile `1.0` summaries/details. Snapshot lists page on immutable membership/order keys and storage-backed `limit + 1` queries. |
+| Feature profiles | Session Settings, Inbox, Context Manifest, Skills, and Memory profile `1.0` summaries/details. Snapshot lists page on immutable membership/order keys and storage-backed `limit + 1` queries. |
 | Profile persistence | Resource revisions, receipt-first exact replay with immutable response projections/ETags, durable operation receipts, audit identity separation, collection revisions, and restart uncertainty. |
 | SDK evidence | Version-matched ABI/Core Client archives, canonical fixtures, and a real Core provider contract harness. |
 
-Core exposes one Approval contract with `ready=true`; Gateway does not choose an internal implementation. Run and Workflow approvals are mapped into the same canonical capability authorization boundary.
+Core exposes one TaskRun Approval contract with `ready=true`; Gateway does not choose an internal implementation.
 
 ## Recovery design
 

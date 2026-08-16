@@ -28,7 +28,6 @@ const expectedWorkspaceDependencies = [
   "@tagent/admission",
   "@tagent/execution",
   "@tagent/governance",
-  "@tagent/learning",
   "@tagent/memory",
 ];
 

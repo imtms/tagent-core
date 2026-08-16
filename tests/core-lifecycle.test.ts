@@ -14,7 +14,6 @@ import {
   type CoreEventLoopDelayMonitor,
   type CoreLifecycleResources,
 } from "@tagent/core-service/composition";
-import { DistillationWorker } from "@tagent/learning";
 import { acquireCoreInstanceLock, CoreInstanceLock, CoreWriterLease, WriterFenceGuard, claimCoreWriterLeaseWithRetry } from "@tagent/persistence-sqlite/writer";
 import {
   bootstrapCore,
@@ -51,11 +50,6 @@ async function temporaryConfig(overrides: Partial<AppConfig> = {}) {
     apiCredentialReference: credentialReference("PATH"),
     apiCredentialConfigured: true,
     memory: { enabled: false },
-    learning: {
-      ...defaults.learning,
-      enabledByDefault: false,
-      semanticJudgeEnabled: false,
-    },
     ...overrides,
   } satisfies AppConfig;
 }
@@ -635,9 +629,7 @@ describe("Core lifecycle", () => {
     expect(readLease(config.database)?.releasedAt).not.toBeNull();
   });
 
-  it.each(["memory", "distillation"] as const)(
-    "never becomes ready and reverses every production resource after %s worker start failure",
-    async (failedWorker) => {
+  it("never becomes ready and reverses every production resource after Memory worker start failure", async () => {
       const base = await temporaryConfig();
       const memory = loadConfig({
         TAGENT_MEMORY_ENABLED: "true",
@@ -645,24 +637,12 @@ describe("Core lifecycle", () => {
         TAGENT_MEMORY_COLD_BACKEND: "local",
         TAGENT_MEMORY_COLD_PATH: path.join(path.dirname(base.database), "memory-cold"),
       }).memory;
-      const config: AppConfig = {
-        ...base,
-        memory,
-        learning: {
-          ...base.learning,
-          enabledByDefault: failedWorker === "distillation",
-        },
-      };
+      const config: AppConfig = { ...base, memory };
       const events: string[] = [];
-      const originalDistillationClose = DistillationWorker.prototype.close;
       const originalGuardRemove = WriterFenceGuard.prototype.removeConnectionGuard;
       const originalLeaseRelease = CoreWriterLease.prototype.release;
       const originalStoreClose = Store.prototype.close;
       const originalLockRelease = CoreInstanceLock.prototype.release;
-      const distillationClose = vi.spyOn(DistillationWorker.prototype, "close").mockImplementation(async function (this: DistillationWorker) {
-        events.push("worker.distillation.close");
-        await originalDistillationClose.call(this);
-      });
       const runtimeClose = vi.spyOn(ExecutionCoordinator.prototype, "closeRuntimes").mockImplementation(async () => {
         events.push("runtime.close");
         return [];
@@ -692,30 +672,16 @@ describe("Core lifecycle", () => {
             events.push("worker.memory.close");
             await originalMemoryClose();
           });
-          if (failedWorker === "memory") throw new Error("simulated memory worker start failure");
-          runtime.start();
-        }),
-        startDistillation: vi.fn(async (worker) => {
-          if (failedWorker === "distillation") throw new Error("simulated distillation worker start failure");
-          worker.start();
+          throw new Error("simulated memory worker start failure");
         }),
       };
 
       try {
         await expect(bootstrapCore(config, { backgroundWorkerStarter: starter }))
-          .rejects.toThrow(`simulated ${failedWorker} worker start failure`);
+          .rejects.toThrow("simulated memory worker start failure");
         expect(markReady).not.toHaveBeenCalled();
-        expect(events).toEqual(failedWorker === "memory" ? [
+        expect(events).toEqual([
           "runtime.close",
-          "worker.distillation.close",
-          "worker.memory.close",
-          "guard.remove",
-          "lease.release",
-          "store.close",
-          "lock.release",
-        ] : [
-          "runtime.close",
-          "worker.distillation.close",
           "worker.memory.close",
           "guard.remove",
           "lease.release",
@@ -734,12 +700,10 @@ describe("Core lifecycle", () => {
         leaseRelease.mockRestore();
         guardRemove.mockRestore();
         runtimeClose.mockRestore();
-        distillationClose.mockRestore();
       }
 
       await assertInstanceLockReleased(config.database);
-    },
-  );
+    });
 
   it("increments the fence on restart and exposes only boolean writer health", async () => {
     const config = await temporaryConfig();
@@ -775,8 +739,6 @@ describe("Core lifecycle", () => {
       runtimeDefaults: { supervisorReviewer: reviewer as never },
       memory: undefined,
       memoryScopeId: "default",
-      learningControl: undefined,
-      semanticJudge: undefined,
       startupOptions: { startupMode: "deferred" },
     });
 

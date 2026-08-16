@@ -82,9 +82,9 @@ If the initiating Run reached `completed` or `failed` between its accepted tool 
 
 A drain timeout causes the Host to terminate the old process before starting a candidate. Process death and the existing writer fence then provide exclusion; ambiguous effects are still governed by the same `outcome_unknown` rules. Candidate readiness failure re-verifies and restores the previous release. If the Host itself crashes during activation, `current` plus `activation.json` deterministically decides whether the recovered result is committed or rolled back.
 
-## Learning integration
+## Retired schema compatibility
 
-Learning consumes the immutable `integration_outbox` through one durable consumer, `learning-projection-v1`. Delivery state lives in `integration_consumer_delivery`; the contiguous checkpoint lives in `learning_projection_checkpoint`; `effect_receipts` deduplicate applied effects. A worker must hold the current lease generation, apply the effect and record its receipt atomically, then ACK and advance the checkpoint. There is no alternate projection source or runtime authority switch.
+The immutable revision-1 baseline still declares the former Learning tables and indexes. Current runtime code never reads or writes them; they remain solely so existing databases keep historical rows and exact-schema verification remains safe. Do not drop or rewrite these objects in place. A future data-removal migration must be explicit, backed up, and separately versioned.
 
 ## Event delivery and receipts
 

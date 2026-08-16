@@ -10,7 +10,7 @@ Use the same term in domain code, ports, persistence, events, ABI, tests, and do
 | `Session Inbox` | queued/deferred inputs and related work | `inboxItemId` |
 | `command` | durable caller intent to control a TaskRun | command receipt, not a direct state mutation |
 | `event consumer` | durable generation-fenced replay cursor | `consumerId`, `generation`, `ackedSequence` |
-| `authority` | component allowed to make a canonical decision | writer, transition, approval, learning projection authority |
+| `authority` | component allowed to make a canonical decision | writer, transition, approval authority |
 | `Unit of Work` | synchronous atomic multi-repository write boundary | `unitOfWork`, `uow` only in narrow local code |
 | `receipt` | immutable evidence that an operation or decision occurred | explicit type prefix, identifier, timestamp |
 | `Gateway` | external browser identity and channel boundary | capitalized when referring to the deployment component |
@@ -25,6 +25,6 @@ Use the same term in domain code, ports, persistence, events, ABI, tests, and do
 - Name ports for the capability they expose and adapters for the technology they implement.
 - Name schema files by surface and major version. Keep HTTP paths plural and kebab-cased.
 - Use ISO 8601 UTC timestamps in the v1 ABI and explicit units in configuration names such as `_MS`.
-- Preserve domain capitalization in prose: Core, Web Console, Memory, Learning, Supervisor, Gateway, TaskRun, Attempt.
+- Preserve domain capitalization in prose: Core, Web Console, Memory, Supervisor, Gateway, TaskRun, Attempt.
 
 Public names must identify the single current DTO, versioned route, and responsibility-owned application surface.

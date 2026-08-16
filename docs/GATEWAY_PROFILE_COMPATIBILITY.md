@@ -7,14 +7,14 @@ This matrix is the release boundary for the full-feature Core/Gateway contract. 
 | Component | Required value |
 | --- | --- |
 | Core | `0.8.5` |
-| SQLite | `tagent-core/0.8`, version `1` |
+| SQLite | `tagent-core/0.8`, version `2` |
 | Capability registry | `GET /api/v1/capability-profiles` |
-| Profile versions | all eight profiles at `1.0` |
+| Profile versions | all five profiles at `1.0` |
 | ABI SDK | `@tagent/abi@0.8.5` |
 | Typed client SDK | `@tagent/core-client@0.8.5` |
 | Node.js | `>=24.18.1` for the SDK; Core release uses exactly `24.18.1` |
 
-The eight profile identities are `operator.session-settings.v1`, `operator.session-inbox.v1`, `operator.context-manifest.v1`, `operator.skills.v1`, `admin.memory.v1`, `admin.learning.v1`, `admin.workflow.v1`, and `admin.autonomy.v1`.
+The five profile identities are `operator.session-settings.v1`, `operator.session-inbox.v1`, `operator.context-manifest.v1`, `operator.skills.v1`, and `admin.memory.v1`.
 
 ## Supported tuple
 

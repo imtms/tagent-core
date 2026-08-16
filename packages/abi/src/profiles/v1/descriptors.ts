@@ -32,7 +32,7 @@ type EndpointInput = {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   path: string;
   requiredScopes: ProfileServiceScope[];
-  resourceScope: "none" | "principal" | "workspace" | "session" | "task_run" | "memory" | "workflow" | "autonomy";
+  resourceScope: "none" | "principal" | "workspace" | "session" | "task_run" | "memory";
   recovery?: typeof none | typeof exactReplay | ReturnType<typeof receipt>;
 };
 
@@ -131,38 +131,6 @@ export const CAPABILITY_PROFILE_DESCRIPTORS: CapabilityProfileDescriptor[] = [
       endpoint({ id: "admin.memory.capture", method: "POST", path: "/api/v1/admin/profiles/memory/captures", requiredScopes: ["admin:memory:write"], resourceScope: "memory", recovery: receipt("/api/v1/admin/operations/:requestId") }),
       endpoint({ id: "admin.memory.govern", method: "POST", path: "/api/v1/admin/profiles/memory/records/:memoryId/govern", requiredScopes: ["admin:memory:write"], resourceScope: "memory", recovery: receipt("/api/v1/admin/operations/:requestId") }),
       endpoint({ id: "admin.memory.forget", method: "DELETE", path: "/api/v1/admin/profiles/memory/records/:memoryId", requiredScopes: ["admin:memory:write"], resourceScope: "memory", recovery: receipt("/api/v1/admin/operations/:requestId") }),
-      endpoint({ id: "admin.operations.get", method: "GET", path: "/api/v1/admin/operations/:requestId", requiredScopes: ["admin:operations:read"], resourceScope: "principal" }),
-    ],
-  }),
-  profile({
-    id: "admin.learning.v1", audience: "admin", pagination, retention: durableRetention,
-    endpoints: [
-      endpoint({ id: "admin.learning.settings.get", method: "GET", path: "/api/v1/admin/profiles/learning/settings", requiredScopes: ["admin:learning:read"], resourceScope: "principal" }),
-      endpoint({ id: "admin.learning.settings.update", method: "PATCH", path: "/api/v1/admin/profiles/learning/settings", requiredScopes: ["admin:learning:write"], resourceScope: "principal", recovery: receipt("/api/v1/admin/operations/:requestId") }),
-      endpoint({ id: "admin.learning.center.get", method: "GET", path: "/api/v1/admin/profiles/learning/sessions/:sessionId", requiredScopes: ["admin:learning:read"], resourceScope: "session" }),
-      endpoint({ id: "admin.learning.policy.update", method: "PUT", path: "/api/v1/admin/profiles/learning/task-runs/:taskRunId/policy", requiredScopes: ["admin:learning:write"], resourceScope: "task_run", recovery: exactReplay }),
-      endpoint({ id: "admin.operations.get", method: "GET", path: "/api/v1/admin/operations/:requestId", requiredScopes: ["admin:operations:read"], resourceScope: "principal" }),
-    ],
-  }),
-  profile({
-    id: "admin.workflow.v1", audience: "admin", pagination, retention: durableRetention,
-    endpoints: [
-      endpoint({ id: "admin.workflows.list", method: "GET", path: "/api/v1/admin/profiles/workflows", requiredScopes: ["admin:workflow:read"], resourceScope: "workflow" }),
-      endpoint({ id: "admin.workflows.activation_request", method: "POST", path: "/api/v1/admin/profiles/workflows/:workflowId/activation-requests", requiredScopes: ["admin:workflow:write"], resourceScope: "workflow", recovery: receipt("/api/v1/admin/operations/:requestId") }),
-      endpoint({ id: "admin.workflows.activate", method: "POST", path: "/api/v1/admin/profiles/workflows/:workflowId/activate", requiredScopes: ["admin:workflow:write"], resourceScope: "workflow", recovery: exactReplay }),
-      endpoint({ id: "admin.workflows.suspend", method: "POST", path: "/api/v1/admin/profiles/workflows/:workflowId/suspend", requiredScopes: ["admin:workflow:write"], resourceScope: "workflow", recovery: exactReplay }),
-      endpoint({ id: "admin.workflows.delete", method: "DELETE", path: "/api/v1/admin/profiles/workflows/:workflowId", requiredScopes: ["admin:workflow:write"], resourceScope: "workflow", recovery: exactReplay }),
-      endpoint({ id: "admin.workflows.restore", method: "POST", path: "/api/v1/admin/profiles/workflows/:workflowId/restore", requiredScopes: ["admin:workflow:write"], resourceScope: "workflow", recovery: exactReplay }),
-      endpoint({ id: "admin.operations.get", method: "GET", path: "/api/v1/admin/operations/:requestId", requiredScopes: ["admin:operations:read"], resourceScope: "principal" }),
-    ],
-  }),
-  profile({
-    id: "admin.autonomy.v1", audience: "admin", pagination, retention: durableRetention,
-    endpoints: [
-      endpoint({ id: "admin.autonomy.approvals.list", method: "GET", path: "/api/v1/admin/profiles/autonomy/approvals", requiredScopes: ["admin:autonomy:read"], resourceScope: "autonomy" }),
-      endpoint({ id: "admin.autonomy.approvals.decide", method: "POST", path: "/api/v1/admin/profiles/autonomy/approvals/:approvalId/decision", requiredScopes: ["admin:autonomy:decide"], resourceScope: "autonomy", recovery: exactReplay }),
-      endpoint({ id: "admin.autonomy.approvals.revoke", method: "POST", path: "/api/v1/admin/profiles/autonomy/approvals/:approvalId/revoke", requiredScopes: ["admin:autonomy:decide"], resourceScope: "autonomy", recovery: exactReplay }),
-      endpoint({ id: "admin.autonomy.approvals.execute", method: "POST", path: "/api/v1/admin/profiles/autonomy/approvals/:approvalId/execute", requiredScopes: ["admin:autonomy:execute"], resourceScope: "autonomy", recovery: receipt("/api/v1/admin/operations/:requestId") }),
       endpoint({ id: "admin.operations.get", method: "GET", path: "/api/v1/admin/operations/:requestId", requiredScopes: ["admin:operations:read"], resourceScope: "principal" }),
     ],
   }),

@@ -75,7 +75,6 @@ describe("modular monolith architecture", () => {
       "packages/core-client/package.json",
       "packages/execution/package.json",
       "packages/governance/package.json",
-      "packages/learning/package.json",
       "packages/memory/package.json",
       "adapters/http-fastify/package.json",
       "adapters/persistence-sqlite/package.json",

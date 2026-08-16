@@ -1,20 +1,16 @@
 import type {
   JsonObject,
-  ConsoleAutonomyApproval,
   ConsoleCaptureJob,
   ConsoleContextManifest,
   ConsoleCoreMemorySnapshot,
-  ConsoleLearningCenterData,
-  ConsoleLearningFeatureState,
   ConsoleMemoryExport,
   ConsoleMemoryStatusResult,
   ConsoleMessage,
   ConsoleRecallResult,
   ConsoleReindexJob,
-  ConsoleRuntimeStatus,
+  AdminConfigStatus,
   ConsoleSessionInboxItem,
   ConsoleTaskRun,
-  ConsoleWorkflowDefinition,
 } from "@tagent/abi";
 import { loadCoreAbi, type CoreAbi } from "./abi-loader.js";
 
@@ -27,15 +23,10 @@ function objectPayload(abi: CoreAbi, payload: unknown): JsonObject {
   return abi.decodeAbi(abi.JsonObjectSchema, payload);
 }
 
-async function runtimeStatus(payload: unknown): Promise<ConsoleRuntimeStatus | null> {
+async function runtimeStatus(payload: unknown): Promise<AdminConfigStatus | null> {
   if (payload === null) return null;
   const abi = await loadCoreAbi();
-  return abi.decodeAbi(abi.ConsoleRuntimeStatusSchema, payload);
-}
-
-async function learningFeatureState(payload: unknown): Promise<ConsoleLearningFeatureState> {
-  const abi = await loadCoreAbi();
-  return abi.decodeAbi(abi.ConsoleLearningFeatureStateSchema, payload);
+  return abi.decodeAbi(abi.AdminConfigStatusSchema, payload);
 }
 
 async function messages(payload: unknown): Promise<ConsoleMessage[]> {
@@ -95,11 +86,6 @@ async function jsonObject(payload: unknown): Promise<JsonObject> {
   return objectPayload(abi, payload);
 }
 
-async function autonomyApproval(payload: unknown): Promise<ConsoleAutonomyApproval> {
-  const abi = await loadCoreAbi();
-  return abi.decodeAbi(abi.ConsoleAutonomyApprovalSchema, payload);
-}
-
 async function captureJobs(payload: unknown): Promise<ConsoleCaptureJob[]> {
   const abi = await loadCoreAbi();
   return arrayPayload(payload).map((item) => abi.decodeAbi(abi.ConsoleCaptureJobSchema, item));
@@ -152,18 +138,7 @@ async function forgetResult(payload: unknown): Promise<{ records: number; topics
   return { records: value.records, topics: value.topics, objects: value.objects };
 }
 
-async function learningCenter(payload: unknown): Promise<ConsoleLearningCenterData> {
-  const abi = await loadCoreAbi();
-  return abi.decodeAbi(abi.ConsoleLearningCenterDataSchema, payload);
-}
-
-async function workflowDefinition(payload: unknown): Promise<ConsoleWorkflowDefinition> {
-  const abi = await loadCoreAbi();
-  return abi.decodeAbi(abi.ConsoleWorkflowDefinitionSchema, payload);
-}
-
 export const ConsoleDecode = {
-  autonomyApproval,
   captureJobId,
   captureJobs,
   contextManifests,
@@ -172,8 +147,6 @@ export const ConsoleDecode = {
   inboxItem,
   inboxItems,
   jsonObject,
-  learningCenter,
-  learningFeatureState,
   memoryExport,
   memoryStatus,
   messages,
@@ -185,5 +158,4 @@ export const ConsoleDecode = {
   startedRun,
   submissionResult,
   taskRun,
-  workflowDefinition,
 } as const;

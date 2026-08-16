@@ -1,49 +1,6 @@
 import type { AdmissionCoordinator } from "@tagent/admission";
 import type { ExecutionCoordinator } from "@tagent/execution";
 
-import type { LearningApplication } from "@tagent/learning/application";
-import type {
-  CommunicationDimension,
-  WorkflowFeedbackSignal,
-  WorkflowSpec,
-} from "@tagent/learning";
-
-export type HttpWorkflowSpec = WorkflowSpec;
-export type HttpWorkflowFeedbackSignal = WorkflowFeedbackSignal;
-export type HttpCommunicationDimension = CommunicationDimension;
-export type HttpWorkflowApplicationInput =
-  Parameters<LearningApplication["recordWorkflowApplication"]>[0];
-
-export type HttpLearningApplicationPort = Pick<LearningApplication,
-  | "teachWorkflow" | "listWorkflows" | "getWorkflow" | "requestWorkflowActivation"
-  | "recordWorkflowApplication" | "getLearningCenter" | "decideWorkflowProposal"
-  | "requestWorkflowProposalApplication" | "runWorkflowDistiller" | "retryWorkflowDistillation"
-  | "listDeadLetterDistillations" | "executeWorkflowEvaluation" | "verifyWorkflowEvaluation"
-  | "requestWorkflowPromotion" | "listAutonomyApprovals" | "listAutonomyApprovalsPage"
-  | "getAutonomyApproval" | "decideAutonomyApproval" | "revokeAutonomyApproval"
-  | "reviseWorkflow" | "setRunLearningPolicy" | "getRunLearningPolicy"
-  | "recordWorkflowFeedback" | "setCommunicationPreference" | "listCommunicationProfiles"
-  | "lockCommunicationProfile" | "listLearningEvents" | "listCorrections" | "recordCorrection"
-  | "listFeedbackAttribution" | "drainFeedbackAttribution"
->;
-
-interface HttpWorkflowGovernanceApplicationPort {
-  activateWorkflow(workflowId: string, revisionId?: string, approvalId?: string): unknown;
-  suspendWorkflow(workflowId: string, reason?: string): unknown;
-  rollbackWorkflow(workflowId: string, revisionId: string, approvalId?: string): unknown;
-  forgetWorkflow(workflowId: string, reason?: string, gracePeriodMs?: number): unknown;
-  restoreWorkflow(workflowId: string): unknown;
-  applyWorkflowProposal(id: string, actor: string, approvalId?: string): unknown;
-  promoteWorkflow(workflowId: string, revisionId: string, canaryPercent?: number, maxFailureDelta?: number, approvalId?: string): unknown;
-  executeAutonomyApproval(id: string, actor: string): unknown;
-  updateLearningSettings(input: {
-    memoryEnabled?: boolean;
-    learningEnabled?: boolean;
-    autoExecutionEnabled?: boolean;
-    reason?: string;
-  }): unknown;
-}
-
 type HttpAdmissionApplicationPort = Pick<AdmissionCoordinator,
   | "enqueueSessionInput"
   | "updateSessionInputProfile" | "reorderSessionInputsProfile"
@@ -66,8 +23,6 @@ type HttpExecutionApplicationPort = Pick<ExecutionCoordinator,
 
 export type HttpApplicationPort = HttpAdmissionApplicationPort
   & HttpExecutionApplicationPort
-  & HttpLearningApplicationPort
-  & HttpWorkflowGovernanceApplicationPort
   & HttpWorkspaceGoalApplicationPort
   & {
     listSkills(): unknown;

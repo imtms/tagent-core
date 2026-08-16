@@ -151,28 +151,27 @@ describe("SqlitePersistence", () => {
       lastTranscriptSeq: 0,
     });
     store.db.exec(`
-      CREATE TRIGGER reject_learning_projection
-      BEFORE INSERT ON integration_outbox
+      CREATE TRIGGER reject_checkpoint_finalization
+      BEFORE UPDATE ON run_checkpoints
       BEGIN
-        SELECT RAISE(ABORT, 'projection enqueue rejected');
+        SELECT RAISE(ABORT, 'checkpoint finalization rejected');
       END
     `);
 
-    expect(() => failRun("rejected transition")).toThrow("projection enqueue rejected");
+    expect(() => failRun("rejected transition")).toThrow("checkpoint finalization rejected");
     expect(adapter.taskRuns.getRun(run.id)).toMatchObject({
       status: "running",
       lastEventSeq: initial.seq,
       blockedReason: "",
     });
     expect(adapter.events.listEvents(run.id)).toEqual([initial]);
-    expect(store.db.prepare("SELECT COUNT(*) count FROM integration_outbox").get()).toEqual({ count: 0 });
     expect(adapter.checkpoints.getCheckpoint(run.id)).toMatchObject({
       active: true,
       assistantPartial: "partial",
       lastEventSeq: initial.seq,
     });
 
-    store.db.exec("DROP TRIGGER reject_learning_projection");
+    store.db.exec("DROP TRIGGER reject_checkpoint_finalization");
     const transitioned = failRun("accepted transition").transitions[0]!.event;
     expect(transitioned).toMatchObject({ seq: initial.seq + 1, type: "run.failed" });
     expect(adapter.events.listEvents(run.id).map(({ seq, type }) => ({ seq, type }))).toEqual([
@@ -180,7 +179,7 @@ describe("SqlitePersistence", () => {
       { seq: 2, type: "run.failed" },
     ]);
     expect(adapter.checkpoints.getCheckpoint(run.id)).toMatchObject({ active: false });
-    expect(store.db.prepare("SELECT COUNT(*) count FROM integration_outbox").get()).toEqual({ count: 1 });
+    expect(store.db.prepare("SELECT COUNT(*) count FROM integration_outbox").get()).toEqual({ count: 0 });
   });
 
   it("preserves consumer generations and ACK validation", () => {
@@ -228,76 +227,6 @@ describe("SqlitePersistence", () => {
       .toThrow("Core writer authority lost");
     expect(adapter.sessions.listSessions()).toEqual([existing]);
     expect(store.getSession(existing.id)).toEqual(existing);
-    expect(currentLease.release()).toBe(true);
-  });
-
-  it("guards every learning-ledger mutation while retaining stale-owner reads", () => {
-    const store = new Store(":memory:");
-    stores.push(store);
-    const firstLease = CoreWriterLease.claim(store.db, {
-      ownerId: "learning-owner-a",
-      pid: process.pid,
-      host: "test-host",
-    })!;
-    const adapter = createGuardedSqlitePersistence(store, new WriterFenceGuard(store.db, firstLease.authority));
-    const identity = {
-      id: "profile-1",
-      subjectId: "session:learning",
-      scopeType: "session",
-      scopeId: "learning",
-      timestamp: Date.now(),
-    };
-    const created = adapter.learning.learningLedger.updateCommunicationProfile(identity, () => ({
-      valuesJson: JSON.stringify({ tone: "concise" }),
-      evidenceJson: "{}",
-      sourceType: "explicit_user",
-      changeSummary: "initial preference",
-    }));
-    expect(firstLease.release()).toBe(true);
-    const currentLease = CoreWriterLease.claim(store.db, {
-      ownerId: "learning-owner-b",
-      pid: process.pid,
-      host: "test-host",
-    })!;
-
-    expect(adapter.learning.learningLedger.getCommunicationProfile(created.id)?.id).toBe(created.id);
-    expect(() => adapter.learning.learningLedger.setCommunicationProfileLocked(created.id, true, Date.now()))
-      .toThrow("Core writer authority lost");
-    expect(adapter.learning.learningLedger.getCommunicationProfile(created.id)?.locked).toBe(false);
-    expect(currentLease.release()).toBe(true);
-  });
-
-  it("guards workflow mutations while retaining stale-owner reads", () => {
-    const store = new Store(":memory:");
-    stores.push(store);
-    const firstLease = CoreWriterLease.claim(store.db, {
-      ownerId: "workflow-owner-a",
-      pid: process.pid,
-      host: "test-host",
-    })!;
-    const adapter = createGuardedSqlitePersistence(store, new WriterFenceGuard(store.db, firstLease.authority));
-    const run = adapter.taskRuns.createRun(adapter.sessions.createSession().id, "workflow policy");
-    adapter.workflow.workflow.upsertRunLearningPolicy({
-      runId: run.id,
-      policy: "allow",
-      reason: "initial",
-      updatedAt: Date.now(),
-    });
-    expect(firstLease.release()).toBe(true);
-    const currentLease = CoreWriterLease.claim(store.db, {
-      ownerId: "workflow-owner-b",
-      pid: process.pid,
-      host: "test-host",
-    })!;
-
-    expect(adapter.workflow.workflow.getRunLearningPolicy(run.id)?.reason).toBe("initial");
-    expect(() => adapter.workflow.workflow.upsertRunLearningPolicy({
-      runId: run.id,
-      policy: "deny",
-      reason: "must not persist",
-      updatedAt: Date.now(),
-    })).toThrow("Core writer authority lost");
-    expect(adapter.workflow.workflow.getRunLearningPolicy(run.id)?.reason).toBe("initial");
     expect(currentLease.release()).toBe(true);
   });
 

@@ -4,7 +4,6 @@ import { httpArtifactContent } from "@tagent/core-service/composition";
 import type { RunId } from "@tagent/execution/domain";
 import type { RuntimeTransitionCommand } from "@tagent/execution/ports";
 import type { AppDependencies, HttpPersistencePort } from "@tagent/http-fastify";
-import type { LearningServicePersistencePort, SettingsRepository, WorkflowLearningPersistencePort } from "@tagent/learning/ports";
 import { SqlitePersistence, type Store } from "@tagent/persistence-sqlite";
 import type { SynchronousResult } from "@tagent/persistence-sqlite/unit-of-work";
 
@@ -62,18 +61,6 @@ export function cancelTaskRun(store: Store, runId: RunId, reason = "Cancelled by
 
 export function corePersistence(store: Store): CoreApplicationPersistencePort {
   return testPersistence(store);
-}
-
-export function workflowPersistence(store: Store): WorkflowLearningPersistencePort {
-  return testPersistence(store).workflow;
-}
-
-export function learningPersistence(store: Store): LearningServicePersistencePort {
-  return testPersistence(store).learning;
-}
-
-export function learningSettingsPersistence(store: Store): SettingsRepository {
-  return testPersistence(store).settings;
 }
 
 export function httpPersistence(store: Store): HttpPersistencePort {

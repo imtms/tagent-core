@@ -104,7 +104,7 @@ Runtime failures are classified separately from settled candidate quality. Known
 
 ## Approval boundary
 
-The Supervisor may request approval but cannot approve its own action. Governance owns canonical approval receipts. Early parallel related-task starts, high-impact operations, and active Learning actions remain subject to their explicit capability and approval policies.
+The Supervisor may request approval but cannot approve its own action. Governance owns canonical approval receipts. Early parallel related-task starts and high-impact operations remain subject to their explicit capability and approval policies.
 
 The Web Console surfaces pending TaskRun approvals directly above the chat composer, where the operator can approve or reject them without opening the audit sidebar. A compact `Off / Relaxed / Strict` selector appears before the input itself; the sidebar remains inspection-only and explains the frozen profile of the selected Run.
 

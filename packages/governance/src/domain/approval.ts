@@ -1,4 +1,4 @@
-export type ApprovalSource = "run" | "workflow";
+export type ApprovalSource = "run";
 
 export interface ApprovalRef {
   source: ApprovalSource;
@@ -17,7 +17,7 @@ export type ApprovalStatus =
 export type ApprovalRisk = "low" | "medium" | "high";
 
 export interface ApprovalSubject {
-  kind: "task_run" | "workflow";
+  kind: "task_run";
   id: string;
 }
 
@@ -32,7 +32,6 @@ export interface ApprovalScope {
 }
 
 export const RUN_APPROVAL_SCOPE_TYPE = "session" as const;
-export const WORKFLOW_APPROVAL_SCOPE_TYPE = "workflow_scope" as const;
 
 export interface ApprovalReuse {
   mode: "one_time" | "reusable";
@@ -43,20 +42,12 @@ export interface ApprovalReuse {
 export type CanonicalApprovalAction =
   | "task_run.resume"
   | "task_run.start_parallel"
-  | "task_run.execute_external"
-  | "workflow.activate"
-  | "workflow.revision.apply"
-  | "workflow.canary.start"
-  | "workflow.execute";
+  | "task_run.execute_external";
 
 export const APPROVAL_ACTION_MAP = {
   resume_taskrun: "task_run.resume",
   start_parallel_taskrun: "task_run.start_parallel",
   execute_external_action: "task_run.execute_external",
-  activate_workflow: "workflow.activate",
-  apply_revision: "workflow.revision.apply",
-  start_canary: "workflow.canary.start",
-  execute_workflow: "workflow.execute",
 } as const satisfies Record<string, CanonicalApprovalAction>;
 
 export function canonicalApprovalAction(action: string): CanonicalApprovalAction | undefined {
@@ -64,14 +55,12 @@ export function canonicalApprovalAction(action: string): CanonicalApprovalAction
 }
 
 const runApprovalActions = new Set(["resume_taskrun", "start_parallel_taskrun", "execute_external_action"]);
-const workflowLearningActions = new Set(["activate_workflow", "apply_revision", "start_canary", "execute_workflow"]);
 
 export function canonicalApprovalActionForSource(
   source: ApprovalSource,
   action: string,
 ): CanonicalApprovalAction | undefined {
-  const allowed = source === "run" ? runApprovalActions : workflowLearningActions;
-  return allowed.has(action) ? canonicalApprovalAction(action) : undefined;
+  return source === "run" && runApprovalActions.has(action) ? canonicalApprovalAction(action) : undefined;
 }
 
 export function canonicalApprovalStatus(
@@ -79,10 +68,7 @@ export function canonicalApprovalStatus(
   status: string,
   reuse?: Pick<ApprovalReuse, "maxUses" | "usedCount">,
 ): ApprovalStatus | undefined {
-  if (source === "workflow" && status === "executed") return "consumed";
-  const allowed = source === "run"
-    ? ["pending", "approved", "rejected", "superseded", "consumed"]
-    : ["pending", "approved", "rejected", "revoked", "expired"];
+  const allowed = ["pending", "approved", "rejected", "superseded", "consumed"];
   if (!allowed.includes(status)) return undefined;
   if (status === "approved" && reuse && reuse.maxUses !== null
     && reuse.usedCount >= reuse.maxUses) return "consumed";

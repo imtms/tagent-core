@@ -63,7 +63,6 @@ export class AttemptExecutor {
       );
       this.state.persistence.sessions.appendMessage(run.sessionId, "assistant", `Run failed: ${message}`);
       publishTransitionOutcome(this.dependencies.eventHub, transition);
-      this.dependencies.settlement.projectWorkflowExperience(run.id);
     };
     const checkIdle = () => {
       idleTimer = undefined;

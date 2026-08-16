@@ -18,7 +18,7 @@ systemd -> stable Core Host -> replaceable Core Generation -> SQLite / Runtime /
 
 The Host verifies immutable releases, supervises exactly one Generation, bounds crash restart/backoff, and performs activation/rollback. It does not import application composition, listen for HTTP, or open the Core database. The Generation remains the modular monolith and the only database writer. This is not a second updater service.
 
-The v1 Channel, base Operator profile, independent Operator Read profile, and eight full-feature capability profiles are ready for Gateway integration. Core readiness cannot prove Gateway-local identity, persistence, routing, or external delivery; both repositories must pass their own release gates.
+The v1 Channel, base Operator profile, independent Operator Read profile, and five capability profiles are ready for Gateway integration. Core readiness cannot prove Gateway-local identity, persistence, routing, or external delivery; both repositories must pass their own release gates.
 
 ## Production prerequisites
 
@@ -80,7 +80,7 @@ Use a Core-before-Gateway order: establish writer readiness, validate replay and
 6. require base capabilities to report schema version `2`, current catalogs, Operator endpoints, ready Approval, receipt recovery, retention, limits, and `operator.read.v1`;
 7. validate Operator Read and every enabled capability-profile summary/detail using the real Gateway principal;
 8. start one Gateway consumer, claim a generation, replay, persist, and then ACK;
-9. run `scripts/gateway-readiness-probe.mjs` and require zero lag/ACK gaps, no unknown or stale receipts, and `learningProjectionReady=true`;
+9. run `scripts/gateway-readiness-probe.mjs` and require zero lag/ACK gaps plus no unknown or stale receipts;
 10. deploy the matching Web artifact with its Gateway/Core origin and reopen traffic.
 
 See [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for exact commands and thresholds.

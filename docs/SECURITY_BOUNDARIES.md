@@ -13,18 +13,14 @@ If credentials are configured, Core fails closed. Requests must present an opaqu
 ```text
 sessions:read       sessions:write
 runs:read           runs:control
-events:consume      workflows:teach
-workflows:govern    workflows:approve
+events:consume
 admin               internal
 operator:session-settings:read   operator:session-settings:write
 operator:inbox:read              operator:inbox:write
 operator:inbox:control           operator:context-manifests:read
 operator:skills:read             operator:skills:write
 admin:memory:read                admin:memory:write
-admin:learning:read              admin:learning:write
-admin:workflow:read              admin:workflow:write
-admin:autonomy:read              admin:autonomy:decide
-admin:autonomy:execute           admin:operations:read
+admin:operations:read
 ```
 
 A credential may bind a subject and `user`, `workspace`, `project`, or `session` resource scopes. Core takes these values only from server configuration. Profile mutation headers may carry delegated actor/request identifiers for audit correlation, but they grant no scope and cannot replace the authenticated principal.
@@ -60,8 +56,6 @@ The following are server-owned and cannot be asserted by a caller:
 - caller-owned cancellation through Runtime, subprocess, workspace, Artifact, Memory, and history seams, including distinct before-dispatch and after-invocation failure codes;
 - hash-verified Attempt request envelopes persisted before provider network dispatch;
 - event-consumer generation and acknowledged sequence;
-- internal evaluation receipt verification;
-- the single Learning integration consumer, delivery generation, checkpoint, and effect receipts.
 
 State-changing handlers persist through guarded repositories and a synchronous Unit of Work. Losing writer authority clears readiness and shuts Core down.
 
@@ -69,6 +63,6 @@ State-changing handlers persist through guarded repositories and a synchronous U
 
 Provider credentials are named in configuration by `CredentialReference` and resolved only inside trusted adapters for an outbound operation. Plaintext values must not enter `AppConfig`, TaskRun contracts, SQLite request envelopes, events, transcripts, tool payloads, browser bundles, source control, or Pi auth files. Rotation takes effect on the next resolution without rebuilding durable state. Protect SQLite/WAL/SHM, PostgreSQL, Cold Memory, logs, artifacts, release manifests, and backups according to their data sensitivity.
 
-Memory capture and Learning policy reduce accidental persistence and promotion; they do not replace encryption, authorization, data retention review, or human approval.
+Memory capture policy reduces accidental persistence; it does not replace encryption, authorization, data retention review, or human approval.
 
 See [WEB_CONSOLE_SECURITY.md](WEB_CONSOLE_SECURITY.md), [PERSISTENCE_AND_RECOVERY.md](PERSISTENCE_AND_RECOVERY.md), and the root [security policy](../SECURITY.md).

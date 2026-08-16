@@ -12,22 +12,6 @@ const PUBLIC_METHODS = {
     "followUp", "steer", "compact", "cancel", "resume", "rejectRunApproval", "submitUserInput",
     "subscribe", "replay", "getRun", "getCurrentAttemptId",
   ],
-  governance: [
-    "activateWorkflow", "suspendWorkflow", "rollbackWorkflow", "forgetWorkflow", "restoreWorkflow",
-    "applyWorkflowProposal", "promoteWorkflow", "executeAutonomyApproval", "updateLearningSettings",
-  ],
-  learning: [
-    "teachWorkflow", "listWorkflows", "getWorkflow", "requestWorkflowActivation",
-    "recordWorkflowApplication", "getLearningCenter", "decideWorkflowProposal",
-    "requestWorkflowProposalApplication", "runWorkflowDistiller", "retryWorkflowDistillation",
-    "listDeadLetterDistillations", "executeWorkflowEvaluation", "verifyWorkflowEvaluation",
-    "requestWorkflowPromotion", "listAutonomyApprovals", "listAutonomyApprovalsPage",
-    "getAutonomyApproval", "decideAutonomyApproval", "revokeAutonomyApproval", "reviseWorkflow",
-    "setRunLearningPolicy", "getRunLearningPolicy", "recordWorkflowFeedback",
-    "setCommunicationPreference", "listCommunicationProfiles", "lockCommunicationProfile",
-    "listLearningEvents", "listCorrections", "recordCorrection", "listFeedbackAttribution",
-    "drainFeedbackAttribution",
-  ],
   workspaceGoals: ["generateWorkspaceGoalRoadmap", "startWorkspaceGoalRoadmapItem"],
   skills: [
     "listSkills", "listSkillsProfile", "getSkill", "getSkillProfile", "listSkillRevisions",
@@ -47,8 +31,6 @@ type SelectedMethods<Group extends keyof CoreApplicationServices> = Pick<
 export type CoreApplicationCoordinator =
   & SelectedMethods<"admission">
   & SelectedMethods<"execution">
-  & SelectedMethods<"governance">
-  & SelectedMethods<"learning">
   & SelectedMethods<"workspaceGoals">
   & SelectedMethods<"skills">;
 

@@ -26,7 +26,7 @@ export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencie
     return successEnvelope(request, sessions.listMessages(id, limit, beforeId));
   });
 
-  app.post("/api/v1/console/sessions/:id/inbox/:itemId/parallel-start-request", { onRequest: authorizeConsole(dependencies, "workflows:govern") }, async (request) => {
+  app.post("/api/v1/console/sessions/:id/inbox/:itemId/parallel-start-request", { onRequest: authorizeConsole(dependencies, "runs:control") }, async (request) => {
     const { id, itemId } = request.params as { id: string; itemId: string };
     const body = (request.body ?? {}) as { actor?: string; reason?: string };
     try { return successEnvelope(request, dependencies.service.requestParallelSessionInputApproval(id, itemId, body.actor ?? "session_governor", body.reason)); }

@@ -173,14 +173,4 @@ describe("dormant capability execution architecture", () => {
     expect(taskRunCommandHandler.text).toContain("service.rejectRunApproval");
   });
 
-  it("keeps Workflow autonomy commands on the versioned Admin surface", () => {
-    const adminRoutes = readFileSync(
-      path.join(repoRoot, "adapters/http-fastify/src/v1/admin-learning-console-routes.ts"),
-      "utf8",
-    );
-    expect(adminRoutes).toContain("/api/v1/admin/autonomy-approvals/:id/${action}");
-    expect(adminRoutes).toContain('action === "execute" ? service.executeAutonomyApproval');
-    expect(adminRoutes).toContain("service.decideAutonomyApproval");
-    expect(adminRoutes).not.toContain('/api/autonomy-approvals/');
-  });
 });

@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import {
-  AdminAutonomyApprovalsResponseSchema,
-  AdminLearningCenterResponseSchema,
   AdminMemoryStatusResponseSchema,
-  AdminWorkflowsResponseSchema,
   CAPABILITY_PROFILE_DESCRIPTORS,
   CapabilityProfileDetailResponseSchema,
   CapabilityProfileRegistryResponseSchema,
@@ -13,10 +10,7 @@ import {
   OperatorSkillCatalogResponseSchema,
   OperatorSkillResponseSchema,
   OperatorWorkspaceSkillsResponseSchema,
-  adminAutonomyApprovalsFixture,
-  adminLearningCenterFixture,
   adminMemoryStatusFixture,
-  adminWorkflowsFixture,
   capabilityProfileDetailFixtures,
   capabilityProfileRegistryFixture,
   decodeAbi,
@@ -55,9 +49,6 @@ export async function verifyGatewayProfileProvider(
     [OperatorSkillResponseSchema, operatorSkillResponseFixture],
     [OperatorWorkspaceSkillsResponseSchema, operatorWorkspaceSkillsFixture],
     [AdminMemoryStatusResponseSchema, adminMemoryStatusFixture],
-    [AdminLearningCenterResponseSchema, adminLearningCenterFixture],
-    [AdminWorkflowsResponseSchema, adminWorkflowsFixture],
-    [AdminAutonomyApprovalsResponseSchema, adminAutonomyApprovalsFixture],
   ];
   for (const [schema, fixture] of fixtures) decodeAbi(schema as never, fixture);
 

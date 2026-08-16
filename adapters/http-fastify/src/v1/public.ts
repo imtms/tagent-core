@@ -6,8 +6,6 @@ import type { V1ApiDependencies } from "./plugin.js";
 export function registerPublicV1Routes(app: FastifyInstance, dependencies: V1ApiDependencies): void {
   app.get("/api/v1/health", async (request, reply) => {
     const writer = dependencies.writerReadiness ? { ready: dependencies.writerReadiness.isWriterReady() } : undefined;
-    const learning = dependencies.learningControl?.snapshot();
-    const distillation = dependencies.distillationWorker?.snapshot() ?? { running: false, ready: false };
     const generation = dependencies.generationStatus?.() ?? undefined;
     if (writer && !writer.ready) reply.code(503);
     const data = {
@@ -15,8 +13,6 @@ export function registerPublicV1Routes(app: FastifyInstance, dependencies: V1Api
       service: "tagent-core",
       ...(writer ? { writer } : {}),
       ...(generation ? { generation } : {}),
-      learning,
-      distillation,
     };
     return successEnvelope(request, data);
   });

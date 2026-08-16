@@ -42,7 +42,6 @@
     "@tagent/execution": "0.8.5",
     "@tagent/governance": "0.8.5",
     "@tagent/http-fastify": "0.8.5",
-    "@tagent/learning": "0.8.5",
     "@tagent/memory": "0.8.5",
     "@tagent/persistence-sqlite": "0.8.5",
     "@tagent/runtime-pi": "0.8.5",

@@ -12,7 +12,6 @@ const callerBoundaryRoots = [
   "packages/admission/src",
   "packages/execution/src",
   "packages/governance/src",
-  "packages/learning/src",
   "packages/memory/src",
 ] as const;
 const rawSqlAdapterFiles = new Set(["packages/memory/src/postgres/postgres-adapter.ts"]);
@@ -106,7 +105,7 @@ function persistenceViolations(relativePath: string) {
 }
 
 describe("persistence caller boundaries", () => {
-  it("keeps application, HTTP, domains, runtime, tools, learning, and memory behind persistence ports", () => {
+  it("keeps application, HTTP, domains, runtime, tools, and memory behind persistence ports", () => {
     expect(callerBoundaryFiles.flatMap(persistenceViolations)).toEqual([]);
   });
 

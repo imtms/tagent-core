@@ -2,7 +2,6 @@ import type { ServiceCredential } from "./auth.js";
 import type {
   HttpApplicationPort,
   HttpArtifactContentPort,
-  HttpLearningControlPort,
   HttpMemoryPort,
   HttpPersistencePort,
   HttpRuntimeConfig,
@@ -19,8 +18,6 @@ export interface AppDependencies {
   memory?: HttpMemoryPort;
   artifacts?: HttpArtifactContentPort;
   closeResources?: () => Promise<void>;
-  distillationWorker?: { snapshot: () => Record<string, unknown> };
-  learningControl?: HttpLearningControlPort;
   writerReadiness?: HttpWriterReadiness;
   generationStatus?: () => Readonly<Record<string, unknown>> | null;
   onClose?: () => Promise<void>;

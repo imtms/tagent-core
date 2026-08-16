@@ -49,32 +49,16 @@ const REQUIRED_CAPABILITY_PROFILES = {
     "admin.memory.status", "admin.memory.recall", "admin.memory.records.list", "admin.memory.capture",
     "admin.memory.govern", "admin.memory.forget", "admin.operations.get",
   ],
-  "admin.learning.v1": [
-    "admin.learning.settings.get", "admin.learning.settings.update", "admin.learning.center.get",
-    "admin.learning.policy.update", "admin.operations.get",
-  ],
-  "admin.workflow.v1": [
-    "admin.workflows.list", "admin.workflows.activation_request", "admin.workflows.activate",
-    "admin.workflows.suspend", "admin.workflows.delete", "admin.workflows.restore", "admin.operations.get",
-  ],
-  "admin.autonomy.v1": [
-    "admin.autonomy.approvals.list", "admin.autonomy.approvals.decide",
-    "admin.autonomy.approvals.revoke", "admin.autonomy.approvals.execute", "admin.operations.get",
-  ],
 };
 const EXACT_REPLAY_PROFILE_ENDPOINTS = new Set([
   "operator.session_settings.update",
   "operator.session_inbox.reorder", "operator.session_inbox.update", "operator.session_inbox.decide",
   "operator.session_inbox.merge", "operator.session_inbox.delete",
   "operator.skills.create", "operator.skills.update", "operator.skills.delete", "operator.workspace_skills.replace",
-  "admin.learning.policy.update",
-  "admin.workflows.activate", "admin.workflows.suspend", "admin.workflows.delete", "admin.workflows.restore",
-  "admin.autonomy.approvals.decide", "admin.autonomy.approvals.revoke",
 ]);
 const DURABLE_RECEIPT_PROFILE_ENDPOINTS = new Set([
   "operator.session_inbox.start", "operator.session_inbox.retry_launch",
   "admin.memory.capture", "admin.memory.govern", "admin.memory.forget",
-  "admin.learning.settings.update", "admin.workflows.activation_request", "admin.autonomy.approvals.execute",
 ]);
 
 function tableExists(db, name) {
@@ -121,17 +105,6 @@ function readConsumer(db, consumerId, now) {
       ? null
       : Math.max(0, now - settled.oldestUpdatedAt),
   };
-}
-
-function readWatermarks(db) {
-  if (!tableExists(db, "learning_projection_checkpoint")) return [];
-  return db.prepare(`SELECT consumer,watermark,generation
-    FROM learning_projection_checkpoint ORDER BY consumer`).all();
-}
-
-function learningProjectionReady(db) {
-  return ["integration_outbox", "integration_consumer_delivery", "learning_projection_checkpoint", "effect_receipts"]
-    .every((table) => tableExists(db, table));
 }
 
 function readReceiptHealth(db, now) {
@@ -357,8 +330,7 @@ function severityFor(snapshot) {
     || (snapshot.receipts?.capabilityProfiles?.outcomeUnknown ?? 0) > 0
     || (snapshot.receipts?.commands?.oldestUncertainAgeMs ?? 0) >= RECEIPT_UNCERTAIN_CRITICAL_AGE_MS
     || (snapshot.receipts?.workspaceGoals?.oldestUncertainAgeMs ?? 0) >= RECEIPT_UNCERTAIN_CRITICAL_AGE_MS
-    || (snapshot.receipts?.capabilityProfiles?.oldestUncertainAgeMs ?? 0) >= RECEIPT_UNCERTAIN_CRITICAL_AGE_MS
-    || !snapshot.learningProjectionReady) return "critical";
+    || (snapshot.receipts?.capabilityProfiles?.oldestUncertainAgeMs ?? 0) >= RECEIPT_UNCERTAIN_CRITICAL_AGE_MS) return "critical";
   return "warning";
 }
 
@@ -388,8 +360,6 @@ async function main() {
       writerReleasedAt: writer.releasedAt,
       writerLeaseFresh: writer.leaseFresh,
       ...consumer,
-      learningProjectionReady: learningProjectionReady(db),
-      watermarks: readWatermarks(db),
       receipts: readReceiptHealth(db, now),
     };
   } finally {
@@ -440,10 +410,8 @@ async function main() {
     }
     if (databaseSnapshot.receipts.capabilityProfiles.outcomeUnknown > 0) reasons.push("profile_receipts_outcome_unknown");
   }
-  if (!databaseSnapshot.learningProjectionReady) reasons.push("learning_projection_storage");
-
   const snapshot = {
-    probeVersion: 6,
+    probeVersion: 7,
     database: path.resolve(database),
     healthUrl,
     capabilitiesUrl,

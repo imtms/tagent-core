@@ -1319,7 +1319,7 @@ a:focus-visible {
   backdrop-filter: blur(8px);
 }
 
-/* Memory and Learning centers */
+/* Memory center */
 .memory-overlay {
   padding: 24px;
 }
@@ -1496,70 +1496,6 @@ a:focus-visible {
 .memory-core textarea:focus {
   border-color: color-mix(in oklab, var(--accent) 60%, var(--border));
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 11%, transparent);
-}
-
-.learning-mode-banner {
-  border-color: var(--border);
-  border-left: 3px solid var(--warning);
-  background: var(--surface-muted);
-}
-
-.learning-mode-banner.active {
-  border-color: var(--border);
-  border-left-color: var(--success);
-  background: var(--surface-muted);
-}
-
-.autonomy-summary-card,
-.learning-workflow,
-.learning-audit-card {
-  border-color: var(--border);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-xs);
-}
-
-.autonomy-summary-card > span {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.approval-row.pending {
-  border-left-color: var(--warning);
-}
-
-.approval-row.approved {
-  border-left-color: var(--info);
-}
-
-.approval-row.executed {
-  border-left-color: var(--success);
-}
-
-.approval-row pre {
-  color: var(--foreground);
-  background: var(--surface-muted);
-}
-
-.learning-workflow button,
-.learning-audit-card button {
-  min-height: 28px;
-  padding: 0 8px;
-  color: var(--foreground);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-muted);
-  cursor: pointer;
-}
-
-.learning-workflow button:hover,
-.learning-audit-card button:hover {
-  color: var(--accent);
-  border-color: color-mix(in oklab, var(--accent) 35%, var(--border));
-  background: var(--accent-soft);
-}
-
-.learning-audit-card > div:not(.section-title) {
-  border-color: var(--border);
 }
 
 /* Chat-first workspace refinements */
@@ -2415,10 +2351,6 @@ a:focus-visible {
     height: 38px;
   }
 
-  .autonomy-summary,
-  .learning-grid {
-    padding-inline: 12px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

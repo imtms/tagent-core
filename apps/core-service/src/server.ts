@@ -8,27 +8,7 @@ import { createCoreApplication } from "./application/core-application-factory.js
 import type { CoreApplicationCoordinator } from "./application/core-application-coordinator.js";
 import { CoreHeartbeatDeadlineError, CoreLifecycle } from "./composition/core-lifecycle.js";
 import type { CoreApplicationPersistencePort } from "./application/ports/index.js";
-import { LearningProjectionRuntime } from "./composition/learning-projection-runtime.js";
-import { CanaryGovernanceRuntime } from "./composition/canary-governance-runtime.js";
-import { LearningBackgroundRuntimeCoordinator } from "./composition/learning-background-runtime-coordinator.js";
-import { OpenAiSemanticJudgeModelAdapter } from "./composition/semantic-judge-model-adapter.js";
 import { assembleHttpMemory } from "./composition/http-memory-adapter.js";
-import {
-  DistillationWorker,
-  LearningFeatureControl,
-  LearningService,
-  LearningWorkflowRevisionMaterializer,
-  SemanticJudge,
-  WorkflowLearningService,
-} from "@tagent/learning";
-import {
-  ActiveLearningProjectionWorker,
-  LearningServicesProjectionApplier,
-} from "@tagent/learning/application";
-import {
-  CanaryGovernanceWorker,
-  WorkflowGovernanceApplication,
-} from "@tagent/governance/application";
 import type { MemoryRuntime } from "@tagent/memory/composition";
 import {
   Store,
@@ -57,8 +37,6 @@ export interface BootstrappedCore {
 
 export interface CoreBackgroundWorkerStarter {
   startMemory(runtime: MemoryRuntime): void | Promise<void>;
-  startDistillation(worker: DistillationWorker): void | Promise<void>;
-  startLearningProjection?(runtime: LearningProjectionRuntime): void | Promise<void>;
 }
 
 export interface CoreBootstrapDependencies {
@@ -79,8 +57,6 @@ export interface CoreGenerationManagement {
 
 const defaultBackgroundWorkerStarter: CoreBackgroundWorkerStarter = Object.freeze({
   startMemory: (runtime: MemoryRuntime) => runtime.start(),
-  startDistillation: (worker: DistillationWorker) => worker.start(),
-  startLearningProjection: (runtime: LearningProjectionRuntime) => runtime.start(),
 });
 
 function assembleCoreApplicationPersistence(
@@ -105,9 +81,6 @@ function assembleCoreApplicationPersistence(
     supervisorDecisions: persistence.supervisorDecisions,
     runtime: persistence.runtime,
     supervisor: persistence.supervisor,
-    workflowGovernance: persistence.workflowGovernance,
-    learning: persistence.learning,
-    workflow: persistence.workflow,
     workspaceGoals: persistence.workspaceGoals,
   });
 }
@@ -145,13 +118,7 @@ export async function bootstrapCore(
   let lifecycle: CoreLifecycle | undefined;
   let app: HttpServer | undefined;
   let memoryRuntime: MemoryRuntime | null = null;
-  let distillationWorker: DistillationWorker | undefined;
-  let learningProjectionRuntime: LearningProjectionRuntime | undefined;
-  let canaryGovernanceRuntime: CanaryGovernanceRuntime | undefined;
-  let learningBackgroundRuntime: LearningBackgroundRuntimeCoordinator | undefined;
-  let canaryBackgroundRuntime: LearningBackgroundRuntimeCoordinator | undefined;
   let service: CoreApplicationCoordinator | undefined;
-  let unsubscribeLearning: (() => void) | undefined;
   let managedGeneration: CoreGenerationManagement | undefined;
   const backgroundWorkerStarter = dependencies.backgroundWorkerStarter ?? defaultBackgroundWorkerStarter;
 
@@ -177,34 +144,7 @@ export async function bootstrapCore(
       writerLease: writerConnection.writerLease,
       writerGuard: writerConnection.writerGuard,
       stopBackground: async () => {
-        unsubscribeLearning?.();
-        unsubscribeLearning = undefined;
         const failures: unknown[] = [];
-        try {
-          await canaryBackgroundRuntime?.close();
-        } catch (error) {
-          failures.push(error);
-        }
-        try {
-          await learningBackgroundRuntime?.close();
-        } catch (error) {
-          failures.push(error);
-        }
-        try {
-          await canaryGovernanceRuntime?.close();
-        } catch (error) {
-          failures.push(error);
-        }
-        try {
-          await learningProjectionRuntime?.close();
-        } catch (error) {
-          failures.push(error);
-        }
-        try {
-          await distillationWorker?.close();
-        } catch (error) {
-          failures.push(error);
-        }
         try {
           await memoryRuntime?.close();
         } catch (error) {
@@ -232,28 +172,6 @@ export async function bootstrapCore(
     store.runStartupRecovery(writerConnection.writerGuard);
 
     const credentialResolver = createEnvironmentCredentialResolver(process.env);
-    const learningControl = new LearningFeatureControl(persistence.settings, config.memory.enabled, {
-      learningEnabled: config.learning.enabledByDefault,
-      autoExecutionEnabled: config.learning.autoExecutionEnabledByDefault,
-    });
-    const semanticJudge = config.learning.semanticJudgeEnabled
-      && config.learning.semanticJudgeBaseUrl
-      && config.learning.semanticJudgeCredentialReference
-      && config.learning.semanticJudgeModel
-      ? new SemanticJudge({
-        model: new OpenAiSemanticJudgeModelAdapter({
-          baseUrl: config.learning.semanticJudgeBaseUrl,
-          resolveApiKey: async () => credentialResolver.resolve(config.learning.semanticJudgeCredentialReference!),
-          modelId: config.learning.semanticJudgeModel,
-          timeoutMs: config.learning.semanticJudgeTimeoutMs,
-        }),
-        maxAttempts: config.providerMaxRetries + 1,
-        minimumConfidence: config.learning.semanticJudgeMinimumConfidence,
-        cacheTtlMs: config.learning.semanticJudgeCacheTtlMs,
-        maxCallsPerMinute: config.learning.semanticJudgeMaxCallsPerMinute,
-      }, persistence.semanticCache)
-      : undefined;
-
     if (config.memory.enabled) {
       const { createMemoryRuntime } = await import("@tagent/memory/composition");
       const embeddingCredentialReference = config.memory.embeddingCredentialReference;
@@ -266,7 +184,7 @@ export async function bootstrapCore(
         resolveExtractorApiKey: extractorCredentialReference
           ? async () => credentialResolver.resolve(extractorCredentialReference)
           : undefined,
-      }, persistence.memory, semanticJudge);
+      }, persistence.memory);
     }
 
     service = createCoreApplication({
@@ -294,8 +212,6 @@ export async function bootstrapCore(
       },
       memory: memoryRuntime?.service,
       memoryScopeId: config.memory.enabled ? config.memory.workspaceScopeId : "default",
-      learningControl: learningControl,
-      semanticJudge: semanticJudge,
       startupOptions: { startupMode: "deferred" },
       projectRuleFiles: config.projectRuleFiles,
       toolArtifactMaxBytes: config.toolArtifactMaxBytes,
@@ -305,90 +221,15 @@ export async function bootstrapCore(
       service?.recoverContinuations();
       service?.recoverSessionInbox();
     });
-    const workflowService = new WorkflowLearningService(
-      persistence.workflow,
-      undefined,
-      learningControl,
-      semanticJudge,
-    );
-    const projectionLearningService = new LearningService(
-      persistence.learning,
-      memoryRuntime?.service,
-      config.memory.enabled ? config.memory.workspaceScopeId : "default",
-      semanticJudge,
-    );
-    distillationWorker = new DistillationWorker(workflowService, config.learning.distillationWorkerIntervalMs);
-    canaryGovernanceRuntime = new CanaryGovernanceRuntime(
-      new CanaryGovernanceWorker(
-        persistence.workflowGovernance,
-        new WorkflowGovernanceApplication(
-          persistence.workflowGovernance,
-          new LearningWorkflowRevisionMaterializer(),
-        ),
-      ),
-      {
-        intervalMs: config.learning.distillationWorkerIntervalMs,
-        onError: (error) => console.error("Canary Governance background tick failed", error),
-      },
-    );
-    const learningProjectionLeaseMs = Math.min(
-      Math.max(config.learning.distillationWorkerIntervalMs * 3, 30_000),
-      300_000,
-    );
-    const activeLearningProjectionWorker = new ActiveLearningProjectionWorker(
-      persistence.learningIntegration,
-      new LearningServicesProjectionApplier(projectionLearningService, workflowService),
-      {
-        owner: `core:${instanceLock.metadata.instanceId}:learning-projection-v1`,
-        leaseMs: learningProjectionLeaseMs,
-      },
-    );
-    learningProjectionRuntime = new LearningProjectionRuntime(
-      activeLearningProjectionWorker,
-      {
-        intervalMs: config.learning.distillationWorkerIntervalMs,
-        afterApplied: async () => {
-          await workflowService.drainSemanticLearningJobs();
-          await projectionLearningService.drainSemanticLearningJobs();
-          await projectionLearningService.drainFeedbackAttribution();
-        },
-      },
-    );
-    const startLearningProjection = () => backgroundWorkerStarter.startLearningProjection
-      ? backgroundWorkerStarter.startLearningProjection(learningProjectionRuntime!)
-      : defaultBackgroundWorkerStarter.startLearningProjection!(learningProjectionRuntime!);
-    learningBackgroundRuntime = new LearningBackgroundRuntimeCoordinator(
-      [
-        { name: "learning-projection", start: startLearningProjection, stop: () => learningProjectionRuntime!.stop() },
-        { name: "distillation", start: () => backgroundWorkerStarter.startDistillation(distillationWorker!), stop: () => distillationWorker!.stop() },
-      ],
-      [
-        { name: "learning-projection", start: startLearningProjection, stop: () => learningProjectionRuntime!.stop() },
-        { name: "distillation", start: () => backgroundWorkerStarter.startDistillation(distillationWorker!), stop: () => distillationWorker!.stop() },
-      ],
-    );
-    const canaryUnit = {
-      name: "canary-governance",
-      start: () => canaryGovernanceRuntime!.start(),
-      stop: () => canaryGovernanceRuntime!.stop(),
-    };
-    canaryBackgroundRuntime = new LearningBackgroundRuntimeCoordinator([canaryUnit], [canaryUnit]);
-    unsubscribeLearning = learningControl.onChange((state) => Promise.all([
-      learningBackgroundRuntime!.reconcile(state.learningEnabled),
-      canaryBackgroundRuntime!.reconcile(state.autoExecutionEnabled),
-    ]).then(() => undefined));
-
     const generationManagement = managedGeneration;
     app = createApp({
       persistence: httpPersistence,
       service,
       workspaceRoot: config.workspace,
-      runtimeConfig: { ...publicRuntimeConfig(config, store.getSchemaVersion()), ...learningControl.snapshot() },
+      runtimeConfig: publicRuntimeConfig(config, store.getSchemaVersion()),
       serviceCredentials: config.serviceCredentials,
       memory: memoryRuntime?.service ? assembleHttpMemory(memoryRuntime.service) : undefined,
       artifacts: httpArtifactContent,
-      distillationWorker,
-      learningControl,
       writerReadiness: lifecycle,
       generationStatus: generationManagement ? () => generationManagement.hostStatus() : undefined,
       onClose: () => lifecycle!.close(),
@@ -403,11 +244,6 @@ export async function bootstrapCore(
     await app.listen({ host: config.host, port: config.port });
     service.startBackgroundWork();
     if (memoryRuntime) await backgroundWorkerStarter.startMemory(memoryRuntime);
-    const initialLearningState = learningControl.snapshot();
-    await Promise.all([
-      learningBackgroundRuntime.reconcile(initialLearningState.learningEnabled),
-      canaryBackgroundRuntime.reconcile(initialLearningState.autoExecutionEnabled),
-    ]);
     lifecycle.markReady();
     managedGeneration?.announceReady(
       () => app!.close(),

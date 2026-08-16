@@ -67,12 +67,7 @@ export type TranscriptItem =
   | (TranscriptBase & { kind: "thinking"; text: string; redacted: boolean })
   | (TranscriptBase & { kind: "tool"; toolCallId: string; toolName: string; arguments: unknown; result: string; isError: boolean; error?: { name: string; code: string; message: string }; status: string });
 
-export type LearningFeatureState = ConsoleV1.ConsoleLearningFeatureState;
-export type RuntimeStatus = ConsoleV1.ConsoleRuntimeStatus;
-export type WorkflowRevision = ConsoleV1.ConsoleWorkflowRevision;
-export type WorkflowDefinition = ConsoleV1.ConsoleWorkflowDefinition;
-export type AutonomyApproval = ConsoleV1.ConsoleAutonomyApproval;
-export type LearningCenterData = ConsoleV1.ConsoleLearningCenterData;
+export type RuntimeStatus = import("@tagent/abi").AdminConfigStatus;
 export type MemoryKind = ConsoleV1.ConsoleMemoryKind;
 export type MemoryTier = ConsoleV1.ConsoleMemoryTier;
 export type MemoryStatus = ConsoleV1.ConsoleMemoryStatus;

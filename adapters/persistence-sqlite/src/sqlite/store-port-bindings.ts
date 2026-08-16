@@ -241,23 +241,5 @@ export function createStoreBackedPorts(
       reconcileSupervisorDecisionStatuses: mutate(store.reconcileSupervisorDecisionStatuses.bind(store)),
     }),
 
-    settings: Object.freeze({
-      getLearningSettings: query(store.getLearningSettings.bind(store)),
-    }),
-
-    semanticCache: Object.freeze({
-      getSemanticCacheEntry: query(store.getSemanticCacheEntry.bind(store)),
-      putSemanticCacheEntry: mutate(store.putSemanticCacheEntry.bind(store)),
-      deleteExpiredSemanticCacheEntries: mutate(store.deleteExpiredSemanticCacheEntries.bind(store)),
-    }),
-
-    semanticLearningJobs: Object.freeze({
-      enqueueSemanticLearningJob: mutate(store.enqueueSemanticLearningJob.bind(store)),
-      claimSemanticLearningJobs: mutate(store.claimSemanticLearningJobs.bind(store)),
-      renewSemanticLearningJob: mutate(store.renewSemanticLearningJob.bind(store)),
-      completeSemanticLearningJob: mutate(store.completeSemanticLearningJob.bind(store)),
-      failSemanticLearningJob: mutate(store.failSemanticLearningJob.bind(store)),
-    }),
-
   };
 }

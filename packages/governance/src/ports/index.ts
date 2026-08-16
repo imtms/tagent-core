@@ -1,15 +1,5 @@
 export type { ApprovalOptions, ApprovalRepository } from "./approval-repository.js";
 export type {
-  ApprovedWorkflowGovernanceCommit,
-  MaterializeWorkflowRevisionInput,
-  OwnedWorkflowGovernanceCommit,
-  WorkflowGovernanceMutationRepository,
-  WorkflowGovernancePersistencePort,
-  WorkflowGovernanceReaderRepository,
-  WorkflowGovernanceUnitOfWork,
-  WorkflowRevisionMaterializerPort,
-} from "./workflow-governance-port.js";
-export type {
   ApprovalAuthorizationCommit,
   ApprovalAuthorizationReceiptInput,
   ApprovalAuthorizationTransactionInput,

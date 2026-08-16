@@ -8,10 +8,7 @@ import type {
   ExecutionLease,
 } from "@tagent/execution/domain";
 import type { AttemptRepository } from "@tagent/execution/ports";
-import {
-  appendLearningProjection,
-  finalizeProjectionCheckpoint,
-} from "./learning-integration-event.js";
+import { finalizeAttemptProjectionCheckpoint } from "./attempt-projection-checkpoint.js";
 
 type AttemptRow = Omit<Attempt, "active"> & { active: number };
 
@@ -20,10 +17,7 @@ function asAttempt(row: AttemptRow | undefined): Attempt | undefined {
 }
 
 export class SqliteAttemptRepository implements AttemptRepository {
-  constructor(
-    private readonly db: Database.Database,
-    private readonly readTaskRunSnapshot: (runId: string) => unknown = () => null,
-  ) {}
+  constructor(private readonly db: Database.Database) {}
 
   getAttempt(attemptId: string): Attempt | undefined {
     return asAttempt(this.db.prepare(`SELECT id,run_id as runId,ordinal,trigger,status,active,version,
@@ -310,7 +304,7 @@ export class SqliteAttemptRepository implements AttemptRepository {
           VALUES (?,'assistant',?,?)`).run(run.sessionId, candidate.response, timestamp);
         this.db.prepare("UPDATE sessions SET updated_at=? WHERE id=?").run(timestamp, run.sessionId);
       }
-      finalizeProjectionCheckpoint(this.db, {
+      finalizeAttemptProjectionCheckpoint(this.db, {
         runId: attempt.runId,
         attemptId: attempt.id,
         attemptOrdinal: attempt.ordinal,
@@ -323,18 +317,6 @@ export class SqliteAttemptRepository implements AttemptRepository {
         randomUUID(), attempt.id, attempt.runId, attempt.ordinal, attempt.status, input.status,
         attempt.trigger, "terminal", input.reason, attempt.version + 1, eventSeq, timestamp,
       );
-      appendLearningProjection(this.db, {
-        runId: attempt.runId,
-        attemptId: attempt.id,
-        attemptOrdinal: attempt.ordinal,
-        lifecycle: eventType,
-        outcome: input.status,
-        eventSeq,
-        runEventType: eventType,
-        payload: projectionPayload,
-        taskRunSnapshot: this.requireTaskRunSnapshot(attempt.runId),
-        timestamp,
-      });
       return this.getAttempt(attempt.id)!;
     })();
   }
@@ -429,14 +411,14 @@ export class SqliteAttemptRepository implements AttemptRepository {
         timestamp, attempt.id, input.leaseToken, input.fence,
       );
       if (released.changes !== 1) throw new Error(`Execution lease changed during Attempt recovery`);
-      finalizeProjectionCheckpoint(this.db, {
+      finalizeAttemptProjectionCheckpoint(this.db, {
         runId: attempt.runId,
         attemptId: attempt.id,
         attemptOrdinal: attempt.ordinal,
         eventSeq,
         timestamp,
       });
-      this.recordTerminalArtifacts(attempt, "interrupted", input.reason, eventSeq, nextVersion, data, timestamp);
+      this.recordTerminalAudit(attempt, "interrupted", input.reason, eventSeq, nextVersion, timestamp);
       const recoveredAttempt = this.getAttempt(attempt.id)!;
       return {
         attempt: recoveredAttempt,
@@ -494,14 +476,14 @@ export class SqliteAttemptRepository implements AttemptRepository {
       );
       this.db.prepare(`UPDATE execution_leases SET released_at=?
         WHERE attempt_id=? AND released_at IS NULL`).run(timestamp, attempt.id);
-      finalizeProjectionCheckpoint(this.db, {
+      finalizeAttemptProjectionCheckpoint(this.db, {
         runId: attempt.runId,
         attemptId: attempt.id,
         attemptOrdinal: attempt.ordinal,
         eventSeq,
         timestamp,
       });
-      this.recordTerminalArtifacts(attempt, "cancelled", input.reason, eventSeq, nextVersion, data, timestamp);
+      this.recordTerminalAudit(attempt, "cancelled", input.reason, eventSeq, nextVersion, timestamp);
       const cancelledAttempt = this.getAttempt(attempt.id)!;
       return {
         attempt: cancelledAttempt,
@@ -511,13 +493,12 @@ export class SqliteAttemptRepository implements AttemptRepository {
     })();
   }
 
-  private recordTerminalArtifacts(
+  private recordTerminalAudit(
     attempt: Attempt,
     status: "interrupted" | "cancelled",
     reason: string,
     eventSeq: number,
     version: number,
-    payload: Record<string, unknown>,
     timestamp: number,
   ): void {
     this.db.prepare(`INSERT INTO attempt_transition_audit
@@ -526,18 +507,6 @@ export class SqliteAttemptRepository implements AttemptRepository {
       randomUUID(), attempt.id, attempt.runId, attempt.ordinal, attempt.status, status,
       attempt.trigger, status === "interrupted" ? "recovery" : "terminal", reason, version, eventSeq, timestamp,
     );
-    appendLearningProjection(this.db, {
-      runId: attempt.runId,
-      attemptId: attempt.id,
-      attemptOrdinal: attempt.ordinal,
-      lifecycle: `run.${status}`,
-      outcome: status,
-      eventSeq,
-      runEventType: `run.${status}`,
-      payload,
-      taskRunSnapshot: this.requireTaskRunSnapshot(attempt.runId),
-      timestamp,
-    });
   }
 
   private appendEvent(
@@ -550,14 +519,6 @@ export class SqliteAttemptRepository implements AttemptRepository {
   ): void {
     this.db.prepare(`INSERT INTO run_events (run_id,seq,attempt_id,type,data,created_at)
       VALUES (?,?,?,?,?,?)`).run(runId, seq, attemptId, type, JSON.stringify(data), timestamp);
-  }
-
-  private requireTaskRunSnapshot(runId: string): Record<string, unknown> {
-    const snapshot = this.readTaskRunSnapshot(runId);
-    if (!snapshot || Array.isArray(snapshot) || typeof snapshot !== "object") {
-      throw new Error(`TaskRun snapshot ${runId} does not exist`);
-    }
-    return snapshot as Record<string, unknown>;
   }
 
   private getCandidate(id: string): CandidateResult | undefined {

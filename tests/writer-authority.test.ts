@@ -196,8 +196,7 @@ describe("Core writer authority", () => {
       (SELECT COUNT(*) FROM sessions) sessions,
       (SELECT COUNT(*) FROM runs) runs,
       (SELECT COUNT(*) FROM approval_requests) approvals,
-      (SELECT COUNT(*) FROM artifacts) artifacts,
-      (SELECT COUNT(*) FROM semantic_learning_jobs) learningJobs
+      (SELECT COUNT(*) FROM artifacts) artifacts
       FROM core_writer_lease WHERE lock_name = 'core-writer'`).get();
     const baseline = state();
     const contracts: Array<[string, () => unknown]> = [
@@ -205,7 +204,6 @@ describe("Core writer authority", () => {
       ["TaskRun", () => store.createRun(session.id, "Stale run", "stale-run")],
       ["Approval", () => store.ensureApprovalRequest(run.id, "stale-decision", "Stale approval")],
       ["Evidence", () => store.addArtifact(run.id, { id: "stale-artifact", kind: "text", title: "Stale", content: "forbidden", uri: "" })],
-      ["Learning job", () => store.enqueueSemanticLearningJob("user_message", { content: "forbidden" }, "stale-learning-job", run.id, run.attempt)],
     ];
 
     for (const [contract, mutation] of contracts) {

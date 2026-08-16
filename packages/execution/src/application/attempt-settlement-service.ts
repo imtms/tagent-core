@@ -6,7 +6,6 @@ import type { ExecutionStateView } from "./execution-state.js";
 import { ensureSettlementApproval } from "./settlement-approval.js";
 import { executeRuntimePrompt } from "./runtime-skill.js";
 import type {
-  AttemptProjectionPort,
   RecoveryControlPort,
   RunEventPublisherPort,
   SupervisorPort,
@@ -35,12 +34,10 @@ export class AttemptSettlementService {
     private readonly state: AttemptSettlementState,
     private readonly dependencies: {
       eventHub: RunEventPublisherPort;
-      projection: AttemptProjectionPort;
       recovery: RecoveryControlPort;
       supervisor: SupervisorPort;
     },
   ) {}
-  public projectWorkflowExperience(runId: RunId) { this.dependencies.projection.project(runId); }
   public async execute(runId: RunId, token: AttemptExecutionToken, runtime: AttemptRuntimePort, prompt: string, continuationId?: string, onRuntimeSettled: () => void = () => {}) {
     let candidateResponse = "";
     let candidate: CandidateResult | undefined;
@@ -190,7 +187,6 @@ export class AttemptSettlementService {
       for (const event of this.state.persistence.events.listEvents(token.runId, current.lastEventSeq)) {
         this.dependencies.eventHub.publish(event);
       }
-      this.projectWorkflowExperience(token.runId);
       if (status === "blocked" && action === "pause_for_approval") {
         const approval = ensureSettlementApproval(this.state.persistence.approvals, current, supervisorDecisionId, reason);
         this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(token.runId, "supervisor.approval.requested", { approvalId: approval.id, decisionId: supervisorDecisionId, reason }));
@@ -217,7 +213,6 @@ export class AttemptSettlementService {
         supervisorDecisionId,
       });
       if (recovery.event) this.dependencies.eventHub.publish(recovery.event);
-      if (recovery.recovered) this.projectWorkflowExperience(token.runId);
       return recovery.recovered;
     } catch {
       // A newer Attempt or execution fence owns the Run. Stale callbacks are zero-write.

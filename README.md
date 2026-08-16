@@ -2,9 +2,9 @@
 
 **TAgent Core is designed by TMs and developed with AI assistance.**
 
-TAgent Core is a durable, self-hosted control plane for a single agent instance. It turns routed user intent into a persistent `TaskRun`, supervises bounded `Attempt`s, owns authoritative state, evidence, approvals, recovery, Memory, and Learning, and produces verifiable delivery results.
+TAgent Core is a durable, self-hosted control plane for a single agent instance. It turns routed user intent into a persistent `TaskRun`, supervises bounded `Attempt`s, owns authoritative state, evidence, approvals, recovery, and optional Memory, and produces verifiable delivery results.
 
-The current 0.8 release is one monotonic-state Core system with independently negotiated Gateway capability profiles for Session Settings, Inbox, Context Manifest, Skills, Memory, Learning, Workflow, and Autonomy. Profile mutations replay immutable stored responses before mutable validation or side effects, and snapshot lists use stable storage-backed pagination without a 500-member ceiling. Core retains managed Skills, governed Workspace Goals, trusted execution receipts, optional Memory and Learning, the contained `pi-agent-core` runtime, and receipt-backed self-restart/handoff. Core remains API-only and `TaskRun` remains the only execution runtime.
+The current 0.8 release is one monotonic-state Core system with independently negotiated Gateway capability profiles for Session Settings, Inbox, Context Manifest, Skills, and Memory. Profile mutations replay immutable stored responses before mutable validation or side effects, and snapshot lists use stable storage-backed pagination without a 500-member ceiling. Core retains managed Skills, governed Workspace Goals, trusted execution receipts, optional Memory, the contained `pi-agent-core` runtime, and receipt-backed self-restart/handoff. Core remains API-only and `TaskRun` remains the only execution runtime.
 
 ## Supported boundary
 
@@ -21,7 +21,7 @@ This release does not provide an operating-system sandbox for `bash`, built-in b
 
 ## Architecture
 
-The repository contains 13 workspaces in one acyclic dependency graph:
+The repository contains 12 workspaces in one acyclic dependency graph:
 
 | Layer | Workspace | Responsibility |
 | --- | --- | --- |
@@ -31,7 +31,6 @@ The repository contains 13 workspaces in one acyclic dependency graph:
 | Domain | `@tagent/execution` | `TaskRun`, `Attempt`, continuation, settlement, and recovery coordination |
 | Domain | `@tagent/admission` | Session input admission and inbox scheduling |
 | Domain | `@tagent/memory` | Optional Hot/Warm/Cold long-term Memory |
-| Domain | `@tagent/learning` | Optional governed Learning projections and workflows |
 | Adapter | `@tagent/http-fastify` | API-only Fastify adapter for `/api/v1` |
 | Adapter | `@tagent/persistence-sqlite` | Current schema, repositories, writer fencing, and Unit of Work |
 | Adapter | `@tagent/runtime-pi` | In-process Pi runtime integration |
@@ -89,7 +88,7 @@ curl -fsS -X POST http://127.0.0.1:3100/api/v1/sessions \
 
 When `TAGENT_SERVICE_CREDENTIALS` is empty, Core uses local-admin mode. Keep that mode bound to the default `127.0.0.1`. When credentials are configured, protected routes fail closed and require a scoped opaque Bearer credential.
 
-Core does not validate browser OIDC/JWT tokens. In production, a Gateway validates browser identity, strips the browser token, and forwards a minimal Core service credential. The independent `operator.read.v1` profile provides authoritative Session/TaskRun inventory, and the capability-profile registry publishes the eight additional stable Gateway feature contracts without exposing private Store DTOs. Configure exact origins with `TAGENT_CORS_ALLOWED_ORIGINS`; a non-empty allowlist requires at least one service credential. See [docs/API_V1.md](docs/API_V1.md), [docs/OPERATOR_READ_API.md](docs/OPERATOR_READ_API.md), [docs/GATEWAY_PROFILE_COMPATIBILITY.md](docs/GATEWAY_PROFILE_COMPATIBILITY.md), and [docs/WEB_CONSOLE_SECURITY.md](docs/WEB_CONSOLE_SECURITY.md).
+Core does not validate browser OIDC/JWT tokens. In production, a Gateway validates browser identity, strips the browser token, and forwards a minimal Core service credential. The independent `operator.read.v1` profile provides authoritative Session/TaskRun inventory, and the capability-profile registry publishes five stable Gateway feature contracts without exposing private Store DTOs. Configure exact origins with `TAGENT_CORS_ALLOWED_ORIGINS`; a non-empty allowlist requires at least one service credential. See [docs/API_V1.md](docs/API_V1.md), [docs/OPERATOR_READ_API.md](docs/OPERATOR_READ_API.md), [docs/GATEWAY_PROFILE_COMPATIBILITY.md](docs/GATEWAY_PROFILE_COMPATIBILITY.md), and [docs/WEB_CONSOLE_SECURITY.md](docs/WEB_CONSOLE_SECURITY.md).
 
 ## Persistence and recovery
 
@@ -115,15 +114,11 @@ The Web Console provides one Skills center shared across Workspaces. Upload or d
 
 Execution uses the native Pi Skill path: `@tagent/runtime-pi` registers every frozen projection in `AgentHarness.resources.skills`; a one-Skill Workspace retains explicit `AgentHarness.skill()` invocation, while Pi selects among a multi-Skill set by its native matching behavior. Core does not flatten Skills into the system prompt, and a Skill cannot add tools or bypass approvals, receipts, path containment, or settlement policy. See [docs/SKILLS.md](docs/SKILLS.md).
 
-## Optional Memory and Learning
+## Optional Memory
 
-Memory and Learning are disabled by default. Learning has a hard dependency on Memory:
+Long-term Memory is disabled by default and can be enabled independently through `TAGENT_MEMORY_*` configuration and the `/api/v1/admin/*` surface. See [docs/MEMORY.md](docs/MEMORY.md).
 
-```text
-Memory off => Learning off => automatic execution off
-```
-
-Passive Learning may run with automatic execution disabled. Enabling automatic execution participation never bypasses human approval, capability policy, or completion evidence. Manage these features through the `/api/v1/admin/*` surface. See [docs/MEMORY.md](docs/MEMORY.md) and [docs/LEARNING.md](docs/LEARNING.md).
+The retired Learning implementation is preserved in the `learning-archive` branch. `main` contains no Learning runtime, APIs, Web UI, configuration, or installable workspace. Legacy SQLite Learning tables remain inert in the immutable schema baseline so upgrades preserve existing data without silently deleting it.
 
 ## Build and release
 

@@ -49,5 +49,4 @@ export function settleRuntimeInitializationFailure(input: RuntimeInitializationF
       message,
     });
   }
-  input.settlement.projectWorkflowExperience(input.run.id);
 }

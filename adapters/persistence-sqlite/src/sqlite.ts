@@ -11,9 +11,6 @@ export {
   SqliteFencedCapabilityAuthorizationRepository,
   type SqliteFencedCapabilityAuthorizationOptions,
 } from "./sqlite/fenced-capability-authorization-repository.js";
-export { SqliteLearningLedgerRepository } from "./sqlite/learning-ledger-repository.js";
-export { SqliteLearningEffectRepository } from "./sqlite/sqlite-learning-effect-repository.js";
-export { SqliteLearningProjectionDeliveryRepository } from "./sqlite/sqlite-learning-projection-delivery-repository.js";
 export {
   GuardedSqliteUnitOfWork,
   SqlitePersistence,

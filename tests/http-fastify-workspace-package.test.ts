@@ -140,7 +140,6 @@ describe("Fastify HTTP adapter workspace package", () => {
       "@tagent/admission": "0.8.5",
       "@tagent/execution": "0.8.5",
       "@tagent/governance": "0.8.5",
-      "@tagent/learning": "0.8.5",
       fastify: "^5.10.0",
       typebox: "^1.1.24",
     });
@@ -197,8 +196,7 @@ describe("Fastify HTTP adapter workspace package", () => {
       "GET /api/v1/health",
       "POST /api/v1/sessions",
       "GET /api/v1/task-runs/:taskRunId",
-      "GET /api/v1/admin/learning/settings",
-      "POST /api/v1/internal/workflows/:id/evaluate",
+      "GET /api/v1/admin/config/status",
       "ALL /api/v1/admin/*",
       "ALL /api/v1/internal/*",
       "ALL /api/v1/*",
@@ -307,8 +305,6 @@ describe("Fastify HTTP adapter workspace package", () => {
       memoryEnabled: true,
       memoryBackend: "postgres",
       memoryColdBackend: "s3",
-      learningEnabled: true,
-      learningAutoExecutionEnabled: false,
     };
     const app = testApp({ runtimeConfig });
 

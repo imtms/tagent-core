@@ -1,12 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import {
+  AdminConfigStatusResponseSchema,
   decodeAbi,
   encodeAbi,
-  LearningSettingsResponseSchema,
-  LearningSettingsUpdateRequestSchema,
   MemoryRecallResponseSchema,
   PrincipalMemoryRecallRequestSchema,
-  type LearningSettings,
   type MemoryKind,
   type MemoryRecallResult,
 } from "@tagent/abi";
@@ -14,28 +12,10 @@ import type { HttpMemoryAccess, HttpMemoryScope } from "../ports/index.js";
 import { authorizeV1, principalOf } from "./auth.js";
 import type { V1ApiDependencies } from "./plugin.js";
 import { successEnvelope, V1HttpError } from "./errors.js";
-import { registerAdminLearningConsoleV1Routes } from "./admin-learning-console-routes.js";
 import { registerAdminMemoryConsoleV1Routes } from "./admin-memory-console-routes.js";
 import { withRequestAbortSignal } from "./console-route-support.js";
 import { registerAdminMemoryProfileV1Routes } from "./admin-memory-profile-routes.js";
-import { registerAdminLearningProfileV1Routes } from "./admin-learning-profile-routes.js";
-import { registerAdminWorkflowProfileV1Routes } from "./admin-workflow-profile-routes.js";
-import { registerAdminAutonomyProfileV1Routes } from "./admin-autonomy-profile-routes.js";
 import { registerAdminOperationV1Routes } from "./admin-operation-routes.js";
-
-function mapLearningSettings(state: Record<string, unknown>): LearningSettings {
-  const updatedAt = Number(state.updatedAt ?? 0);
-  return {
-    memoryAvailable: Boolean(state.memoryAvailable ?? state.memoryEnabled),
-    memoryEnabled: Boolean(state.memoryEnabled),
-    learningEnabled: Boolean(state.learningEnabled),
-    autoExecutionEnabled: Boolean(state.autoExecutionEnabled),
-    passiveLearningEnabled: Boolean(state.passiveLearningEnabled ?? state.learningEnabled),
-    activeExecutionRequiresApproval: true,
-    updatedAt: new Date(Number.isFinite(updatedAt) && updatedAt >= 0 ? updatedAt : 0).toISOString(),
-    reason: String(state.reason ?? "learning_control_unavailable"),
-  };
-}
 
 function principalMemoryAccess(
   request: FastifyRequest,
@@ -105,35 +85,14 @@ export function registerAdminV1Routes(app: FastifyInstance, dependencies: V1ApiD
     authorizeV1(request, dependencies.serviceCredentials, "admin", "admin");
   };
 
-  app.get("/api/v1/admin/learning/settings", { onRequest: authorize }, async (request) => {
-    const state = dependencies.learningControl?.snapshot() ?? {
-      memoryAvailable: Boolean(dependencies.memory),
-      memoryEnabled: Boolean(dependencies.memory),
-      learningEnabled: false,
-      autoExecutionEnabled: false,
-      passiveLearningEnabled: false,
-      updatedAt: 0,
-      reason: "learning_control_unavailable",
-    };
-    return encodeAbi(
-      LearningSettingsResponseSchema,
-      successEnvelope(request, { settings: mapLearningSettings(state) }),
-    );
-  });
-
-  app.patch("/api/v1/admin/learning/settings", {
-    onRequest: authorize,
-    schema: { body: LearningSettingsUpdateRequestSchema },
-  }, async (request) => {
-    if (!dependencies.learningControl) {
-      throw new V1HttpError(503, "learning.control_unavailable", "Learning feature control is unavailable", "unavailable", true);
+  app.get("/api/v1/admin/config/status", { onRequest: authorize }, async (request) => {
+    if (!dependencies.runtimeConfig) {
+      throw new V1HttpError(503, "runtime.config_unavailable", "Runtime configuration is unavailable", "unavailable", true);
     }
-    const body = decodeAbi(LearningSettingsUpdateRequestSchema, request.body);
-    const state = await dependencies.service.updateLearningSettings(body) as Record<string, unknown>;
-    return encodeAbi(
-      LearningSettingsResponseSchema,
-      successEnvelope(request, { settings: mapLearningSettings(state) }),
-    );
+    return encodeAbi(AdminConfigStatusResponseSchema, successEnvelope(
+      request,
+      dependencies.runtimeConfig as import("@tagent/abi").AdminConfigStatus,
+    ));
   });
 
   app.post("/api/v1/admin/memory/recall", {
@@ -158,11 +117,7 @@ export function registerAdminV1Routes(app: FastifyInstance, dependencies: V1ApiD
   });
 
   registerAdminMemoryConsoleV1Routes(app, dependencies);
-  registerAdminLearningConsoleV1Routes(app, dependencies);
   registerAdminMemoryProfileV1Routes(app, dependencies);
-  registerAdminLearningProfileV1Routes(app, dependencies);
-  registerAdminWorkflowProfileV1Routes(app, dependencies);
-  registerAdminAutonomyProfileV1Routes(app, dependencies);
   registerAdminOperationV1Routes(app, dependencies);
 
   app.all("/api/v1/admin/*", { onRequest: authorize }, async () => {

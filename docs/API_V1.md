@@ -15,8 +15,8 @@ Core is API-only. Unversioned paths such as `/api/health`, `/api/sessions`, `/ap
 | Operator Read | `/api/v1/operator/*` | stable Gateway Session discovery and per-Session TaskRun history |
 | Capability profiles | `/api/v1/capability-profiles`, declared Operator/Admin routes | independently negotiated Gateway feature contracts |
 | Console | `/api/v1/console/*` | operator projections and controls used by the Web Console |
-| Admin | `/api/v1/admin/*` | configuration, Memory, Learning, Workflow, and governance operations |
-| Internal | `/api/v1/internal/*` | trusted workflow evaluation and worker integration |
+| Admin | `/api/v1/admin/*` | configuration, Memory, and operation receipts |
+| Internal | `/api/v1/internal/*` | reserved trusted surface; undeclared routes return 404 |
 
 Selected channel routes:
 
@@ -71,19 +71,16 @@ The registry contains exactly these profile `1.0` identities:
 - `operator.context-manifest.v1`
 - `operator.skills.v1`
 - `admin.memory.v1`
-- `admin.learning.v1`
-- `admin.workflow.v1`
-- `admin.autonomy.v1`
 
 Each summary is evaluated for the authenticated Core principal and reports available endpoint IDs and missing service scopes. Each detail document owns the exact methods/paths, required service and resource scopes, opaque-cursor limits, retention, compatibility and write-recovery semantics. Gateway must not infer availability from another principal's document or call undeclared Console/Admin routes.
 
 Synchronous resource mutations require `Idempotency-Key` and an `If-Match: "rN"` ETag. The first canonical payload, complete public result projection, and ETag source are retained for exact replay. Core resolves that receipt before mutable deployment validation, live readback, Router analysis, or filesystem staging; a changed payload returns `409 idempotency.conflict`, and a stale revision returns `409 concurrency.conflict` with the current ETag. Asynchronous or externally observable mutations require `Idempotency-Key` and return a durable operation receipt. Recover those receipts at `/api/v1/operator/operations/:requestId` or `/api/v1/admin/operations/:requestId`; `outcome_unknown` requires reconciliation and is never permission for automatic replay.
 
-Profile list cursors freeze membership with immutable creation or binding order keys while returning current public projections. Updating an unread item cannot move it past the cursor. Memory and Autonomy pages query storage with `limit + 1`; the 200-item HTTP maximum is a per-page bound, not a 500-item collection cap.
+Profile list cursors freeze membership with immutable creation order keys while returning current public projections. Updating an unread item cannot move it past the cursor. Memory pages query storage with `limit + 1`; the 200-item HTTP maximum is a per-page bound, not a 500-item collection cap.
 
 Session Inbox update, reorder, decision, merge, and delete operations exist only through the declared `operator.session-inbox.v1` profile endpoints. They always use the profile's idempotency receipt, resource scope, and collection-revision checks; Core does not expose a parallel unreceipted application mutation surface.
 
-Optional `X-TAgent-Delegated-Actor` and `X-TAgent-Delegated-Request-Id` headers carry Gateway provenance but grant no authority. Core audits them separately from the authenticated service principal and granted scopes. Public Settings/Inbox/Context/Skill/Memory/Learning/Workflow/Autonomy DTOs are ABI-owned projections and intentionally omit private paths, prompts, arbitrary metadata, tool arguments and internal evidence. See [GATEWAY_PROFILE_COMPATIBILITY.md](GATEWAY_PROFILE_COMPATIBILITY.md) and [GATEWAY_HANDOFF_STATUS.md](GATEWAY_HANDOFF_STATUS.md).
+Optional `X-TAgent-Delegated-Actor` and `X-TAgent-Delegated-Request-Id` headers carry Gateway provenance but grant no authority. Core audits them separately from the authenticated service principal and granted scopes. Public Settings/Inbox/Context/Skill/Memory DTOs are ABI-owned projections and intentionally omit private paths, prompts, arbitrary metadata, tool arguments and internal evidence. See [GATEWAY_PROFILE_COMPATIBILITY.md](GATEWAY_PROFILE_COMPATIBILITY.md) and [GATEWAY_HANDOFF_STATUS.md](GATEWAY_HANDOFF_STATUS.md).
 
 ### Workspace Goal Console routes
 
@@ -184,18 +181,14 @@ When credentials exist, protected routes require `Authorization: Bearer <opaque-
 ```text
 sessions:read       sessions:write
 runs:read           runs:control
-events:consume      workflows:teach
-workflows:govern    workflows:approve
+events:consume
 admin               internal
 operator:session-settings:read   operator:session-settings:write
 operator:inbox:read              operator:inbox:write
 operator:inbox:control           operator:context-manifests:read
 operator:skills:read             operator:skills:write
 admin:memory:read                admin:memory:write
-admin:learning:read              admin:learning:write
-admin:workflow:read              admin:workflow:write
-admin:autonomy:read              admin:autonomy:decide
-admin:autonomy:execute           admin:operations:read
+admin:operations:read
 ```
 
 A configured credential may also define a server-owned `subjectId` and up to 64 `user`, `workspace`, `project`, or `session` resource scopes. The client cannot replace these through request headers.

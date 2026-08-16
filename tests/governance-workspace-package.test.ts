@@ -153,7 +153,6 @@ describe("Governance workspace package", () => {
     expect([...graph].filter(([, dependencies]) => dependencies.includes("@tagent/governance")).map(([name]) => name).sort()).toEqual([
       "@tagent/admission",
       "@tagent/execution",
-      "@tagent/learning",
     ]);
 
     const incoming = new Map([...graph.keys()].map((name) => [name, 0]));

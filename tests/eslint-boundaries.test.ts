@@ -41,11 +41,6 @@ const rejectedProbes: LintProbe[] = [
     source: 'import "@tagent/memory/ports";\n',
   },
   {
-    name: "Learning cannot reach Persistence",
-    filePath: "packages/learning/src/eslint-probe.ts",
-    source: 'import "@tagent/persistence-sqlite";\n',
-  },
-  {
     name: "an allowed workspace dependency still cannot expose src",
     filePath: "packages/execution/src/eslint-probe.ts",
     source: 'import "@tagent/governance/src/domain.js";\n',
@@ -57,7 +52,7 @@ const rejectedProbes: LintProbe[] = [
   },
   {
     name: "SQLite is concrete to the persistence adapter",
-    filePath: "packages/learning/src/eslint-probe.ts",
+    filePath: "packages/execution/src/eslint-probe.ts",
     source: 'import "better-sqlite3";\n',
   },
   {

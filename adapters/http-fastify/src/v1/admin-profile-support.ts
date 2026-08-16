@@ -10,7 +10,7 @@ export async function runAdminProfileOperation(
   reply: FastifyReply,
   dependencies: ChannelV1Dependencies,
   input: {
-    profileId: "admin.memory.v1" | "admin.workflow.v1" | "admin.autonomy.v1" | "admin.learning.v1";
+    profileId: "admin.memory.v1";
     endpointId: string;
     resourceType: string;
     resourceId: string;

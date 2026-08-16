@@ -16,7 +16,6 @@ The system deploys as one Core product and one service. A small stable Host proc
 | Domain | `@tagent/execution` | `TaskRun`, `Attempt`, request envelopes, event vocabulary, ToolRegistry/Pipeline, settlement, continuation, recovery |
 | Domain | `@tagent/admission` | sessions, submissions, inbox admission and scheduling |
 | Domain | `@tagent/memory` | recall, capture, lifecycle, Hot/Warm/Cold storage ports |
-| Domain | `@tagent/learning` | observations, projections, workflow evolution and authority |
 | Adapter | `@tagent/http-fastify` | `/api/v1`, auth, CORS, media protocols |
 | Adapter | `@tagent/persistence-sqlite` | current schema, repositories, UOW, writer fence |
 | Adapter | `@tagent/runtime-pi` | `pi-agent-core.AgentHarness` session policy and `pi-ai` provider normalization |
@@ -66,8 +65,8 @@ This separation prepares multiple future channels to use the same stable ABI and
 
 All control-plane writes pass through the active SQLite writer fence. Multi-repository changes execute inside a synchronous Unit of Work so state, receipts, and events commit atomically. Background code consumes owned ports and cannot escape the transaction with an async callback.
 
-Each governed state has one mutation entrance. Runtime completion, blocking, and failure use the fenced TaskRun transition port; cancellation uses the Attempt repository. Workflow lifecycle, proposal application, canary, and Learning feature-policy changes use Workflow Governance. Session Inbox collection edits use the receipt-backed Session Inbox capability profile. SQLite keeps one connection and synchronous Unit of Work while schema migration, Transcript, Skills, Semantic Learning, and port bindings live in focused internal modules; the compatibility `Store` delegates to those repositories and publishes no parallel terminal shortcuts, Workflow-governance shadows, or unreceipted Inbox application facades.
+Each governed state has one mutation entrance. Runtime completion, blocking, and failure use the fenced TaskRun transition port; cancellation uses the Attempt repository. Session Inbox collection edits use the receipt-backed Session Inbox capability profile. SQLite keeps one connection and synchronous Unit of Work while schema migration, Transcript, Skills, and port bindings live in focused internal modules; the compatibility `Store` delegates to those repositories and publishes no parallel terminal shortcuts or unreceipted Inbox application facades.
 
-Core application construction accepts one named options object. Internally, Admission, Execution, Governance, Learning, Workspace Goals, and Skills stay grouped; the flat HTTP-facing application ABI is bound once from an explicit method whitelist with missing-method and collision checks, rather than an eighty-method forwarding class. Web uses CoreClient for ABI/SSE transport and keeps workspace loading/preferences, transcript projection, ACK scheduling, and presentation components outside the root component.
+Core application construction accepts one named options object. Internally, Admission, Execution, Governance, Workspace Goals, Memory, and Skills stay grouped; the flat HTTP-facing application ABI is bound once from an explicit method whitelist with missing-method and collision checks. Web uses CoreClient for ABI/SSE transport and keeps workspace loading/preferences, transcript projection, ACK scheduling, and presentation components outside the root component.
 
 See [PERSISTENCE_AND_RECOVERY.md](PERSISTENCE_AND_RECOVERY.md) for the lifecycle and recovery contract.

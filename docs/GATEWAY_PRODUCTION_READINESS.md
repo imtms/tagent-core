@@ -19,7 +19,7 @@ The command must verify the release manifest, commit marker, runtime ABI, native
 A Gateway enabling every profile needs the five Channel scopes, the profile scopes below, and an explicit resource grant. Narrower deployments may omit a profile only when all of its endpoints are disabled.
 
 ```sh
-TAGENT_SERVICE_CREDENTIALS='[{"token":"REPLACE_WITH_24_PLUS_CHAR_TOKEN","scopes":["sessions:read","sessions:write","runs:read","runs:control","events:consume","operator:session-settings:read","operator:session-settings:write","operator:inbox:read","operator:inbox:write","operator:inbox:control","operator:context-manifests:read","operator:skills:read","operator:skills:write","admin:memory:read","admin:memory:write","admin:learning:read","admin:learning:write","admin:workflow:read","admin:workflow:write","admin:autonomy:read","admin:autonomy:decide","admin:autonomy:execute","admin:operations:read"],"principal":{"subjectId":"gateway-production","resourceScopes":[{"type":"workspace","id":"*"}]}}]' \
+TAGENT_SERVICE_CREDENTIALS='[{"token":"REPLACE_WITH_24_PLUS_CHAR_TOKEN","scopes":["sessions:read","sessions:write","runs:read","runs:control","events:consume","operator:session-settings:read","operator:session-settings:write","operator:inbox:read","operator:inbox:write","operator:inbox:control","operator:context-manifests:read","operator:skills:read","operator:skills:write","admin:memory:read","admin:memory:write","admin:operations:read"],"principal":{"subjectId":"gateway-production","resourceScopes":[{"type":"workspace","id":"*"}]}}]' \
 node --input-type=module <<'NODE'
 import { loadConfig } from "@tagent/core-service/config";
 const config = loadConfig(process.env);
@@ -89,23 +89,20 @@ The current output has `probeVersion: 6`, `schemaId: "tagent-core/0.8"`, and `sc
 | `consumerLag` | Maximum `runs.last_event_seq - event_consumers.acked_seq` for the configured consumer |
 | `settledUnacked`, `finalUnacked` | terminal boundaries not durably ACKed |
 | `receipts.commands`, `receipts.workspaceGoals`, `receipts.capabilityProfiles` | started/unknown receipt health |
-| `learningProjectionReady` | all four single-projection storage tables exist |
-| `watermarks` | `learning-projection-v1` checkpoint rows with consumer, watermark, and generation |
 | `capabilities`, `operatorReadCapabilities`, `capabilityProfiles` | authenticated contract compatibility results |
 | `ready`, `severity`, `reasons` | final gate decision |
 
-The probe requires the base command/event catalogs, interaction support, Operator endpoint list, ready Approval contract, exact replay/no-blind-replay semantics, `operator.read.v1`, and all eight capability profile `1.0` summaries and details for the actual principal.
+The probe requires the base command/event catalogs, interaction support, Operator endpoint list, ready Approval contract, exact replay/no-blind-replay semantics, `operator.read.v1`, and all five capability profile `1.0` summaries and details for the actual principal.
 
 ## Exact thresholds
 
 | Gate | Ready | Critical |
 | --- | --- | --- |
-| Schema | ID `tagent-core/0.8`, version `1` | missing or different |
+| Schema | ID `tagent-core/0.8`, version `2` | missing or different |
 | Writer | health ready and lease fresh | unavailable or stale |
 | Consumer lag | `0` | `>= 10000`; any positive value still blocks readiness |
 | Settled/final ACK | both `0` | oldest unsettled age `>= 120000 ms`; any positive value blocks |
 | Receipts | no `outcome_unknown`; `started` younger than 120 s may be live work | unknown outcome or started age `>= 120000 ms` |
-| Learning projection | all four tables present | any table missing |
 | Capability contracts | all compatible and available | any endpoint, scope, pagination, retention, or recovery mismatch |
 
 ## Diagnostic SQL

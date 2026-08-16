@@ -224,7 +224,7 @@ describe("Admission workspace package", () => {
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as PackageManifest;
       return Object.hasOwn(manifest.dependencies, "@tagent/admission") ? [manifest.name] : [];
     });
-    expect(dependents).toEqual(["@tagent/learning"]);
+    expect(dependents).toEqual([]);
   });
 
   it("resolves every public Admission export through compiled Node ESM", () => {

@@ -2,7 +2,6 @@ import type { ServiceCredential } from "../auth.js";
 import type {
   HttpApplicationPort,
   HttpArtifactContentPort,
-  HttpLearningControlPort,
   HttpMemoryPort,
   HttpPersistencePort,
   HttpRuntimeConfig,
@@ -17,8 +16,6 @@ export interface ChannelV1Dependencies {
   artifacts: HttpArtifactContentPort;
   memory?: HttpMemoryPort;
   runtimeConfig?: HttpRuntimeConfig;
-  learningControl?: HttpLearningControlPort;
   writerReadiness?: HttpWriterReadiness;
   generationStatus?: () => Readonly<Record<string, unknown>> | null;
-  distillationWorker?: { snapshot: () => Record<string, unknown> };
 }

@@ -51,7 +51,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 
 - [ ] The persistent Memory profile passes.
 - [ ] An absent PostgreSQL `memory` schema initializes as `tagent-memory/0.8`, version `1`, reopens successfully, and an unmarked/different schema is rejected.
-- [ ] Memory-disabled startup does not connect to PostgreSQL/Cold storage or start Memory/Learning workers.
+- [ ] Memory-disabled startup does not connect to PostgreSQL/Cold storage or start Memory workers.
 - [ ] Reindex vector writes atomically require the current unexpired lease and fencing token; a reclaimed worker cannot overwrite the newer worker's generation.
 - [ ] Backup/restore and reindex generation behavior were rehearsed for production configuration changes.
 
@@ -91,8 +91,8 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] Transcript, interaction and Artifact metadata pages enforce default/max limits; SSE batch/buffer bounds and HTTP 413 Artifact limits match capabilities.
 - [ ] Operator Session/TaskRun lists enforce scope/default/max limits, tied-key and snapshot pagination, cursor retry/mismatch/restart behavior, empty/latest semantics and public-summary redaction.
 - [ ] Core-owned ABI fixtures and provider/consumer tests pass. Gateway separately proves its Fake Core against the exact current Core/SDK tuple before production cutover.
-- [ ] `GET /api/v1/capability-profiles` returns all eight profile `1.0` summaries/details for the production principal, with the expected 41 unique endpoint IDs/routes, fine-grained scopes, pagination/retention and exact-replay/durable-receipt recovery semantics.
-- [ ] Profile exact replay precedes mutable validation/live/Router/filesystem work and returns the stored projection/ETag after later changes; snapshot traversal survives unread-member updates and reaches every member in 501-row Memory and Autonomy collections.
+- [ ] `GET /api/v1/capability-profiles` returns all five profile `1.0` summaries/details for the production principal, with the expected 27 unique endpoint IDs/routes, fine-grained scopes, pagination/retention and exact-replay/durable-receipt recovery semantics.
+- [ ] Profile exact replay precedes mutable validation/live/Router/filesystem work and returns the stored projection/ETag after later changes; Memory snapshot traversal reaches every member in a 501-row collection.
 - [ ] The real provider harness and canonical fixture suite pass; no Fake Core or Gateway transport simulation has been moved into Core.
 - [ ] `scripts/gateway-readiness-probe.mjs` exits 0 with `ready=true` and no reasons.
 - [ ] Web is served from its independent artifact and targets the Gateway/Core origin; Core serves no static Web content.

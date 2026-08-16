@@ -69,16 +69,13 @@ Fastify decodes ingress and encodes egress with `@tagent/abi`. `@tagent/core-cli
 
 ## Full-feature profiles
 
-`GET /api/v1/capability-profiles` and its detail route publish eight profile `1.0` identities:
+`GET /api/v1/capability-profiles` and its detail route publish five profile `1.0` identities:
 
 - Session Settings;
 - Session Inbox;
 - Context Manifest;
 - Skills;
 - Memory;
-- Learning;
-- Workflow;
-- Autonomy.
 
 Each detail owns its exact endpoint IDs, required scopes, resource authority, pagination, retention, compatibility, and recovery semantics. Adding an endpoint or optional field requires a profile minor and matching strict fixtures/client. Removing an endpoint, changing a scope/resource boundary, cursor/revision identity, or recovery kind requires a profile major.
 

@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "@tagent/http-fastify";
-import { LearningService, WorkflowLearningService } from "@tagent/learning";
 import { Store } from "@tagent/persistence-sqlite/store";
 import { createRuntimeHost } from "@tagent/core-service/composition";
 import { attemptIdFor } from "@tagent/execution/domain";
 import { createExecutionCollaborationAdapters } from "../apps/core-service/src/composition/execution-collaboration-adapters.js";
-import { corePersistence, learningPersistence, workflowPersistence } from "./support/test-persistence.js";
+import { corePersistence } from "./support/test-persistence.js";
 
 const testSignal = new AbortController().signal;
 
@@ -26,8 +25,6 @@ function collaborationFixture(principalId = "session:alice", withMemory = true) 
     canonicalPayload: "configured-principal",
   }).session;
   const persistence = corePersistence(store);
-  const learning = new LearningService(learningPersistence(store));
-  const workflows = new WorkflowLearningService(workflowPersistence(store));
   const captureRequests: any[] = [];
   const adapters = createExecutionCollaborationAdapters({
     persistence,
@@ -39,11 +36,9 @@ function collaborationFixture(principalId = "session:alice", withMemory = true) 
       getCoreSnapshot: async () => undefined,
     } as never : undefined,
     memoryScopeId: "default",
-    learningService: learning,
-    workflowService: workflows,
     publish: () => undefined,
   });
-  return { store, session, persistence, learning, adapters, captureRequests };
+  return { store, session, persistence, adapters, captureRequests };
 }
 
 function runtimeHost(store: Store, sessionId: string, subjectId: string, memory: { recall: ReturnType<typeof vi.fn> }) {
@@ -105,23 +100,6 @@ describe("GitHub issue regressions #36-#38", () => {
       { type: "workspace", id: "default" },
       { type: "session", id: fallbackSession.id },
     ]);
-  });
-
-  it("#37 keeps explicitly task/session-local Chinese and English communication preferences out of unrelated sessions", async () => {
-    const { store, session, learning, adapters } = collaborationFixture("user:37", false);
-    const second = store.createSessionIdempotent({ title: "Unrelated", principalId: "user:37", idempotencyKey: "unrelated", canonicalPayload: "unrelated" }).session;
-    const firstRun = store.createRun(session.id, "first task");
-    const secondRun = store.createRun(second.id, "second task");
-
-    for (const [index, content] of ["这次任务我偏好回答简洁", "For this session, I prefer concise answers"].entries()) {
-      const message = store.appendMessage(session.id, "user", content);
-      adapters.userMessageObserver.observe({ run: firstRun, messageId: message.id, content, context: "" });
-      await vi.waitFor(() => expect(store.db.prepare("SELECT COUNT(*) count FROM semantic_learning_jobs WHERE status='completed'").get()).toEqual({ count: index + 1 }));
-    }
-
-    expect(learning.listCommunicationProfiles("user:37").map((profile) => profile.scopeType)).toEqual(["session"]);
-    expect(adapters.contextEnrichment.prepareWithoutRecall(firstRun, "current task").promptSection).toContain("verbosity: 简洁");
-    expect(adapters.contextEnrichment.prepareWithoutRecall(secondRun, "unrelated task").promptSection).not.toContain("verbosity: 简洁");
   });
 
 });

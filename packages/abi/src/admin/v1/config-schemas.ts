@@ -15,10 +15,9 @@ export const AdminConfigStatusSchema = Type.Object({
   maxContinuations: Type.Integer({ minimum: 0 }),
   schemaVersion: Type.Optional(Type.Integer({ minimum: 1 })),
   memoryEnabled: Type.Boolean(),
+  memoryWorkspaceScopeId: Type.Optional(Type.String({ minLength: 1 })),
   memoryBackend: Type.Optional(Type.Union([Type.Literal("memory"), Type.Literal("postgres")])),
   memoryColdBackend: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("s3")])),
-  learningEnabled: Type.Boolean(),
-  learningAutoExecutionEnabled: Type.Boolean(),
 });
 export type AdminConfigStatus = Static<typeof AdminConfigStatusSchema>;
 

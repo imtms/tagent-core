@@ -63,9 +63,6 @@ import {
   operatorSkillResponseFixture,
   operatorWorkspaceSkillsFixture,
   adminMemoryStatusFixture,
-  adminLearningCenterFixture,
-  adminWorkflowsFixture,
-  adminAutonomyApprovalsFixture,
   type SubmissionCreateRequest,
   type TaskRunCommand,
   type TaskRunEvent,
@@ -74,7 +71,7 @@ import { MEMORY_SOURCE_TYPES as DOMAIN_MEMORY_SOURCE_TYPES } from "@tagent/memor
 
 describe("ABI runtime decoding", () => {
   it("publishes strict capability-profile descriptors and canonical fixtures", () => {
-    expect(ProfilesV1.CAPABILITY_PROFILE_IDS).toHaveLength(8);
+    expect(ProfilesV1.CAPABILITY_PROFILE_IDS).toHaveLength(5);
     expect(decodeAbi(ProfilesV1.CapabilityProfileRegistryResponseSchema, capabilityProfileRegistryFixture))
       .toEqual(capabilityProfileRegistryFixture);
     for (const fixture of capabilityProfileDetailFixtures) {
@@ -101,7 +98,7 @@ describe("ABI runtime decoding", () => {
     expect(JSON.stringify(operatorContextManifestListFixture)).not.toContain("metadata");
   });
 
-  it("publishes strict Skills and Admin profile fixtures without private storage fields", () => {
+  it("publishes strict Skills and Memory profile fixtures without private storage fields", () => {
     expect(decodeAbi(OperatorSkillsV1.OperatorSkillCatalogResponseSchema, operatorSkillCatalogFixture))
       .toEqual(operatorSkillCatalogFixture);
     expect(decodeAbi(OperatorSkillsV1.OperatorSkillResponseSchema, operatorSkillResponseFixture))
@@ -113,12 +110,6 @@ describe("ABI runtime decoding", () => {
 
     expect(decodeAbi(AdminProfilesV1.AdminMemoryStatusResponseSchema, adminMemoryStatusFixture))
       .toEqual(adminMemoryStatusFixture);
-    expect(decodeAbi(AdminProfilesV1.AdminLearningCenterResponseSchema, adminLearningCenterFixture))
-      .toEqual(adminLearningCenterFixture);
-    expect(decodeAbi(AdminProfilesV1.AdminWorkflowsResponseSchema, adminWorkflowsFixture))
-      .toEqual(adminWorkflowsFixture);
-    expect(decodeAbi(AdminProfilesV1.AdminAutonomyApprovalsResponseSchema, adminAutonomyApprovalsFixture))
-      .toEqual(adminAutonomyApprovalsFixture);
   });
 
   it("publishes the standalone Operator Read v1 ABI and canonical fixtures", () => {
@@ -188,8 +179,6 @@ describe("ABI runtime decoding", () => {
       memoryEnabled: true,
       memoryBackend: "postgres",
       memoryColdBackend: "s3",
-      learningEnabled: true,
-      learningAutoExecutionEnabled: false,
     };
 
     expect(decodeAbi(AdminConfigStatusSchema, status)).toEqual(status);
@@ -395,11 +384,11 @@ describe("ABI envelopes and surface separation", () => {
     expect(ChannelV1).not.toHaveProperty("WorkerCallbackSchema");
 
     expect(AdminV1).toHaveProperty("MemoryScopeSchema");
-    expect(AdminV1).toHaveProperty("WorkflowProposalSchema");
+    expect(AdminV1).not.toHaveProperty("WorkflowProposalSchema");
     expect(AdminV1).not.toHaveProperty("TaskRunCommandSchema");
     expect(AdminV1).not.toHaveProperty("WorkerCallbackSchema");
 
-    expect(InternalV1).toHaveProperty("WorkflowEvaluationReceiptSchema");
+    expect(InternalV1).not.toHaveProperty("WorkflowEvaluationReceiptSchema");
     expect(InternalV1).toHaveProperty("WorkerCallbackSchema");
     expect(InternalV1).not.toHaveProperty("TaskRunSchema");
     expect(InternalV1).not.toHaveProperty("MemoryScopeSchema");

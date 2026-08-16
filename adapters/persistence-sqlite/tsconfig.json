@@ -15,7 +15,6 @@
     { "path": "../../packages/governance" },
     { "path": "../../packages/execution" },
     { "path": "../../packages/admission" },
-    { "path": "../../packages/memory" },
-    { "path": "../../packages/learning" }
+    { "path": "../../packages/memory" }
   ]
 }

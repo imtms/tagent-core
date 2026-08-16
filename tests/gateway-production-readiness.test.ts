@@ -409,7 +409,6 @@ function createCoreReleaseFixture(directory: string): void {
     ["@tagent/execution", "packages/execution"],
     ["@tagent/governance", "packages/governance"],
     ["@tagent/http-fastify", "adapters/http-fastify"],
-    ["@tagent/learning", "packages/learning"],
     ["@tagent/memory", "packages/memory"],
     ["@tagent/persistence-sqlite", "adapters/persistence-sqlite"],
     ["@tagent/runtime-pi", "adapters/runtime-pi"],
@@ -464,7 +463,7 @@ function runChild(
 }
 
 describe("Gateway production readiness", () => {
-  it("preserves a scoped production principal through internal v1 authorization and canonical validation", async () => {
+  it("preserves a scoped production principal while retired internal Learning routes stay unavailable", async () => {
     const token = "gateway-production-internal-token";
     const config = loadConfig({
       TAGENT_API_BASE: "https://models.internal/v1",
@@ -488,79 +487,25 @@ describe("Gateway production readiness", () => {
       },
     }]);
 
-    let evaluationInput: unknown;
     const app = createApp({
       persistence: {} as never,
-      service: {
-        executeWorkflowEvaluation(input: unknown) {
-          evaluationInput = input;
-          return { id: "evaluation-1", status: "passed", receiptHash: "hash", signature: "signature" };
-        },
-        verifyWorkflowEvaluation: () => true,
-      } as never,
+      service: {} as never,
       logger: false,
       serviceCredentials: config.serviceCredentials,
       onClose: async () => undefined,
     });
     try {
       const headers = { authorization: `Bearer ${token}`, "x-request-id": "gateway-request-1" };
-      const accepted = await app.inject({
+      const retired = await app.inject({
         method: "POST",
         url: "/api/v1/internal/workflows/workflow-1/evaluate",
         headers,
-        payload: {
-          candidateRevisionId: "revision-candidate",
-          baselineRevisionId: "revision-baseline",
-          kind: "shadow",
-          datasetId: "dataset-1",
-          baselineRunIds: ["baseline-run-1"],
-          candidateRunIds: ["candidate-run-1"],
-        },
+        payload: {},
       });
-      expect(accepted.statusCode).toBe(200);
-      expect(accepted.json()).toEqual({
-        data: { id: "evaluation-1", status: "passed", receiptHash: "hash", signature: "signature" },
-        requestId: "gateway-request-1",
+      expect(retired.statusCode).toBe(404);
+      expect(retired.json()).toMatchObject({
+        error: { code: "route.not_found", requestId: "gateway-request-1" },
       });
-      expect(evaluationInput).toEqual({
-        workflowId: "workflow-1",
-        candidateRevisionId: "revision-candidate",
-        baselineRevisionId: "revision-baseline",
-        kind: "shadow",
-        datasetId: "dataset-1",
-        baselineRunIds: ["baseline-run-1"],
-        candidateRunIds: ["candidate-run-1"],
-      });
-
-      for (const payload of [
-        {
-          candidateRevisionId: "revision-candidate",
-          baselineRevisionId: "revision-baseline",
-          kind: "canary",
-          datasetId: "dataset-1",
-          baselineRunIds: ["baseline-run-1"],
-          candidateRunIds: ["candidate-run-1"],
-        },
-        {
-          candidateRevisionId: "revision-candidate",
-          baselineRevisionId: "revision-baseline",
-          kind: "shadow",
-          datasetId: "dataset-1",
-          baselineRunIds: [""],
-          candidateRunIds: ["candidate-run-1"],
-        },
-      ]) {
-        const rejected = await app.inject({
-          method: "POST",
-          url: "/api/v1/internal/workflows/workflow-1/evaluate",
-          headers,
-          payload,
-        });
-        expect(rejected.statusCode).toBe(400);
-        expect(rejected.json()).toMatchObject({
-          error: { code: "request.validation_failed", requestId: "gateway-request-1" },
-        });
-      }
     } finally {
       await app.close();
     }
@@ -879,9 +824,7 @@ describe("Gateway production readiness", () => {
       "operator:session-settings:read", "operator:session-settings:write",
       "operator:inbox:read", "operator:inbox:write", "operator:inbox:control",
       "operator:context-manifests:read", "operator:skills:read", "operator:skills:write",
-      "admin:memory:read", "admin:memory:write", "admin:learning:read", "admin:learning:write",
-      "admin:workflow:read", "admin:workflow:write", "admin:autonomy:read", "admin:autonomy:decide",
-      "admin:autonomy:execute", "admin:operations:read",
+      "admin:memory:read", "admin:memory:write", "admin:operations:read",
     ];
     const configEnvironment = {
       TAGENT_API_BASE: "https://models.internal/v1",
@@ -1032,13 +975,12 @@ describe("Gateway production readiness", () => {
         terminalUnacked: ready.terminalUnacked,
         settledUnacked: ready.settledUnacked,
         finalUnacked: ready.finalUnacked,
-        learningProjectionReady: ready.learningProjectionReady,
         ready: ready.ready,
         severity: ready.severity,
         reasons: ready.reasons,
         thresholds: ready.thresholds,
       }).toEqual({
-        probeVersion: 6,
+        probeVersion: 7,
         schemaId: "tagent-core/0.8",
         schemaVersion: 2,
         writerReady: true,
@@ -1048,7 +990,6 @@ describe("Gateway production readiness", () => {
         terminalUnacked: 0,
         settledUnacked: 0,
         finalUnacked: 0,
-        learningProjectionReady: true,
         ready: true,
         severity: "ready",
         reasons: [],
@@ -1060,14 +1001,13 @@ describe("Gateway production readiness", () => {
           receiptUncertainCriticalAgeMs: 120_000,
         },
       });
-      expect(ready.watermarks).toEqual([]);
       expect(ready.capabilityProfiles).toMatchObject({
         reachable: true,
         status: 200,
         compatible: true,
         data: { profiles: expect.arrayContaining([
           expect.objectContaining({ id: "operator.session-settings.v1", version: "1.0" }),
-          expect.objectContaining({ id: "admin.autonomy.v1", version: "1.0" }),
+          expect.objectContaining({ id: "admin.memory.v1", version: "1.0" }),
         ]) },
       });
 

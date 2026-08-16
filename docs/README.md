@@ -39,10 +39,9 @@ This directory contains the maintained contracts for the current TAgent Core mai
 - [Gateway handoff status](GATEWAY_HANDOFF_STATUS.md) — evidence-based P0/P1/P2 implementation and acceptance gaps against the Gateway team's handoff.
 - [Gateway production readiness](GATEWAY_PRODUCTION_READINESS.md) — pre-deployment verification and probes.
 
-## Memory and Learning
+## Memory
 
 - [Memory](MEMORY.md) — optional PostgreSQL/Hot/Warm/Cold architecture, policy, operations, and admin surface.
-- [Learning](LEARNING.md) — dependency on Memory, passive/active modes, durable authority, and approval boundary.
 
 ## Release
 

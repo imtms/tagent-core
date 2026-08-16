@@ -14,7 +14,6 @@ const expectedDependencies = {
   "@tagent/execution": "0.8.5",
   "@tagent/governance": "0.8.5",
   "@tagent/http-fastify": "0.8.5",
-  "@tagent/learning": "0.8.5",
   "@tagent/memory": "0.8.5",
   "@tagent/persistence-sqlite": "0.8.5",
   "@tagent/runtime-pi": "0.8.5",
@@ -252,7 +251,6 @@ describe("Core service application workspace package", () => {
       /\bcreateGuardedSqlitePersistence\(/g,
       /\bresolveRuntimeFactory\(/g,
       /\bcreateMemoryRuntime\(/g,
-      /\bnew LearningFeatureControl\(/g,
       /\bservice\s*=\s*createCoreApplication\(/g,
       /\bcreateApp\(/g,
     ];
@@ -267,14 +265,13 @@ describe("Core service application workspace package", () => {
     }
   });
 
-  it("wires one guarded persistence graph through Memory, Learning, Core, and HTTP", () => {
+  it("wires one guarded persistence graph through Memory, Core, and HTTP", () => {
     const server = readFileSync(path.join(repoRoot, sourceRoot, "server.ts"), "utf8");
     for (const sentinel of [
       "writerConnection.writerGuard.installConnectionGuard()",
       "const persistence = createGuardedSqlitePersistence(store, writerConnection.writerGuard)",
       "const corePersistence = assembleCoreApplicationPersistence(persistence)",
       "const httpPersistence = assembleHttpPersistence(persistence)",
-      "new LearningFeatureControl(persistence.settings",
       "memoryRuntime = await createMemoryRuntime({",
       "resolveEmbeddingApiKey: embeddingCredentialReference",
       "resolveExtractorApiKey: extractorCredentialReference",

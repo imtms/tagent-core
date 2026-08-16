@@ -1,26 +1,17 @@
 import type { RunEventMap, RunEventType, TaskRun } from "@tagent/execution/domain";
 import type { CoreApplicationPersistencePort } from "../application/ports/index.js";
 import type {
-  AttemptProjectionPort,
   ContextEnrichmentPort,
   ExecutionBackgroundWorkPort,
   UserMessageObserverPort,
 } from "@tagent/execution/composition";
 import type { RuntimeMessage } from "@tagent/execution/ports";
-import type {
-  LearningFeatureControl,
-  LearningService,
-  WorkflowLearningService,
-} from "@tagent/learning";
 import type { AccessContext, MemoryFacade } from "@tagent/memory";
 
 interface ExecutionCollaborationAdapterOptions {
   persistence: Pick<CoreApplicationPersistencePort, "events" | "sessions" | "submissions" | "taskRuns">;
   memory?: MemoryFacade;
   memoryScopeId: string;
-  learningControl?: LearningFeatureControl;
-  learningService: LearningService;
-  workflowService: WorkflowLearningService;
   publish<TType extends RunEventType>(runId: string, type: TType, data: RunEventMap[TType]): void;
 }
 
@@ -34,21 +25,11 @@ export function resolveMemorySubjectId(
 export interface ExecutionCollaborationAdapters {
   backgroundWork: ExecutionBackgroundWorkPort;
   contextEnrichment: ContextEnrichmentPort;
-  projection: AttemptProjectionPort;
   userMessageObserver: UserMessageObserverPort;
 }
 
 const ONLINE_RECALL_DEADLINE_MS = 3_000;
 const ONLINE_EMBEDDING_TIMEOUT_MS = 2_200;
-
-function durableCommunicationPreferenceScope(content: string, sessionId: string) {
-  const explicitlyLocal = /(?:这次(?:任务)?|本次(?:任务)?|当前(?:任务|会话|session)|仅限(?:这次|本次|当前)|(?:for|in)\s+(?:this|the current)\s+(?:task|session)|this\s+(?:task|session)\s+only)/i.test(content);
-  const durable = !explicitlyLocal
-    && /(?:以后|今后|后续|始终|每次|一直|默认|记住|我的?习惯|我的?.{0,8}偏好|from now on|always|every time|by default|remember|my preference|i prefer)/i.test(content);
-  return durable
-    ? { preferenceScopeType: "global" as const, preferenceScopeId: "*" }
-    : { preferenceScopeType: "session" as const, preferenceScopeId: sessionId };
-}
 
 export async function withinDeadline<T>(work: (signal: AbortSignal) => Promise<T>, timeoutMs: number, signal: AbortSignal): Promise<T> {
   signal.throwIfAborted();
@@ -84,24 +65,12 @@ export async function withinDeadline<T>(work: (signal: AbortSignal) => Promise<T
 export function createExecutionCollaborationAdapters(
   options: ExecutionCollaborationAdapterOptions,
 ): ExecutionCollaborationAdapters {
-  const learningEnabled = () => options.learningControl?.snapshot().learningEnabled ?? true;
   const subjectId = (run: TaskRun) => resolveMemorySubjectId(options.persistence, run.sessionId);
   const access = (run: TaskRun, observedSubjectId = subjectId(run)): AccessContext => ({
     subjectId: observedSubjectId,
     scopes: memoryScopes(observedSubjectId, options.memoryScopeId, run.sessionId),
     purpose: "agent_recall",
   });
-  const learningContext = (run: TaskRun, query: string) => {
-    const workflows = options.workflowService.recall(run.sessionId, query, run.id, run.attempt);
-    const profile = learningEnabled()
-      ? options.learningService.resolveCommunicationProfile(subjectId(run), [
-          { type: "workspace", id: options.memoryScopeId },
-          { type: "session", id: run.sessionId },
-          { type: "task", id: run.id },
-        ], [`session:${run.sessionId}`])
-      : { promptSection: "", contextItems: [] };
-    return { workflows, profile };
-  };
   const capturePrunedUserContext = (run: TaskRun, messages: RuntimeMessage[]) => {
     if (!options.memory) return;
     const durable = messages
@@ -128,21 +97,12 @@ export function createExecutionCollaborationAdapters(
 
   return {
     backgroundWork: {
-      start() {
-        if (!learningEnabled()) return;
-        void options.workflowService.drainSemanticLearningJobs();
-        void options.learningService.drainSemanticLearningJobs();
-        void options.learningService.drainFeedbackAttribution();
-      },
+      start() {},
     },
     contextEnrichment: {
       requiresAsyncPreparation: () => Boolean(options.memory),
-      prepareWithoutRecall(run, query) {
-        const { workflows, profile } = learningContext(run, query);
-        return {
-          promptSection: [profile.promptSection, workflows.promptSection].filter(Boolean).join("\n\n"),
-          contextItems: [...profile.contextItems, ...workflows.contextItems],
-        };
+      prepareWithoutRecall() {
+        return { promptSection: "", contextItems: [] };
       },
       async enrich(run, query, signal) {
         signal.throwIfAborted();
@@ -166,10 +126,9 @@ export function createExecutionCollaborationAdapters(
           }
         }
         signal.throwIfAborted();
-        const { workflows, profile } = learningContext(run, query);
         const coreSection = coreSnapshots.map((snapshot) => `<core_memory scope="${snapshot.scope.type}:${snapshot.scope.id}" revision="${snapshot.revision}">\n${snapshot.markdown}\n</core_memory>`).join("\n\n");
         return {
-          promptSection: [coreSection, profile.promptSection, recall?.promptSection, workflows.promptSection]
+          promptSection: [coreSection, recall?.promptSection]
             .filter(Boolean)
             .join("\n\n"),
           contextItems: [
@@ -205,48 +164,14 @@ export function createExecutionCollaborationAdapters(
               estimatedTokens: 0,
               metadata: { outcome: candidate.outcome, channels: candidate.channels, finalScore: candidate.finalScore },
             })) ?? []),
-            ...profile.contextItems,
-            ...workflows.contextItems,
           ],
         };
       },
       capturePrunedUserContext,
     },
-    projection: {
-      project(runId) {
-        if (!learningEnabled()) return;
-        const run = options.persistence.taskRuns.getRun(runId);
-        if (!run) return;
-        try {
-          void options.workflowService.drainSemanticLearningJobs();
-          void options.learningService.drainSemanticLearningJobs()
-            .then(() => options.learningService.drainFeedbackAttribution())
-            .catch((error: unknown) => options.publish(runId, "memory.feedback.attribution.failed", {
-              error: error instanceof Error ? error.message : String(error),
-            }));
-        } catch (error) {
-          options.publish(runId, "workflow.learning.failed", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      },
-    },
     userMessageObserver: {
       observe({ run, messageId, content, context, subjectId: observedSubjectId }) {
         const messageSubjectId = observedSubjectId ?? subjectId(run);
-        if (learningEnabled()) {
-          options.learningService.enqueueUserMessageAnalysis({
-            subjectId: messageSubjectId,
-            scopeId: run.sessionId,
-            ...durableCommunicationPreferenceScope(content, run.sessionId),
-            messageId,
-            content,
-            context,
-            runId: run.id,
-            attempt: run.attempt,
-          });
-          void options.learningService.drainSemanticLearningJobs();
-        }
         if (!options.memory) return;
         void options.memory.enqueueCapture({
           access: { ...access(run, messageSubjectId), purpose: "capture" },

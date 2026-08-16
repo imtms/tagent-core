@@ -14,13 +14,6 @@ import {
   SessionInputRouter,
   type SessionInputModelPort,
 } from "@tagent/admission/composition";
-import {
-  LearningService,
-  LearningWorkflowRevisionMaterializer,
-  WorkflowLearningService,
-} from "@tagent/learning";
-import { LearningApplication } from "@tagent/learning/application";
-import { WorkflowGovernanceApplication } from "@tagent/governance/application";
 import { AdmissionCoordinator } from "@tagent/admission";
 import {
   AttemptExecutor,
@@ -52,14 +45,12 @@ import { createWorkspaceEditPort } from "@tagent/workspace-local/snapshot-edit";
 import type { AdmissionDispatchPort } from "@tagent/admission/composition";
 import type { CoreApplicationPersistencePort } from "../application/ports/index.js";
 import type { MemoryFacade } from "@tagent/memory";
-import type { LearningFeatureControl, SemanticJudge } from "@tagent/learning";
 import type { SupervisorReviewer } from "./supervisor-reviewer.js";
 import { createExecutionCollaborationAdapters, resolveMemorySubjectId } from "./execution-collaboration-adapters.js";
 import {
   createCoreApplicationCoordinator,
   type CoreApplicationCoordinator,
 } from "../application/core-application-coordinator.js";
-import { CoreWorkflowGovernanceApplication } from "../application/workflow-governance-application.js";
 import { CoreWorkspaceGoalApplication, type WorkspaceGoalRoadmapGenerator } from "../application/workspace-goal-application.js";
 import { OpenAiWorkspaceGoalRoadmapGenerator } from "./workspace-goal-roadmap-generator.js";
 import { CoreSkillApplication } from "../application/skill-application.js";
@@ -80,8 +71,6 @@ export interface ExecutionCompositionOptions {
   runtimeDefaults?: CoreRuntimeDefaults;
   memory?: MemoryFacade;
   memoryScopeId?: string;
-  learningControl?: LearningFeatureControl;
-  semanticJudge?: SemanticJudge;
   projectRuleFiles?: string[];
   toolArtifactMaxBytes?: number;
   startupOptions?: ExecutionCoordinatorStartupOptions;
@@ -168,8 +157,6 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
       ? createSessionInputModelPort(routerModel, runtimeDefaults.credential, routerTimeoutMs)
       : undefined,
   });
-  const workflowService = new WorkflowLearningService(options.persistence.workflow, undefined, options.learningControl, options.semanticJudge);
-  const learningService = new LearningService(options.persistence.learning, options.memory, options.memoryScopeId ?? "default", options.semanticJudge);
   const projectContextSource = createProjectContextSource(options.workspace, options.projectRuleFiles);
   const artifactSink = createWorkspaceArtifactSink(options.workspace, options.toolArtifactMaxBytes);
   const workspaceEdit = createWorkspaceEditPort(options.workspace);
@@ -192,9 +179,6 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     persistence: options.persistence,
     memory: options.memory,
     memoryScopeId: options.memoryScopeId ?? "default",
-    learningControl: options.learningControl,
-    learningService,
-    workflowService,
     publish: (runId, type, data) => eventHub.publish(options.persistence.events.appendEvent(runId, type, data)),
   });
   const runtimeRegistry = new RuntimeRegistry(state, { eventHub });
@@ -206,7 +190,6 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
   recoveryRef.bind(recovery);
   const settlement = new AttemptSettlementService(state, {
     eventHub,
-    projection: collaborators.projection,
     recovery: recoveryRef.port,
     supervisor: supervisorPort,
   });
@@ -304,16 +287,6 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     ?? (routerModel && runtimeDefaults.credential ? new OpenAiWorkspaceGoalRoadmapGenerator({ model: routerModel, credential: runtimeDefaults.credential, timeoutMs: routerTimeoutMs }) : undefined);
   const workspaceGoals = new CoreWorkspaceGoalApplication(options.persistence.workspaceGoals, admission, roadmapGenerator);
   const skills = new CoreSkillApplication(options.persistence.skills, options.persistence.sessions, options.workspace);
-  const learning = new LearningApplication(workflowService, learningService);
-  const workflowGovernance = new WorkflowGovernanceApplication(
-    options.persistence.workflowGovernance,
-    new LearningWorkflowRevisionMaterializer(),
-  );
-  const governance = new CoreWorkflowGovernanceApplication(
-    workflowGovernance,
-    options.persistence.workflowGovernance.reader,
-    options.learningControl,
-  );
   const lifecycle = new ExecutionLifecycleService(state, collaborators.backgroundWork);
 
   for (const port of [attemptLauncherRef, settlementRef, continuationRef, recoveryRef, contextRef, admissionRef]) {
@@ -333,8 +306,6 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
   const coordinator = createCoreApplicationCoordinator(Object.freeze({
     admission,
     execution,
-    governance,
-    learning,
     workspaceGoals,
     skills,
   }));

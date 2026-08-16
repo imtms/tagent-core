@@ -41,6 +41,6 @@ describe("Gateway profile provider harness", () => {
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
 
     const report = await verifyGatewayProfileProvider(app, new CoreClient({ baseUrl: address, timeoutMs: 5_000 }));
-    expect(report).toEqual({ profileCount: 8, uniqueEndpointCount: 41, routeCount: 41, fixtureCount: 19 });
+    expect(report).toEqual({ profileCount: 5, uniqueEndpointCount: 27, routeCount: 27, fixtureCount: 13 });
   });
 });
