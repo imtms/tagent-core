@@ -63,7 +63,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] A nonempty unmarked database, another schema ID, and missing/extra/changed schema objects are rejected with instructions to recreate the database.
 - [ ] A second Core process is rejected by the OS lock/writer authority.
 - [ ] The stable Host imports no application composition or persistence, supervises one Generation, rejects malformed/stale/incompatible IPC and release paths, and uses its own trusted verifier for candidates.
-- [ ] Same-release restart, staged-release activation, drain timeout, candidate readiness failure, activation replay/conflict, Host crash points, `current` rollback, parent disconnect, and durable crash-budget exhaustion pass.
+- [ ] Same-release restart, staged-release activation, drain timeout, candidate readiness/stabilization/heartbeat failure, activation replay/conflict, Host crash points, `current` rollback, parent disconnect, and durable crash-budget exhaustion pass.
 - [ ] `core_generation_activate` is absent outside a managed immutable release, requires explicit external-action approval, dispatches only after its exact operation receipt is durable, and startup redispatch does not repeat a settled receipt.
 - [ ] Writer lease/fence loss clears health readiness and closes Core.
 - [ ] Restart recovery produces `outcome_unknown` for effects/deliveries whose outcome cannot be proven and `restart_before_effect` cancellation only before effect start.
@@ -79,7 +79,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 ## API, Web, and Gateway gate
 
 - [ ] [Gateway handoff status](GATEWAY_HANDOFF_STATUS.md) confirms every dependency is either Core Ready, explicitly Gateway-owned, or deferred by current policy; a passing Core runtime probe alone cannot prove Gateway-owned behavior.
-- [ ] `GET /api/v1/health` reports writer readiness; `/api/health` returns 404.
+- [ ] `GET /api/v1/health` reports writer readiness and Host-managed Generation/activation/crash-budget status; `/api/health` returns 404.
 - [ ] `GET /api/v1/capabilities` matches the release/schema, required commands/events, base Operator endpoint list, ready Approval contract, receipt-recovery protocol, retention and limits; `operator.read.v1` and `/api/v1/operator/capabilities` match the independent read profile.
 - [ ] Credential mode fails closed for missing, invalid, and under-scoped opaque tokens.
 - [ ] Resource scopes are enforced from server configuration.

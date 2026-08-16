@@ -33,6 +33,9 @@ interface ChildPlan {
   writerFence?: number;
   onReady?: () => void;
   onKill?: () => void;
+  heartbeat?: boolean;
+  crashAfterReadyMs?: number;
+  drainDelayMs?: number;
 }
 
 class FakeChild extends EventEmitter {
@@ -43,6 +46,7 @@ class FakeChild extends EventEmitter {
   readonly activationRequestId?: string;
   readonly kills: NodeJS.Signals[] = [];
   private exited = false;
+  private heartbeatTimer?: ReturnType<typeof setInterval>;
 
   constructor(
     readonly plan: ChildPlan,
@@ -74,14 +78,37 @@ class FakeChild extends EventEmitter {
         stateProtocol: CORE_STATE_PROTOCOL,
         writerFence: this.writerFence,
       });
+      if (plan.heartbeat) {
+        let sequence = 0;
+        this.heartbeatTimer = setInterval(() => {
+          sequence += 1;
+          this.deliver({
+            type: "HEARTBEAT",
+            protocolVersion: CORE_HOST_PROTOCOL_VERSION,
+            generationId: this.generationId,
+            releaseId: this.releaseId,
+            writerFence: this.writerFence,
+            sequence,
+          });
+        }, 5);
+        this.heartbeatTimer.unref?.();
+      }
+      if (plan.crashAfterReadyMs !== undefined) {
+        const crash = setTimeout(() => this.exit(1, null), plan.crashAfterReadyMs);
+        crash.unref?.();
+      }
     });
   }
 
   send(message: HostToGenerationMessage): boolean {
     if (message.type === "DRAIN" && this.plan.drain === "throw") throw new Error("IPC send failed");
     this.sent.push(message);
+    if (message.type === "DRAIN" && this.plan.drain === "exit") {
+      queueMicrotask(() => this.exit(1, null));
+      return true;
+    }
     if (message.type === "DRAIN" && this.plan.drain !== "ignore") {
-      queueMicrotask(() => {
+      const drain = () => {
         this.deliver({
           type: "DRAINED",
           protocolVersion: CORE_HOST_PROTOCOL_VERSION,
@@ -90,7 +117,9 @@ class FakeChild extends EventEmitter {
           writerFence: this.writerFence,
         });
         this.exit(0, null);
-      });
+      };
+      if (this.plan.drainDelayMs === undefined) queueMicrotask(drain);
+      else setTimeout(drain, this.plan.drainDelayMs).unref?.();
     }
     return true;
   }
@@ -109,6 +138,8 @@ class FakeChild extends EventEmitter {
   exit(code: number | null, signal: NodeJS.Signals | null): void {
     if (this.exited) return;
     this.exited = true;
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
     this.connected = false;
     this.emit("exit", code, signal);
   }
@@ -172,6 +203,8 @@ function hostFixture(root: string, plans: Map<string, ChildPlan[]>, overrides: P
     readyTimeoutMs: 200,
     drainTimeoutMs: 200,
     forceKillGraceMs: 100,
+    heartbeatTimeoutMs: 60_000,
+    candidateStabilizationMs: 0,
     spawn,
     verifyRelease: async () => undefined,
     fatal,
@@ -206,8 +239,16 @@ describe("Core Host protocol", () => {
     };
     expect(parseGenerationToHostMessage(ready)).toEqual(ready);
     expect(() => parseGenerationToHostMessage({ ...ready, extra: true })).toThrow("exactly");
-    expect(() => parseGenerationToHostMessage({ ...ready, protocolVersion: 2 })).toThrow("unsupported");
+    expect(() => parseGenerationToHostMessage({ ...ready, protocolVersion: 1 })).toThrow("unsupported");
     expect(() => parseGenerationToHostMessage({ ...ready, releaseId: "x".repeat(33_000) })).toThrow("too large");
+    expect(parseGenerationToHostMessage({
+      type: "HEARTBEAT",
+      protocolVersion: CORE_HOST_PROTOCOL_VERSION,
+      generationId: "generation-1",
+      releaseId: oldRelease,
+      writerFence: 1,
+      sequence: 1,
+    })).toMatchObject({ type: "HEARTBEAT", sequence: 1 });
 
     const result = {
       type: "ACTIVATION_RESULT",
@@ -218,6 +259,19 @@ describe("Core Host protocol", () => {
     } as const;
     expect(parseHostToGenerationMessage(result)).toEqual(result);
     expect(() => parseHostToGenerationMessage({ ...result, status: "unknown" })).toThrow("status is invalid");
+    const status = {
+      type: "HOST_STATUS",
+      protocolVersion: CORE_HOST_PROTOCOL_VERSION,
+      generationId: "generation-1",
+      activeRelease: oldRelease,
+      activationPhase: "committed",
+      activationRequestId: "request-1",
+      recentCrashes: 1,
+      maxCrashes: 5,
+    } as const;
+    expect(parseHostToGenerationMessage(status)).toEqual(status);
+    expect(() => parseHostToGenerationMessage({ ...status, activationPhase: "unknown" })).toThrow("unsupported");
+    expect(() => parseHostToGenerationMessage({ ...status, activationRequestId: null })).toThrow("must be a string");
   });
 
   it("treats IPC backpressure as an accepted send and rejects stale drains", async () => {
@@ -255,8 +309,19 @@ describe("Core Host protocol", () => {
       requestId: "accepted",
       deadlineMs: 100,
     });
+    listeners[0]({
+      type: "HOST_STATUS",
+      protocolVersion: CORE_HOST_PROTOCOL_VERSION,
+      generationId: "generation-1",
+      activeRelease: oldRelease,
+      activationPhase: "",
+      activationRequestId: "",
+      recentCrashes: 1,
+      maxCrashes: 5,
+    });
     await Promise.resolve();
     expect(drains).toEqual(["accepted"]);
+    expect(bridge.hostStatus()).toMatchObject({ activeRelease: oldRelease, recentCrashes: 1, maxCrashes: 5 });
     expect(sent).toHaveLength(1);
     const drained = bridge.drained("accepted", 3);
     expect(disconnected).toBe(false);
@@ -496,7 +561,7 @@ describe("Core Host protocol", () => {
 });
 
 describe("Core Host generation lifecycle", () => {
-  it("does not start a parallel restart loop when an initial Generation fails before READY", async () => {
+  it("records an initial pre-READY failure without starting a parallel in-process restart loop", async () => {
     const root = await releaseRoot([oldRelease]);
     const { host, children } = hostFixture(root, new Map([
       [oldRelease, [{ ready: false }, {}]],
@@ -506,6 +571,30 @@ describe("Core Host generation lifecycle", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(children).toHaveLength(1);
+    expect(host.snapshot().state.crashTimestamps).toHaveLength(1);
+  });
+
+  it("persists the pre-READY crash budget across Host process restarts", async () => {
+    const root = await releaseRoot([oldRelease]);
+    const first = hostFixture(root, new Map([[oldRelease, [{ ready: false }]]]), { maxCrashes: 1 });
+    await expect(first.host.start()).rejects.toThrow("exited before READY");
+    const second = hostFixture(root, new Map([[oldRelease, [{ ready: false }]]]), { maxCrashes: 1 });
+    await expect(second.host.start()).rejects.toThrow("exited before READY");
+    const third = hostFixture(root, new Map([[oldRelease, [{}]]]), { maxCrashes: 1 });
+
+    await expect(third.host.start()).rejects.toThrow("exceeded 1 crashes");
+    expect(third.children).toHaveLength(0);
+  });
+
+  it("does not charge release verification failures to the Generation crash budget", async () => {
+    const root = await releaseRoot([oldRelease]);
+    const { host, children } = hostFixture(root, new Map([[oldRelease, [{}]]]), {
+      verifyRelease: async () => { throw new Error("release signature is invalid"); },
+    });
+
+    await expect(host.start()).rejects.toThrow("release signature is invalid");
+
+    expect(children).toHaveLength(0);
     expect(host.snapshot().state.crashTimestamps).toEqual([]);
   });
 
@@ -519,6 +608,58 @@ describe("Core Host generation lifecycle", () => {
 
     expect(children).toHaveLength(1);
     expect(host.snapshot().activeRelease).toBeNull();
+  });
+
+  it("terminates and restarts a Generation that stops sending Host heartbeats", async () => {
+    const root = await releaseRoot([oldRelease]);
+    const { host, children } = hostFixture(root, new Map([
+      [oldRelease, [{}, { heartbeat: true }]],
+    ]), { heartbeatTimeoutMs: 10 });
+
+    await host.start();
+    await waitFor(() => children.length === 2, "unresponsive Generation was not restarted");
+
+    expect(children[0].kills).toContain("SIGKILL");
+    expect(host.snapshot().state.crashTimestamps).toHaveLength(1);
+    await host.close();
+  });
+
+  it("rolls back when a candidate crashes after READY during stabilization", async () => {
+    const root = await releaseRoot();
+    const { host, children } = hostFixture(root, new Map([
+      [oldRelease, [{ heartbeat: true }, { heartbeat: true }]],
+      [newRelease, [{ heartbeat: true, crashAfterReadyMs: 5 }]],
+    ]), { candidateStabilizationMs: 30, heartbeatTimeoutMs: 100 });
+    await host.start();
+    children[0].deliver(activation(children[0].generationId));
+
+    await waitFor(
+      () => host.snapshot().state.activation?.phase === "rolled_back" && !host.snapshot().activationBusy,
+      "early candidate crash did not roll back",
+    );
+
+    expect(await readlink(path.join(root, "current"))).toBe(`releases/${oldRelease}`);
+    expect(host.snapshot().activeRelease).toBe(oldRelease);
+    await host.close();
+  });
+
+  it("keeps current on the previous release until candidate stabilization completes", async () => {
+    const root = await releaseRoot();
+    const { host, children } = hostFixture(root, new Map([
+      [oldRelease, [{ heartbeat: true }]],
+      [newRelease, [{ heartbeat: true }]],
+    ]), { candidateStabilizationMs: 30, heartbeatTimeoutMs: 100 });
+    await host.start();
+    children[0].deliver(activation(children[0].generationId));
+    await waitFor(() => host.snapshot().state.activation?.phase === "starting", "candidate did not enter stabilization");
+
+    expect(await readlink(path.join(root, "current"))).toBe(`releases/${oldRelease}`);
+    await waitFor(
+      () => host.snapshot().state.activation?.phase === "committed" && !host.snapshot().activationBusy,
+      "stable candidate did not commit",
+    );
+    expect(await readlink(path.join(root, "current"))).toBe(`releases/${newRelease}`);
+    await host.close();
   });
 
   it("drains the old Generation, commits only after candidate readiness, and exactly replays the result", async () => {
@@ -711,6 +852,46 @@ describe("Core Host generation lifecycle", () => {
     await host.close();
   });
 
+  it("lets the drain deadline own quiescent teardown after heartbeats stop", async () => {
+    const root = await releaseRoot();
+    const { host, children } = hostFixture(root, new Map([
+      [oldRelease, [{ heartbeat: true, drainDelayMs: 25 }]],
+      [newRelease, [{ heartbeat: true }]],
+    ]), { heartbeatTimeoutMs: 10, drainTimeoutMs: 50 });
+    await host.start();
+    children[0].deliver(activation(children[0].generationId));
+
+    await waitFor(
+      () => host.snapshot().state.activation?.phase === "committed" && !host.snapshot().activationBusy,
+      "slow graceful drain did not commit",
+    );
+
+    expect(children[0].kills).toEqual([]);
+    expect(host.snapshot().activeRelease).toBe(newRelease);
+    await host.close();
+  });
+
+  it("does not wait for the drain timeout after the old Generation has exited", async () => {
+    const root = await releaseRoot();
+    const { host, children } = hostFixture(root, new Map([
+      [oldRelease, [{ drain: "exit" }]],
+      [newRelease, [{}]],
+    ]), { drainTimeoutMs: 1_000 });
+    await host.start();
+    const startedAt = Date.now();
+    children[0].deliver(activation(children[0].generationId));
+
+    await waitFor(
+      () => host.snapshot().state.activation?.phase === "committed" && !host.snapshot().activationBusy,
+      "activation did not recover the drain exit",
+    );
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(children[0].kills).toEqual([]);
+    expect(host.snapshot().activeRelease).toBe(newRelease);
+    await host.close();
+  });
+
   it("forces termination and continues activation when DRAIN IPC cannot be sent", async () => {
     const root = await releaseRoot();
     const { host, children } = hostFixture(root, new Map([
@@ -868,7 +1049,10 @@ describe("Core Host generation lifecycle", () => {
     await host.start();
     children[0].deliver(activation(children[0].generationId));
 
-    await waitFor(() => host.snapshot().state.activation?.phase === "committed", "activation did not commit");
+    await waitFor(
+      () => host.snapshot().state.activation?.phase === "committed" && !host.snapshot().activationBusy,
+      "activation did not commit",
+    );
 
     expect(children.map((child) => child.cwd)).toEqual([root, root]);
     expect(children[1].cwd).not.toBe(path.join(root, "releases", newRelease));
@@ -892,6 +1076,31 @@ describe("Core Host generation lifecycle", () => {
     expect(host.snapshot().state.crashTimestamps).toHaveLength(2);
     const durable = JSON.parse(await readFile(path.join(root, "runtime", "activation.json"), "utf8"));
     expect(durable.crashTimestamps).toHaveLength(2);
+    await host.close();
+  });
+
+  it("fails closed without charging release verification to the restart crash budget", async () => {
+    const root = await releaseRoot([oldRelease]);
+    let verificationCalls = 0;
+    const fastBackoff: CoreHostTimers = {
+      setTimeout: (callback, delayMs) => setTimeout(callback, delayMs >= 1_000 ? 0 : delayMs),
+      clearTimeout: (timer) => clearTimeout(timer),
+    };
+    const { host, children, fatal } = hostFixture(root, new Map([[oldRelease, [{}]]]), {
+      timers: fastBackoff,
+      verifyRelease: async () => {
+        verificationCalls += 1;
+        if (verificationCalls > 1) throw new Error("committed release was modified");
+      },
+    });
+    await host.start();
+    children[0].exit(1, null);
+
+    await waitFor(() => fatal.mock.calls.length === 1, "invalid committed release did not stop Host recovery");
+
+    expect(children).toHaveLength(1);
+    expect(host.snapshot().state.crashTimestamps).toHaveLength(1);
+    expect(String(fatal.mock.calls[0]?.[0])).toContain("could not verify the committed release");
     await host.close();
   });
 

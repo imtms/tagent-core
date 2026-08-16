@@ -177,16 +177,23 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("requests an explicit approval for maintenance even outside external-action TaskRuns", () => {
-    const approval = vi.fn(() => ({ allowed: true, reason: "approved" }));
-    const { port } = capabilities({ authorizeExternalAction: approval });
+  it("requests and blocks on explicit approval for maintenance outside external-action TaskRuns", () => {
+    const approval = vi.fn(() => ({ allowed: false, reason: "missing" }));
+    const request = vi.fn(() => ({ approvalId: "approval-1", reason: "Approval requested for the next Attempt" }));
+    const { port } = capabilities({ authorizeExternalAction: approval, requestExternalActionApproval: request });
     const maintenance = tool("maintenance", undefined, true);
     maintenance.policy = { ...maintenance.policy!, externalAction: "explicit" };
     const pipeline = new ToolExecutionPipeline(port);
     pipeline.bindCatalog({ tools: [maintenance] });
 
-    expect(pipeline.beforeToolCall("maintenance-1", "maintenance", {})).toEqual({ blocked: false });
+    expect(pipeline.beforeToolCall("maintenance-1", "maintenance", {})).toEqual({
+      blocked: true,
+      reason: expect.stringContaining("Approval requested for the next Attempt"),
+    });
     expect(approval).toHaveBeenCalledWith(true);
+    expect(request).toHaveBeenCalledWith("maintenance-1", "maintenance");
+    expect(pipeline.beforeToolCall("maintenance-1", "maintenance", {})).toMatchObject({ blocked: true });
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("settles a successful mutation once and replays its receipt without repeating the provider", async () => {

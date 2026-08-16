@@ -246,7 +246,7 @@ describe("production TaskRun transition authority", () => {
     expect(transitionCalls("packages/execution/src/application/runtime-initialization-failure.ts"))
       .toEqual({ runtime: 1, system: 0 });
     expect(transitionCalls("packages/admission/src/application/admission-coordinator.ts"))
-      .toEqual({ runtime: 0, system: 2 });
+      .toEqual({ runtime: 0, system: 3 });
     expect(transitionCalls("packages/execution/src/application/execution-lifecycle-service.ts"))
       .toEqual({ runtime: 0, system: 1 });
     expect(transitionCalls("packages/execution/src/application/runtime-registry.ts"))

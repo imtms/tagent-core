@@ -87,7 +87,7 @@ See [GATEWAY_PRODUCTION_READINESS.md](GATEWAY_PRODUCTION_READINESS.md) for exact
 
 ## Immutable Core deployment
 
-The Core archive includes `scripts/deploy-release.sh`. It rejects unsafe archive entries, verifies the manifest/runtime and both Host/Generation entrypoints, and stages the commit under `<release-root>/releases/<commit>`. It does not switch an existing `current`, restart systemd, or probe health. On the first installation only, it initializes `current` so the Host has a boot target.
+The Core archive includes `scripts/deploy-release.sh`. It rejects unsafe archive entries, verifies the manifest/runtime and both Host/Generation entrypoints, and stages the commit under `<release-root>/releases/<commit>`. The integrity verifier comes from the already trusted deployment tool, never from the candidate. When deployment runs as root, the candidate native SQLite smoke test runs with an empty environment as `TAGENT_SERVICE_USER` (default `tagent`), so candidate native code is not executed with root authority. The trusted verifier must therefore be readable by that account. The script does not switch an existing `current`, restart systemd, or probe health. On the first installation only, it initializes `current` so the Host has a boot target.
 
 ```bash
 sudo /path/to/deploy-release.sh \
@@ -95,13 +95,21 @@ sudo /path/to/deploy-release.sh \
   /opt/tagent-core
 ```
 
+Set `TAGENT_SERVICE_USER` when the systemd account is not `tagent`. Run the deployment path with root ownership so published release directories and files settle at modes `0555`/`0444`; the service account needs read/execute access but no release-content write access.
+
 For an already running installation, submit `core_generation_activate` with the staged 40-character commit. The tool is available only under a managed immutable Host and always consumes an explicit human external-action approval. Its exact parameters are stored in a writer-fenced operation receipt before the Host is notified. `targetRelease=current` performs a same-release Generation restart.
 
-The Host drains Runtime and background work, prepares a durable TaskRun handoff, releases writer authority, starts the candidate, and changes `current` only after the candidate reports `READY` with the expected Host/state protocols and a positive writer fence. Candidate bootstrap failure restores the previous release and resumes the handoff there. A short API readiness gap is intentional; the Host does not proxy HTTP or allow overlapping SQLite writers.
+The Host drains Runtime and background work, prepares a durable TaskRun handoff, releases writer authority, and starts the candidate. `READY` proves HTTP/writer bootstrap, but is not an immediate commit: the candidate must keep sending a writer-fenced IPC heartbeat through the default 12-second stabilization period. Only then does the Host change `current` and settle the activation. A pre-commit crash or heartbeat timeout restores the previous release and resumes the handoff there. A short API readiness gap is intentional; the Host does not proxy HTTP or allow overlapping SQLite writers.
+
+The Generation emits Host heartbeats every 2 seconds; the Host treats 10 seconds without a valid advancing heartbeat as an unresponsive process and feeds that termination through the durable crash budget/restart path. During intentional drain, the 30-second drain deadline replaces the heartbeat deadline. `/api/v1/health` includes the Host-published Generation/release, activation phase, request identity, and crash-budget status when Core is Host-managed.
 
 One suitable systemd boundary is:
 
 ```ini
+[Unit]
+StartLimitIntervalSec=10min
+StartLimitBurst=6
+
 [Service]
 Type=simple
 User=tagent
@@ -116,9 +124,9 @@ KillMode=control-group
 TimeoutStopSec=45s
 ```
 
-The service account must be able to atomically replace `/opt/tagent-core/current` and write `/opt/tagent-core/runtime/activation.json`. Only the deployment path should add verified directories under `/opt/tagent-core/releases`; their contents are made read-only. A Generation crash is normally handled inside the Host. systemd remains the recovery boundary if the Host itself exits or exhausts its durable crash budget.
+The service account must be able to atomically replace `/opt/tagent-core/current` and write `/opt/tagent-core/runtime/activation.json`. Only the deployment path should add verified directories under `/opt/tagent-core/releases`; their root-owned contents are made read-only. Generation failures before `READY`, heartbeat failures, and later crashes all consume the Host's persistent five-crash/ten-minute budget. A Generation crash is normally handled inside the Host. systemd remains the recovery boundary if the Host itself exits or exhausts that budget; its start limit prevents an infinite Host restart loop.
 
-Ordinary compatible releases replace only the Generation. A Host implementation or Host IPC protocol change still requires a conventional full systemd restart and a release whose manifest declares the matching protocol.
+Ordinary compatible releases replace only the Generation. The current heartbeat/status contract is Host IPC protocol v2. A Host implementation or Host IPC protocol change still requires a conventional full systemd restart and a release whose manifest declares the matching protocol.
 
 ### Manual disaster switch
 

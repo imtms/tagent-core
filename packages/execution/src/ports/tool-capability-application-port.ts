@@ -26,6 +26,10 @@ export interface ToolCapabilityApplicationPort {
   isCurrentAttempt(): boolean;
   authorizeWorkspaceMutation(): { allowed: boolean; reason: string };
   authorizeExternalAction(requireExplicit?: boolean): { allowed: boolean; reason: string };
+  requestExternalActionApproval?(
+    toolCallId: string,
+    toolName: string,
+  ): { approvalId: string; reason: string };
   advanceRunPhase(phase: "implement"): boolean;
   setRunPhase(phase: "discover" | "plan" | "implement" | "verify" | "review"): boolean;
   claimOperation(id: string, operationType: string, payload: unknown): {

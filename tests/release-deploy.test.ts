@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chmod, mkdtemp, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
@@ -75,8 +75,8 @@ async function releaseDirectory(root: string, commit: string, corrupt: "native" 
   }));
   await writeFile(path.join(directory, "package-lock.json"), "{}\n");
   await writeFile(path.join(directory, "dist", "host.js"), "console.log('host');\n");
-  await writeFile(path.join(directory, "scripts", "deploy-release.sh"), "deploy\n");
-  await writeFile(path.join(directory, "scripts", "release-manifest.mjs"), await readFile(manifestScript));
+  await writeFile(path.join(directory, "scripts", "deploy-release.sh"), "deploy\n", { mode: 0o755 });
+  await writeFile(path.join(directory, "scripts", "release-manifest.mjs"), await readFile(manifestScript), { mode: 0o755 });
   await writeFile(
     path.join(directory, "scripts", "gateway-readiness-probe.mjs"),
     await readFile(path.resolve("scripts/gateway-readiness-probe.mjs")),
@@ -132,7 +132,7 @@ async function releaseDirectory(root: string, commit: string, corrupt: "native" 
     artifact: "core",
     commit,
     runtime: { node: "24.18.1", abi: "137", platform: "linux", arch: "x64" },
-    core: { hostProtocolVersion: 1, stateProtocol: "tagent-core/state-0.8-r2", generationEntry: "node_modules/@tagent/core-service/dist/generation-entry.js" },
+    core: { hostProtocolVersion: 2, stateProtocol: "tagent-core/state-0.8-r2", generationEntry: "node_modules/@tagent/core-service/dist/generation-entry.js" },
     files,
   }));
   return directory;
@@ -263,7 +263,7 @@ describe("production release deployment", () => {
     const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
       core: { hostProtocolVersion: number };
     };
-    manifest.core.hostProtocolVersion = 2;
+    manifest.core.hostProtocolVersion = 1;
     await writeFile(manifestPath, JSON.stringify(manifest));
 
     const result = runManifest(fixture, "verify", directory);
@@ -398,6 +398,10 @@ describe("production release deployment", () => {
     expect(await readFile(path.join(fixture.releaseRoot, "releases", commit, "RELEASE_COMMIT"), "utf8")).toBe(`${commit}\n`);
     expect(await readFile(fixture.log, "utf8").catch(() => "")).toBe("");
     expect(result.stderr).toContain("request Core Host activation");
+    const release = path.join(fixture.releaseRoot, "releases", commit);
+    expect((await stat(release)).mode & 0o777).toBe(0o555);
+    expect((await stat(path.join(release, "package.json"))).mode & 0o777).toBe(0o444);
+    expect((await stat(path.join(release, "scripts", "deploy-release.sh"))).mode & 0o777).toBe(0o555);
   });
 
   it("initializes current on first install without starting a service", async () => {
@@ -407,6 +411,9 @@ describe("production release deployment", () => {
     expect(await readlink(path.join(fixture.releaseRoot, "current"))).toBe(`releases/${commit}`);
     expect(await readFile(fixture.log, "utf8").catch(() => "")).toBe("");
     expect(result.stderr).toContain("initialized current");
+    const source = await readFile(deployScript, "utf8");
+    expect(source.indexOf('fsync_directory "$release_root"'))
+      .toBeGreaterThan(source.indexOf('ln -s "releases/$commit"'));
   });
 
   it("replays staging idempotently after an installer interruption", async () => {
@@ -417,6 +424,17 @@ describe("production release deployment", () => {
     expect(replay.status, replay.stderr).toBe(0);
     expect(replay.stderr).toContain("already staged");
     expect(await readlink(path.join(fixture.releaseRoot, "current"))).toBe("releases/old");
+  });
+
+  it("uses the deploy tool's trusted verifier instead of executing the candidate verifier", async () => {
+    const source = await readFile(deployScript, "utf8");
+    expect(source).toContain('trusted_verifier=${TAGENT_TRUSTED_RELEASE_VERIFIER:-"$script_directory/release-manifest.mjs"}');
+    expect(source).toContain('node "$trusted_verifier" verify-integrity "$staging"');
+    expect(source).toContain('"$node_binary" "$trusted_verifier" verify-native "$release_directory"');
+    expect(source).toContain('runuser -u "$service_user" -- env -i');
+    expect(source).not.toContain('node "$staging/scripts/release-manifest.mjs" verify');
+    expect(source.indexOf('verify_native_as_service_user "$staging"'))
+      .toBeLessThan(source.indexOf('chmod u+w "$staging"'));
   });
 
   it("fails closed when an already-staged immutable release was modified", async () => {

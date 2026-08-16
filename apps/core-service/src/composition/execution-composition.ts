@@ -253,6 +253,14 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
           artifactSink,
           workspaceEdit,
           additionalToolProviders: options.additionalToolProviders,
+          requestExternalActionApproval: (toolCallId, toolName) => admissionRef.port.requestExternalActionApproval({
+            runId: input.token.runId,
+            attemptId: input.token.attemptId,
+            attempt: input.token.ordinal,
+            expectedVersion: input.token.expectedVersion,
+            toolCallId,
+            toolName,
+          }),
           ...input,
           memorySubjectId: run
             ? resolveMemorySubjectId(options.persistence, run.sessionId)

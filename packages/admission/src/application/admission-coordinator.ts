@@ -14,7 +14,7 @@ import type {
   SubmissionAuditInput,
   SubmissionQueue,
 } from "../ports/index.js";
-import type { ContextManifestItem, TaskRun } from "@tagent/execution/domain";
+import type { ContextManifestItem, RunId, TaskRun } from "@tagent/execution/domain";
 import type {
   AttemptRepository,
   RunEventJournal,
@@ -423,6 +423,75 @@ export class AdmissionCoordinator {
       approvalId: approval.id, decisionId: decision.id, reason, actionType: approval.actionType,
     }));
     this.state.persistence.workspaceGoals.recordRunOutcome(run.id);
+  }
+
+  public requestExternalActionApproval(input: {
+    runId: RunId;
+    attemptId: string;
+    attempt: number;
+    expectedVersion: number;
+    toolCallId: string;
+    toolName: string;
+  }): { approvalId: string; reason: string } {
+    const toolName = input.toolName.trim();
+    const toolCallId = input.toolCallId.trim();
+    if (!toolName || toolName.length > 128 || toolName.includes("\0")) {
+      throw new Error("External-action approval tool name is invalid");
+    }
+    if (!toolCallId || toolCallId.length > 512 || toolCallId.includes("\0")) {
+      throw new Error("External-action approval tool call identity is invalid");
+    }
+    const run = this.state.persistence.taskRuns.getRun(input.runId);
+    if (!run || run.status !== "running" || run.attempt !== input.attempt) {
+      throw new Error(`TaskRun ${input.runId} is not running Attempt ${input.attempt}`);
+    }
+    const attempt = this.state.persistence.attempts.getAttempt(input.attemptId);
+    if (!attempt || attempt.runId !== run.id || attempt.ordinal !== input.attempt
+      || attempt.version !== input.expectedVersion || !attempt.active || attempt.status !== "running") {
+      throw new Error(`Attempt ${input.attemptId} cannot request external-action approval`);
+    }
+    const reason = `Tool ${toolName} requires explicit external-action approval before execution`;
+    const decision = this.dependencies.supervisor.proposeExternalActionStart(run.id, reason);
+    const approval = this.state.persistence.approvals.ensureApprovalRequest(run.id, decision.id, reason, {
+      actionType: "execute_external_action",
+      targetType: "taskrun",
+      targetId: run.id,
+      metadata: {
+        sessionId: run.sessionId,
+        approvedAttempt: run.attempt + 1,
+        requestedAttempt: run.attempt,
+        requestedToolName: toolName,
+        requestedToolCallId: toolCallId,
+      },
+    });
+    const transition = this.state.persistence.taskRunTransitions.transitionSystem({
+      kind: "require_external_approval",
+      attemptId: attempt.id,
+      expectedVersion: attempt.version,
+      approvalId: approval.id,
+      reason,
+    }, {
+      kind: "external_action_guard",
+      component: "admission_coordinator",
+      approvalId: approval.id,
+    }).transitions[0];
+    if (!transition?.event) throw new Error(`TaskRun ${run.id} external approval transition returned no event`);
+    this.dependencies.supervisor.markExecuted(
+      decision.id,
+      approval.decisionId === decision.id ? "executed" : "superseded",
+    );
+    this.dependencies.eventHub.publish(transition.event);
+    this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(run.id, "supervisor.approval.requested", {
+      approvalId: approval.id,
+      decisionId: approval.decisionId,
+      reason,
+      actionType: approval.actionType,
+      toolName,
+      requestedAttempt: run.attempt,
+      approvedAttempt: run.attempt + 1,
+    }));
+    this.state.persistence.workspaceGoals.recordRunOutcome(run.id);
+    return { approvalId: approval.id, reason: `Approval requested for ${toolName}; resume will use Attempt ${run.attempt + 1}` };
   }
 
   public completeClaimedSessionLaunch(item: Submission, run: TaskRun, sessionHistory: ContextAssembly & { recalledMemory?: string; memoryContextItems?: ContextManifestItem[] }, retry: boolean) {

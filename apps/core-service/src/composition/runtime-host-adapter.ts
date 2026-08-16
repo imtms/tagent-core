@@ -36,6 +36,10 @@ export interface RuntimeHostOptions {
   artifactSink?: ArtifactSinkPort;
   workspaceEdit?: WorkspaceEditPort;
   additionalToolProviders?: AdditionalToolProviderFactory;
+  requestExternalActionApproval?: (
+    toolCallId: string,
+    toolName: string,
+  ) => { approvalId: string; reason: string };
 }
 
 export interface RuntimeHost {
@@ -114,6 +118,7 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
       || effectiveTaskExecutionPolicy(currentRun()?.contract ?? null).mode === "external_action"
       ? persistence.approvals.authorizeExternalAction(token.runId, token.ordinal)
       : { allowed: true, reason: "TaskRun does not require external-action approval" },
+    requestExternalActionApproval: options.requestExternalActionApproval,
     advanceRunPhase: (phase) => persistence.runtimeMutations.advanceRunPhase(mutationContext, phase),
     setRunPhase: (phase) => persistence.runtimeMutations.setRunPhase(mutationContext, phase),
     claimOperation: (id, operationType, payload) => persistence.runtimeMutations.claimOperation(mutationContext, id, operationType, payload),

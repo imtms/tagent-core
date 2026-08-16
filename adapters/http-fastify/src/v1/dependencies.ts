@@ -19,5 +19,6 @@ export interface ChannelV1Dependencies {
   runtimeConfig?: HttpRuntimeConfig;
   learningControl?: HttpLearningControlPort;
   writerReadiness?: HttpWriterReadiness;
+  generationStatus?: () => Readonly<Record<string, unknown>> | null;
   distillationWorker?: { snapshot: () => Record<string, unknown> };
 }

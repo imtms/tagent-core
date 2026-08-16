@@ -5,6 +5,7 @@ import {
   parseHostToGenerationMessage,
   protocolText,
   type CoreHostActivationRequest,
+  type CoreHostStatusMessage,
   type HostToGenerationMessage,
 } from "../generation-protocol.js";
 import type { GenerationActivationResult } from "@tagent/execution/ports";
@@ -40,6 +41,7 @@ export class GenerationHostBridge {
   private readonly disconnectParent?: () => void;
   private intentionalDisconnect = false;
   private parentDisconnected = false;
+  private currentHostStatus: Omit<CoreHostStatusMessage, "type" | "protocolVersion"> | null = null;
 
   constructor(options: GenerationHostBridgeOptions = {}) {
     const environment = options.environment ?? process.env;
@@ -87,6 +89,10 @@ export class GenerationHostBridge {
     if (this.parentDisconnected) void handler();
   }
 
+  hostStatus(): Readonly<Omit<CoreHostStatusMessage, "type" | "protocolVersion">> | null {
+    return this.currentHostStatus ? Object.freeze({ ...this.currentHostStatus }) : null;
+  }
+
   ready(writerFence: number): void {
     if (!this.managed) return;
     this.send({
@@ -96,6 +102,18 @@ export class GenerationHostBridge {
       releaseId: this.releaseId,
       stateProtocol: CORE_STATE_PROTOCOL,
       writerFence,
+    });
+  }
+
+  heartbeat(writerFence: number, sequence: number): void {
+    if (!this.managed) return;
+    this.send({
+      type: "HEARTBEAT",
+      protocolVersion: CORE_HOST_PROTOCOL_VERSION,
+      generationId: this.generationId,
+      releaseId: this.releaseId,
+      writerFence,
+      sequence,
     });
   }
 
@@ -142,6 +160,15 @@ export class GenerationHostBridge {
         return;
       }
       void this.drainHandler?.({ requestId: message.requestId, deadlineMs: message.deadlineMs });
+      return;
+    }
+    if (message.type === "HOST_STATUS") {
+      if (message.generationId !== this.generationId) {
+        this.logger.error("Core Generation rejected stale Host status");
+        return;
+      }
+      const { type: _type, protocolVersion: _protocolVersion, ...status } = message;
+      this.currentHostStatus = status;
       return;
     }
     void this.resultHandler?.({

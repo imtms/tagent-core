@@ -20,6 +20,7 @@ export function createApp({
   distillationWorker,
   learningControl,
   writerReadiness,
+  generationStatus,
   onClose,
 }: AppDependencies) {
   const corsAllowedOrigins = allowedCorsOrigins(process.env.TAGENT_CORS_ALLOWED_ORIGINS);
@@ -59,6 +60,7 @@ export function createApp({
     runtimeConfig,
     learningControl,
     writerReadiness,
+    generationStatus,
     distillationWorker,
   });
   app.addHook("onClose", async () => {

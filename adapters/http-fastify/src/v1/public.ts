@@ -8,8 +8,16 @@ export function registerPublicV1Routes(app: FastifyInstance, dependencies: V1Api
     const writer = dependencies.writerReadiness ? { ready: dependencies.writerReadiness.isWriterReady() } : undefined;
     const learning = dependencies.learningControl?.snapshot();
     const distillation = dependencies.distillationWorker?.snapshot() ?? { running: false, ready: false };
+    const generation = dependencies.generationStatus?.() ?? undefined;
     if (writer && !writer.ready) reply.code(503);
-    const data = { ok: !writer || writer.ready, service: "tagent-core", ...(writer ? { writer } : {}), learning, distillation };
+    const data = {
+      ok: !writer || writer.ready,
+      service: "tagent-core",
+      ...(writer ? { writer } : {}),
+      ...(generation ? { generation } : {}),
+      learning,
+      distillation,
+    };
     return successEnvelope(request, data);
   });
   app.all("/api/v1", async (request) => {

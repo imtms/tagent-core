@@ -21,4 +21,12 @@ export interface AdmissionSupervisorPort {
 export interface AdmissionDispatchPort {
   launchClaimedSessionInbox(item: Submission, run: TaskRun, retry?: boolean): TaskRun | undefined;
   dispatchSessionInbox(sessionId: SessionId): TaskRun | undefined;
+  requestExternalActionApproval(input: {
+    runId: RunId;
+    attemptId: string;
+    attempt: number;
+    expectedVersion: number;
+    toolCallId: string;
+    toolName: string;
+  }): { approvalId: string; reason: string };
 }

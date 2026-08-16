@@ -182,10 +182,22 @@ describe("Core service application workspace package", () => {
   it("keeps Host supervision independent from Generation composition and persistence", () => {
     const hostImports = moduleSpecifiers(`${sourceRoot}/host.ts`);
     expect([...new Set(hostImports.filter((specifier) => !specifier.startsWith("node:")))])
-      .toEqual(["./generation-protocol.js"]);
+      .toEqual([
+        "./generation-protocol.js",
+        "./host-generation-session.js",
+        "./host-state-store.js",
+        "./host-release-registry.js",
+      ]);
     expect(moduleSpecifiers(`${sourceRoot}/generation-protocol.ts`)).toEqual([]);
-    expect(readFileSync(path.join(repoRoot, sourceRoot, "host.ts"), "utf8"))
-      .not.toMatch(/@tagent\/|\.\/composition|\.\/server|sqlite|Store|bootstrapCore/);
+    expect(moduleSpecifiers(`${sourceRoot}/host-generation-session.ts`).filter((specifier) => !specifier.startsWith("node:")))
+      .toEqual(["./generation-protocol.js", "./host-release-registry.js"]);
+    expect(moduleSpecifiers(`${sourceRoot}/host-state-store.ts`).filter((specifier) => !specifier.startsWith("node:"))).toEqual([]);
+    expect(moduleSpecifiers(`${sourceRoot}/host-release-registry.ts`).filter((specifier) => !specifier.startsWith("node:")))
+      .toEqual(["./generation-protocol.js"]);
+    for (const filename of ["host.ts", "host-generation-session.ts", "host-state-store.ts", "host-release-registry.ts"]) {
+      expect(readFileSync(path.join(repoRoot, sourceRoot, filename), "utf8"))
+        .not.toMatch(/@tagent\/|\.\/composition|\.\/server|sqlite|\bStore\b|bootstrapCore/);
+    }
     expect(readFileSync(path.join(repoRoot, sourceRoot, "composition", "generation-host-bridge.ts"), "utf8"))
       .not.toContain("../host.js");
     expect(readFileSync(path.join(repoRoot, sourceRoot, "server.ts"), "utf8"))

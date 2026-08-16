@@ -108,6 +108,21 @@ describe("SessionInputRouter", async () => {
     expect((await router.analyze("请部署到生产环境。")).executionPolicy).toMatchObject({ mode: "external_action", reviewPolicy: "full", evidencePolicy: "trusted_check" });
     expect(calls).toBe(1);
   });
+  it("classifies source-control publication and hot activation as external actions", async () => {
+    for (const request of ["提交并推送，然后执行热更新", "激活暂存发布"]) {
+      expect((await router.analyze(request)).executionPolicy).toMatchObject({
+        mode: "external_action",
+        sideEffectRisk: "external_high",
+        reviewPolicy: "full",
+      });
+    }
+  });
+  it("does not treat hot-update architecture review as executing a hot update", async () => {
+    expect((await router.analyze("审查并评估热更新和自恢复架构当前设计和实现")).executionPolicy).toMatchObject({
+      mode: "read_only_analysis",
+      sideEffectRisk: "read_only",
+    });
+  });
   it("routes external-action synonyms through semantic classification and preserves the safety floor", async () => {
     const phrases = ["把最新版同步到线上", "把这个结果通知客户", "清空远端缓存", "给 Alice 开管理员权限", "合并并推到主分支", "把最新构建交付到客户环境", "撤掉线上旧实例", "将账号设为管理员", "把报告发给客户", "删除远端资源", "忘记关于 Alice 的长期记忆", "删除这些记忆记录", "forget these memory records"];
     let calls = 0;

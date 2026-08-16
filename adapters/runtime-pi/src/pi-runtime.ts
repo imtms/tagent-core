@@ -255,6 +255,7 @@ export class PiRuntime implements AttemptRuntimePort {
   private internalPromptOrdinal = 0;
   private readonly internalPrompts = new Set<string>();
   private readonly blockedToolErrors = new Map<string, StructuredToolError>();
+  private approvalPauseActive = false;
   private providerRequestOrdinal = 0;
   private deferredControls: Array<{ mode: "steer" | "followUp"; instruction: string }> = [];
   private harnessPendingMessageCount = 0;
@@ -306,6 +307,10 @@ export class PiRuntime implements AttemptRuntimePort {
       },
       retry: { enabled: (this.options.providerMaxRetries ?? 1) > 0, maxRetries: this.options.providerMaxRetries ?? 1, baseDelayMs: 1_000 },
     });
+    harness.on("before_provider_request", () => {
+      if (this.options.eventSink.isRunning() && !this.options.eventSink.isWaitingForInput()) return undefined;
+      throw new Error("Provider continuation blocked because the TaskRun is paused");
+    });
     harness.on("context", ({ messages }) => {
       const projected = projectRuntimeHistory(
         messages,
@@ -354,7 +359,17 @@ export class PiRuntime implements AttemptRuntimePort {
       const error = classifyToolError(new Error(guard.reason ?? "Tool call blocked"), { code: "NOT_AUTHORIZED" }).toJSON();
       this.blockedToolErrors.set(toolCallId, error);
       this.emit("tool.guard.blocked", { toolCallId, toolName, reason: guard.reason });
-      return { block: true, reason: `${guard.reason}. Use a different approach or report the blocker.` };
+      const paused = !this.options.eventSink.isRunning() || this.options.eventSink.isWaitingForInput();
+      if (paused) {
+        this.approvalPauseActive = true;
+        void harness.abort();
+      }
+      return {
+        block: true,
+        reason: paused
+          ? `${guard.reason}. The TaskRun is paused until the hard approval is resolved.`
+          : `${guard.reason}. Use a different approach or report the blocker.`,
+      };
     });
     harness.on("tool_result", ({ toolCallId, toolName, content, details, isError }) => {
       const text = content.find((part) => part.type === "text")?.text ?? "Tool execution failed";
@@ -363,8 +378,9 @@ export class PiRuntime implements AttemptRuntimePort {
         ?? (isError ? classifyToolError(new Error(text)).toJSON() : undefined);
       this.blockedToolErrors.delete(toolCallId);
       this.options.eventSink.afterToolCall({ toolCallId, toolName, success: !error && !isError, error });
-      if (this.options.eventSink.isWaitingForInput()) setImmediate(() => void harness.abort());
-      return error ? { details: mergeToolErrorDetails(details, error), isError: true } : undefined;
+      const terminate = !this.options.eventSink.isRunning() || this.options.eventSink.isWaitingForInput();
+      if (error) return { details: mergeToolErrorDetails(details, error), isError: true, terminate };
+      return terminate ? { terminate: true } : undefined;
     });
     this.unsubscribe = harness.subscribe((event) => this.handleEvent(event));
     if (this.disposed) void harness.abort();
@@ -374,12 +390,14 @@ export class PiRuntime implements AttemptRuntimePort {
   private handleEvent(event: AgentHarnessEvent) {
     this.options.eventSink.activity();
     if (event.type === "message_start" && event.message.role === "assistant") {
+      if (this.suppressApprovalPauseFailure(event.message as RuntimeMessage)) return;
       this.assistantMessageOrdinal += 1;
       this.emit("message.started", { ordinal: this.assistantMessageOrdinal });
     }
     if (event.type === "message_end") {
       this.flushDelta(); this.flushThinkingDelta();
       const sourceMessage = event.message as RuntimeMessage;
+      if (this.suppressApprovalPauseFailure(sourceMessage)) return;
       const message = sourceMessage.role === "toolResult" && !sourceMessage.error
         ? { ...sourceMessage, error: structuredToolErrorFromDetails(sourceMessage.details) }
         : sourceMessage;
@@ -551,6 +569,10 @@ export class PiRuntime implements AttemptRuntimePort {
       }
     } finally {
       this.streaming = false;
+      if (this.approvalPauseActive) {
+        this.lastError = undefined;
+        this.lastProviderFailure = undefined;
+      }
       if (this.pendingManualCompaction) {
         const pending = this.pendingManualCompaction;
         this.pendingManualCompaction = undefined;
@@ -682,6 +704,12 @@ export class PiRuntime implements AttemptRuntimePort {
   getError() { return this.lastError; }
   getProviderFailure() { return this.lastProviderFailure; }
   getActiveToolNames() { return this.harness?.getActiveTools().map((tool) => tool.name) ?? []; }
+
+  private suppressApprovalPauseFailure(message: RuntimeMessage) {
+    return this.approvalPauseActive
+      && message.role === "assistant"
+      && (message.stopReason === "error" || message.stopReason === "aborted");
+  }
 
   private isInternalMessage(message: AgentMessage) {
     if (message.role !== "user" || typeof message.content === "string") return false;

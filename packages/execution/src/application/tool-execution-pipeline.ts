@@ -82,7 +82,18 @@ export class ToolExecutionPipeline {
     if (!this.capabilities.isCurrentAttempt()) blocked = "Attempt is no longer current";
     if (!blocked && tool.policy?.externalAction) {
       const approval = this.capabilities.authorizeExternalAction(tool.policy.externalAction === "explicit");
-      if (!approval.allowed) blocked = `External action approval guard: ${approval.reason}`;
+      if (!approval.allowed) {
+        let reason = approval.reason;
+        if (tool.policy.externalAction === "explicit" && this.capabilities.requestExternalActionApproval) {
+          try {
+            const requested = this.capabilities.requestExternalActionApproval(toolCallId, toolName);
+            reason = `${requested.reason} (approval ${requested.approvalId})`;
+          } catch (error) {
+            reason = `${reason}; approval request failed: ${error instanceof Error ? error.message : String(error)}`;
+          }
+        }
+        blocked = `External action approval guard: ${reason}`;
+      }
     }
     const access = typeof tool.policy?.workspaceAccess === "function" ? tool.policy.workspaceAccess(args) : tool.policy?.workspaceAccess;
     if (!blocked && access === "mutation") {

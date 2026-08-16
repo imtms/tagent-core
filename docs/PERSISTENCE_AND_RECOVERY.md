@@ -34,7 +34,7 @@ Production startup is ordered so no runtime can mutate before writer ownership i
 
 Core rejects a second live instance. Losing the writer lease or failing a guard clears readiness and initiates shutdown.
 
-Before this sequence, the Host resolves `current`, checks that it is a contained 40-character immutable release, uses its own trusted release verifier to validate the artifact, and forks the Generation. Every Generation uses the stable release root—not its immutable release directory—as its working directory, so default relative database/workspace paths remain identical across activation and rollback. The Generation reports `READY` only after HTTP is listening, background reconciliation has completed, and writer readiness is established. Development startup can still run through the Host as a non-activatable `development` Generation; direct `bootstrapCore` tests remain Host-independent.
+Before this sequence, the Host resolves `current`, checks that it is a contained 40-character immutable release, uses its own trusted release verifier to validate the artifact, and forks the Generation. Every Generation uses the stable release root—not its immutable release directory—as its working directory, so default relative database/workspace paths remain identical across activation and rollback. The Generation reports `READY` only after HTTP is listening, background reconciliation has completed, and writer readiness is established, then emits writer-fenced IPC heartbeats. Development startup can still run through the Host as a non-activatable `development` Generation; direct `bootstrapCore` tests remain Host-independent.
 
 ## Transaction and writer authority
 
@@ -55,7 +55,7 @@ Startup never blindly repeats an effect whose outcome may have escaped Core:
 
 Callers must reconcile `outcome_unknown` explicitly. Automatic replay is forbidden.
 
-An unexpectedly terminated Generation is restarted by the Host on the committed release with durable exponential backoff and a bounded crash budget. Startup may queue a crash-recovery Continuation only when all of these are true for an interrupted TaskRun:
+An unexpectedly terminated or heartbeat-unresponsive Generation is restarted by the Host on the committed release with durable exponential backoff and a bounded crash budget. Pre-`READY` failures consume the same budget across Host restarts; release-resolution and verification failures do not. Startup may queue a crash-recovery Continuation only when all of these are true for an interrupted TaskRun:
 
 - no operation, control delivery, or TaskRun command is `outcome_unknown`;
 - no tool attempt is still `running`;
@@ -75,7 +75,7 @@ Graceful replacement reuses the existing state model rather than adding maintena
 2. HTTP readiness is removed, owned Runtime/background work is cancelled and joined;
 3. one fenced SQLite transaction verifies the succeeded operation receipt, creates or reuses a Continuation marked `[restart-handoff:<requestId>:<targetRelease>]`, moves the Run to `blocked`, updates its Attempt/checkpoint, and appends `maintenance.handoff.prepared`;
 4. the Generation releases the writer guard, lease, Store, and OS lock, flushes `DRAINED`, and exits;
-5. the candidate reports `READY` with a writer fence strictly higher than the drained Generation; the Host rejects a non-advancing fence, then atomically changes `current`, records the terminal Host phase, and returns the activation result;
+5. the candidate reports `READY` with a writer fence strictly higher than the drained Generation; the Host rejects a non-advancing fence and requires the candidate to survive the stabilization window with valid heartbeats before atomically changing `current`, recording the terminal Host phase, and returning the activation result;
 6. the new Generation records `maintenance.activation.succeeded` or `.failed` before recovering the handoff Continuation.
 
 If the initiating Run reached `completed` or `failed` between its accepted tool receipt and drain, handoff deliberately reopens it as `blocked`. This avoids losing the accepted activation across the final-response race; the continuation may generate one new complete standalone final response.

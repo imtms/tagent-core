@@ -481,6 +481,53 @@ describe("Pi AgentHarness integration", () => {
     store.close();
   });
 
+  it("aborts the provider loop after a hard-approval guard makes the Run non-running", async () => {
+    const faux = fauxProvider({ models: [{ id: "faux-hard-approval", contextWindow: 32_000, maxTokens: 2_000 }] });
+    faux.setResponses([
+      fauxAssistantMessage([{ type: "toolCall", id: "approval-read", name: "read", arguments: { path: "README.md" } }], { stopReason: "toolUse" }),
+      fauxAssistantMessage("must not continue before approval"),
+    ]);
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, "hard approval pause");
+    const eventProbe = new RunEventProbe();
+    const spec = runtimeSpec(store, run, {
+      workspace: process.cwd(),
+      systemPrompt: "Controlled prompt",
+      model: faux.getModel(),
+      models: fauxModels(faux),
+      initialMessages: [],
+    }, eventProbe.observe);
+    let running = true;
+    const eventSink = {
+      ...spec.eventSink,
+      beforeToolCall() {
+        running = false;
+        return { blocked: true, reason: "Hard approval requested" };
+      },
+      isRunning: () => running,
+    };
+    const runtime = new PiRuntime({ ...spec, eventSink });
+
+    await runtime.prompt("request approval");
+
+    expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "tool.guard.blocked", data: expect.objectContaining({ reason: "Hard approval requested" }) }),
+    ]));
+    expect(runtime.getMessages()).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "assistant", content: [{ type: "text", text: "must not continue before approval" }] }),
+    ]));
+    expect(store.listEvents(run.id)).not.toContainEqual(expect.objectContaining({ type: "provider.failure" }));
+    expect(store.listEvents(run.id)).not.toContainEqual(expect.objectContaining({ type: "message.completed" }));
+    expect(runtime.getMessages()).not.toContainEqual(expect.objectContaining({
+      role: "assistant",
+      stopReason: expect.stringMatching(/^(?:aborted|error)$/),
+    }));
+    expect(runtime.getProviderFailure()).toBeUndefined();
+    await runtime.dispose();
+    store.close();
+  });
+
   it("does not execute tool calls from token-truncated assistant output", async () => {
     const path = `.tagent/tmp/truncated-${Date.now()}.txt`;
     const { store, run, runtime } = await setup([

@@ -74,6 +74,7 @@ export interface CoreGenerationManagement {
   bindRecovery(recover: () => void): void;
   prepareHandoffBeforeWriterRelease(): void;
   announceReady(closeGeneration: () => Promise<void>, writerFence: number): void;
+  hostStatus(): Readonly<Record<string, unknown>> | null;
 }
 
 const defaultBackgroundWorkerStarter: CoreBackgroundWorkerStarter = Object.freeze({
@@ -377,6 +378,7 @@ export async function bootstrapCore(
       canaryBackgroundRuntime!.reconcile(state.autoExecutionEnabled),
     ]).then(() => undefined));
 
+    const generationManagement = managedGeneration;
     app = createApp({
       persistence: httpPersistence,
       service,
@@ -388,6 +390,7 @@ export async function bootstrapCore(
       distillationWorker,
       learningControl,
       writerReadiness: lifecycle,
+      generationStatus: generationManagement ? () => generationManagement.hostStatus() : undefined,
       onClose: () => lifecycle!.close(),
     });
 

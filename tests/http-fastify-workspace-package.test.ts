@@ -211,11 +211,24 @@ describe("Fastify HTTP adapter workspace package", () => {
   });
 
   it("serves the v1 envelope while rejecting unversioned API and SPA paths", async () => {
-    const app = testApp();
+    const app = testApp({
+      generationStatus: () => ({
+        generationId: "generation-health",
+        activeRelease: "1".repeat(40),
+        activationPhase: "committed",
+        activationRequestId: "request-health",
+        recentCrashes: 1,
+        maxCrashes: 5,
+      }),
+    });
     const health = await app.inject({ method: "GET", url: "/api/v1/health" });
     expect(health.statusCode).toBe(200);
     expect(health.json()).toMatchObject({
-      data: { ok: true, service: "tagent-core" },
+      data: {
+        ok: true,
+        service: "tagent-core",
+        generation: { generationId: "generation-health", activationPhase: "committed", recentCrashes: 1 },
+      },
       requestId: expect.any(String),
     });
 

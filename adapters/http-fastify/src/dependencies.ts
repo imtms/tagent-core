@@ -22,5 +22,6 @@ export interface AppDependencies {
   distillationWorker?: { snapshot: () => Record<string, unknown> };
   learningControl?: HttpLearningControlPort;
   writerReadiness?: HttpWriterReadiness;
+  generationStatus?: () => Readonly<Record<string, unknown>> | null;
   onClose?: () => Promise<void>;
 }

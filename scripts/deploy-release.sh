@@ -21,6 +21,34 @@ artifact=$(realpath "$1")
 release_root=${2:-/opt/tagent-core}
 [[ -f "$artifact" ]] || fail "artifact does not exist: $artifact"
 for command in node tar python3; do command -v "$command" >/dev/null || fail "$command is required"; done
+node_binary=$(command -v node)
+script_directory=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+trusted_verifier=${TAGENT_TRUSTED_RELEASE_VERIFIER:-"$script_directory/release-manifest.mjs"}
+[[ -f "$trusted_verifier" && ! -L "$trusted_verifier" ]] || fail "trusted release verifier is unavailable: $trusted_verifier"
+
+verify_native_as_service_user() {
+  local release_directory=$1
+  if [[ $(id -u) -eq 0 ]]; then
+    local service_user=${TAGENT_SERVICE_USER:-tagent}
+    command -v runuser >/dev/null || fail "runuser is required when deploying as root"
+    id -u "$service_user" >/dev/null 2>&1 || fail "Core service user does not exist: $service_user"
+    runuser -u "$service_user" -- env -i PATH="$PATH" \
+      "$node_binary" "$trusted_verifier" verify-native "$release_directory"
+    return
+  fi
+  env -i PATH="$PATH" "$node_binary" "$trusted_verifier" verify-native "$release_directory"
+}
+
+fsync_directory() {
+  python3 - "$1" <<'PY'
+import os, sys
+descriptor = os.open(sys.argv[1], os.O_RDONLY)
+try:
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+PY
+}
 
 [[ "$(node -p 'process.versions.node')" == "24.18.1" ]] || fail "Node version mismatch"
 [[ "$(node -p 'process.versions.modules')" == "137" ]] || fail "Node ABI mismatch"
@@ -45,34 +73,60 @@ PY
 
 mkdir -p "$release_root/releases"
 staging=$(mktemp -d "$release_root/releases/.staging.XXXXXXXX")
-cleanup() { rm -rf "$staging"; }
+cleanup() {
+  # A failed verification may already have normalized the tree read-only.
+  chmod -R u+w "$staging" 2>/dev/null || true
+  rm -rf "$staging"
+}
 trap cleanup EXIT
 tar -xzf "$artifact" -C "$staging" --strip-components=1 --no-same-owner --no-same-permissions
 [[ -f "$staging/RELEASE_MANIFEST.json" ]] || fail "artifact has no RELEASE_MANIFEST.json"
 [[ -f "$staging/RELEASE_COMMIT" ]] || fail "artifact has no RELEASE_COMMIT"
 commit=$(tr -d '\r\n' < "$staging/RELEASE_COMMIT")
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fail "invalid RELEASE_COMMIT: $commit"
-node "$staging/scripts/release-manifest.mjs" verify "$staging"
+# Verification must never execute code supplied by the candidate as its own
+# trust root. The deploy tool and its sibling verifier are installed together
+# from an already trusted release (or supplied explicitly on first install).
+node "$trusted_verifier" verify-integrity "$staging"
 node --check "$staging/dist/host.js"
 node --check "$staging/node_modules/@tagent/core-service/dist/host.js"
 node --check "$staging/node_modules/@tagent/core-service/dist/generation-entry.js"
 
+# mktemp creates the staging root as 0700. Normalize readability and remove
+# every write bit before the directory becomes visible as an immutable release.
+# Executable bits are retained only for directories and files already marked
+# executable by the verified archive.
+chmod -R a+rX,go-w,u-w "$staging"
+verify_native_as_service_user "$staging"
+# BSD/macOS requires the source directory itself to remain owner-writable for
+# rename. The deployment directory is root-owned in production, so this does
+# not grant the low-privilege Core account mutation access. All descendants
+# are already immutable, and no candidate code runs after this point.
+chmod u+w "$staging"
+
 release_dir="$release_root/releases/$commit"
 if [[ -e "$release_dir" || -L "$release_dir" ]]; then
   [[ -d "$release_dir" && ! -L "$release_dir" ]] || fail "immutable release path is not a directory: $release_dir"
-  node "$staging/scripts/release-manifest.mjs" verify "$release_dir"
+  node "$trusted_verifier" verify-integrity "$release_dir"
+  # Repair the only safe interrupted-install residue: verified content whose
+  # final read-only mode normalization did not complete in an older installer.
+  chmod -R a+rX,go-w,u-w "$release_dir"
+  verify_native_as_service_user "$release_dir"
   log "immutable release $commit was already staged"
 else
   mv "$staging" "$release_dir"
   trap - EXIT
-  chmod -R a-w "$release_dir"
+  chmod u-w "$release_dir"
+  fsync_directory "$release_root/releases"
 fi
 if [[ ! -e "$release_root/current" && ! -L "$release_root/current" ]]; then
   if ln -s "releases/$commit" "$release_root/current"; then
+    fsync_directory "$release_root"
     log "initialized current to immutable release $commit"
   else
     current_target=$(readlink "$release_root/current" 2>/dev/null || true)
-    [[ -n "$current_target" ]] || fail "current was initialized concurrently with an invalid target"
+    [[ "$current_target" =~ ^releases/[0-9a-f]{40}$ ]] \
+      || fail "current was initialized concurrently with an invalid target"
   fi
 fi
 log "staged immutable release $commit; request Core Host activation to switch a running installation"

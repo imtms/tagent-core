@@ -1,4 +1,4 @@
-export const CORE_HOST_PROTOCOL_VERSION = 1 as const;
+export const CORE_HOST_PROTOCOL_VERSION = 2 as const;
 export const CORE_STATE_PROTOCOL = "tagent-core/state-0.8-r2" as const;
 
 const RELEASE_ID = /^[0-9a-f]{40}$/;
@@ -32,8 +32,42 @@ export interface CoreHostDrainedMessage {
   readonly writerFence: number;
 }
 
+export interface CoreHostHeartbeatMessage {
+  readonly type: "HEARTBEAT";
+  readonly protocolVersion: typeof CORE_HOST_PROTOCOL_VERSION;
+  readonly generationId: string;
+  readonly releaseId: string;
+  readonly writerFence: number;
+  readonly sequence: number;
+}
+
+export type CoreHostStatusActivationPhase =
+  | ""
+  | "validating"
+  | "draining"
+  | "starting"
+  | "committed"
+  | "rolled_back"
+  | "failed";
+
+const CORE_HOST_STATUS_ACTIVATION_PHASES = new Set<CoreHostStatusActivationPhase>([
+  "", "validating", "draining", "starting", "committed", "rolled_back", "failed",
+]);
+
+export interface CoreHostStatusMessage {
+  readonly type: "HOST_STATUS";
+  readonly protocolVersion: typeof CORE_HOST_PROTOCOL_VERSION;
+  readonly generationId: string;
+  readonly activeRelease: string;
+  readonly activationPhase: CoreHostStatusActivationPhase;
+  readonly activationRequestId: string;
+  readonly recentCrashes: number;
+  readonly maxCrashes: number;
+}
+
 export type GenerationToHostMessage =
   | CoreHostReadyMessage
+  | CoreHostHeartbeatMessage
   | CoreHostActivationRequest
   | CoreHostDrainedMessage;
 
@@ -45,6 +79,7 @@ export type HostToGenerationMessage =
       readonly requestId: string;
       readonly deadlineMs: number;
     }
+  | CoreHostStatusMessage
   | {
       readonly type: "ACTIVATION_RESULT";
       readonly protocolVersion: typeof CORE_HOST_PROTOCOL_VERSION;
@@ -69,6 +104,11 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[], 
 
 export function protocolText(value: unknown, name: string): string {
   if (typeof value !== "string" || !value || value.includes("\0")) throw new TypeError(`${name} must be a non-empty string`);
+  return value;
+}
+
+function optionalProtocolText(value: unknown, name: string): string {
+  if (typeof value !== "string" || value.includes("\0")) throw new TypeError(`${name} must be a string`);
   return value;
 }
 
@@ -141,6 +181,17 @@ export function parseGenerationToHostMessage(value: unknown): GenerationToHostMe
       targetRelease,
     };
   }
+  if (type === "HEARTBEAT") {
+    exactKeys(input, ["type", "protocolVersion", "generationId", "releaseId", "writerFence", "sequence"], "HEARTBEAT");
+    return {
+      type,
+      protocolVersion: CORE_HOST_PROTOCOL_VERSION,
+      generationId: protocolText(input.generationId, "HEARTBEAT.generationId"),
+      releaseId: generationReleaseId(input.releaseId, "HEARTBEAT.releaseId"),
+      writerFence: positiveInteger(input.writerFence, "HEARTBEAT.writerFence"),
+      sequence: positiveInteger(input.sequence, "HEARTBEAT.sequence"),
+    };
+  }
   if (type === "DRAINED") {
     exactKeys(input, ["type", "protocolVersion", "generationId", "requestId", "writerFence"], "DRAINED");
     return {
@@ -183,6 +234,26 @@ export function parseHostToGenerationMessage(value: unknown): HostToGenerationMe
       status: input.status as Extract<HostToGenerationMessage, { type: "ACTIVATION_RESULT" }>["status"],
       activeRelease: protocolText(input.activeRelease, "ACTIVATION_RESULT.activeRelease"),
       ...(input.error === undefined ? {} : { error: protocolText(input.error, "ACTIVATION_RESULT.error") }),
+    };
+  }
+  if (type === "HOST_STATUS") {
+    exactKeys(input, [
+      "type", "protocolVersion", "generationId", "activeRelease", "activationPhase",
+      "activationRequestId", "recentCrashes", "maxCrashes",
+    ], "HOST_STATUS");
+    const activationPhase = optionalProtocolText(input.activationPhase, "HOST_STATUS.activationPhase");
+    if (!CORE_HOST_STATUS_ACTIVATION_PHASES.has(activationPhase as CoreHostStatusActivationPhase)) {
+      throw new TypeError("HOST_STATUS.activationPhase is unsupported");
+    }
+    return {
+      type,
+      protocolVersion: CORE_HOST_PROTOCOL_VERSION,
+      generationId: protocolText(input.generationId, "HOST_STATUS.generationId"),
+      activeRelease: generationReleaseId(input.activeRelease, "HOST_STATUS.activeRelease"),
+      activationPhase: activationPhase as CoreHostStatusActivationPhase,
+      activationRequestId: optionalProtocolText(input.activationRequestId, "HOST_STATUS.activationRequestId"),
+      recentCrashes: safeInteger(input.recentCrashes, "HOST_STATUS.recentCrashes"),
+      maxCrashes: positiveInteger(input.maxCrashes, "HOST_STATUS.maxCrashes"),
     };
   }
   throw new TypeError(`Unknown Host IPC message ${type}`);

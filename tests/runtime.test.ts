@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { symlinkSync, unlinkSync } from "node:fs";
-import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
+import type { RuntimeMessage as AgentMessage, RuntimeTool } from "@tagent/execution/ports";
 import { createCoreApplication } from "@tagent/core-service/application";
 import { loadConfig } from "@tagent/core-service/config";
 import { Store } from "@tagent/persistence-sqlite/store";
 import type { RunEventMap, RunEventType } from "@tagent/execution/domain";
-import { ExecutionState, RunEventHub, RuntimeRegistry } from "@tagent/execution/composition";
+import { ExecutionState, RunEventHub, RuntimeRegistry, type ToolProvider } from "@tagent/execution/composition";
 import { createEnvironmentCredentialResolver, credentialReference } from "@tagent/execution/ports";
 import { TaskRunSupervisor, SupervisorReviewError, TestSupervisorReviewer, passingTestAudit, type SupervisorAudit, type SupervisorReviewer } from "@tagent/core-service/composition";
 import type {
@@ -683,6 +683,81 @@ describe("Core application runtime boundary", () => {
     expect(runtimeOptions!.eventSink.beforeToolCall({ toolCallId: "external-call", toolName: "write", args: { path: "approved.txt", content: "approved" } })).toEqual({ blocked: false });
     expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "consumed" });
     expect(store.authorizeExternalAction(runId, 3)).toMatchObject({ allowed: false });
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("raises a hard approval when an explicit external tool is discovered inside a workspace-mutation Attempt", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const runtimeOptions: Array<Parameters<RuntimeFactory>[0]> = [];
+    const runtimes: DeferredRuntime[] = [];
+    const externalTool: RuntimeTool = {
+      name: "test_external_action",
+      label: "Test external action",
+      description: "A test-only explicit external action",
+      parameters: { type: "object", additionalProperties: false, properties: {} },
+      executionMode: "sequential",
+      policy: {
+        operationType: "test.external_action",
+        workspaceAccess: "none",
+        invalidatesChecks: false,
+        externalAction: "explicit",
+      },
+      execute: vi.fn(async () => ({ content: [{ type: "text" as const, text: "executed" }], details: {} })),
+    };
+    const provider: ToolProvider = { id: "test.external", provideTools: () => [externalTool] };
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => {
+        runtimeOptions.push(options);
+        const runtime = new DeferredRuntime();
+        runtimes.push(runtime);
+        return runtime;
+      },
+      additionalToolProviders: () => [provider],
+    });
+    const admitted = await service.enqueueSessionInput(session.id, "修复本地代码结构", "dynamic-external-approval");
+    const runId = admitted.run!.id;
+    expect(store.getRun(runId)?.contract?.executionPolicy).toMatchObject({ mode: "workspace_mutation" });
+
+    const blocked = runtimeOptions[0]!.eventSink.beforeToolCall({
+      toolCallId: "activate-1",
+      toolName: externalTool.name,
+      args: {},
+    });
+
+    expect(blocked).toMatchObject({ blocked: true, reason: expect.stringContaining("Approval requested") });
+    expect(store.getRun(runId)).toMatchObject({ status: "blocked", attempt: 1 });
+    const approval = store.listApprovalRequests(runId)[0]!;
+    expect(approval).toMatchObject({
+      actionType: "execute_external_action",
+      status: "pending",
+      metadata: {
+        approvedAttempt: 2,
+        requestedAttempt: 1,
+        requestedToolName: externalTool.name,
+        requestedToolCallId: "activate-1",
+      },
+    });
+    expect(store.listEvents(runId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "supervisor.approval.requested", data: expect.objectContaining({ approvalId: approval.id, toolName: externalTool.name }) }),
+    ]));
+
+    runtimes[0]!.abort();
+    await service.approveRunApproval(approval.id, "Approved with the hard approval control");
+    await vi.waitFor(() => expect(runtimeOptions).toHaveLength(2));
+
+    expect(store.getRun(runId)).toMatchObject({ status: "running", attempt: 2 });
+    expect(runtimeOptions[1]!.eventSink.beforeToolCall({
+      toolCallId: "activate-2",
+      toolName: externalTool.name,
+      args: {},
+    })).toEqual({ blocked: false });
+    expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "consumed" });
+    runtimeOptions[1]!.eventSink.afterToolCall({ toolCallId: "activate-2", toolName: externalTool.name, success: true });
+
     await service.closeRuntimes();
     store.close();
   });

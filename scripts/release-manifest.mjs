@@ -9,6 +9,7 @@ import { createRequire } from "node:module";
 
 const root = path.resolve(process.argv[3] ?? ".");
 const manifestPath = path.join(root, "RELEASE_MANIFEST.json");
+const hashConcurrency = 8;
 const requiredRuntime = { node: "24.18.1", abi: "137", platform: "linux", arch: "x64" };
 const generatedFiles = new Set(["RELEASE_COMMIT", "RELEASE_MANIFEST.json"]);
 const nativeBinding = "node_modules/better-sqlite3/build/Release/better_sqlite3.node";
@@ -33,7 +34,7 @@ const webRequiredReleaseFiles = [
   "scripts/release-manifest.mjs",
 ];
 const coreContract = Object.freeze({
-  hostProtocolVersion: 1,
+  hostProtocolVersion: 2,
   stateProtocol: "tagent-core/state-0.8-r2",
   generationEntry: "node_modules/@tagent/core-service/dist/generation-entry.js",
 });
@@ -69,6 +70,20 @@ function assertArtifactBoundary(files, artifact) {
 async function sha256(relativePath) {
   const content = await readFile(path.join(root, relativePath));
   return createHash("sha256").update(content).digest("hex");
+}
+
+async function mapConcurrent(values, concurrency, mapper) {
+  const results = new Array(values.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (cursor < values.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(values[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 function assertRuntime(expected = requiredRuntime) {
@@ -186,7 +201,8 @@ async function createManifest() {
     await assertWorkspaceHelper();
     await verifyNativeModule();
   }
-  const files = Object.fromEntries(await Promise.all(releaseFiles.map(async (file) => [file, await sha256(file)])));
+  const hashes = await mapConcurrent(releaseFiles, hashConcurrency, async (file) => [file, await sha256(file)]);
+  const files = Object.fromEntries(hashes);
   await writeFile(path.join(root, "RELEASE_COMMIT"), `${commit}\n`, "utf8");
   const manifest = artifact === "core"
     ? { schemaVersion: 2, artifact, commit, runtime: requiredRuntime, core: coreContract, files }
@@ -195,7 +211,8 @@ async function createManifest() {
   console.log(`[release-verify] created ${artifact} manifest for ${commit}`);
 }
 
-async function verifyManifest() {
+async function verifyManifest(options = {}) {
+  const verifyNative = options.verifyNative !== false;
   const actualFiles = await listReleaseFiles();
   if (!existsSync(manifestPath)) fail("RELEASE_MANIFEST.json is missing");
   let manifest;
@@ -221,15 +238,24 @@ async function verifyManifest() {
   if (artifact === "core") await assertWorkspaceHelper();
   const expectedFiles = Object.keys(manifest.files ?? {}).sort();
   if (actualFiles.join("\n") !== expectedFiles.join("\n")) fail("manifest file set does not match the release contents");
-  for (const file of actualFiles) {
-    const actual = await sha256(file);
+  const actualHashes = await mapConcurrent(actualFiles, hashConcurrency, sha256);
+  for (const [index, file] of actualFiles.entries()) {
+    const actual = actualHashes[index];
     if (actual !== manifest.files[file]) fail(`checksum mismatch for ${file}: expected ${manifest.files[file]}, got ${actual}`);
   }
-  if (artifact === "core") await verifyNativeModule();
+  if (artifact === "core" && verifyNative) await verifyNativeModule();
   console.log(`[release-verify] ${artifact} release ${manifest.commit} is compatible and internally consistent`);
+}
+
+async function verifyNativeOnly() {
+  assertRuntime();
+  await verifyNativeModule();
+  console.log("[release-verify] Core native SQLite binding smoke test passed");
 }
 
 const command = process.argv[2];
 if (command === "create") await createManifest();
 else if (command === "verify") await verifyManifest();
-else fail("usage: release-manifest.mjs <create|verify> [release-directory]");
+else if (command === "verify-integrity") await verifyManifest({ verifyNative: false });
+else if (command === "verify-native") await verifyNativeOnly();
+else fail("usage: release-manifest.mjs <create|verify|verify-integrity|verify-native> [release-directory]");
