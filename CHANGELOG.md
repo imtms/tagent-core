@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.8.6] - 2026-08-17
+
 ### Retired Learning subsystem
 
 - Preserved the complete former implementation in the `learning-archive` branch and removed its workspace, runtime composition, APIs, ABI profiles, Core Client methods, Web Console UI, configuration, workers, and active persistence repositories from `main`.

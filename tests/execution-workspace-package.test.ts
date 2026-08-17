@@ -71,10 +71,10 @@ describe("Execution workspace package", () => {
     const root = readJson<{ devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const execution = readJson<PackageManifest>("packages/execution/package.json");
 
-    expect(execution).toMatchObject({ name: "@tagent/execution", version: "0.8.5", private: true });
+    expect(execution).toMatchObject({ name: "@tagent/execution", version: "0.8.6", private: true });
     expect(root.devDependencies[execution.name]).toBe(execution.version);
     expect(Object.keys(execution.exports).sort()).toEqual(expectedExports);
-    expect(execution.dependencies).toEqual({ "@tagent/governance": "0.8.5" });
+    expect(execution.dependencies).toEqual({ "@tagent/governance": "0.8.6" });
     for (const [subpath, target] of Object.entries(execution.exports)) {
       expect(subpath).not.toContain("*");
       expect(target.types).toMatch(/^\.\/dist\/.+\.d\.ts$/);
@@ -91,7 +91,7 @@ describe("Execution workspace package", () => {
       ...sourceFiles("packages/execution/src/domain"),
       ...sourceFiles("packages/execution/src/ports"),
     ];
-    expect(implementationFiles).toHaveLength(60);
+    expect(implementationFiles).toHaveLength(61);
     expect(implementationFiles).toEqual(expect.arrayContaining([
       "packages/execution/src/application/attempt-execution-failure.ts",
       "packages/execution/src/application/context-token-estimate.ts",
@@ -107,6 +107,7 @@ describe("Execution workspace package", () => {
       "packages/execution/src/application/tool-execution-pipeline.ts",
       "packages/execution/src/application/tool-registry.ts",
       "packages/execution/src/domain/attempt-request-envelope.ts",
+      "packages/execution/src/domain/runtime-model.ts",
       "packages/execution/src/ports/attempt-request-envelope-repository.ts",
       "packages/execution/src/ports/credential-resolver-port.ts",
       "packages/execution/src/ports/generation-maintenance.ts",
