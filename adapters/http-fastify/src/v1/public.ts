@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { successEnvelope, V1HttpError } from "./errors.js";
-import type { V1ApiDependencies } from "./plugin.js";
+import type { V1ApiDependencies } from "./dependencies.js";
 
 /** Stable public v1 discovery/fallback surface. */
 export function registerPublicV1Routes(app: FastifyInstance, dependencies: V1ApiDependencies): void {

@@ -12,7 +12,13 @@ const PUBLIC_METHODS = {
     "followUp", "steer", "compact", "cancel", "resume", "rejectRunApproval", "submitUserInput",
     "subscribe", "replay", "getRun", "getCurrentAttemptId",
   ],
-  workspaceGoals: ["generateWorkspaceGoalRoadmap", "startWorkspaceGoalRoadmapItem"],
+  workspaceGoals: [
+    "listWorkspaceGoals", "createWorkspaceGoal", "getWorkspaceGoal",
+    "reviseWorkspaceGoalDefinition", "reviseWorkspaceGoalRoadmap",
+    "requestWorkspaceGoalRoadmapGeneration", "getWorkspaceGoalOperation",
+    "decideWorkspaceGoal", "generateWorkspaceGoalRoadmap",
+    "startWorkspaceGoalRoadmapItem", "startWorkspaceGoalRoadmapTask",
+  ],
   skills: [
     "listSkills", "listSkillsProfile", "getSkill", "getSkillProfile", "listSkillRevisions",
     "listSkillRevisionsProfile", "uploadSkill", "uploadSkillProfile", "updateSkill",

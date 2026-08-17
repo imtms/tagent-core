@@ -2,11 +2,25 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "@tagent/http-fastify";
 import { Store } from "@tagent/persistence-sqlite";
 import { httpPersistence } from "./support/test-persistence.js";
+import { corePersistence } from "./support/test-persistence.js";
 import { createCoreClient } from "@tagent/core-client";
+import { CoreWorkspaceGoalApplication, type WorkspaceGoalRoadmapGenerator } from "@tagent/core-service/application";
 import type { AddressInfo } from "node:net";
 
 const apps: Array<ReturnType<typeof createApp>> = [];
 afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close())); });
+
+function goalHttpService(store:Store,options:{generator?:WorkspaceGoalRoadmapGenerator;enqueue?:ReturnType<typeof vi.fn>}={}){
+  const persistence=corePersistence(store);
+  const enqueue=options.enqueue??vi.fn(()=>({item:{id:"goal-inbox"},run:{id:"goal-run"}}));
+  const application=new CoreWorkspaceGoalApplication(persistence.workspaceGoals,{enqueueGoalRoadmapItem:enqueue} as never,options.generator,persistence.sessions,persistence.workspaceGoalOperations);
+  const service={closeRuntimes:async()=>undefined,
+    listWorkspaceGoals:application.listWorkspaceGoals.bind(application),createWorkspaceGoal:application.createWorkspaceGoal.bind(application),getWorkspaceGoal:application.getWorkspaceGoal.bind(application),
+    reviseWorkspaceGoalDefinition:application.reviseWorkspaceGoalDefinition.bind(application),reviseWorkspaceGoalRoadmap:application.reviseWorkspaceGoalRoadmap.bind(application),
+    requestWorkspaceGoalRoadmapGeneration:application.requestWorkspaceGoalRoadmapGeneration.bind(application),getWorkspaceGoalOperation:application.getWorkspaceGoalOperation.bind(application),
+    startWorkspaceGoalRoadmapTask:application.startWorkspaceGoalRoadmapTask.bind(application),decideWorkspaceGoal:application.decideWorkspaceGoal.bind(application)} as never;
+  return{application,enqueue,service};
+}
 
 describe("Workspace Goal console API", () => {
   it("calls the Roadmap generator at most once per requestId and exposes its receipt", async () => {
@@ -14,16 +28,19 @@ describe("Workspace Goal console API", () => {
     const workspace = store.createSession("Generated Roadmap");
     const persistence = httpPersistence(store);
     const definition = { title: "Generate", outcome: "One draft", scope: [], nonGoals: [], criteria: [{ key: "one", title: "One", required: true }], completionPolicy: "user_confirm" as const };
-    const goal = persistence.workspaceGoals.createGoal({ workspaceId: workspace.id, definition, createdBy: "test" });
-    const generateWorkspaceGoalRoadmap = vi.fn(async () => {
-      persistence.workspaceGoals.addRoadmapRevision(goal.id, { summary: "Generated once", items: [{ id: "one", title: "One", outcome: "Done", verification: "Check", criterionKeys: ["one"] }] }, null, "test");
-    });
-    const app = createApp({ persistence, service: { closeRuntimes: async () => undefined, generateWorkspaceGoalRoadmap } as never, logger: false, closeResources: async () => store.close() });
+    const generate = vi.fn(async () => ({ summary: "Generated once", items: [
+      { id: "one", title: "One", outcome: "Done", verification: "Check", criterionKeys: ["one"] },
+      { id: "verify_one", title: "Verify", outcome: "Verified", verification: "Inspect result", criterionKeys: ["one"] },
+    ] }));
+    const harness=goalHttpService(store,{generator:{model:"goal-api",generate}});
+    const goal=harness.application.createWorkspaceGoal(workspace.id,{definition,actorId:"test"});
+    harness.application.decideWorkspaceGoal({goalId:goal.id,targetRevisionId:goal.definition!.id,targetHash:goal.definition!.contentHash,kind:"approve_goal",actorId:"test"});
+    const app = createApp({ persistence, service:harness.service, logger: false, closeResources: async () => store.close() });
     apps.push(app);
     const payload = { requestId: "generate-once", actorId: "gateway" };
     expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/roadmap/generate`, payload })).statusCode).toBe(200);
     expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/roadmap/generate`, payload })).statusCode).toBe(200);
-    expect(generateWorkspaceGoalRoadmap).toHaveBeenCalledTimes(1);
+    expect(generate).toHaveBeenCalledTimes(1);
     const receipt = await app.inject({ method: "GET", url: `/api/v1/console/workspace-goals/${goal.id}/operations/generate-once` });
     expect(receipt.json().data).toMatchObject({ operationType: "roadmap.generate", state: "succeeded", result: { generated: true } });
     expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/roadmap/generate`, payload: { requestId: "generate-once", actorId: "changed" } })).statusCode).toBe(409);
@@ -32,9 +49,9 @@ describe("Workspace Goal console API", () => {
   it("uses only Roadmap terminology and exposes direct Roadmap TaskRun start", async () => {
     const store = new Store(":memory:");
     const workspace = store.createSession("Goal workspace");
-    const startWorkspaceGoalRoadmapItem = vi.fn(() => ({ item: { id: "inbox-roadmap" }, run: { id: "run-roadmap" } }));
-    const service = { closeRuntimes: async () => undefined, startWorkspaceGoalRoadmapItem } as never;
-    const app = createApp({ persistence: httpPersistence(store), service, logger: false, closeResources: async () => store.close() });
+    const enqueue = vi.fn(() => ({ item: { id: "inbox-roadmap" }, run: { id: "run-roadmap" } }));
+    const harness=goalHttpService(store,{enqueue});
+    const app = createApp({ persistence: httpPersistence(store), service:harness.service, logger: false, closeResources: async () => store.close() });
     apps.push(app);
     const definition = {
       title: "Workspace Goal Roadmap",
@@ -68,7 +85,7 @@ describe("Workspace Goal console API", () => {
     const started = await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/task-runs`, payload: { roadmapItemId: "web", requestId: "start-web" } });
     expect(started.statusCode).toBe(200);
     expect(started.json().data).toMatchObject({ inboxItemId: "inbox-roadmap", runId: "run-roadmap", goal: { id: goal.id } });
-    expect(startWorkspaceGoalRoadmapItem).toHaveBeenCalledWith(goal.id, "web", "start-web");
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({goalId:goal.id,requestId:"start-web",roadmapItem:expect.objectContaining({id:"web"})}));
 
     expect((await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/decisions`, payload: { requestId: "invalid-decision", targetRevisionId: withRoadmap.roadmap.id, targetHash: withRoadmap.roadmap.contentHash, kind: "approve_something", approvedItemIds: ["web"] } })).statusCode).toBe(400);
   });
@@ -76,10 +93,11 @@ describe("Workspace Goal console API", () => {
   it("exposes every stable Goal write through the typed Core Client", async () => {
     const store = new Store(":memory:");
     const workspace = store.createSession("Goal client");
-    const startWorkspaceGoalRoadmapItem = vi.fn(() => ({ item: { id: "client-inbox" }, run: { id: "client-run" } }));
+    const enqueue = vi.fn(() => ({ item: { id: "client-inbox" }, run: { id: "client-run" } }));
+    const harness=goalHttpService(store,{enqueue});
     const app = createApp({
       persistence: httpPersistence(store),
-      service: { closeRuntimes: async () => undefined, startWorkspaceGoalRoadmapItem } as never,
+      service:harness.service,
       logger: false,
       closeResources: async () => store.close(),
     });
@@ -112,6 +130,6 @@ describe("Workspace Goal console API", () => {
     });
     await expect(client.startWorkspaceGoalTaskRun(created.id, { roadmapItemId: "typed_client", requestId: "client-start" }))
       .resolves.toMatchObject({ inboxItemId: "client-inbox", runId: "client-run", goal: { id: created.id } });
-    expect(startWorkspaceGoalRoadmapItem).toHaveBeenCalledWith(created.id, "typed_client", "client-start");
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({goalId:created.id,requestId:"client-start",roadmapItem:expect.objectContaining({id:"typed_client"})}));
   });
 });

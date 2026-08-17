@@ -1,4 +1,4 @@
-import type { ExtractorPort, JobQueuePort, SourceLoaderPort } from "./ports.js";
+import type { CaptureCommitPort, ExtractorPort, JobQueuePort, SourceLoaderPort } from "./ports.js";
 import type { PolicyGatePort } from "./policy/policy-engine.js";
 import type { MemoryService } from "./memory-service.js";
 import type { MemoryLifecycle } from "./lifecycle.js";
@@ -35,12 +35,17 @@ export class MemoryCaptureWorker {
       if(leaseLost)return true;
       const integrated=this.lifecycle?await this.lifecycle.integrate(job.request.access,proposal):proposal;
       if(leaseLost||!await this.jobs.renew(job.id,this.owner,leaseToken,fencingToken,leaseMs))return true;
-      const persisted=await this.service.persistExtracted(job.request.access,integrated.records,integrated.topics,proposal.nodes,proposal.edges);
-      const completed=await finish(()=>this.jobs.complete(job.id,this.owner,leaseToken,fencingToken,{extractedCount,proposalCount:proposal.records.length,persistedCount:persisted.length,filterReasons}));
-      if(completed)this.onEvent?.({type:proposal.records.length?"memory.capture.completed":"memory.capture.empty",sourceRefs:job.request.sourceRefs,data:{jobId:job.id,attempts:job.attempts,extractedCount,proposalCount:proposal.records.length,persistedCount:persisted.length,filterReasons,latencyMs:Date.now()-job.createdAt,errorCode:proposal.records.length?(persisted.length<proposal.records.length?"partially_persisted":undefined):(extractedCount?"all_filtered":"extractor_zero")}});
+      const committed=await this.service.commitCaptured(job.request.access,{jobId:job.id,owner:this.owner,leaseToken,fencingToken},integrated.records,integrated.topics,proposal.nodes,proposal.edges,{extractedCount,proposalCount:proposal.records.length,persistedCount:0,filterReasons},captureCommit(this.jobs));
+      if(committed.committed)this.onEvent?.({type:proposal.records.length?"memory.capture.completed":"memory.capture.empty",sourceRefs:job.request.sourceRefs,data:{jobId:job.id,attempts:job.attempts,extractedCount,proposalCount:proposal.records.length,persistedCount:committed.persisted.length,filterReasons,latencyMs:Date.now()-job.createdAt,errorCode:proposal.records.length?(committed.persisted.length<proposal.records.length?"partially_persisted":undefined):(extractedCount?"all_filtered":"extractor_zero")}});
       return true;
     }catch(error){const errorCode=error instanceof Error?error.name:"capture_error";const failed=await finish(()=>this.jobs.fail(job.id,this.owner,leaseToken,fencingToken,errorCode,true));if(failed)this.onEvent?.({type:"memory.capture.failed",sourceRefs:job.request.sourceRefs,data:{jobId:job.id,attempts:job.attempts,errorCode,latencyMs:Date.now()-job.createdAt}});return true;}finally{clearInterval(heartbeat);}
   }
+}
+
+function captureCommit(jobs:JobQueuePort):CaptureCommitPort{
+  const candidate=jobs as Partial<CaptureCommitPort>;
+  if(typeof candidate.commitCapture!=="function")throw new Error("Memory capture requires a fenced commit adapter");
+  return candidate as CaptureCommitPort;
 }
 
 function applyProvenance(proposal:{records:WarmMemory[];topics:any[];nodes:any[];edges:any[]},request:CaptureRequest){

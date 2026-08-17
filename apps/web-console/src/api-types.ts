@@ -83,5 +83,7 @@ export type MemoryStatusResult = ConsoleV1.ConsoleMemoryStatusResult;
 export type ReindexJob = ConsoleV1.ConsoleReindexJob;
 export type CoreMemorySnapshot = ConsoleV1.ConsoleCoreMemorySnapshot;
 export type MemoryExport = ConsoleV1.ConsoleMemoryExport;
+export type MemoryRecordPage=ConsoleV1.ConsoleMemoryRecordPage;
+export type MemoryTopicPage=ConsoleV1.ConsoleMemoryTopicPage;
 export type MemoryCard = ConsoleV1.ConsoleMemoryCard;
 export type RecallResult = ConsoleV1.ConsoleRecallResult;

@@ -285,7 +285,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
   admissionRef.bind(admission);
   const roadmapGenerator = runtimeDefaults.workspaceGoalRoadmapGenerator
     ?? (routerModel && runtimeDefaults.credential ? new OpenAiWorkspaceGoalRoadmapGenerator({ model: routerModel, credential: runtimeDefaults.credential, timeoutMs: routerTimeoutMs }) : undefined);
-  const workspaceGoals = new CoreWorkspaceGoalApplication(options.persistence.workspaceGoals, admission, roadmapGenerator);
+  const workspaceGoals = new CoreWorkspaceGoalApplication(options.persistence.workspaceGoals, admission, roadmapGenerator, options.persistence.sessions, options.persistence.workspaceGoalOperations);
   const skills = new CoreSkillApplication(options.persistence.skills, options.persistence.sessions, options.workspace);
   const lifecycle = new ExecutionLifecycleService(state, collaborators.backgroundWork);
 

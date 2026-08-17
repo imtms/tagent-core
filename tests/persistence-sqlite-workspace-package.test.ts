@@ -98,6 +98,23 @@ function usesRawDatabaseApi(relativePath: string): boolean {
 }
 
 describe("SQLite persistence adapter workspace package", () => {
+  it("delegates Session and Message persistence to a bounded repository", () => {
+    const store = readFileSync(path.join(repoRoot, sourceRoot, "store.ts"), "utf8");
+    const repository = readFileSync(path.join(repoRoot, sourceRoot, "sqlite/session-repository.ts"), "utf8");
+    expect(store).toContain("SqliteSessionRepository");
+    expect(store).toContain("this.sessionRepository.createSessionIdempotent(input)");
+    expect(store).toContain("this.sessionRepository.appendMessage(sessionId, role, content)");
+    expect(repository).toContain("export class SqliteSessionRepository");
+    expect(repository).toContain("INSERT INTO session_create_receipts");
+  });
+
+  it("delegates Workspace Goal operation receipts to a bounded repository", () => {
+    const store = readFileSync(path.join(repoRoot, sourceRoot, "store.ts"), "utf8");
+    const composition = readFileSync(path.join(repoRoot, sourceRoot, "sqlite/sqlite-persistence.ts"), "utf8");
+    expect(store).not.toContain("claimWorkspaceGoalOperation(");
+    expect(composition).toContain("SqliteWorkspaceGoalOperationRepository");
+  });
+
   it("publishes a private explicit ABI with only approved domain ports and SQLite runtime", () => {
     const root = readJson<{ version: string; devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const manifest = readJson<PackageManifest>(`${packageRoot}/package.json`);

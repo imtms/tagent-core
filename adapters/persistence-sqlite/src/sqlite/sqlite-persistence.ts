@@ -36,6 +36,7 @@ import { SqliteAttemptRepository } from "./attempt-repository.js";
 import { SqliteFencedRuntimeMutationRepository } from "./attempt-runtime-mutation-repository.js";
 import { SqliteTaskRunTransitionRepository } from "./task-run-transition-repository.js";
 import { SqliteWorkspaceGoalRepository } from "./workspace-goal-repository.js";
+import { SqliteWorkspaceGoalOperationRepository } from "./workspace-goal-operation-repository.js";
 import { SqliteAttemptRequestEnvelopeRepository } from "./attempt-request-envelope-repository.js";
 import { SqliteProfileContractRepository } from "./profile-contract-repository.js";
 import { createStoreBackedPorts } from "./store-port-bindings.js";
@@ -109,6 +110,7 @@ export class SqlitePersistence {
     const sqliteRuntimeMutations = new SqliteFencedRuntimeMutationRepository(store.db, store);
     const sqliteTaskRunTransitions = new SqliteTaskRunTransitionRepository(store.db, store);
     const sqliteWorkspaceGoals = new SqliteWorkspaceGoalRepository(store.db);
+    const sqliteWorkspaceGoalOperations = new SqliteWorkspaceGoalOperationRepository(store.db);
     const sqliteRequestEnvelopes = new SqliteAttemptRequestEnvelopeRepository(store.db);
     const sqliteProfileContracts = new SqliteProfileContractRepository(store.db);
 
@@ -146,9 +148,9 @@ export class SqlitePersistence {
       authorizeRunMutation: query(sqliteWorkspaceGoals.authorizeRunMutation.bind(sqliteWorkspaceGoals)),
     });
     this.workspaceGoalOperations = Object.freeze({
-      claimWorkspaceGoalOperation: mutate(store.claimWorkspaceGoalOperation.bind(store)),
-      getWorkspaceGoalOperation: query(store.getWorkspaceGoalOperation.bind(store)),
-      settleWorkspaceGoalOperation: mutate(store.settleWorkspaceGoalOperation.bind(store)),
+      claimWorkspaceGoalOperation: mutate(sqliteWorkspaceGoalOperations.claimWorkspaceGoalOperation.bind(sqliteWorkspaceGoalOperations)),
+      getWorkspaceGoalOperation: query(sqliteWorkspaceGoalOperations.getWorkspaceGoalOperation.bind(sqliteWorkspaceGoalOperations)),
+      settleWorkspaceGoalOperation: mutate(sqliteWorkspaceGoalOperations.settleWorkspaceGoalOperation.bind(sqliteWorkspaceGoalOperations)),
     });
 
     this.attempts = Object.freeze({
@@ -251,7 +253,7 @@ export class SqlitePersistence {
 
     this.memory = Object.freeze({
       getMessageSource: this.messageSources.getMessageSource,
-      listDurableUserMessages: this.messageSources.listDurableUserMessages,
+      listDurableUserMessagesPage: this.messageSources.listDurableUserMessagesPage,
       getRun: this.taskRuns.getRun,
       listTranscriptView: this.transcript.listTranscriptView,
       appendEvent: this.events.appendEvent,

@@ -12,12 +12,10 @@ import {
   ConsoleDecideWorkspaceGoalRequestSchema,
   ConsoleStartWorkspaceGoalTaskRunRequestSchema,
   ConsoleStartWorkspaceGoalTaskRunResultSchema,
-  canonicalJson,
   decodeAbi,
   encodeAbi,
 } from "@tagent/abi";
-import { WorkspaceGoalService } from "@tagent/governance";
-import type { V1ApiDependencies } from "./plugin.js";
+import type { V1ApiDependencies } from "./dependencies.js";
 import { successEnvelope, V1HttpError } from "./errors.js";
 import { authorizeConsole, consoleError } from "./console-route-support.js";
 
@@ -36,27 +34,25 @@ type GoalOperationParams = Static<typeof GoalOperationParamsSchema>;
 type WorkspaceIdParams = Static<typeof WorkspaceIdParamsSchema>;
 
 export function registerConsoleGoalV1Routes(app: FastifyInstance, dependencies: V1ApiDependencies): void {
-  const goals = new WorkspaceGoalService(dependencies.persistence.workspaceGoals);
   const read = authorizeConsole(dependencies, "sessions:read");
   const write = authorizeConsole(dependencies, "sessions:write");
 
   app.get("/api/v1/console/workspaces/:workspaceId/goals", { onRequest: read, schema: { params: WorkspaceIdParamsSchema } }, async (request) => {
     const { workspaceId } = request.params as WorkspaceIdParams;
-    if (!dependencies.persistence.sessions.getSession(workspaceId)) throw consoleError(404, "workspace.not_found", "workspace not found");
-    return successEnvelope(request, goals.list(workspaceId).map((goal) => encodeAbi(ConsoleWorkspaceGoalSummarySchema, goal)));
+    try{return successEnvelope(request, dependencies.service.listWorkspaceGoals(workspaceId).map((goal) => encodeAbi(ConsoleWorkspaceGoalSummarySchema, goal)));}
+    catch(error){throw mapGoalError(error);}
   });
 
   app.post("/api/v1/console/workspaces/:workspaceId/goals", { onRequest: write, schema: { params: WorkspaceIdParamsSchema, body: CreateGoalBodySchema } }, async (request) => {
     const { workspaceId } = request.params as WorkspaceIdParams;
-    if (!dependencies.persistence.sessions.getSession(workspaceId)) throw consoleError(404, "workspace.not_found", "workspace not found");
     const body = decodeAbi(CreateGoalBodySchema, request.body);
     try {
-      return successEnvelope(request, encodeAbi(ConsoleWorkspaceGoalSchema, goals.create({ workspaceId, definition: body.definition, createdBy: body.actorId?.trim() || "web_console", idempotencyKey: body.requestId?.trim() || undefined })));
+      return successEnvelope(request, encodeAbi(ConsoleWorkspaceGoalSchema, dependencies.service.createWorkspaceGoal(workspaceId,{definition:body.definition,actorId:body.actorId,requestId:body.requestId})));
     } catch (error) { throw mapGoalError(error); }
   });
 
   app.get("/api/v1/console/workspace-goals/:goalId", { onRequest: read, schema: { params: GoalIdParamsSchema } }, async (request) => {
-    const goal = goals.get((request.params as GoalIdParams).goalId);
+    const goal = dependencies.service.getWorkspaceGoal((request.params as GoalIdParams).goalId);
     if (!goal) throw consoleError(404, "workspace_goal.not_found", "Workspace Goal not found");
     return successEnvelope(request, encodeAbi(ConsoleWorkspaceGoalSchema, goal));
   });
@@ -65,17 +61,8 @@ export function registerConsoleGoalV1Routes(app: FastifyInstance, dependencies: 
     const { goalId } = request.params as GoalIdParams;
     const body = decodeAbi(ReviseGoalBodySchema, request.body);
     try {
-      const actorId = body.actorId?.trim() || "web_console";
-      const claim = dependencies.persistence.workspaceGoalOperations.claimWorkspaceGoalOperation({ goalId, requestId: body.requestId, operationType: "definition.revise", canonicalPayload: canonicalJson({ definition: body.definition, actorId }) });
-      if (!claim.claimed) return successEnvelope(request, replayGoalOperation(claim.receipt));
-      try {
-        const result = encodeAbi(ConsoleWorkspaceGoalRevisionSchema, goals.reviseDefinition(goalId, body.definition, actorId));
-        dependencies.persistence.workspaceGoalOperations.settleWorkspaceGoalOperation(goalId, body.requestId, "succeeded", result as unknown as Record<string, unknown>);
-        return successEnvelope(request, result);
-      } catch (error) {
-        dependencies.persistence.workspaceGoalOperations.settleWorkspaceGoalOperation(goalId, body.requestId, "failed", {}, goalOperationError(error));
-        throw error;
-      }
+      const result=dependencies.service.reviseWorkspaceGoalDefinition(goalId,{definition:body.definition,actorId:body.actorId,requestId:body.requestId});
+      return successEnvelope(request,encodeAbi(ConsoleWorkspaceGoalRevisionSchema,result));
     } catch (error) { throw mapGoalError(error); }
   });
 
@@ -83,54 +70,23 @@ export function registerConsoleGoalV1Routes(app: FastifyInstance, dependencies: 
     const { goalId } = request.params as GoalIdParams;
     const body = decodeAbi(RoadmapBodySchema, request.body);
     try {
-      const actorId = body.actorId?.trim() || "web_console";
-      const sourceArtifactId = body.sourceArtifactId?.trim() || null;
-      const claim = dependencies.persistence.workspaceGoalOperations.claimWorkspaceGoalOperation({ goalId, requestId: body.requestId, operationType: "roadmap.revise", canonicalPayload: canonicalJson({ content: body.content, sourceArtifactId, actorId }) });
-      if (!claim.claimed) return successEnvelope(request, encodeAbi(ConsoleWorkspaceGoalSchema, replayGoalOperation(claim.receipt) as never));
-      try {
-        goals.addRoadmap(goalId, body.content, sourceArtifactId, actorId);
-        const result = encodeAbi(ConsoleWorkspaceGoalSchema, goals.get(goalId)!);
-        dependencies.persistence.workspaceGoalOperations.settleWorkspaceGoalOperation(goalId, body.requestId, "succeeded", result as unknown as Record<string, unknown>);
-        return successEnvelope(request, result);
-      } catch (error) {
-        dependencies.persistence.workspaceGoalOperations.settleWorkspaceGoalOperation(goalId, body.requestId, "failed", {}, goalOperationError(error));
-        throw error;
-      }
+      const result=dependencies.service.reviseWorkspaceGoalRoadmap(goalId,{content:body.content,sourceArtifactId:body.sourceArtifactId,actorId:body.actorId,requestId:body.requestId});
+      return successEnvelope(request,encodeAbi(ConsoleWorkspaceGoalSchema,result));
     } catch (error) { throw mapGoalError(error); }
   });
 
   app.post("/api/v1/console/workspace-goals/:goalId/roadmap/generate", { onRequest: write, schema: { params: GoalIdParamsSchema, body: GenerateRoadmapBodySchema } }, async (request) => {
     const { goalId } = request.params as GoalIdParams;
     const body = decodeAbi(GenerateRoadmapBodySchema, request.body ?? {});
-    const actorId = body.actorId?.trim() || "web_console";
     try {
-      const claim = dependencies.persistence.workspaceGoalOperations.claimWorkspaceGoalOperation({
-        goalId,
-        requestId: body.requestId,
-        operationType: "roadmap.generate",
-        canonicalPayload: canonicalJson({ actorId }),
-      });
-      if (!claim.claimed) {
-        if (claim.receipt.state === "succeeded") return successEnvelope(request, encodeAbi(ConsoleWorkspaceGoalSchema, goals.get(goalId)!));
-        if (claim.receipt.state === "failed") throw new Error(String(claim.receipt.error?.message ?? "Goal Roadmap generation failed"));
-        if (claim.receipt.state === "started") throw consoleError(409, "workspace_goal.operation_in_progress", "Goal Roadmap generation is still in progress");
-        throw consoleError(409, "workspace_goal.operation_outcome_unknown", "Goal Roadmap generation outcome is unknown; inspect the Goal before retrying with a new requestId");
-      }
-      try {
-        await dependencies.service.generateWorkspaceGoalRoadmap(goalId, actorId);
-        dependencies.persistence.workspaceGoalOperations.settleWorkspaceGoalOperation(goalId, body.requestId, "succeeded", { generated: true });
-      } catch (error) {
-        dependencies.persistence.workspaceGoalOperations.settleWorkspaceGoalOperation(goalId, body.requestId, "failed", {}, goalOperationError(error));
-        throw error;
-      }
-      return successEnvelope(request, encodeAbi(ConsoleWorkspaceGoalSchema, goals.get(goalId)!));
+      const goal=await dependencies.service.requestWorkspaceGoalRoadmapGeneration(goalId,{requestId:body.requestId,actorId:body.actorId});
+      return successEnvelope(request,encodeAbi(ConsoleWorkspaceGoalSchema,goal));
     } catch (error) { throw mapGoalError(error); }
   });
 
   app.get("/api/v1/console/workspace-goals/:goalId/operations/:requestId", { onRequest: read, schema: { params: GoalOperationParamsSchema } }, async (request) => {
     const { goalId, requestId } = request.params as GoalOperationParams;
-    if (!goals.get(goalId)) throw consoleError(404, "workspace_goal.not_found", "Workspace Goal not found");
-    const receipt = dependencies.persistence.workspaceGoalOperations.getWorkspaceGoalOperation(goalId, requestId);
+    const receipt = dependencies.service.getWorkspaceGoalOperation(goalId, requestId);
     if (!receipt) throw consoleError(404, "workspace_goal.operation_not_found", "Workspace Goal operation not found");
     return successEnvelope(request, encodeAbi(ConsoleWorkspaceGoalOperationReceiptSchema, receipt));
   });
@@ -139,14 +95,11 @@ export function registerConsoleGoalV1Routes(app: FastifyInstance, dependencies: 
     const { goalId } = request.params as GoalIdParams;
     const body = decodeAbi(StartRoadmapItemBodySchema, request.body);
     try {
-      const result = dependencies.service.startWorkspaceGoalRoadmapItem(goalId, body.roadmapItemId, body.requestId?.trim() || undefined) as {
-        item: { id: string };
-        run: { id: string } | null;
-      };
+      const result = dependencies.service.startWorkspaceGoalRoadmapTask(goalId, body.roadmapItemId, body.requestId?.trim() || undefined);
       return successEnvelope(request, encodeAbi(ConsoleStartWorkspaceGoalTaskRunResultSchema, {
-        goal: encodeAbi(ConsoleWorkspaceGoalSchema, goals.get(goalId)!),
-        inboxItemId: result.item.id,
-        runId: result.run?.id ?? null,
+        goal: encodeAbi(ConsoleWorkspaceGoalSchema, result.goal),
+        inboxItemId: result.inboxItemId,
+        runId: result.runId,
       }));
     } catch (error) { throw mapGoalError(error); }
   });
@@ -155,8 +108,8 @@ export function registerConsoleGoalV1Routes(app: FastifyInstance, dependencies: 
     const { goalId } = request.params as GoalIdParams;
     const body = decodeAbi(DecisionBodySchema, request.body);
     try {
-      goals.decide({ goalId, requestId: body.requestId, targetRevisionId: body.targetRevisionId, targetHash: body.targetHash, kind: body.kind, approvedItemIds: body.approvedItemIds, reason: body.reason, actorId: body.actorId?.trim() || "web_console" });
-      return successEnvelope(request, encodeAbi(ConsoleWorkspaceGoalSchema, goals.get(goalId)!));
+      const goal=dependencies.service.decideWorkspaceGoal({ goalId, requestId: body.requestId, targetRevisionId: body.targetRevisionId, targetHash: body.targetHash, kind: body.kind, approvedItemIds: body.approvedItemIds, reason: body.reason, actorId: body.actorId?.trim() || "web_console" });
+      return successEnvelope(request, encodeAbi(ConsoleWorkspaceGoalSchema, goal));
     } catch (error) { throw mapGoalError(error); }
   });
 
@@ -172,16 +125,4 @@ function mapGoalError(error: unknown) {
   if (message.includes("not ready") || message.includes("must be") || message.includes("only a")) return consoleError(409, "workspace_goal.invalid_transition", message);
   if (message.includes("conflict")) return consoleError(409, "workspace_goal.conflict", message);
   return consoleError(400, "workspace_goal.invalid", message);
-}
-
-function replayGoalOperation(receipt: { state: string; result: Record<string, unknown> | null; error: Record<string, unknown> | null }): Record<string, unknown> {
-  if (receipt.state === "succeeded" && receipt.result) return receipt.result;
-  if (receipt.state === "failed") throw consoleError(409, "workspace_goal.operation_failed", String(receipt.error?.message ?? "Workspace Goal operation failed"));
-  if (receipt.state === "started") throw consoleError(409, "workspace_goal.operation_in_progress", "Workspace Goal operation is still in progress");
-  throw consoleError(409, "workspace_goal.operation_outcome_unknown", "Workspace Goal operation outcome is unknown; inspect the Goal before retrying with a new requestId");
-}
-
-function goalOperationError(error: unknown): Record<string, unknown> {
-  const mapped = mapGoalError(error);
-  return { code: mapped.code, message: mapped.message, retryable: mapped.retryable, details: mapped.details };
 }

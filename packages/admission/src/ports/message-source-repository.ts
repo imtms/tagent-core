@@ -15,5 +15,5 @@ export interface DurableUserMessage {
 
 export interface MessageSourceRepository {
   getMessageSource(id: number): MessageSource | undefined;
-  listDurableUserMessages(): DurableUserMessage[];
+  listDurableUserMessagesPage(afterId: number, limit: number): DurableUserMessage[];
 }

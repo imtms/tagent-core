@@ -1,1 +1,1 @@
-export { WorkspaceGoalService, validateWorkspaceGoalRoadmap, workspaceGoalContentHash, workspaceGoalNextAction } from "./application/workspace-goal-service.js";
+export { WorkspaceGoalService, authorizeWorkspaceGoalRunMutation, planWorkspaceGoalDecision, planWorkspaceGoalRevision, shouldWorkspaceGoalBeReady, validateWorkspaceGoalEvidenceTarget, validateWorkspaceGoalRoadmap, workspaceGoalContentHash, workspaceGoalNextAction } from "./application/workspace-goal-service.js";

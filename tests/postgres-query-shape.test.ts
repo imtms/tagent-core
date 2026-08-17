@@ -48,9 +48,11 @@ function expectTypedDynamicParameters(call: { text: string; values?: unknown[] }
 
 
 describe("PostgreSQL memory query shape", () => {
-  it("accepts only the current PostgreSQL Memory schema identity", async () => {
+  it("accepts the current PostgreSQL Memory schema and migrates version 1", async () => {
+    const calls: string[] = [];
     const connect = (identity?: { schemaId: string; schemaVersion: number }) => async () => ({
       async query(text: string) {
+        calls.push(text);
         if (text.includes("to_regnamespace")) return { rows: [{ oid: "1" }] };
         if (text.includes("to_regclass")) return { rows: [{ table_name: identity ? "memory.schema_identity" : null }] };
         if (text.includes("FROM memory.schema_identity")) return { rows: [identity] };
@@ -59,8 +61,18 @@ describe("PostgreSQL memory query shape", () => {
       release() {},
     });
     const current = new PostgresMemoryAdapter({});
-    (current as unknown as { pool: { connect: ReturnType<typeof connect> } }).pool = { connect: connect({ schemaId: "tagent-memory/0.8", schemaVersion: 1 }) };
+    (current as unknown as { pool: { connect: ReturnType<typeof connect> } }).pool = { connect: connect({ schemaId: "tagent-memory/0.8", schemaVersion: 2 }) };
     await expect(current.initializeSchema()).resolves.toBeUndefined();
+    expect(calls.some((query) => query.startsWith("ALTER TABLE memory.topics ADD COLUMN"))).toBe(false);
+
+    calls.length = 0;
+    const legacy = new PostgresMemoryAdapter({});
+    (legacy as unknown as { pool: { connect: ReturnType<typeof connect> } }).pool = { connect: connect({ schemaId: "tagent-memory/0.8", schemaVersion: 1 }) };
+    await expect(legacy.initializeSchema()).resolves.toBeUndefined();
+    expect(calls).toEqual(expect.arrayContaining([
+      "ALTER TABLE memory.topics ADD COLUMN created_at bigint",
+      "UPDATE memory.schema_identity SET schema_version=2 WHERE id=1",
+    ]));
 
     const unmarked = new PostgresMemoryAdapter({});
     (unmarked as unknown as { pool: { connect: ReturnType<typeof connect> } }).pool = { connect: connect() };
@@ -245,7 +257,7 @@ describe("PostgreSQL memory query shape", () => {
     }));
     const nodes: GraphNode[] = Array.from({ length: 1_000 }, (_, index) => ({ id: `node-${index}`, type: "entity", canonicalName: `Node ${index}`, aliases: [], scope }));
     const edges: GraphEdge[] = Array.from({ length: 1_000 }, (_, index) => ({ id: `edge-${index}`, fromId: `node-${index}`, predicate: "related", toId: `node-${(index + 1) % 1_000}`, scope, confidence: 1, status: "active" }));
-    const topics: TopicDescriptor[] = Array.from({ length: 1_000 }, (_, index) => ({ topicId: `topic-${index}`, kind: "fact", scope, title: `Topic ${index}`, description: "description", aliases: [], entityIds: [], relatedTopicIds: [], embeddingText: `topic ${index}`, status: "active", updatedAt: index }));
+    const topics: TopicDescriptor[] = Array.from({ length: 1_000 }, (_, index) => ({ topicId: `topic-${index}`, kind: "fact", scope, title: `Topic ${index}`, description: "description", aliases: [], entityIds: [], relatedTopicIds: [], embeddingText: `topic ${index}`, status: "active", createdAt: index, updatedAt: index }));
 
     await adapter.upsert(vectors);
     await adapter.upsertNodes(nodes);

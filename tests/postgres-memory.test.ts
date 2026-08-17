@@ -72,7 +72,7 @@ suite("PostgreSQL memory adapter", () => {
     const descriptor = {
       topicId: `tagent.memory.postgres.${scope.id}`, kind: "fact" as const, scope, title: "PostgreSQL memory",
       description: "PostgreSQL pgvector storage", aliases: ["memory database"], entityIds: [], relatedTopicIds: [],
-      embeddingText: "PostgreSQL pgvector memory", status: "active" as const, updatedAt: now,
+      embeddingText: "PostgreSQL pgvector memory", status: "active" as const, createdAt: now, updatedAt: now,
     };
     await service.publishColdTopic(access, descriptor, "# PostgreSQL memory\n\nCold is read in full.");
     const recalled = await service.recall({ access, cue: "PostgreSQL pgvector", maxColdTopics: 1, signal: testSignal });

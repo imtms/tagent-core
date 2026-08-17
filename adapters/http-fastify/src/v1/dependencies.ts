@@ -19,3 +19,5 @@ export interface ChannelV1Dependencies {
   writerReadiness?: HttpWriterReadiness;
   generationStatus?: () => Readonly<Record<string, unknown>> | null;
 }
+
+export type V1ApiDependencies = ChannelV1Dependencies;

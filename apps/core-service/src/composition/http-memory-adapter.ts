@@ -12,6 +12,7 @@ export function assembleHttpMemory(memory: MemoryFacade): HttpMemoryPort {
       ...(request as Omit<Parameters<MemoryFacade["recall"]>[0], "signal">),
       signal,
     }),
+    getRecord:(access,id)=>memory.getRecord(access,id),
     getColdTopic: (access, topicId) => memory.getColdTopic(access, topicId),
     upsert: (access, records, topics) => memory.upsert(
       access,
@@ -20,6 +21,7 @@ export function assembleHttpMemory(memory: MemoryFacade): HttpMemoryPort {
     ),
     export: (access, scope, limit) => memory.export(access, scope, limit),
     listRecordsPage: (access, scope, query) => memory.listRecordsPage(access, scope, query),
+    listTopicsPage:(access,scope,query)=>memory.listTopicsPage(access,scope,query),
     forget: (request) => memory.forget(request as Parameters<MemoryFacade["forget"]>[0]),
     restore: (request) => memory.restore(request as Parameters<MemoryFacade["restore"]>[0]),
     enqueueReindex: memory.enqueueReindex

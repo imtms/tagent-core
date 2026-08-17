@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { RuntimeModelSpec } from "../ports/attempt-runtime.js";
+import type { RuntimeModelSpec } from "./runtime-model.js";
 
 export interface AttemptRequestEnvelopeDraft {
   runId: string;

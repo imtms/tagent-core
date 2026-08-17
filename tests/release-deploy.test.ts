@@ -156,7 +156,14 @@ function runManifest(
 
 function deploy(fixture: Awaited<ReturnType<typeof deploymentFixture>>, tarball: string) {
   return spawnSync("bash", [deployScript, tarball, fixture.releaseRoot], {
-    env: { ...process.env, PATH: `${fixture.bin}:${process.env.PATH}`, TAGENT_HEALTH_ATTEMPTS: "1", TAGENT_HEALTH_URL: "http://test/api/health" }, encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${fixture.bin}:${process.env.PATH}`,
+      TAGENT_SERVICE_USER: os.userInfo().username,
+      TAGENT_HEALTH_ATTEMPTS: "1",
+      TAGENT_HEALTH_URL: "http://test/api/health",
+    },
+    encoding: "utf8",
   });
 }
 

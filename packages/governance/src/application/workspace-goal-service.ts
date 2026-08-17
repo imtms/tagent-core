@@ -5,10 +5,14 @@ import type {
   LinkWorkspaceGoalInboxInput,
   LinkWorkspaceGoalRunInput,
   WorkspaceGoal,
+  WorkspaceGoalDecision,
   WorkspaceGoalDecisionInput,
+  WorkspaceGoalEvidenceStatus,
   WorkspaceGoalNextAction,
+  WorkspaceGoalRevision,
   WorkspaceGoalRoadmap,
   WorkspaceGoalRoadmapItemProgress,
+  WorkspaceGoalRunLink,
   WorkspaceGoalStatus,
 } from "../domain/workspace-goal.js";
 import type { WorkspaceGoalRepository } from "../ports/workspace-goal-repository.js";
@@ -139,9 +143,47 @@ export function workspaceGoalContentHash(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }
 
+export function planWorkspaceGoalDecision(input:{goal:WorkspaceGoal;revision:WorkspaceGoalRevision;decision:WorkspaceGoalDecisionInput;hasOtherGuidingGoal:boolean}){
+  const {goal,revision,decision}=input,approvedItemIds=[...new Set(decision.approvedItemIds??[])].sort();
+  assertDecisionAllowed(goal.status,decision.kind);
+  if(goal.currentRunId&&["approve_goal","approve_roadmap","request_change","pause","cancel"].includes(decision.kind))throw new Error("workspace Goal cannot change approval, pause, or end while a guided TaskRun is active");
+  if(revision.goalId!==goal.id||revision.id!==decision.targetRevisionId||revision.contentHash!==decision.targetHash)throw new Error("workspace Goal revision is stale");
+  if(decision.kind==="approve_goal"&&revision.kind!=="definition")throw new Error("approve_goal requires a definition revision");
+  if(decision.kind==="approve_roadmap"&&revision.kind!=="roadmap")throw new Error("approve_roadmap requires a Roadmap revision");
+  if(decision.kind==="request_change"&&revision.kind==="definition"&&goal.activeDefinitionRevisionId!==revision.id)throw new Error("request_change must target the active Goal definition revision");
+  if(decision.kind==="request_change"&&revision.kind==="roadmap"&&goal.activeRoadmapRevisionId!==revision.id)throw new Error("request_change must target the active Roadmap revision");
+  if(["approve_goal","resume"].includes(decision.kind)&&input.hasOtherGuidingGoal)throw new Error("another active workspace Goal already guides this Workspace; pause it before activating this Goal");
+  if(decision.kind==="approve_roadmap")validateRoadmapApproval(goal,revision,approvedItemIds);
+  if(decision.kind==="close"&&(goal.requiredCriteria===0||goal.verifiedCriteria<goal.requiredCriteria))throw new Error("workspace Goal is not ready to close");
+  let status=goal.status,activeDefinitionRevisionId=goal.activeDefinitionRevisionId,activeRoadmapRevisionId=goal.activeRoadmapRevisionId,complete=false;
+  if(decision.kind==="approve_goal"){status="active";activeDefinitionRevisionId=revision.id;activeRoadmapRevisionId=null;}
+  if(decision.kind==="approve_roadmap"){status=goal.status==="paused"?"paused":"active";activeRoadmapRevisionId=revision.id;}
+  if(decision.kind==="request_change"&&revision.kind==="definition"){status="draft";activeDefinitionRevisionId=null;activeRoadmapRevisionId=null;}
+  if(decision.kind==="request_change"&&revision.kind==="roadmap"){status=status==="paused"?"paused":"active";activeRoadmapRevisionId=null;}
+  if(decision.kind==="pause")status="paused";
+  if(decision.kind==="resume")status="active";
+  if(decision.kind==="cancel"){status="cancelled";complete=true;}
+  if(decision.kind==="close"){status="completed";complete=true;}
+  return{approvedItemIds,status,activeDefinitionRevisionId,activeRoadmapRevisionId,complete};
+}
+
+export function planWorkspaceGoalRevision(goal:WorkspaceGoal,kind:WorkspaceGoalRevision["kind"]){if(["completed","cancelled"].includes(goal.status))throw new Error("terminal workspace Goal cannot be revised");if(goal.currentRunId)throw new Error("workspace Goal cannot be revised while a guided TaskRun is active");return{status:kind==="definition"?"draft" as const:goal.status==="ready_to_close"?"active" as const:goal.status,activeDefinitionRevisionId:kind==="definition"?null:goal.activeDefinitionRevisionId,activeRoadmapRevisionId:kind==="roadmap"||kind==="definition"?null:goal.activeRoadmapRevisionId};}
+
+export function authorizeWorkspaceGoalRunMutation(goal:WorkspaceGoal|null,link:WorkspaceGoalRunLink|undefined):{allowed:boolean;reason:string}{if(!link)return{allowed:true,reason:"ordinary TaskRun is not Goal-governed"};if(!goal||goal.status!=="active")return{allowed:false,reason:"Workspace Goal is not active"};if(!goal.definition||goal.definition.revision!==link.goalRevision||goal.activeDefinitionRevisionId!==goal.definition.id)return{allowed:false,reason:"Workspace Goal definition approval is stale"};if(link.mode==="workspace")return{allowed:true,reason:"User-started TaskRun follows the active Workspace Goal direction"};if(!link.roadmapRevisionId||goal.activeRoadmapRevisionId!==link.roadmapRevisionId||goal.roadmap?.id!==link.roadmapRevisionId)return{allowed:false,reason:"Workspace Goal Roadmap is not active"};const approval=latestRoadmapApproval(goal,link.roadmapRevisionId);if(!approval||!link.roadmapItemIds.length||link.roadmapItemIds.some((itemId)=>!approval.approvedItemIds.includes(itemId)))return{allowed:false,reason:"TaskRun exceeds the approved Goal Roadmap slice"};return{allowed:true,reason:"Goal Roadmap slice is approved"};}
+
+export function validateWorkspaceGoalEvidenceTarget(goal:WorkspaceGoal,input:{goalRevision:number;criterionKey:string;runId:string;checkKey?:string|null;artifactId?:string|null;operationId?:string|null;status?:WorkspaceGoalEvidenceStatus},runWorkspaceId:string){if(["completed","cancelled"].includes(goal.status))throw new Error("terminal workspace Goal cannot accept evidence");if(runWorkspaceId!==goal.workspaceId)throw new Error("TaskRun belongs to a different workspace");if(!goal.definition||input.goalRevision!==goal.definition.revision)throw new Error("workspace Goal definition revision is stale");if(!(goal.definition.content as CreateWorkspaceGoalInput["definition"]).criteria.some((criterion)=>criterion.key===input.criterionKey))throw new Error("criterion not found");const runLink=goal.runLinks.find((link)=>link.runId===input.runId);if(!runLink)throw new Error("TaskRun is not linked to this workspace Goal");if(!runLink.criterionKeys.includes(input.criterionKey))throw new Error("TaskRun is not authorized to provide evidence for this Goal criterion");if(!input.checkKey&&!input.artifactId&&!input.operationId)throw new Error("evidence must reference a check, artifact or operation");}
+
+export function shouldWorkspaceGoalBeReady(goal:WorkspaceGoal){return!goal.currentRunId&&goal.requiredCriteria>0&&goal.verifiedCriteria>=goal.requiredCriteria&&goal.activeDefinitionRevisionId===goal.definition?.id&&Boolean(goal.roadmap&&goal.activeRoadmapRevisionId===goal.roadmap.id&&latestRoadmapApproval(goal,goal.roadmap.id));}
+
 function action(actor: WorkspaceGoalNextAction["actor"], kind: WorkspaceGoalNextAction["kind"], title: string, explanation: string, primaryActionLabel: string, roadmapItemId: string | null = null): WorkspaceGoalNextAction {
   return { actor, kind, title, explanation, primaryActionLabel, roadmapItemId };
 }
+
+function assertDecisionAllowed(status:WorkspaceGoalStatus,kind:WorkspaceGoalDecision["kind"]){if(["completed","cancelled"].includes(status))throw new Error("terminal workspace Goal cannot accept decisions");if(kind==="approve_goal"&&status!=="draft")throw new Error("only a draft workspace Goal definition can be approved");if(kind==="resume"&&status!=="paused")throw new Error("only a paused workspace Goal can be resumed");if(kind==="pause"&&!(["active","ready_to_close"] as WorkspaceGoalStatus[]).includes(status))throw new Error("only an active workspace Goal can be paused");if(kind==="close"&&status!=="ready_to_close")throw new Error("workspace Goal is not ready to close");if(kind==="approve_roadmap"&&status==="draft")throw new Error("workspace Goal definition must be approved before Roadmap approval");}
+
+function validateRoadmapApproval(goal:WorkspaceGoal,revision:WorkspaceGoalRevision,approvedItemIds:string[]){if(!goal.definition||goal.activeDefinitionRevisionId!==goal.definition.id)throw new Error("approve_roadmap requires an approved Goal definition");if(goal.decisions.some((decision)=>decision.kind==="approve_roadmap"&&decision.targetRevisionId===revision.id&&decision.targetHash===revision.contentHash))throw new Error("Goal Roadmap revision is already approved; create a new revision to change its approved items");const roadmap=revision.content as WorkspaceGoalRoadmap,knownItemIds=new Set(roadmap.items.map((item)=>item.id)),knownCriteria=new Set((goal.definition.content as CreateWorkspaceGoalInput["definition"]).criteria.map((criterion)=>criterion.key));if(!approvedItemIds.length)throw new Error("approve_roadmap requires at least one approved item");if(approvedItemIds.some((itemId)=>!knownItemIds.has(itemId)))throw new Error("approve_roadmap contains an unknown Roadmap item");if(roadmap.items.some((item)=>approvedItemIds.includes(item.id)&&!item.criterionKeys.length))throw new Error("every approved Roadmap item must advance at least one Goal criterion");if(roadmap.items.some((item)=>item.criterionKeys.some((key)=>!knownCriteria.has(key))))throw new Error("approve_roadmap references a criterion outside the active Goal definition");}
+
+function latestRoadmapApproval(goal:WorkspaceGoal,roadmapRevisionId:string){return[...goal.decisions].reverse().find((decision)=>decision.kind==="approve_roadmap"&&decision.targetRevisionId===roadmapRevisionId&&decision.targetHash===goal.roadmap?.contentHash&&decision.approvedItemIds.length>0);}
 
 function validateDefinition(input: CreateWorkspaceGoalInput["definition"]): CreateWorkspaceGoalInput["definition"] {
   if (!input || typeof input !== "object") throw new Error("definition is required");

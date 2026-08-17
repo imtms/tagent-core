@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { V1ApiDependencies } from "./plugin.js";
+import type { V1ApiDependencies } from "./dependencies.js";
 import { successEnvelope } from "./errors.js";
 import { authorizeConsole, consoleError } from "./console-route-support.js";
 

@@ -82,6 +82,7 @@ function assembleCoreApplicationPersistence(
     runtime: persistence.runtime,
     supervisor: persistence.supervisor,
     workspaceGoals: persistence.workspaceGoals,
+    workspaceGoalOperations: persistence.workspaceGoalOperations,
   });
 }
 
@@ -100,8 +101,6 @@ function assembleHttpPersistence(persistence: SqlitePersistence): HttpPersistenc
     transcript: persistence.transcript,
     evidence: persistence.evidence,
     eventConsumers: persistence.eventConsumers,
-    workspaceGoals: persistence.workspaceGoals,
-    workspaceGoalOperations: persistence.workspaceGoalOperations,
   });
 }
 

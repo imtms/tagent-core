@@ -1,3 +1,4 @@
+@layer design {
 /*
  * TAgent Console design system
  * A quiet, high-density control plane built on semantic tokens. Feature CSS in
@@ -1443,6 +1444,17 @@ a:focus-visible {
   background: var(--surface-hover);
 }
 
+.memory-load-more {
+  color: var(--foreground-muted);
+  border-color: var(--border);
+  background: var(--surface-muted);
+}
+
+.memory-load-more:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--surface-hover);
+}
+
 .memory-record-list p,
 .topic-grid p,
 .topic-description {
@@ -2222,6 +2234,7 @@ a:focus-visible {
   .memory-toolbar > button:not(.memory-primary) {
     justify-self: end;
   }
+}
 }
 
 @media (max-width: 680px) {

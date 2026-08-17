@@ -96,6 +96,7 @@ describe("memory 0.1.5 governance", () => {
         relatedTopicIds: [],
         embeddingText: "Topic",
         status: "active" as const,
+        createdAt: now,
         updatedAt: now,
       };
     await a.upsertDescriptors([topic]);

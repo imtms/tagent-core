@@ -7,6 +7,7 @@ import { HashEmbeddingAdapter } from "../packages/memory/src/adapters/hash-embed
 import { LocalBlobStore } from "../packages/memory/src/storage/local-blob-store.js";
 import { DefaultPolicyEngine } from "../packages/memory/src/policy/policy-engine.js";
 import { MemoryService } from "../packages/memory/src/memory-service.js";
+import { MemoryHistoryBackfill } from "../packages/memory/src/history-backfill.js";
 import { corePersistence } from "./support/test-persistence.js";
 const scope = { type: "workspace" as const, id: "w1" };
 const access = {
@@ -31,6 +32,7 @@ async function fixture() {
     jobs: adapter,
     policy,
   });
+
   return { adapter, service };
 }
 describe("memory platform", () => {
@@ -59,6 +61,46 @@ describe("memory platform", () => {
     expect(ids).toHaveLength(501);
     expect(new Set(ids).size).toBe(501);
     expect(ids).toContain(records[0].id);
+  });
+
+  it("pages every topic descriptor beyond 500 without loading Cold bodies", async () => {
+    const { adapter, service } = await fixture();
+    const topics = Array.from({ length: 501 }, (_, index) => ({
+      topicId: `page-topic-${String(index).padStart(3, "0")}`,
+      kind: "fact" as const,
+      scope,
+      title: `Topic ${index}`,
+      description: `Topic description ${index}`,
+      aliases: [],
+      entityIds: [],
+      relatedTopicIds: [],
+      embeddingText: `Topic ${index}`,
+      status: "active" as const,
+      createdAt: index + 1,
+      updatedAt: index + 1,
+    }));
+    await adapter.upsertDescriptors(topics);
+    const ids: string[] = [];
+    let snapshotCreatedAt: number | undefined;
+    let after: { createdAt: number; topicId: string } | undefined;
+    do {
+      const page = await service.listTopicsPage(access, scope, {
+        snapshotCreatedAt,
+        after,
+        limit: 101,
+      });
+      snapshotCreatedAt = page.snapshotCreatedAt;
+      const items = page.topics.slice(0, 100);
+      ids.push(...items.map((topic) => topic.topicId));
+      if (ids.length === 100) await adapter.upsertDescriptors([{ ...topics[0], updatedAt: 10_000 }]);
+      const last = items.at(-1);
+      after = page.topics.length > 100 && last
+        ? { createdAt: last.createdAt, topicId: last.topicId }
+        : undefined;
+    } while (after);
+    expect(ids).toHaveLength(501);
+    expect(new Set(ids).size).toBe(501);
+    expect(ids).toContain(topics[0].topicId);
   });
 
   it("propagates the required caller signal into embedding recall and rejects cancellation", async () => {
@@ -192,6 +234,7 @@ describe("memory platform", () => {
       relatedTopicIds: [],
       embeddingText: "memory tier routing",
       status: "active" as const,
+      createdAt: Date.now(),
       updatedAt: Date.now(),
     };
     const body =
@@ -223,6 +266,7 @@ describe("memory platform", () => {
       relatedTopicIds: [],
       embeddingText: "bad",
       status: "active" as const,
+      createdAt: Date.now(),
       updatedAt: Date.now(),
     };
     await expect(
@@ -514,6 +558,7 @@ describe("local memory lifecycle", () => {
       relatedTopicIds: [],
       embeddingText: "stable topic",
       status: "active" as const,
+      createdAt: now,
       updatedAt: now,
     };
     const record = {
@@ -660,6 +705,7 @@ describe("Core application memory capture boundaries", () => {
       restore: memoryService.restore.bind(memoryService),
       export: memoryService.export.bind(memoryService),
       listRecordsPage: memoryService.listRecordsPage.bind(memoryService),
+      listTopicsPage: memoryService.listTopicsPage.bind(memoryService),
       status: memoryService.status.bind(memoryService),
       readiness: memoryService.readiness.bind(memoryService),
     };
@@ -731,6 +777,47 @@ describe("Core application memory capture boundaries", () => {
 });
 
 describe("memory safety hardening", () => {
+  it("backfills durable messages in restart-safe bounded pages", async () => {
+    const adapter = new InMemoryMemoryAdapter();
+    const messages = [
+      { id: 1, content: "普通消息", sessionId: "s1", principalId: null },
+      { id: 2, content: "记住我叫 TMs", sessionId: "s1", principalId: "u1" },
+      { id: 3, content: "remember that I prefer concise answers", sessionId: "s2", principalId: "u2" },
+    ];
+    const requestedAfter: number[] = [];
+    const source = {
+      getMessageSource: () => undefined,
+      getRun: () => undefined,
+      listTranscriptView: () => [],
+      listDurableUserMessagesPage: (afterId: number, limit: number) => {
+        requestedAfter.push(afterId);
+        return messages.filter((message) => message.id > afterId).slice(0, limit);
+      },
+    };
+    expect(await new MemoryHistoryBackfill(source, adapter, adapter, scope.id, 2).runOnce()).toBe(true);
+    expect(adapter.jobs.size).toBe(1);
+    expect(await new MemoryHistoryBackfill(source, adapter, adapter, scope.id, 2).runOnce()).toBe(true);
+    expect(adapter.jobs.size).toBe(2);
+    expect(await new MemoryHistoryBackfill(source, adapter, adapter, scope.id, 2).runOnce()).toBe(false);
+    expect(requestedAfter).toEqual([0, 2]);
+  });
+  it("treats an intentionally unconfigured embedding provider as ready", async () => {
+    const adapter = new InMemoryMemoryAdapter();
+    const service = new MemoryService({
+      records: adapter,
+      vectors: adapter,
+      graph: adapter,
+      topics: adapter,
+      blobs: new LocalBlobStore(await mkdtemp(path.join(tmpdir(), "tagent-readiness-none-"))),
+      jobs: adapter,
+      policy: new DefaultPolicyEngine(adapter),
+    });
+    service.noteWorkerHeartbeat();
+    const readiness = await service.readiness(access);
+    expect(readiness.ready).toBe(true);
+    expect(readiness.checks.embedding).toBe(true);
+    expect(readiness.reasons).not.toContain("embedding_provider_unavailable");
+  });
   it("reuses readiness provider probes within the 30 second cache window", async () => {
     const adapter = new InMemoryMemoryAdapter();
     const blobs = new LocalBlobStore(
@@ -906,15 +993,32 @@ describe("memory safety hardening", () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     const second = await adapter.claim("worker-b", 1000);
     expect(second?.fencingToken).toBeGreaterThan(first!.fencingToken!);
-    expect(
-      await adapter.complete(
-        first!.id,
-        "worker-a",
-        first!.leaseToken!,
-        first!.fencingToken!,
-        { extractedCount: 1, proposalCount: 1, persistedCount: 1 },
-      ),
-    ).toBe(false);
+    const staleRecord = {
+      id: "30000000-0000-4000-8000-000000000001",
+      kind: "fact" as const,
+      tier: "hot" as const,
+      scope,
+      title: "stale capture",
+      content: "must not publish",
+      summary: "stale",
+      topicIds: [],
+      entityIds: [],
+      status: "active" as const,
+      confidence: 1,
+      importance: 1,
+      sourceRefs: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    expect(await adapter.commitCapture({
+      jobId: first!.id,
+      owner: "worker-a",
+      leaseToken: first!.leaseToken!,
+      fencingToken: first!.fencingToken!,
+      records: [staleRecord], topics: [], nodes: [], edges: [], vectors: [], removeVectorIds: [],
+      completion: { extractedCount: 1, proposalCount: 1, persistedCount: 1 },
+    })).toBe(false);
+    expect(adapter.records.has(staleRecord.id)).toBe(false);
     expect(
       await adapter.complete(
         second!.id,

@@ -15,7 +15,7 @@ export interface MemorySourceViewPort {
   getMessageSource(id: number): MemoryMessageSourceView | undefined;
   getRun(id: string): MemoryRunSourceView | undefined;
   listTranscriptView(id: string): readonly unknown[];
-  listDurableUserMessages(): readonly MemoryDurableUserMessageView[];
+  listDurableUserMessagesPage(afterId: number, limit: number): readonly MemoryDurableUserMessageView[];
 }
 export interface MemoryRunEventSinkPort {
   appendEvent(runId: string, type: string, data: Record<string, unknown>): void;
@@ -27,6 +27,15 @@ export interface MemoryRecordPageQuery {
 }
 export interface MemoryRecordPage {
   records: WarmMemory[];
+  snapshotCreatedAt: number;
+}
+export interface MemoryTopicPageQuery {
+  snapshotCreatedAt?: number;
+  after?: { createdAt: number; topicId: string };
+  limit: number;
+}
+export interface MemoryTopicPage {
+  topics: TopicDescriptor[];
   snapshotCreatedAt: number;
 }
 export type MemoryRuntimeSourcePort = MemorySourceViewPort & MemoryRunEventSinkPort;
@@ -53,17 +62,31 @@ export interface VectorIndexPort { upsert(documents: VectorDocument[]): Promise<
 export interface GraphStorePort { upsertNodes(nodes: GraphNode[]): Promise<void>; upsertEdges(edges: GraphEdge[]): Promise<void>; removeByEntityIds?(entityIds:string[],scopes:MemoryScope[]):Promise<void>; resolveEntities(cue: string, scopes: MemoryScope[], limit: number): Promise<GraphNode[]>; neighborhood(entityIds: string[], scopes: MemoryScope[], depth: 1 | 2, limit: number): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> }
 export interface TopicCatalogPort {
   upsertDescriptors(topics: TopicDescriptor[]): Promise<void>; searchTopics(cue: string, scopes: MemoryScope[], kinds: MemoryKind[], limit: number): Promise<Array<{ descriptor: TopicDescriptor; score: number }>>;
-  getDescriptors(topicIds: string[], scopes: MemoryScope[]): Promise<TopicDescriptor[]>; listDescriptors(scopes: MemoryScope[], kinds?: MemoryKind[], limit?: number): Promise<TopicDescriptor[]>; countTopicSummary?(scopes: MemoryScope[]): Promise<{ topics: number; coldTopics: number }>; stageRevision(revision: ColdRevision): Promise<void>; publishRevision(topicId: string, revisionId: string): Promise<void>; abandonRevision(revisionId: string): Promise<void>; listStagedRevisions(olderThan: number, limit: number): Promise<ColdRevision[]>; getCurrentRevision(topicId: string, scopes: MemoryScope[]): Promise<ColdRevision | null>; invalidateTopics?(topicIds:string[],scopes:MemoryScope[]):Promise<number>; forgetTopics(topicIds: string[], scopes: MemoryScope[], options?: { reason?: string; purgeAfter?: number }): Promise<ColdRevision[]>; restoreTopics?(topicIds: string[], scopes: MemoryScope[]): Promise<number>; listPurgeableTopics?(scopes:MemoryScope[],now:number,limit:number):Promise<Array<{topicId:string;revisions:ColdRevision[]}>>; purgeTopics?(topicIds:string[],scopes:MemoryScope[]):Promise<number>;
+  getDescriptors(topicIds: string[], scopes: MemoryScope[]): Promise<TopicDescriptor[]>; listDescriptors(scopes: MemoryScope[], kinds?: MemoryKind[], limit?: number): Promise<TopicDescriptor[]>; listDescriptorsPage?(scopes:MemoryScope[],kinds:MemoryKind[]|undefined,query:MemoryTopicPageQuery):Promise<MemoryTopicPage>; countTopicSummary?(scopes: MemoryScope[]): Promise<{ topics: number; coldTopics: number }>; stageRevision(revision: ColdRevision): Promise<void>; publishRevision(topicId: string, revisionId: string): Promise<void>; abandonRevision(revisionId: string): Promise<void>; listStagedRevisions(olderThan: number, limit: number): Promise<ColdRevision[]>; getCurrentRevision(topicId: string, scopes: MemoryScope[]): Promise<ColdRevision | null>; invalidateTopics?(topicIds:string[],scopes:MemoryScope[]):Promise<number>; forgetTopics(topicIds: string[], scopes: MemoryScope[], options?: { reason?: string; purgeAfter?: number }): Promise<ColdRevision[]>; restoreTopics?(topicIds: string[], scopes: MemoryScope[]): Promise<number>; listPurgeableTopics?(scopes:MemoryScope[],now:number,limit:number):Promise<Array<{topicId:string;revisions:ColdRevision[]}>>; purgeTopics?(topicIds:string[],scopes:MemoryScope[]):Promise<number>;
 }
 export interface BlobStorePort { putImmutable(key: string, body: string, metadata: Record<string, string>): Promise<{ checksum: string; byteLength: number }>; get(key: string): Promise<string>; delete(key: string): Promise<void>; exists(key: string): Promise<boolean> }
 export interface EmbeddingRequestOptions { timeoutMs?: number; maxRetries?: number; signal?: AbortSignal }
 export interface EmbeddingPort { readonly generation: string; embed(texts: string[], options?: EmbeddingRequestOptions): Promise<number[][]> }
 export interface ExtractorPort { extract(content: string, sourceRefs: SourceReference[], scope: MemoryScope): Promise<ExtractionProposal> }
-export interface JobQueuePort { enqueue(request: CaptureRequest): Promise<CaptureJob>; claim(owner: string, leaseMs: number): Promise<CaptureJob | null>; renew(id: string, owner: string, leaseToken: string, fencingToken: number, leaseMs: number): Promise<boolean>; complete(id: string, owner: string, leaseToken: string, fencingToken: number, result?: { extractedCount: number; proposalCount: number; persistedCount: number; filterReasons?: Record<string,number> }): Promise<boolean>; fail(id: string, owner: string, leaseToken: string, fencingToken: number, errorCode: string, retryable: boolean): Promise<boolean>; listJobs?(scopes: MemoryScope[], limit?: number): Promise<CaptureJob[]>; getJob?(id: string): Promise<CaptureJob | null> }
+export interface CaptureCompletion { extractedCount: number; proposalCount: number; persistedCount: number; filterReasons?: Record<string,number> }
+export interface JobQueuePort { enqueue(request: CaptureRequest): Promise<CaptureJob>; claim(owner: string, leaseMs: number): Promise<CaptureJob | null>; renew(id: string, owner: string, leaseToken: string, fencingToken: number, leaseMs: number): Promise<boolean>; complete(id: string, owner: string, leaseToken: string, fencingToken: number, result?: CaptureCompletion): Promise<boolean>; fail(id: string, owner: string, leaseToken: string, fencingToken: number, errorCode: string, retryable: boolean): Promise<boolean>; listJobs?(scopes: MemoryScope[], limit?: number): Promise<CaptureJob[]>; getJob?(id: string): Promise<CaptureJob | null> }
+export interface CaptureCommitRequest {
+  jobId: string;
+  owner: string;
+  leaseToken: string;
+  fencingToken: number;
+  records: WarmMemory[];
+  topics: TopicDescriptor[];
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  vectors: VectorDocument[];
+  removeVectorIds: string[];
+  completion: CaptureCompletion;
+}
+export interface CaptureCommitPort { commitCapture(request: CaptureCommitRequest): Promise<boolean> }
 export interface AuditPort { record(event: { action: string; subjectId: string; scope?: MemoryScope; decision: string; reasonCodes: string[]; payloadHash?: string; policyVersion: string; at: number }): Promise<void> }
 export interface MemorySourceLoaderPort { load(access: AccessContext, refs: SourceReference[]): Promise<string> }
 export type SourceLoaderPort = MemorySourceLoaderPort;
-export interface MemoryTransactionPort { transaction<T>(operation: () => Promise<T>): Promise<T> }
 export type FactWrite = MemoryRecord;
 export type PreferenceWrite = PreferenceRecord;
 

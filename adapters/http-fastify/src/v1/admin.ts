@@ -10,7 +10,7 @@ import {
 } from "@tagent/abi";
 import type { HttpMemoryAccess, HttpMemoryScope } from "../ports/index.js";
 import { authorizeV1, principalOf } from "./auth.js";
-import type { V1ApiDependencies } from "./plugin.js";
+import type { V1ApiDependencies } from "./dependencies.js";
 import { successEnvelope, V1HttpError } from "./errors.js";
 import { registerAdminMemoryConsoleV1Routes } from "./admin-memory-console-routes.js";
 import { withRequestAbortSignal } from "./console-route-support.js";

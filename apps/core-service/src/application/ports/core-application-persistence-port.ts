@@ -17,6 +17,7 @@ import type {
   ContextManifestRepository,
   SupervisorDecisionJournal,
   SupervisorPersistencePort,
+  WorkspaceGoalOperationRepository,
   WorkspaceGoalRepository,
 } from "@tagent/governance/ports";
 
@@ -41,4 +42,5 @@ export interface CoreApplicationPersistencePort {
   readonly runtime: RuntimePersistencePort;
   readonly supervisor: SupervisorPersistencePort;
   readonly workspaceGoals: WorkspaceGoalRepository;
+  readonly workspaceGoalOperations: WorkspaceGoalOperationRepository;
 }

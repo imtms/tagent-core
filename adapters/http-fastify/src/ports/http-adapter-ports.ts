@@ -16,6 +16,7 @@ export interface HttpMemoryPort {
   listCaptureJobs?(access: HttpMemoryAccess, limit?: number): Promise<unknown>;
   status(access: HttpMemoryAccess): Promise<unknown>;
   recall(request: unknown, signal: AbortSignal): Promise<unknown>;
+  getRecord(access:HttpMemoryAccess,id:string):Promise<unknown|null>;
   getColdTopic(access: HttpMemoryAccess, topicId: string): Promise<unknown | null>;
   upsert(access: HttpMemoryAccess, records: unknown[], topics?: unknown[]): Promise<unknown>;
   export(access: HttpMemoryAccess, scope: HttpMemoryScope, limit?: number): Promise<unknown>;
@@ -24,6 +25,7 @@ export interface HttpMemoryPort {
     after?: { createdAt: number; id: string };
     limit: number;
   }): Promise<unknown>;
+  listTopicsPage(access:HttpMemoryAccess,scope:HttpMemoryScope,query:{snapshotCreatedAt?:number;after?:{createdAt:number;topicId:string};limit:number}):Promise<unknown>;
   forget(request: unknown): Promise<unknown>;
   restore(request: unknown): Promise<unknown>;
   enqueueReindex?(access: HttpMemoryAccess): Promise<unknown>;

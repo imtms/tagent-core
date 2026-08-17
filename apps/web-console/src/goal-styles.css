@@ -1,3 +1,4 @@
+@layer features {
 /* Workspace Goals — follows the Console's Memory center visual language. */
 .goal-center{width:min(1240px,100%);height:min(860px,100%);grid-template-rows:auto minmax(0,1fr)}
 .goal-header .memory-heading-icon{background:var(--accent)}
@@ -152,3 +153,4 @@
 .danger-quiet{color:var(--danger)!important;border-color:color-mix(in oklab,var(--danger) 22%,var(--border))!important;background:var(--danger-soft)!important}
 @media(prefers-reduced-motion:reduce){.goal-loading span{animation:none}}
 @media(max-width:760px){.goal-overlay{padding:0}.goal-center{width:100%;height:100%;border:0;border-radius:0}.goal-header p,.goal-header .memory-live{display:none}.goal-shell{display:block;overflow:auto}.goal-sidebar{max-height:190px;overflow:auto;border-right:0;border-bottom:1px solid var(--border)}.goal-main{min-height:calc(100vh - 260px);overflow:visible;padding:18px 14px}.goal-nav{gap:10px}.goal-nav section{display:flex;gap:5px;overflow:auto}.goal-nav h3{display:none}.goal-nav button{min-width:210px}.goal-form-columns,.goal-scope-grid{grid-template-columns:1fr}.goal-criterion-editor{grid-template-columns:24px minmax(0,1fr) 30px}.goal-required{grid-column:2}.goal-next-card{grid-template-columns:32px minmax(0,1fr)}.goal-next-card>button{grid-column:1/-1;width:100%}.goal-section-heading{align-items:flex-start}.goal-roadmap-item{grid-template-columns:auto minmax(0,1fr)}.goal-roadmap-action{grid-column:2;display:flex;justify-content:flex-start}.goal-hero h2{font-size:21px}}
+}

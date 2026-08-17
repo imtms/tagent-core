@@ -4,7 +4,11 @@ import type {
   ConsoleContextManifest,
   ConsoleCoreMemorySnapshot,
   ConsoleMemoryExport,
+  ConsoleMemoryRecordPage,
   ConsoleMemoryStatusResult,
+  ConsoleMemoryTopicPage,
+  ConsoleColdTopic,
+  ConsoleWarmMemory,
   ConsoleMessage,
   ConsoleRecallResult,
   ConsoleReindexJob,
@@ -101,6 +105,11 @@ async function memoryExport(payload: unknown): Promise<ConsoleMemoryExport> {
   return abi.decodeAbi(abi.ConsoleMemoryExportSchema, payload);
 }
 
+async function memoryRecordPage(payload:unknown):Promise<ConsoleMemoryRecordPage>{const abi=await loadCoreAbi();return abi.decodeAbi(abi.ConsoleMemoryRecordPageSchema,payload);}
+async function memoryTopicPage(payload:unknown):Promise<ConsoleMemoryTopicPage>{const abi=await loadCoreAbi();return abi.decodeAbi(abi.ConsoleMemoryTopicPageSchema,payload);}
+async function memoryRecord(payload:unknown):Promise<ConsoleWarmMemory|null>{if(payload===null)return null;const abi=await loadCoreAbi();return abi.decodeAbi(abi.ConsoleWarmMemorySchema,payload);}
+async function coldTopic(payload:unknown):Promise<ConsoleColdTopic|null>{if(payload===null)return null;const abi=await loadCoreAbi();return abi.decodeAbi(abi.ConsoleColdTopicSchema,payload);}
+
 async function recallResult(payload: unknown): Promise<ConsoleRecallResult> {
   const abi = await loadCoreAbi();
   return abi.decodeAbi(abi.ConsoleRecallResultSchema, payload);
@@ -141,6 +150,7 @@ async function forgetResult(payload: unknown): Promise<{ records: number; topics
 export const ConsoleDecode = {
   captureJobId,
   captureJobs,
+  coldTopic,
   contextManifests,
   coreMemorySnapshot,
   forgetResult,
@@ -148,7 +158,10 @@ export const ConsoleDecode = {
   inboxItems,
   jsonObject,
   memoryExport,
+  memoryRecord,
+  memoryRecordPage,
   memoryStatus,
+  memoryTopicPage,
   messages,
   ok,
   recallResult,

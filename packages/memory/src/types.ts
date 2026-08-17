@@ -46,7 +46,7 @@ export interface TopicLifecycleState { deletedAt?: number; purgeAfter?: number; 
 export interface TopicDescriptor {
   topicId: string; kind: MemoryKind; scope: MemoryScope; title: string; description: string;
   aliases: string[]; entityIds: string[]; relatedTopicIds: string[]; coldRevisionId?: string;
-  embeddingText: string; status: MemoryStatus; lifecycle?: TopicLifecycleState; updatedAt: number;
+  embeddingText: string; status: MemoryStatus; lifecycle?: TopicLifecycleState; createdAt: number; updatedAt: number;
 }
 export interface ColdRevision {
   id: string; topicId: string; kind: MemoryKind; scope: MemoryScope; revision: number; state: "staged" | "published" | "superseded";

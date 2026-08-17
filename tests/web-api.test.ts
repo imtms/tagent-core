@@ -51,6 +51,24 @@ function profileOperation(endpointId: "operator.session_inbox.start" | "operator
 }
 
 describe("Web API request headers", () => {
+  it("passes stable Memory snapshot cursors through the admin paging API", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ records: [], snapshotCreatedAt: 500 })), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ topics: [], snapshotCreatedAt: 600 })), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const scope = { type: "workspace" as const, id: "memory-page" };
+    await api.memoryRecordsPage(scope, { snapshotCreatedAt: 500, after: { createdAt: 400, id: "record-1" }, limit: 101 });
+    await api.memoryTopicsPage(scope, { snapshotCreatedAt: 600, after: { createdAt: 550, topicId: "topic-1" }, limit: 101 });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/admin/memory/records/page", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ scope, snapshotCreatedAt: 500, after: { createdAt: 400, id: "record-1" }, limit: 101 }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/admin/memory/topics/page", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ scope, snapshotCreatedAt: 600, after: { createdAt: 550, topicId: "topic-1" }, limit: 101 }),
+    }));
+  });
+
   it("accepts only a credential-free HTTP(S) origin", () => {
     expect(normalizeCoreOrigin("https://core.example.test")).toBe("https://core.example.test");
     expect(normalizeCoreOrigin("http://127.0.0.1:3100/")).toBe("http://127.0.0.1:3100");

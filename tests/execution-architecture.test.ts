@@ -116,6 +116,15 @@ describe("execution architecture boundaries", () => {
     expect(sourceText("apps/core-service/src/application/core-application-coordinator.ts")).toContain("CoreApplicationServices");
   });
 
+  it("keeps Execution domain types independent from adapter ports", () => {
+    const violations = sourceFiles("packages/execution/src/domain").flatMap((relativePath) =>
+      [...sourceText(relativePath).matchAll(/(?:from|import\()\s*["']([^"']+)["']/g)]
+        .map((match) => match[1])
+        .filter((specifier) => specifier.includes("/ports"))
+        .map((specifier) => `${relativePath} imports ${specifier}`));
+    expect(violations).toEqual([]);
+  });
+
   it("gives each Execution service a compile-time narrowed state capability view", () => {
     const statefulServices = [
       "attempt-executor.ts",

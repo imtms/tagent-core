@@ -111,7 +111,8 @@ describe("Memory workspace package", () => {
     const source = readFileSync(path.join(repoRoot, "packages/memory/src/postgres/schema.sql"));
     expect(readFileSync(path.join(repoRoot, "packages/memory/dist/postgres/schema.sql"))).toEqual(source);
     const sql = source.toString("utf8");
-    expect(sql).toContain("'tagent-memory/0.8',1");
+    expect(sql).toContain("'tagent-memory/0.8',2");
+    expect(sql).toContain("created_at bigint NOT NULL");
     expect(sql).not.toMatch(/ALTER TABLE .* ADD COLUMN/i);
   });
 

@@ -6,6 +6,7 @@ import type { ColdStorageReconciler } from "./reconciler.js";
 import type { DurableReindexWorker } from "./reindex-worker.js";
 import type { CoreMemorySnapshotService } from "./core-snapshot.js";
 import type { BlobStorePort, OperationsStatePort, RecordStorePort } from "./ports.js";
+import type { MemoryHistoryBackfillPort } from "./history-backfill.js";
 
 type MemoryWorkerState = "idle" | "running" | "stopping" | "closed";
 
@@ -33,6 +34,7 @@ export class LocalMemoryWorker {
     private readonly operations?: OperationsStatePort,
     private readonly blobs?: BlobStorePort,
     private readonly records?: RecordStorePort,
+    private readonly backfill?: MemoryHistoryBackfillPort,
   ) {}
 
   start(): void {
@@ -131,6 +133,7 @@ export class LocalMemoryWorker {
     this.trackHeartbeat();
     const started = Date.now();
     try {
+      const backfilled = await this.backfill?.runOnce() ?? false;
       let count = 0;
       while (count < 20 && await this.capture.runOnce()) count += 1;
       await this.operations?.recordMetric(this.access.scopes[0], "capture_total", count, Date.now());
@@ -144,7 +147,7 @@ export class LocalMemoryWorker {
       await this.reindex?.runOnce().catch(async (error) => {
         await this.operations?.recordDegraded(this.access.scopes[0], `reindex:${String(error)}`, Date.now());
       });
-      return count > 0;
+      return backfilled || count > 0;
     } catch (error) {
       await this.operations?.recordMetric(this.access.scopes[0], "capture_error", 1, Date.now());
       throw error;

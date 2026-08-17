@@ -1,12 +1,13 @@
 import type { FastifyPluginAsync } from "fastify";
 import { decodeAbi } from "@tagent/abi";
 import { asV1HttpError, ensureRequestId, errorEnvelope, V1HttpError } from "./errors.js";
-import { registerChannelV1Routes, type ChannelV1Dependencies } from "./channel.js";
+import { registerChannelV1Routes } from "./channel.js";
+import type { V1ApiDependencies } from "./dependencies.js";
 import { registerAdminV1Routes } from "./admin.js";
 import { registerInternalV1Routes } from "./internal.js";
 import { registerPublicV1Routes } from "./public.js";
 
-export type V1ApiDependencies = ChannelV1Dependencies;
+export type { V1ApiDependencies } from "./dependencies.js";
 
 export const v1ApiPlugin: FastifyPluginAsync<V1ApiDependencies> = async (app, dependencies): Promise<void> => {
   app.addHook("onRequest", async (request, reply): Promise<void> => {

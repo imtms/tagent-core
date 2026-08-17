@@ -75,7 +75,7 @@ export function createStoreBackedPorts(
 
     messageSources: Object.freeze({
       getMessageSource: query(store.getMessageSource.bind(store)),
-      listDurableUserMessages: query(store.listDurableUserMessages.bind(store)),
+      listDurableUserMessagesPage: query(store.listDurableUserMessagesPage.bind(store)),
     }),
 
     submissions: Object.freeze({

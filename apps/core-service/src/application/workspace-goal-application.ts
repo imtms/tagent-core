@@ -1,5 +1,6 @@
-import { WorkspaceGoalService, validateWorkspaceGoalRoadmap, type WorkspaceGoal, type WorkspaceGoalDefinition, type WorkspaceGoalRepository, type WorkspaceGoalRoadmap } from "@tagent/governance";
+import { WorkspaceGoalService, validateWorkspaceGoalRoadmap, type WorkspaceGoal, type WorkspaceGoalDecisionInput, type WorkspaceGoalDefinition, type WorkspaceGoalOperationReceipt, type WorkspaceGoalOperationRepository, type WorkspaceGoalRepository, type WorkspaceGoalRoadmap } from "@tagent/governance";
 import type { AdmissionCoordinator } from "@tagent/admission";
+import type { SessionRepository } from "@tagent/admission/ports";
 
 export interface WorkspaceGoalRoadmapGenerator {
   readonly model: string;
@@ -15,9 +16,27 @@ export class CoreWorkspaceGoalApplication {
     repository: WorkspaceGoalRepository,
     private readonly admission: Pick<AdmissionCoordinator, "enqueueGoalRoadmapItem">,
     private readonly generator?: WorkspaceGoalRoadmapGenerator,
+    private readonly sessions?: Pick<SessionRepository, "getSession">,
+    private readonly operations?: WorkspaceGoalOperationRepository,
   ) {
     this.goals = new WorkspaceGoalService(repository);
   }
+
+  listWorkspaceGoals(workspaceId:string){this.requireWorkspace(workspaceId);return this.goals.list(workspaceId);}
+
+  createWorkspaceGoal(workspaceId:string,input:{definition:WorkspaceGoalDefinition;actorId?:string;requestId?:string}){this.requireWorkspace(workspaceId);return this.goals.create({workspaceId,definition:input.definition,createdBy:input.actorId?.trim()||"web_console",idempotencyKey:input.requestId?.trim()||undefined});}
+
+  getWorkspaceGoal(goalId:string){return this.goals.get(goalId);}
+
+  reviseWorkspaceGoalDefinition(goalId:string,input:{definition:WorkspaceGoalDefinition;actorId?:string;requestId:string}){const actorId=input.actorId?.trim()||"web_console";return this.runOperation(goalId,input.requestId,"definition.revise",{definition:input.definition,actorId},()=>this.goals.reviseDefinition(goalId,input.definition,actorId));}
+
+  reviseWorkspaceGoalRoadmap(goalId:string,input:{content:WorkspaceGoalRoadmap;sourceArtifactId?:string|null;actorId?:string;requestId:string}){const actorId=input.actorId?.trim()||"web_console",sourceArtifactId=input.sourceArtifactId?.trim()||null;return this.runOperation(goalId,input.requestId,"roadmap.revise",{content:input.content,sourceArtifactId,actorId},()=>{this.goals.addRoadmap(goalId,input.content,sourceArtifactId,actorId);return this.requireGoal(goalId);});}
+
+  async requestWorkspaceGoalRoadmapGeneration(goalId:string,input:{requestId:string;actorId?:string}){const actorId=input.actorId?.trim()||"web_console",operations=this.requireOperations(),claim=operations.claimWorkspaceGoalOperation({goalId,requestId:input.requestId,operationType:"roadmap.generate",canonicalPayload:canonicalJson({actorId})});if(!claim.claimed){this.replayOperation(claim.receipt);return this.requireGoal(goalId);}try{await this.generateWorkspaceGoalRoadmap(goalId,actorId);operations.settleWorkspaceGoalOperation(goalId,input.requestId,"succeeded",{generated:true});return this.requireGoal(goalId);}catch(error){operations.settleWorkspaceGoalOperation(goalId,input.requestId,"failed",{},operationError(error));throw error;}}
+
+  getWorkspaceGoalOperation(goalId:string,requestId:string){this.requireGoal(goalId);return this.requireOperations().getWorkspaceGoalOperation(goalId,requestId);}
+
+  decideWorkspaceGoal(input:WorkspaceGoalDecisionInput){this.goals.decide({...input,actorId:input.actorId?.trim()||"web_console"});return this.requireGoal(input.goalId);}
 
   async generateWorkspaceGoalRoadmap(goalId: string, actorId = "web_console") {
     const inFlight = this.roadmapGenerations.get(goalId);
@@ -80,4 +99,20 @@ export class CoreWorkspaceGoalApplication {
       requestId,
     });
   }
+
+  startWorkspaceGoalRoadmapTask(goalId:string,roadmapItemId:string,requestId?:string){const result=this.startWorkspaceGoalRoadmapItem(goalId,roadmapItemId,requestId);return{goal:this.requireGoal(goalId),inboxItemId:result.item.id,runId:result.run?.id??null};}
+
+  private runOperation<T extends object>(goalId:string,requestId:string,operationType:string,payload:Record<string,unknown>,operation:()=>T):T{const operations=this.requireOperations(),claim=operations.claimWorkspaceGoalOperation({goalId,requestId,operationType,canonicalPayload:canonicalJson(payload)});if(!claim.claimed)return this.replayOperation(claim.receipt) as T;try{const result=operation();operations.settleWorkspaceGoalOperation(goalId,requestId,"succeeded",result as unknown as Record<string,unknown>);return result;}catch(error){operations.settleWorkspaceGoalOperation(goalId,requestId,"failed",{},operationError(error));throw error;}}
+
+  private replayOperation(receipt:WorkspaceGoalOperationReceipt):Record<string,unknown>{if(receipt.state==="succeeded"&&receipt.result)return receipt.result;if(receipt.state==="failed")throw new Error(String(receipt.error?.message??"Workspace Goal operation failed"));if(receipt.state==="started")throw new Error("Workspace Goal operation is still in progress");throw new Error("Workspace Goal operation outcome is unknown; inspect the Goal before retrying with a new requestId");}
+
+  private requireWorkspace(workspaceId:string){if(this.sessions&&!this.sessions.getSession(workspaceId))throw new Error("workspace not found");}
+
+  private requireGoal(goalId:string){const goal=this.goals.get(goalId);if(!goal)throw new Error("Workspace Goal not found");return goal;}
+
+  private requireOperations(){if(!this.operations)throw new Error("Workspace Goal operation persistence is unavailable");return this.operations;}
 }
+
+function operationError(error:unknown):Record<string,unknown>{return{message:error instanceof Error?error.message:String(error)};}
+
+function canonicalJson(value:unknown):string{if(value===null||typeof value!=="object")return JSON.stringify(value) as string;if(Array.isArray(value))return`[${value.map(canonicalJson).join(",")}]`;return`{${Object.entries(value as Record<string,unknown>).sort(([left],[right])=>left.localeCompare(right)).map(([key,item])=>`${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;}

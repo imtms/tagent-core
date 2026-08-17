@@ -2,7 +2,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import type { ServiceScope } from "../auth.js";
 import type { HttpMemoryAccess, HttpMemoryScope } from "../ports/index.js";
 import { authorizeV1, principalOf } from "./auth.js";
-import type { V1ApiDependencies } from "./plugin.js";
+import type { V1ApiDependencies } from "./dependencies.js";
 import { V1HttpError } from "./errors.js";
 
 export function authorizeConsole(dependencies: V1ApiDependencies, scope: ServiceScope, surface: "channel" | "admin" = "channel") {

@@ -39,7 +39,7 @@ describe("Memory package boundary", () => {
       getMessageSource: (id) => id === 1 ? { role: "user", content: "remember me" } : undefined,
       getRun: (id) => id === "run-1" ? { goal: "verify release" } : undefined,
       listTranscriptView: (id) => id === "run-1" ? [{ kind: "assistant", text: "done" }] : [],
-      listDurableUserMessages: () => [{ id: 1, content: "remember me" }],
+      listDurableUserMessagesPage: () => [{ id: 1, content: "remember me" }],
     };
     const loader = new PersistenceMemorySourceLoader(source);
 

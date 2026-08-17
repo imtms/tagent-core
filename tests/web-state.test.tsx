@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, type SessionInboxItem, type TaskRun, type TranscriptItem } from "../apps/web-console/src/api.js";
+import { api, type Session, type SessionInboxItem, type TaskRun, type TranscriptItem } from "../apps/web-console/src/api.js";
 import {
   ApprovalDock,
   ConversationDateDivider,
@@ -15,10 +15,14 @@ import { nextConversationPinState } from "../apps/web-console/src/conversation-s
 import { deriveCurrentOperation } from "../apps/web-console/src/current-operation.js";
 import { createEventAcknowledger } from "../apps/web-console/src/event-acknowledger.js";
 import { IntentPrefetchCache } from "../apps/web-console/src/intent-prefetch-cache.js";
+import { MEMORY_PAGE_REQUEST_LIMIT, memoryPageWindow, mergeMemoryPage } from "../apps/web-console/src/memory-pagination.js";
 import { canResumeRun, findActiveRun, isActiveRunStatus } from "../apps/web-console/src/run-state.js";
+import { runViewForStartedRun, runViewFromWorkspaceSnapshot } from "../apps/web-console/src/use-run-view-state.js";
 import { mergeTranscriptItems } from "../apps/web-console/src/transcript-projection.js";
 import { createStreamingDeltaBatcher, type FrameScheduler } from "../apps/web-console/src/streaming-delta-batcher.js";
 import { loadWorkspaceSnapshot } from "../apps/web-console/src/workspace-controller.js";
+import { WorkspaceLiveSyncCoordinator } from "../apps/web-console/src/workspace-live-sync.js";
+import { mergeSessionActivityBaseline } from "../apps/web-console/src/use-workspace-presentation.js";
 import { storedGateProfiles, storedStringLists, storedStringRecord } from "../apps/web-console/src/workspace-preferences.js";
 
 afterEach(() => {
@@ -66,6 +70,121 @@ function run(overrides: Partial<TaskRun> = {}): TaskRun {
 }
 
 describe("Web workbench behavior", () => {
+  it("applies workspace and new-run view transitions atomically", () => {
+    const active = run({
+      checkpoint: {
+        runId: "run-1",
+        attempt: 1,
+        active: true,
+        assistantPartial: "working",
+        currentTool: { toolCallId: "call-1", toolName: "read" },
+        lastEventSeq: 4,
+        lastTranscriptSeq: 2,
+        updatedAt: 10,
+      },
+    });
+    const snapshot = runViewFromWorkspaceSnapshot({
+      sessionId: "session-1",
+      history: [],
+      runHistory: [active],
+      queued: [],
+      active,
+      latest: active,
+      transcript: [{ seq: 2, index: 0, attempt: 1, kind: "assistant", text: "persisted", createdAt: 9 }],
+      transcriptAfter: 2,
+    });
+    expect(snapshot).toMatchObject({
+      activeRun: active,
+      selectedRun: active,
+      expandedRunId: active.id,
+      streaming: "working",
+      liveThinking: "",
+    });
+    expect(snapshot.events).toEqual([{ runId: active.id, seq: 4, type: "tool.started", data: active.checkpoint!.currentTool, createdAt: 10 }]);
+
+    const next = run({ id: "run-2", updatedAt: 20 });
+    expect(runViewForStartedRun(snapshot, next)).toMatchObject({
+      activeRun: next,
+      selectedRun: next,
+      runs: [next, active],
+      expandedRunId: next.id,
+      events: [],
+      transcript: [],
+      streaming: "",
+      liveThinking: "",
+    });
+  });
+
+  it("advances 501 paged items without duplicates or skips", () => {
+    const source = Array.from({ length: 501 }, (_, index) => ({ id: `item-${500 - index}`, order: 500 - index }));
+    let after: { order: number; id: string } | undefined;
+    let loaded: typeof source = [];
+    do {
+      const page = source
+        .filter((item) => !after || item.order < after.order || item.order === after.order && item.id < after.id)
+        .slice(0, MEMORY_PAGE_REQUEST_LIMIT);
+      const next = memoryPageWindow(page, (item) => ({ order: item.order, id: item.id }));
+      loaded = mergeMemoryPage(loaded, next.items, (item) => item.id);
+      after = next.hasMore ? next.after : undefined;
+    } while (after);
+    expect(loaded.map((item) => item.id)).toEqual(source.map((item) => item.id));
+    expect(new Set(loaded.map((item) => item.id)).size).toBe(501);
+  });
+
+  it("rejects stale workspace and stream writers after authority changes", () => {
+    const coordinator = new WorkspaceLiveSyncCoordinator();
+    const firstWorkspace = coordinator.enterWorkspace("workspace");
+    const firstStream = coordinator.beginStream(firstWorkspace, "run-1")!;
+    expect(coordinator.markStreamHealthy(firstStream, 100)).toBe(true);
+    const staleSnapshot = coordinator.snapshotGuard(firstWorkspace);
+    coordinator.noteStreamActivity(firstStream, 110);
+    expect(coordinator.commitSnapshot(staleSnapshot, 120)).toBe(false);
+
+    coordinator.enterWorkspace("other");
+    const currentWorkspace = coordinator.enterWorkspace("workspace");
+    expect(coordinator.isWorkspaceCurrent(firstWorkspace)).toBe(false);
+    expect(coordinator.noteStreamActivity(firstStream, 130)).toBe(false);
+    expect(coordinator.isWorkspaceCurrent(currentWorkspace)).toBe(true);
+  });
+
+  it("uses fresh SSE activity as authority and requests snapshot recovery after disconnect", () => {
+    const coordinator = new WorkspaceLiveSyncCoordinator();
+    const workspace = coordinator.enterWorkspace("workspace");
+    const stream = coordinator.beginStream(workspace, "run-1")!;
+    coordinator.markStreamHealthy(stream, 1_000);
+    expect(coordinator.hasFreshStream(workspace, "run-1", 10_000)).toBe(true);
+    expect(coordinator.hasFreshStream(workspace, "run-1", 20_000)).toBe(false);
+
+    const recoverySnapshot = coordinator.snapshotGuard(workspace);
+    expect(coordinator.commitSnapshot(recoverySnapshot, 20_000)).toBe(true);
+    expect(coordinator.hasFreshStream(workspace, "run-1", 20_001)).toBe(true);
+
+    coordinator.closeStream(stream, true);
+    expect(coordinator.hasFreshStream(workspace, "run-1", 20_002)).toBe(false);
+    expect(coordinator.consumeRecoveryRequest(workspace)).toBe(true);
+    expect(coordinator.consumeRecoveryRequest(workspace)).toBe(false);
+  });
+
+  it("adds presentation activity baselines without rewriting established values", () => {
+    const current = { existing: 10 };
+    const session = (id: string, updatedAt: number): Session => ({
+      id,
+      title: id,
+      modelId: "model",
+      reasoningEffort: "medium",
+      createdAt: 1,
+      updatedAt,
+      latestRunStatus: null,
+      latestRunPhase: null,
+    });
+    const unchanged = mergeSessionActivityBaseline(current, [session("existing", 20)]);
+    expect(unchanged).toBe(current);
+    expect(mergeSessionActivityBaseline(current, [
+      session("existing", 20),
+      session("new", 30),
+    ])).toEqual({ existing: 10, new: 30 });
+  });
+
   it("replaces a pending tool projection with its later completed result", () => {
     const pending = {
       seq: 1, index: 0, attempt: 1, kind: "tool", toolCallId: "call-1", toolName: "read",

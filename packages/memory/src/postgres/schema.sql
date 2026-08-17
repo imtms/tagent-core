@@ -4,7 +4,7 @@ CREATE SCHEMA memory;
 CREATE TABLE memory.schema_identity (
  id smallint PRIMARY KEY CHECK(id=1), schema_id text NOT NULL, schema_version integer NOT NULL
 );
-INSERT INTO memory.schema_identity(id,schema_id,schema_version) VALUES(1,'tagent-memory/0.8',1);
+INSERT INTO memory.schema_identity(id,schema_id,schema_version) VALUES(1,'tagent-memory/0.8',2);
 CREATE TABLE memory.records (
  id uuid PRIMARY KEY, kind text NOT NULL CHECK(kind IN ('fact','episode','procedure')), tier text NOT NULL CHECK(tier IN ('hot','warm')),
  scope_type text NOT NULL, scope_id text NOT NULL, title text NOT NULL, content text NOT NULL, summary text NOT NULL,
@@ -32,8 +32,9 @@ CREATE INDEX memory_entities_scope ON memory.entities(scope_type,scope_id);
 CREATE TABLE memory.edges (id text PRIMARY KEY,from_id text NOT NULL,predicate text NOT NULL,to_id text NOT NULL,scope_type text NOT NULL,scope_id text NOT NULL,confidence real NOT NULL,status text NOT NULL,updated_at bigint NOT NULL);
 CREATE INDEX memory_edges_from ON memory.edges(scope_type,scope_id,from_id);
 CREATE INDEX memory_edges_to ON memory.edges(scope_type,scope_id,to_id);
-CREATE TABLE memory.topics (topic_id text PRIMARY KEY,kind text NOT NULL,scope_type text NOT NULL,scope_id text NOT NULL,title text NOT NULL,description text NOT NULL,aliases text[] NOT NULL,entity_ids text[] NOT NULL,related_topic_ids text[] NOT NULL,current_cold_revision uuid,embedding_text text NOT NULL,status text NOT NULL,lifecycle jsonb,updated_at bigint NOT NULL,search_document tsvector GENERATED ALWAYS AS (to_tsvector('simple',coalesce(title,'')||' '||coalesce(description,''))) STORED);
+CREATE TABLE memory.topics (topic_id text PRIMARY KEY,kind text NOT NULL,scope_type text NOT NULL,scope_id text NOT NULL,title text NOT NULL,description text NOT NULL,aliases text[] NOT NULL,entity_ids text[] NOT NULL,related_topic_ids text[] NOT NULL,current_cold_revision uuid,embedding_text text NOT NULL,status text NOT NULL,lifecycle jsonb,created_at bigint NOT NULL,updated_at bigint NOT NULL,search_document tsvector GENERATED ALWAYS AS (to_tsvector('simple',coalesce(title,'')||' '||coalesce(description,''))) STORED);
 CREATE INDEX memory_topics_scope ON memory.topics(scope_type,scope_id,status);
+CREATE INDEX memory_topics_page ON memory.topics(scope_type,scope_id,created_at DESC,topic_id DESC);
 CREATE INDEX memory_topics_fts ON memory.topics USING gin(search_document);
 CREATE INDEX memory_topics_trgm ON memory.topics USING gin ((coalesce(title,'')||' '||coalesce(description,'')) gin_trgm_ops);
 CREATE TABLE memory.cold_revisions (id uuid PRIMARY KEY,topic_id text NOT NULL REFERENCES memory.topics(topic_id),kind text NOT NULL,scope_type text NOT NULL,scope_id text NOT NULL,revision integer NOT NULL,state text NOT NULL,object_key text NOT NULL UNIQUE,checksum text NOT NULL,byte_length integer NOT NULL,token_count integer NOT NULL,created_at bigint NOT NULL,published_at bigint,UNIQUE(topic_id,revision));

@@ -21,6 +21,25 @@
 - Added transactional, restart-safe migration of exact legacy 0.8 databases with data-preservation, idempotent reopen, drift, newer-revision, immutable-journal, and failure-rollback coverage.
 - Advanced the Core state protocol to `tagent-core/state-0.8-r2`, requiring one full Host restart for the first revision-2 deployment and preventing automatic rollback to an incompatible revision-1 binary.
 
+### Runtime and delivery correctness
+
+- Made Transcript pagination cursor-stable across concurrent appends, added bounded SSE write pumping and delivery fencing, and preserved exact event acknowledgements across reconnect and replay.
+- Hardened runtime retry, cancellation, provider cooldown, and partial-response isolation so stale or failed Attempts cannot publish state after ownership changes.
+- Added Generation heartbeats and candidate stabilization, kept `current` on the previous release until stabilization succeeds, and made drain and post-commit activation recovery converge without replaying privileged effects.
+
+### Memory consistency and administration
+
+- Fenced reindex vector writes against the current database-time lease and fencing token so reclaimed workers cannot overwrite a newer generation.
+- Published capture records, topics, graph data, vectors, and job completion through one lease-validated transaction, preventing stale workers, duplicate retries, and partially visible captures.
+- Switched Record and Topic administration to bounded snapshot/keyset pagination; Topic traversal now uses immutable `(created_at, topic_id)` ordering and includes an additive PostgreSQL Memory schema migration.
+- Added bounded history backfill, Core Snapshot administration, recall inspection, capture/reindex job visibility, and Records/Topics browsing to the Web Console Memory surface.
+
+### Application boundaries
+
+- Moved Workspace Goal transition and evidence rules into Governance application services and added durable exact-replay operation receipts at the persistence boundary.
+- Continued decomposing the SQLite Store into responsibility-owned repositories for Session, Message, Workspace Goal, Transcript, Skill, and operation persistence while retaining one connection and Unit of Work.
+- Split Web Console workspace presentation, Inbox mutations, Run view transitions, live synchronization, and Memory presentation into focused state controllers and display components without introducing a second wire client or deployment boundary.
+
 ## [0.8.5] - 2026-08-15
 
 ### Self-managed Core generations

@@ -1,7 +1,7 @@
 import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { createPortal } from "react-dom";
 import { Activity, ArrowDown, BrainCircuit, Check, ChevronDown, ChevronRight, Keyboard, Menu, Moon, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, PanelRightClose, PanelRightOpen, Pencil, Play, Plus, Search, Send, Settings2, ShieldCheck, Square, Sun, Target, Trash2, Upload, WandSparkles, X } from "lucide-react";
-import { api, drainTranscriptView, subscribe, type CaptureJob, type GateProfile, type Message, type RunEvent, type RuntimeStatus, type Session, type SkillRevision, type SkillSummary, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem, type UserInputRequest } from "./api";
+import { api, drainTranscriptView, subscribe, type CaptureJob, type GateProfile, type Message, type RuntimeStatus, type Session, type SkillRevision, type SkillSummary, type TaskRun, type TranscriptItem, type UserInputRequest } from "./api";
 import { preloadMarkdown } from "./LazyMarkdown";
 import { createRequestId, getOrCreateEventConsumerId } from "./id";
 import { IntentPrefetchCache } from "./intent-prefetch-cache";
@@ -12,6 +12,9 @@ import { useMobileDrawerSwipe } from "./use-mobile-drawer-swipe";
 import { useModalFocus } from "./use-modal-focus";
 import { usePopoverFocus } from "./use-popover-focus";
 import { useStickyConversation } from "./use-sticky-conversation";
+import { useRunViewState } from "./use-run-view-state";
+import { useSessionInboxController } from "./use-session-inbox-controller";
+import { useWorkspacePresentation } from "./use-workspace-presentation";
 import { WorkspaceContextMenu } from "./WorkspaceContextMenu";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
@@ -32,18 +35,12 @@ import {
 } from "./AppPanels";
 import { mergeTranscriptItems } from "./transcript-projection";
 import { createEventAcknowledger, type EventAcknowledger } from "./event-acknowledger";
-import { createStreamingDeltaBatcher } from "./streaming-delta-batcher";
 import { loadWorkspaceSnapshot, type WorkspaceSnapshot } from "./workspace-controller";
+import { WorkspaceLiveSyncCoordinator } from "./workspace-live-sync";
 import {
-  storedBoolean,
   storedGateProfiles,
-  storedNumberRecord,
-  storedStringArray,
   storedStringLists,
   storedStringRecord,
-  storedTheme,
-  storedWorkspaceEmojis,
-  type Theme,
 } from "./workspace-preferences";
 const MemoryPanel = lazy(() => import("./MemoryPanel").then((module) => ({ default: module.MemoryPanel })));
 const GoalsPanel = lazy(() => import("./GoalsPanel").then((module) => ({ default: module.GoalsPanel })));
@@ -75,49 +72,52 @@ export function App() {
   const [submittingUserInputId, setSubmittingUserInputId] = useState("");
   const [resolvingApprovalId, setResolvingApprovalId] = useState("");
   const [resolvingApprovalDecision, setResolvingApprovalDecision] = useState<"approved" | "rejected" | "">("");
-  const [activeRun, setActiveRun] = useState<TaskRun | null>(null);
-  const [selectedRun, setSelectedRun] = useState<TaskRun | null>(null);
-  const [runs, setRuns] = useState<TaskRunSummary[]>([]);
-  const [expandedRunId, setExpandedRunId] = useState("");
-  const [events, setEvents] = useState<RunEvent[]>([]);
-  const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
+  const {
+    activeRun,
+    selectedRun,
+    runs,
+    expandedRunId,
+    events,
+    transcript,
+    streaming,
+    liveThinking,
+    setActiveRun,
+    setSelectedRun,
+    setRuns,
+    setExpandedRunId,
+    setEvents,
+    setTranscript,
+    setStreaming,
+    setLiveThinking,
+    streamingDeltaBatcher,
+    activeRunIdRef,
+    activeRunRef,
+    replaceStreamingOnNextDeltaRef,
+    transcriptRunIdRef,
+    transcriptAfterRef,
+    transcriptRefreshTaskRef,
+    applyWorkspaceSnapshot: applyRunWorkspaceSnapshot,
+    resetWorkspace: resetRunWorkspace,
+    startRun: startRunView,
+    openRun: openRunView,
+  } = useRunViewState();
   const [draft, setDraft] = useState("");
   const [draftBySession, setDraftBySession] = useState<Record<string, string>>(() => storedStringRecord("tagent.composer-drafts"));
   const [gateProfileBySession, setGateProfileBySession] = useState<Record<string, GateProfile>>(storedGateProfiles);
   const [inputHistoryBySession, setInputHistoryBySession] = useState<Record<string, string[]>>(() => storedStringLists("tagent.composer-history"));
   const [historyCursor, setHistoryCursor] = useState<number | null>(null);
-  const [inbox, setInbox] = useState<SessionInboxItem[]>([]);
-  const [startingInboxId, setStartingInboxId] = useState("");
-  const [editingInboxId, setEditingInboxId] = useState("");
-  const [inboxDraft, setInboxDraft] = useState("");
-  const [savingInboxId, setSavingInboxId] = useState("");
-  const [draggingInboxId, setDraggingInboxId] = useState("");
-  const [reorderingInbox, setReorderingInbox] = useState(false);
-  const [mutatingInboxId, setMutatingInboxId] = useState("");
-  const [streaming, setStreaming] = useState("");
-  const [liveThinking, setLiveThinking] = useState("");
-  const [streamingDeltaBatcher] = useState(() => createStreamingDeltaBatcher((outputDelta, thinkingDelta) => {
-    if (outputDelta) setStreaming((current) => current + outputDelta);
-    if (thinkingDelta) setLiveThinking((current) => current + thinkingDelta);
-  }));
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
-  const [leftOpen, setLeftOpen] = useState(false);
-  const [rightOpen, setRightOpen] = useState(false);
-  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
-  const [workspaceSwitcherOpen, setWorkspaceSwitcherOpen] = useState(false);
-  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
-  const [sessionSearch, setSessionSearch] = useState("");
-  const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(() => storedStringArray("tagent.pinned-workspaces"));
-  const [lastSeenBySession, setLastSeenBySession] = useState<Record<string, number>>(() => storedNumberRecord("tagent.workspace-last-seen"));
-  const [sessionActivityBaseline, setSessionActivityBaseline] = useState<Record<string, number>>({});
-  const [viewingEarlierHistory, setViewingEarlierHistory] = useState(false);
-  const [leftCollapsed, setLeftCollapsed] = useState(() => storedBoolean("tagent.left-rail-collapsed"));
-  const [rightCollapsed, setRightCollapsed] = useState(() => storedBoolean("tagent.right-panel-collapsed", true));
-  const [theme, setTheme] = useState<Theme>(storedTheme);
-  const [workspaceEmojiById, setWorkspaceEmojiById] = useState<Record<string, string>>(storedWorkspaceEmojis);
-  const [sessionMenuId, setSessionMenuId] = useState("");
-  const [sessionMenuPosition, setSessionMenuPosition] = useState({ top: 0, left: 0 });
+  const {
+    leftOpen, setLeftOpen, rightOpen, setRightOpen,
+    workspaceMenuOpen, setWorkspaceMenuOpen, workspaceSwitcherOpen, setWorkspaceSwitcherOpen,
+    shortcutHelpOpen, setShortcutHelpOpen, sessionSearch, setSessionSearch,
+    pinnedSessionIds, setPinnedSessionIds, lastSeenBySession, setLastSeenBySession,
+    sessionActivityBaseline, viewingEarlierHistory, setViewingEarlierHistory,
+    leftCollapsed, setLeftCollapsed, rightCollapsed, setRightCollapsed,
+    theme, setTheme, workspaceEmojiById, setWorkspaceEmojiById,
+    sessionMenuId, setSessionMenuId, sessionMenuPosition, setSessionMenuPosition,
+  } = useWorkspacePresentation(sessions);
   const [savingExecutionProfile, setSavingExecutionProfile] = useState(false);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [workspaceSkills, setWorkspaceSkills] = useState<SkillRevision[]>([]);
@@ -130,6 +130,7 @@ export function App() {
   const [goalsOpen, setGoalsOpen] = useState(false);
   const [memoryJobs, setMemoryJobs] = useState<CaptureJob[]>([]);
   const [memoryJobsLoaded, setMemoryJobsLoaded] = useState(false);
+  const [streamGeneration, setStreamGeneration] = useState(0);
   const sessionRailRef = useRef<HTMLElement>(null);
   const conversationStageRef = useRef<HTMLDivElement>(null);
   const runPanelRef = useRef<HTMLElement>(null);
@@ -141,32 +142,56 @@ export function App() {
   const skillFileRef = useRef<HTMLInputElement>(null);
   const cancelRenameRef = useRef(false);
   const renameSubmittingRef = useRef(false);
-  const activeRunIdRef = useRef("");
-  const activeRunRef = useRef<TaskRun | null>(null);
   const sessionIdRef = useRef("");
-  const replaceStreamingOnNextDeltaRef = useRef(false);
-  const transcriptRunIdRef = useRef("");
-  const transcriptAfterRef = useRef(0);
-  const transcriptRefreshTaskRef = useRef<Promise<void>>(Promise.resolve());
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const composerIsComposingRef = useRef(false);
   const historySeedRef = useRef("");
+  const workspaceLiveSyncRef = useRef(new WorkspaceLiveSyncCoordinator());
   const [workspacePrefetchCache] = useState(() => new IntentPrefetchCache<string, WorkspaceSnapshot>(30_000, 6));
+  const handleInboxRunStarted = useCallback((nextRun: TaskRun, history: Message[]) => {
+    setMessages(history);
+    setHasOlderMessages(history.length === 80);
+    startRunView(nextRun);
+  }, [startRunView]);
+  const {
+    items: inbox,
+    setItems: setInbox,
+    startingId: startingInboxId,
+    editingId: editingInboxId,
+    draft: inboxDraft,
+    setDraft: setInboxDraft,
+    savingId: savingInboxId,
+    draggingId: draggingInboxId,
+    setDraggingId: setDraggingInboxId,
+    reordering: reorderingInbox,
+    mutatingId: mutatingInboxId,
+    startEditing: startEditingInbox,
+    cancelEditing: cancelEditingInbox,
+    save: saveInbox,
+    dropOn: reorderInbox,
+    move: moveInbox,
+    toggleDeferred: toggleDeferredInbox,
+    mergeIntoFirst: mergeInboxIntoFirst,
+    remove: deleteInboxItem,
+    runNow: runInboxNow,
+  } = useSessionInboxController({
+    sessionId,
+    activeRun,
+    setError,
+    setNotice,
+    onRunStarted: handleInboxRunStarted,
+  });
   const shortcutModifier = useShortcutModifier();
   const workspaceShortcut = formatShortcut(shortcutModifier, "K");
   const conversationActivityKey = `${messages.at(-1)?.id ?? 0}:${pendingUserMessage?.sessionId === sessionId ? pendingUserMessage.createdAt : 0}:${transcript.at(-1)?.seq ?? 0}:${events.at(-1)?.seq ?? 0}:${streaming.length}:${liveThinking.length}`;
   const { viewportRef: messageScrollRef, contentRef: messageFeedRef, pinnedToLatest, hasNewActivity, handleScroll: handleMessageScroll, jumpToLatest: scrollToLatest, pinToLatest } = useStickyConversation(sessionId, conversationActivityKey, conversationStageRef);
 
   const applyWorkspaceSnapshot = useCallback((snapshot: WorkspaceSnapshot) => {
-    streamingDeltaBatcher.discard();
-    replaceStreamingOnNextDeltaRef.current = false;
-    setMessages(snapshot.history); setHasOlderMessages(snapshot.history.length === 80); setRuns(snapshot.runHistory); setInbox(snapshot.queued); setActiveRun(snapshot.active); setSelectedRun(snapshot.latest); setExpandedRunId(snapshot.latest?.id ?? "");
-    setStreaming(snapshot.active?.checkpoint?.active ? snapshot.active.checkpoint.assistantPartial : ""); setLiveThinking("");
-    setEvents(snapshot.active?.checkpoint?.active && snapshot.active.checkpoint.currentTool ? [{ runId: snapshot.active.id, seq: snapshot.active.checkpoint.lastEventSeq, type: "tool.started", data: snapshot.active.checkpoint.currentTool, createdAt: snapshot.active.checkpoint.updatedAt }] : []);
-    transcriptRunIdRef.current = snapshot.latest?.id ?? "";
-    transcriptAfterRef.current = snapshot.transcriptAfter;
-    setTranscript(snapshot.transcript);
-  }, [streamingDeltaBatcher]);
+    setMessages(snapshot.history);
+    setHasOlderMessages(snapshot.history.length === 80);
+    setInbox(snapshot.queued);
+    applyRunWorkspaceSnapshot(snapshot);
+  }, [applyRunWorkspaceSnapshot, setInbox]);
 
   const prefetchWorkspace = useCallback((targetSessionId: string) => {
     if (!targetSessionId || targetSessionId === sessionIdRef.current) return;
@@ -199,8 +224,11 @@ export function App() {
     setSessionMenuId(session.id);
   }
 
-  useEffect(() => { activeRunIdRef.current = activeRun?.id ?? ""; activeRunRef.current = activeRun; }, [activeRun]);
-  useEffect(() => { sessionIdRef.current = sessionId; setViewingEarlierHistory(false); }, [sessionId]);
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+    workspaceLiveSyncRef.current.enterWorkspace(sessionId);
+    setViewingEarlierHistory(false);
+  }, [sessionId]);
   useEffect(() => {
     setDraft(draftBySession[sessionId] ?? "");
     setHistoryCursor(null);
@@ -245,15 +273,6 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    try { globalThis.localStorage?.setItem("tagent.left-rail-collapsed", String(leftCollapsed)); } catch { /* Browser storage is optional. */ }
-  }, [leftCollapsed]);
-  useEffect(() => {
-    try { globalThis.localStorage?.setItem("tagent.right-panel-collapsed", String(rightCollapsed)); } catch { /* Browser storage is optional. */ }
-  }, [rightCollapsed]);
-  useEffect(() => {
-    try { globalThis.localStorage?.setItem("tagent.workspace-emojis", JSON.stringify(workspaceEmojiById)); } catch { /* Browser storage is optional. */ }
-  }, [workspaceEmojiById]);
-  useEffect(() => {
     try { globalThis.localStorage?.setItem("tagent.composer-drafts", JSON.stringify(draftBySession)); } catch { /* Browser storage is optional. */ }
   }, [draftBySession]);
   useEffect(() => {
@@ -262,29 +281,6 @@ export function App() {
   useEffect(() => {
     try { globalThis.localStorage?.setItem("tagent.composer-history", JSON.stringify(inputHistoryBySession)); } catch { /* Browser storage is optional. */ }
   }, [inputHistoryBySession]);
-  useEffect(() => {
-    try { globalThis.localStorage?.setItem("tagent.pinned-workspaces", JSON.stringify(pinnedSessionIds)); } catch { /* Browser storage is optional. */ }
-  }, [pinnedSessionIds]);
-  useEffect(() => {
-    try { globalThis.localStorage?.setItem("tagent.workspace-last-seen", JSON.stringify(lastSeenBySession)); } catch { /* Browser storage is optional. */ }
-  }, [lastSeenBySession]);
-  useEffect(() => {
-    setSessionActivityBaseline((current) => {
-      let changed = false;
-      const next = { ...current };
-      for (const session of sessions) {
-        if (next[session.id] === undefined) { next[session.id] = session.updatedAt; changed = true; }
-      }
-      return changed ? next : current;
-    });
-  }, [sessions]);
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.documentElement.style.colorScheme = theme;
-    document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#171715" : "#f5f4f2");
-    try { globalThis.localStorage?.setItem("tagent.theme", theme); } catch { /* Browser storage is optional. */ }
-  }, [theme]);
-
   const loadSessions = useCallback(async () => {
     setSessionsLoading(true);
     try {
@@ -377,25 +373,31 @@ export function App() {
   useEffect(() => {
     if (!sessionId) return;
     const targetSessionId = sessionId;
+    const workspaceToken = workspaceLiveSyncRef.current.captureWorkspace(targetSessionId);
+    if (!workspaceToken) return;
     let closed = false;
-    setConversationLoading(true);
     let polling = false;
+    const isCurrent = () => !closed && workspaceLiveSyncRef.current.isWorkspaceCurrent(workspaceToken);
     const refresh = async () => {
-      if (closed || polling) return;
+      if (!isCurrent() || polling || document.visibilityState !== "visible") return;
       polling = true;
+      const snapshotGuard = workspaceLiveSyncRef.current.snapshotGuard(workspaceToken);
       try {
         const [queued, runHistory, sessionItems] = await Promise.all([
           api.inbox(targetSessionId), api.runs(targetSessionId), api.sessions(),
         ]);
-        if (closed || sessionIdRef.current !== targetSessionId) return;
+        if (!isCurrent() || !workspaceLiveSyncRef.current.canCommitSnapshot(snapshotGuard)) return;
         setInbox(queued);
         setRuns(runHistory);
         setSessions(sessionItems);
         const active = findActiveRun(runHistory);
+        const currentActiveRunId = activeRunIdRef.current;
+        if (active?.id === currentActiveRunId && workspaceLiveSyncRef.current.hasFreshStream(workspaceToken, active.id)) return;
+        if (!active && currentActiveRunId && workspaceLiveSyncRef.current.hasFreshStream(workspaceToken, currentActiveRunId)) return;
         if (active?.id && active.id !== activeRunIdRef.current) {
           const [hydrated, history] = await Promise.all([api.run(active.id), api.messages(targetSessionId)]);
           const view = await drainTranscriptView(active.id, hydrated.transcriptCount);
-          if (closed || sessionIdRef.current !== targetSessionId) return;
+          if (!isCurrent() || !workspaceLiveSyncRef.current.commitSnapshot(snapshotGuard)) return;
           replaceStreamingOnNextDeltaRef.current = false;
           setMessages(history); setHasOlderMessages(history.length === 80);
           setActiveRun(hydrated); setSelectedRun(hydrated); setExpandedRunId(hydrated.id);
@@ -408,7 +410,7 @@ export function App() {
           const endedRunId = activeRunIdRef.current;
           const [history, ended] = await Promise.all([api.messages(targetSessionId), api.run(endedRunId)]);
           const view = await drainTranscriptView(endedRunId, ended.transcriptCount);
-          if (closed || sessionIdRef.current !== targetSessionId || activeRunIdRef.current !== endedRunId) return;
+          if (!isCurrent() || activeRunIdRef.current !== endedRunId || !workspaceLiveSyncRef.current.commitSnapshot(snapshotGuard)) return;
           replaceStreamingOnNextDeltaRef.current = false;
           transcriptRunIdRef.current = ended.id;
           transcriptAfterRef.current = view.after;
@@ -423,13 +425,14 @@ export function App() {
               refreshSelectedTranscript ? drainTranscriptView(active.id, currentRun.transcriptCount) : Promise.resolve(undefined),
               api.messages(targetSessionId),
             ]);
-            if (closed || sessionIdRef.current !== targetSessionId) return;
+            if (!isCurrent() || !workspaceLiveSyncRef.current.commitSnapshot(snapshotGuard)) return;
             if (view && refreshSelectedTranscript && transcriptRunIdRef.current === active.id) {
               transcriptAfterRef.current = view.after;
               setTranscript(view.items);
             }
             setMessages(history); setHasOlderMessages(history.length === 80);
           }
+          else if (!workspaceLiveSyncRef.current.commitSnapshot(snapshotGuard)) return;
           setActiveRun(currentRun);
           setSelectedRun((current) => current?.id === currentRun.id ? currentRun : current);
         }
@@ -437,12 +440,16 @@ export function App() {
         // SSE remains authoritative while polling provides eventual UI recovery.
       } finally { polling = false; }
     };
+    if (workspaceLiveSyncRef.current.consumeRecoveryRequest(workspaceToken)) void refresh();
     const timer = setInterval(() => void refresh(), 5000);
     return () => { closed = true; clearInterval(timer); };
-  }, [sessionId]);
+  }, [sessionId, streamGeneration]);
   useEffect(() => {
     if (!sessionId) return;
     const targetSessionId = sessionId;
+    const workspaceToken = workspaceLiveSyncRef.current.captureWorkspace(targetSessionId);
+    if (!workspaceToken) return;
+    const snapshotGuard = workspaceLiveSyncRef.current.snapshotGuard(workspaceToken);
     let closed = false;
     const cached = workspacePrefetchCache.peek(targetSessionId);
     if (cached) {
@@ -451,35 +458,40 @@ export function App() {
       workspacePrefetchCache.invalidate(targetSessionId);
     }
     else {
-      replaceStreamingOnNextDeltaRef.current = false;
-      transcriptRunIdRef.current = "";
-      transcriptAfterRef.current = 0;
-      setMessages([]); setHasOlderMessages(false); setRuns([]); setInbox([]); setActiveRun(null); setSelectedRun(null); setExpandedRunId("");
-      setStreaming(""); setLiveThinking(""); setEvents([]); setTranscript([]); setConversationLoading(true);
+      setMessages([]); setHasOlderMessages(false); setInbox([]); resetRunWorkspace(); setConversationLoading(true);
     }
-    setError(""); setEditingInboxId(""); setInboxDraft(""); setDraggingInboxId(""); setPendingUserMessage(null);
+    setError(""); setPendingUserMessage(null);
     void workspacePrefetchCache.load(targetSessionId, () => loadWorkspaceSnapshot(targetSessionId)).then((snapshot) => {
-      if (closed || sessionIdRef.current !== targetSessionId) return;
+      if (closed || !workspaceLiveSyncRef.current.commitSnapshot(snapshotGuard)) return;
       applyWorkspaceSnapshot(snapshot);
-    }).catch((cause) => { if (!closed && sessionIdRef.current === targetSessionId) setError(cause instanceof Error ? cause.message : String(cause)); })
-      .finally(() => { workspacePrefetchCache.invalidate(targetSessionId); if (!closed && sessionIdRef.current === targetSessionId) setConversationLoading(false); });
+    }).catch((cause) => { if (!closed && workspaceLiveSyncRef.current.isWorkspaceCurrent(workspaceToken)) setError(cause instanceof Error ? cause.message : String(cause)); })
+      .finally(() => { workspacePrefetchCache.invalidate(targetSessionId); if (!closed && workspaceLiveSyncRef.current.isWorkspaceCurrent(workspaceToken)) setConversationLoading(false); });
     return () => { closed = true; };
   }, [applyWorkspaceSnapshot, sessionId, workspacePrefetchCache]);
 
-  const [streamGeneration, setStreamGeneration] = useState(0);
   useEffect(() => {
-    const reconnect = () => { if (document.visibilityState === "visible" && navigator.onLine) setStreamGeneration((value) => value + 1); };
+    const reconnect = () => {
+      if (document.visibilityState !== "visible" || !navigator.onLine) return;
+      workspaceLiveSyncRef.current.invalidateStream(sessionIdRef.current);
+      setStreamGeneration((value) => value + 1);
+    };
     document.addEventListener("visibilitychange", reconnect);
     window.addEventListener("online", reconnect);
     return () => { document.removeEventListener("visibilitychange", reconnect); window.removeEventListener("online", reconnect); };
   }, []);
   useEffect(() => {
     if (!activeRun?.id || !isActiveRunStatus(activeRun.status)) return;
+    const targetSessionId = sessionId;
+    const workspaceToken = workspaceLiveSyncRef.current.captureWorkspace(targetSessionId);
+    if (!workspaceToken) return;
+    const streamToken = workspaceLiveSyncRef.current.beginStream(workspaceToken, activeRun.id);
+    if (!streamToken) return;
     let closed = false;
     let unsubscribe: () => void = () => {};
     const consumerId = getOrCreateEventConsumerId();
     const runId = activeRun.id;
     let acknowledger: EventAcknowledger | undefined;
+    const isCurrent = () => !closed && workspaceLiveSyncRef.current.isStreamCurrent(streamToken);
     const checkpointAfter = activeRun.checkpoint?.active ? activeRun.checkpoint.lastEventSeq : activeRun.lastEventSeq ?? 0;
     const refreshTranscriptThrough = (throughSeq: number) => {
       const refresh = transcriptRefreshTaskRef.current.catch(() => undefined).then(async () => {
@@ -487,7 +499,7 @@ export function App() {
         const after = transcriptAfterRef.current;
         if (!Number.isSafeInteger(throughSeq) || throughSeq <= after) return;
         const delta = await drainTranscriptView(runId, throughSeq, after);
-        if (closed || sessionIdRef.current !== sessionId || activeRunIdRef.current !== runId || transcriptRunIdRef.current !== runId) return;
+        if (!isCurrent() || activeRunIdRef.current !== runId || transcriptRunIdRef.current !== runId) return;
         transcriptAfterRef.current = delta.after;
         setTranscript((current) => mergeTranscriptItems(current, delta.items));
         setStreaming(""); setLiveThinking("");
@@ -496,14 +508,16 @@ export function App() {
       return refresh;
     };
     void api.claimConsumer(runId, consumerId).then((cursor) => {
+      if (!isCurrent()) return;
       acknowledger = createEventAcknowledger((sequence) => {
         void api.ackConsumer(runId, consumerId, cursor.generation, sequence).catch(() => undefined);
       });
-      if (closed) return;
       setError("");
       // The durable server cursor is authoritative. Events already represented by the
       // hydrated checkpoint are replayed and acknowledged, but need not be applied twice.
       unsubscribe = subscribe(runId, consumerId, cursor.generation, cursor.ackedSeq, async (event) => {
+        if (!isCurrent()) return;
+        workspaceLiveSyncRef.current.noteStreamActivity(streamToken);
         if (event.seq <= checkpointAfter) { acknowledger?.schedule(event.seq); return; }
         setEvents((current) => [...current.slice(-39), event]);
         if (event.type === "message.started") {
@@ -531,21 +545,21 @@ export function App() {
       }
       if (event.type === "transcript.updated") {
         await refreshTranscriptThrough(Number(event.data.transcriptSeq));
-        if (closed || sessionIdRef.current !== sessionId) return;
+        if (!isCurrent()) return;
         streamingDeltaBatcher.discard();
       }
       if (["run.completed", "run.blocked", "run.failed", "run.cancelled", "run.interrupted", "run.waiting_for_input"].includes(event.type)) {
         streamingDeltaBatcher.flush();
         const updatedTask = api.run(runId);
         const [updated, runHistory, history, queued, view, sessionItems] = await Promise.all([
-          updatedTask, api.runs(sessionId), api.messages(sessionId), api.inbox(sessionId), updatedTask.then((run) => drainTranscriptView(runId, run.transcriptCount)), api.sessions(),
+          updatedTask, api.runs(targetSessionId), api.messages(targetSessionId), api.inbox(targetSessionId), updatedTask.then((run) => drainTranscriptView(runId, run.transcriptCount)), api.sessions(),
         ]);
-        if (closed || sessionIdRef.current !== sessionId) return;
+        if (!isCurrent()) return;
         const nextActiveSummary = findActiveRun(runHistory);
         const nextActive = nextActiveSummary
           ? nextActiveSummary.id === updated.id ? updated : await api.run(nextActiveSummary.id)
           : null;
-        if (closed || sessionIdRef.current !== sessionId) return;
+        if (!isCurrent()) return;
         setStreaming((current) => {
           const response = String(event.data.response ?? "").trim();
           const persisted = !current.trim() || history.some((message) => message.role === "assistant" && (message.content === current || (response && message.content === response)));
@@ -559,19 +573,32 @@ export function App() {
         }); setInbox(queued); transcriptRunIdRef.current = updated.id; transcriptAfterRef.current = view.after; setTranscript(view.items); setSessions(sessionItems);
       } else if (event.type === "run.updated" || event.type.startsWith("continuation.") || event.type.startsWith("supervisor.")) {
         const updated = await api.run(runId);
-        if (closed || sessionIdRef.current !== sessionId) return;
+        if (!isCurrent()) return;
         setActiveRun(updated);
         setSelectedRun((current) => current?.id === updated.id ? updated : current);
         setRuns((current) => current.map((item) => item.id === updated.id ? updated : item));
       }
-      if (!closed) acknowledger?.schedule(event.seq);
+      if (isCurrent()) acknowledger?.schedule(event.seq);
       }, () => {
-        if (closed) return;
+        if (!isCurrent()) return;
+        workspaceLiveSyncRef.current.closeStream(streamToken, true);
         unsubscribe();
         window.setTimeout(() => { if (!closed && document.visibilityState === "visible" && navigator.onLine) setStreamGeneration((value) => value + 1); }, 1_000);
       });
-    }).catch((cause) => { if (!closed) setError(cause instanceof Error ? cause.message : String(cause)); });
-    return () => { acknowledger?.close(); closed = true; streamingDeltaBatcher.discard(); unsubscribe(); };
+      workspaceLiveSyncRef.current.markStreamHealthy(streamToken);
+    }).catch((cause) => {
+      if (!isCurrent()) return;
+      workspaceLiveSyncRef.current.closeStream(streamToken, true);
+      setError(cause instanceof Error ? cause.message : String(cause));
+      window.setTimeout(() => { if (!closed && document.visibilityState === "visible" && navigator.onLine) setStreamGeneration((value) => value + 1); }, 1_000);
+    });
+    return () => {
+      acknowledger?.close();
+      workspaceLiveSyncRef.current.closeStream(streamToken, false);
+      closed = true;
+      streamingDeltaBatcher.discard();
+      unsubscribe();
+    };
   }, [activeRun?.id, activeRun?.status, sessionId, loadSessions, streamGeneration]);
 
   const jumpToLatest = useCallback(() => {
@@ -708,69 +735,11 @@ export function App() {
       setInbox(queued); setMessages(history); setHasOlderMessages(history.length === 80); setPendingUserMessage(persisted ? null : admission.run ? optimistic : null);
       if (admission.run) {
         const nextRun = admission.run;
-        transcriptRunIdRef.current = nextRun.id; transcriptAfterRef.current = 0; setActiveRun(nextRun); setSelectedRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setTranscript([]); setStreaming(""); setLiveThinking("");
+        startRunView(nextRun);
       }
     } catch (cause) {
       if (sessionIdRef.current === targetSessionId) { setPendingUserMessage(null); updateComposerDraft(content); setError(cause instanceof Error ? cause.message : String(cause)); }
     } finally { setSubmitting(false); }
-  }
-
-  async function saveInbox(item: SessionInboxItem) {
-    const content = inboxDraft.trim();
-    if (!content || savingInboxId) return;
-    setSavingInboxId(item.id); setError(""); setNotice("");
-    try { await api.updateInbox(sessionId, item.id, content); setInbox(await api.inbox(sessionId)); setEditingInboxId(""); setInboxDraft(""); setNotice("Queued prompt updated."); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setSavingInboxId(""); }
-  }
-
-  async function applyInboxOrder(next: SessionInboxItem[]) {
-    setReorderingInbox(true); setError(""); setNotice("");
-    try { setInbox(await api.reorderInbox(sessionId, next.map((item) => item.id))); setNotice("Queued prompts reordered."); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setInbox(await api.inbox(sessionId).catch(() => inbox)); }
-    finally { setReorderingInbox(false); setDraggingInboxId(""); }
-  }
-
-  async function reorderInbox(targetId: string) {
-    if (!draggingInboxId || draggingInboxId === targetId || reorderingInbox || mutatingInboxId) return;
-    const from = inbox.findIndex((item) => item.id === draggingInboxId); const to = inbox.findIndex((item) => item.id === targetId);
-    if (from < 0 || to < 0) return;
-    const next = [...inbox]; const [moved] = next.splice(from, 1); next.splice(to, 0, moved);
-    await applyInboxOrder(next);
-  }
-
-  async function moveInbox(itemId: string, offset: -1 | 1) {
-    if (reorderingInbox || mutatingInboxId) return;
-    const from = inbox.findIndex((item) => item.id === itemId); const to = from + offset;
-    if (from < 0 || to < 0 || to >= inbox.length) return;
-    const next = [...inbox]; const [moved] = next.splice(from, 1); next.splice(to, 0, moved);
-    await applyInboxOrder(next);
-  }
-
-  async function mutateInbox(itemId: string, operation: () => Promise<unknown>, noticeText?: string) {
-    if (mutatingInboxId || reorderingInbox || startingInboxId || savingInboxId) return;
-    setMutatingInboxId(itemId); setError(""); setNotice("");
-    try { await operation(); setInbox(await api.inbox(sessionId)); if (noticeText) setNotice(noticeText); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setMutatingInboxId(""); }
-  }
-
-  async function runInboxNow(item: SessionInboxItem) {
-    if (!sessionId || startingInboxId) return;
-    setStartingInboxId(item.id); setError(""); setNotice("");
-    try {
-      if (activeRun?.status === "running" && item.analysis.relation === "parallel" && item.analysis.targetRunId === activeRun.id) {
-        await api.requestParallelStart(sessionId, item.id);
-        setNotice("Parallel start sent to the human approval queue. The task remains queued until approval and explicit execution.");
-        return;
-      }
-      const result = await api.startInbox(sessionId, item.id);
-      const nextRun = result.run;
-      setInbox(await api.inbox(sessionId)); const history = await api.messages(sessionId); setMessages(history); setHasOlderMessages(history.length === 80); setActiveRun(nextRun); setSelectedRun(nextRun);
-      transcriptRunIdRef.current = nextRun.id; transcriptAfterRef.current = 0; setRuns((current) => [nextRun, ...current.filter((run) => run.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setEvents([]); setTranscript([]); setStreaming(""); setLiveThinking("");
-      setNotice("Queued prompt started.");
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setStartingInboxId(""); }
   }
 
   async function submitRequestedInput(request: UserInputRequest, values: Record<string, string>) {
@@ -818,7 +787,7 @@ export function App() {
     try {
       const result = await api.retryLaunch(run.id);
       const nextRun = result.run;
-      transcriptRunIdRef.current = nextRun.id; transcriptAfterRef.current = 0; setActiveRun(nextRun); setSelectedRun(nextRun); setRuns((current) => [nextRun, ...current.filter((item) => item.id !== nextRun.id)]); setExpandedRunId(nextRun.id); setTranscript([]); setStreaming(""); setLiveThinking("");
+      startRunView(nextRun);
       setNotice("TaskRun launch retry started.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setRetryingRunId(""); }
@@ -962,7 +931,7 @@ export function App() {
           if (event.key === "ArrowDown" && historyCursor !== null && caretAtEnd) { event.preventDefault(); navigateComposerHistory(1); }
         }} placeholder="Describe an outcome, correction, constraint, or follow-up…" rows={1} aria-label={enterSubmits ? "Message. Press Enter to send and Shift Enter for a new line." : "Message. Use the send button to submit."} /><button type="button" onClick={() => void submit()} disabled={!draft.trim() || submitting} aria-label="Add to Supervisor queue">{submitting ? <Activity className="spin" size={18} /> : <Send size={18} />}</button></div>
         <div className="composer-hint"><span>{enterSubmits ? "Enter to send · Shift+Enter for a new line" : "Use the arrow to send"}</span>{draftBySession[sessionId]?.trim() && <span>Draft saved</span>}</div>
-        {inbox.length > 0 && <section className="supervisor-inbox"><div className="inbox-heading"><span>Up next</span><small>{inbox.length} queued</small></div>{inbox.map((item, index) => <QueuePrompt key={item.id} item={item} index={index} editing={editingInboxId === item.id} draft={editingInboxId === item.id ? inboxDraft : item.content} busy={Boolean(startingInboxId || savingInboxId || reorderingInbox || mutatingInboxId)} starting={startingInboxId === item.id} dragging={draggingInboxId === item.id} canMoveUp={index > 0} canMoveDown={index < inbox.length - 1} onEdit={() => { setEditingInboxId(item.id); setInboxDraft(item.content); setError(""); setNotice(""); }} onDraftChange={setInboxDraft} onSave={() => void saveInbox(item)} onCancelEdit={() => { setEditingInboxId(""); setInboxDraft(""); }} onStart={() => void runInboxNow(item)} onToggleDefer={() => void mutateInbox(item.id, () => api.decideInbox(sessionId, item.id, item.decision === "defer" ? "pending" : "defer"))} onMergeFirst={() => void mutateInbox(item.id, () => api.mergeInbox(sessionId, item.id, inbox[0].id))} onDelete={() => void mutateInbox(item.id, () => api.deleteInbox(sessionId, item.id))} onMoveUp={() => void moveInbox(item.id, -1)} onMoveDown={() => void moveInbox(item.id, 1)} onDragStart={(event) => { setDraggingInboxId(item.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); }} onDragEnd={() => setDraggingInboxId("")} onDrop={(event) => { event.preventDefault(); void reorderInbox(item.id); }} />)}</section>}
+        {inbox.length > 0 && <section className="supervisor-inbox"><div className="inbox-heading"><span>Up next</span><small>{inbox.length} queued</small></div>{inbox.map((item, index) => <QueuePrompt key={item.id} item={item} index={index} editing={editingInboxId === item.id} draft={editingInboxId === item.id ? inboxDraft : item.content} busy={Boolean(startingInboxId || savingInboxId || reorderingInbox || mutatingInboxId)} starting={startingInboxId === item.id} dragging={draggingInboxId === item.id} canMoveUp={index > 0} canMoveDown={index < inbox.length - 1} onEdit={() => startEditingInbox(item)} onDraftChange={setInboxDraft} onSave={() => void saveInbox(item)} onCancelEdit={cancelEditingInbox} onStart={() => void runInboxNow(item)} onToggleDefer={() => void toggleDeferredInbox(item)} onMergeFirst={() => void mergeInboxIntoFirst(item)} onDelete={() => void deleteInboxItem(item)} onMoveUp={() => void moveInbox(item.id, -1)} onMoveDown={() => void moveInbox(item.id, 1)} onDragStart={(event) => { setDraggingInboxId(item.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); }} onDragEnd={() => setDraggingInboxId("")} onDrop={(event) => { event.preventDefault(); void reorderInbox(item.id); }} />)}</section>}
       </footer>
     </main>
 
@@ -973,7 +942,7 @@ export function App() {
         return <section className={`run-history-item ${expanded ? "expanded" : ""}`} key={item.id}>
           <button className="run-history-toggle" onClick={async () => {
             if (expanded) { setExpandedRunId(""); return; }
-            const selected = await api.run(item.id); const view = await drainTranscriptView(item.id, selected.transcriptCount); transcriptRunIdRef.current = selected.id; transcriptAfterRef.current = view.after; setSelectedRun(selected); setExpandedRunId(item.id); setTranscript(view.items);
+            const selected = await api.run(item.id); const view = await drainTranscriptView(item.id, selected.transcriptCount); openRunView(selected, view.items, view.after);
           }} aria-expanded={expanded}>
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
             <span className={`history-status ${item.status}`} />
@@ -985,7 +954,7 @@ export function App() {
       })}</div>}
     </aside>}
     {runtimeStatus?.memoryEnabled && memoryOpen && <Suspense fallback={null}><MemoryPanel runtime={runtimeStatus} onClose={() => setMemoryOpen(false)} /></Suspense>}
-    {goalsOpen && sessionId && <Suspense fallback={null}><GoalsPanel workspaceId={sessionId} onClose={() => setGoalsOpen(false)} onOpenRun={(runId) => { void api.run(runId).then(async (run) => { const view = await drainTranscriptView(run.id, run.transcriptCount); transcriptRunIdRef.current = run.id; transcriptAfterRef.current = view.after; setSelectedRun(run); setExpandedRunId(run.id); setTranscript(view.items); setGoalsOpen(false); setRightOpen(true); }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }} /></Suspense>}
+    {goalsOpen && sessionId && <Suspense fallback={null}><GoalsPanel workspaceId={sessionId} onClose={() => setGoalsOpen(false)} onOpenRun={(runId) => { void api.run(runId).then(async (run) => { const view = await drainTranscriptView(run.id, run.transcriptCount); openRunView(run, view.items, view.after); setGoalsOpen(false); setRightOpen(true); }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }} /></Suspense>}
     <button ref={mobileBackdropRef} className={`backdrop mobile-only ${leftOpen || rightOpen ? "visible" : ""}`} onClick={() => { setLeftOpen(false); setRightOpen(false); }} aria-label="Close panel" aria-hidden={leftOpen || rightOpen ? undefined : "true"} tabIndex={leftOpen || rightOpen ? 0 : -1} />
   </div>;
 }

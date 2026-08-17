@@ -71,14 +71,20 @@ export type ConsolePreferenceRecord = Static<typeof ConsolePreferenceRecordSchem
 export const ConsoleWarmMemorySchema = Type.Union([ConsoleMemoryRecordSchema, ConsolePreferenceRecordSchema]);
 export type ConsoleWarmMemory = Static<typeof ConsoleWarmMemorySchema>;
 
+export const ConsoleMemoryRecordPageSchema=Type.Object({records:Type.Array(ConsoleWarmMemorySchema),snapshotCreatedAt:TimestampMillisecondsSchema});
+export type ConsoleMemoryRecordPage=Static<typeof ConsoleMemoryRecordPageSchema>;
+
 export const ConsoleTopicDescriptorSchema = Type.Object({
   topicId: Type.String(), kind: ConsoleMemoryKindSchema, scope: ConsoleMemoryScopeSchema,
   title: Type.String(), description: Type.String(), aliases: Type.Array(Type.String()),
   entityIds: Type.Array(Type.String()), relatedTopicIds: Type.Array(Type.String()),
   coldRevisionId: Type.Optional(Type.String()), status: ConsoleMemoryStatusSchema,
-  updatedAt: TimestampMillisecondsSchema,
+  createdAt: TimestampMillisecondsSchema, updatedAt: TimestampMillisecondsSchema,
 });
 export type ConsoleTopicDescriptor = Static<typeof ConsoleTopicDescriptorSchema>;
+
+export const ConsoleMemoryTopicPageSchema=Type.Object({topics:Type.Array(ConsoleTopicDescriptorSchema),snapshotCreatedAt:TimestampMillisecondsSchema});
+export type ConsoleMemoryTopicPage=Static<typeof ConsoleMemoryTopicPageSchema>;
 
 export const ConsoleColdTopicSchema = Type.Object({
   descriptor: ConsoleTopicDescriptorSchema,

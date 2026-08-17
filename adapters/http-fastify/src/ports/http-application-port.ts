@@ -1,5 +1,6 @@
 import type { AdmissionCoordinator } from "@tagent/admission";
 import type { ExecutionCoordinator } from "@tagent/execution";
+import type { WorkspaceGoal, WorkspaceGoalDecisionInput, WorkspaceGoalDefinition, WorkspaceGoalOperationReceipt, WorkspaceGoalRevision, WorkspaceGoalRoadmap, WorkspaceGoalSummary } from "@tagent/governance";
 
 type HttpAdmissionApplicationPort = Pick<AdmissionCoordinator,
   | "enqueueSessionInput"
@@ -9,8 +10,15 @@ type HttpAdmissionApplicationPort = Pick<AdmissionCoordinator,
 >;
 
 interface HttpWorkspaceGoalApplicationPort {
-  generateWorkspaceGoalRoadmap(goalId: string, actorId?: string): unknown;
-  startWorkspaceGoalRoadmapItem(goalId: string, roadmapItemId: string, requestId?: string): unknown;
+  listWorkspaceGoals(workspaceId:string):WorkspaceGoalSummary[];
+  createWorkspaceGoal(workspaceId:string,input:{definition:WorkspaceGoalDefinition;actorId?:string;requestId?:string}):WorkspaceGoal;
+  getWorkspaceGoal(goalId:string):WorkspaceGoal|null;
+  reviseWorkspaceGoalDefinition(goalId:string,input:{definition:WorkspaceGoalDefinition;actorId?:string;requestId:string}):WorkspaceGoalRevision;
+  reviseWorkspaceGoalRoadmap(goalId:string,input:{content:WorkspaceGoalRoadmap;sourceArtifactId?:string|null;actorId?:string;requestId:string}):WorkspaceGoal;
+  requestWorkspaceGoalRoadmapGeneration(goalId:string,input:{requestId:string;actorId?:string}):Promise<WorkspaceGoal>;
+  getWorkspaceGoalOperation(goalId:string,requestId:string):WorkspaceGoalOperationReceipt|undefined;
+  startWorkspaceGoalRoadmapTask(goalId:string,roadmapItemId:string,requestId?:string):{goal:WorkspaceGoal;inboxItemId:string;runId:string|null};
+  decideWorkspaceGoal(input:WorkspaceGoalDecisionInput):WorkspaceGoal;
 }
 
 type HttpExecutionApplicationPort = Pick<ExecutionCoordinator,

@@ -128,6 +128,15 @@ afterEach(async () => {
 });
 
 describe("Fastify HTTP adapter workspace package", () => {
+  it("keeps route modules independent from plugin composition", () => {
+    const violations = sourceFiles(`${sourceRoot}/v1`)
+      .filter((relativePath) => path.basename(relativePath) !== "plugin.ts")
+      .flatMap((relativePath) => moduleSpecifiers(relativePath)
+        .filter((specifier) => specifier === "./plugin.js")
+        .map(() => relativePath));
+    expect(violations).toEqual([]);
+  });
+
   it("publishes only the compiled root, auth, ports, and v1 package entry points", () => {
     const root = readJson<{ dependencies: Record<string, string>; devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const manifest = readJson<PackageManifest>(`${packageRoot}/package.json`);

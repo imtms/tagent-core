@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { HttpMemoryAccess, HttpMemoryScope } from "../ports/index.js";
-import type { V1ApiDependencies } from "./plugin.js";
+import type { V1ApiDependencies } from "./dependencies.js";
 import { successEnvelope } from "./errors.js";
 import { authorizeConsole, consoleError, memoryAccess, withRequestAbortSignal } from "./console-route-support.js";
 
@@ -43,6 +43,14 @@ export function registerAdminMemoryConsoleV1Routes(app: FastifyInstance, depende
     if (!body.scopes?.length) throw consoleError(400, "memory.scopes_required", "scopes are required");
     return successEnvelope(request, await requireMemory().status(access(request, body.scopes, "memory_admin")));
   });
+
+  app.post("/api/v1/admin/memory/records/page",{onRequest:authorize},async(request)=>{const body=request.body as{scope?:HttpMemoryScope;snapshotCreatedAt?:number;after?:{createdAt:number;id:string};limit?:number};if(!body.scope)throw consoleError(400,"memory.scope_required","scope is required");return successEnvelope(request,await requireMemory().listRecordsPage(access(request,[body.scope],"memory_admin"),body.scope,{snapshotCreatedAt:body.snapshotCreatedAt,after:body.after,limit:Math.min(201,Math.max(1,body.limit??101))}));});
+
+  app.post("/api/v1/admin/memory/topics/page",{onRequest:authorize},async(request)=>{const body=request.body as{scope?:HttpMemoryScope;snapshotCreatedAt?:number;after?:{createdAt:number;topicId:string};limit?:number};if(!body.scope)throw consoleError(400,"memory.scope_required","scope is required");return successEnvelope(request,await requireMemory().listTopicsPage(access(request,[body.scope],"memory_admin"),body.scope,{snapshotCreatedAt:body.snapshotCreatedAt,after:body.after,limit:Math.min(201,Math.max(1,body.limit??101))}));});
+
+  app.post("/api/v1/admin/memory/record",{onRequest:authorize},async(request)=>{const body=request.body as{scope?:HttpMemoryScope;id?:string};if(!body.scope||!body.id)throw consoleError(400,"memory.record_invalid","scope and id are required");return successEnvelope(request,await requireMemory().getRecord(access(request,[body.scope],"memory_admin"),body.id));});
+
+  app.post("/api/v1/admin/memory/topic",{onRequest:authorize},async(request)=>{const body=request.body as{scope?:HttpMemoryScope;topicId?:string};if(!body.scope||!body.topicId)throw consoleError(400,"memory.topic_invalid","scope and topicId are required");return successEnvelope(request,await requireMemory().getColdTopic(access(request,[body.scope],"memory_admin"),body.topicId));});
 
   app.post("/api/v1/admin/memory/recall-console", { onRequest: authorize }, async (request, reply) => {
     const body = request.body as { cue?: string; scopes?: HttpMemoryScope[]; kinds?: Array<"fact" | "preference" | "episode" | "procedure">; maxCards?: number; maxColdTopics?: number };

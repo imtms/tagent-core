@@ -11,8 +11,6 @@ import type {
   EvidenceRepository,
   OperationRepository,
   SupervisorDecisionJournal,
-  WorkspaceGoalRepository,
-  WorkspaceGoalOperationRepository,
 } from "@tagent/governance/ports";
 import type { ReasoningEffort } from "@tagent/admission/domain";
 import type { RunPhase, RunStatus } from "@tagent/execution/domain";
@@ -63,6 +61,4 @@ export interface HttpPersistencePort {
   transcript: Pick<TranscriptRepository, "listTranscriptEntries" | "listTranscriptView">;
   evidence: Pick<EvidenceRepository, "getArtifact" | "listArtifacts">;
   eventConsumers: EventConsumerRepository;
-  workspaceGoals: WorkspaceGoalRepository;
-  workspaceGoalOperations: WorkspaceGoalOperationRepository;
 }

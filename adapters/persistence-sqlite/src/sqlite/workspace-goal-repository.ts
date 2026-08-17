@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
+  authorizeWorkspaceGoalRunMutation,
+  planWorkspaceGoalDecision,
+  planWorkspaceGoalRevision,
+  shouldWorkspaceGoalBeReady,
+  validateWorkspaceGoalEvidenceTarget,
   workspaceGoalContentHash,
   workspaceGoalNextAction,
   type CreateWorkspaceGoalInput,
@@ -26,8 +31,6 @@ import type { CriterionCoverage } from "@tagent/governance/domain";
 import type { RunStatus, TaskRunContractSnapshot, TaskRunWorkspaceGoalSnapshot } from "@tagent/execution/domain";
 
 const now = () => Date.now();
-const TERMINAL_STATUSES = new Set<WorkspaceGoalStatus>(["completed", "cancelled"]);
-
 type DbRevisionKind = WorkspaceGoalRevision["kind"];
 type DbDecisionKind = WorkspaceGoalDecision["kind"];
 
@@ -148,60 +151,17 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
       if (existing.payloadHash !== payloadHash) throw new Error("workspace Goal decision idempotency conflict");
       return decisionFromRow(existing);
     }
-    this.assertDecisionAllowed(goal.status, input.kind);
-    if (goal.currentRunId && ["approve_goal", "approve_roadmap", "request_change", "pause", "cancel"].includes(input.kind)) {
-      throw new Error("workspace Goal cannot change approval, pause, or end while a guided TaskRun is active");
-    }
     const revision = this.revision(input.targetRevisionId);
-    if (!revision || revision.goalId !== input.goalId || revision.contentHash !== input.targetHash) throw new Error("workspace Goal revision is stale");
-    if (input.kind === "approve_goal" && revision.kind !== "definition") throw new Error("approve_goal requires a definition revision");
-    if (input.kind === "approve_roadmap" && revision.kind !== "roadmap") throw new Error("approve_roadmap requires a Roadmap revision");
-    if (input.kind === "request_change" && revision.kind === "definition" && goal.activeDefinitionRevisionId !== revision.id) {
-      throw new Error("request_change must target the active Goal definition revision");
-    }
-    if (input.kind === "request_change" && revision.kind === "roadmap" && goal.activeRoadmapRevisionId !== revision.id) {
-      throw new Error("request_change must target the active Roadmap revision");
-    }
-    if (["approve_goal", "resume"].includes(input.kind)) this.assertNoOtherGuidingGoal(goal);
-    if (input.kind === "approve_roadmap") {
-      if (!goal.definition || goal.activeDefinitionRevisionId !== goal.definition.id) throw new Error("approve_roadmap requires an approved Goal definition");
-      if (goal.decisions.some((decision) => decision.kind === "approve_roadmap" && decision.targetRevisionId === revision.id && decision.targetHash === revision.contentHash)) {
-        throw new Error("Goal Roadmap revision is already approved; create a new revision to change its approved items");
-      }
-      const roadmap = roadmapContent(revision);
-      const knownItemIds = new Set(roadmap.items.map((item) => item.id));
-      const knownCriteria = new Set(definitionContent(goal.definition).criteria.map((criterion) => criterion.key));
-      if (!approvedItemIds.length) throw new Error("approve_roadmap requires at least one approved item");
-      if (approvedItemIds.some((itemId) => !knownItemIds.has(itemId))) throw new Error("approve_roadmap contains an unknown Roadmap item");
-      if (roadmap.items.some((item) => approvedItemIds.includes(item.id) && !item.criterionKeys.length)) {
-        throw new Error("every approved Roadmap item must advance at least one Goal criterion");
-      }
-      if (roadmap.items.some((item) => item.criterionKeys.some((key) => !knownCriteria.has(key)))) throw new Error("approve_roadmap references a criterion outside the active Goal definition");
-    }
+    if (!revision) throw new Error("workspace Goal revision is stale");
+    const transition=planWorkspaceGoalDecision({goal,revision,decision:{...input,approvedItemIds},hasOtherGuidingGoal:this.hasOtherGuidingGoal(goal)});
     const createdAt = now();
     const decision: WorkspaceGoalDecision = { id: randomUUID(), requestId, payloadHash, goalId: input.goalId, targetRevisionId: input.targetRevisionId, targetHash: input.targetHash, kind: input.kind, approvedItemIds, reason, actorId: input.actorId, createdAt };
     this.db.transaction(() => {
-      let status = goal.status;
-      let definitionId = goal.activeDefinitionRevisionId;
-      let roadmapId = goal.activeRoadmapRevisionId;
-      let completedAt = goal.completedAt;
-      if (input.kind === "approve_goal") { status = "active"; definitionId = revision.id; roadmapId = null; }
-      if (input.kind === "approve_roadmap") { status = goal.status === "paused" ? "paused" : "active"; roadmapId = revision.id; }
-      if (input.kind === "request_change" && revision.kind === "definition") { status = "draft"; definitionId = null; roadmapId = null; }
-      if (input.kind === "request_change" && revision.kind === "roadmap") { status = status === "paused" ? "paused" : "active"; roadmapId = null; }
-      if (input.kind === "pause") status = "paused";
-      if (input.kind === "resume") status = "active";
-      if (input.kind === "cancel") { status = "cancelled"; completedAt = createdAt; }
-      if (input.kind === "close") {
-        if (goal.requiredCriteria === 0 || goal.verifiedCriteria < goal.requiredCriteria) throw new Error("workspace Goal is not ready to close");
-        status = "completed";
-        completedAt = createdAt;
-      }
       this.db.prepare(`INSERT INTO workspace_goal_decisions
         (id,request_id,payload_hash,goal_id,target_revision_id,target_hash,kind,approved_item_ids_json,reason,actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
         .run(decision.id, decision.requestId, decision.payloadHash, decision.goalId, decision.targetRevisionId, decision.targetHash, decision.kind, JSON.stringify(decision.approvedItemIds), decision.reason, decision.actorId, createdAt);
       this.db.prepare(`UPDATE workspace_goals SET status=?,active_definition_revision_id=?,active_roadmap_revision_id=?,updated_at=?,completed_at=? WHERE id=?`)
-        .run(status, definitionId, roadmapId, createdAt, completedAt, input.goalId);
+        .run(transition.status, transition.activeDefinitionRevisionId, transition.activeRoadmapRevisionId, createdAt, transition.complete ? createdAt : goal.completedAt, input.goalId);
       if (input.kind === "approve_roadmap") {
         for (const itemId of approvedItemIds) this.db.prepare(`INSERT INTO workspace_goal_roadmap_item_progress
           (goal_id,roadmap_revision_id,item_id,status,run_id,updated_at,completed_at) VALUES (?,?,?,'pending',NULL,?,NULL)
@@ -305,32 +265,15 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
   }
 
   authorizeRunMutation(runId: string): { allowed: boolean; reason: string } {
-    const link = this.runLinkForRun(runId);
-    if (!link) return { allowed: true, reason: "ordinary TaskRun is not Goal-governed" };
-    const goal = this.getGoal(link.goalId);
-    if (!goal || goal.status !== "active") return { allowed: false, reason: "Workspace Goal is not active" };
-    if (!goal.definition || goal.definition.revision !== link.goalRevision || goal.activeDefinitionRevisionId !== goal.definition.id) return { allowed: false, reason: "Workspace Goal definition approval is stale" };
-    if (link.mode === "workspace") return { allowed: true, reason: "User-started TaskRun follows the active Workspace Goal direction" };
-    if (!link.roadmapRevisionId || goal.activeRoadmapRevisionId !== link.roadmapRevisionId || goal.roadmap?.id !== link.roadmapRevisionId) return { allowed: false, reason: "Workspace Goal Roadmap is not active" };
-    const itemIds = link.mode === "roadmap" ? JSON.parse(link.roadmapItemIdsJson) as string[] : [];
-    const approval = this.latestRoadmapApproval(goal, link.roadmapRevisionId);
-    if (!approval || !itemIds.length || itemIds.some((itemId) => !approval.approvedItemIds.includes(itemId))) return { allowed: false, reason: "TaskRun exceeds the approved Goal Roadmap slice" };
-    return { allowed: true, reason: "Goal Roadmap slice is approved" };
+    const row = this.runLinkForRun(runId);
+    return authorizeWorkspaceGoalRunMutation(row?this.getGoal(row.goalId):null,row?runLinkFromRow(row):undefined);
   }
 
   linkEvidence(input: LinkWorkspaceGoalEvidenceInput): WorkspaceGoalEvidenceLink {
     const goal = this.requireGoal(input.goalId);
-    if (TERMINAL_STATUSES.has(goal.status)) throw new Error("terminal workspace Goal cannot accept evidence");
     const run = this.runRow(input.runId);
     if (!run) throw new Error("TaskRun not found");
-    if (run.workspaceId !== goal.workspaceId) throw new Error("TaskRun belongs to a different workspace");
-    const definition = goal.definition;
-    if (!definition || input.goalRevision !== definition.revision) throw new Error("workspace Goal definition revision is stale");
-    if (!definitionContent(definition).criteria.some((criterion) => criterion.key === input.criterionKey)) throw new Error("criterion not found");
-    const runLink = goal.runLinks.find((link) => link.runId === input.runId);
-    if (!runLink) throw new Error("TaskRun is not linked to this workspace Goal");
-    if (!runLink.criterionKeys.includes(input.criterionKey)) throw new Error("TaskRun is not authorized to provide evidence for this Goal criterion");
-    if (!input.checkKey && !input.artifactId && !input.operationId) throw new Error("evidence must reference a check, artifact or operation");
+    validateWorkspaceGoalEvidenceTarget(goal,input,run.workspaceId);
     const status = input.status ?? "valid";
     const sourceDigest = this.computeEvidenceDigest(input, status);
     const requestId = input.requestId?.trim();
@@ -496,34 +439,22 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
 
   private addRevision(goalId: string, kind: WorkspaceGoalRevision["kind"], content: WorkspaceGoalDefinition | WorkspaceGoalRoadmap, sourceArtifactId: string | null, createdBy: string): WorkspaceGoalRevision {
     const goal = this.requireGoal(goalId);
-    if (TERMINAL_STATUSES.has(goal.status)) throw new Error("terminal workspace Goal cannot be revised");
-    if (goal.currentRunId) throw new Error("workspace Goal cannot be revised while a guided TaskRun is active");
+    const transition=planWorkspaceGoalRevision(goal,kind);
     const dbKind = kind;
     const revisionNumber = Number((this.db.prepare("SELECT COALESCE(MAX(revision),0)+1 as revision FROM workspace_goal_revisions WHERE goal_id=? AND kind=?").get(goalId, dbKind) as { revision: number }).revision);
     const revision = revisionRecord(goalId, kind, revisionNumber, content, sourceArtifactId, createdBy, now());
     this.db.transaction(() => {
       insertRevision(this.db, revision);
-      const status = kind === "definition" ? "draft" : goal.status === "ready_to_close" ? "active" : goal.status;
       this.db.prepare(`UPDATE workspace_goals SET status=?,
-        active_definition_revision_id=CASE WHEN ?='definition' THEN NULL ELSE active_definition_revision_id END,
-        active_roadmap_revision_id=CASE WHEN ?='roadmap' OR ?='definition' THEN NULL ELSE active_roadmap_revision_id END,
-        updated_at=? WHERE id=?`).run(status, kind, kind, kind, revision.createdAt, goalId);
+        active_definition_revision_id=?,active_roadmap_revision_id=?,updated_at=? WHERE id=?`)
+        .run(transition.status,transition.activeDefinitionRevisionId,transition.activeRoadmapRevisionId,revision.createdAt,goalId);
     })();
     return revision;
   }
 
-  private assertDecisionAllowed(status: WorkspaceGoalStatus, kind: WorkspaceGoalDecision["kind"]): void {
-    if (TERMINAL_STATUSES.has(status)) throw new Error("terminal workspace Goal cannot accept decisions");
-    if (kind === "approve_goal" && status !== "draft") throw new Error("only a draft workspace Goal definition can be approved");
-    if (kind === "resume" && status !== "paused") throw new Error("only a paused workspace Goal can be resumed");
-    if (kind === "pause" && !["active", "ready_to_close"].includes(status)) throw new Error("only an active workspace Goal can be paused");
-    if (kind === "close" && status !== "ready_to_close") throw new Error("workspace Goal is not ready to close");
-    if (kind === "approve_roadmap" && status === "draft") throw new Error("workspace Goal definition must be approved before Roadmap approval");
-  }
-
-  private assertNoOtherGuidingGoal(goal: WorkspaceGoal): void {
+  private hasOtherGuidingGoal(goal: WorkspaceGoal): boolean {
     const other = this.db.prepare(`SELECT id FROM workspace_goals WHERE workspace_id=? AND id<>? AND status IN ('active','ready_to_close') LIMIT 1`).get(goal.workspaceId, goal.id) as { id: string } | undefined;
-    if (other) throw new Error("another active workspace Goal already guides this Workspace; pause it before activating this Goal");
+    return Boolean(other);
   }
 
   private guidingGoal(workspaceId: string): WorkspaceGoal | null {
@@ -594,10 +525,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
 
   private refreshReadyStatus(goalId: string, timestamp: number): void {
     const refreshed = this.requireGoal(goalId);
-    const activeRoadmapApproved = Boolean(refreshed.roadmap && refreshed.activeRoadmapRevisionId === refreshed.roadmap.id
-      && this.latestRoadmapApproval(refreshed, refreshed.roadmap.id));
-    const ready = !refreshed.currentRunId && refreshed.requiredCriteria > 0 && refreshed.verifiedCriteria >= refreshed.requiredCriteria
-      && refreshed.activeDefinitionRevisionId === refreshed.definition?.id && activeRoadmapApproved;
+    const ready = shouldWorkspaceGoalBeReady(refreshed);
     const raw = this.goalRow(goalId)!;
     if (ready && raw.status === "active") this.db.prepare("UPDATE workspace_goals SET status='ready_to_close',current_run_id=NULL,updated_at=? WHERE id=?").run(timestamp, goalId);
     else if (!ready && raw.status === "ready_to_close") this.db.prepare("UPDATE workspace_goals SET status='active',updated_at=? WHERE id=?").run(timestamp, goalId);

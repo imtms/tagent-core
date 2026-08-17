@@ -1,4 +1,6 @@
 import type { StructuredToolError } from "./tool-error.js";
+import type { RuntimeModelSpec } from "../domain/runtime-model.js";
+export type { RuntimeModelSpec } from "../domain/runtime-model.js";
 
 /** Execution-owned identity and fencing token for one bounded Attempt. */
 export interface AttemptExecutionToken {
@@ -152,17 +154,6 @@ export interface AttemptRuntimePort {
   getError(): string | undefined;
   /** Latest terminal provider failure, when the concrete runtime can classify it. */
   getProviderFailure?(): RuntimeProviderFailure | undefined;
-}
-
-/** Neutral model projection used only for Execution sizing and runtime selection. */
-export interface RuntimeModelSpec {
-  id: string;
-  provider: string;
-  api: string;
-  baseUrl: string;
-  reasoning?: boolean;
-  contextWindow: number;
-  maxTokens: number;
 }
 
 /** Runtime-neutral projection of one immutable Core-managed Skill revision. */

@@ -113,7 +113,7 @@ describe("SqlitePersistence", () => {
       role: "user",
       content: user.content,
     });
-    expect(adapter.messageSources.listDurableUserMessages()).toEqual([
+    expect(adapter.messageSources.listDurableUserMessagesPage(0, 50)).toEqual([
       { id: user.id, content: user.content, sessionId: session.id, principalId: null },
     ]);
   });

@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { authorizeV1 } from "./auth.js";
-import type { V1ApiDependencies } from "./plugin.js";
+import type { V1ApiDependencies } from "./dependencies.js";
 import { V1HttpError } from "./errors.js";
 
 export function registerInternalV1Routes(app: FastifyInstance, dependencies: V1ApiDependencies): void {

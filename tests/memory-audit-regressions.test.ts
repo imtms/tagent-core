@@ -143,7 +143,8 @@ describe("Memory audit regressions", () => {
     const blobs = new LocalBlobStore(await mkdtemp(path.join(tmpdir(), "tagent-memory-forget-")));
     const composed = new MemoryService({ records: adapter, vectors: adapter, graph: adapter, topics: adapter, blobs, jobs: adapter, policy: new DefaultPolicyEngine(adapter), coreSnapshots: { get: (value) => core.get(value), generate: (value, options) => core.generate(value, options), update: (value, markdown) => core.update(value, markdown) } });
     const topicId = `${scope.type}.${scope.id}.fact.identity`, entityIds = [`${scope.type}:${scope.id}:entity:user`, `${scope.type}:${scope.id}:entity:name`], record = fact("10000000-0000-4000-8000-000000000005", topicId, entityIds);
-    const descriptor: TopicDescriptor = { topicId, kind: "fact", scope, title: "Identity", description: record.kind === "preference" ? record.value : record.content, aliases: ["SecretName"], entityIds, relatedTopicIds: [], embeddingText: "SecretName identity", status: "active", updatedAt: Date.now() };
+    const descriptorTimestamp = Date.now();
+    const descriptor: TopicDescriptor = { topicId, kind: "fact", scope, title: "Identity", description: record.kind === "preference" ? record.value : record.content, aliases: ["SecretName"], entityIds, relatedTopicIds: [], embeddingText: "SecretName identity", status: "active", createdAt: descriptorTimestamp, updatedAt: descriptorTimestamp };
     const nodes: GraphNode[] = entityIds.map((id, index) => ({ id, type: index ? "person" : "user", canonicalName: index ? "SecretName" : "用户", aliases: [], scope }));
     const edge: GraphEdge = { id: `${scope.type}:${scope.id}:edge:identity`, fromId: entityIds[0], predicate: "called", toId: entityIds[1], scope, confidence: 1, status: "active" };
     await composed.persistExtracted(access, [record], [descriptor], nodes, [edge]);
@@ -184,6 +185,7 @@ describe("Memory audit regressions", () => {
       relatedTopicIds: [],
       embeddingText: "topic-only forget",
       status: "active",
+      createdAt: Date.now(),
       updatedAt: Date.now(),
     };
     await service.persistExtracted(access, [record], [descriptor]);
