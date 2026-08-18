@@ -15,6 +15,10 @@ Do not restore a catch-all `styles.css`, add an unlayered override file, put vis
 
 Third-party components may provide behavior, but they must not import an independent visual theme. Syntax highlighting, editor chrome, charts, and similar rendered surfaces are styled from the same semantic tokens inside `design-system.css`; feature modules do not import package CSS directly.
 
+## Live-data authority
+
+The visual contract also requires deterministic ownership of asynchronous state. SSE reconnect uses one jittered exponential backoff timer per active Run, starts at one second, caps at 30 seconds, and resets after a healthy stream, online/visibility recovery, Run change, or stream completion. Terminal refresh clears any local streaming buffer once authoritative Transcript or terminal-event output exists, even when replayed text differs byte-for-byte. Artifact previews use latest-request authority so a stale response cannot replace a newer selection or reopen a closed preview. Requested-input forms are keyed by request ID and submit only fields declared by the current request.
+
 ## Visual rules
 
 - Use the shared semantic color tokens. Raw colors and component-local `color-mix()` formulas are not allowed outside the light/dark token definitions.

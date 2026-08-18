@@ -6,8 +6,8 @@ This document records the Core team's responsibility decision for the Gateway ha
 
 | Item | Value |
 | --- | --- |
-| Review date | 2026-08-18 |
-| Target release | `0.8.8` |
+| Review date | 2026-08-19 |
+| Target release | `0.8.9` |
 | SQLite schema | ID `tagent-core/0.8`, numeric version `2` |
 | Channel API | `/api/v1` |
 | Operator Read | `operator.read.v1` |

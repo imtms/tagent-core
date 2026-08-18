@@ -682,7 +682,52 @@ describe("Core application runtime boundary", () => {
     expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "approved" });
     expect(runtimeOptions!.eventSink.beforeToolCall({ toolCallId: "external-call", toolName: "write", args: { path: "approved.txt", content: "approved" } })).toEqual({ blocked: false });
     expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "consumed" });
+    expect(store.authorizeExternalAction(runId, 2)).toMatchObject({ allowed: false });
     expect(store.authorizeExternalAction(runId, 3)).toMatchObject({ allowed: false });
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("atomically enforces finite, unlimited, expired, and exhausted external-action approval reuse", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime(),
+    });
+    const admitted = await service.enqueueSessionInput(session.id, "请部署到生产环境。", "external-reuse-bounds");
+    const runId = admitted.run!.id;
+    const approval = store.listApprovalRequests(runId)[0]!;
+    await service.approveRunApproval(approval.id);
+    const reuseState = () => store.db.prepare(`SELECT status,used_count as usedCount,max_uses as maxUses
+      FROM approval_requests WHERE id=?`).get(approval.id) as { status: string; usedCount: number; maxUses: number | null };
+
+    store.db.prepare(`UPDATE approval_requests SET status='approved',reuse_mode='reusable',max_uses=2,used_count=0,expires_at=NULL
+      WHERE id=?`).run(approval.id);
+    expect(store.authorizeExternalAction(runId, 2)).toMatchObject({ allowed: true, approvalId: approval.id });
+    expect(reuseState()).toEqual({ status: "approved", usedCount: 1, maxUses: 2 });
+    expect(store.authorizeExternalAction(runId, 2)).toMatchObject({ allowed: true, approvalId: approval.id });
+    expect(reuseState()).toEqual({ status: "consumed", usedCount: 2, maxUses: 2 });
+    expect(store.authorizeExternalAction(runId, 2)).toMatchObject({ allowed: false });
+
+    store.db.prepare(`UPDATE approval_requests SET status='approved',reuse_mode='reusable',max_uses=NULL,used_count=0,expires_at=NULL
+      WHERE id=?`).run(approval.id);
+    expect(store.authorizeExternalAction(runId, 2).allowed).toBe(true);
+    expect(store.authorizeExternalAction(runId, 2).allowed).toBe(true);
+    expect(reuseState()).toEqual({ status: "approved", usedCount: 2, maxUses: null });
+
+    store.db.prepare(`UPDATE approval_requests SET status='approved',reuse_mode='one_time',max_uses=1,used_count=0,expires_at=?
+      WHERE id=?`).run(Date.now() - 1, approval.id);
+    expect(store.authorizeExternalAction(runId, 2)).toMatchObject({ allowed: false });
+    expect(reuseState()).toEqual({ status: "approved", usedCount: 0, maxUses: 1 });
+
+    store.db.prepare(`UPDATE approval_requests SET status='approved',reuse_mode='one_time',max_uses=1,used_count=0,expires_at=NULL
+      WHERE id=?`).run(approval.id);
+    const competing = [store.authorizeExternalAction(runId, 2), store.authorizeExternalAction(runId, 2)];
+    expect(competing.filter((result) => result.allowed)).toHaveLength(1);
+    expect(reuseState()).toEqual({ status: "consumed", usedCount: 1, maxUses: 1 });
+
     await service.closeRuntimes();
     store.close();
   });

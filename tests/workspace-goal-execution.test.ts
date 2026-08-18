@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCoreApplication } from "@tagent/core-service/application";
 import type { WorkspaceGoalRoadmapGenerator } from "@tagent/core-service/application";
+import { OpenAiWorkspaceGoalRoadmapGenerator } from "../apps/core-service/src/composition/workspace-goal-roadmap-generator.js";
+import { credentialReference } from "@tagent/execution/ports";
 import { WorkspaceGoalService } from "@tagent/governance";
 import { Store } from "@tagent/persistence-sqlite";
 import type { AttemptRuntimeFactory, AttemptRuntimePort, AttemptRuntimeSpec } from "@tagent/execution/ports";
@@ -69,6 +71,67 @@ function enqueueUnlinkedRoadmapItem(store: Store, input: {
 }
 
 describe("Workspace Goal Core execution", () => {
+  it("starts the Roadmap response timeout after credential resolution", async () => {
+    const original = globalThis.fetch;
+    let fetchSignalAborted = true;
+    globalThis.fetch = async (_url, init) => {
+      fetchSignalAborted = (init?.signal as AbortSignal | undefined)?.aborted ?? false;
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: "Bounded", items: [
+        { id: "store", title: "Store", outcome: "State is stored", verification: "Check storage", criterionKeys: ["stored"] },
+        { id: "verify", title: "Verify", outcome: "Behavior is verified", verification: "Check behavior", criterionKeys: ["verified"] },
+      ] }) } }] }), { status: 200 });
+    };
+    try {
+      const generator = new OpenAiWorkspaceGoalRoadmapGenerator({
+        model: { id: "roadmap-model", provider: "test", api: "openai-completions", baseUrl: "https://roadmap.test/v1", contextWindow: 32_000, maxTokens: 2_048 },
+        credential: {
+          reference: credentialReference("SLOW_ROADMAP_API_KEY"),
+          resolver: {
+            configured: async () => true,
+            resolve: async () => { await new Promise((resolve) => setTimeout(resolve, 25)); return "secret"; },
+          },
+        },
+        timeoutMs: 10,
+      });
+      await expect(generator.generate({ goalId: "goal-1", definition: definition() })).resolves.toMatchObject({ summary: "Bounded" });
+      expect(fetchSignalAborted).toBe(false);
+    } finally { globalThis.fetch = original; }
+  });
+
+  it("distinguishes Roadmap credential and response-header failures", async () => {
+    const original = globalThis.fetch;
+    const model = { id: "roadmap-model", provider: "test", api: "openai-completions", baseUrl: "https://roadmap.test/v1", contextWindow: 32_000, maxTokens: 2_048 } as const;
+    try {
+      const fetchProbe = vi.fn<typeof fetch>();
+      globalThis.fetch = fetchProbe;
+      const failedCredential = new OpenAiWorkspaceGoalRoadmapGenerator({
+        model,
+        credential: {
+          reference: credentialReference("FAILED_ROADMAP_API_KEY"),
+          resolver: { configured: async () => true, resolve: async () => { throw new Error("vault unavailable"); } },
+        },
+        timeoutMs: 10,
+      });
+      await expect(failedCredential.generate({ goalId: "goal-1", definition: definition() })).rejects.toThrow("credential resolution failed");
+      expect(fetchProbe).not.toHaveBeenCalled();
+
+      globalThis.fetch = async (_url, init) => new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal as AbortSignal;
+        const fail = () => reject(signal.reason);
+        if (signal.aborted) fail(); else signal.addEventListener("abort", fail, { once: true });
+      });
+      const stalledHeaders = new OpenAiWorkspaceGoalRoadmapGenerator({
+        model,
+        credential: {
+          reference: credentialReference("TEST_ROADMAP_API_KEY"),
+          resolver: { configured: async () => true, resolve: async () => "secret" },
+        },
+        timeoutMs: 10,
+      });
+      await expect(stalledHeaders.generate({ goalId: "goal-1", definition: definition() })).rejects.toThrow("response headers timed out");
+    } finally { globalThis.fetch = original; }
+  });
+
   it("deduplicates the single initial Roadmap LLM call and requires user approval before execution", async () => {
     const store = new Store(":memory:");
     const { workspace, goals, goal } = createApprovedGoal(store);

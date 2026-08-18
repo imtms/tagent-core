@@ -13,7 +13,7 @@ Properties:
 - multi-file patches preflight as a unit and do not intentionally leave partial writes;
 - commit-time hashes are checked again through the descriptor-relative helper;
 - normal commit failures roll back visible renames;
-- successful edits invalidate affected checks;
+- mutation-capable operations invalidate affected checks on both success and failure because a failed operation may have produced partial effects;
 - Operation canonical payloads include the snapshot-bound patch, so receipt replay does not write twice;
 - durable `workspace.edit.completed` and `workspace.edit.rejected` events retain audit metrics.
 
@@ -30,7 +30,7 @@ totalBytes / storedBytes / shownBytes
 truncatedAtSource / outputDiscardedBytes
 ```
 
-The default Artifact hard limit is 16 MiB and is configurable with `TAGENT_TOOL_ARTIFACT_MAX_BYTES`. If the source exceeds the configured limit, the result explicitly reports discarded bytes and never presents the Artifact as complete. Core emits `tool.output.spilled` for durable evidence and diagnostics.
+The default Artifact hard limit is 16 MiB and is configurable with `TAGENT_TOOL_ARTIFACT_MAX_BYTES`. If the source exceeds the configured limit, the result explicitly reports discarded bytes and never presents the Artifact as complete. Core emits `tool.output.spilled` for durable evidence and diagnostics. Bash always closes and removes its temporary capture after the durable result is settled or when Artifact persistence fails.
 
 ## Core-owned project context
 
@@ -86,9 +86,11 @@ The compact semantic-lite prompt omits plan, operation and Artifact payloads. Re
 
 ## Bash timeout and repeat protection
 
-Bash timeout is classified separately from generic signal termination and emits `tool.bash.timed_out` with command hash, output byte counts and Artifact references. Composite commands emit `tool.bash.composite` guidance so build, test, deploy, restart and polling can be executed and evidenced separately.
+Bash timeout is classified separately from generic signal termination and emits `tool.bash.timed_out` with command hash, output byte counts and Artifact references. Composite commands emit `tool.bash.composite` guidance so build, test, deploy, restart and polling can be executed and evidenced separately. Process-group cleanup continues after the main child exits when descendants remain, but is bounded by the configured termination grace plus a fixed cleanup margin.
 
 After a Bash command fails or times out, an identical canonical command is fenced before the next execution. The Agent must inspect preserved output or materially change the command/timeout/recovery approach. This prevents expensive blind reruns while allowing a changed recovery action.
+
+The check-invalidation classifier parses command positions and shell stages. Quoted mutation words in `echo`, `grep`, or other recognized observations do not stale checks, while output redirection, substitution, unknown executables, and test snapshot-update flags do. A separate minimal catastrophic-command guard catches common `rm -rf`, `git clean --force`, wrapper, variable, and nested-shell forms. It intentionally does not claim complete shell parsing or operating-system isolation.
 
 ## Continuation stall detection
 

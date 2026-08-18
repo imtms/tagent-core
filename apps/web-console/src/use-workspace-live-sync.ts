@@ -7,6 +7,7 @@ import {
   type Session,
   type SessionInboxItem,
   type TaskRun,
+  type TranscriptItem,
 } from "./api";
 import { createEventAcknowledger, type EventAcknowledger } from "./event-acknowledger";
 import { getOrCreateEventConsumerId } from "./id";
@@ -15,7 +16,7 @@ import { findActiveRun, isActiveRunStatus } from "./run-state";
 import { mergeTranscriptItems } from "./transcript-projection";
 import type { useRunViewState } from "./use-run-view-state";
 import { loadWorkspaceSnapshot, type WorkspaceSnapshot } from "./workspace-controller";
-import { WorkspaceLiveSyncCoordinator } from "./workspace-live-sync";
+import { WorkspaceLiveSyncCoordinator, WorkspaceReconnectBackoff } from "./workspace-live-sync";
 
 export interface PendingUserMessage {
   workspaceId: string;
@@ -55,6 +56,17 @@ export function shouldStreamWorkspaceRun(run: TaskRun | null, workspaceId: strin
   return Boolean(run?.id && run.sessionId === workspaceId && isActiveRunStatus(run.status));
 }
 
+export function terminalStreamingAfterRefresh(
+  current: string,
+  transcript: TranscriptItem[],
+  terminalResponse: unknown,
+): string {
+  if (!current) return "";
+  const hasAuthoritativeOutput = String(terminalResponse ?? "").trim().length > 0
+    || transcript.some((item) => item.kind === "assistant" && item.text.trim().length > 0);
+  return hasAuthoritativeOutput ? "" : current;
+}
+
 export function useWorkspaceLiveSync({
   workspaceId,
   runView,
@@ -87,6 +99,9 @@ export function useWorkspaceLiveSync({
     resetWorkspace: resetRunWorkspace,
   } = runView;
   const coordinatorRef = useRef(new WorkspaceLiveSyncCoordinator());
+  const reconnectBackoffRef = useRef(new WorkspaceReconnectBackoff());
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectRunIdRef = useRef("");
   const currentWorkspaceIdRef = useRef(workspaceId);
   const [streamGeneration, setStreamGeneration] = useState(0);
   const [prefetchCache] = useState(() => new IntentPrefetchCache<string, WorkspaceSnapshot>(30_000, 6));
@@ -265,6 +280,9 @@ export function useWorkspaceLiveSync({
   useEffect(() => {
     const reconnect = () => {
       if (document.visibilityState !== "visible" || !navigator.onLine) return;
+      if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+      reconnectBackoffRef.current.cancel();
       coordinatorRef.current.invalidateStream(currentWorkspaceIdRef.current);
       setStreamGeneration((value) => value + 1);
     };
@@ -273,11 +291,26 @@ export function useWorkspaceLiveSync({
     return () => {
       document.removeEventListener("visibilitychange", reconnect);
       window.removeEventListener("online", reconnect);
+      if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+      reconnectBackoffRef.current.cancel();
     };
   }, []);
 
   useEffect(() => {
-    if (!shouldStreamWorkspaceRun(activeRun, workspaceId)) return;
+    if (!shouldStreamWorkspaceRun(activeRun, workspaceId)) {
+      if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+      reconnectBackoffRef.current.reset();
+      reconnectRunIdRef.current = "";
+      return;
+    }
+    if (reconnectRunIdRef.current !== activeRun.id) {
+      if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+      reconnectBackoffRef.current.reset();
+      reconnectRunIdRef.current = activeRun.id;
+    }
     const targetWorkspaceId = workspaceId;
     const workspaceToken = coordinatorRef.current.captureWorkspace(targetWorkspaceId);
     if (!workspaceToken) return;
@@ -293,11 +326,15 @@ export function useWorkspaceLiveSync({
       ? activeRun.checkpoint.lastEventSeq
       : activeRun.lastEventSeq ?? 0;
     const scheduleReconnect = () => {
-      window.setTimeout(() => {
+      const delay = reconnectBackoffRef.current.nextDelay();
+      if (delay === null) return;
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectTimerRef.current = null;
+        reconnectBackoffRef.current.fired();
         if (!closed && document.visibilityState === "visible" && navigator.onLine) {
           setStreamGeneration((value) => value + 1);
         }
-      }, 1_000);
+      }, delay);
     };
     const refreshTranscriptThrough = (throughSeq: number) => {
       const refresh = transcriptRefreshTaskRef.current.catch(() => undefined).then(async () => {
@@ -381,13 +418,7 @@ export function useWorkspaceLiveSync({
             ? nextActiveSummary.id === updated.id ? updated : await api.run(nextActiveSummary.id)
             : null;
           if (!isCurrent()) return;
-          setStreaming((current) => {
-            const response = String(event.data.response ?? "").trim();
-            const persisted = !current.trim() || history.some((message) =>
-              message.role === "assistant"
-              && (message.content === current || (response && message.content === response)));
-            return persisted ? "" : current;
-          });
+          setStreaming((current) => terminalStreamingAfterRefresh(current, view.items, event.data.response));
           replaceStreamingOnNextDeltaRef.current = false;
           setActiveRun(nextActive);
           setSelectedRun(updated);
@@ -415,6 +446,9 @@ export function useWorkspaceLiveSync({
         scheduleReconnect();
       });
       coordinatorRef.current.markStreamHealthy(streamToken);
+      if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+      reconnectBackoffRef.current.reset();
     }).catch((cause) => {
       if (!isCurrent()) return;
       coordinatorRef.current.closeStream(streamToken, true);
@@ -422,6 +456,9 @@ export function useWorkspaceLiveSync({
       scheduleReconnect();
     });
     return () => {
+      if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+      reconnectBackoffRef.current.cancel();
       acknowledger?.close();
       coordinatorRef.current.closeStream(streamToken, false);
       closed = true;

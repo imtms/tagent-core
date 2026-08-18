@@ -44,6 +44,7 @@ The Web Console depends only on `@tagent/abi` and `@tagent/core-client`. Core ne
 
 - Node.js `24.18.1`
 - npm `12+`
+- macOS or Linux for local runtime development; package compilation and documentation checks remain cross-platform, but `@tagent/workspace-local` requires POSIX descriptor-relative filesystem APIs and fails early with `WORKSPACE_PLATFORM_UNSUPPORTED` on Windows
 - an OpenAI Chat Completions-compatible provider and API key
 - a trusted workspace directory
 - optional PostgreSQL 17 with `vector` and `pg_trgm` for persistent Memory

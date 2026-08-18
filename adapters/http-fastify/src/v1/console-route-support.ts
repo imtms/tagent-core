@@ -43,8 +43,8 @@ export function memoryAccess(
 ): HttpMemoryAccess {
   const principal = principalOf(request);
   if (!principal.localAdmin) {
-    const allowed = new Set(principal.resourceScopes.map((scope) => `${scope.type}:${scope.id}`));
-    if (scopes.some((scope) => !allowed.has(`${scope.type}:${scope.id}`))) {
+    if (scopes.some((requested) => !principal.resourceScopes.some((granted) =>
+      granted.type === requested.type && (granted.id === requested.id || granted.id === "*")))) {
       throw new V1HttpError(403, "auth.resource_scope_denied", "Memory resource scope is not authorized", "permission_denied");
     }
   }

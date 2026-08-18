@@ -34,6 +34,24 @@ export function principalOf(request: FastifyRequest): V1Principal {
   return principal;
 }
 
+export function assertV1ResourceScope(
+  request: FastifyRequest,
+  type: "session" | "workspace" | "project" | "user",
+  id: string,
+): void {
+  const principal = principalOf(request);
+  if (principal.localAdmin) return;
+  const allowed = principal.resourceScopes.some((scope) =>
+    (scope.type === type || (type === "session" && scope.type === "workspace"))
+      && (scope.id === id || scope.id === "*"));
+  if (!allowed) {
+    throw new V1HttpError(403, "auth.resource_scope_denied", "Resource scope is not authorized", "permission_denied", false, {
+      resourceType: type,
+      resourceId: id,
+    });
+  }
+}
+
 export function authorizeV1(request: FastifyRequest, credentials: ServiceCredential[], requiredScope: V1RequiredScope, surface: V1Surface): void {
   authorizeV1Scopes(request, credentials, [requiredScope], surface);
 }

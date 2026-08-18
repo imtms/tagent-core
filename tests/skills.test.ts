@@ -4,6 +4,7 @@ import path from "node:path";
 import { zipSync, strToU8 } from "fflate";
 import { describe, expect, it } from "vitest";
 import { CoreSkillApplication } from "@tagent/core-service/application";
+import { renameConflictMayReferenceExistingDirectory } from "../apps/core-service/src/application/skill-application.js";
 import { Store } from "@tagent/persistence-sqlite/store";
 
 function skillSource(name: string, body: string, description = "A bounded test Skill") {
@@ -33,6 +34,14 @@ function application(store: Store, workspace: string) {
 }
 
 describe("Core-managed Skills", () => {
+  it("recognizes only genuine platform-specific existing-directory rename conflicts", () => {
+    expect(renameConflictMayReferenceExistingDirectory({ code: "EPERM" }, "win32")).toBe(true);
+    expect(renameConflictMayReferenceExistingDirectory({ code: "EACCES" }, "win32")).toBe(true);
+    expect(renameConflictMayReferenceExistingDirectory({ code: "EPERM" }, "linux")).toBe(false);
+    expect(renameConflictMayReferenceExistingDirectory({ code: "EACCES" }, "darwin")).toBe(false);
+    expect(renameConflictMayReferenceExistingDirectory({ code: "ENOENT" }, "win32")).toBe(false);
+  });
+
   it("uploads, binds, revisions, and freezes the selected revision in a TaskRun contract", async () => {
     const workspace = mkdtempSync(path.join(tmpdir(), "tagent-skill-"));
     const store = new Store(":memory:");
@@ -63,6 +72,19 @@ describe("Core-managed Skills", () => {
     expect(store.getRun(secondRun.id)?.contract?.skills).toEqual([expect.objectContaining({ revisionId: second.id, content: "Second checklist." })]);
     expect(readFileSync(path.join(workspace, second.filePath), "utf8")).toContain("Second checklist.");
     expect(readFileSync(path.join(path.dirname(path.join(workspace, second.filePath)), "references/notes.md"), "utf8")).toBe("supporting notes");
+    store.close();
+  });
+
+  it("reuses an identical content-addressed Skill bundle", async () => {
+    const workspace = mkdtempSync(path.join(tmpdir(), "tagent-skill-repeat-"));
+    const store = new Store(":memory:");
+    store.createSession();
+    const skills = application(store, workspace);
+    const upload = { filename: "repeat.md", contentBase64: Buffer.from(skillSource("repeat-check", "Repeat safely.")).toString("base64") };
+    const first = await skills.uploadSkill(upload);
+    const second = await skills.uploadSkill(upload);
+    expect(second).toMatchObject({ skillId: first.skillId, sha256: first.sha256, filePath: first.filePath });
+    expect(readFileSync(path.join(workspace, second.filePath), "utf8")).toContain("Repeat safely.");
     store.close();
   });
 

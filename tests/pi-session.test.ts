@@ -5,6 +5,7 @@ import { readFile, rm, writeFile } from "node:fs/promises";
 import { createModels, type Context, type Model } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider, fauxThinking } from "@earendil-works/pi-ai/providers/faux";
 import { PiRuntime, providerRetryDelayMs, type PiRuntimeOptions } from "@tagent/runtime-pi";
+import { deliverDeferredControls } from "../adapters/runtime-pi/src/pi-runtime.js";
 import { Store } from "@tagent/persistence-sqlite/store";
 import { createRuntimeHost } from "@tagent/core-service/composition";
 import { attemptIdFor, canonicalRequestJson, requestHash, type AttemptRequestEnvelope } from "@tagent/execution/domain";
@@ -26,6 +27,22 @@ describe("Pi AgentHarness integration", () => {
     expect(providerRetryDelayMs(1_000, 1_200_000, 86_400_000)).toBe(1_199_999);
     expect(providerRetryDelayMs(1, 10_000, 10_000, 5_000)).toBe(5_000);
     expect(providerRetryDelayMs(1, 1_200, 10_000, 5_000)).toBe(1_199);
+  });
+  it("preserves deferred steer and follow-up delivery modes in queue order", async () => {
+    const delivered: Array<{ mode: "steer" | "followUp"; instruction: string }> = [];
+    const controls = [
+      { mode: "steer" as const, instruction: "correct the current answer" },
+      { mode: "followUp" as const, instruction: "then do the next task" },
+    ];
+    await deliverDeferredControls(controls, {
+      steer: async (instruction: string) => { delivered.push({ mode: "steer", instruction }); },
+      followUp: async (instruction: string) => { delivered.push({ mode: "followUp", instruction }); },
+    } as never);
+    expect(delivered).toEqual([
+      { mode: "steer", instruction: "correct the current answer" },
+      { mode: "followUp", instruction: "then do the next task" },
+    ]);
+    expect(controls).toEqual([]);
   });
   function fauxModels(faux: ReturnType<typeof fauxProvider>) {
     const models = createModels();

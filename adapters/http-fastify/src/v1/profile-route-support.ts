@@ -14,7 +14,7 @@ import {
 import type { ProfileMutationContext, ProfileMutationResult } from "@tagent/admission/ports";
 import type { ProfileOperationReceiptRecord } from "@tagent/admission/ports";
 import type { ChannelV1Dependencies } from "./dependencies.js";
-import { authorizeV1, principalOf } from "./auth.js";
+import { assertV1ResourceScope, authorizeV1, principalOf } from "./auth.js";
 import { requestIdOf, V1HttpError } from "./errors.js";
 
 export function authorizeProfile(dependencies: ChannelV1Dependencies, scope: ProfileServiceScope, surface: "operator" | "admin") {
@@ -22,17 +22,7 @@ export function authorizeProfile(dependencies: ChannelV1Dependencies, scope: Pro
 }
 
 export function assertProfileResourceScope(request: FastifyRequest, type: "session" | "workspace" | "project" | "user", id: string): void {
-  const principal = principalOf(request);
-  if (principal.localAdmin) return;
-  const allowed = principal.resourceScopes.some((scope) =>
-    (scope.type === type || (type === "session" && scope.type === "workspace"))
-      && (scope.id === id || scope.id === "*"));
-  if (!allowed) {
-    throw new V1HttpError(403, "auth.resource_scope_denied", "Resource scope is not authorized", "permission_denied", false, {
-      resourceType: type,
-      resourceId: id,
-    });
-  }
+  assertV1ResourceScope(request, type, id);
 }
 
 export function profileMutationHeaders(request: FastifyRequest): ProfileMutationHeaders {

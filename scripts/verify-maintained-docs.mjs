@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import process from "node:process";
+import { isPathInside } from "./path-containment.mjs";
 
 const repositoryRoot = process.cwd();
 const docsRoot = resolve(repositoryRoot, "docs");
@@ -44,7 +45,7 @@ if (missingLinks.length) {
 
 const indexedTargets = localMarkdownTargets(docsIndex)
   .map((target) => resolve(docsRoot, target))
-  .filter((target) => target.startsWith(`${docsRoot}/`) && target.endsWith(".md") && target !== docsIndex);
+  .filter((target) => isPathInside(docsRoot, target) && target.endsWith(".md") && target !== docsIndex);
 const duplicateTargets = [...new Set(indexedTargets.filter((target, index) => indexedTargets.indexOf(target) !== index))];
 if (duplicateTargets.length) {
   throw new Error(`Duplicate maintained documentation index entries: ${duplicateTargets.map((target) => relative(repositoryRoot, target)).join(", ")}`);

@@ -123,7 +123,7 @@ describe("modular monolith architecture", () => {
       scripts: { build: string };
     };
     expect(rootPackage.engines).toEqual({ node: "24.18.1", npm: ">=12" });
-    expect(rootPackage.scripts.build).toContain("rm -rf dist && tsc -p tsconfig.server.json");
+    expect(rootPackage.scripts.build).toContain("node scripts/build-files.mjs reset dist && tsc -p tsconfig.server.json");
 
     const releaseBuild = source("scripts/build-release.sh");
     expect(releaseBuild).toContain('cp -a package.json package-lock.json dist "$core_release/"');

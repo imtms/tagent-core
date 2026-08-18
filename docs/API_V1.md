@@ -193,6 +193,10 @@ admin:operations:read
 
 A configured credential may also define a server-owned `subjectId` and up to 64 `user`, `workspace`, `project`, or `session` resource scopes. The client cannot replace these through request headers.
 
+Every concrete Session or TaskRun Channel, Operator Read, or first-party Console request must also match one of those configured resource scopes. Core resolves a TaskRun to its owning Session before reads, controls, receipt claims, event-consumer changes, acknowledgements, or SSE response takeover, and filters Operator Session discovery to authorized identifiers. `workspace:<session-id>` and `session:<session-id>` both authorize that Session; `workspace:*` and `session:*` are explicit type-scoped wildcards. A configured credential with no matching resource grant is denied. `POST /api/v1/sessions` requires a Session/Workspace wildcard grant, while resource-neutral capability negotiation requires only its documented service scope. The credential-free loopback `local-admin` mode is unchanged.
+
+Memory admin requests apply the same exact-type wildcard rule: for example, `workspace:*` authorizes a requested concrete Workspace Memory scope but does not authorize a Session, Project, or User scope. Callers cannot use a wildcard of another resource type to widen access.
+
 Core does not validate browser OIDC tokens. Production browser traffic must pass through a Gateway that validates the token and replaces it with a minimal opaque Core credential.
 
 ## Session and Submission idempotency

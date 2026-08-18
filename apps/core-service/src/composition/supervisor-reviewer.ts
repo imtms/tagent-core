@@ -10,7 +10,7 @@ import type {
 import { deriveSupervisorAction, effectiveTaskExecutionPolicy } from "@tagent/governance/domain";
 import type { GovernanceTaskRunView, OperationRecord } from "@tagent/governance/ports";
 import { projectUtf8HeadTail, truncateUtf8 } from "@tagent/execution/composition";
-import { OpenAiSseIdleTimeoutError, readOpenAiChatContent } from "./openai-sse.js";
+import { OpenAiResponseHeaderTimeoutError, OpenAiSseIdleTimeoutError, readOpenAiChatContent } from "./openai-sse.js";
 
 export type AuditedGateType = "progress" | "evidence" | "contract" | "completion" | "continuation";
 export interface AuditedGate { passed: boolean; failures: GateFailure[]; criterionCoverage?: CriterionCoverage[]; summary: string }
@@ -667,12 +667,18 @@ TASKRUN_DATA=${JSON.stringify(payload)}`;
   }
 
   private async requestModel(prompt: string, model: RuntimeModelSpec, runId: string): Promise<string> {
+    let apiKey: string;
+    try {
+      const resolved = await this.options.credential.resolver.resolve(this.options.credential.reference);
+      if (!resolved) throw new Error(`Missing configured credential: ${this.options.credential.reference}`);
+      apiKey = resolved;
+    } catch (error) {
+      throw new SupervisorRequestError(`Supervisor credential resolution failed (${model.id}): ${error instanceof Error ? error.message : String(error)}`, false);
+    }
     const controller = new AbortController();
     const idleTimeoutMs = this.options.timeoutMs ?? 5_000;
-    const headerTimer = setTimeout(() => controller.abort(new OpenAiSseIdleTimeoutError(idleTimeoutMs)), idleTimeoutMs);
+    const headerTimer = setTimeout(() => controller.abort(new OpenAiResponseHeaderTimeoutError(idleTimeoutMs)), idleTimeoutMs);
     try {
-      const apiKey = await this.options.credential.resolver.resolve(this.options.credential.reference);
-      if (!apiKey) throw new Error(`Missing configured credential: ${this.options.credential.reference}`);
       const response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model: model.id, messages: [{ role: "user", content: prompt }], temperature: 0, max_completion_tokens: model.maxTokens, response_format: { type: "json_object" }, stream: true }), signal: controller.signal });
       clearTimeout(headerTimer);
       if (!response.ok) {
@@ -684,6 +690,7 @@ TASKRUN_DATA=${JSON.stringify(payload)}`;
       return content;
     } catch (error) {
       if (error instanceof SupervisorRequestError) throw error;
+      if (error instanceof OpenAiResponseHeaderTimeoutError || controller.signal.reason instanceof OpenAiResponseHeaderTimeoutError) throw new SupervisorRequestError(`Supervisor LLM response headers timed out after ${idleTimeoutMs}ms (${model.id})`);
       if (error instanceof OpenAiSseIdleTimeoutError || controller.signal.reason instanceof OpenAiSseIdleTimeoutError) throw new SupervisorRequestError(`Supervisor LLM SSE stream was idle for ${idleTimeoutMs}ms (${model.id})`);
       if (error instanceof SyntaxError) throw error;
       throw new SupervisorRequestError(`Supervisor LLM request failed (${model.id}): ${error instanceof Error ? error.message : String(error)}`);

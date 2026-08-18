@@ -6,12 +6,12 @@ This matrix is the release boundary for the full-feature Core/Gateway contract. 
 
 | Component | Required value |
 | --- | --- |
-| Core | `0.8.8` |
+| Core | `0.8.9` |
 | SQLite | `tagent-core/0.8`, version `2` |
 | Capability registry | `GET /api/v1/capability-profiles` |
 | Profile versions | all five profiles at `1.0` |
-| ABI SDK | `@tagent/abi@0.8.8` |
-| Typed client SDK | `@tagent/core-client@0.8.8` |
+| ABI SDK | `@tagent/abi@0.8.9` |
+| Typed client SDK | `@tagent/core-client@0.8.9` |
 | Node.js | `>=24.18.1` for the SDK; Core release uses exactly `24.18.1` |
 
 The five profile identities are `operator.session-settings.v1`, `operator.session-inbox.v1`, `operator.context-manifest.v1`, `operator.skills.v1`, and `admin.memory.v1`.
@@ -20,9 +20,9 @@ The five profile identities are `operator.session-settings.v1`, `operator.sessio
 
 | Core/provider | Gateway SDK | Result |
 | --- | --- | --- |
-| Core `0.8.8`, current schema, all required profile summaries/details available | ABI + Core Client `0.8.8` | Supported |
-| Core `0.8.8`, current schema | hand-written DTOs or direct Console/Admin calls | Unsupported |
-| Core `0.8.8`, required profile partially available/unavailable to the actual service principal | any | Unsupported for that profile until scopes/resource grants are corrected |
+| Core `0.8.9`, current schema, all required profile summaries/details available | ABI + Core Client `0.8.9` | Supported |
+| Core `0.8.9`, current schema | hand-written DTOs or direct Console/Admin calls | Unsupported |
+| Core `0.8.9`, required profile partially available/unavailable to the actual service principal | any | Unsupported for that profile until scopes/resource grants are corrected |
 | Any other Core or SDK package version | any | Unsupported; deploy one matching release tuple |
 
 Availability is negotiated per feature. A healthy Core or valid base `/api/v1/capabilities` response does not enable a missing full-feature profile. Gateway must validate the registry and the selected profile detail using the same authenticated service principal that will call its endpoints.
@@ -32,10 +32,10 @@ Availability is negotiated per feature. A healthy Core or valid base `/api/v1/ca
 The GitHub Release attaches these SDK artifacts in addition to Core and Web Console archives:
 
 ```text
-tagent-abi-0.8.8.tgz
-tagent-abi-0.8.8.tgz.sha256
-tagent-core-client-0.8.8.tgz
-tagent-core-client-0.8.8.tgz.sha256
+tagent-abi-0.8.9.tgz
+tagent-abi-0.8.9.tgz.sha256
+tagent-core-client-0.8.9.tgz
+tagent-core-client-0.8.9.tgz.sha256
 ```
 
 Each tarball contains compiled ESM JavaScript, `.d.ts` declarations, `.js.map` files and `.d.ts.map` files. Each checksum records only the archive basename. The release build validates the package identity/version, tar inventory, runtime imports, public ABI subpaths, typed compilation and joint isolated installation before publishing.

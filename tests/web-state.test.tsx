@@ -30,11 +30,13 @@ import { IntentPrefetchCache } from "../apps/web-console/src/intent-prefetch-cac
 import { MEMORY_PAGE_REQUEST_LIMIT, memoryPageWindow, mergeMemoryPage } from "../apps/web-console/src/memory-pagination.js";
 import { canResumeRun, findActiveRun, formatRunStatus, formatRunValue, isActiveRunStatus, isRedundantRunPhase, runStatusNotice } from "../apps/web-console/src/run-state.js";
 import { runViewForResolvedRuns, runViewForResumedRun, runViewForStartedRun, runViewFromWorkspaceSnapshot } from "../apps/web-console/src/use-run-view-state.js";
-import { mergeRefreshedMessages, shouldStreamWorkspaceRun } from "../apps/web-console/src/use-workspace-live-sync.js";
+import { mergeRefreshedMessages, shouldStreamWorkspaceRun, terminalStreamingAfterRefresh } from "../apps/web-console/src/use-workspace-live-sync.js";
 import { mergeTranscriptItems } from "../apps/web-console/src/transcript-projection.js";
 import { createStreamingDeltaBatcher, type FrameScheduler } from "../apps/web-console/src/streaming-delta-batcher.js";
 import { loadWorkspaceSnapshot } from "../apps/web-console/src/workspace-controller.js";
-import { WorkspaceLiveSyncCoordinator } from "../apps/web-console/src/workspace-live-sync.js";
+import { WorkspaceLiveSyncCoordinator, WorkspaceReconnectBackoff } from "../apps/web-console/src/workspace-live-sync.js";
+import { LatestRequestAuthority } from "../apps/web-console/src/latest-request.js";
+import { userInputRequestKey, userInputValuesForRequest } from "../apps/web-console/src/user-input-state.js";
 import { WorkspaceSkillAuthority } from "../apps/web-console/src/workspace-skill-authority.js";
 import { deriveWorkspaceNavigation, workspaceEmptyState } from "../apps/web-console/src/workspace-navigation.js";
 import { mergeWorkspaceActivityBaseline } from "../apps/web-console/src/use-workspace-presentation.js";
@@ -631,6 +633,59 @@ describe("Web workbench behavior", () => {
     expect(shouldStreamWorkspaceRun(run({ sessionId: "workspace-1" }), "workspace-1")).toBe(true);
     expect(shouldStreamWorkspaceRun(run({ sessionId: "workspace-1" }), "workspace-2")).toBe(false);
     expect(shouldStreamWorkspaceRun(run({ sessionId: "workspace-1", status: "completed" }), "workspace-1")).toBe(false);
+  });
+
+  it("backs off reconnects to a cap, rejects parallel timers, and resets after health", () => {
+    const backoff = new WorkspaceReconnectBackoff();
+    expect(backoff.nextDelay(() => 1)).toBe(1_000);
+    expect(backoff.nextDelay(() => 1)).toBeNull();
+    backoff.fired();
+    expect(backoff.nextDelay(() => 1)).toBe(2_000);
+    backoff.fired();
+    const delays = Array.from({ length: 8 }, () => { const delay = backoff.nextDelay(() => 1)!; backoff.fired(); return delay; });
+    expect(delays.at(-1)).toBe(30_000);
+    backoff.reset();
+    expect(backoff.nextDelay(() => 0)).toBe(750);
+  });
+
+  it("clears terminal live output whenever the refreshed Run has authoritative output", () => {
+    const assistant = (text: string) => ({ seq: 1, index: 0, attempt: 1, kind: "assistant" as const, text, createdAt: 1 });
+    expect(terminalStreamingAfterRefresh("complete output", [assistant("complete output")], "")).toBe("");
+    expect(terminalStreamingAfterRefresh("complete", [assistant("complete output")], "")).toBe("");
+    expect(terminalStreamingAfterRefresh("complete   output", [assistant("complete output")], "")).toBe("");
+    expect(terminalStreamingAfterRefresh("unrelated stale buffer", [assistant("authoritative output")], "")).toBe("");
+    expect(terminalStreamingAfterRefresh("only unpersisted fragment", [], "")).toBe("only unpersisted fragment");
+    expect(terminalStreamingAfterRefresh("event output", [], "authoritative terminal response")).toBe("");
+  });
+
+  it("lets only the latest artifact preview request commit", async () => {
+    const authority = new LatestRequestAuthority();
+    let committed = "";
+    let releaseFirst!: (value: string) => void;
+    let releaseSecond!: (value: string) => void;
+    const first = new Promise<string>((resolve) => { releaseFirst = resolve; });
+    const second = new Promise<string>((resolve) => { releaseSecond = resolve; });
+    const open = async (request: Promise<string>) => {
+      const token = authority.begin();
+      const value = await request;
+      if (authority.isCurrent(token)) committed = value;
+    };
+    const firstOpen = open(first);
+    const secondOpen = open(second);
+    releaseSecond("artifact B");
+    await secondOpen;
+    releaseFirst("artifact A");
+    await firstOpen;
+    expect(committed).toBe("artifact B");
+  });
+
+  it("keys requested-input forms by request and submits only current declared fields", () => {
+    const request = (id: string, keys: string[]) => ({ id, fields: keys.map((key) => ({ key })) });
+    const first = request("request-a", ["email"]);
+    const second = request("request-b", ["confirmation_code"]);
+    expect(userInputRequestKey(first)).not.toBe(userInputRequestKey(second));
+    expect(userInputValuesForRequest(second, { email: "stale@example.test", confirmation_code: "123456", extra: "stale" }))
+      .toEqual({ confirmation_code: "123456" });
   });
 
   it("rejects stale Skill catalog writers after a Workspace switch", () => {

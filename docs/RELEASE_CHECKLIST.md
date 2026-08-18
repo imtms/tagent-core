@@ -36,10 +36,12 @@ git diff --check
 - [ ] `.agents` decision records pass `npm run check:agents`, have one owner per non-trivial decision, and match the shipped paths and verification commands.
 - [ ] Maintained documentation passes `npm run check:docs`; every `docs/*.md` contract is indexed exactly once and all maintained local links resolve.
 - [ ] AgentHarness runtime contracts cover quiescent asynchronous teardown, required cancellation ownership, transcript-invisible retry/fallback, provider `Retry-After`, steering/follow-up during retry and compaction, abort queue audit, structured tool failures, current-turn context preservation, provider idle timeout, threshold compaction and context-overflow recovery.
+- [ ] Deferred controls retain their original steering/follow-up mode and FIFO order; Router, Supervisor, and Roadmap response-header timers start only after credential resolution and remain distinct from SSE body-idle timeouts.
 - [ ] Scripted wire-fault tests cover reset-before-headers, partial reset, missing `[DONE]`, malformed SSE, empty completion, rate-limit windows, request identity, and failed-partial isolation; fixed-seed state-machine properties remain reproducible.
 - [ ] `npm run benchmark:compaction` reports full exact-fact literal recall within its checked bounded-cost threshold; its synthetic-corpus limitations remain documented.
 - [ ] API tests confirm unversioned paths return 404.
 - [ ] Core-managed Skill tests prove shared catalog CRUD, immutable revisions, multi-Skill Workspace references, TaskRun snapshot isolation, native `resources.skills`/`AgentHarness.skill()` invocation, and upload rejection for traversal, symlink, malformed ZIP, size, and tampering cases.
+- [ ] Workspace-local tests prove bounded process-tree cleanup, capture-file cleanup after Artifact failures, stage-aware Bash check invalidation, catastrophic-command flag variants, explicit Windows runtime rejection, and portable contained build-file operations.
 
 ## PostgreSQL Memory gate
 
@@ -54,6 +56,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] An absent PostgreSQL `memory` schema initializes as `tagent-memory/0.8`, version `1`, reopens successfully, and an unmarked/different schema is rejected.
 - [ ] Memory-disabled startup does not connect to PostgreSQL/Cold storage or start Memory workers.
 - [ ] Reindex vector writes atomically require the current unexpired lease and fencing token; a reclaimed worker cannot overwrite the newer worker's generation.
+- [ ] Capture renewal, completion, and failure settlement reject expired leases using the PostgreSQL database clock; the in-memory contract matches.
 - [ ] Backup/restore and reindex generation behavior were rehearsed for production configuration changes.
 
 ## Current schema and recovery gate
@@ -83,8 +86,9 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] `GET /api/v1/health` reports writer readiness and Host-managed Generation/activation/crash-budget status; `/api/health` returns 404.
 - [ ] `GET /api/v1/capabilities` matches the release/schema, required commands/events, base Operator endpoint list, ready Approval contract, receipt-recovery protocol, retention and limits; `operator.read.v1` and `/api/v1/operator/capabilities` match the independent read profile.
 - [ ] Credential mode fails closed for missing, invalid, and under-scoped opaque tokens.
-- [ ] Resource scopes are enforced from server configuration.
+- [ ] Resource scopes are enforced from server configuration on every concrete Channel, Console, and Operator Read resource before side effects or SSE takeover; TaskRuns resolve through their Session, discovery filters before pagination, Memory accepts same-type wildcards, empty grants fail closed, and Session creation requires `session:*` or `workspace:*`.
 - [ ] Exact CORS origins pass and wildcard/invalid origins fail startup or request policy as designed.
+- [ ] Hijacked SSE responses preserve the already-authorized CORS and exposed-header policy.
 - [ ] The Gateway validates OIDC claims and translates to a minimal Core credential; Core is private.
 - [ ] Session create, Submission, command and Goal operation identities replay the original result and conflict on changed canonical payload.
 - [ ] Command receipt lookup precedes Attempt fencing; structured failures survive replay; unprovable effects are not repeated.
@@ -101,6 +105,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] Workspace sidebar/switcher, composer and live Run surfaces, Skills, keyboard shortcuts, Workspace Goals, and Memory were rendered in desktop light/dark and 390px mobile light/dark with no horizontal overflow.
 - [ ] Web Skills center upload/drag-and-drop, edit/delete, multi-select Workspace references, empty/loading/error states, keyboard focus, light/dark theme, and mobile-width states were rendered and checked.
 - [ ] The Gate selector is visible above the composer, retains its per-Workspace setting, and renders correctly in light/dark themes and mobile widths; Run detail explains the frozen profile.
+- [ ] Web live-state tests prove bounded single-timer reconnect backoff, authoritative terminal-output replacement, latest-only Artifact preview commits, and request-keyed User Input form state.
 
 ## Artifact gate
 

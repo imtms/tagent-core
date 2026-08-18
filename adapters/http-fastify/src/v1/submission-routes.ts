@@ -20,7 +20,7 @@ import type { ChannelV1Dependencies } from "./dependencies.js";
 import { principalOf } from "./auth.js";
 import { successEnvelope, V1HttpError } from "./errors.js";
 import { mapSession, mapSubmissionReceipt } from "./mappers.js";
-import { authorizeChannel, conflict, missing } from "./route-support.js";
+import { assertChannelSessionScope, authorizeChannel, conflict, missing } from "./route-support.js";
 
 function isOpaqueAutomationMarker(content: string): boolean {
   return /^(?:(?:final-)?ui-sync|release)-[a-z0-9._-]*\d{10,}$/i.test(content) && !/[\s：:，,。.!?？]/.test(content);
@@ -34,6 +34,7 @@ export function registerSubmissionV1Routes(app: FastifyInstance, dependencies: C
     onRequest: authorizeChannel(serviceCredentials, "sessions:write"),
     schema: { headers: SessionCreateHeadersSchema, body: SessionCreateRequestSchema },
   }, async (request) => {
+    assertChannelSessionScope(request, "*");
     const body = decodeAbi(SessionCreateRequestSchema, request.body);
     const headers = decodeAbi(SessionCreateHeadersSchema, request.headers);
     try {
@@ -58,6 +59,7 @@ export function registerSubmissionV1Routes(app: FastifyInstance, dependencies: C
     schema: { params: SessionParamsSchema },
   }, async (request) => {
     const { sessionId } = request.params as SessionParams;
+    assertChannelSessionScope(request, sessionId);
     const session = sessions.getSession(sessionId);
     if (!session) throw missing("session");
     return successEnvelope(request, encodeAbi(SessionSchema, mapSession(session)));
@@ -68,6 +70,7 @@ export function registerSubmissionV1Routes(app: FastifyInstance, dependencies: C
     schema: { params: SessionParamsSchema, headers: SubmissionCreateHeadersSchema, body: SubmissionCreateRequestSchema },
   }, async (request) => {
     const { sessionId } = request.params as SessionParams;
+    assertChannelSessionScope(request, sessionId);
     if (!sessions.getSession(sessionId)) throw missing("session");
     const headers = decodeAbi(SubmissionCreateHeadersSchema, request.headers);
     const body = normalizeSubmissionRequest(decodeAbi(SubmissionCreateRequestSchema, request.body));
@@ -105,6 +108,7 @@ export function registerSubmissionV1Routes(app: FastifyInstance, dependencies: C
     schema: { params: SubmissionLookupParamsSchema },
   }, async (request) => {
     const { sessionId, idempotencyKey } = request.params as SubmissionLookupParams;
+    assertChannelSessionScope(request, sessionId);
     if (!sessions.getSession(sessionId)) throw missing("session");
     const item = submissions.getSessionSubmission(sessionId, idempotencyKey);
     if (!item) throw missing("submission");

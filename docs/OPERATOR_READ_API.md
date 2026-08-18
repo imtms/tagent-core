@@ -38,6 +38,8 @@ The ABI is exported from `@tagent/abi/operator/read-v1`; all methods are also av
 
 Missing or invalid credentials return `401 auth.unauthenticated`; missing scopes return `403 auth.permission_denied`. A missing Session returns `404 session.not_found`. Invalid, malformed or resource-mismatched cursors return `400 pagination.cursor_invalid`; an invalid limit returns `400 pagination.limit_invalid`.
 
+Concrete Session reads also require a matching server-configured `session` or same-ID `workspace` resource grant. Session discovery applies those grants inside SQLite before keyset pagination: explicit IDs expose only those Sessions, `session:*` or `workspace:*` exposes all Sessions, and an empty grant set returns an empty list. Capability discovery remains resource-neutral and requires only its documented service scope.
+
 Defaults are 50 items and maxima are 200 for both lists. `goalSummary` and `blockedReason` are deterministically bounded to 500 characters. Summary creation does not invoke an LLM and exposes neither the full contract nor source input, prompt, credential, Workspace path or tool payload.
 
 ## Pagination and consistency
@@ -60,4 +62,4 @@ P0 intentionally excludes `updatedAfter`, status/search filters, bootstrap aggre
 
 ## Verification
 
-Provider, ABI, Core Client and current-schema tests cover empty and missing Sessions, tied timestamps, concurrent inserts, cursor replay/mismatch/malformed input, restart continuation, scope failures, latest semantics, public-summary redaction and histories larger than the maximum page size. The current schema validates the ordered Session/TaskRun indexes as part of its exact shape.
+Provider, ABI, Core Client and current-schema tests cover empty and missing Sessions, tied timestamps, concurrent inserts, cursor replay/mismatch/malformed input, restart continuation, explicit/wildcard/empty resource grants, unauthorized concrete reads, latest semantics, public-summary redaction and histories larger than the maximum page size. The current schema validates the ordered Session/TaskRun indexes as part of its exact shape.

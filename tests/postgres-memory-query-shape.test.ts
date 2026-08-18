@@ -4,6 +4,23 @@ import { PostgresMemoryAdapter } from "../packages/memory/src/postgres/postgres-
 const scope = { type: "workspace" as const, id: "query-shape" };
 
 describe("PostgreSQL Memory query safety", () => {
+  it("requires a live database-clock lease for capture renewal and settlement", async () => {
+    const queries: string[] = [];
+    const adapter = new PostgresMemoryAdapter("postgres://unused");
+    (adapter as any).pool = { query: async (sql: string) => {
+      queries.push(sql);
+      return { rows: [], rowCount: 0 };
+    } };
+    const token = "10000000-0000-4000-8000-000000000020";
+
+    await expect(adapter.renew("job", "worker", token, 1, 60_000)).resolves.toBe(false);
+    await expect(adapter.complete("job", "worker", token, 1)).resolves.toBe(false);
+    await expect(adapter.fail("job", "worker", token, 1, "expired", true)).resolves.toBe(false);
+
+    expect(queries).toHaveLength(3);
+    for (const query of queries) expect(query).toMatch(/lease_until>=floor\(extract\(epoch from clock_timestamp\(\)\)\*1000\)::bigint/);
+  });
+
   it("publishes capture projections only after locking a live fenced lease", async () => {
     const queries: string[] = [];
     const client = {

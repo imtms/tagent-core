@@ -1,6 +1,6 @@
 {
   "name": "@tagent/web-console",
-  "version": "0.8.8",
+  "version": "0.8.9",
   "private": true,
   "type": "module",
   "sideEffects": [
@@ -18,8 +18,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@tagent/abi": "0.8.8",
-    "@tagent/core-client": "0.8.8",
+    "@tagent/abi": "0.8.9",
+    "@tagent/core-client": "0.8.9",
     "highlight.js": "^11.11.1",
     "lucide-react": "0.553.0",
     "markdown-it": "^14.3.0",

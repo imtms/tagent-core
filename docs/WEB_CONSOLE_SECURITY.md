@@ -34,12 +34,12 @@ When the browser reaches Core/Gateway across origins, configure Core with exact 
 
 ```env
 TAGENT_CORS_ALLOWED_ORIGINS=https://console.example.com
-TAGENT_SERVICE_CREDENTIALS=[{"token":"REPLACE_WITH_24_PLUS_CHAR_TOKEN","scopes":["sessions:read","sessions:write","runs:read","runs:control","events:consume"]}]
+TAGENT_SERVICE_CREDENTIALS=[{"token":"REPLACE_WITH_24_PLUS_CHAR_TOKEN","scopes":["sessions:read","sessions:write","runs:read","runs:control","events:consume"],"principal":{"subjectId":"gateway-console","resourceScopes":[{"type":"workspace","id":"*"}]}}]
 ```
 
 Core rejects wildcards, `null`, credentials, paths, query strings, fragments, and non-canonical origins. Invalid configuration fails startup. A non-empty allowlist requires at least one service credential.
 
-Allowed responses echo the exact origin and set `Vary: Origin`. Preflight permits `Authorization`, `Content-Type`, `Idempotency-Key`, `If-Match`, `X-Request-Id`, `X-TAgent-Delegated-Actor`, and `X-TAgent-Delegated-Request-Id`; responses expose `ETag` and `Idempotency-Replayed` with the existing metadata headers. Core does not send `Access-Control-Allow-Credentials`.
+Allowed responses echo the exact origin and set `Vary: Origin`. Preflight permits `Authorization`, `Content-Type`, `Idempotency-Key`, `If-Match`, `X-Request-Id`, `X-TAgent-Delegated-Actor`, and `X-TAgent-Delegated-Request-Id`; responses expose `ETag` and `Idempotency-Replayed` with the existing metadata headers. Raw SSE takeover preserves the same already-authorized CORS and exposed-header values. Core does not send `Access-Control-Allow-Credentials`.
 
 ## Content and browser controls
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { performance } from "node:perf_hooks";
 import { Store } from "@tagent/persistence-sqlite/store";
 import { TaskRunSupervisor, OpenAiSupervisorReviewer, TestSupervisorReviewer, passingTestAudit, type SupervisorAudit } from "@tagent/core-service/composition";
@@ -510,6 +510,56 @@ describe("TaskRunSupervisor LLM audit", () => {
       const audit = await new OpenAiSupervisorReviewer({ model: light, fallbackModel: main, credential: TEST_CREDENTIAL, timeoutMs: 1_000 }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
       expect(audit.action).toBe("complete_taskrun");
       expect(models).toEqual(["gpt-5.6-luna", "gpt-5.6-sol"]);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("starts the Supervisor response timeout after credential resolution", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "slow credential resolution");
+    const original = globalThis.fetch;
+    let fetchSignalAborted = true;
+    globalThis.fetch = async (_url, init) => {
+      fetchSignalAborted = (init?.signal as AbortSignal | undefined)?.aborted ?? false;
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(semanticVerdict()) } }] }), { status: 200 });
+    };
+    try {
+      const credential = {
+        reference: credentialReference("SLOW_TEST_API_KEY"),
+        resolver: {
+          configured: async () => true,
+          resolve: async () => { await new Promise((resolve) => setTimeout(resolve, 25)); return "secret"; },
+        },
+      };
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1", maxTokens: 2_048 } as never;
+      const audit = await new OpenAiSupervisorReviewer({ model, credential, timeoutMs: 10 }).reviewSettled({ run, response: "done", operations: [], progress: undefined });
+      expect(fetchSignalAborted).toBe(false);
+      expect(audit.action).toBe("complete_taskrun");
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("distinguishes Supervisor credential and response-header failures", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "request stage failures");
+    const model = { id: "audit-model", baseUrl: "https://audit.test/v1", maxTokens: 2_048 } as never;
+    const original = globalThis.fetch;
+    try {
+      const fetchProbe = vi.fn<typeof fetch>();
+      globalThis.fetch = fetchProbe;
+      await expect(new OpenAiSupervisorReviewer({
+        model,
+        credential: {
+          reference: credentialReference("FAILED_TEST_API_KEY"),
+          resolver: { configured: async () => true, resolve: async () => { throw new Error("vault unavailable"); } },
+        },
+        timeoutMs: 10,
+      }).reviewAttemptFailure({ run, error: "failed" })).rejects.toThrow("credential resolution failed");
+      expect(fetchProbe).not.toHaveBeenCalled();
+
+      globalThis.fetch = async (_url, init) => new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal as AbortSignal;
+        const fail = () => reject(signal.reason);
+        if (signal.aborted) fail(); else signal.addEventListener("abort", fail, { once: true });
+      });
+      await expect(new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL, timeoutMs: 10 })
+        .reviewAttemptFailure({ run, error: "failed" })).rejects.toThrow("response headers timed out");
     } finally { globalThis.fetch = original; store.close(); }
   });
 

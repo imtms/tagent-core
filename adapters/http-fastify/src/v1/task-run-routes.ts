@@ -25,7 +25,7 @@ import type { ChannelV1Dependencies } from "./dependencies.js";
 import { requestIdOf, successEnvelope, V1HttpError } from "./errors.js";
 import { principalOf } from "./auth.js";
 import { mapArtifact, mapArtifactContent, mapCommandReceipt, mapTaskRun, mapTranscriptItem } from "./mappers.js";
-import { authorizeChannel, conflict, decodeQuery, missing } from "./route-support.js";
+import { authorizeChannel, conflict, decodeQuery, missing, requireChannelTaskRun } from "./route-support.js";
 import { withRequestAbortSignal } from "./console-route-support.js";
 import { executeTaskRunCommand } from "./task-run-command-handler.js";
 
@@ -38,8 +38,7 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
     schema: { params: TaskRunParamsSchema },
   }, async (request) => {
     const { taskRunId } = request.params as TaskRunParams;
-    const run = taskRuns.getRunReadView(taskRunId);
-    if (!run) throw missing("task_run");
+    const run = requireChannelTaskRun(request, taskRuns, taskRunId);
     return successEnvelope(request, encodeAbi(TaskRunSchema, mapTaskRun(run)));
   });
 
@@ -49,6 +48,7 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
   }, async (request) => {
     const { taskRunId } = request.params as TaskRunParams;
     const command = decodeAbi(TaskRunCommandSchema, request.body);
+    requireChannelTaskRun(request, taskRuns, taskRunId);
     const run = service.getRun(taskRunId);
     if (!run) throw missing("task_run");
     const principalId = principalOf(request).subjectId;
@@ -108,7 +108,7 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
     schema: { params: TaskRunCommandParamsSchema },
   }, async (request) => {
     const { taskRunId, commandId } = request.params as TaskRunCommandParams;
-    if (!taskRuns.hasRun(taskRunId)) throw missing("task_run");
+    requireChannelTaskRun(request, taskRuns, taskRunId);
     const receipt = taskRunCommands.getTaskRunCommand(principalOf(request).subjectId, taskRunId, commandId);
     if (!receipt) throw missing("command");
     return encodeAbi(CommandResponseSchema, successEnvelope(request, { receipt: mapCommandReceipt(receipt, true) }));
@@ -119,7 +119,7 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
     schema: { params: TaskRunParamsSchema },
   }, async (request) => {
     const { taskRunId } = request.params as TaskRunParams;
-    if (!taskRuns.hasRun(taskRunId)) throw missing("task_run");
+    requireChannelTaskRun(request, taskRuns, taskRunId);
     const raw = request.query as { after?: number | string; limit?: number | string };
     const query = decodeQuery(TranscriptQuerySchema, {
       ...(raw.after === undefined ? {} : { after: Number(raw.after) }),
@@ -144,8 +144,7 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
     schema: { params: TaskRunParamsSchema },
   }, async (request) => {
     const { taskRunId } = request.params as TaskRunParams;
-    const run = taskRuns.getRunReadView(taskRunId);
-    if (!run) throw missing("task_run");
+    const run = requireChannelTaskRun(request, taskRuns, taskRunId);
     const raw = request.query as { after?: number | string; limit?: number | string };
     const query = decodeQuery(TaskRunInteractionsQuerySchema, {
       ...(raw.after === undefined ? {} : { after: Number(raw.after) }),
@@ -180,7 +179,7 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
     schema: { params: TaskRunParamsSchema },
   }, async (request) => {
     const { taskRunId } = request.params as TaskRunParams;
-    if (!taskRuns.hasRun(taskRunId)) throw missing("task_run");
+    requireChannelTaskRun(request, taskRuns, taskRunId);
     const raw = request.query as { after?: number | string; limit?: number | string };
     const query = decodeQuery(ArtifactListQuerySchema, {
       ...(raw.after === undefined ? {} : { after: Number(raw.after) }),
@@ -203,7 +202,7 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
     schema: { params: TaskRunArtifactParamsSchema },
   }, async (request, reply) => {
     const { taskRunId, artifactId } = request.params as TaskRunArtifactParams;
-    if (!taskRuns.hasRun(taskRunId)) throw missing("task_run");
+    requireChannelTaskRun(request, taskRuns, taskRunId);
     const artifact = evidence.getArtifact(taskRunId, artifactId);
     if (!artifact) throw missing("artifact");
     try {
@@ -234,7 +233,7 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
     schema: { params: TaskRunArtifactParamsSchema },
   }, async (request, reply) => {
     const { taskRunId, artifactId } = request.params as TaskRunArtifactParams;
-    if (!taskRuns.hasRun(taskRunId)) throw missing("task_run");
+    requireChannelTaskRun(request, taskRuns, taskRunId);
     const artifact = evidence.getArtifact(taskRunId, artifactId);
     if (!artifact) throw missing("artifact");
     try {

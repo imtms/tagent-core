@@ -10,6 +10,15 @@ export class WorkspacePathError extends Error {
 
 const helper = fileURLToPath(new URL("./workspace-fd-helper.py", import.meta.url));
 
+export function assertWorkspacePlatformSupported(platform: NodeJS.Platform = process.platform): void {
+  if (platform === "win32") {
+    throw new WorkspacePathError(
+      "The workspace-local adapter requires POSIX descriptor-relative filesystem APIs and is not supported on Windows",
+      "WORKSPACE_PLATFORM_UNSUPPORTED",
+    );
+  }
+}
+
 function validateTarget(target: string) {
   if (target.includes("\0")) throw new WorkspacePathError("Path contains a NUL byte");
   if (path.isAbsolute(target)) throw new WorkspacePathError("Absolute paths are not allowed");
@@ -21,6 +30,7 @@ function validateTarget(target: string) {
 type HelperOptions = { signal: AbortSignal; input?: string | Buffer; env?: NodeJS.ProcessEnv };
 
 async function runHelper(operation: "read" | "write" | "list" | "commit-batch", root: string, target: string, options: HelperOptions) {
+  assertWorkspacePlatformSupported();
   options.signal.throwIfAborted();
   const normalized = validateTarget(target);
   const subprocess = createLocalSubprocessPort();

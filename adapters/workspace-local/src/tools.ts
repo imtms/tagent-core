@@ -1,4 +1,5 @@
 export {
+  bashCommandIsDestructive,
   bashInvalidatesChecks,
   composeWorkspaceTools,
   ensureWorkspace,

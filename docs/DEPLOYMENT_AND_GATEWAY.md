@@ -51,10 +51,10 @@ HOST=127.0.0.1
 PORT=3100
 TAGENT_DB=/var/lib/tagent/tagent.db
 TAGENT_WORKSPACE=/srv/tagent/workspace
-TAGENT_SERVICE_CREDENTIALS=[{"token":"REPLACE_WITH_24_PLUS_CHAR_TOKEN","scopes":["sessions:read","sessions:write","runs:read","runs:control","events:consume"]}]
+TAGENT_SERVICE_CREDENTIALS=[{"token":"REPLACE_WITH_24_PLUS_CHAR_TOKEN","scopes":["sessions:read","sessions:write","runs:read","runs:control","events:consume"],"principal":{"subjectId":"gateway-channel","resourceScopes":[{"type":"workspace","id":"*"}]}}]
 ```
 
-Add the fine-grained Operator/Admin scopes and resource grants only for enabled capability profiles. If a browser origin reaches Core directly, use an exact allowlist:
+The wildcard shown above is suitable only for a trusted private Gateway that is allowed to route every Workspace; narrower deployments should enumerate Session/Workspace IDs. Concrete resources fail closed when the configured principal has no matching grant, and Session creation requires `session:*` or `workspace:*`. Add the fine-grained Operator/Admin scopes only for enabled capability profiles. If a browser origin reaches Core directly, use an exact allowlist:
 
 ```env
 TAGENT_CORS_ALLOWED_ORIGINS=https://console.example.com
@@ -91,7 +91,7 @@ The Core archive includes `scripts/deploy-release.sh`. It rejects unsafe archive
 
 ```bash
 sudo /path/to/deploy-release.sh \
-  /path/to/tagent-core-v0.8.8-linux-x64-node24-abi137.tar.gz \
+  /path/to/tagent-core-v0.8.9-linux-x64-node24-abi137.tar.gz \
   /opt/tagent-core
 ```
 

@@ -41,11 +41,32 @@ function posixTreeAlive(pid: number) {
   catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
 }
 
-async function waitForTreeExit(pid: number) {
-  while (posixTreeAlive(pid)) await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, 20);
-    timer.unref?.();
-  });
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+export class SubprocessTreeCleanupTimeoutError extends Error {
+  readonly code = "SUBPROCESS_TREE_CLEANUP_TIMEOUT";
+  constructor(readonly pid: number, readonly timeoutMs: number) {
+    super(`Subprocess tree ${pid} remained alive after ${timeoutMs}ms of cleanup`);
+    this.name = "SubprocessTreeCleanupTimeoutError";
+  }
+}
+
+export function subprocessTreeCleanupDeadlineMs(terminationGraceMs: number) {
+  return Math.min(MAX_TIMER_DELAY_MS, Math.ceil(terminationGraceMs) + 1_000);
+}
+
+export async function waitForTreeExit(
+  pid: number,
+  timeoutMs: number,
+  treeAlive: (candidatePid: number) => boolean = posixTreeAlive,
+) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("Subprocess tree cleanup timeout must be positive");
+  const deadline = Date.now() + timeoutMs;
+  while (treeAlive(pid)) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new SubprocessTreeCleanupTimeoutError(pid, timeoutMs);
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(20, remaining)));
+  }
 }
 
 /** Local managed-process implementation with scrubbed environment and tree-scoped termination. */
@@ -93,12 +114,18 @@ export class LocalSubprocessPort implements SubprocessPort {
       child.once("error", (error) => { if (!settled) { settled = true; cleanup(); reject(error); } });
       child.once("close", (exitCode, signal) => {
         if (settled) return;
-        void waitForTreeExit(pid).then(() => {
+        if (posixTreeAlive(pid)) terminate();
+        void waitForTreeExit(pid, subprocessTreeCleanupDeadlineMs(spec.terminationGraceMs)).then(() => {
           if (settled) return;
           settled = true;
           cleanup();
           resolve({ exitCode, signal });
-        }, reject);
+        }, (error) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(error);
+        });
       });
     });
     handle = Object.freeze({ pid, done, terminate });

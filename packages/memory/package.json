@@ -1,6 +1,6 @@
 {
   "name": "@tagent/memory",
-  "version": "0.8.8",
+  "version": "0.8.9",
   "private": true,
   "type": "module",
   "sideEffects": false,
@@ -27,7 +27,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -b && mkdir -p dist/postgres && cp src/postgres/schema.sql dist/postgres/schema.sql",
+    "build": "tsc -b && node ../../scripts/build-files.mjs copy src/postgres/schema.sql dist/postgres/schema.sql",
     "clean": "tsc -b --clean && rm -rf dist"
   },
   "dependencies": {

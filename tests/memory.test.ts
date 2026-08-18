@@ -1029,6 +1029,24 @@ describe("memory safety hardening", () => {
       ),
     ).toBe(true);
   });
+
+  it("rejects renew and settlement after a capture lease expires", async () => {
+    const { adapter, service } = await fixture();
+    const queued = await service.enqueueCapture({
+      access,
+      sourceRefs: [],
+      content: "user: expired capture",
+      idempotencyKey: "expired-capture-lease",
+    });
+    const claimed = await adapter.claim("worker-expired", 60_000);
+    expect(claimed?.id).toBe(queued.jobId);
+    adapter.jobs.get(queued.jobId)!.leaseUntil = Date.now() - 1;
+
+    await expect(adapter.renew(queued.jobId, "worker-expired", claimed!.leaseToken!, claimed!.fencingToken!, 60_000)).resolves.toBe(false);
+    await expect(adapter.complete(queued.jobId, "worker-expired", claimed!.leaseToken!, claimed!.fencingToken!)).resolves.toBe(false);
+    await expect(adapter.fail(queued.jobId, "worker-expired", claimed!.leaseToken!, claimed!.fencingToken!, "expired", true)).resolves.toBe(false);
+    expect(adapter.jobs.get(queued.jobId)?.status).toBe("running");
+  });
 });
 
 describe("memory recall isolation", () => {

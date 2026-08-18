@@ -1,6 +1,6 @@
 {
   "name": "tagent-core",
-  "version": "0.8.8",
+  "version": "0.8.9",
   "private": true,
   "workspaces": [
     "packages/*",
@@ -18,7 +18,7 @@
     "dev:server": "TAGENT_RELEASE_ROOT=. tsx watch apps/core-service/src/cli.ts",
     "dev:web": "npm run dev -w @tagent/web-console",
     "build:packages": "tsc -b packages/abi packages/core-client packages/governance packages/execution packages/admission && npm run build -w @tagent/memory && tsc -b adapters/runtime-pi && npm run build -w @tagent/persistence-sqlite && tsc -b adapters/http-fastify && npm run build -w @tagent/workspace-local && npm run build -w @tagent/core-service",
-    "build": "npm run build:packages && rm -rf dist && tsc -p tsconfig.server.json && mkdir -p dist/memory/postgres && cp packages/memory/dist/postgres/schema.sql dist/memory/postgres/schema.sql && npm run build -w @tagent/web-console",
+    "build": "npm run build:packages && node scripts/build-files.mjs reset dist && tsc -p tsconfig.server.json && node scripts/build-files.mjs copy packages/memory/dist/postgres/schema.sql dist/memory/postgres/schema.sql && npm run build -w @tagent/web-console",
     "start": "node dist/host.js",
     "test": "npm run build:packages && vitest run",
     "test:watch": "npm run build:packages && vitest",
@@ -35,7 +35,7 @@
     "clean": "rm -rf dist && npm run clean -w @tagent/web-console && npm run clean -w @tagent/core-service && npm run clean -w @tagent/http-fastify && npm run clean -w @tagent/workspace-local && npm run clean -w @tagent/persistence-sqlite && npm run clean -w @tagent/memory && npm run clean -w @tagent/runtime-pi && npm run clean -w @tagent/admission && npm run clean -w @tagent/execution && npm run clean -w @tagent/governance && npm run clean -w @tagent/core-client && npm run clean -w @tagent/abi"
   },
   "dependencies": {
-    "@tagent/core-service": "0.8.8",
+    "@tagent/core-service": "0.8.9",
     "better-sqlite3": "12.4.1"
   },
   "overrides": {
@@ -47,16 +47,16 @@
   "devDependencies": {
     "@earendil-works/pi-ai": "0.83.0",
     "@eslint/js": "^10.0.1",
-    "@tagent/abi": "0.8.8",
-    "@tagent/admission": "0.8.8",
-    "@tagent/core-client": "0.8.8",
-    "@tagent/execution": "0.8.8",
-    "@tagent/governance": "0.8.8",
-    "@tagent/http-fastify": "0.8.8",
-    "@tagent/memory": "0.8.8",
-    "@tagent/persistence-sqlite": "0.8.8",
-    "@tagent/runtime-pi": "0.8.8",
-    "@tagent/workspace-local": "0.8.8",
+    "@tagent/abi": "0.8.9",
+    "@tagent/admission": "0.8.9",
+    "@tagent/core-client": "0.8.9",
+    "@tagent/execution": "0.8.9",
+    "@tagent/governance": "0.8.9",
+    "@tagent/http-fastify": "0.8.9",
+    "@tagent/memory": "0.8.9",
+    "@tagent/persistence-sqlite": "0.8.9",
+    "@tagent/runtime-pi": "0.8.9",
+    "@tagent/workspace-local": "0.8.9",
     "@types/better-sqlite3": "7.6.13",
     "@types/node": "24.10.1",
     "concurrently": "^9.2.4",

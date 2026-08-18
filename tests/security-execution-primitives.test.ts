@@ -5,7 +5,13 @@ import {
   credentialReference,
   scrubbedParentEnvironment,
 } from "@tagent/execution/ports";
-import { childEnvironment, createLocalSubprocessPort } from "@tagent/workspace-local/local-subprocess";
+import {
+  SubprocessTreeCleanupTimeoutError,
+  childEnvironment,
+  createLocalSubprocessPort,
+  subprocessTreeCleanupDeadlineMs,
+  waitForTreeExit,
+} from "@tagent/workspace-local/local-subprocess";
 
 function runProcess(command: string, options: { signal?: AbortSignal; env?: NodeJS.ProcessEnv; graceMs?: number } = {}) {
   const subprocess = createLocalSubprocessPort();
@@ -94,17 +100,20 @@ describe("security execution primitives", () => {
     await processRun.subprocess.dispose?.();
   });
 
-  it.runIf(process.platform !== "win32")("does not settle until detached descendants leave the process group", async () => {
+  it.runIf(process.platform !== "win32")("terminates detached descendants after the main child closes", async () => {
     const processRun = runProcess("(trap '' TERM; sleep 30) >/dev/null 2>&1 & printf ready", { graceMs: 25 });
     while (!processRun.output().includes("ready")) await new Promise((resolve) => setTimeout(resolve, 5));
-    let settled = false;
-    void processRun.handle.done.then(() => { settled = true; });
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(settled).toBe(false);
     const startedAt = Date.now();
-    await processRun.subprocess.dispose?.();
+    await expect(processRun.handle.done).resolves.toMatchObject({ exitCode: 0 });
     expect(Date.now() - startedAt).toBeLessThan(2_000);
-    expect(settled).toBe(true);
+    await processRun.subprocess.dispose?.();
+  });
+
+  it("rejects process-tree cleanup after a finite total deadline", async () => {
+    const startedAt = Date.now();
+    await expect(waitForTreeExit(42, 25, () => true)).rejects.toBeInstanceOf(SubprocessTreeCleanupTimeoutError);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(subprocessTreeCleanupDeadlineMs(2_000)).toBe(3_000);
   });
 
   it("changes request digests when any replay-relevant field changes", () => {

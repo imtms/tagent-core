@@ -22,6 +22,8 @@ import { formatCount } from "./count-format";
 import { deriveCurrentOperation } from "./current-operation";
 import { formatRunStatus, formatRunValue, isActiveRunStatus, isRedundantRunPhase, runStatusNotice } from "./run-state";
 import { formatConversationDay, formatTime } from "./time-format";
+import { LatestRequestAuthority } from "./latest-request";
+import { userInputValuesForRequest } from "./user-input-state";
 
 export function TAgentMark({ size = 18 }: { size?: number }) {
   return <svg className="tagent-mark" width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -66,12 +68,12 @@ function RunStep({ item }: { item: TranscriptItem }) {
 }
 
 export function UserInputCard({ request, submitting, onSubmit }: { request: UserInputRequest; submitting: boolean; onSubmit: (values: Record<string, string>) => Promise<void> }) {
-  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(request.fields.map((field) => [field.key, ""])));
+  const [values, setValues] = useState<Record<string, string>>(() => userInputValuesForRequest(request));
   const missing = request.fields.some((field) => field.required && !values[field.key]?.trim());
   return <section className="user-input-card" aria-label="TaskRun needs more information">
     <div className="user-input-heading"><HelpCircle size={ICON_SIZE.lg} /><div><strong>Information needed to continue</strong><p>{request.prompt}</p></div><span>Paused</span></div>
     <ul className="user-input-needed">{request.fields.map((field) => <li key={field.key}><strong>{field.label}{field.required ? " *" : ""}</strong>{field.description && <span>{field.description}</span>}</li>)}</ul>
-    <form onSubmit={(event) => { event.preventDefault(); if (!missing && !submitting) void onSubmit(values); }}>
+    <form onSubmit={(event) => { event.preventDefault(); if (!missing && !submitting) void onSubmit(userInputValuesForRequest(request, values)); }}>
       {request.fields.map((field) => <label key={field.key}><span>{field.label}{field.required ? " *" : ""}</span>{field.inputType === "textarea" ? <textarea rows={3} value={values[field.key] ?? ""} placeholder={field.placeholder} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} /> : <input value={values[field.key] ?? ""} placeholder={field.placeholder} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} />}{field.description && <small>{field.description}</small>}</label>)}
       <button type="submit" disabled={missing || submitting}>{submitting ? <Activity className="spin" size={ICON_SIZE.md} /> : <Send size={ICON_SIZE.md} />}{submitting ? "Resuming…" : "Submit and resume"}</button>
     </form>
@@ -281,13 +283,20 @@ function ArtifactsPanel({ run }: { run: TaskRun }) {
   const [downloadingId, setDownloadingId] = useState("");
   const [error, setError] = useState("");
   const [downloadError, setDownloadError] = useState("");
-  useEffect(() => { setSelectedId(""); setPreview(null); setError(""); setLoadingId(""); setDownloadingId(""); setDownloadError(""); }, [run.id]);
+  const previewAuthorityRef = useRef(new LatestRequestAuthority());
+  useEffect(() => { previewAuthorityRef.current.invalidate(); setSelectedId(""); setPreview(null); setError(""); setLoadingId(""); setDownloadingId(""); setDownloadError(""); }, [run.id]);
   const openArtifact = async (artifact: Artifact) => {
-    if (selectedId === artifact.id && preview) { setSelectedId(""); setPreview(null); setError(""); return; }
+    if (selectedId === artifact.id && preview) { previewAuthorityRef.current.invalidate(); setSelectedId(""); setPreview(null); setError(""); setLoadingId(""); return; }
+    const requestToken = previewAuthorityRef.current.begin();
     setSelectedId(artifact.id); setPreview(null); setError(""); setLoadingId(artifact.id);
-    try { setPreview(await api.artifactContent(run.id, artifact.id)); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setLoadingId(""); }
+    try {
+      const content = await api.artifactContent(run.id, artifact.id);
+      if (previewAuthorityRef.current.isCurrent(requestToken)) setPreview(content);
+    } catch (cause) {
+      if (previewAuthorityRef.current.isCurrent(requestToken)) setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (previewAuthorityRef.current.isCurrent(requestToken)) setLoadingId("");
+    }
   };
   const downloadArtifact = async (artifact: Artifact) => {
     setDownloadingId(artifact.id); setDownloadError("");
@@ -295,7 +304,7 @@ function ArtifactsPanel({ run }: { run: TaskRun }) {
     catch (cause) { setDownloadError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setDownloadingId(""); }
   };
-  const closePreview = () => { setSelectedId(""); setPreview(null); setError(""); setLoadingId(""); };
+  const closePreview = () => { previewAuthorityRef.current.invalidate(); setSelectedId(""); setPreview(null); setError(""); setLoadingId(""); };
   const selectedArtifact = run.artifacts.find((item) => item.id === selectedId);
   return <section className="audit-section artifacts-section">
     <div className="audit-section-heading"><span>Artifacts</span><small>{run.artifacts.length}</small></div>

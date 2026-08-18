@@ -141,6 +141,7 @@ export interface OperatorTaskRunReadRow {
 export interface OperatorReadPageQuery {
   snapshotRowId?: number;
   after?: { createdAt: number; id: string };
+  sessionIds?: string[];
   limit: number;
 }
 
@@ -2369,17 +2370,27 @@ ${source.content}`;
 
   authorizeExternalAction(runId: RunId, attempt: number) {
     return this.db.transaction(() => {
-      const approved = this.db.prepare(`SELECT id,status FROM approval_requests
+      const timestamp = now();
+      const approved = this.db.prepare(`SELECT id FROM approval_requests
         WHERE run_id=? AND action_type='execute_external_action'
-          AND status IN ('approved','consumed')
+          AND status='approved'
           AND CAST(json_extract(metadata_json,'$.approvedAttempt') AS INTEGER)=?
-        ORDER BY requested_at DESC LIMIT 1`).get(runId, attempt) as { id: string; status: string } | undefined;
-      if (!approved) return { allowed: false, reason: `Attempt ${attempt} has no approved external-action authorization` };
-      if (approved.status === "approved") {
-        const consumed = this.db.prepare(`UPDATE approval_requests SET status='consumed',used_count=1
-          WHERE id=? AND status='approved'`).run(approved.id);
-        if (consumed.changes !== 1) return { allowed: false, reason: "External-action authorization was consumed concurrently" };
-      }
+          AND used_count IS NOT NULL AND used_count>=0
+          AND ((reuse_mode='one_time' AND max_uses=1)
+            OR (reuse_mode='reusable' AND (max_uses IS NULL OR max_uses>0)))
+          AND (max_uses IS NULL OR used_count<max_uses)
+          AND (expires_at IS NULL OR expires_at>?)
+        ORDER BY requested_at DESC,id DESC LIMIT 1`).get(runId, attempt, timestamp) as { id: string } | undefined;
+      if (!approved) return { allowed: false, reason: `Attempt ${attempt} has no remaining approved external-action authorization` };
+      const consumed = this.db.prepare(`UPDATE approval_requests
+        SET used_count=used_count+1,
+          status=CASE WHEN max_uses IS NOT NULL AND used_count+1>=max_uses THEN 'consumed' ELSE 'approved' END
+        WHERE id=? AND status='approved' AND used_count IS NOT NULL AND used_count>=0
+          AND ((reuse_mode='one_time' AND max_uses=1)
+            OR (reuse_mode='reusable' AND (max_uses IS NULL OR max_uses>0)))
+          AND (max_uses IS NULL OR used_count<max_uses)
+          AND (expires_at IS NULL OR expires_at>?)`).run(approved.id, timestamp);
+      if (consumed.changes !== 1) return { allowed: false, reason: "External-action authorization was exhausted or consumed concurrently" };
       return { allowed: true, reason: `External action approved for Attempt ${attempt}`, approvalId: approved.id };
     })();
   }

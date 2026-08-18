@@ -1,3 +1,10 @@
+export class OpenAiResponseHeaderTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`OpenAI-compatible response headers were not received within ${timeoutMs}ms`);
+    this.name = "OpenAiResponseHeaderTimeoutError";
+  }
+}
+
 export class OpenAiSseIdleTimeoutError extends Error {
   constructor(readonly idleTimeoutMs: number) {
     super(`OpenAI-compatible SSE stream was idle for ${idleTimeoutMs}ms`);

@@ -60,6 +60,23 @@ export interface PiRuntimeOptions extends AttemptRuntimeSpec {
   models?: MutableModels;
 }
 
+export interface DeferredRuntimeControl {
+  mode: "steer" | "followUp";
+  instruction: string;
+}
+
+export async function deliverDeferredControls(
+  controls: DeferredRuntimeControl[],
+  harness: Pick<AgentHarness<undefined>, "steer" | "followUp">,
+) {
+  while (controls.length > 0) {
+    const control = controls[0];
+    if (control.mode === "steer") await harness.steer(control.instruction);
+    else await harness.followUp(control.instruction);
+    controls.shift();
+  }
+}
+
 function toPiModel(spec: RuntimeModelSpec): Model<Api> {
   return {
     id: spec.id,
@@ -257,7 +274,7 @@ export class PiRuntime implements AttemptRuntimePort {
   private readonly blockedToolErrors = new Map<string, StructuredToolError>();
   private approvalPauseActive = false;
   private providerRequestOrdinal = 0;
-  private deferredControls: Array<{ mode: "steer" | "followUp"; instruction: string }> = [];
+  private deferredControls: DeferredRuntimeControl[] = [];
   private harnessPendingMessageCount = 0;
   private retryDelayAbort?: AbortController;
   private pendingManualCompaction?: {
@@ -739,6 +756,11 @@ export class PiRuntime implements AttemptRuntimePort {
     }
   }
   private continueHarness(harness: AgentHarness<undefined>) {
+    const next = this.deferredControls[0];
+    if (next?.mode === "followUp") {
+      this.deferredControls.shift();
+      return this.runHarnessPrompt(harness, next.instruction, false);
+    }
     const marker = `[TAgent internal continuation ${++this.internalPromptOrdinal}:${randomUUID()}]`;
     return this.runHarnessPrompt(harness, marker, true);
   }
@@ -759,14 +781,7 @@ export class PiRuntime implements AttemptRuntimePort {
     return "accepted" as const;
   }
   private async flushDeferredControls(harness: AgentHarness<undefined>) {
-    while (this.deferredControls.length > 0) {
-      const control = this.deferredControls[0];
-      // A response already ended before controls entered this adapter-owned
-      // gap queue. Inject both modes at the start of the continuation so a
-      // follow-up does not cause an unprompted retry before it is delivered.
-      await harness.steer(control.instruction);
-      this.deferredControls.shift();
-    }
+    await deliverDeferredControls(this.deferredControls, harness);
   }
   private emitDeferredQueue() {
     this.emit("runtime.queue", {

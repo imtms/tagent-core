@@ -1,11 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { describe, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Store } from "@tagent/persistence-sqlite/store";
 import type { RunEvent, RunId } from "@tagent/execution/domain";
 import type { ToolCapabilityApplicationPort } from "@tagent/execution/ports";
-import { bashInvalidatesChecks, composeWorkspaceTools, createLocalSubprocessPort, createWorkspaceArtifactSink, createWorkspaceEditPort, listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "@tagent/workspace-local";
+import { bashCommandIsDestructive, bashInvalidatesChecks, composeWorkspaceTools, createLocalSubprocessPort, createWorkspaceArtifactSink, createWorkspaceEditPort, listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "@tagent/workspace-local";
 
 const testSignal = new AbortController().signal;
 
@@ -21,6 +21,7 @@ function createTestTools(
   runId: RunId,
   workspace: string,
   onEvent: (event: RunEvent) => void = () => undefined,
+  overrides: Partial<ToolCapabilityApplicationPort> = {},
 ) {
   const capabilities: ToolCapabilityApplicationPort = {
     runId,
@@ -68,6 +69,7 @@ function createTestTools(
         return { ...result, beforeSeq };
       },
     },
+    ...overrides,
   };
   return [...composeWorkspaceTools(capabilities, workspace, createLocalSubprocessPort()).catalog.tools];
 }
@@ -225,6 +227,25 @@ describe("workspace tools", () => {
     store.close();
   });
 
+  it("removes Bash capture files when Artifact persistence fails", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-capture-cleanup-"));
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "capture cleanup");
+    const write = vi.fn(async () => { throw new Error("artifact persistence failed"); });
+    const bash = createTestTools(store, run.id, workspace, () => undefined, {
+      artifactSink: { maxBytes: 64_000, write },
+    }).find((tool) => tool.name === "bash")!;
+
+    await expect(bash.execute("spill-failure", {
+      command: "node -e \"process.stdout.write('x'.repeat(30000))\"",
+      timeoutSeconds: 10,
+    }, testSignal)).rejects.toThrow("artifact persistence failed");
+
+    expect(write).toHaveBeenCalledOnce();
+    expect(await readdir(path.join(workspace, ".tagent/tmp"))).toEqual([]);
+    store.close();
+  });
+
   it("replays mutating tool receipts without repeating side effects and stales checks", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-"));
     const store = new Store(":memory:");
@@ -277,6 +298,20 @@ describe("workspace tools", () => {
     const bash = createTestTools(store, run.id, workspace).find((tool) => tool.name === "bash")!;
     await expect(bash.execute("1", { command: "rm -rf ." }, testSignal)).rejects.toThrow("blocked");
     store.close();
+  });
+
+  it("recognizes common destructive flag variants without matching quoted text", () => {
+    for (const command of [
+      "rm -r -f .",
+      "rm --recursive --force .",
+      "rm -fr .",
+      "git clean -fdx",
+      "git clean --force -d",
+      "R=rm; $R -rf .",
+      "command /bin/rm -rf .",
+      "echo safe & (rm -rf .)",
+    ]) expect(bashCommandIsDestructive(command), command).toBe(true);
+    expect(bashCommandIsDestructive("echo 'rm -rf .'")).toBe(false);
   });
 
   it("publishes task updates and infers phases from plan, mutation, and checks", async () => {
@@ -338,7 +373,7 @@ describe("workspace tools", () => {
     await taskRun.execute("baseline-check", { action: "check", key: "baseline", title: "Baseline", status: "passed", command: "ls" }, testSignal);
     expect(store.getRun(run.id)?.checks[0].stale).toBe(false);
 
-    await bash.execute("observe", { command: "ls", timeoutSeconds: 5 }, testSignal);
+    await bash.execute("observe", { command: "echo 'git add file' | grep git", timeoutSeconds: 5 }, testSignal);
     expect(store.getRun(run.id)?.checks[0].stale).toBe(false);
     expect(store.getOperation(`${run.id}:${run.attempt}:observe`)?.effects).toEqual(expect.arrayContaining([
       { kind: "workspace", action: "read_only" },
@@ -350,6 +385,25 @@ describe("workspace tools", () => {
       { kind: "workspace", action: "mutation" },
     ]));
     store.close();
+  });
+
+  it("classifies shell command positions and snapshot mutation flags", () => {
+    for (const command of [
+      'echo "git add file"',
+      "ls | grep rm",
+      "cat README.md | grep mv",
+      "npm test",
+      "npx vitest run",
+      "python -m pytest",
+    ]) expect(bashInvalidatesChecks(command), command).toBe(false);
+    for (const command of [
+      "git add file",
+      "rm file",
+      "mv a b",
+      "npm test -- --updateSnapshot",
+      "npx vitest --update",
+      "python -m pytest --snapshot-update",
+    ]) expect(bashInvalidatesChecks(command), command).toBe(true);
   });
 
   it("rolls back every task_run batch mutation when one mutation fails", async () => {

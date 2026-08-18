@@ -103,6 +103,54 @@ describe("Operator Read API", () => {
     expect(retried.data.items.map((item) => item.id)).toEqual(seen.slice(2, 4));
   });
 
+  it("filters Operator discovery and denies concrete reads outside the principal resource scope", async () => {
+    const scopedToken = "operator-scoped-resource-token";
+    const wildcardToken = "operator-wildcard-resource-token";
+    const emptyToken = "operator-empty-resource-token";
+    const scoped: ServiceCredential = {
+      token: scopedToken,
+      scopes: ["sessions:read", "runs:read"],
+      principal: { subjectId: "operator-scoped", resourceScopes: [] },
+    };
+    const { app, store } = await fixture([
+      scoped,
+      {
+        token: wildcardToken,
+        scopes: ["sessions:read", "runs:read"],
+        principal: { subjectId: "operator-wildcard", resourceScopes: [{ type: "workspace", id: "*" }] },
+      },
+      {
+        token: emptyToken,
+        scopes: ["sessions:read", "runs:read"],
+        principal: { subjectId: "operator-empty", resourceScopes: [] },
+      },
+    ]);
+    const allowed = store.createSession("Allowed");
+    const denied = store.createSession("Denied");
+    store.createRun(allowed.id, "Allowed run");
+    store.createRun(denied.id, "Denied run");
+    scoped.principal!.resourceScopes.push({ type: "workspace", id: allowed.id });
+
+    const scopedHeaders = { authorization: `Bearer ${scopedToken}` };
+    const scopedList = decodeAbi(OperatorSessionListResponseSchema, (await app.inject({
+      method: "GET", url: "/api/v1/operator/sessions", headers: scopedHeaders,
+    })).json()).data;
+    expect(scopedList.items.map((item) => item.id)).toEqual([allowed.id]);
+    expect((await app.inject({ method: "GET", url: `/api/v1/operator/sessions/${allowed.id}/task-runs`, headers: scopedHeaders })).statusCode).toBe(200);
+    const deniedRead = await app.inject({ method: "GET", url: `/api/v1/operator/sessions/${denied.id}/task-runs/latest`, headers: scopedHeaders });
+    expect(deniedRead.statusCode).toBe(403);
+    expect(decodeAbi(ErrorEnvelopeSchema, deniedRead.json()).error.code).toBe("auth.resource_scope_denied");
+
+    const emptyList = decodeAbi(OperatorSessionListResponseSchema, (await app.inject({
+      method: "GET", url: "/api/v1/operator/sessions", headers: { authorization: `Bearer ${emptyToken}` },
+    })).json()).data;
+    expect(emptyList.items).toEqual([]);
+    const wildcardList = decodeAbi(OperatorSessionListResponseSchema, (await app.inject({
+      method: "GET", url: "/api/v1/operator/sessions", headers: { authorization: `Bearer ${wildcardToken}` },
+    })).json()).data;
+    expect(new Set(wildcardList.items.map((item) => item.id))).toEqual(new Set([allowed.id, denied.id]));
+  });
+
   it("returns bounded TaskRun summaries, stable pages, latest semantics, and distinct missing/empty Sessions", async () => {
     const { app, store } = await fixture();
     const session = store.createSession("Runs");

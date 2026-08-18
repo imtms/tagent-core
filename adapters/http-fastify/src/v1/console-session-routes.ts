@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { V1ApiDependencies } from "./dependencies.js";
 import { successEnvelope } from "./errors.js";
 import { authorizeConsole, consoleError } from "./console-route-support.js";
+import { assertChannelSessionScope } from "./route-support.js";
 
 function paginationLimit(value: string | undefined, fallback: number): number {
   if (value == null) return fallback;
@@ -18,6 +19,7 @@ export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencie
 
   app.get("/api/v1/console/sessions/:id/messages", { onRequest: read }, async (request) => {
     const { id } = request.params as { id: string };
+    assertChannelSessionScope(request, id);
     if (!sessions.getSession(id)) throw consoleError(404, "session.not_found", "session not found");
     const query = request.query as { limit?: string; beforeId?: string };
     const limit = paginationLimit(query.limit, 80);
@@ -28,6 +30,8 @@ export function registerConsoleSessionV1Routes(app: FastifyInstance, dependencie
 
   app.post("/api/v1/console/sessions/:id/inbox/:itemId/parallel-start-request", { onRequest: authorizeConsole(dependencies, "runs:control") }, async (request) => {
     const { id, itemId } = request.params as { id: string; itemId: string };
+    assertChannelSessionScope(request, id);
+    if (!sessions.getSession(id)) throw consoleError(404, "session.not_found", "session not found");
     const body = (request.body ?? {}) as { actor?: string; reason?: string };
     try { return successEnvelope(request, dependencies.service.requestParallelSessionInputApproval(id, itemId, body.actor ?? "session_governor", body.reason)); }
     catch (error) { throw consoleError(409, "inbox.approval_conflict", error instanceof Error ? error.message : String(error)); }

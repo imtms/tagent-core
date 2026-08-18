@@ -26,6 +26,7 @@ import { WorkspaceSkillsControl } from "./WorkspaceSkillsControl";
 import { GateProfileControl } from "./GateProfileControl";
 import { TimeAgo } from "./TimeAgo";
 import { localDayKey } from "./time-format";
+import { userInputRequestKey } from "./user-input-state";
 import { ConversationMessage, PendingConversationMessage } from "./ConversationMessage";
 import {
   ApprovalDock,
@@ -416,7 +417,7 @@ export function App() {
         {messages.map((message, index) => <Fragment key={message.id}>{(index === 0 || localDayKey(messages[index - 1].createdAt) !== localDayKey(message.createdAt)) && <ConversationDateDivider value={message.createdAt} />}<ConversationMessage message={message} memoryJob={message.role === "user" && runtimeStatus?.memoryEnabled ? (memoryJobsLoaded ? memoryJobByMessageId.get(message.id) ?? null : undefined) : undefined} /></Fragment>)}
         {pendingUserMessage?.workspaceId === workspaceId && !messages.some((message) => message.role === "user" && message.content === pendingUserMessage.content && message.createdAt >= pendingUserMessage.createdAt - 5_000) && <>{(!messages.length || localDayKey(messages[messages.length - 1].createdAt) !== localDayKey(pendingUserMessage.createdAt)) && <ConversationDateDivider value={pendingUserMessage.createdAt} />}<PendingConversationMessage content={pendingUserMessage.content} /></>}
         {activeRun && <RunActivityStrip run={activeRun} />}
-        {selectedRun?.pendingUserInput && <UserInputCard request={selectedRun.pendingUserInput} submitting={submittingUserInputId === selectedRun.pendingUserInput.id} onSubmit={(values) => submitRequestedInput(selectedRun.pendingUserInput!, values)} />}
+        {selectedRun?.pendingUserInput && <UserInputCard key={userInputRequestKey(selectedRun.pendingUserInput)} request={selectedRun.pendingUserInput} submitting={submittingUserInputId === selectedRun.pendingUserInput.id} onSubmit={(values) => submitRequestedInput(selectedRun.pendingUserInput!, values)} />}
         {(activeRun || selectedRun) && transcript.length + events.length + Number(Boolean(liveThinking || streaming)) > 0 && <ExecutionTimeline runId={(activeRun ?? selectedRun)!.id} isRunning={activeRun?.status === "running"} items={transcript} events={activeRun ? events : []} liveThinking={activeRun ? liveThinking : ""} liveOutput={activeRun ? streaming : ""} />}
           </div>
         </section>

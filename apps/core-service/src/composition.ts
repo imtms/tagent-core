@@ -40,6 +40,7 @@ export type {
 export { ManagedGenerationAdapter } from "./composition/managed-generation-adapter.js";
 export type { ManagedGenerationAdapterOptions } from "./composition/managed-generation-adapter.js";
 export {
+  OpenAiResponseHeaderTimeoutError,
   OpenAiSseIdleTimeoutError,
   readOpenAiChatContent,
   readOpenAiChatSse,

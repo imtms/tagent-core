@@ -41,6 +41,15 @@ interface ParsedSkill {
 
 interface BundleFile { relativePath: string; data: Uint8Array }
 
+export function renameConflictMayReferenceExistingDirectory(
+  error: unknown,
+  platform: NodeJS.Platform = process.platform,
+) {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code ?? "";
+  return code === "EEXIST" || code === "ENOTEMPTY"
+    || platform === "win32" && (code === "EPERM" || code === "EACCES");
+}
+
 function decodeBase64(value: string): Uint8Array {
   const normalized = value.replace(/\s/g, "");
   if (!normalized || normalized.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) {
@@ -352,7 +361,12 @@ export class CoreSkillApplication {
       }
       try { await rename(staging, target); }
       catch (error) {
-        if (!["EEXIST", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+        if (!renameConflictMayReferenceExistingDirectory(error)) throw error;
+        const code = (error as NodeJS.ErrnoException).code ?? "";
+        if ((code === "EPERM" || code === "EACCES") && process.platform === "win32") {
+          try { await requireDirectory(target); }
+          catch { throw error; }
+        }
         await assertExistingBundle(target, managedRoot, bundle.files);
       }
     } finally {

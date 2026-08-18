@@ -5,6 +5,7 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
   WorkspacePathError,
+  assertWorkspacePlatformSupported,
   composeWorkspaceTools,
   listWorkspaceDirectory,
   readWorkspaceFile,
@@ -80,13 +81,13 @@ describe("Local workspace adapter package", () => {
   it("publishes a private minimal ABI with exact approved dependencies", () => {
     const root = readJson<{ devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const manifest = readJson<PackageManifest>(`${packageRoot}/package.json`);
-    expect(manifest).toMatchObject({ name: "@tagent/workspace-local", version: "0.8.8", private: true });
+    expect(manifest).toMatchObject({ name: "@tagent/workspace-local", version: "0.8.9", private: true });
     expect(root.devDependencies[manifest.name]).toBe(manifest.version);
     expect(Object.keys(manifest.exports).sort()).toEqual([
       ".", "./artifact-file-sink", "./local-subprocess", "./project-context", "./snapshot-edit", "./tools", "./workspace-path",
     ]);
     expect(manifest.dependencies).toEqual({
-      "@tagent/execution": "0.8.8",
+      "@tagent/execution": "0.8.9",
       typebox: "^1.1.24",
     });
     for (const target of Object.values(manifest.exports)) {
@@ -94,8 +95,7 @@ describe("Local workspace adapter package", () => {
       expect(target.import).toMatch(/^\.\/dist\/.+\.js$/);
       expect(`${target.types}\n${target.import}`).not.toContain("/src/");
     }
-    expect(manifest.scripts.build).toContain("cp src/workspace-fd-helper.py dist/workspace-fd-helper.py");
-    expect(manifest.scripts.build).toContain("chmod 755 dist/workspace-fd-helper.py");
+    expect(manifest.scripts.build).toContain("build-files.mjs copy-executable src/workspace-fd-helper.py dist/workspace-fd-helper.py");
     expect(root.scripts["build:packages"]).toContain("@tagent/workspace-local");
     expect(root.scripts.clean).toContain("@tagent/workspace-local");
   });
@@ -117,6 +117,15 @@ describe("Local workspace adapter package", () => {
     expect(PathListWorkspaceDirectory).toBe(listWorkspaceDirectory);
     expect(PathReadWorkspaceFile).toBe(readWorkspaceFile);
     expect(PathWriteWorkspaceFile).toBe(writeWorkspaceFile);
+  });
+
+  it("rejects Windows before launching the POSIX workspace helper", () => {
+    expect(() => assertWorkspacePlatformSupported("win32")).toThrowError(expect.objectContaining({
+      name: "WorkspacePathError",
+      code: "WORKSPACE_PLATFORM_UNSUPPORTED",
+      message: expect.stringContaining("not supported on Windows"),
+    }));
+    expect(() => assertWorkspacePlatformSupported(process.platform)).not.toThrow();
   });
 
   it("keeps the adapter independent from stores, persistence, memory, HTTP, runtime-pi, and Core aggregates", () => {

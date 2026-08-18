@@ -18,6 +18,7 @@ import type { RunPhase, RunStatus } from "@tagent/execution/domain";
 interface HttpOperatorReadPageQuery {
   snapshotRowId?: number;
   after?: { createdAt: number; id: string };
+  sessionIds?: string[];
   limit: number;
 }
 

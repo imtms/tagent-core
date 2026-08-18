@@ -179,10 +179,15 @@ export class ToolExecutionPipeline {
       if (receipt.status === "succeeded") return receipt.result as RuntimeToolResult;
       throw new Error(`Operation ${id} cannot be replayed from status ${receipt.status}`);
     }
+    const invalidates = typeof policy.invalidatesChecks === "function" ? policy.invalidatesChecks(args) : policy.invalidatesChecks !== false;
+    let invalidatedChecks: number | undefined;
+    const invalidateChecks = () => {
+      if (invalidatedChecks === undefined) invalidatedChecks = invalidates ? this.capabilities.markChecksStale() : 0;
+      return invalidatedChecks;
+    };
     try {
       const result = evidencedResult(await this.executeToolBody(tool, toolCallId, args, signal, onUpdate), id, true);
-      const invalidates = typeof policy.invalidatesChecks === "function" ? policy.invalidatesChecks(args) : policy.invalidatesChecks !== false;
-      const staleChecks = invalidates ? this.capabilities.markChecksStale() : 0;
+      const staleChecks = invalidateChecks();
       this.capabilities.updateOperation(id, { status: "succeeded", stage: "completed", effects: [
         { kind: "workspace", action: access ?? "mutation" },
         { kind: "checks", action: staleChecks ? "stale" : "preserved", count: staleChecks },
@@ -197,11 +202,13 @@ export class ToolExecutionPipeline {
       return result;
     } catch (error) {
       const classified = classifyToolError(error, { signal });
+      const staleChecks = invalidateChecks();
       this.capabilities.updateOperation(id, {
         status: "failed",
         stage: "execution_failed",
         effects: [
           { kind: "workspace", action: access ?? "mutation" },
+          { kind: "checks", action: staleChecks ? "stale" : "preserved", count: staleChecks },
           { kind: "error", error: classified.toJSON() },
         ],
         error: classified.message,

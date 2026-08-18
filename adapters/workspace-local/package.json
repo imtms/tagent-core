@@ -1,6 +1,6 @@
 {
   "name": "@tagent/workspace-local",
-  "version": "0.8.8",
+  "version": "0.8.9",
   "private": true,
   "type": "module",
   "sideEffects": false,
@@ -39,11 +39,11 @@
     }
   },
   "scripts": {
-    "build": "tsc -b && cp src/workspace-fd-helper.py dist/workspace-fd-helper.py && chmod 755 dist/workspace-fd-helper.py",
+    "build": "tsc -b && node ../../scripts/build-files.mjs copy-executable src/workspace-fd-helper.py dist/workspace-fd-helper.py",
     "clean": "tsc -b --clean && rm -rf dist"
   },
   "dependencies": {
-    "@tagent/execution": "0.8.8",
+    "@tagent/execution": "0.8.9",
     "typebox": "^1.1.24"
   },
   "engines": {

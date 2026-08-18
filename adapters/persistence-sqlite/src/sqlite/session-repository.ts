@@ -28,6 +28,7 @@ interface OperatorSessionReadRow {
 interface OperatorReadPageQuery {
   snapshotRowId?: number;
   after?: { createdAt: number; id: string };
+  sessionIds?: string[];
   limit: number;
 }
 
@@ -140,6 +141,11 @@ export class SqliteSessionRepository {
     const afterClause = query.after
       ? "AND (sessions.created_at < @afterCreatedAt OR (sessions.created_at = @afterCreatedAt AND sessions.id < @afterId))"
       : "";
+    const sessionScopeClause = query.sessionIds === undefined
+      ? ""
+      : query.sessionIds.length === 0
+        ? "AND 0"
+        : `AND sessions.id IN (${query.sessionIds.map((_, index) => `@sessionScope${index}`).join(",")})`;
     const items = this.db.prepare(`
       SELECT sessions.id,sessions.title,sessions.model_id as modelId,sessions.reasoning_effort as reasoningEffort,
         sessions.created_at as createdAt,sessions.updated_at as updatedAt,
@@ -151,11 +157,12 @@ export class SqliteSessionRepository {
         SELECT candidate.rowid FROM runs candidate WHERE candidate.session_id=sessions.id
         ORDER BY candidate.updated_at DESC,candidate.id DESC LIMIT 1
       )
-      WHERE sessions.rowid <= @snapshotRowId ${afterClause}
+      WHERE sessions.rowid <= @snapshotRowId ${sessionScopeClause} ${afterClause}
       ORDER BY sessions.created_at DESC,sessions.id DESC LIMIT @limit
     `).all({
       snapshotRowId,
       limit: query.limit,
+      ...Object.fromEntries((query.sessionIds ?? []).map((sessionId, index) => [`sessionScope${index}`, sessionId])),
       ...(query.after ? { afterCreatedAt: query.after.createdAt, afterId: query.after.id } : {}),
     }) as OperatorSessionReadRow[];
     return { items, snapshotRowId };

@@ -1,6 +1,6 @@
 import { createInProcessRuntime } from "@tagent/runtime-pi/factory";
 import {
-  OpenAiSseIdleTimeoutError,
+  OpenAiResponseHeaderTimeoutError,
   readOpenAiChatContent,
   type OpenAiUsage,
 } from "./openai-sse.js";
@@ -85,7 +85,7 @@ function createSessionInputModelPort(model: RuntimeModelSpec, credential: Creden
     if (!apiKey) throw new Error(`Missing configured credential: ${credential.reference}`);
     const controller = new AbortController();
     const usage: OpenAiUsage[] = [];
-    const headerTimer = setTimeout(() => controller.abort(new OpenAiSseIdleTimeoutError(timeoutMs)), timeoutMs);
+    const headerTimer = setTimeout(() => controller.abort(new OpenAiResponseHeaderTimeoutError(timeoutMs)), timeoutMs);
     let response: Response;
     try {
       response = await fetch(`${model.baseUrl.replace(/\/$/, "")}/chat/completions`, {

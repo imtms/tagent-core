@@ -25,6 +25,10 @@ admin:operations:read
 
 A credential may bind a subject and `user`, `workspace`, `project`, or `session` resource scopes. Core takes these values only from server configuration. Profile mutation headers may carry delegated actor/request identifiers for audit correlation, but they grant no scope and cannot replace the authenticated principal.
 
+When credentials are configured, concrete Channel, Operator Read, and first-party Console resources require an explicit matching resource grant; an empty grant set authorizes no Session or TaskRun. TaskRun, transcript, Artifact, command, interaction, and event-consumer access is checked against the owning Session before any receipt, mutation, acknowledgement, or streamed response. Operator Session discovery is filtered to authorized Session/Workspace identifiers. A `workspace` grant may authorize the Session with the same identifier, and a type-scoped `*` grant is explicit wildcard authority. Creating a new Session requires a `session:*` or `workspace:*` grant because no concrete identifier exists before creation. Resource-neutral capability documents remain protected by service scope rather than an invented resource target. Localhost `local-admin` mode retains its documented bypass.
+
+Wildcard grants never cross unrelated resource types. Memory administration accepts `workspace:*` for a concrete Workspace scope, for example, but not for a Session, Project, or User request. This check and the Channel/Operator checks use the authenticated server-side principal; provenance and delegated-actor headers remain non-authoritative.
+
 `runs:read` includes the unified TaskRun transcript. Transcript items preserve model reasoning, commands, paths, tool arguments, and tool results without a Web-only or Console-only projection, so grant this scope only to principals allowed to inspect complete execution history.
 
 ## Gateway boundary
@@ -48,7 +52,7 @@ The following are server-owned and cannot be asserted by a caller:
 - OS instance lock, writer lease, fence, and connection mutation guard;
 - canonical TaskRun/Attempt transition authority and the closed `RunEventMap` event vocabulary;
 - approval and capability authorization receipts;
-- Attempt-bound external-action approval consumption before mutation-capable tools, with fresh approval required before any later Attempt retries the action;
+- Attempt-bound external-action approval consumption before mutation-capable tools, with atomic remaining-use enforcement, one-time exhaustion after exactly one action, and fresh approval required before any later Attempt retries the action;
 - current-Attempt Bash bindings and Core-derived check evidence;
 - immutable ToolRegistry snapshots and the Core-owned ToolExecutionPipeline guard/receipt/settlement path;
 - explicit external-action approval and a writer-fenced successful operation receipt before a managed Generation activation can reach the Host;

@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+## [0.8.9] - 2026-08-19
+
+### Authorization and security boundaries
+
+- Enforced server-configured Session/Workspace resource grants on every concrete Channel, first-party Console, and Operator Read resource before reads, mutations, event-consumer changes, acknowledgements, or SSE response takeover. TaskRun routes now authorize through their owning Session, Session discovery is filtered before pagination, Session creation requires an explicit wildcard grant, and empty grants fail closed.
+- Made external-action approval consumption atomic and Attempt-bound: consumed, expired, exhausted, malformed, or concurrently spent approvals are denied; finite approvals transition to `consumed` exactly at their use limit; unlimited reusable approvals remain approved.
+- Required an unexpired, fenced capture-job lease for Memory renewal, completion, and failure settlement in both in-memory and PostgreSQL adapters, using the PostgreSQL database clock for persistent enforcement.
+- Expanded the Bash catastrophic-command guard to recognize common equivalent `rm`, `git clean`, variable, path, and shell-stage forms while documenting it as a best-effort guardrail rather than an operating-system sandbox.
+
+### Runtime and execution correctness
+
+- Preserved deferred `steer` and `follow_up` delivery modes and queue order instead of converting follow-ups into steering, including the continuation boundary after an active response settles.
+- Started model response-header timers only after credential resolution and distinguished credential, response-header, and SSE idle failures for Supervisor, admission, and Workspace Goal Roadmap calls.
+- Bounded subprocess-tree cleanup after child exit, terminated surviving descendants, and rejected cleanup that cannot settle before its total deadline.
+- Invalidated trusted checks after failed mutation-capable tool operations as well as successful mutations, and removed Bash capture files and descriptors on every Artifact-persistence or execution failure path.
+- Preserved configured CORS headers when Fastify hands an event stream to the raw SSE response.
+
+### Web Console consistency
+
+- Added jittered exponential SSE reconnect backoff capped at 30 seconds with single-timer ownership and reset after a healthy stream.
+- Cleared stale terminal streaming buffers whenever refreshed Transcript or terminal-event data contains authoritative assistant output.
+- Made only the latest Artifact preview request authoritative after selection, close, or Workspace changes, and keyed requested-input forms by request identity so stale fields cannot leak into a replacement request.
+
+### Portability and maintenance
+
+- Replaced shell-specific build copy/reset commands with contained Node filesystem helpers and made maintained-document containment path-aware on Windows.
+- Made `@tagent/workspace-local` fail early with `WORKSPACE_PLATFORM_UNSUPPORTED` on Windows because its descriptor-relative helper requires POSIX APIs, while preserving cross-platform package compilation and documentation checks.
+- Treated Windows existing-directory rename errors as idempotent only after validating the already-installed content-addressed Skill bundle.
+
+### Compatibility and upgrade
+
+- The ABI shapes, SQLite schema revision `2`, Memory schema, and `tagent-core/state-0.8-r2` protocol are unchanged; no data migration is required.
+- Credentialed deployments must configure an explicit matching Session/Workspace resource grant for concrete API resources, and a `session:*` or `workspace:*` grant for Session creation. Deploy the matching `0.8.9` Core, Web Console, ABI, and Core Client artifacts.
+
 ## [0.8.8] - 2026-08-18
 
 ### Workspace Goal continuity

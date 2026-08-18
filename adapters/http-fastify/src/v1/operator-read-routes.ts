@@ -14,7 +14,7 @@ import {
   type OperatorTaskRunSummary,
 } from "@tagent/abi";
 import type { ChannelV1Dependencies } from "./dependencies.js";
-import { authorizeV1Scopes } from "./auth.js";
+import { assertV1ResourceScope, authorizeV1Scopes, principalOf } from "./auth.js";
 import { successEnvelope, V1HttpError } from "./errors.js";
 import { decodeQuery, missing } from "./route-support.js";
 import {
@@ -33,6 +33,14 @@ function authorizeOperator(dependencies: ChannelV1Dependencies, ...scopes: Array
   return async (request: FastifyRequest): Promise<void> => {
     authorizeV1Scopes(request, dependencies.serviceCredentials, scopes, "operator");
   };
+}
+
+function authorizedSessionIds(request: FastifyRequest): string[] | undefined {
+  const principal = principalOf(request);
+  if (principal.localAdmin) return undefined;
+  const scopes = principal.resourceScopes.filter((scope) => scope.type === "session" || scope.type === "workspace");
+  if (scopes.some((scope) => scope.id === "*")) return undefined;
+  return [...new Set(scopes.map((scope) => scope.id))];
 }
 
 function listQuery(request: FastifyRequest, maximum: number): OperatorListQuery {
@@ -127,7 +135,7 @@ export function registerOperatorReadV1Routes(app: FastifyInstance, dependencies:
     const query = listQuery(request, SESSION_LIST_MAX);
     const limit = query.limit ?? SESSION_LIST_DEFAULT;
     const state = pageState(query, "sessions", null);
-    const page = operatorRead.listSessionsPage({ ...state, limit: limit + 1 });
+    const page = operatorRead.listSessionsPage({ ...state, sessionIds: authorizedSessionIds(request), limit: limit + 1 });
     const items = page.items.slice(0, limit).map(mapSession);
     const hasMore = page.items.length > limit;
     return encodeAbi(OperatorSessionListResponseSchema, successEnvelope(request, {
@@ -141,6 +149,7 @@ export function registerOperatorReadV1Routes(app: FastifyInstance, dependencies:
     schema: { params: OperatorSessionParamsSchema },
   }, async (request) => {
     const { sessionId } = request.params as OperatorSessionParams;
+    assertV1ResourceScope(request, "session", sessionId);
     if (!dependencies.persistence.sessions.getSession(sessionId)) throw missing("session");
     const query = listQuery(request, TASK_RUN_LIST_MAX);
     const limit = query.limit ?? TASK_RUN_LIST_DEFAULT;
@@ -159,6 +168,7 @@ export function registerOperatorReadV1Routes(app: FastifyInstance, dependencies:
     schema: { params: OperatorSessionParamsSchema },
   }, async (request) => {
     const { sessionId } = request.params as OperatorSessionParams;
+    assertV1ResourceScope(request, "session", sessionId);
     if (!dependencies.persistence.sessions.getSession(sessionId)) throw missing("session");
     const latest = operatorRead.getLatestSessionTaskRun(sessionId);
     return encodeAbi(OperatorLatestSessionTaskRunResponseSchema, successEnvelope(request, latest ? mapTaskRun(latest) : null));

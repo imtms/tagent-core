@@ -21,7 +21,7 @@ import {
   TranscriptResponseSchema,
 } from "@tagent/abi";
 import { ConsoleDecode } from "@tagent/core-client";
-import { createApp } from "@tagent/http-fastify";
+import { createApp, type ServiceCredential } from "@tagent/http-fastify";
 import { createCoreApplication } from "@tagent/core-service/application";
 import { Store } from "@tagent/persistence-sqlite/store";
 import { corePersistence, httpTestResources } from "./support/test-persistence.js";
@@ -129,12 +129,75 @@ describe("v1 API contracts", () => {
     expect(decodeAbi(SessionSchema, decodeAbi(SuccessEnvelopeSchema, read.json()).data)).toEqual(session);
     const capabilities = decodeAbi(CoreCapabilitiesResponseSchema, (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).data;
     expect(capabilities).toMatchObject({
-      releaseVersion: "0.8.8",
+      releaseVersion: "0.8.9",
       persistenceSchemaVersion: 2,
       interactions: { approvalResolution: true, userInputSubmission: true },
       operator: { roadmapGenerationIdempotent: true },
       approval: { ready: true },
     });
+  });
+
+  it("enforces configured resource scopes before Channel reads, controls, submissions, and event mutations", async () => {
+    const scopedToken = "v1-channel-scoped-token-with-24-characters";
+    const wildcardToken = "v1-channel-wildcard-token-with-24-characters";
+    const scopedCredential: ServiceCredential = {
+      token: scopedToken,
+      scopes: ["sessions:read", "sessions:write", "runs:read", "runs:control", "events:consume"],
+      principal: { subjectId: "service:scoped-channel", resourceScopes: [] },
+    };
+    const { app, store } = await fixture([
+      scopedCredential,
+      {
+        token: wildcardToken,
+        scopes: ["sessions:read", "sessions:write", "runs:read", "runs:control", "events:consume"],
+        principal: { subjectId: "service:wildcard-channel", resourceScopes: [{ type: "workspace", id: "*" }] },
+      },
+    ]);
+    const allowedSession = store.createSession();
+    const deniedSession = store.createSession();
+    const allowedRun = store.createRun(allowedSession.id, "allowed run");
+    const deniedRun = store.createRun(deniedSession.id, "denied run");
+    scopedCredential.principal!.resourceScopes.push({ type: "workspace", id: allowedSession.id });
+    const scopedHeaders = { authorization: `Bearer ${scopedToken}` };
+
+    const deniedRequests = [
+      { method: "GET" as const, url: `/api/v1/sessions/${deniedSession.id}` },
+      { method: "POST" as const, url: `/api/v1/sessions/${deniedSession.id}/submissions`, headers: { "idempotency-key": "forbidden-submission" }, payload: { content: "must not enqueue" } },
+      { method: "GET" as const, url: `/api/v1/sessions/${deniedSession.id}/submissions/forbidden-submission` },
+      { method: "GET" as const, url: `/api/v1/task-runs/${deniedRun.id}` },
+      { method: "POST" as const, url: `/api/v1/task-runs/${deniedRun.id}/commands`, payload: { commandId: "forbidden-command", expectedAttemptId: null, type: "task_run.steer", payload: { content: "must not control" } } },
+      { method: "GET" as const, url: `/api/v1/task-runs/${deniedRun.id}/commands/forbidden-command` },
+      { method: "GET" as const, url: `/api/v1/task-runs/${deniedRun.id}/transcript` },
+      { method: "GET" as const, url: `/api/v1/task-runs/${deniedRun.id}/interactions` },
+      { method: "GET" as const, url: `/api/v1/task-runs/${deniedRun.id}/artifacts` },
+      { method: "GET" as const, url: `/api/v1/task-runs/${deniedRun.id}/artifacts/missing/content` },
+      { method: "GET" as const, url: `/api/v1/task-runs/${deniedRun.id}/artifacts/missing/download` },
+      { method: "POST" as const, url: `/api/v1/task-runs/${deniedRun.id}/event-consumers/forbidden-consumer/claim` },
+      { method: "GET" as const, url: `/api/v1/task-runs/${deniedRun.id}/events?consumerId=forbidden-consumer&generation=1&after=0` },
+      { method: "POST" as const, url: `/api/v1/task-runs/${deniedRun.id}/event-consumers/forbidden-consumer/ack`, payload: { generation: 1, sequence: 0 } },
+      { method: "GET" as const, url: `/api/v1/console/sessions/${deniedSession.id}/messages` },
+      { method: "POST" as const, url: `/api/v1/console/sessions/${deniedSession.id}/inbox/missing/parallel-start-request`, payload: {} },
+      { method: "GET" as const, url: `/api/v1/console/task-runs/${deniedRun.id}/context-manifests` },
+      { method: "GET" as const, url: `/api/v1/console/workspaces/${deniedSession.id}/goals` },
+    ];
+    for (const input of deniedRequests) {
+      const response = await app.inject({ ...input, headers: { ...scopedHeaders, ...input.headers } });
+      expect(response.statusCode, `${input.method} ${input.url}`).toBe(403);
+      expect(decodeAbi(ErrorEnvelopeSchema, response.json()).error.code).toBe("auth.resource_scope_denied");
+    }
+    expect(store.listSessionInbox(deniedSession.id, true)).toEqual([]);
+    expect(store.getTaskRunCommand("service:scoped-channel", deniedRun.id, "forbidden-command")).toBeUndefined();
+    expect(store.getEventConsumer(deniedRun.id, "forbidden-consumer")).toBeUndefined();
+
+    expect((await app.inject({ method: "GET", url: `/api/v1/sessions/${allowedSession.id}`, headers: scopedHeaders })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: `/api/v1/task-runs/${allowedRun.id}`, headers: scopedHeaders })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: `/api/v1/task-runs/${allowedRun.id}/event-consumers/allowed-consumer/claim`, headers: scopedHeaders })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/v1/capabilities", headers: scopedHeaders })).statusCode).toBe(200);
+
+    const deniedCreate = await app.inject({ method: "POST", url: "/api/v1/sessions", headers: { ...scopedHeaders, "idempotency-key": "specific-scope-create" }, payload: { title: "must not create" } });
+    expect(deniedCreate.statusCode).toBe(403);
+    const wildcardCreate = await app.inject({ method: "POST", url: "/api/v1/sessions", headers: { authorization: `Bearer ${wildcardToken}`, "idempotency-key": "wildcard-scope-create" }, payload: { title: "wildcard creation" } });
+    expect(wildcardCreate.statusCode).toBe(200);
   });
 
   it("converges 100 concurrent Session create retries on one durable Session", async () => {
@@ -818,6 +881,76 @@ describe("v1 API contracts", () => {
       }),
       expect.any(AbortSignal),
     );
+  });
+
+  it("applies type-scoped wildcard grants to concrete Memory admin resources", async () => {
+    const token = "v1-memory-wildcard-token-with-24-characters";
+    const listCaptureJobs = vi.fn(async () => []);
+    const { app } = await fixture([{
+      token,
+      scopes: ["admin"],
+      principal: {
+        subjectId: "service:wildcard-gateway",
+        resourceScopes: [{ type: "workspace", id: "*" }],
+      },
+    }], 32, { memory: { listCaptureJobs } as never });
+
+    const allowed = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/memory/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { scopes: [{ type: "workspace", id: "workspace-concrete" }] },
+    });
+    expect(allowed.statusCode).toBe(200);
+    expect(listCaptureJobs).toHaveBeenCalledWith({
+      subjectId: "service:wildcard-gateway",
+      scopes: [{ type: "workspace", id: "workspace-concrete" }],
+      purpose: "memory_admin",
+    }, 100);
+
+    const wrongType = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/memory/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { scopes: [{ type: "session", id: "workspace-concrete" }] },
+    });
+    expect(wrongType.statusCode).toBe(403);
+    expect(decodeAbi(ErrorEnvelopeSchema, wrongType.json()).error.code).toBe("auth.resource_scope_denied");
+  });
+
+  it("preserves configured CORS headers on the hijacked SSE response", async () => {
+    const previousOrigins = process.env.TAGENT_CORS_ALLOWED_ORIGINS;
+    const origin = "https://console.example";
+    const token = "v1-sse-cors-token-with-24-characters";
+    process.env.TAGENT_CORS_ALLOWED_ORIGINS = origin;
+    const controller = new AbortController();
+    try {
+      const { app, store } = await fixture([{
+        token,
+        scopes: ["events:consume"],
+        principal: { subjectId: "service:sse-cors", resourceScopes: [{ type: "workspace", id: "*" }] },
+      }]);
+      const run = store.createRun(store.createSession().id, "SSE CORS");
+      store.appendEvent(run.id, "message.delta", { delta: "ready", ordinal: 1 });
+      const cursor = store.claimEventConsumer(run.id, "cors-client");
+      const address = await app.listen({ host: "127.0.0.1", port: 0 });
+      const response = await fetch(`${address}/api/v1/task-runs/${run.id}/events?consumerId=cors-client&generation=${cursor.generation}&after=0`, {
+        headers: { origin, authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("access-control-allow-origin")).toBe(origin);
+      expect(response.headers.get("vary")).toBe("Origin");
+      expect(response.headers.get("access-control-expose-headers")).toBe("Deprecation, ETag, Idempotency-Replayed, Link, X-Request-Id");
+      expect(response.headers.get("content-type")).toBe("text/event-stream");
+      controller.abort();
+      await response.body?.cancel().catch(() => undefined);
+    } finally {
+      controller.abort();
+      if (previousOrigins === undefined) delete process.env.TAGENT_CORS_ALLOWED_ORIGINS;
+      else process.env.TAGENT_CORS_ALLOWED_ORIGINS = previousOrigins;
+    }
   });
 
   it("subscribes before capturing the SSE replay watermark so gap events are delivered", async () => {

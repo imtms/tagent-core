@@ -60,7 +60,7 @@ Changing a reference, editing, or deleting a catalog entry affects only TaskRuns
 | ZIP entries | 128 |
 | Workspace references | 32 |
 
-Core rejects invalid base64 or UTF-8, missing or multiple `SKILL.md` files, invalid frontmatter, absolute and traversal paths, duplicate ZIP paths, symlinks, ZIP64/multi-disk or inconsistent archives, files outside the Skill root, bounds violations, duplicate names, and tampered content-addressed revisions.
+Core rejects invalid base64 or UTF-8, missing or multiple `SKILL.md` files, invalid frontmatter, absolute and traversal paths, duplicate ZIP paths, symlinks, ZIP64/multi-disk or inconsistent archives, files outside the Skill root, bounds violations, duplicate names, and tampered content-addressed revisions. Uploading byte-identical content reuses the validated content-addressed bundle. On Windows, rename errors that may represent an existing directory are treated as idempotent only after Core proves that directory contains the complete expected immutable bundle; unrelated permission errors remain failures.
 
 Skills are untrusted instructions, not capabilities. They do not add tools, widen Workspace access, change service scopes, or weaken approval, receipts, completion evidence, and settlement rules. Skill validation is not an operating-system sandbox.
 

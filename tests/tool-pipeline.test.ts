@@ -291,7 +291,12 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     const { port, complete, update } = capabilities();
     const wrapped = new ToolExecutionPipeline(port).bindCatalog({ tools: [tool("write", execute, true)] }).tools[0];
     await expect(wrapped.execute("failed-call", {}, testSignal)).rejects.toThrow("provider failed");
-    expect(update).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: "failed", stage: "execution_failed" }));
+    expect(port.markChecksStale).toHaveBeenCalledOnce();
+    expect(update).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      status: "failed",
+      stage: "execution_failed",
+      effects: expect.arrayContaining([{ kind: "checks", action: "stale", count: 2 }]),
+    }));
     expect(complete).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledTimes(1);
   });

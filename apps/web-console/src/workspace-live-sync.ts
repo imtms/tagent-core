@@ -13,6 +13,29 @@ export interface BackgroundSnapshotGuard {
   liveRevision: number;
 }
 
+const RECONNECT_BASE_DELAY_MS = 1_000;
+const RECONNECT_MAX_DELAY_MS = 30_000;
+
+/** Bounded exponential reconnect state that also rejects parallel timer ownership. */
+export class WorkspaceReconnectBackoff {
+  private attempt = 0;
+  private pending = false;
+
+  nextDelay(random: () => number = Math.random): number | null {
+    if (this.pending) return null;
+    this.pending = true;
+    const exponent = Math.min(this.attempt, 30);
+    this.attempt += 1;
+    const bounded = Math.min(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS * 2 ** exponent);
+    const sample = Math.min(1, Math.max(0, random()));
+    return Math.round(bounded * (0.75 + sample * 0.25));
+  }
+
+  fired(): void { this.pending = false; }
+  cancel(): void { this.pending = false; }
+  reset(): void { this.attempt = 0; this.pending = false; }
+}
+
 export class WorkspaceLiveSyncCoordinator {
   private sessionId = "";
   private workspaceGeneration = 0;

@@ -5,7 +5,7 @@ import { Type, type Static } from "typebox";
 import type { ToolProvider } from "@tagent/execution/composition";
 import type { RuntimeTool, RuntimeToolResult, RuntimeToolUpdateCallback, SubprocessPort, ToolCapabilityApplicationPort } from "@tagent/execution/ports";
 import { readWorkspaceFile } from "../workspace-path.js";
-import { bashInvalidatesChecks, durableTextResult, MAX_DURABLE_OUTPUT, MAX_OUTPUT, persistToolOutputArtifact, previewText, safeArtifactId, textResult } from "./shared.js";
+import { bashCommandIsDestructive, bashInvalidatesChecks, durableTextResult, MAX_DURABLE_OUTPUT, MAX_OUTPUT, persistToolOutputArtifact, previewText, safeArtifactId, textResult } from "./shared.js";
 
 const BashSchema = Type.Object({ command: Type.String(), timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })) });
 
@@ -19,7 +19,7 @@ export class BashToolProvider implements ToolProvider {
 
   provideTools(): readonly RuntimeTool[] {
     const tool: RuntimeTool<Static<typeof BashSchema>, Record<string, unknown>> = {
-      name: "bash", label: "Run command", description: "Run a non-interactive shell command in the workspace. Destructive commands are blocked.",
+      name: "bash", label: "Run command", description: "Run a non-interactive shell command in the workspace. A minimal best-effort guard blocks common catastrophic forms; it is not an operating-system sandbox.",
       parameters: BashSchema, executionMode: "sequential",
       policy: {
         operationType: "tool.bash",
@@ -38,7 +38,7 @@ export class BashToolProvider implements ToolProvider {
     signal: AbortSignal,
     onUpdate?: RuntimeToolUpdateCallback<Record<string, unknown>>,
   ): Promise<RuntimeToolResult<Record<string, unknown>>> {
-    if (/\b(rm\s+-rf|mkfs|shutdown|reboot|poweroff|git\s+reset\s+--hard|git\s+clean\s+-[a-z]*f)\b/i.test(params.command)) {
+    if (bashCommandIsDestructive(params.command)) {
       throw new Error("Command blocked by the minimal safety policy");
     }
     const chainedStages = (params.command.match(/(?:&&|;|\|\||\n)/g) ?? []).length + 1;
@@ -47,6 +47,7 @@ export class BashToolProvider implements ToolProvider {
     const captureRelative = `.tagent/tmp/${safeArtifactId(`${this.capabilities.runId}-${id}`)}.log`;
     const capturePath = path.join(this.workspace, captureRelative);
     let captureFile: Awaited<ReturnType<typeof open>> | undefined;
+    let captureClosed = false;
     let stdoutBytes = 0, stderrBytes = 0, capturedOutputBytes = 0, sourceDroppedBytes = 0;
     let progressChunks: string[] = [];
     let progressTimer: ReturnType<typeof setTimeout> | undefined;
@@ -82,7 +83,7 @@ export class BashToolProvider implements ToolProvider {
       });
       const outcome = await child.done;
       clearTimeout(timer); if (progressTimer) clearTimeout(progressTimer); flushProgress();
-      await captureReady; await captureWrites; await captureFile!.sync(); await captureFile!.close();
+      await captureReady; await captureWrites; await captureFile!.sync(); await captureFile!.close(); captureClosed = true;
       const stdout = Buffer.concat(stdoutChunks).toString("utf8"), stderr = Buffer.concat(stderrChunks).toString("utf8");
       const combined = [stdout, stderr && `STDERR:\n${stderr}`].filter(Boolean).join("\n");
       const totalBytes = stdoutBytes + stderrBytes;
@@ -106,7 +107,12 @@ export class BashToolProvider implements ToolProvider {
       return result;
     } finally {
       clearTimeout(timer);
+      if (progressTimer) clearTimeout(progressTimer);
       signal.removeEventListener("abort", forwardAbort);
+      await captureReady.catch(() => undefined);
+      await captureWrites.catch(() => undefined);
+      if (captureFile && !captureClosed) await captureFile.close().catch(() => undefined);
+      await unlink(capturePath).catch(() => undefined);
     }
   }
 }

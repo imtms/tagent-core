@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { OutgoingHttpHeaders } from "node:http";
 import {
   decodeAbi,
   EventConsumerAckRequestSchema,
@@ -17,7 +18,7 @@ import {
 import type { ChannelV1Dependencies } from "./dependencies.js";
 import { requestIdOf, successEnvelope, V1HttpError } from "./errors.js";
 import { mapEventConsumerCursor, mapTaskRunEvent } from "./mappers.js";
-import { authorizeChannel, conflict, decodeQuery, missing } from "./route-support.js";
+import { authorizeChannel, conflict, decodeQuery, missing, requireChannelTaskRun } from "./route-support.js";
 import { SseWritePump } from "./sse-write-pump.js";
 
 const EVENT_REPLAY_BATCH_SIZE = 256;
@@ -38,7 +39,7 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
     schema: { params: EventConsumerParamsSchema },
   }, async (request) => {
     const { taskRunId, consumerId } = request.params as EventConsumerParams;
-    if (!taskRuns.hasRun(taskRunId)) throw missing("task_run");
+    requireChannelTaskRun(request, taskRuns, taskRunId);
     return encodeAbi(
       EventConsumerClaimResponseSchema,
       successEnvelope(request, {
@@ -58,7 +59,7 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
       generation: Number(rawQuery.generation),
       ...(rawQuery.after === undefined ? {} : { after: Number(rawQuery.after) }),
     });
-    if (!taskRuns.hasRun(taskRunId)) throw missing("task_run");
+    requireChannelTaskRun(request, taskRuns, taskRunId);
     const cursor = eventConsumers.getEventConsumer(taskRunId, query.consumerId);
     if (!cursor || cursor.generation !== query.generation) throw conflict("event_consumer.stale_generation", "Consumer generation is stale");
     if (query.after !== undefined && query.after > cursor.ackedSeq) {
@@ -70,9 +71,13 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
     // The durable acknowledgement is authoritative. An older local cursor may
     // replay duplicates, but a client may never skip unacknowledged events.
     const replayAfter = cursor.ackedSeq;
+    const inheritedHeaders = Object.fromEntries(
+      Object.entries(reply.getHeaders()).filter((entry) => entry[1] !== undefined),
+    ) as OutgoingHttpHeaders;
     reply.hijack();
     const response = reply.raw;
-    response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no", "X-Request-Id": requestIdOf(request) });
+    const responseHeaders: OutgoingHttpHeaders = { ...inheritedHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no", "X-Request-Id": requestIdOf(request) };
+    response.writeHead(200, responseHeaders);
     let unsubscribe = () => {};
     let closed = false;
     let replaying = true;
@@ -204,6 +209,7 @@ export function registerEventV1Routes(app: FastifyInstance, dependencies: Channe
     },
   }, async (request) => {
     const { taskRunId, consumerId } = request.params as EventConsumerParams;
+    requireChannelTaskRun(request, taskRuns, taskRunId);
     const body = decodeAbi(EventConsumerAckRequestSchema, request.body);
     const status = eventConsumers.ackEventConsumer(taskRunId, consumerId, body.generation, body.sequence);
     if (status === "missing") throw missing("task_run");
