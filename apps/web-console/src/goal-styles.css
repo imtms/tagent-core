@@ -166,6 +166,10 @@
 .goal-management button.danger-quiet{color:var(--danger);border-color:var(--border-danger);background:var(--surface-raised)}
 .goal-management button.danger-quiet:hover:not(:disabled){border-color:var(--border-danger);background:var(--surface-hover)}
 @media(prefers-reduced-motion:reduce){.goal-loading span{animation:none}}
+.goal-secondary-action:disabled{opacity:var(--opacity-disabled);cursor:not-allowed}
+.goal-start-blocked{max-width:210px;color:var(--foreground-muted);font-size:var(--text-xs);line-height:var(--leading-ui);text-align:right}
+.goal-start-blocked button{padding:0;border:0;background:transparent;color:var(--accent);cursor:pointer;font:inherit;font-weight:var(--weight-bold)}
+.goal-start-blocked code{font-size:inherit}
 @media(max-width:760px){
   .goal-overlay{padding:0}
   .goal-center{width:100%;height:100%;border:0;border-radius:0}

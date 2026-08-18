@@ -25,6 +25,7 @@ import {
 } from "./api";
 import { formatCount } from "./count-format";
 import { goalStatusTone } from "./goal-display";
+import { goalStartBlockedReason, shortRunId } from "./goal-start-feedback";
 
 const blankDefinition = (): WorkspaceGoalDefinition => ({
   title: "",
@@ -483,6 +484,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
   const evidenceByCriterion = useMemo(() => new Map((definition?.criteria ?? []).map((criterion) => [criterion.key, goal.evidenceLinks.filter((link) => link.goalRevision === goal.definition?.revision && link.criterionKey === criterion.key)])), [definition, goal.definition?.revision, goal.evidenceLinks]);
   const progressByItem = useMemo(() => new Map(goal.roadmapProgress.map((item) => [item.itemId, item])), [goal.roadmapProgress]);
   const canEdit = !["completed", "cancelled"].includes(goal.status) && !goal.currentRunId;
+  const startBlockedReason = goalStartBlockedReason(goal.currentRunId, busy);
   const verifiedPercent = goal.requiredCriteria ? Math.round(goal.verifiedCriteria / goal.requiredCriteria * 100) : 0;
 
   const nextAction = () => {
@@ -552,7 +554,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
               <span className="goal-roadmap-index">{index + 1}</span>
             </div>
             <div className="goal-roadmap-copy"><strong>{item.title}</strong><p>{item.outcome}</p><div>{item.criterionKeys.map((key) => <span key={key}>{definition?.criteria.find((criterion) => criterion.key === key)?.title ?? key}</span>)}</div><details><summary>Verification</summary><p>{item.verification}</p></details></div>
-            <div className="goal-roadmap-action"><em>{roadmapStatusLabel(itemStatus)}</em>{approved && (itemStatus === "pending" || itemStatus === "blocked" && !goal.currentRunId) && <button className="goal-secondary-action" disabled={busy || Boolean(goal.currentRunId)} onClick={() => void onStartRoadmapItem(item.id)}><Play size={ICON_SIZE.xs} />{itemStatus === "blocked" ? "Retry" : "Start"}</button>}{itemProgress?.runId && ["running", "blocked"].includes(itemStatus) && <button className="goal-secondary-action" onClick={() => onOpenRun?.(itemProgress.runId!)}><ExternalLink size={ICON_SIZE.xs} />Open</button>}</div>
+            <div className="goal-roadmap-action"><em>{roadmapStatusLabel(itemStatus)}</em>{approved && (itemStatus === "pending" || itemStatus === "blocked") && <button className="goal-secondary-action" disabled={Boolean(startBlockedReason)} aria-describedby={startBlockedReason ? `goal-start-blocked-${item.id}` : undefined} title={startBlockedReason ?? undefined} onClick={() => void onStartRoadmapItem(item.id)}><Play size={ICON_SIZE.xs} />{itemStatus === "blocked" ? "Retry" : "Start"}</button>}{itemProgress?.runId && ["running", "blocked"].includes(itemStatus) && <button className="goal-secondary-action" onClick={() => onOpenRun?.(itemProgress.runId!)}><ExternalLink size={ICON_SIZE.xs} />Open</button>}{approved && (itemStatus === "pending" || itemStatus === "blocked") && startBlockedReason && <small className="goal-start-blocked" id={`goal-start-blocked-${item.id}`}>{goal.currentRunId ? <>Another TaskRun is active: <button type="button" onClick={() => onOpenRun?.(goal.currentRunId!)}><code>{shortRunId(goal.currentRunId)}</code> Open</button></> : startBlockedReason}</small>}</div>
           </div>;
         })}
         {!approval && <p className="goal-roadmap-help">{requiresRoadmapRevision ? "Changes were requested. Edit and save a new Roadmap revision before approval." : "Select the items that may drive TaskRuns, then approve the Roadmap above."}</p>}
