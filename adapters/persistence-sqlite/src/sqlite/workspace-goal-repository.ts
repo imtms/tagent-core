@@ -307,6 +307,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
     if (!link) return null;
     const run = this.runRow(runId);
     if (!run) return null;
+    const selectedRunId = this.goalRow(link.goalId)?.currentRunId ?? null;
     const timestamp = now();
     const itemIds = link.mode === "roadmap" ? JSON.parse(link.roadmapItemIdsJson) as string[] : [];
     const progressStatus = run.status === "completed" ? "completed" : ["running", "waiting_input"].includes(run.status) ? "running" : "blocked";
@@ -316,10 +317,9 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
         ON CONFLICT(goal_id,roadmap_revision_id,item_id) DO UPDATE SET status=excluded.status,run_id=excluded.run_id,updated_at=excluded.updated_at,completed_at=excluded.completed_at`)
         .run(link.goalId, link.roadmapRevisionId, itemId, progressStatus, runId, timestamp, progressStatus === "completed" ? timestamp : null);
       const retainCurrent = ["running", "waiting_input", "blocked", "interrupted"].includes(run.status);
-      this.db.prepare("UPDATE workspace_goals SET current_run_id=?,updated_at=? WHERE id=? AND current_run_id=?")
-        .run(retainCurrent ? runId : null, timestamp, link.goalId, runId);
-      const nextCurrent = this.findActiveGuidedRun(link.goalId, retainCurrent ? runId : null);
-      this.db.prepare("UPDATE workspace_goals SET current_run_id=? WHERE id=?").run(nextCurrent.id, link.goalId);
+      const preferredRunId = selectedRunId === runId && !retainCurrent ? null : selectedRunId;
+      const nextCurrent = this.findActiveGuidedRun(link.goalId, preferredRunId);
+      this.db.prepare("UPDATE workspace_goals SET current_run_id=?,updated_at=? WHERE id=?").run(nextCurrent.id, timestamp, link.goalId);
     })();
     if (!["running", "waiting_input"].includes(run.status)) this.harvestSupervisorEvidence(link, run.contractJson);
     this.refreshReadyStatus(link.goalId, timestamp);
@@ -581,11 +581,14 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
   }
 
   private findActiveGuidedRun(goalId: string, preferredRunId: string | null): { id: string | null; status: string | null } {
+    // Blocked/interrupted Runs remain resumable history, but only the selected
+    // one owns Goal attention after a newer guided Run has taken over.
     const run = this.db.prepare(`SELECT r.id,r.status FROM workspace_goal_run_links l
       JOIN runs r ON r.id=l.run_id
-      WHERE l.goal_id=? AND r.status IN ('running','waiting_input','interrupted','blocked')
+      WHERE l.goal_id=? AND (r.status IN ('running','waiting_input')
+        OR (r.id=? AND r.status IN ('interrupted','blocked')))
       ORDER BY CASE WHEN r.id=? THEN 0 ELSE 1 END,l.created_at DESC,r.id DESC LIMIT 1`)
-      .get(goalId, preferredRunId) as { id: string; status: string } | undefined;
+      .get(goalId, preferredRunId, preferredRunId) as { id: string; status: string } | undefined;
     return run ?? { id: null, status: null };
   }
 

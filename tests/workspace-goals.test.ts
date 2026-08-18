@@ -300,6 +300,41 @@ describe("Workspace Goal Roadmap execution", () => {
     } finally { store.close(); }
   });
 
+  it("does not resurrect an older blocked TaskRun after a newer guided task takes over", () => {
+    const store = new Store(":memory:");
+    try {
+      const { workspace, goals, goal } = createApprovedGoal(store);
+      addApprovedRoadmap(goals, goal.id);
+      const blocked = store.createRun(workspace.id, "blocked earlier task");
+      goals.attachRun(blocked.id);
+      store.transitionRun(blocked.id, ["running"], "blocked", "run.blocked", { reason: "external dependency" }, "blocked", blocked.attempt);
+      goals.recordRunOutcome(blocked.id);
+      expect(goals.get(goal.id)).toMatchObject({ currentRunId: blocked.id, nextAction: { kind: "resolve_problem" } });
+
+      const replacement = store.createRun(workspace.id, "new independent task");
+      goals.attachRun(replacement.id);
+      expect(goals.get(goal.id)).toMatchObject({ currentRunId: replacement.id, nextAction: { kind: "view_running_task" } });
+
+      // A duplicate or delayed projection of the older outcome must not steal
+      // Goal attention back from the newer TaskRun.
+      goals.recordRunOutcome(blocked.id);
+      expect(goals.get(goal.id)?.currentRunId).toBe(replacement.id);
+
+      store.transitionRun(replacement.id, ["running"], "completed", "run.completed", {}, "done", replacement.attempt);
+      goals.recordRunOutcome(replacement.id);
+      expect(store.getRun(blocked.id)).toMatchObject({ status: "blocked" });
+      expect(goals.get(goal.id)).toMatchObject({ currentRunId: null, nextAction: { kind: "run_roadmap_item" } });
+
+      expect(() => goals.decide({
+        goalId: goal.id,
+        targetRevisionId: goal.definition!.id,
+        targetHash: goal.definition!.contentHash,
+        kind: "pause",
+        actorId: "user",
+      })).not.toThrow();
+    } finally { store.close(); }
+  });
+
   it("rejects fake evidence, cross-criterion overreach, and arbitrary artifact URIs", () => {
     const store = new Store(":memory:");
     try {

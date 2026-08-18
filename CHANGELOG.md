@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## [0.8.8] - 2026-08-18
+
+### Workspace Goal continuity
+
+- Kept a blocked or interrupted TaskRun as the Workspace Goal's active blocker only while it still owns the Goal's current-run selection. A newer guided TaskRun now takes over that selection without rewriting the earlier Run's durable status or audit history.
+- Prevented delayed or duplicate outcome projection from resurrecting an older blocked TaskRun after a newer TaskRun completes, so the Goal can continue, pause, or be revised while the earlier Run remains available for explicit resume.
+
+### Compatibility and upgrade
+
+- No API, SQLite schema, Memory schema, or state-protocol changes are included. There are no breaking changes and no data migration is required; deploy the matching `0.8.8` Core, Web Console, ABI, and Core Client artifacts.
+
 ## [0.8.7] - 2026-08-18
 
 ### Web Console coherence
