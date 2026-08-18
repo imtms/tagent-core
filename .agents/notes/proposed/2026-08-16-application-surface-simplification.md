@@ -27,14 +27,16 @@ Keep one process, one SQLite connection and Unit of Work, and the existing domai
 - `App.tsx` delegates workspace/session/inbox, run/stream/transcript, and presentation/preferences transitions to testable state modules.
 - Stream snapshots and SSE deltas have one explicit ordering authority.
 - Memory administration uses cursor paging and loads Cold bodies on demand.
-- Duplicate legacy CSS selectors are removed or isolated by explicit cascade layers.
+- Layout mechanics and visual styling have separate cascade owners; dead lower-layer declarations and raw component colors are rejected.
 - Focused type, lint, architecture, and behavior checks pass without requiring unrelated release-host provisioning.
 
-Current implementation: shipped slices now move Workspace Goal transitions and evidence authorization into Governance/application code, route every Goal workflow through a typed Core application port, and keep HTTP as transport composition. SQLite owns the connection and Unit of Work while bounded Workspace Goal, Workspace Goal operation-receipt, Skill, Transcript, and Session/Message repositories own their aggregate SQL.
+**Current progress.**
 
-The Web console now pages Memory records and topic descriptors with bounded keyset cursors, loads Cold bodies and out-of-page recall cards on demand, isolates legacy/design/feature CSS with explicit cascade layers, and delegates presentation persistence, Session Inbox mutations, Run-view state transitions, plus live Workspace/SSE ordering to focused modules. Memory overview, observability, recall, and catalog rendering are separated from the panel's data orchestration. The Inbox controller rejects mutation responses after a Workspace switch. The live coordinator rejects stale same-session generations, treats recent SSE activity as authoritative, pauses polling while hidden, and permits full snapshot recovery only after stream staleness or disconnect.
-
-This record remains proposed because `App.tsx` still owns the detailed SSE orchestration and a large rendering surface, while `Store` still contains Submission, TaskRun-command, Evidence, and other aggregates that should be extracted incrementally. Those remaining extractions should preserve the current single connection and avoid a mechanical reducer or repository rewrite.
+- Workspace Goal transitions and evidence authorization now live behind Governance/application ports; HTTP only composes the typed transport boundary.
+- SQLite still owns one connection and Unit of Work, while bounded Workspace Goal, operation-receipt, Skill, Transcript, and Session/Message repositories own their aggregate SQL.
+- The Web console delegates Session lifecycle and execution preferences, presentation persistence, Session Inbox mutations, Run-view state, TaskRun input/approval/retry operations, Workspace submission orchestration, live Workspace/SSE ordering, paged conversation history, Memory annotation polling, and per-Workspace composer behavior to focused modules. Async operations carry Workspace-scoped authority; Session preferences, conversation history, and submissions reject an obsolete generation after an A→B→A switch. Memory uses bounded cursor paging and loads Cold bodies on demand.
+- Layout, design, and Goal feature CSS have explicit cascade owners. The durable color, geometry, interaction, and visual-QA contract belongs to `docs/WEB_CONSOLE_DESIGN.md` and its executable Web style checks instead of being duplicated in this decision record.
+- This record remains proposed because `App.tsx` still composes a large rendering surface, while `Store` still contains Submission, TaskRun-command, Evidence, and other aggregates. Those remaining extractions must preserve coherent state ownership and the single connection rather than becoming a mechanical component or repository rewrite.
 
 ## Risks
 

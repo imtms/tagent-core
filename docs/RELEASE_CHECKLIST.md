@@ -30,10 +30,11 @@ git diff --check
 ```
 
 - [ ] All commands exit 0.
-- [ ] No generated `*.tsbuildinfo`, database, WAL/SHM, secret, log, or release archive is tracked.
+- [ ] No generated `*.tsbuildinfo`, database, WAL/SHM, secret, log, release archive, or local `runtime/activation.json` Host state is tracked.
 - [ ] Architecture tests confirm the 13-workspace DAG, package exports, API-only Core, and Web dependency boundary.
 - [ ] `pi-coding-agent` is absent from source, manifests, lockfile, release archive and `npm ls`; production `pi-agent-core`/`pi-ai` imports exist only in `adapters/runtime-pi`.
 - [ ] `.agents` decision records pass `npm run check:agents`, have one owner per non-trivial decision, and match the shipped paths and verification commands.
+- [ ] Maintained documentation passes `npm run check:docs`; every `docs/*.md` contract is indexed exactly once and all maintained local links resolve.
 - [ ] AgentHarness runtime contracts cover quiescent asynchronous teardown, required cancellation ownership, transcript-invisible retry/fallback, provider `Retry-After`, steering/follow-up during retry and compaction, abort queue audit, structured tool failures, current-turn context preservation, provider idle timeout, threshold compaction and context-overflow recovery.
 - [ ] Scripted wire-fault tests cover reset-before-headers, partial reset, missing `[DONE]`, malformed SSE, empty completion, rate-limit windows, request identity, and failed-partial isolation; fixed-seed state-machine properties remain reproducible.
 - [ ] `npm run benchmark:compaction` reports full exact-fact literal recall within its checked bounded-cost threshold; its synthetic-corpus limitations remain documented.
@@ -96,6 +97,8 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] The real provider harness and canonical fixture suite pass; no Fake Core or Gateway transport simulation has been moved into Core.
 - [ ] `scripts/gateway-readiness-probe.mjs` exits 0 with `ready=true` and no reasons.
 - [ ] Web is served from its independent artifact and targets the Gateway/Core origin; Core serves no static Web content.
+- [ ] The Web style gate confirms the canonical four-file entrypoint, named cascade ownership, semantic light/dark colors, shared visual scales, boot-theme parity, live selectors, and no shadowed declarations.
+- [ ] Workspace sidebar/switcher, composer and live Run surfaces, Skills, keyboard shortcuts, Workspace Goals, and Memory were rendered in desktop light/dark and 390px mobile light/dark with no horizontal overflow.
 - [ ] Web Skills center upload/drag-and-drop, edit/delete, multi-select Workspace references, empty/loading/error states, keyboard focus, light/dark theme, and mobile-width states were rendered and checked.
 - [ ] The Gate selector is visible above the composer, retains its per-Workspace setting, and renders correctly in light/dark themes and mobile widths; Run detail explains the frozen profile.
 

@@ -63,6 +63,30 @@ export function runViewForStartedRun(current: RunViewState, run: TaskRun): RunVi
   };
 }
 
+export function runViewForResumedRun(current: RunViewState, run: TaskRun): RunViewState {
+  return {
+    ...current,
+    activeRun: run,
+    selectedRun: run,
+    runs: current.runs.map((item) => item.id === run.id ? run : item),
+    events: [],
+    streaming: "",
+    liveThinking: "",
+  };
+}
+
+export function runViewForResolvedRuns(current: RunViewState, resolvedRuns: TaskRun[], resetLiveState: boolean): RunViewState {
+  const replacements = new Map(resolvedRuns.map((run) => [run.id, run]));
+  const knownIds = new Set(current.runs.map((run) => run.id));
+  return {
+    ...current,
+    activeRun: replacements.get(current.activeRun?.id ?? "") ?? current.activeRun,
+    selectedRun: replacements.get(current.selectedRun?.id ?? "") ?? current.selectedRun,
+    runs: [...resolvedRuns.filter((run) => !knownIds.has(run.id)), ...current.runs.map((run) => replacements.get(run.id) ?? run)],
+    ...(resetLiveState ? { events: [], streaming: "", liveThinking: "" } : {}),
+  };
+}
+
 export function useRunViewState() {
   const [state, setState] = useState<RunViewState>(initialRunViewState);
   const activeRunIdRef = useRef("");
@@ -116,6 +140,14 @@ export function useRunViewState() {
     setState((current) => runViewForStartedRun(current, run));
   }, []);
 
+  const resumeRun = useCallback((run: TaskRun) => {
+    setState((current) => runViewForResumedRun(current, run));
+  }, []);
+
+  const resolveRuns = useCallback((runs: TaskRun[], resetLiveState: boolean) => {
+    setState((current) => runViewForResolvedRuns(current, runs, resetLiveState));
+  }, []);
+
   const openRun = useCallback((run: TaskRun, transcript: TranscriptItem[], after: number) => {
     transcriptRunIdRef.current = run.id;
     transcriptAfterRef.current = after;
@@ -142,6 +174,8 @@ export function useRunViewState() {
     applyWorkspaceSnapshot,
     resetWorkspace,
     startRun,
+    resumeRun,
+    resolveRuns,
     openRun,
   };
 }

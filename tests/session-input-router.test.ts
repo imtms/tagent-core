@@ -67,9 +67,10 @@ describe("SessionInputRouter", async () => {
     expect(result.objectives).toHaveLength(2);
     expect(result.objectives.every((item) => item.timing === "current")).toBe(true);
     expect(result.intent).toBe("new_task");
+    expect(result.reason).toContain("2 semantic objectives");
   });
   it("classifies lightweight discussion and clarification turns", async () => {
-    expect(await router.analyze("为什么需要 completion gate？")).toMatchObject({ intent: "discussion", priority: 350 });
+    expect(await router.analyze("为什么需要 completion gate？")).toMatchObject({ intent: "discussion", priority: 350, reason: expect.stringContaining("1 semantic objective into") });
     expect(await router.analyze("刚才具体哪个路径错了？")).toMatchObject({ intent: "clarification", priority: 350 });
   });
   it("classifies non-programming deliveries by execution rather than topic keywords", async () => {

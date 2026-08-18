@@ -16,4 +16,5 @@ tmp-*.png
 
 # Runtime and agent working tree
 /workspace/
+/runtime/
 .omx/

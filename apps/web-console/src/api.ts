@@ -29,7 +29,7 @@ async function decodeEventConsumerClaim(payload: unknown): Promise<EventConsumer
 
 function sessionView(value: {
   id: string; title: string; modelId: string; reasoningEffort: Session["reasoningEffort"];
-  createdAt: string; updatedAt: string; latestTaskRunStatus: string | null; latestTaskRunPhase: string | null;
+  createdAt: string; updatedAt: string; latestTaskRunStatus: Session["latestRunStatus"]; latestTaskRunPhase: Session["latestRunPhase"];
 }): Session {
   return {
     id: value.id, title: value.title, modelId: value.modelId, reasoningEffort: value.reasoningEffort,

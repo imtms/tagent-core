@@ -32,7 +32,7 @@ export interface CoreHostDrainedMessage {
   readonly writerFence: number;
 }
 
-export interface CoreHostHeartbeatMessage {
+interface CoreHostHeartbeatMessage {
   readonly type: "HEARTBEAT";
   readonly protocolVersion: typeof CORE_HOST_PROTOCOL_VERSION;
   readonly generationId: string;
@@ -41,7 +41,7 @@ export interface CoreHostHeartbeatMessage {
   readonly sequence: number;
 }
 
-export type CoreHostStatusActivationPhase =
+type CoreHostStatusActivationPhase =
   | ""
   | "validating"
   | "draining"

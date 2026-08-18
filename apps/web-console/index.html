@@ -3,35 +3,37 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f5f4f2" />
+    <meta name="theme-color" content="#f8f8f7" data-light="#f8f8f7" data-dark="#10100f" />
     <script>
       try {
         const saved = localStorage.getItem("tagent.theme");
         const theme = saved === "light" || saved === "dark" ? saved : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
         document.documentElement.dataset.theme = theme;
         document.documentElement.style.colorScheme = theme;
-        document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#171715" : "#f5f4f2");
+        const themeColor = document.querySelector('meta[name="theme-color"]');
+        const nextThemeColor = theme === "dark" ? themeColor?.dataset.dark : themeColor?.dataset.light;
+        if (nextThemeColor) themeColor.setAttribute("content", nextThemeColor);
       } catch {}
     </script>
     <style>
       :root {
-        --boot-surface: oklch(0.994 0.001 95);
-        --boot-muted: oklch(0.958 0.002 95);
-        --boot-raised: oklch(1 0 0);
-        --boot-line: oklch(0.875 0.004 95);
-        --boot-ink: oklch(0.18 0.008 95);
-        --boot-copy: oklch(0.51 0.007 95);
-        --boot-mark-bg: var(--boot-ink);
-        --boot-mark-fg: var(--boot-raised);
+        --boot-surface: oklch(0.995 0.001 95);
+        --boot-muted: oklch(0.969 0.0015 95);
+        --boot-raised: oklch(0.999 0.0005 95);
+        --boot-line: oklch(0.18 0.004 95 / 10%);
+        --boot-ink: oklch(0.17 0.006 95);
+        --boot-copy: oklch(0.5 0.005 95);
+        --boot-mark-bg: oklch(0.17 0.006 95);
+        --boot-mark-fg: oklch(0.985 0.004 150);
       }
       :root[data-theme="dark"] {
         --boot-surface: oklch(0.178 0.003 95);
         --boot-muted: oklch(0.165 0.003 95);
         --boot-raised: oklch(0.205 0.004 95);
-        --boot-line: oklch(0.285 0.005 95);
+        --boot-line: oklch(1 0 0 / 10%);
         --boot-ink: oklch(0.955 0.004 95);
         --boot-copy: oklch(0.66 0.006 95);
-        --boot-mark-bg: oklch(0.71 0.105 155);
+        --boot-mark-bg: oklch(0.69 0.082 155);
         --boot-mark-fg: oklch(0.15 0.02 155);
       }
       html, body, #root { width: 100%; height: 100%; margin: 0; }

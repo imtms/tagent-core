@@ -7,6 +7,7 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
+import { ICON_SIZE } from "./icon-size";
 import {
   api,
   type CaptureJob,
@@ -154,6 +155,11 @@ export function MemoryPanel({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+  useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(""), 4_500);
+    return () => window.clearTimeout(timer);
+  }, [message]);
 
   const filteredRecords = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -399,6 +405,12 @@ export function MemoryPanel({
     }
   }
 
+  const detailOpen = Boolean(selectedRecord || selectedTopic);
+  const hasCatalogData = records.length > 0 || topics.length > 0;
+  const hasMemoryData = hasCatalogData || core !== null;
+  const catalogHasMatches = filteredRecords.length > 0 || filteredTopics.length > 0 || hasMoreRecords || hasMoreTopics;
+  const initialLoading = status === null && busy;
+
   return (
     <div
       className="memory-overlay"
@@ -414,7 +426,7 @@ export function MemoryPanel({
       <section className="memory-center">
         <header className="memory-header">
           <div className="memory-heading-icon">
-            <BrainCircuit size={21} />
+            <BrainCircuit size={ICON_SIZE.xl} />
           </div>
           <div>
             <span className="eyebrow">Long-term memory</span>
@@ -424,111 +436,112 @@ export function MemoryPanel({
             </p>
           </div>
           <div className="memory-header-actions">
-            <span className="memory-live">
-              <span />
-              Enabled
-            </span>
             <button
               className="icon-button"
               onClick={() => void refresh()}
               aria-label="Refresh memory"
             >
-              <RefreshCw size={17} className={busy ? "spin" : ""} />
+              <RefreshCw size={ICON_SIZE.lg} className={busy ? "spin" : ""} />
             </button>
             <button
               className="icon-button"
               onClick={onClose}
               aria-label="Close memory center"
             >
-              <X size={18} />
+              <X size={ICON_SIZE.lg} />
             </button>
           </div>
         </header>
-        <div className="memory-toolbar">
-          <form
-            className="memory-search"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void searchMemory();
-            }}
-          >
-            <Search size={16} />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search facts, preferences, episodes, procedures or topics"
-            />
-            <button type="submit">Recall</button>
-          </form>
-          <button onClick={() => void runReindex()}>
-            <RefreshCw size={14} /> Reindex
-          </button>
-          <button
+        <div className={`memory-toolbar ${hasCatalogData ? "" : "empty-catalog"}`}>
+          {hasCatalogData ? <form
+              className="memory-search"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void searchMemory();
+              }}
+            >
+              <Search size={ICON_SIZE.md} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search facts, preferences, episodes, procedures or topics"
+              />
+              <button type="submit">Recall</button>
+            </form> : <div className="memory-toolbar-context">
+              <strong>{scope.id}</strong>
+              <small>{runtime.memoryBackend ?? "memory"} metadata · {runtime.memoryColdBackend ?? "local"} Cold</small>
+            </div>}
+          {hasMemoryData && <button
             className="memory-primary"
             onClick={() => setCaptureOpen(true)}
           >
-            <Plus size={16} />
+            <Plus size={ICON_SIZE.md} />
             Add memory
-          </button>
+          </button>}
         </div>
-        {error && <div className="memory-alert error">{error}</div>}
-        {message && <div className="memory-alert success">{message}</div>}
-        <div className="memory-content">
-          <MemoryOverview
-            scope={scope}
-            runtime={runtime}
-            status={status}
-            kind={kind}
-            onKindChange={setKind}
-            records={records}
-            topics={topics}
-          />
-          <main className="memory-browser">
-            <MemoryRecallResults
-              results={results}
-              query={query}
-              onClear={() => setResults(null)}
-              onOpenRecord={(recordId) => void openRecord(recordId)}
-              onSelectTopic={(topic) => {
-                setSelectedRecord(null);
-                setSelectedTopic(topic);
-              }}
-            />
-            <MemoryCoreProjection
-              core={core}
-              coreText={coreText}
-              onCoreTextChange={setCoreText}
-              onGenerate={() => void generateCore()}
-              onSave={() => void saveCore()}
-            />
-            <MemoryJobLists reindexJobs={reindexJobs} jobs={jobs} />
-            <MemoryCatalog
-              records={filteredRecords}
-              topics={filteredTopics}
-              selectedRecordId={selectedRecord?.id ?? ""}
-              selectedTopicId={selectedTopic?.descriptor.topicId ?? ""}
-              onOpenRecord={(recordId) => void openRecord(recordId)}
-              onOpenTopic={(topicId) => void openTopic(topicId)}
-              hasMoreRecords={hasMoreRecords}
-              loadingMoreRecords={loadingMoreRecords}
-              onLoadMoreRecords={() => void loadMoreRecords()}
-              hasMoreTopics={hasMoreTopics}
-              loadingMoreTopics={loadingMoreTopics}
-              onLoadMoreTopics={() => void loadMoreTopics()}
-            />
+        {error && <div className="memory-alert error" role="alert">{error}</div>}
+        {message && <div className="memory-alert success" role="status">{message}</div>}
+        <div className={`memory-content ${detailOpen ? "" : "detail-unavailable"} ${hasCatalogData ? "" : "empty-catalog"}`}>
+          {hasCatalogData && <MemoryOverview
+              scope={scope}
+              runtime={runtime}
+              status={status}
+              kind={kind}
+              onKindChange={setKind}
+              records={records}
+              topics={topics}
+            />}
+          <main className={`memory-browser ${hasCatalogData ? "" : "empty-catalog"}`}>
+            {initialLoading ? <div className="memory-loading" role="status" aria-label="Loading memory"><span /><span /><span /></div> : !hasMemoryData ? <>
+              <section className="memory-empty memory-empty-catalog">
+                <BrainCircuit size={ICON_SIZE.xl} />
+                <strong>No durable memories yet</strong>
+                <p>Add a stable fact, preference, event or procedure. Search and filters appear after the first memory is stored.</p>
+                <button className="memory-primary" onClick={() => setCaptureOpen(true)}><Plus size={ICON_SIZE.sm} />Add first memory</button>
+              </section>
+              <MemoryJobLists reindexJobs={reindexJobs} jobs={jobs} busy={busy} onReindex={() => void runReindex()} />
+            </> : <>
+              <MemoryRecallResults
+                results={results}
+                query={query}
+                onClear={() => setResults(null)}
+                onOpenRecord={(recordId) => void openRecord(recordId)}
+                onSelectTopic={(topic) => {
+                  setSelectedRecord(null);
+                  setSelectedTopic(topic);
+                }}
+              />
+              {catalogHasMatches ? <MemoryCatalog
+                  records={filteredRecords}
+                  topics={filteredTopics}
+                  selectedRecordId={selectedRecord?.id ?? ""}
+                  selectedTopicId={selectedTopic?.descriptor.topicId ?? ""}
+                  onOpenRecord={(recordId) => void openRecord(recordId)}
+                  onOpenTopic={(topicId) => void openTopic(topicId)}
+                  hasMoreRecords={hasMoreRecords}
+                  loadingMoreRecords={loadingMoreRecords}
+                  onLoadMoreRecords={() => void loadMoreRecords()}
+                  hasMoreTopics={hasMoreTopics}
+                  loadingMoreTopics={loadingMoreTopics}
+                  onLoadMoreTopics={() => void loadMoreTopics()}
+                /> : <section className="memory-empty compact">
+                  <Search size={ICON_SIZE.lg} />
+                  <strong>No catalog matches</strong>
+                  <p>Clear the search phrase or choose another memory kind.</p>
+                  <button onClick={() => { setQuery(""); setKind("all"); setResults(null); }}>Clear filters</button>
+                </section>}
+              <MemoryCoreProjection
+                core={core}
+                coreText={coreText}
+                onCoreTextChange={setCoreText}
+                onGenerate={() => void generateCore()}
+                onSave={() => void saveCore()}
+              />
+              <MemoryJobLists reindexJobs={reindexJobs} jobs={jobs} busy={busy} onReindex={() => void runReindex()} />
+            </>}
           </main>
-          <aside
-            className={`memory-detail ${selectedRecord || selectedTopic ? "open" : ""}`}
-          >
-            {!selectedRecord && !selectedTopic ? (
-              <div className="memory-detail-empty">
-                <BrainCircuit size={24} />
-                <strong>Select a memory</strong>
-                <p>
-                  Review provenance, confidence, topic links and Cold content.
-                </p>
-              </div>
-            ) : selectedRecord ? (
+          {detailOpen && <aside className="memory-detail open">
+            {selectedRecord ? (
               <RecordDetail
                 record={selectedRecord}
                 onForget={() => void forgetRecord(selectedRecord)}
@@ -541,7 +554,7 @@ export function MemoryPanel({
                 onForget={() => void forgetTopic(selectedTopic)}
               />
             ) : null}
-          </aside>
+          </aside>}
         </div>
       </section>
       {captureOpen && (
@@ -562,7 +575,7 @@ export function MemoryPanel({
                 onClick={() => setCaptureOpen(false)}
                 aria-label="Close add memory"
               >
-                <X size={17} />
+                <X size={ICON_SIZE.lg} />
               </button>
             </header>
             <p>
@@ -578,7 +591,7 @@ export function MemoryPanel({
             />
             <footer>
               <span>
-                <ShieldCheck size={14} />
+                <ShieldCheck size={ICON_SIZE.sm} />
                 Scope: {scope.id}
               </span>
               <div>

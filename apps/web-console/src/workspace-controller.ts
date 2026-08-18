@@ -1,5 +1,5 @@
 import { api, drainTranscriptView, type Message, type SessionInboxItem, type TaskRun, type TaskRunSummary, type TranscriptItem } from "./api";
-import { preloadMarkdown } from "./LazyMarkdown";
+import { preloadMarkdown } from "./markdown-loader";
 import { findActiveRun } from "./run-state";
 
 export type WorkspaceSnapshot = {

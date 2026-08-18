@@ -78,7 +78,3 @@ export function profileRevision(value: unknown): number {
   const number = Number(value);
   return Number.isSafeInteger(number) && number > 0 ? number : 1;
 }
-
-export function arrayCount(value: unknown): number {
-  return Array.isArray(value) ? value.length : 0;
-}

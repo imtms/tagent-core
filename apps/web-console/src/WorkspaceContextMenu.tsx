@@ -2,9 +2,10 @@ import { useEffect, useRef, type CSSProperties, type KeyboardEvent } from "react
 import { Pencil, Pin } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { Session } from "./api";
+import { ICON_SIZE } from "./icon-size";
 
 export function WorkspaceContextMenu({
-  session,
+  workspace,
   pinned,
   currentEmoji,
   emojis,
@@ -14,7 +15,7 @@ export function WorkspaceContextMenu({
   onRename,
   onChooseEmoji,
 }: {
-  session: Session;
+  workspace: Session;
   pinned: boolean;
   currentEmoji: string;
   emojis: readonly string[];
@@ -53,11 +54,11 @@ export function WorkspaceContextMenu({
   }
 
   return createPortal(<>
-    <div className="session-menu-scrim" aria-hidden="true" onMouseDown={onClose} onContextMenu={(event) => { event.preventDefault(); onClose(); }} />
-    <div ref={menuRef} className="session-context-menu" role="menu" aria-label={`Actions for ${session.title}`} style={position} onKeyDown={handleKeyDown}>
-      <button type="button" role="menuitem" onClick={() => { onTogglePinned(); onClose(); }}><Pin size={13} /><span>{pinned ? "Unpin workspace" : "Pin workspace"}</span></button>
-      <button type="button" role="menuitem" onClick={() => { restoreFocusRef.current = false; onRename(); onClose(); }}><Pencil size={13} /><span>Rename workspace</span></button>
-      <div className="session-emoji-options" role="group" aria-label="Workspace icon"><span>Icon</span><div>{emojis.map((emoji) => <button type="button" role="menuitemradio" aria-label={`Use ${emoji} for ${session.title}`} aria-checked={currentEmoji === emoji} key={emoji} onClick={() => { onChooseEmoji(emoji); onClose(); }}>{emoji}</button>)}</div></div>
+    <div className="workspace-context-menu-scrim" aria-hidden="true" onMouseDown={onClose} onContextMenu={(event) => { event.preventDefault(); onClose(); }} />
+    <div ref={menuRef} className="workspace-context-menu" role="menu" aria-label={`Actions for ${workspace.title}`} style={position} onKeyDown={handleKeyDown}>
+      <button type="button" role="menuitem" onClick={() => { onTogglePinned(); onClose(); }}><Pin size={ICON_SIZE.sm} /><span>{pinned ? "Unpin workspace" : "Pin workspace"}</span></button>
+      <button type="button" role="menuitem" onClick={() => { restoreFocusRef.current = false; onRename(); onClose(); }}><Pencil size={ICON_SIZE.sm} /><span>Rename workspace</span></button>
+      <div className="workspace-avatar-options" role="group" aria-label="Workspace icon"><span>Icon</span><div>{emojis.map((emoji) => <button type="button" role="menuitemradio" aria-label={`Use ${emoji} for ${workspace.title}`} aria-checked={currentEmoji === emoji} key={emoji} onClick={() => { onChooseEmoji(emoji); onClose(); }}>{emoji}</button>)}</div></div>
     </div>
   </>, document.body);
 }

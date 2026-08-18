@@ -14,7 +14,6 @@ This directory contains the maintained contracts for the current TAgent Core mai
 - [Naming conventions](NAMING_CONVENTIONS.md) — canonical domain and wire terminology.
 - [Workspace Goals](WORKSPACE_GOALS.md) — Workspace direction, user-approved Goal Roadmaps, guided TaskRuns, verified evidence, and explicit closure.
 - [Skills center](SKILLS.md) — shared upload/edit/delete lifecycle, per-Workspace references, multi-Skill TaskRun snapshots, native Pi execution, and security limits.
-- [Runtime](RUNTIME.md) — Core-managed Skill snapshots, explicit Pi Skill execution, cancellation ownership, provider recovery, compaction, and bounded durable-history recall.
 
 ## ABI and HTTP
 
@@ -35,6 +34,7 @@ This directory contains the maintained contracts for the current TAgent Core mai
 
 - [Security boundaries](SECURITY_BOUNDARIES.md) — Core authentication, principals, resource scopes, workspace, and writer authority.
 - [Web Console security](WEB_CONSOLE_SECURITY.md) — separate origin, CORS, OIDC hosting boundary, and browser storage.
+- [Web Console design system](WEB_CONSOLE_DESIGN.md) — cascade ownership, semantic tokens, Hermit/Linear visual rules, style gates, and required visual QA.
 - [Deployment and Gateway](DEPLOYMENT_AND_GATEWAY.md) — stable Host/Generation deployment, staging, activation, configuration, backup, and rollback.
 - [Gateway handoff status](GATEWAY_HANDOFF_STATUS.md) — evidence-based P0/P1/P2 implementation and acceptance gaps against the Gateway team's handoff.
 - [Gateway production readiness](GATEWAY_PRODUCTION_READINESS.md) — pre-deployment verification and probes.
@@ -47,3 +47,5 @@ This directory contains the maintained contracts for the current TAgent Core mai
 
 - [Release checklist](RELEASE_CHECKLIST.md) — toolchain, tests, audits, current-schema checks, artifacts, and publication.
 - [Changelog](../CHANGELOG.md) — release-level changes and deployment or breaking notices.
+
+`npm run check:docs` verifies that every maintained document in this directory appears exactly once above and that local links from maintained repository documentation resolve.

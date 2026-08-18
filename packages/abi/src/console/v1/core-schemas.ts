@@ -135,6 +135,7 @@ export type ConsoleContextManifestItem = Static<typeof ConsoleContextManifestIte
 
 export const ConsoleContextManifestSchema = Type.Object({
   id: Type.String(),
+  runId: Type.String(),
   source: Type.Union([Type.Literal("session"), Type.Literal("transcript")]),
   attempt: Type.Number(),
   manifestHash: Type.String(),

@@ -1,6 +1,6 @@
 {
   "name": "@tagent/web-console",
-  "version": "0.8.6",
+  "version": "0.8.7",
   "private": true,
   "type": "module",
   "sideEffects": [
@@ -13,13 +13,13 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
-    "check": "tsc --noEmit",
+    "check": "node scripts/check-style-tokens.mjs && node scripts/check-react-refresh-boundaries.mjs && tsc --noEmit",
     "preview": "vite preview --host 0.0.0.0",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@tagent/abi": "0.8.6",
-    "@tagent/core-client": "0.8.6",
+    "@tagent/abi": "0.8.7",
+    "@tagent/core-client": "0.8.7",
     "highlight.js": "^11.11.1",
     "lucide-react": "0.553.0",
     "markdown-it": "^14.3.0",
@@ -31,6 +31,7 @@
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "@vitejs/plugin-react": "5.1.1",
+    "postcss": "8.5.25",
     "typescript": "5.9.3",
     "vite": "^7.3.6"
   },

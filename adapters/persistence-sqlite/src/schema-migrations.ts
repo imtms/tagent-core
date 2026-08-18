@@ -112,7 +112,7 @@ function validateJournal(db: Database.Database): void {
   }
 }
 
-export function assertCurrentSqliteSchema(db: Database.Database): void {
+function assertCurrentSqliteSchema(db: Database.Database): void {
   assertMarker(db);
   const version = userVersion(db);
   if (version !== CURRENT_SCHEMA_VERSION) {

@@ -4,8 +4,8 @@ import {
   storedBoolean,
   storedNumberRecord,
   storedStringArray,
+  storedStringRecord,
   storedTheme,
-  storedWorkspaceEmojis,
   type Theme,
 } from "./workspace-preferences";
 
@@ -15,48 +15,54 @@ function persist(key: string, value: unknown): void {
   } catch { /* Browser storage is optional. */ }
 }
 
-export function mergeSessionActivityBaseline(
+function applyThemeColor(theme: Theme): void {
+  const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  const nextThemeColor = theme === "dark" ? themeColor?.dataset.dark : themeColor?.dataset.light;
+  if (nextThemeColor) themeColor?.setAttribute("content", nextThemeColor);
+}
+
+export function mergeWorkspaceActivityBaseline(
   current: Record<string, number>,
-  sessions: readonly Session[],
+  workspaces: readonly Session[],
 ): Record<string, number> {
   let changed = false;
   const next = { ...current };
-  for (const session of sessions) {
-    if (next[session.id] !== undefined) continue;
-    next[session.id] = session.updatedAt;
+  for (const workspace of workspaces) {
+    if (next[workspace.id] !== undefined) continue;
+    next[workspace.id] = workspace.updatedAt;
     changed = true;
   }
   return changed ? next : current;
 }
 
-export function useWorkspacePresentation(sessions: readonly Session[]) {
+export function useWorkspacePresentation(workspaces: readonly Session[]) {
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [workspaceSwitcherOpen, setWorkspaceSwitcherOpen] = useState(false);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
-  const [sessionSearch, setSessionSearch] = useState("");
-  const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(() => storedStringArray("tagent.pinned-workspaces"));
-  const [lastSeenBySession, setLastSeenBySession] = useState<Record<string, number>>(() => storedNumberRecord("tagent.workspace-last-seen"));
-  const [sessionActivityBaseline, setSessionActivityBaseline] = useState<Record<string, number>>({});
+  const [workspaceSearch, setWorkspaceSearch] = useState("");
+  const [pinnedWorkspaceIds, setPinnedWorkspaceIds] = useState<string[]>(() => storedStringArray("tagent.pinned-workspaces"));
+  const [lastSeenByWorkspace, setLastSeenByWorkspace] = useState<Record<string, number>>(() => storedNumberRecord("tagent.workspace-last-seen"));
+  const [workspaceActivityBaseline, setWorkspaceActivityBaseline] = useState<Record<string, number>>({});
   const [viewingEarlierHistory, setViewingEarlierHistory] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(() => storedBoolean("tagent.left-rail-collapsed"));
   const [rightCollapsed, setRightCollapsed] = useState(() => storedBoolean("tagent.right-panel-collapsed", true));
   const [theme, setTheme] = useState<Theme>(storedTheme);
-  const [workspaceEmojiById, setWorkspaceEmojiById] = useState<Record<string, string>>(storedWorkspaceEmojis);
-  const [sessionMenuId, setSessionMenuId] = useState("");
-  const [sessionMenuPosition, setSessionMenuPosition] = useState({ top: 0, left: 0 });
+  const [workspaceEmojiById, setWorkspaceEmojiById] = useState<Record<string, string>>(() => storedStringRecord("tagent.workspace-emojis"));
+  const [workspaceContextMenuId, setWorkspaceContextMenuId] = useState("");
+  const [workspaceContextMenuPosition, setWorkspaceContextMenuPosition] = useState({ top: 0, left: 0 });
 
   useEffect(() => persist("tagent.left-rail-collapsed", String(leftCollapsed)), [leftCollapsed]);
   useEffect(() => persist("tagent.right-panel-collapsed", String(rightCollapsed)), [rightCollapsed]);
   useEffect(() => persist("tagent.workspace-emojis", workspaceEmojiById), [workspaceEmojiById]);
-  useEffect(() => persist("tagent.pinned-workspaces", pinnedSessionIds), [pinnedSessionIds]);
-  useEffect(() => persist("tagent.workspace-last-seen", lastSeenBySession), [lastSeenBySession]);
-  useEffect(() => setSessionActivityBaseline((current) => mergeSessionActivityBaseline(current, sessions)), [sessions]);
+  useEffect(() => persist("tagent.pinned-workspaces", pinnedWorkspaceIds), [pinnedWorkspaceIds]);
+  useEffect(() => persist("tagent.workspace-last-seen", lastSeenByWorkspace), [lastSeenByWorkspace]);
+  useEffect(() => setWorkspaceActivityBaseline((current) => mergeWorkspaceActivityBaseline(current, workspaces)), [workspaces]);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
-    document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#171715" : "#f5f4f2");
+    applyThemeColor(theme);
     persist("tagent.theme", theme);
   }, [theme]);
 
@@ -66,16 +72,16 @@ export function useWorkspacePresentation(sessions: readonly Session[]) {
     workspaceMenuOpen, setWorkspaceMenuOpen,
     workspaceSwitcherOpen, setWorkspaceSwitcherOpen,
     shortcutHelpOpen, setShortcutHelpOpen,
-    sessionSearch, setSessionSearch,
-    pinnedSessionIds, setPinnedSessionIds,
-    lastSeenBySession, setLastSeenBySession,
-    sessionActivityBaseline,
+    workspaceSearch, setWorkspaceSearch,
+    pinnedWorkspaceIds, setPinnedWorkspaceIds,
+    lastSeenByWorkspace, setLastSeenByWorkspace,
+    workspaceActivityBaseline,
     viewingEarlierHistory, setViewingEarlierHistory,
     leftCollapsed, setLeftCollapsed,
     rightCollapsed, setRightCollapsed,
     theme, setTheme,
     workspaceEmojiById, setWorkspaceEmojiById,
-    sessionMenuId, setSessionMenuId,
-    sessionMenuPosition, setSessionMenuPosition,
+    workspaceContextMenuId, setWorkspaceContextMenuId,
+    workspaceContextMenuPosition, setWorkspaceContextMenuPosition,
   };
 }

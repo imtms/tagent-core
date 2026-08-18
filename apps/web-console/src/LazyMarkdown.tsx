@@ -1,16 +1,5 @@
 import { lazy, memo, Suspense } from "react";
-
-type MarkdownModule = typeof import("./Markdown");
-
-let markdownModulePromise: Promise<MarkdownModule> | undefined;
-
-export function preloadMarkdown(): Promise<MarkdownModule> {
-  markdownModulePromise ??= import("./Markdown").catch((cause) => {
-    markdownModulePromise = undefined;
-    throw cause;
-  });
-  return markdownModulePromise;
-}
+import { preloadMarkdown } from "./markdown-loader";
 
 const RichMarkdown = lazy(() => preloadMarkdown().then((module) => ({ default: module.Markdown })));
 

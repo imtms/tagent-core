@@ -1,5 +1,6 @@
-import { Database, Flame, ShieldCheck, Snowflake } from "lucide-react";
+import { Database, Flame, Snowflake } from "lucide-react";
 import type { MemoryKind, MemoryScope, MemoryStatusResult, RuntimeStatus, TopicDescriptor, WarmMemory } from "./api";
+import { ICON_SIZE } from "./icon-size";
 
 const kinds: Array<{ value: "all" | MemoryKind; label: string }> = [
   { value: "all", label: "All" },
@@ -28,6 +29,25 @@ export function MemoryOverview({
   records,
   topics,
 }: MemoryOverviewProps) {
+  const tiers = [
+    { key: "hot", label: "Hot", count: status?.records.hot ?? 0, detail: "active cues", icon: <Flame size={ICON_SIZE.md} /> },
+    { key: "warm", label: "Warm", count: status?.records.warm ?? 0, detail: "searchable cards", icon: <Database size={ICON_SIZE.md} /> },
+    { key: "cold", label: "Cold", count: status?.coldTopics ?? 0, detail: "full pages", icon: <Snowflake size={ICON_SIZE.md} /> },
+  ].filter((item) => item.count > 0);
+  const recordStates = [
+    { label: "Active", count: status?.records.active ?? 0 },
+    { label: "Candidate", count: status?.records.candidate ?? 0 },
+    { label: "Disputed", count: status?.records.disputed ?? 0 },
+    { label: "Topics", count: status?.topics ?? 0 },
+  ].filter((item) => item.count > 0);
+  const total = records.length + topics.length;
+  const filters = kinds.map((item) => ({
+    ...item,
+    count: item.value === "all"
+      ? total
+      : records.filter((record) => record.kind === item.value).length
+        + topics.filter((topic) => topic.kind === item.value).length,
+  })).filter((item) => item.count > 0 || item.value === kind);
   return (
     <aside className="memory-summary">
       <section className="memory-scope-card">
@@ -37,56 +57,27 @@ export function MemoryOverview({
           {runtime.memoryBackend ?? "memory"} metadata · {runtime.memoryColdBackend ?? "local"} Cold
         </small>
       </section>
-      <div className="memory-tier-grid">
-        <div>
-          <Flame size={16} />
-          <span>Hot</span>
-          <strong>{status?.records.hot ?? 0}</strong>
-          <small>active cues</small>
-        </div>
-        <div>
-          <Database size={16} />
-          <span>Warm</span>
-          <strong>{status?.records.warm ?? 0}</strong>
-          <small>searchable cards</small>
-        </div>
-        <div>
-          <Snowflake size={16} />
-          <span>Cold</span>
-          <strong>{status?.coldTopics ?? 0}</strong>
-          <small>full pages</small>
-        </div>
-      </div>
-      <section className="memory-health-card">
-        <div>
-          <ShieldCheck size={16} />
-          <strong>Policy protected</strong>
-        </div>
-        <p>Sensitive data is gated before capture, embedding, storage and injection.</p>
-        <dl>
-          <div><dt>Active</dt><dd>{status?.records.active ?? 0}</dd></div>
-          <div><dt>Candidate</dt><dd>{status?.records.candidate ?? 0}</dd></div>
-          <div><dt>Disputed</dt><dd>{status?.records.disputed ?? 0}</dd></div>
-          <div><dt>Topics</dt><dd>{status?.topics ?? 0}</dd></div>
-        </dl>
-      </section>
-      <nav className="memory-kind-filter">
-        {kinds.map((item) => (
+      {tiers.length > 0 && <div className="memory-tier-grid">{tiers.map((item) => <div key={item.key}>
+        {item.icon}
+        <span>{item.label}</span>
+        <strong>{item.count}</strong>
+        <small>{item.detail}</small>
+      </div>)}</div>}
+      {recordStates.length > 0 && <dl className="memory-health-ledger" aria-label="Memory record state">
+        {recordStates.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.count}</dd></div>)}
+      </dl>}
+      {total > 0 && <nav className="memory-kind-filter">
+        {filters.map((item) => (
           <button
             key={item.value}
             className={kind === item.value ? "active" : ""}
             onClick={() => onKindChange(item.value)}
           >
             {item.label}
-            <span>
-              {item.value === "all"
-                ? records.length + topics.length
-                : records.filter((record) => record.kind === item.value).length
-                  + topics.filter((topic) => topic.kind === item.value).length}
-            </span>
+            {item.count > 0 && <span>{item.count}</span>}
           </button>
         ))}
-      </nav>
+      </nav>}
     </aside>
   );
 }

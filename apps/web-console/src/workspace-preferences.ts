@@ -45,13 +45,6 @@ export function storedStringArray(key: string): string[] {
   } catch { return []; }
 }
 
-export function storedWorkspaceEmojis(): Record<string, string> {
-  try {
-    const parsed = JSON.parse(globalThis.localStorage?.getItem("tagent.workspace-emojis") ?? "{}");
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, string> : {};
-  } catch { return {}; }
-}
-
 export function storedTheme(): Theme {
   try {
     const saved = globalThis.localStorage?.getItem("tagent.theme");

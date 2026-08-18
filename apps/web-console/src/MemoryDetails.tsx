@@ -1,5 +1,6 @@
 import { Check, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
 import type { ColdTopic, PreferenceRecord, WarmMemory } from "./api";
+import { ICON_SIZE } from "./icon-size";
 import { Markdown } from "./LazyMarkdown";
 import { formatMemoryDate, memoryContent, memorySignal, memoryTitle } from "./memory-display";
 
@@ -19,7 +20,7 @@ export function RecordDetail({
       <header>
         <span className={`memory-kind ${record.kind}`}>{record.kind}</span>
         <button className="memory-danger" onClick={onForget}>
-          <Trash2 size={14} />
+          <Trash2 size={ICON_SIZE.sm} />
           Forget
         </button>
       </header>
@@ -27,7 +28,7 @@ export function RecordDetail({
         {record.status === "candidate" && (
           <>
             <button onClick={() => onGovern("approve")}>
-              <Check size={13} />
+              <Check size={ICON_SIZE.sm} />
               Approve
             </button>
             <button onClick={() => onGovern("reject")}>Reject</button>
@@ -35,11 +36,11 @@ export function RecordDetail({
         )}
         {record.status === "disputed" && <button onClick={() => onGovern("resolve")}>Resolve</button>}
         <button onClick={() => onFeedback("helpful")}>
-          <ThumbsUp size={13} />
+          <ThumbsUp size={ICON_SIZE.sm} />
           Helpful
         </button>
         <button onClick={() => onFeedback("harmful")}>
-          <ThumbsDown size={13} />
+          <ThumbsDown size={ICON_SIZE.sm} />
           Wrong
         </button>
       </div>
@@ -65,20 +66,20 @@ export function RecordDetail({
           <p>{(record as PreferenceRecord).applicability} · {(record as PreferenceRecord).origin}</p>
         </section>
       )}
-      <section>
+      {record.topicIds.length > 0 && <section>
         <span>Topic routes</span>
         <div className="memory-tags">
-          {record.topicIds.length ? record.topicIds.map((topic) => <code key={topic}>{topic}</code>) : <em>No topic route</em>}
+          {record.topicIds.map((topic) => <code key={topic}>{topic}</code>)}
         </div>
-      </section>
-      <section>
+      </section>}
+      {record.sourceRefs.length > 0 && <section>
         <span>Provenance</span>
         <div className="memory-source-list">
-          {record.sourceRefs.length ? record.sourceRefs.map((source, index) => (
+          {record.sourceRefs.map((source, index) => (
             <code key={`${source.sourceType}-${source.sourceId}-${index}`}>{source.sourceType}:{source.sourceId}</code>
-          )) : <em>No source reference</em>}
+          ))}
         </div>
-      </section>
+      </section>}
       <small className="memory-updated">
         Created {formatMemoryDate(record.createdAt)} · updated {formatMemoryDate(record.updatedAt)}
       </small>
@@ -92,7 +93,7 @@ export function TopicDetail({ topic, onForget }: { topic: ColdTopic; onForget: (
       <header>
         <span className="memory-kind cold">cold · {topic.descriptor.kind}</span>
         <button className="memory-danger" onClick={onForget}>
-          <Trash2 size={14} />
+          <Trash2 size={ICON_SIZE.sm} />
           Forget
         </button>
       </header>

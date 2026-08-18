@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+## [0.8.7] - 2026-08-18
+
+### Web Console coherence
+
+- Consolidated visible count grammar behind one formatter across Run, Memory, Goal, Skill, and message surfaces, removing mechanical `(s)` copy and incorrect singular labels.
+- Simplified the empty Skills center to one upload action plus its immutable-revision guarantee, removing the duplicate no-Skills placeholder row.
+- Removed the unreachable empty Audit panel and its stale `No TaskRuns` styling; the panel now exists only with real TaskRun history. Corrected the paused-input primary action to use the shared accent-contrast token and the same quiet hover/press behavior as other primary controls.
+- Removed empty Workspace group headings and zero counts, repeated `No tasks` chrome for never-run Workspaces, the unusable filter and clear action for a never-created Workspace collection, empty Memory job and catalog groups, zero-only recall and job metrics, empty Memory Topic-route and Provenance sections, the static Memory enabled badge and policy explainer, the unselected Memory detail column, the empty ungenerated Core Memory editor and save action, the duplicate empty Goal navigation rail, empty Goal Roadmap, Scope, and linked-TaskRun sections, actionless completed or cancelled Goal callouts, redundant Goal header totals, and zero-only Skills totals while retaining distinct designed collection and no-match feedback where it guides a real next action. Roadmap generation and manual creation now share the immediate Next action, and switcher results plus the bottom create action stay anchored when their optional search row is absent.
+- Removed zero-only Context Manifest selection summaries, Tool activity call totals, checkpoint positions, one-sided token breakdown values, empty Goal progress tracks, and empty Gate evaluation-history notices; single retained manifests no longer repeat their count, and per-Run token usage no longer carries a repeated implementation disclaimer.
+- Collapsed the full Gate evaluation history behind one summarized disclosure and stopped repeating equivalent terminal phase plus default first-attempt labels across Run history, summaries, and Supervisor metadata.
+- Flattened Goal evidence, Roadmap, Scope, and management surfaces into one hairline ledger while retaining the immediate Next action as the sole raised callout.
+- Flattened Run contracts, checkpoints, Supervisor and Gate evidence plus Memory recall, jobs, topics, and detail metrics into continuous hairline ledgers, with a style gate preventing those dense surfaces from regressing into nested cards.
+- Removed translucent overlay tokens and backdrop blur from navigation chrome, menus, dialogs, tooltips, and modal backdrops so elevation now uses opaque neutral surfaces, hairlines, and restrained shadows consistently.
+- Flattened the Skills catalog, Workspace model/reasoning settings, and execution timeline into shared hairline ledgers, with automated checks preventing their rows from regaining gaps, rounded cards, or independent surfaces.
+- Split operational state from the green accent across the Workspace rail and switcher, Run controls and history, Audit indicators, Memory annotations, Gate evidence, and Goal totals: running/live and active Goals now use info, completed/passed uses success, waiting/paused/blocked uses warning, failed/cancelled/interrupted uses danger, and ordinary hierarchy remains neutral. Added a style gate that rejects future semantic drift.
+- Cleared mobile drawer modal state when the layout crosses to desktop so resize or rotation cannot leave the visible workspace inert, hidden from assistive technology, or blocked by an invisible backdrop.
+- Moved Goal tone, approval notice, Markdown loading, and Markdown rendering utilities out of React component modules, restoring stable Fast Refresh boundaries and adding a check that prevents non-component value exports from returning to `.tsx` files.
+- Preserved Workspace icon customization while rendering emoji consistently in grayscale across the rail, switcher, and picker; reused the validated string-map preference parser instead of maintaining a weaker Emoji-only storage decoder.
+
+### Contract correctness
+
+- Added the missing `runId` to the Console Context Manifest ABI and covered the real Fastify response through the Core Client decoder, preventing the Web contract from drifting from persisted manifests.
+- Corrected Session input-routing diagnostics to use singular and plural objective grammar without changing routing behavior.
+
+### Maintenance
+
+- Removed the unimplemented `TAGENT_GOVERNANCE_APPROVAL_AUTHORITY` example left behind after the Governance dual-authority path was retired.
+- Consolidated repeated CSS declaration lookup in the Web style gate so its visual invariants share one media-aware parser.
+- Removed unused helper exports and narrowed Host/schema implementation types that are not part of supported package boundaries.
+- Updated the maintained API, Gateway tuple, deployment, release, and Web design documentation for the five-profile `0.8.7` contract.
+
 ## [0.8.6] - 2026-08-17
 
 ### Retired Learning subsystem
@@ -613,7 +644,7 @@
 - Upgrade Core first and allow forward migration to schema 33. If v33 preflight leaves open `migration_issues`, startup stops; do not bypass the ledger.
 - Update Gateway and client routes to `/api/v1`, then deploy the Web Console separately with its Core origin and OIDC Gateway integration.
 - Rollback to 0.1.x requires restoring the matching pre-upgrade database backup. Never run a 0.1.x binary against schema 33.
-- Follow the maintained [upgrade and rollback guide](docs/UPGRADING.md) and complete the release checklist before publishing. This changelog does not assert that a particular CI or artifact run has passed.
+- Follow the current [deployment and rollback contract](docs/DEPLOYMENT_AND_GATEWAY.md) and complete the release checklist before publishing. This changelog does not assert that a particular CI or artifact run has passed.
 
 ## [0.1.13] - 2026-08-04
 

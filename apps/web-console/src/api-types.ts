@@ -7,8 +7,8 @@ export interface Session {
   reasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   createdAt: number;
   updatedAt: number;
-  latestRunStatus: string | null;
-  latestRunPhase: string | null;
+  latestRunStatus: ConsoleV1.ConsoleTaskRun["status"] | null;
+  latestRunPhase: ConsoleV1.ConsoleTaskRun["phase"] | null;
 }
 
 export type GateProfile = "off" | "relaxed" | "strict";
@@ -52,8 +52,8 @@ export type TaskRun = ConsoleV1.ConsoleTaskRun;
 export interface TaskRunSummary {
   id: string;
   goal: string;
-  status: string;
-  phase: string;
+  status: TaskRun["status"];
+  phase: TaskRun["phase"];
   attempt: number;
   createdAt: number;
   updatedAt: number;

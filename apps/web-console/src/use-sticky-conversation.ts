@@ -4,9 +4,13 @@ import { nextConversationPinState } from "./conversation-scroll";
 const settleAfterResizeMs = 360;
 const settleFrames = 2;
 
-export function useStickyConversation(resetKey: string, activityKey: string, stageRef: RefObject<HTMLElement | null>) {
-  const viewportRef = useRef<HTMLElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
+export function useStickyConversation(
+  resetKey: string,
+  activityKey: string,
+  stageRef: RefObject<HTMLElement | null>,
+  viewportRef: RefObject<HTMLElement | null>,
+  contentRef: RefObject<HTMLDivElement | null>,
+) {
   const pinnedRef = useRef(true);
   const programmaticRef = useRef(false);
   const previousTopRef = useRef(0);
@@ -126,5 +130,5 @@ export function useStickyConversation(resetKey: string, activityKey: string, sta
     if (nextPinned !== pinnedRef.current) setPinned(nextPinned);
   }, [setPinned, writeLatest]);
 
-  return { viewportRef, contentRef, pinnedToLatest, hasNewActivity, handleScroll, jumpToLatest, pinToLatest };
+  return { pinnedToLatest, hasNewActivity, handleScroll, jumpToLatest, pinToLatest };
 }

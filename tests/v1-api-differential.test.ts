@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   CommandResponseSchema,
   ArtifactListResponseSchema,
+  ConsoleContextManifestSchema,
   CoreCapabilitiesResponseSchema,
   decodeAbi,
   ErrorEnvelopeSchema,
@@ -19,6 +20,7 @@ import {
   TaskRunInteractionsResponseSchema,
   TranscriptResponseSchema,
 } from "@tagent/abi";
+import { ConsoleDecode } from "@tagent/core-client";
 import { createApp } from "@tagent/http-fastify";
 import { createCoreApplication } from "@tagent/core-service/application";
 import { Store } from "@tagent/persistence-sqlite/store";
@@ -127,7 +129,7 @@ describe("v1 API contracts", () => {
     expect(decodeAbi(SessionSchema, decodeAbi(SuccessEnvelopeSchema, read.json()).data)).toEqual(session);
     const capabilities = decodeAbi(CoreCapabilitiesResponseSchema, (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).data;
     expect(capabilities).toMatchObject({
-      releaseVersion: "0.8.6",
+      releaseVersion: "0.8.7",
       persistenceSchemaVersion: 2,
       interactions: { approvalResolution: true, userInputSubmission: true },
       operator: { roadmapGenerationIdempotent: true },
@@ -425,6 +427,43 @@ describe("v1 API contracts", () => {
     expect(first).toMatchObject({ items: [{ sequence: 1, text: "one" }, { sequence: 2, text: "two" }], pageInfo: { nextCursor: 2, hasMore: true, limit: 2 } });
     const second = decodeAbi(TranscriptResponseSchema, (await app.inject({ method: "GET", url: `/api/v1/task-runs/${run.id}/transcript?after=${first.pageInfo.nextCursor}&limit=2` })).json()).data;
     expect(second).toMatchObject({ items: [{ sequence: 3, text: "three" }], pageInfo: { nextCursor: null, hasMore: false, limit: 2 } });
+  });
+
+  it("keeps Console Context Manifest responses aligned with the Web decoder", async () => {
+    const { app, store } = await fixture();
+    const run = store.createRun(store.createSession().id, "console context manifest");
+    store.recordContextManifest({
+      id: "console-manifest",
+      runId: run.id,
+      attempt: 1,
+      source: "session",
+      items: [{
+        kind: "user_prompt",
+        sourceId: "prompt-1",
+        selected: true,
+        reason: "current input",
+        estimatedTokens: 12,
+      }],
+      stats: { source: "session", keptTurns: 1 },
+      manifestHash: "abcdef1234567890",
+      createdAt: 10,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/console/task-runs/${run.id}/context-manifests?limit=20`,
+    });
+    expect(response.statusCode).toBe(200);
+    const payload = decodeAbi(SuccessEnvelopeSchema, response.json()).data;
+    const manifests = await ConsoleDecode.contextManifests(payload);
+
+    expect(manifests).toHaveLength(1);
+    expect(decodeAbi(ConsoleContextManifestSchema, manifests[0])).toMatchObject({
+      id: "console-manifest",
+      runId: run.id,
+      attempt: 1,
+      source: "session",
+    });
   });
 
   it("delivers a later tool result through the exclusive Transcript cursor", async () => {

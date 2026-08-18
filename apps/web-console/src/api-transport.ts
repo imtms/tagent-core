@@ -35,7 +35,7 @@ async function coreFetch(input: string, init: RequestInit = {}): Promise<Respons
   return fetch(input, { ...init, credentials: "omit", headers });
 }
 
-export const coreClient = createCoreClient({
+const coreClient = createCoreClient({
   baseUrl: configuredCoreOrigin,
   fetch: coreFetch,
 });
@@ -60,7 +60,7 @@ export function authenticatedCoreRequest(
   };
 }
 
-export async function authenticatedCoreFetch(
+async function authenticatedCoreFetch(
   pathname: string,
   init: RequestInit = {},
   options: AuthenticatedCoreRequestOptions = {},

@@ -1,8 +1,23 @@
-import { useEffect, type RefObject } from "react";
+import { useEffect, useState, type RefObject } from "react";
+
+const mobileDrawerQuery = "(max-width: 980px)";
+
+export function useMobileDrawerLayout(): boolean {
+  const [mobile, setMobile] = useState(() => globalThis.matchMedia?.(mobileDrawerQuery).matches === true);
+  useEffect(() => {
+    const media = globalThis.matchMedia?.(mobileDrawerQuery);
+    if (!media) return;
+    const sync = () => setMobile(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
+  return mobile;
+}
 
 export function useDrawerFocus(open: boolean, drawerRef: RefObject<HTMLElement | null>) {
   useEffect(() => {
-    if (!open || !globalThis.matchMedia?.("(max-width: 980px)").matches) return;
+    if (!open || !globalThis.matchMedia?.(mobileDrawerQuery).matches) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const drawer = drawerRef.current;
     const siblings = Array.from(drawer?.parentElement?.children ?? []).filter((element): element is HTMLElement => element instanceof HTMLElement && element !== drawer && !element.classList.contains("backdrop"));

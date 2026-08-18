@@ -2,107 +2,110 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Activity, ArrowRight, CornerDownLeft, Pin, Plus, Search, X } from "lucide-react";
 import type { Session } from "./api";
+import { ICON_SIZE } from "./icon-size";
+import { formatRunStatus } from "./run-state";
 import { TimeAgo } from "./TimeAgo";
 import { useModalFocus } from "./use-modal-focus";
-
-function statusLabel(session: Session): string {
-  if (!session.latestRunStatus) return "No tasks";
-  return session.latestRunStatus === "waiting_input" ? "Needs input" : session.latestRunStatus.replaceAll("_", " ");
-}
+import { workspaceEmptyState } from "./workspace-navigation";
 
 export function WorkspaceSwitcher({
   open,
-  sessions,
-  selectedSessionId,
-  pinnedSessionIds,
+  workspaces,
+  selectedWorkspaceId,
+  pinnedWorkspaceIds,
   workspaceEmojiById,
+  creating,
   onClose,
   onSelect,
   onCreate,
   onPrefetch,
 }: {
   open: boolean;
-  sessions: Session[];
-  selectedSessionId: string;
-  pinnedSessionIds: string[];
+  workspaces: Session[];
+  selectedWorkspaceId: string;
+  pinnedWorkspaceIds: string[];
   workspaceEmojiById: Record<string, string>;
+  creating: boolean;
   onClose: () => void;
-  onSelect: (session: Session) => void;
+  onSelect: (workspace: Session) => void;
   onCreate: () => void | Promise<void>;
-  onPrefetch: (sessionId: string) => void;
+  onPrefetch: (workspaceId: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const createButtonRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const initializedOpenRef = useRef(false);
-  const sortedSessions = useMemo(() => [...sessions]
-    .sort((left, right) => Number(pinnedSessionIds.includes(right.id)) - Number(pinnedSessionIds.includes(left.id)) || right.updatedAt - left.updatedAt), [pinnedSessionIds, sessions]);
-  const ordered = useMemo(() => {
+  const sortedWorkspaces = useMemo(() => [...workspaces]
+    .sort((left, right) => Number(pinnedWorkspaceIds.includes(right.id)) - Number(pinnedWorkspaceIds.includes(left.id)) || right.updatedAt - left.updatedAt), [pinnedWorkspaceIds, workspaces]);
+  const visibleWorkspaces = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
-    return sortedSessions.filter((session) => !normalized || session.title.toLocaleLowerCase().includes(normalized));
-  }, [query, sortedSessions]);
-  useModalFocus(open, dialogRef, onClose, inputRef);
+    return sortedWorkspaces.filter((workspace) => !normalized || workspace.title.toLocaleLowerCase().includes(normalized));
+  }, [query, sortedWorkspaces]);
+  const emptyState = workspaceEmptyState(workspaces.length, visibleWorkspaces.length);
+  useModalFocus(open, dialogRef, onClose, sortedWorkspaces.length > 0 ? inputRef : createButtonRef);
 
   useEffect(() => {
     if (!open) { initializedOpenRef.current = false; return; }
     if (initializedOpenRef.current) return;
     initializedOpenRef.current = true;
     setQuery("");
-    setActiveIndex(Math.max(0, sortedSessions.findIndex((session) => session.id === selectedSessionId)));
-  }, [open, selectedSessionId, sortedSessions]);
+    setActiveIndex(Math.max(0, sortedWorkspaces.findIndex((workspace) => workspace.id === selectedWorkspaceId)));
+  }, [open, selectedWorkspaceId, sortedWorkspaces]);
 
-  useEffect(() => { setActiveIndex((current) => Math.min(current, Math.max(ordered.length - 1, 0))); }, [ordered.length]);
+  useEffect(() => { setActiveIndex((current) => Math.min(current, Math.max(visibleWorkspaces.length - 1, 0))); }, [visibleWorkspaces.length]);
   useEffect(() => {
     if (!open) return;
     optionRefs.current[activeIndex]?.scrollIntoView({ block: "nearest" });
-    const activeSession = ordered[activeIndex];
-    if (activeSession) onPrefetch(activeSession.id);
-  }, [activeIndex, onPrefetch, open, ordered]);
+    const activeWorkspace = visibleWorkspaces[activeIndex];
+    if (activeWorkspace) onPrefetch(activeWorkspace.id);
+  }, [activeIndex, onPrefetch, open, visibleWorkspaces]);
   if (!open) return null;
 
-  function choose(session: Session) {
-    onSelect(session);
+  function choose(workspace: Session) {
+    onSelect(workspace);
     onClose();
   }
 
   function moveActive(delta: number) {
-    if (!ordered.length) return;
-    setActiveIndex((current) => (current + delta + ordered.length) % ordered.length);
+    if (!visibleWorkspaces.length) return;
+    setActiveIndex((current) => (current + delta + visibleWorkspaces.length) % visibleWorkspaces.length);
   }
 
   return createPortal(<div className="workspace-switcher-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section ref={dialogRef} className="workspace-switcher" role="dialog" aria-modal="true" aria-labelledby="workspace-switcher-title">
       <header>
         <div><span>Navigate</span><h2 id="workspace-switcher-title">Switch workspace</h2></div>
-        <button type="button" onClick={onClose} aria-label="Close workspace switcher"><X size={16} /></button>
+        <button type="button" onClick={onClose} aria-label="Close workspace switcher"><X size={ICON_SIZE.md} /></button>
       </header>
-      <label className="workspace-switcher-search">
-        <Search size={16} />
-        <input ref={inputRef} role="combobox" aria-controls="workspace-switcher-results" aria-expanded="true" aria-activedescendant={ordered[activeIndex] ? `workspace-option-${ordered[activeIndex].id}` : undefined} value={query} onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }} onKeyDown={(event) => {
+      {sortedWorkspaces.length > 0 && <label className="workspace-switcher-search">
+        <Search size={ICON_SIZE.md} />
+        <input ref={inputRef} role="combobox" aria-controls="workspace-switcher-results" aria-expanded="true" aria-activedescendant={visibleWorkspaces[activeIndex] ? `workspace-option-${visibleWorkspaces[activeIndex].id}` : undefined} value={query} onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }} onKeyDown={(event) => {
           if (event.key === "ArrowDown") { event.preventDefault(); moveActive(1); }
           if (event.key === "ArrowUp") { event.preventDefault(); moveActive(-1); }
-          if (event.key === "Home" && ordered.length) { event.preventDefault(); setActiveIndex(0); }
-          if (event.key === "End" && ordered.length) { event.preventDefault(); setActiveIndex(ordered.length - 1); }
-          if (event.key === "Enter" && ordered[activeIndex]) { event.preventDefault(); choose(ordered[activeIndex]); }
+          if (event.key === "Home" && visibleWorkspaces.length) { event.preventDefault(); setActiveIndex(0); }
+          if (event.key === "End" && visibleWorkspaces.length) { event.preventDefault(); setActiveIndex(visibleWorkspaces.length - 1); }
+          if (event.key === "Enter" && visibleWorkspaces[activeIndex]) { event.preventDefault(); choose(visibleWorkspaces[activeIndex]); }
         }} placeholder="Search by workspace name…" aria-label="Search all workspaces" />
         <kbd>esc</kbd>
-      </label>
+      </label>}
       <div className="workspace-switcher-results" id="workspace-switcher-results" role="listbox" aria-label="Workspaces">
-        {ordered.map((session, index) => {
-          const pinned = pinnedSessionIds.includes(session.id);
-          const selected = session.id === selectedSessionId;
-          return <button ref={(element) => { optionRefs.current[index] = element; }} id={`workspace-option-${session.id}`} type="button" role="option" tabIndex={-1} aria-selected={selected} className={`${index === activeIndex ? "highlighted" : ""} ${selected ? "selected" : ""}`} key={session.id} onMouseEnter={() => { setActiveIndex(index); onPrefetch(session.id); }} onClick={() => choose(session)}>
-            <span className="workspace-switcher-avatar">{workspaceEmojiById[session.id] ?? "💬"}</span>
-            <span className="workspace-switcher-copy"><strong>{session.title}</strong><small><TimeAgo value={session.updatedAt} /><i className={`workspace-switcher-status ${session.latestRunStatus ?? "idle"}`}>{session.latestRunStatus === "running" ? <Activity size={10} /> : <span className="workspace-switcher-dot" />}{statusLabel(session)}</i></small></span>
-            {pinned && <Pin className="workspace-switcher-pin" size={13} />}
-            {selected ? <span className="workspace-switcher-current">Current</span> : index === activeIndex ? <CornerDownLeft className="workspace-switcher-enter" size={14} /> : <ArrowRight className="workspace-switcher-arrow" size={14} />}
+        {visibleWorkspaces.map((workspace, index) => {
+          const pinned = pinnedWorkspaceIds.includes(workspace.id);
+          const selected = workspace.id === selectedWorkspaceId;
+          const customWorkspaceEmoji = workspaceEmojiById[workspace.id];
+          return <button ref={(element) => { optionRefs.current[index] = element; }} id={`workspace-option-${workspace.id}`} type="button" role="option" tabIndex={-1} aria-selected={selected} className={`${index === activeIndex ? "highlighted" : ""} ${selected ? "selected" : ""}`} key={workspace.id} onMouseEnter={() => { setActiveIndex(index); onPrefetch(workspace.id); }} onClick={() => choose(workspace)}>
+            <span className={`workspace-switcher-avatar ${customWorkspaceEmoji ? "custom" : "monogram"}`}>{(customWorkspaceEmoji ?? workspace.title.trim().slice(0, 1).toLocaleUpperCase()) || "T"}</span>
+            <span className="workspace-switcher-copy"><strong>{workspace.title}</strong><small><TimeAgo value={workspace.updatedAt} />{workspace.latestRunStatus && <i className={`workspace-switcher-status ${workspace.latestRunStatus}`}>{workspace.latestRunStatus === "running" ? <Activity size={ICON_SIZE.micro} /> : <span className="workspace-switcher-dot" />}{formatRunStatus(workspace.latestRunStatus)}</i>}</small></span>
+            {pinned && <Pin className="workspace-switcher-pin" size={ICON_SIZE.sm} />}
+            {selected ? <span className="workspace-switcher-current">Current</span> : index === activeIndex ? <CornerDownLeft className="workspace-switcher-enter" size={ICON_SIZE.sm} /> : <ArrowRight className="workspace-switcher-arrow" size={ICON_SIZE.sm} />}
           </button>;
         })}
-        {!ordered.length && <div className="workspace-switcher-empty"><Search size={20} /><strong>No matching workspaces</strong><span>Try another name or create a new workspace.</span></div>}
+        {emptyState && <div className="workspace-switcher-empty">{emptyState.kind === "no-workspaces" ? <Plus size={ICON_SIZE.xl} /> : <Search size={ICON_SIZE.xl} />}<strong>{emptyState.title}</strong><span>{emptyState.detail}</span></div>}
       </div>
-      <footer><button type="button" onClick={() => { onClose(); void onCreate(); }}><Plus size={15} /><span>New workspace</span></button><span><kbd>↑</kbd><kbd>↓</kbd> navigate <kbd>↵</kbd> open</span></footer>
+      <footer><button ref={createButtonRef} type="button" disabled={creating} aria-busy={creating} onClick={() => { onClose(); void onCreate(); }}>{creating ? <Activity className="spin" size={ICON_SIZE.md} /> : <Plus size={ICON_SIZE.md} />}<span>{creating ? "Creating…" : "New workspace"}</span></button>{sortedWorkspaces.length > 0 && <span><kbd>↑</kbd><kbd>↓</kbd> navigate <kbd>↵</kbd> open</span>}</footer>
     </section>
   </div>, document.body);
 }

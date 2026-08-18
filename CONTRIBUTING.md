@@ -22,6 +22,8 @@ Place code in the workspace that owns the behavior:
 
 Keep the dependency graph acyclic. Domain packages depend on contracts and ports, not adapters. Adapters implement ports. The Core application composes domains and adapters. The Web Console may depend only on `@tagent/abi`, `@tagent/core-client`, and third-party UI libraries. Core must not depend on the Web Console.
 
+Web Console styling follows the maintained [design-system contract](docs/WEB_CONSOLE_DESIGN.md). Keep the canonical four-file entrypoint and named cascade ownership; extend shared semantic scales instead of adding component-local colors or near-duplicate geometry.
+
 ## Imports and public ABI
 
 - Import another workspace only through its declared `package.json` exports.
@@ -72,5 +74,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 ## Documentation and releases
 
 Maintained documents are listed in [docs/README.md](docs/README.md). Remove superseded product/operation documents after their durable facts move into a canonical document; Git history retains release evidence. Decision rationale belongs in the owning `.agents` record and must be updated or moved to `rejected/` rather than copied into another note.
+
+Run `npm run check:docs` after documentation changes. Every maintained file under `docs/` must be indexed exactly once, and local links in maintained repository documentation must resolve.
 
 Do not claim that lint, tests, audits, artifacts, migrations, or release workflows passed without fresh evidence. A release entry in [CHANGELOG.md](CHANGELOG.md) must be non-empty and describe breaking changes and upgrade requirements.

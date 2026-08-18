@@ -1,4 +1,4 @@
-export const MEMORY_PAGE_SIZE = 100;
+const MEMORY_PAGE_SIZE = 100;
 export const MEMORY_PAGE_REQUEST_LIMIT = MEMORY_PAGE_SIZE + 1;
 
 export interface MemoryPageWindow<Item, Cursor> {
