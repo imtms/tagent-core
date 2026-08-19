@@ -5,6 +5,7 @@ import { httpPersistence } from "./support/test-persistence.js";
 import { corePersistence } from "./support/test-persistence.js";
 import { createCoreClient } from "@tagent/core-client";
 import { CoreWorkspaceGoalApplication, type WorkspaceGoalRoadmapGenerator } from "@tagent/core-service/application";
+import { WorkspaceGoalService } from "@tagent/governance";
 import type { AddressInfo } from "node:net";
 
 const apps: Array<ReturnType<typeof createApp>> = [];
@@ -77,10 +78,18 @@ describe("Workspace Goal console API", () => {
     expect(added.statusCode).toBe(200);
     const withRoadmap = added.json().data;
     expect(withRoadmap).toMatchObject({ nextAction: { kind: "review_roadmap" }, roadmap: { kind: "roadmap", content: { items: [expect.objectContaining({ id: "web", criterionKeys: ["durable"] })] } } });
+    const roadmapConflict = await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/roadmaps`, payload: { requestId: "add-roadmap", content: { summary: "Conflicting Roadmap", items: [
+      { id: "web", title: "Expose Web UI", outcome: "Different outcome", verification: "Web build", criterionKeys: ["durable"] },
+    ] } } });
+    expect(roadmapConflict.statusCode).toBe(409);
+    expect(roadmapConflict.json()).toMatchObject({ error: { code: "workspace_goal.idempotency_conflict", retryable: false } });
 
     const roadmapApproved = await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/decisions`, payload: { requestId: "approve-roadmap", targetRevisionId: withRoadmap.roadmap.id, targetHash: withRoadmap.roadmap.contentHash, kind: "approve_roadmap", approvedItemIds: ["web"] } });
     expect(roadmapApproved.statusCode).toBe(200);
     expect(roadmapApproved.json().data).toMatchObject({ nextAction: { kind: "run_roadmap_item", roadmapItemId: "web" }, decisions: expect.arrayContaining([expect.objectContaining({ kind: "approve_roadmap", approvedItemIds: ["web"] })]) });
+    const staleLifecycle = await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/decisions`, payload: { requestId: "stale-pause", targetRevisionId: withRoadmap.roadmap.id, targetHash: withRoadmap.roadmap.contentHash, kind: "pause" } });
+    expect(staleLifecycle.statusCode).toBe(409);
+    expect(staleLifecycle.json()).toMatchObject({ error: { code: "workspace_goal.stale_revision", retryable: false } });
 
     const started = await app.inject({ method: "POST", url: `/api/v1/console/workspace-goals/${goal.id}/task-runs`, payload: { roadmapItemId: "web", requestId: "start-web" } });
     expect(started.statusCode).toBe(200);
@@ -131,5 +140,48 @@ describe("Workspace Goal console API", () => {
     await expect(client.startWorkspaceGoalTaskRun(created.id, { roadmapItemId: "typed_client", requestId: "client-start" }))
       .resolves.toMatchObject({ inboxItemId: "client-inbox", runId: "client-run", goal: { id: created.id } });
     expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({goalId:created.id,requestId:"client-start",roadmapItem:expect.objectContaining({id:"typed_client"})}));
+  });
+
+  it("exposes Roadmap Run state, retryability, and the Run that needs attention", async () => {
+    const store = new Store(":memory:");
+    const workspace = store.createSession("Goal progress ABI");
+    const harness = goalHttpService(store);
+    const definition = {
+      title: "Inspect blocked work", outcome: "The original Run remains discoverable", scope: [], nonGoals: [],
+      criteria: [{ key: "visible", title: "Blocked Run is visible", required: true }], completionPolicy: "user_confirm" as const,
+    };
+    const created = harness.application.createWorkspaceGoal(workspace.id, { definition, actorId: "test" });
+    harness.application.decideWorkspaceGoal({
+      goalId: created.id, targetRevisionId: created.definition!.id, targetHash: created.definition!.contentHash,
+      kind: "approve_goal", actorId: "test",
+    });
+    const withRoadmap = harness.application.reviseWorkspaceGoalRoadmap(created.id, {
+      requestId: "progress-roadmap", actorId: "test", content: {
+        summary: "One inspectable item",
+        items: [{ id: "inspect", title: "Inspect", outcome: "Visible", verification: "Open the Run", criterionKeys: ["visible"] }],
+      },
+    });
+    harness.application.decideWorkspaceGoal({
+      goalId: created.id, targetRevisionId: withRoadmap.roadmap!.id, targetHash: withRoadmap.roadmap!.contentHash,
+      kind: "approve_roadmap", approvedItemIds: ["inspect"], actorId: "test",
+    });
+    const run = store.createRun(workspace.id, "blocked Goal item");
+    const goals = new WorkspaceGoalService(corePersistence(store).workspaceGoals);
+    goals.linkRun({
+      goalId: created.id, runId: run.id, goalRevision: created.definition!.revision,
+      roadmapRevisionId: withRoadmap.roadmap!.id, roadmapItemIds: ["inspect"], criterionKeys: ["visible"], mode: "roadmap",
+    });
+    store.transitionRun(run.id, ["running"], "blocked", "run.blocked", {}, "blocked", run.attempt);
+    goals.recordRunOutcome(run.id);
+
+    const app = createApp({ persistence: httpPersistence(store), service: harness.service, logger: false, closeResources: async () => store.close() });
+    apps.push(app);
+    const response = await app.inject({ method: "GET", url: `/api/v1/console/workspace-goals/${created.id}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      currentRunId: run.id,
+      nextAction: { kind: "resolve_problem", taskRunId: run.id },
+      roadmapProgress: [expect.objectContaining({ itemId: "inspect", runId: run.id, runStatus: "blocked", retryable: false })],
+    });
   });
 });

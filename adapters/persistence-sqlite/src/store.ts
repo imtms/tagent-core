@@ -84,6 +84,7 @@ import { registerInternalUserInputCoordinator } from "./sqlite/internal-user-inp
 import { SqliteTranscriptRepository } from "./sqlite/transcript-repository.js";
 import { SqliteSkillRepository } from "./sqlite/skill-repository.js";
 import { SqliteSessionRepository } from "./sqlite/session-repository.js";
+import { SqliteWorkspaceGoalRepository } from "./sqlite/workspace-goal-repository.js";
 
 const now = () => Date.now();
 const MAX_SUBMISSION_CONTENT_CHARS = 200_000;
@@ -670,7 +671,8 @@ export class Store {
   routeSessionInboxItem(id: string, sessionId: SessionId, decision: "steer" | "follow_up" | "discussion", runId: RunId | null, error = "") {
     const timestamp = now();
     const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET status='routed',decision=?,run_id=?,error=?,claimed_at=COALESCE(claimed_at,?),started_at=COALESCE(started_at,?),revision=revision+1,updated_at=?
-      WHERE id=? AND session_id=? AND status='queued'`).run(decision, runId, error, timestamp, timestamp, timestamp, id, sessionId);
+      WHERE id=? AND session_id=? AND status='queued'
+        AND NOT EXISTS (SELECT 1 FROM workspace_goal_inbox_links WHERE inbox_item_id=session_supervisor_inbox.id)`).run(decision, runId, error, timestamp, timestamp, timestamp, id, sessionId);
     if (changed.changes === 1) this.touchSessionInboxRevision(sessionId, timestamp);
     return changed.changes === 1 ? this.getSessionInboxItem(id) : undefined;
   }
@@ -679,13 +681,14 @@ export class Store {
     const normalized = analysis.summary.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
     if (!normalized) return undefined;
     const gateProfile = analysis.executionPolicy?.gateProfile ?? "strict";
-    return this.listSessionInbox(sessionId).find((item) => item.status === "queued" && item.decision === "pending"
+    return this.listSessionInbox(sessionId).find((item) => item.status === "queued" && item.decision === "pending" && !this.isGoalLinkedInbox(item.id)
       && (item.analysis.executionPolicy?.gateProfile ?? "strict") === gateProfile
       && item.analysis.intent === analysis.intent
       && item.analysis.summary.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "") === normalized);
   }
 
   markSessionInboxDuplicate(sourceId: string, targetId: string, sessionId: SessionId) {
+    if (this.isGoalLinkedInbox(sourceId) || this.isGoalLinkedInbox(targetId)) return undefined;
     const timestamp = now();
     const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET status='deleted',decision='merge',error=?,revision=revision+1,updated_at=?
       WHERE id=? AND session_id=? AND status='queued'`).run(`Duplicate of ${targetId}`, timestamp, sourceId, sessionId);
@@ -700,7 +703,8 @@ export class Store {
     const resolved = analysis ?? { ...this.getSessionInboxItem(id)?.analysis, summary: trimmed.slice(0, 120), scope: trimmed.slice(0, 120) } as SessionInputAnalysis;
     const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET content=?,summary=?,objectives_json=?,intent=?,target_run_id=?,priority=?,urgency=?,relation=?,
       acceptance_json=?,scope=?,non_goals_json=?,confidence=?,decision_reason=?,router_version=?,execution_policy_json=?,revision=revision+1,updated_at=?
-      WHERE id=? AND session_id=? AND status='queued'`)
+      WHERE id=? AND session_id=? AND status='queued'
+        AND NOT EXISTS (SELECT 1 FROM workspace_goal_inbox_links WHERE inbox_item_id=session_supervisor_inbox.id)`)
       .run(trimmed, resolved.summary, JSON.stringify(resolved.objectives), resolved.intent, resolved.targetRunId, resolved.priority, resolved.urgency, resolved.relation,
         JSON.stringify(resolved.acceptanceCriteria), resolved.scope, JSON.stringify(resolved.nonGoals), resolved.confidence, resolved.reason,
         resolved.routerVersion, JSON.stringify(resolved.executionPolicy ?? null), now(), id, sessionId).changes;
@@ -799,6 +803,10 @@ export class Store {
     };
   }
 
+  private isGoalLinkedInbox(itemId: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM workspace_goal_inbox_links WHERE inbox_item_id=?").get(itemId));
+  }
+
   updateSessionInboxItemProfile(input: {
     sessionId: SessionId;
     itemId: string;
@@ -894,7 +902,8 @@ export class Store {
   deleteSessionInboxItem(id: string, sessionId: SessionId) {
     const timestamp = now();
     const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET status='deleted',decision='delete',revision=revision+1,updated_at=?
-      WHERE id=? AND session_id=? AND status='queued'`).run(timestamp, id, sessionId).changes === 1;
+      WHERE id=? AND session_id=? AND status='queued'
+        AND NOT EXISTS (SELECT 1 FROM workspace_goal_inbox_links WHERE inbox_item_id=session_supervisor_inbox.id)`).run(timestamp, id, sessionId).changes === 1;
     if (changed) this.touchSessionInboxRevision(sessionId, timestamp);
     return changed;
   }
@@ -908,7 +917,9 @@ export class Store {
 
   decideSessionInboxItem(id: string, sessionId: SessionId, decision: "pending" | "defer") {
     const timestamp = now();
-    const changed = this.db.prepare("UPDATE session_supervisor_inbox SET decision=?,revision=revision+1,updated_at=? WHERE id=? AND session_id=? AND status='queued'").run(decision,timestamp,id,sessionId).changes === 1;
+    const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET decision=?,revision=revision+1,updated_at=?
+      WHERE id=? AND session_id=? AND status='queued'
+        AND NOT EXISTS (SELECT 1 FROM workspace_goal_inbox_links WHERE inbox_item_id=session_supervisor_inbox.id)`).run(decision,timestamp,id,sessionId).changes === 1;
     if (changed) this.touchSessionInboxRevision(sessionId, timestamp);
     return changed;
   }
@@ -918,6 +929,7 @@ export class Store {
     const transaction = this.db.transaction(() => {
       const source = this.getSessionInboxItem(sourceId); const target = this.getSessionInboxItem(targetId);
       if (!source || !target || source.sessionId !== sessionId || target.sessionId !== sessionId || source.status !== "queued" || target.status !== "queued") return false;
+      if (this.isGoalLinkedInbox(sourceId) || this.isGoalLinkedInbox(targetId)) return false;
       const content = `${target.content}
 
 Additional queued instruction:
@@ -988,9 +1000,22 @@ ${source.content}`;
       this.db.prepare("INSERT OR IGNORE INTO taskrun_edges (from_run_id,to_run_id,relation,reason,created_at) VALUES (?,?,?,?,?)")
         .run(contract.parentRunId,run.id,edgeRelation,`Session Inbox ${inbox.id}: ${contract.decisionReason}`,timestamp);
     }
+    // Goal attachment is part of the claim transaction. A process can never
+    // observe a runnable Roadmap Run without its immutable authorization snapshot.
+    let attachmentError = "";
+    try {
+      new SqliteWorkspaceGoalRepository(this.db).attachRun(run.id, inbox.id);
+    } catch (error) {
+      attachmentError = error instanceof Error ? error.message : String(error);
+      this.transitionRun(run.id, ["running"], "failed", "run.failed", {
+        reason: "workspace_goal_authorization_failed",
+        error: attachmentError,
+      }, attachmentError, run.attempt);
+    }
     this.db.prepare("UPDATE session_supervisor_inbox SET status='started',run_id=?,started_at=?,revision=revision+1,updated_at=? WHERE id=? AND status='claimed'").run(run.id,timestamp,timestamp,inbox.id);
+    if (attachmentError) this.db.prepare("UPDATE session_supervisor_inbox SET error=?,updated_at=? WHERE id=?").run(attachmentError, timestamp, inbox.id);
     this.touchSessionInboxRevision(sessionId, timestamp);
-    return { item: this.getSessionInboxItem(inbox.id)!, run };
+    return { item: this.getSessionInboxItem(inbox.id)!, run: this.getRun(run.id)! };
   }
 
   recordSessionInboxLaunchFailure(itemId: string, runId: RunId, error: string) {

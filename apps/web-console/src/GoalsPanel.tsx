@@ -493,7 +493,10 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
       return void decide("approve_roadmap", goal.roadmap, selectedItems);
     }
     if (goal.nextAction.kind === "run_roadmap_item" && goal.nextAction.roadmapItemId) return void onStartRoadmapItem(goal.nextAction.roadmapItemId);
-    if (["view_running_task", "resolve_problem"].includes(goal.nextAction.kind) && goal.currentRunId) return onOpenRun?.(goal.currentRunId);
+    if (["view_running_task", "resolve_problem"].includes(goal.nextAction.kind)) {
+      const targetRunId = goal.nextAction.taskRunId ?? goal.currentRunId;
+      if (targetRunId) return onOpenRun?.(targetRunId);
+    }
     if (goal.nextAction.kind === "resume") return void decide("resume");
     if (goal.nextAction.kind === "view_result" && goal.status === "ready_to_close" && window.confirm("Close this Goal with the verified evidence? This cannot be undone.")) return void decide("close");
     return undefined;
@@ -526,10 +529,13 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
         {definition?.criteria.map((criterion) => {
           const evidence = evidenceByCriterion.get(criterion.key) ?? [];
           const validCount = evidence.filter((link) => link.status === "valid").length;
-          const contradicted = evidence.some((link) => link.status === "contradicted");
-          return <div className={validCount && !contradicted ? "verified" : contradicted ? "warning" : "pending"} key={criterion.key}>
-            {validCount && !contradicted ? <CheckCircle2 size={ICON_SIZE.md} /> : contradicted ? <AlertTriangle size={ICON_SIZE.md} /> : <Circle size={ICON_SIZE.md} />}
-            <span><strong>{criterion.title}</strong><small>{validCount && !contradicted ? formatCount(validCount, "verified source") : contradicted ? "Evidence contradicted" : criterion.required ? "Required · pending" : "Optional"}</small></span>
+          const decisive = [...evidence].filter((link) => link.status !== "stale")
+            .sort((left, right) => left.updatedAt - right.updatedAt || left.id.localeCompare(right.id)).at(-1);
+          const verified = decisive?.status === "valid";
+          const contradicted = decisive?.status === "contradicted";
+          return <div className={verified ? "verified" : contradicted ? "warning" : "pending"} key={criterion.key}>
+            {verified ? <CheckCircle2 size={ICON_SIZE.md} /> : contradicted ? <AlertTriangle size={ICON_SIZE.md} /> : <Circle size={ICON_SIZE.md} />}
+            <span><strong>{criterion.title}</strong><small>{verified ? formatCount(validCount, "verified source") : contradicted ? "Latest evidence contradicted" : criterion.required ? "Required · pending" : "Optional"}</small></span>
           </div>;
         })}
       </div>
@@ -552,7 +558,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
               <span className="goal-roadmap-index">{index + 1}</span>
             </div>
             <div className="goal-roadmap-copy"><strong>{item.title}</strong><p>{item.outcome}</p><div>{item.criterionKeys.map((key) => <span key={key}>{definition?.criteria.find((criterion) => criterion.key === key)?.title ?? key}</span>)}</div><details><summary>Verification</summary><p>{item.verification}</p></details></div>
-            <div className="goal-roadmap-action"><em>{roadmapStatusLabel(itemStatus)}</em>{approved && (itemStatus === "pending" || itemStatus === "blocked" && !goal.currentRunId) && <button className="goal-secondary-action" disabled={busy || Boolean(goal.currentRunId)} onClick={() => void onStartRoadmapItem(item.id)}><Play size={ICON_SIZE.xs} />{itemStatus === "blocked" ? "Retry" : "Start"}</button>}{itemProgress?.runId && ["running", "blocked"].includes(itemStatus) && <button className="goal-secondary-action" onClick={() => onOpenRun?.(itemProgress.runId!)}><ExternalLink size={ICON_SIZE.xs} />Open</button>}</div>
+            <div className="goal-roadmap-action"><em>{roadmapStatusLabel(itemStatus)}</em>{approved && (itemStatus === "pending" || itemStatus === "blocked" && itemProgress?.retryable && !goal.currentRunId) && <button className="goal-secondary-action" disabled={busy || Boolean(goal.currentRunId)} onClick={() => void onStartRoadmapItem(item.id)}><Play size={ICON_SIZE.xs} />{itemStatus === "blocked" ? "Retry" : "Start"}</button>}{itemProgress?.runId && ["running", "blocked"].includes(itemStatus) && <button className="goal-secondary-action" onClick={() => onOpenRun?.(itemProgress.runId!)}><ExternalLink size={ICON_SIZE.xs} />Open</button>}</div>
           </div>;
         })}
         {!approval && <p className="goal-roadmap-help">{requiresRoadmapRevision ? "Changes were requested. Edit and save a new Roadmap revision before approval." : "Select the items that may drive TaskRuns, then approve the Roadmap above."}</p>}

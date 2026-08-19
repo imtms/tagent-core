@@ -23,6 +23,8 @@ export interface WorkspaceGoalRepository {
   linkInbox(input: LinkWorkspaceGoalInboxInput): void;
   attachRun(runId: string, inboxItemId: string | null): WorkspaceGoal | null;
   recordRunOutcome(runId: string): WorkspaceGoal | null;
+  /** Repairs interrupted Inbox attachment and replays idempotent Run projections after restart. */
+  reconcileRunState(): string[];
   linkEvidence(input: LinkWorkspaceGoalEvidenceInput): WorkspaceGoalEvidenceLink;
   authorizeRunMutation(runId: string): { allowed: boolean; reason: string };
 }

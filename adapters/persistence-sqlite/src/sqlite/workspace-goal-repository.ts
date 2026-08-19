@@ -29,6 +29,7 @@ import {
 } from "@tagent/governance";
 import type { CriterionCoverage } from "@tagent/governance/domain";
 import type { RunStatus, TaskRunContractSnapshot, TaskRunWorkspaceGoalSnapshot } from "@tagent/execution/domain";
+import { buildGoalRoadmapAdmission, matchesGoalRoadmapAdmission } from "@tagent/admission";
 
 const now = () => Date.now();
 type DbRevisionKind = WorkspaceGoalRevision["kind"];
@@ -37,7 +38,7 @@ type DbDecisionKind = WorkspaceGoalDecision["kind"];
 interface GoalRow { id: string; workspaceId: string; status: WorkspaceGoalStatus; activeDefinitionRevisionId: string | null; activeRoadmapRevisionId: string | null; currentRunId: string | null; createdAt: number; updatedAt: number; completedAt: number | null }
 interface RevisionRow { id: string; goalId: string; kind: DbRevisionKind; revision: number; contentJson: string; contentHash: string; sourceArtifactId: string | null; createdBy: string; createdAt: number }
 interface DecisionRow { id: string; requestId: string | null; payloadHash: string; goalId: string; targetRevisionId: string; targetHash: string; kind: DbDecisionKind; approvedItemIdsJson: string; reason: string; actorId: string; createdAt: number }
-interface RunLinkRow { goalId: string; runId: string; goalRevision: number; roadmapRevisionId: string | null; roadmapItemIdsJson: string; criterionKeysJson: string; mode: WorkspaceGoalRunLinkMode; createdAt: number }
+interface RunLinkRow { goalId: string; runId: string; goalRevision: number; roadmapRevisionId: string | null; roadmapItemIdsJson: string; criterionKeysJson: string; mode: WorkspaceGoalRunLinkMode; createdAt: number; linkOrder: number }
 
 interface LinkSpec {
   goal: WorkspaceGoal;
@@ -93,15 +94,20 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
     const criteria = definition ? definitionContent(definition).criteria : [];
     const requiredKeys = criteria.filter((item) => item.required).map((item) => item.key);
     const currentEvidence = definition ? allEvidenceLinks.filter((link) => link.goalRevision === definition.revision) : [];
-    const validKeys = new Set(currentEvidence.filter((item) => item.status === "valid").map((item) => item.criterionKey));
-    const contradictedKeys = new Set(currentEvidence.filter((item) => item.status === "contradicted").map((item) => item.criterionKey));
+    const decisiveEvidence = new Map<string, WorkspaceGoalEvidenceLink>();
+    for (const link of currentEvidence.filter((item) => item.status !== "stale")) {
+      const prior = decisiveEvidence.get(link.criterionKey);
+      if (!prior || link.updatedAt > prior.updatedAt || link.updatedAt === prior.updatedAt && link.id > prior.id) {
+        decisiveEvidence.set(link.criterionKey, link);
+      }
+    }
     const hasApprovedDefinition = row.activeDefinitionRevisionId === definition?.id
       && decisions.some((item) => item.kind === "approve_goal" && item.targetRevisionId === definition.id && item.targetHash === definition.contentHash);
     const roadmapApproval = row.activeRoadmapRevisionId === roadmap?.id
       ? [...decisions].reverse().find((item) => item.kind === "approve_roadmap" && item.targetRevisionId === roadmap.id && item.targetHash === roadmap.contentHash && item.approvedItemIds.length > 0)
       : undefined;
     const roadmapProgress = roadmap ? this.roadmapProgress(goalId, roadmap, roadmapApproval?.approvedItemIds ?? []) : [];
-    const verifiedCriteria = requiredKeys.filter((key) => validKeys.has(key) && !contradictedKeys.has(key)).length;
+    const verifiedCriteria = requiredKeys.filter((key) => decisiveEvidence.get(key)?.status === "valid").length;
     let status = row.status;
     if (status === "ready_to_close" && (verifiedCriteria < requiredKeys.length || !hasApprovedDefinition || !roadmapApproval)) status = "active";
     return {
@@ -153,6 +159,10 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
     }
     const revision = this.revision(input.targetRevisionId);
     if (!revision) throw new Error("workspace Goal revision is stale");
+    if (["approve_goal", "approve_roadmap", "request_change", "pause", "cancel", "close"].includes(input.kind)
+      && this.hasPendingInboxWork(input.goalId)) {
+      throw new Error("workspace Goal cannot change or end while an approved Roadmap TaskRun is queued");
+    }
     const transition=planWorkspaceGoalDecision({goal,revision,decision:{...input,approvedItemIds},hasOtherGuidingGoal:this.hasOtherGuidingGoal(goal)});
     const createdAt = now();
     const decision: WorkspaceGoalDecision = { id: randomUUID(), requestId, payloadHash, goalId: input.goalId, targetRevisionId: input.targetRevisionId, targetHash: input.targetHash, kind: input.kind, approvedItemIds, reason, actorId: input.actorId, createdAt };
@@ -175,28 +185,32 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
   linkInbox(input: LinkWorkspaceGoalInboxInput): void {
     const inbox = this.db.prepare("SELECT session_id as workspaceId,status FROM session_supervisor_inbox WHERE id=?").get(input.inboxItemId) as { workspaceId: string; status: string } | undefined;
     if (!inbox) throw new Error("Session Inbox item not found");
+    const existing = this.db.prepare("SELECT goal_id as goalId,goal_revision as goalRevision,roadmap_revision_id as roadmapRevisionId,roadmap_item_ids_json as roadmapItemIdsJson,criterion_keys_json as criterionKeysJson FROM workspace_goal_inbox_links WHERE inbox_item_id=?").get(input.inboxItemId) as { goalId: string; goalRevision: number; roadmapRevisionId: string; roadmapItemIdsJson: string; criterionKeysJson: string } | undefined;
+    const expected = workspaceGoalContentHash({ goalId: input.goalId, goalRevision: input.goalRevision, roadmapRevisionId: input.roadmapRevisionId, roadmapItemIds: [...new Set(input.roadmapItemIds)], criterionKeys: [...new Set(input.criterionKeys)] });
+    if (existing) {
+      const actual = workspaceGoalContentHash({ goalId: existing.goalId, goalRevision: existing.goalRevision, roadmapRevisionId: existing.roadmapRevisionId, roadmapItemIds: JSON.parse(existing.roadmapItemIdsJson), criterionKeys: JSON.parse(existing.criterionKeysJson) });
+      if (actual !== expected) throw new Error("Workspace Goal Roadmap TaskRun idempotency conflict");
+      return;
+    }
     if (inbox.status !== "queued") throw new Error("Session Inbox item is not queued");
     const spec = this.resolveLinkSpec({ ...input, runId: "pending", mode: "roadmap" });
     if (spec.goal.workspaceId !== inbox.workspaceId) throw new Error("Session Inbox item belongs to a different workspace");
-    const existing = this.db.prepare("SELECT goal_id as goalId,goal_revision as goalRevision,roadmap_revision_id as roadmapRevisionId,roadmap_item_ids_json as roadmapItemIdsJson,criterion_keys_json as criterionKeysJson FROM workspace_goal_inbox_links WHERE inbox_item_id=?").get(input.inboxItemId) as { goalId: string; goalRevision: number; roadmapRevisionId: string; roadmapItemIdsJson: string; criterionKeysJson: string } | undefined;
-    const expected = workspaceGoalContentHash({ goalId: input.goalId, goalRevision: input.goalRevision, roadmapRevisionId: input.roadmapRevisionId, roadmapItemIds: spec.roadmapItemIds, criterionKeys: spec.criterionKeys });
-    if (existing) {
-      const actual = workspaceGoalContentHash({ goalId: existing.goalId, goalRevision: existing.goalRevision, roadmapRevisionId: existing.roadmapRevisionId, roadmapItemIds: JSON.parse(existing.roadmapItemIdsJson), criterionKeys: JSON.parse(existing.criterionKeysJson) });
-      if (actual !== expected) throw new Error("Session Inbox Goal link conflict");
-      return;
-    }
+    if (spec.roadmapItemIds.length !== 1) throw new Error("Goal Roadmap Inbox launch requires exactly one Roadmap item");
+    const priorRuns = this.db.prepare(`SELECT r.id,r.status FROM workspace_goal_run_links l
+      JOIN runs r ON r.id=l.run_id
+      WHERE l.goal_id=? AND l.roadmap_revision_id=? AND l.link_mode='roadmap'
+        AND EXISTS (SELECT 1 FROM json_each(l.approved_item_ids_json) selected
+          WHERE selected.value IN (SELECT requested.value FROM json_each(?) requested))
+      ORDER BY l.created_at DESC,l.rowid DESC`).all(input.goalId, input.roadmapRevisionId, JSON.stringify(spec.roadmapItemIds)) as Array<{ id: string; status: RunStatus }>;
+    if (priorRuns.some((prior) => prior.status === "completed")) throw new Error("Goal Roadmap item is already completed");
+    const activePrior = priorRuns.find((prior) => ["running", "waiting_input", "blocked", "interrupted"].includes(prior.status));
+    if (activePrior && ["running", "waiting_input"].includes(activePrior.status)) throw new Error("Goal Roadmap item already has a running TaskRun");
+    if (activePrior) throw new Error("Goal Roadmap item has a blocked TaskRun that must be resolved first");
     const itemProgress = this.db.prepare(`SELECT status,run_id as runId FROM workspace_goal_roadmap_item_progress
       WHERE goal_id=? AND roadmap_revision_id=? AND item_id IN (SELECT value FROM json_each(?))
       ORDER BY CASE status WHEN 'completed' THEN 0 WHEN 'running' THEN 1 WHEN 'blocked' THEN 2 ELSE 3 END LIMIT 1`)
       .get(input.goalId, input.roadmapRevisionId, JSON.stringify(spec.roadmapItemIds)) as { status: string; runId: string | null } | undefined;
     if (itemProgress?.status === "completed") throw new Error("Goal Roadmap item is already completed");
-    if (itemProgress?.status === "running") throw new Error("Goal Roadmap item already has a running TaskRun");
-    if (itemProgress?.status === "blocked" && itemProgress.runId) {
-      const priorRun = this.db.prepare("SELECT status FROM runs WHERE id=?").get(itemProgress.runId) as { status: string } | undefined;
-      if (priorRun && ["running", "waiting_input", "blocked", "interrupted"].includes(priorRun.status)) {
-        throw new Error("Goal Roadmap item has a blocked TaskRun that must be resolved first");
-      }
-    }
     const queuedLinks = this.db.prepare(`SELECT l.roadmap_item_ids_json as roadmapItemIdsJson
       FROM workspace_goal_inbox_links l JOIN session_supervisor_inbox i ON i.id=l.inbox_item_id
       WHERE l.goal_id=? AND l.roadmap_revision_id=? AND i.status IN ('queued','claimed')`).all(input.goalId, input.roadmapRevisionId) as Array<{ roadmapItemIdsJson: string }>;
@@ -227,6 +241,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
         criterionKeys: JSON.parse(pending.criterionKeysJson) as string[],
         mode: "roadmap",
       });
+      this.assertCanonicalRoadmapAdmission(run, spec);
     } else {
       const contract = run.contractJson ? JSON.parse(run.contractJson) as TaskRunContractSnapshot : null;
       if (contract?.routerVersion === "workspace-goal-roadmap-v1") {
@@ -266,7 +281,36 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
 
   authorizeRunMutation(runId: string): { allowed: boolean; reason: string } {
     const row = this.runLinkForRun(runId);
+    if (!row) {
+      const run = this.runRow(runId);
+      const contract = run?.contractJson ? JSON.parse(run.contractJson) as TaskRunContractSnapshot : null;
+      const pendingAuthorization = this.db.prepare(`SELECT 1 FROM workspace_goal_inbox_links l
+        JOIN session_supervisor_inbox i ON i.id=l.inbox_item_id WHERE i.run_id=? LIMIT 1`).get(runId);
+      if (contract?.routerVersion === "workspace-goal-roadmap-v1" || pendingAuthorization) {
+        return { allowed: false, reason: "Workspace Goal Roadmap TaskRun is missing its durable Run authorization" };
+      }
+    }
     return authorizeWorkspaceGoalRunMutation(row?this.getGoal(row.goalId):null,row?runLinkFromRow(row):undefined);
+  }
+
+  reconcileRunState(): string[] {
+    const repaired: string[] = [];
+    const missing = this.db.prepare(`SELECT i.run_id as runId,i.id as inboxItemId FROM workspace_goal_inbox_links l
+      JOIN session_supervisor_inbox i ON i.id=l.inbox_item_id
+      WHERE i.run_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM workspace_goal_run_links linked WHERE linked.run_id=i.run_id
+      ) ORDER BY l.created_at,l.rowid`).all() as Array<{ runId: string; inboxItemId: string }>;
+    for (const item of missing) {
+      try {
+        if (this.attachRun(item.runId, item.inboxItemId)) repaired.push(item.runId);
+      } catch { /* Invalid historical authorization remains fail-closed in authorizeRunMutation. */ }
+    }
+    const linked = this.db.prepare("SELECT run_id as runId FROM workspace_goal_run_links ORDER BY created_at,rowid").all() as Array<{ runId: string }>;
+    for (const { runId } of linked) {
+      this.recordRunOutcome(runId);
+      if (!repaired.includes(runId)) repaired.push(runId);
+    }
+    return repaired;
   }
 
   linkEvidence(input: LinkWorkspaceGoalEvidenceInput): WorkspaceGoalEvidenceLink {
@@ -285,7 +329,9 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
         return this.evidenceLinks(input.goalId).find((item) => item.id === request.evidenceLinkId)!;
       }
     }
-    const timestamp = now();
+    const latestEvidenceTimestamp = this.db.prepare(`SELECT MAX(updated_at) as updatedAt FROM workspace_goal_evidence_links
+      WHERE goal_id=? AND goal_revision=? AND criterion_key=?`).get(input.goalId, input.goalRevision, input.criterionKey) as { updatedAt: number | null };
+    const timestamp = Math.max(now(), (latestEvidenceTimestamp.updatedAt ?? 0) + 1);
     const existing = this.db.prepare(`SELECT id FROM workspace_goal_evidence_links WHERE goal_id=? AND goal_revision=? AND criterion_key=? AND source_digest=?`)
       .get(input.goalId, input.goalRevision, input.criterionKey, sourceDigest) as { id: string } | undefined;
     const id = existing?.id ?? randomUUID();
@@ -312,10 +358,18 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
     const itemIds = link.mode === "roadmap" ? JSON.parse(link.roadmapItemIdsJson) as string[] : [];
     const progressStatus = run.status === "completed" ? "completed" : ["running", "waiting_input"].includes(run.status) ? "running" : "blocked";
     this.db.transaction(() => {
-      if (link.roadmapRevisionId) for (const itemId of itemIds) this.db.prepare(`INSERT INTO workspace_goal_roadmap_item_progress
-        (goal_id,roadmap_revision_id,item_id,status,run_id,updated_at,completed_at) VALUES (?,?,?,?,?,?,?)
-        ON CONFLICT(goal_id,roadmap_revision_id,item_id) DO UPDATE SET status=excluded.status,run_id=excluded.run_id,updated_at=excluded.updated_at,completed_at=excluded.completed_at`)
-        .run(link.goalId, link.roadmapRevisionId, itemId, progressStatus, runId, timestamp, progressStatus === "completed" ? timestamp : null);
+      if (link.roadmapRevisionId) for (const itemId of itemIds) {
+        const owner = this.db.prepare(`SELECT run_id as runId FROM workspace_goal_roadmap_item_progress
+          WHERE goal_id=? AND roadmap_revision_id=? AND item_id=?`).get(link.goalId, link.roadmapRevisionId, itemId) as { runId: string | null } | undefined;
+        const ownerLink = owner?.runId && owner.runId !== runId ? this.runLinkForRun(owner.runId) : undefined;
+        const ownerIsNewer = ownerLink && (ownerLink.createdAt > link.createdAt
+          || ownerLink.createdAt === link.createdAt && ownerLink.linkOrder > link.linkOrder);
+        if (ownerIsNewer) continue;
+        this.db.prepare(`INSERT INTO workspace_goal_roadmap_item_progress
+          (goal_id,roadmap_revision_id,item_id,status,run_id,updated_at,completed_at) VALUES (?,?,?,?,?,?,?)
+          ON CONFLICT(goal_id,roadmap_revision_id,item_id) DO UPDATE SET status=excluded.status,run_id=excluded.run_id,updated_at=excluded.updated_at,completed_at=excluded.completed_at`)
+          .run(link.goalId, link.roadmapRevisionId, itemId, progressStatus, runId, timestamp, progressStatus === "completed" ? timestamp : null);
+      }
       const retainCurrent = ["running", "waiting_input", "blocked", "interrupted"].includes(run.status);
       const preferredRunId = selectedRunId === runId && !retainCurrent ? null : selectedRunId;
       const nextCurrent = this.findActiveGuidedRun(link.goalId, preferredRunId);
@@ -330,8 +384,10 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
     const contract = contractJson ? JSON.parse(contractJson) as TaskRunContractSnapshot : null;
     const snapshot = contract?.workspaceGoal;
     if (!snapshot || snapshot.goalId !== link.goalId || !snapshot.criterionPrompts.length) return;
-    const row = this.db.prepare(`SELECT attempt,checkpoint_seq as checkpointSeq,criterion_coverage_json as coverageJson FROM gate_evaluations
-      WHERE run_id=? AND gate_type='contract' AND evaluator='llm' ORDER BY attempt DESC,checkpoint_seq DESC,created_at DESC LIMIT 1`).get(link.runId) as { attempt: number; checkpointSeq: number; coverageJson: string } | undefined;
+    const row = this.db.prepare(`SELECT evaluation.attempt,evaluation.checkpoint_seq as checkpointSeq,evaluation.criterion_coverage_json as coverageJson
+      FROM gate_evaluations evaluation JOIN runs run ON run.id=evaluation.run_id AND run.attempt=evaluation.attempt
+      WHERE evaluation.run_id=? AND evaluation.gate_type='contract' AND evaluation.evaluator='llm'
+      ORDER BY evaluation.checkpoint_seq DESC,evaluation.created_at DESC LIMIT 1`).get(link.runId) as { attempt: number; checkpointSeq: number; coverageJson: string } | undefined;
     if (!row) return;
     const coverage = JSON.parse(row.coverageJson) as CriterionCoverage[];
     for (const target of snapshot.criterionPrompts) {
@@ -359,6 +415,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
 
   private persistRunLinkAndSnapshot(run: ReturnType<SqliteWorkspaceGoalRepository["runRow"]> & {}, spec: LinkSpec): WorkspaceGoal {
     if (run.workspaceId !== spec.goal.workspaceId) throw new Error("TaskRun belongs to a different workspace");
+    if (spec.mode === "roadmap") this.assertRoadmapRunAvailable(spec);
     const createdAt = now();
     const snapshot = this.executionSnapshot(spec, createdAt);
     const contract = mergeGoalSnapshot(run, snapshot);
@@ -437,8 +494,22 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
     return { goal, goalRevision: input.goalRevision, roadmapRevisionId: input.roadmapRevisionId ?? null, roadmapItemIds, criterionKeys, mode };
   }
 
+  private assertRoadmapRunAvailable(spec: LinkSpec): void {
+    if (!spec.roadmapRevisionId) return;
+    const priorRuns = this.db.prepare(`SELECT r.status FROM workspace_goal_run_links l JOIN runs r ON r.id=l.run_id
+      WHERE l.goal_id=? AND l.roadmap_revision_id=? AND l.link_mode='roadmap'
+        AND EXISTS (SELECT 1 FROM json_each(l.approved_item_ids_json) selected
+          WHERE selected.value IN (SELECT requested.value FROM json_each(?) requested))`)
+      .all(spec.goal.id, spec.roadmapRevisionId, JSON.stringify(spec.roadmapItemIds)) as Array<{ status: RunStatus }>;
+    if (priorRuns.some((prior) => prior.status === "completed")) throw new Error("Goal Roadmap item is already completed");
+    const active = priorRuns.find((prior) => ["running", "waiting_input", "blocked", "interrupted"].includes(prior.status));
+    if (active && ["running", "waiting_input"].includes(active.status)) throw new Error("Goal Roadmap item already has a running TaskRun");
+    if (active) throw new Error("Goal Roadmap item has a blocked TaskRun that must be resolved first");
+  }
+
   private addRevision(goalId: string, kind: WorkspaceGoalRevision["kind"], content: WorkspaceGoalDefinition | WorkspaceGoalRoadmap, sourceArtifactId: string | null, createdBy: string): WorkspaceGoalRevision {
     const goal = this.requireGoal(goalId);
+    if (this.hasPendingInboxWork(goalId)) throw new Error("workspace Goal cannot be revised while an approved Roadmap TaskRun is queued");
     const transition=planWorkspaceGoalRevision(goal,kind);
     const dbKind = kind;
     const revisionNumber = Number((this.db.prepare("SELECT COALESCE(MAX(revision),0)+1 as revision FROM workspace_goal_revisions WHERE goal_id=? AND kind=?").get(goalId, dbKind) as { revision: number }).revision);
@@ -457,6 +528,47 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
     return Boolean(other);
   }
 
+  private hasPendingInboxWork(goalId: string): boolean {
+    return Boolean(this.db.prepare(`SELECT 1 FROM workspace_goal_inbox_links l
+      JOIN session_supervisor_inbox i ON i.id=l.inbox_item_id
+      WHERE l.goal_id=? AND i.status IN ('queued','claimed') LIMIT 1`).get(goalId));
+  }
+
+  private assertCanonicalRoadmapAdmission(run: ReturnType<SqliteWorkspaceGoalRepository["runRow"]> & {}, spec: LinkSpec): void {
+    if (spec.mode !== "roadmap" || spec.roadmapItemIds.length !== 1 || !spec.goal.definition || !spec.goal.roadmap) {
+      throw new Error("Goal Roadmap Inbox authorization is incomplete");
+    }
+    const roadmapItem = roadmapContent(spec.goal.roadmap).items.find((item) => item.id === spec.roadmapItemIds[0]);
+    if (!roadmapItem) throw new Error("Goal Roadmap item not found");
+    const expected = buildGoalRoadmapAdmission({
+      goalId: spec.goal.id,
+      goalOutcome: definitionContent(spec.goal.definition).outcome,
+      roadmapItem,
+    });
+    const contract = run.contractJson ? JSON.parse(run.contractJson) as TaskRunContractSnapshot : null;
+    if (!contract || !matchesGoalRoadmapAdmission({
+      content: contract.sourceInput,
+      analysis: {
+        summary: contract.summary,
+        objectives: contract.objectives,
+        intent: contract.intent,
+        targetRunId: contract.parentRunId,
+        priority: 700,
+        urgency: "normal",
+        relation: contract.relation,
+        acceptanceCriteria: contract.acceptanceCriteria,
+        scope: contract.scope,
+        nonGoals: contract.nonGoals,
+        confidence: 1,
+        reason: contract.decisionReason,
+        routerVersion: contract.routerVersion,
+        executionPolicy: contract.executionPolicy ?? undefined,
+      },
+    }, expected)) {
+      throw new Error("Workspace Goal Roadmap Inbox content no longer matches its durable authorization");
+    }
+  }
+
   private guidingGoal(workspaceId: string): WorkspaceGoal | null {
     const rows = this.db.prepare(`SELECT id FROM workspace_goals WHERE workspace_id=? AND status IN ('active','ready_to_close') AND active_definition_revision_id IS NOT NULL ORDER BY updated_at DESC`).all(workspaceId) as Array<{ id: string }>;
     if (!rows.length) return null;
@@ -467,8 +579,10 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
   private computeEvidenceDigest(input: LinkWorkspaceGoalEvidenceInput, requestedStatus: WorkspaceGoalEvidenceStatus): string {
     const facts: Record<string, unknown> = { runId: input.runId };
     const requiresTrustedReceipt = requestedStatus === "valid" || requestedStatus === "contradicted";
-    const runState = this.db.prepare("SELECT attempt FROM runs WHERE id=?").get(input.runId) as { attempt: number } | undefined;
+    const runState = this.db.prepare(`SELECT r.attempt,a.started_at as attemptStartedAt FROM runs r
+      JOIN attempts a ON a.run_id=r.id AND a.ordinal=r.attempt WHERE r.id=?`).get(input.runId) as { attempt: number; attemptStartedAt: number } | undefined;
     if (!runState) throw new Error("TaskRun not found");
+    facts.attempt = runState.attempt;
     if (input.checkKey) {
       const check = this.db.prepare(`SELECT status,stale,evidence,command,title,source_operation_id as sourceOperationId,observed_at as observedAt
         FROM run_checks WHERE run_id=? AND check_key=?`).get(input.runId, input.checkKey) as { status: string; stale: number; evidence: string; command: string; title: string; sourceOperationId: string | null; observedAt: number | null } | undefined;
@@ -496,9 +610,12 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
         return { ...operation, details };
       }).find((operation) => operation.details?.artifactId === input.artifactId
         && operation.details?.artifactUri === artifact.uri && typeof operation.details?.sha256 === "string");
-      const inline = artifact.content.trim().length > 0;
+      // Artifact rows predate Attempt identity in the immutable schema. An
+      // equal millisecond is ambiguous across an Attempt transition, so inline
+      // provenance must be strictly later than the current Attempt start.
+      const inline = artifact.content.trim().length > 0 && artifact.createdAt > runState.attemptStartedAt;
       const receiptBacked = Boolean(receipt && /^\.tagent\/artifacts\//.test(artifact.uri));
-      if (requiresTrustedReceipt && !inline && !receiptBacked) throw new Error("artifact evidence is not backed by readable inline content or a successful current-Attempt artifact receipt");
+      if (requiresTrustedReceipt && !inline && !receiptBacked) throw new Error("artifact evidence is not backed by current-Attempt inline content or a successful current-Attempt artifact receipt");
       const contentHash = inline ? sha256(Buffer.from(artifact.content)) : receiptBacked ? `sha256:${String(receipt!.details!.sha256)}` : "missing";
       facts.artifact = { id: input.artifactId, ...artifact, content: undefined, contentHash, receipt: receipt ? { operationId: receipt.id, completedAt: receipt.completedAt } : null };
     }
@@ -536,7 +653,10 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
       p.updated_at as updatedAt,p.completed_at as completedAt,r.status as runStatus
       FROM workspace_goal_roadmap_item_progress p LEFT JOIN runs r ON r.id=p.run_id
       WHERE p.goal_id=? AND p.roadmap_revision_id=?`).all(goalId, roadmap.id) as Array<WorkspaceGoalRoadmapItemProgress & { runStatus: RunStatus | null }>;
-    const byItem = new Map(rows.map(({ runStatus, ...row }) => [row.itemId, { ...row, status: projectedRoadmapStatus(row.status, runStatus) }]));
+    const byItem = new Map(rows.map(({ runStatus, ...row }) => {
+      const status = projectedRoadmapStatus(row.status, runStatus);
+      return [row.itemId, { ...row, status, runStatus, retryable: status === "blocked" && Boolean(runStatus && ["failed", "cancelled"].includes(runStatus)) }];
+    }));
     const approved = new Set(approvedItemIds);
     return roadmapContent(roadmap).items.map((item) => {
       if (!approved.has(item.id)) return {
@@ -545,6 +665,8 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
         itemId: item.id,
         status: "unapproved" as const,
         runId: null,
+        runStatus: null,
+        retryable: false,
         updatedAt: roadmap.createdAt,
         completedAt: null,
       };
@@ -554,6 +676,8 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
         itemId: item.id,
         status: "pending" as const,
         runId: null,
+        runStatus: null,
+        retryable: false,
         updatedAt: roadmap.createdAt,
         completedAt: null,
       };
@@ -587,7 +711,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
       JOIN runs r ON r.id=l.run_id
       WHERE l.goal_id=? AND (r.status IN ('running','waiting_input')
         OR (r.id=? AND r.status IN ('interrupted','blocked')))
-      ORDER BY CASE WHEN r.id=? THEN 0 ELSE 1 END,l.created_at DESC,r.id DESC LIMIT 1`)
+      ORDER BY CASE WHEN r.id=? THEN 0 ELSE 1 END,l.created_at DESC,l.rowid DESC LIMIT 1`)
       .get(goalId, preferredRunId, preferredRunId) as { id: string; status: string } | undefined;
     return run ?? { id: null, status: null };
   }
@@ -598,7 +722,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
 
   private runLinkForRun(runId: string): RunLinkRow | undefined {
     return this.db.prepare(`SELECT goal_id as goalId,run_id as runId,goal_revision as goalRevision,roadmap_revision_id as roadmapRevisionId,
-      approved_item_ids_json as roadmapItemIdsJson,criterion_keys_json as criterionKeysJson,link_mode as mode,created_at as createdAt
+      approved_item_ids_json as roadmapItemIdsJson,criterion_keys_json as criterionKeysJson,link_mode as mode,created_at as createdAt,rowid as linkOrder
       FROM workspace_goal_run_links WHERE run_id=?`).get(runId) as RunLinkRow | undefined;
   }
 
@@ -612,7 +736,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
   private latestRevision(goalId: string, kind: WorkspaceGoalRevision["kind"]): WorkspaceGoalRevision | null { const row = this.db.prepare(`SELECT id,goal_id as goalId,kind,revision,content_json as contentJson,content_hash as contentHash,source_artifact_id as sourceArtifactId,created_by as createdBy,created_at as createdAt FROM workspace_goal_revisions WHERE goal_id=? AND kind=? ORDER BY revision DESC LIMIT 1`).get(goalId, kind) as RevisionRow | undefined; return row ? revisionFromRow(row) : null; }
   private decisionByRequest(goalId: string, requestId: string) { return this.db.prepare(`SELECT id,request_id as requestId,payload_hash as payloadHash,goal_id as goalId,target_revision_id as targetRevisionId,target_hash as targetHash,kind,approved_item_ids_json as approvedItemIdsJson,reason,actor_id as actorId,created_at as createdAt FROM workspace_goal_decisions WHERE goal_id=? AND request_id=?`).get(goalId, requestId) as DecisionRow | undefined; }
   private decisions(goalId: string): WorkspaceGoalDecision[] { return (this.db.prepare(`SELECT id,COALESCE(request_id,'') as requestId,payload_hash as payloadHash,goal_id as goalId,target_revision_id as targetRevisionId,target_hash as targetHash,kind,approved_item_ids_json as approvedItemIdsJson,reason,actor_id as actorId,created_at as createdAt FROM workspace_goal_decisions WHERE goal_id=? ORDER BY created_at ASC,id ASC`).all(goalId) as DecisionRow[]).map(decisionFromRow); }
-  private runLinks(goalId: string): WorkspaceGoalRunLink[] { return (this.db.prepare(`SELECT goal_id as goalId,run_id as runId,goal_revision as goalRevision,roadmap_revision_id as roadmapRevisionId,approved_item_ids_json as roadmapItemIdsJson,criterion_keys_json as criterionKeysJson,link_mode as mode,created_at as createdAt FROM workspace_goal_run_links WHERE goal_id=? ORDER BY created_at ASC`).all(goalId) as RunLinkRow[]).map(runLinkFromRow); }
+  private runLinks(goalId: string): WorkspaceGoalRunLink[] { return (this.db.prepare(`SELECT goal_id as goalId,run_id as runId,goal_revision as goalRevision,roadmap_revision_id as roadmapRevisionId,approved_item_ids_json as roadmapItemIdsJson,criterion_keys_json as criterionKeysJson,link_mode as mode,created_at as createdAt,rowid as linkOrder FROM workspace_goal_run_links WHERE goal_id=? ORDER BY created_at,rowid`).all(goalId) as RunLinkRow[]).map(runLinkFromRow); }
   private evidenceLinks(goalId: string): WorkspaceGoalEvidenceLink[] { return this.db.prepare(`SELECT id,goal_id as goalId,goal_revision as goalRevision,criterion_key as criterionKey,run_id as runId,check_key as checkKey,artifact_id as artifactId,operation_id as operationId,source_digest as sourceDigest,status,created_at as createdAt,updated_at as updatedAt FROM workspace_goal_evidence_links WHERE goal_id=? ORDER BY created_at ASC`).all(goalId) as WorkspaceGoalEvidenceLink[]; }
 }
 

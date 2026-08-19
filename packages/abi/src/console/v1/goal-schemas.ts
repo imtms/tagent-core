@@ -13,6 +13,7 @@ export const ConsoleWorkspaceGoalNextActionSchema = Type.Object({
     Type.Literal("resume"), Type.Literal("view_result"),
   ]),
   title: Type.String(), explanation: Type.String(), primaryActionLabel: Type.String(), roadmapItemId: Type.Union([Type.String(), Type.Null()]),
+  taskRunId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 });
 export const ConsoleWorkspaceGoalCriterionSchema = Type.Object({ key: Type.String(), title: Type.String(), required: Type.Boolean() });
 export const ConsoleWorkspaceGoalDefinitionSchema = Type.Object({
@@ -41,8 +42,13 @@ export const ConsoleWorkspaceGoalRunLinkSchema = Type.Object({
 });
 export const ConsoleWorkspaceGoalRoadmapProgressSchema = Type.Object({
   goalId: Type.String(), roadmapRevisionId: Type.String(), itemId: Type.String(),
-  status: Type.Union([Type.Literal("unapproved"), Type.Literal("pending"), Type.Literal("running"), Type.Literal("completed"), Type.Literal("blocked"), Type.Literal("skipped")]),
-  runId: Type.Union([Type.String(), Type.Null()]), updatedAt: TimestampMillisecondsSchema, completedAt: Type.Union([TimestampMillisecondsSchema, Type.Null()]),
+  status: Type.Union([Type.Literal("unapproved"), Type.Literal("pending"), Type.Literal("running"), Type.Literal("completed"), Type.Literal("blocked")]),
+  runId: Type.Union([Type.String(), Type.Null()]),
+  runStatus: Type.Union([
+    Type.Literal("running"), Type.Literal("waiting_input"), Type.Literal("completed"), Type.Literal("blocked"),
+    Type.Literal("interrupted"), Type.Literal("cancelled"), Type.Literal("failed"), Type.Null(),
+  ]),
+  retryable: Type.Boolean(), updatedAt: TimestampMillisecondsSchema, completedAt: Type.Union([TimestampMillisecondsSchema, Type.Null()]),
 });
 export const ConsoleWorkspaceGoalEvidenceLinkSchema = Type.Object({
   id: Type.String(), goalId: Type.String(), goalRevision: Type.Number(), criterionKey: Type.String(), runId: Type.String(),

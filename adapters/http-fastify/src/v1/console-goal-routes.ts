@@ -138,6 +138,9 @@ function mapGoalError(error: unknown) {
   if (message.includes("idempotency conflict")) return consoleError(409, "workspace_goal.idempotency_conflict", message);
   if (message.includes("terminal")) return consoleError(409, "workspace_goal.terminal", message);
   if (message.includes("not ready") || message.includes("must be") || message.includes("only a")) return consoleError(409, "workspace_goal.invalid_transition", message);
-  if (message.includes("conflict")) return consoleError(409, "workspace_goal.conflict", message);
+  if (message.includes("conflict") || message.includes("already") || message.includes("cannot")
+    || message.includes("active TaskRun") || message.includes("queued") || message.includes("no longer launchable")) {
+    return consoleError(409, "workspace_goal.conflict", message);
+  }
   return consoleError(400, "workspace_goal.invalid", message);
 }

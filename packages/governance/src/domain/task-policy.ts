@@ -126,13 +126,14 @@ export function effectiveTaskExecutionPolicy(
   }
   const currentOperations = currentAttempt === undefined ? operations : operations.filter((item) => item.attempt === currentAttempt);
   const mutationObserved = currentOperations.some(operationMayMutate);
-  if (contract?.workspaceGoal || mutationObserved) {
+  const roadmapGoal = (contract?.workspaceGoal as { mode?: string } | null | undefined)?.mode === "roadmap";
+  if (roadmapGoal || mutationObserved) {
     mode = mode === "external_action" ? mode : "workspace_mutation";
     sideEffectRisk = maxByRank(sideEffectRisk, "workspace", riskRank);
     evidencePolicy = maxByRank(evidencePolicy, "trusted_check", evidenceRank);
     reviewPolicy = maxByRank(reviewPolicy, "full", reviewRank);
-    reasons.push(contract?.workspaceGoal
-      ? "Core raised the policy because a Workspace Goal is attached."
+    reasons.push(roadmapGoal
+      ? "Core raised the policy because an approved Workspace Goal Roadmap item is attached."
       : "Core raised the policy because a mutation-capable operation was observed in the current Attempt.");
   }
   if (mode === "external_action") {

@@ -491,6 +491,68 @@ describe("Web workbench behavior", () => {
       }],
     });
     const cancelled = renderGoal({ ...goal, status: "cancelled" });
+    const roadmap = {
+      id: "roadmap-1",
+      goalId: goal.id,
+      kind: "roadmap" as const,
+      revision: 1,
+      content: {
+        summary: "One bounded item",
+        items: [{ id: "item-1", title: "Inspect blocked Run", outcome: "Run is visible", verification: "Open it", criterionKeys: ["visual"] }],
+      },
+      contentHash: "roadmap-hash",
+      sourceArtifactId: null,
+      createdBy: "operator",
+      createdAt: 2,
+    };
+    const approval = {
+      id: "approval-1",
+      requestId: "approval-request-1",
+      payloadHash: "approval-payload-hash",
+      goalId: goal.id,
+      targetRevisionId: roadmap.id,
+      targetHash: roadmap.contentHash,
+      kind: "approve_roadmap" as const,
+      approvedItemIds: ["item-1"],
+      reason: "",
+      actorId: "operator",
+      createdAt: 2,
+    };
+    const blockedProgress = {
+      goalId: goal.id,
+      roadmapRevisionId: roadmap.id,
+      itemId: "item-1",
+      status: "blocked" as const,
+      runId: "blocked-run",
+      runStatus: "blocked" as const,
+      retryable: false,
+      updatedAt: 3,
+      completedAt: null,
+    };
+    const blockedRoadmapGoal = {
+      ...goal,
+      status: "active" as const,
+      completedAt: null,
+      activeRoadmapRevisionId: roadmap.id,
+      roadmap,
+      decisions: [approval],
+      roadmapProgress: [blockedProgress],
+      nextAction: {
+        actor: "user" as const,
+        kind: "resolve_problem" as const,
+        title: "A Roadmap TaskRun needs attention",
+        explanation: "Open the original Run.",
+        primaryActionLabel: "Open task",
+        roadmapItemId: "item-1",
+        taskRunId: "blocked-run",
+      },
+    } satisfies WorkspaceGoal;
+    const nonRetryable = renderGoal(blockedRoadmapGoal);
+    const retryable = renderGoal({
+      ...blockedRoadmapGoal,
+      roadmapProgress: [{ ...blockedProgress, runStatus: "failed", retryable: true }],
+      nextAction: { ...blockedRoadmapGoal.nextAction, kind: "run_roadmap_item", primaryActionLabel: "Retry TaskRun" },
+    });
 
     expect(empty).not.toContain("Scope and boundaries");
     expect(empty).not.toContain("Linked TaskRuns");
@@ -522,6 +584,10 @@ describe("Web workbench behavior", () => {
     expect(populated).toContain("1 linked");
     expect(populated).toContain("1 Roadmap item");
     expect(cancelled).toContain('class="goal-status-badge danger"');
+    expect(nonRetryable).toContain(">Open</button>");
+    expect(nonRetryable).not.toContain(">Retry</button>");
+    expect(nonRetryable).toContain("Open task");
+    expect(retryable).toContain(">Retry</button>");
   });
 
   it("applies workspace and new-run view transitions atomically", () => {

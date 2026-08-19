@@ -144,6 +144,7 @@ export class SqlitePersistence {
       linkInbox: mutate(sqliteWorkspaceGoals.linkInbox.bind(sqliteWorkspaceGoals)),
       attachRun: mutate(sqliteWorkspaceGoals.attachRun.bind(sqliteWorkspaceGoals)),
       recordRunOutcome: mutate(sqliteWorkspaceGoals.recordRunOutcome.bind(sqliteWorkspaceGoals)),
+      reconcileRunState: mutate(sqliteWorkspaceGoals.reconcileRunState.bind(sqliteWorkspaceGoals)),
       linkEvidence: mutate(sqliteWorkspaceGoals.linkEvidence.bind(sqliteWorkspaceGoals)),
       authorizeRunMutation: query(sqliteWorkspaceGoals.authorizeRunMutation.bind(sqliteWorkspaceGoals)),
     });

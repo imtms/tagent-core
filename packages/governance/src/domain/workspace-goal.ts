@@ -3,7 +3,7 @@ export type WorkspaceGoalRevisionKind = "definition" | "roadmap";
 export type WorkspaceGoalDecisionKind = "approve_goal" | "approve_roadmap" | "request_change" | "pause" | "resume" | "close" | "cancel";
 export type WorkspaceGoalEvidenceStatus = "valid" | "stale" | "contradicted";
 export type WorkspaceGoalRunLinkMode = "workspace" | "roadmap";
-export type WorkspaceGoalRoadmapItemStatus = "unapproved" | "pending" | "running" | "completed" | "blocked" | "skipped";
+export type WorkspaceGoalRoadmapItemStatus = "unapproved" | "pending" | "running" | "completed" | "blocked";
 
 export interface WorkspaceGoalCriterionDefinition {
   key: string;
@@ -77,6 +77,8 @@ export interface WorkspaceGoalRoadmapItemProgress {
   itemId: string;
   status: WorkspaceGoalRoadmapItemStatus;
   runId: string | null;
+  runStatus: "running" | "waiting_input" | "completed" | "blocked" | "interrupted" | "cancelled" | "failed" | null;
+  retryable: boolean;
   updatedAt: number;
   completedAt: number | null;
 }
@@ -103,6 +105,8 @@ export interface WorkspaceGoalNextAction {
   explanation: string;
   primaryActionLabel: string;
   roadmapItemId: string | null;
+  /** TaskRun to open when resolving an item that no longer owns Goal attention. */
+  taskRunId?: string | null;
 }
 
 export interface WorkspaceGoal {

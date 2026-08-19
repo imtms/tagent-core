@@ -250,6 +250,45 @@ describe("Workspace Goal Core execution", () => {
     }
   });
 
+  it("keeps a Goal-linked Inbox item immutable and attaches its Run inside claim", () => {
+    const store = new Store(":memory:");
+    const { workspace, goals, goal } = createApprovedGoal(store);
+    const item = { id: "persist", title: "Persist", outcome: "State is stored", verification: "Run storage tests", criterionKeys: ["stored"] };
+    const roadmap = goals.addRoadmap(goal.id, { summary: "Persist safely", items: [item] }, null, "user");
+    goals.decide({ goalId: goal.id, targetRevisionId: roadmap.id, targetHash: roadmap.contentHash, kind: "approve_roadmap", approvedItemIds: [item.id], actorId: "user" });
+    try {
+      const queued = enqueueUnlinkedRoadmapItem(store, { workspaceId: workspace.id, goalId: goal.id, goalOutcome: definition().outcome, item, requestId: "immutable-roadmap" });
+      goals.linkInbox({ goalId: goal.id, inboxItemId: queued.id, goalRevision: 1, roadmapRevisionId: roadmap.id, roadmapItemIds: [item.id], criterionKeys: item.criterionKeys });
+      const unrelated = store.enqueueSessionInbox(workspace.id, "ordinary", { ...queued.analysis, routerVersion: "ordinary", reason: "ordinary" }, "ordinary");
+      expect(store.updateSessionInboxItem(queued.id, workspace.id, "Delete unrelated files", { ...queued.analysis, summary: "Delete unrelated files" })).toBeUndefined();
+      expect(store.mergeSessionInboxItems(unrelated.id, queued.id, workspace.id)).toBe(false);
+      expect(store.mergeSessionInboxItems(queued.id, unrelated.id, workspace.id)).toBe(false);
+      expect(store.deleteSessionInboxItem(queued.id, workspace.id)).toBe(false);
+      expect(store.decideSessionInboxItem(queued.id, workspace.id, "defer")).toBe(false);
+
+      const claimed = store.claimSessionInboxNow(queued.id, workspace.id);
+      expect(claimed).toMatchObject({ status: "started", run: { contract: { sourceInput: expect.stringContaining("Persist"), workspaceGoal: { goalId: goal.id, mode: "roadmap", targetRoadmapItemIds: [item.id] } } } });
+      if (claimed.status !== "started") throw new Error("Goal Inbox item did not start");
+      expect(corePersistence(store).workspaceGoals.authorizeRunMutation(claimed.run.id)).toEqual({ allowed: true, reason: "Goal Roadmap slice is approved" });
+    } finally { store.close(); }
+  });
+
+  it("fails closed when an internal Roadmap Run has no durable Run link", () => {
+    const store = new Store(":memory:");
+    try {
+      const workspace = store.createSession("Missing Goal Run link");
+      const run = store.createRun(workspace.id, "orphan", undefined, {
+        sourceInput: "orphan", summary: "orphan", objectives: [{ id: "roadmap-orphan", summary: "orphan", timing: "current", kind: "change" }],
+        acceptanceCriteria: [], scope: "orphan", nonGoals: [], sourceInboxIds: [], parentRunId: null,
+        relation: "independent", intent: "new_task", decisionReason: "orphan", routerVersion: "workspace-goal-roadmap-v1",
+      });
+      expect(corePersistence(store).workspaceGoals.authorizeRunMutation(run.id)).toEqual({
+        allowed: false,
+        reason: "Workspace Goal Roadmap TaskRun is missing its durable Run authorization",
+      });
+    } finally { store.close(); }
+  });
+
   it("fails closed when recovery finds a Roadmap submission without durable authorization", async () => {
     const store = new Store(":memory:");
     const { workspace, goals, goal } = createApprovedGoal(store);
@@ -263,9 +302,33 @@ describe("Workspace Goal Core execution", () => {
       enqueueUnlinkedRoadmapItem(store, { workspaceId: workspace.id, goalId: goal.id, goalOutcome: definition().outcome, item, requestId: "orphan-roadmap-link" });
       expect(service.recoverSessionInbox()).toEqual([]);
       const run = store.listRuns(workspace.id)[0];
-      expect(run).toMatchObject({ status: "failed", launchRetryable: true });
+      expect(run).toMatchObject({ status: "failed", launchRetryable: false });
       expect(run.contract?.workspaceGoal).toBeUndefined();
       expect(goals.get(goal.id)?.runLinks).toEqual([]);
+    } finally {
+      await service.closeRuntimes();
+      store.close();
+    }
+  });
+
+  it("rejects a started requestId when the active Roadmap revision changes", async () => {
+    const store = new Store(":memory:");
+    const { workspace, goals, goal } = createApprovedGoal(store);
+    const content = { summary: "Stable item", items: [
+      { id: "persist", title: "Persist", outcome: "State is stored", verification: "Run storage tests", criterionKeys: ["stored"] },
+    ] };
+    const firstRoadmap = goals.addRoadmap(goal.id, content, null, "user");
+    goals.decide({ goalId: goal.id, targetRevisionId: firstRoadmap.id, targetHash: firstRoadmap.contentHash, kind: "approve_roadmap", approvedItemIds: ["persist"], actorId: "user" });
+    const service = createCoreApplication({ persistence: corePersistence(store), workspace: "/tmp", runtimeFactory: () => new DeferredRuntime() });
+    try {
+      const first = service.startWorkspaceGoalRoadmapItem(goal.id, "persist", "stable-start");
+      store.transitionRun(first.run!.id, ["running"], "completed", "run.completed", {}, "done", first.run!.attempt);
+      goals.recordRunOutcome(first.run!.id);
+      const secondRoadmap = goals.addRoadmap(goal.id, content, null, "user");
+      goals.decide({ goalId: goal.id, targetRevisionId: secondRoadmap.id, targetHash: secondRoadmap.contentHash, kind: "approve_roadmap", approvedItemIds: ["persist"], actorId: "user" });
+      expect(() => service.startWorkspaceGoalRoadmapItem(goal.id, "persist", "stable-start")).toThrow("idempotency conflict");
+      expect(goals.get(goal.id)?.roadmapProgress).toContainEqual(expect.objectContaining({ itemId: "persist", status: "pending" }));
+      expect(store.listRuns(workspace.id)).toHaveLength(1);
     } finally {
       await service.closeRuntimes();
       store.close();

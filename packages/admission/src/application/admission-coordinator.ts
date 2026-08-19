@@ -23,6 +23,7 @@ import type {
 } from "@tagent/execution/ports";
 import type { ApprovalRepository } from "@tagent/governance/ports";
 import type { WorkspaceGoalRepository } from "@tagent/governance/ports";
+import { buildGoalRoadmapAdmission, matchesGoalRoadmapAdmission } from "./goal-roadmap-admission.js";
 import { effectiveTaskExecutionPolicy } from "@tagent/governance";
 import type {
   AttemptLauncherPort,
@@ -45,7 +46,7 @@ interface AdmissionState {
     submissions: SubmissionQueue;
     taskRuns: TaskRunRepository;
     taskRunTransitions: TaskRunTransitionPort;
-    workspaceGoals: Pick<WorkspaceGoalRepository, "linkInbox" | "attachRun" | "recordRunOutcome">;
+    workspaceGoals: Pick<WorkspaceGoalRepository, "linkInbox" | "attachRun" | "recordRunOutcome" | "reconcileRunState">;
   };
   readonly recalledMemory: Map<string, string>;
   readonly preparationTasks: Map<string, {
@@ -56,6 +57,8 @@ interface AdmissionState {
 }
 
 export class AdmissionCoordinator {
+  private goalRunStateReconciled = false;
+
   constructor(
     private readonly state: AdmissionState,
     private readonly dependencies: {
@@ -161,14 +164,8 @@ export class AdmissionCoordinator {
   }) {
     if (this.state.closing) throw new Error("Service is shutting down");
     const requestId = input.requestId?.trim() || `goal:${input.goalId}:roadmap:${input.roadmapRevisionId}:${input.roadmapItem.id}:${randomUUID()}`;
-    const content = [
-      `Advance Workspace Goal: ${input.goalOutcome}`,
-      `Execute Goal Roadmap item: ${input.roadmapItem.title}`,
-      `Expected outcome: ${input.roadmapItem.outcome}`,
-      `Verification: ${input.roadmapItem.verification}`,
-    ].join("\n");
-    const expectedObjectiveId = `roadmap-${input.roadmapItem.id}`;
-    const expectedReason = `Explicitly launched from Workspace Goal ${input.goalId} Roadmap item ${input.roadmapItem.id}.`;
+    const admission = buildGoalRoadmapAdmission(input);
+    const { content, analysis } = admission;
     const linkInput = {
       goalId: input.goalId,
       goalRevision: input.goalRevision,
@@ -178,33 +175,20 @@ export class AdmissionCoordinator {
     };
     const existing = this.state.persistence.submissions.getSessionSubmission(input.workspaceId, requestId);
     if (existing) {
-      if (existing.content !== content || existing.analysis.routerVersion !== "workspace-goal-roadmap-v1"
-        || existing.analysis.objectives[0]?.id !== expectedObjectiveId || existing.analysis.reason !== expectedReason) {
+      if (!matchesGoalRoadmapAdmission(existing, admission)) {
         throw new Error("Workspace Goal Roadmap TaskRun idempotency conflict");
       }
+      this.state.persistence.workspaceGoals.linkInbox({ ...linkInput, inboxItemId: existing.id });
+      if (["deleted", "routed"].includes(existing.status)) {
+        throw new Error("Workspace Goal Roadmap TaskRun request is no longer launchable");
+      }
       if (!existing.runId && existing.status === "queued") {
-        this.state.persistence.workspaceGoals.linkInbox({ ...linkInput, inboxItemId: existing.id });
         const run = this.dispatchSessionInbox(input.workspaceId) ?? null;
         return { item: this.state.persistence.submissions.getSessionInboxItem(existing.id)!, run };
       }
+      if (existing.runId) this.state.persistence.workspaceGoals.attachRun(existing.runId, existing.id);
       return { item: existing, run: existing.runId ? this.state.persistence.taskRuns.getRun(existing.runId) ?? null : null };
     }
-    const analysis: SessionInputAnalysis = {
-      summary: input.roadmapItem.title,
-      objectives: [{ id: expectedObjectiveId, summary: input.roadmapItem.outcome, timing: "current", kind: "change" }],
-      intent: "new_task",
-      targetRunId: null,
-      priority: 700,
-      urgency: "normal",
-      relation: "independent",
-      acceptanceCriteria: [input.roadmapItem.outcome, input.roadmapItem.verification],
-      scope: input.roadmapItem.outcome,
-      nonGoals: [],
-      confidence: 1,
-      reason: expectedReason,
-      routerVersion: "workspace-goal-roadmap-v1",
-      executionPolicy: { mode: "workspace_mutation", sideEffectRisk: "workspace", evidencePolicy: "trusted_check", reviewPolicy: "full", policyVersion: "workspace-goal-v1", confidence: 1, reason: "Workspace Goal Roadmap execution mutates durable workspace state and requires trusted verification." },
-    };
     const item = this.state.persistence.submissions.enqueueSessionInbox(input.workspaceId, content, analysis, requestId);
     try {
       this.state.persistence.workspaceGoals.linkInbox({
@@ -354,6 +338,9 @@ export class AdmissionCoordinator {
   }
 
   public launchClaimedSessionInbox(item: Submission, run: TaskRun, retry = false) {
+    const claimedRun = this.state.persistence.taskRuns.getRun(run.id);
+    if (!claimedRun || claimedRun.status !== "running") return undefined;
+    run = claimedRun;
     try {
       this.state.persistence.workspaceGoals.attachRun(run.id, item.id);
       run = this.state.persistence.taskRuns.getRun(run.id) ?? run;
@@ -561,6 +548,10 @@ export class AdmissionCoordinator {
 
   recoverSessionInbox() {
     if (this.state.closing) return [];
+    if (!this.goalRunStateReconciled) {
+      this.state.persistence.workspaceGoals.reconcileRunState();
+      this.goalRunStateReconciled = true;
+    }
     const started: string[] = [];
     for (const sessionId of this.state.persistence.submissions.listSessionsWithQueuedInbox()) {
       const run = this.dispatchSessionInbox(sessionId);

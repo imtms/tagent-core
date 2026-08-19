@@ -8,6 +8,7 @@ import {
 } from "@tagent/governance";
 import { corePersistence } from "./support/test-persistence.js";
 import { recordSuccessfulBash, upsertTrustedCheck } from "./support/trusted-evidence.js";
+import { effectiveTaskExecutionPolicy } from "@tagent/governance/domain";
 
 function persistence(store: Store) {
   return createGuardedSqlitePersistence(store, { run: (work: () => unknown) => work() } as never);
@@ -151,6 +152,31 @@ describe("Workspace Goal Roadmap execution", () => {
       expect(goals.get(goal.id)?.runLinks).toEqual([expect.objectContaining({ runId: run.id, mode: "workspace", roadmapRevisionId: null, roadmapItemIds: [], criterionKeys: [] })]);
       expect(persistence(store).workspaceGoals.authorizeRunMutation(run.id)).toEqual({ allowed: true, reason: "User-started TaskRun follows the active Workspace Goal direction" });
     } finally { store.close(); }
+  });
+
+  it("prioritizes an attached TaskRun over Roadmap generation in nextAction", () => {
+    const store = new Store(":memory:");
+    try {
+      const { workspace, goals, goal } = createApprovedGoal(store);
+      const run = store.createRun(workspace.id, "ordinary guided work");
+      goals.attachRun(run.id);
+      expect(goals.get(goal.id)).toMatchObject({
+        currentRunId: run.id,
+        nextAction: { kind: "view_running_task", taskRunId: run.id },
+      });
+    } finally { store.close(); }
+  });
+
+  it("does not raise ordinary Goal direction to mutation policy without an observed mutation", () => {
+    const policy = effectiveTaskExecutionPolicy({
+      objectives: [],
+      executionPolicy: {
+        mode: "exact_delivery", sideEffectRisk: "none", evidencePolicy: "none", reviewPolicy: "local",
+        policyVersion: "test", confidence: 1, reason: "literal", exactOutput: "OK",
+      },
+      workspaceGoal: { mode: "workspace" },
+    });
+    expect(policy).toMatchObject({ mode: "exact_delivery", evidencePolicy: "none", reviewPolicy: "local", exactOutput: "OK" });
   });
 
   it("embeds only an approved Roadmap slice and Goal criterion prompts in a Roadmap TaskRun", () => {
@@ -335,6 +361,68 @@ describe("Workspace Goal Roadmap execution", () => {
     } finally { store.close(); }
   });
 
+  it("opens the original non-retryable blocked Roadmap Run after Goal attention moves on", () => {
+    const store = new Store(":memory:");
+    try {
+      const { workspace, goals, goal } = createApprovedGoal(store);
+      const revision = addApprovedRoadmap(goals, goal.id, roadmap(), ["storage"]);
+      const blocked = store.createRun(workspace.id, "blocked Roadmap item");
+      goals.linkRun({ goalId: goal.id, runId: blocked.id, goalRevision: 1, roadmapRevisionId: revision.id, roadmapItemIds: ["storage"], criterionKeys: ["stored"], mode: "roadmap" });
+      store.transitionRun(blocked.id, ["running"], "blocked", "run.blocked", {}, "blocked", blocked.attempt);
+      goals.recordRunOutcome(blocked.id);
+      const replacement = store.createRun(workspace.id, "replacement ordinary task");
+      goals.attachRun(replacement.id);
+      store.transitionRun(replacement.id, ["running"], "completed", "run.completed", {}, "done", replacement.attempt);
+      goals.recordRunOutcome(replacement.id);
+      expect(goals.get(goal.id)).toMatchObject({
+        currentRunId: null,
+        nextAction: { kind: "resolve_problem", roadmapItemId: "storage", taskRunId: blocked.id },
+        roadmapProgress: expect.arrayContaining([
+          expect.objectContaining({ itemId: "storage", status: "blocked", runStatus: "blocked", retryable: false }),
+        ]),
+      });
+    } finally { store.close(); }
+  });
+
+  it("does not let a delayed old outcome overwrite a newer Roadmap item owner", () => {
+    const store = new Store(":memory:");
+    try {
+      const value = definition([{ key: "stored", title: "Stored", required: true }]);
+      const { workspace, goals, goal } = createApprovedGoal(store, value);
+      const revision = addApprovedRoadmap(goals, goal.id, roadmap([{ id: "storage", title: "Store", outcome: "Stored", verification: "Verify", criterionKeys: ["stored"] }]));
+      const failed = store.createRun(workspace.id, "failed first attempt");
+      goals.linkRun({ goalId: goal.id, runId: failed.id, goalRevision: 1, roadmapRevisionId: revision.id, roadmapItemIds: ["storage"], criterionKeys: ["stored"], mode: "roadmap" });
+      store.transitionRun(failed.id, ["running"], "failed", "run.failed", {}, "failed", failed.attempt);
+      goals.recordRunOutcome(failed.id);
+
+      const replacement = store.createRun(workspace.id, "replacement");
+      goals.linkRun({ goalId: goal.id, runId: replacement.id, goalRevision: 1, roadmapRevisionId: revision.id, roadmapItemIds: ["storage"], criterionKeys: ["stored"], mode: "roadmap" });
+      // Millisecond timestamps are not a total order. Force a tie so insertion
+      // order, rather than random UUID ordering, decides the newer owner.
+      store.db.prepare("UPDATE workspace_goal_run_links SET created_at=1 WHERE run_id IN (?,?)").run(failed.id, replacement.id);
+      goals.recordRunOutcome(failed.id);
+      expect(goals.get(goal.id)?.roadmapProgress).toContainEqual(expect.objectContaining({ itemId: "storage", status: "running", runId: replacement.id }));
+      expect(() => goals.linkRun({ goalId: goal.id, runId: store.createRun(workspace.id, "third").id, goalRevision: 1, roadmapRevisionId: revision.id, roadmapItemIds: ["storage"], criterionKeys: ["stored"], mode: "roadmap" }))
+        .toThrow("already has a running TaskRun");
+    } finally { store.close(); }
+  });
+
+  it("reconciles a terminal Run whose Goal projection was interrupted", () => {
+    const store = new Store(":memory:");
+    try {
+      const value = definition([{ key: "stored", title: "Stored", required: true }]);
+      const { workspace, goals, goal } = createApprovedGoal(store, value);
+      const revision = addApprovedRoadmap(goals, goal.id, roadmap([{ id: "storage", title: "Store", outcome: "Stored", verification: "Verify", criterionKeys: ["stored"] }]));
+      const run = store.createRun(workspace.id, "failed before projection");
+      goals.linkRun({ goalId: goal.id, runId: run.id, goalRevision: 1, roadmapRevisionId: revision.id, roadmapItemIds: ["storage"], criterionKeys: ["stored"], mode: "roadmap" });
+      store.transitionRun(run.id, ["running"], "failed", "run.failed", {}, "failed", run.attempt);
+      expect(store.db.prepare("SELECT status FROM workspace_goal_roadmap_item_progress WHERE goal_id=? AND item_id=?").get(goal.id, "storage")).toMatchObject({ status: "running" });
+      persistence(store).workspaceGoals.reconcileRunState();
+      expect(store.db.prepare("SELECT status FROM workspace_goal_roadmap_item_progress WHERE goal_id=? AND item_id=?").get(goal.id, "storage")).toMatchObject({ status: "blocked" });
+      expect(goals.get(goal.id)?.roadmapProgress).toContainEqual(expect.objectContaining({ retryable: true, runStatus: "failed" }));
+    } finally { store.close(); }
+  });
+
   it("rejects fake evidence, cross-criterion overreach, and arbitrary artifact URIs", () => {
     const store = new Store(":memory:");
     try {
@@ -351,6 +439,81 @@ describe("Workspace Goal Roadmap execution", () => {
       expect(() => goals.linkEvidence({ goalId: goal.id, goalRevision: 1, criterionKey: "stored", runId: run.id, artifactId: "fake-artifact" })).toThrow("artifact receipt");
       const operation = recordSuccessfulBash(store, run.id, "echo receipt");
       expect(goals.linkEvidence({ goalId: goal.id, goalRevision: 1, criterionKey: "stored", runId: run.id, operationId: operation.id })).toMatchObject({ status: "valid" });
+    } finally { store.close(); }
+  });
+
+  it("rejects evidence from a TaskRun linked to an older Goal definition revision", () => {
+    const store = new Store(":memory:");
+    try {
+      const value = definition([{ key: "stored", title: "Stored v1", required: true }]);
+      const { workspace, goals, goal } = createApprovedGoal(store, value);
+      const revision = addApprovedRoadmap(goals, goal.id, roadmap([{ id: "storage", title: "Store", outcome: "Stored", verification: "Verify", criterionKeys: ["stored"] }]));
+      const run = store.createRun(workspace.id, "old revision evidence");
+      goals.linkRun({ goalId: goal.id, runId: run.id, goalRevision: 1, roadmapRevisionId: revision.id, roadmapItemIds: ["storage"], criterionKeys: ["stored"], mode: "roadmap" });
+      const operation = recordSuccessfulBash(store, run.id, "echo old");
+      store.transitionRun(run.id, ["running"], "completed", "run.completed", {}, "done", run.attempt);
+      goals.recordRunOutcome(run.id);
+      const next = goals.reviseDefinition(goal.id, definition([{ key: "stored", title: "Stored v2", required: true }]), "user");
+      goals.decide({ goalId: goal.id, targetRevisionId: next.id, targetHash: next.contentHash, kind: "approve_goal", actorId: "user" });
+      expect(() => goals.linkEvidence({ goalId: goal.id, goalRevision: 2, criterionKey: "stored", runId: run.id, operationId: operation.id }))
+        .toThrow("different workspace Goal definition revision");
+      expect(goals.get(goal.id)?.verifiedCriteria).toBe(0);
+    } finally { store.close(); }
+  });
+
+  it("makes inline Artifact evidence stale and non-rebindable when the Run advances to another Attempt", () => {
+    const store = new Store(":memory:");
+    try {
+      const value = definition([{ key: "stored", title: "Stored", required: true }]);
+      const { workspace, goals, goal } = createApprovedGoal(store, value);
+      const revision = addApprovedRoadmap(goals, goal.id, roadmap([{ id: "storage", title: "Store", outcome: "Stored", verification: "Verify", criterionKeys: ["stored"] }]));
+      const run = store.createRun(workspace.id, "artifact evidence");
+      goals.linkRun({ goalId: goal.id, runId: run.id, goalRevision: 1, roadmapRevisionId: revision.id, roadmapItemIds: ["storage"], criterionKeys: ["stored"], mode: "roadmap" });
+      store.addArtifact(run.id, { id: "inline", title: "Inline", kind: "report", content: "evidence", uri: "artifact://inline" });
+      const firstAttempt = store.db.prepare("SELECT started_at as startedAt FROM attempts WHERE run_id=? AND ordinal=1").get(run.id) as { startedAt: number };
+      const artifactCreatedAt = firstAttempt.startedAt + 1;
+      store.db.prepare("UPDATE artifacts SET created_at=? WHERE run_id=? AND id='inline'").run(artifactCreatedAt, run.id);
+      goals.linkEvidence({ goalId: goal.id, goalRevision: 1, criterionKey: "stored", runId: run.id, artifactId: "inline" });
+      store.db.prepare("UPDATE attempts SET active=0,status='superseded',updated_at=?,completed_at=? WHERE run_id=? AND ordinal=1")
+        .run(artifactCreatedAt, artifactCreatedAt, run.id);
+      store.db.prepare(`INSERT INTO attempts
+        (id,run_id,ordinal,trigger,status,active,version,event_sequence,started_at,updated_at,completed_at)
+        VALUES (?, ?, 2, 'retry', 'running', 1, 1, 0, ?, ?, NULL)`)
+        .run(`attempt:${run.id}:2`, run.id, artifactCreatedAt, artifactCreatedAt);
+      store.db.prepare("UPDATE runs SET attempt=2 WHERE id=?").run(run.id);
+      expect(goals.get(goal.id)?.evidenceLinks).toContainEqual(expect.objectContaining({ artifactId: "inline", status: "stale" }));
+      expect(() => goals.linkEvidence({
+        goalId: goal.id,
+        requestId: "attempt-2-inline",
+        goalRevision: 1,
+        criterionKey: "stored",
+        runId: run.id,
+        artifactId: "inline",
+      })).toThrow("current-Attempt inline content");
+    } finally { store.close(); }
+  });
+
+  it("lets newer valid evidence resolve an older contradiction for the same criterion", () => {
+    const store = new Store(":memory:");
+    try {
+      const value = definition([{ key: "stored", title: "Stored", required: true }]);
+      const { workspace, goals, goal } = createApprovedGoal(store, value);
+      const revision = addApprovedRoadmap(goals, goal.id, roadmap([
+        { id: "diagnose", title: "Diagnose", outcome: "Diagnosed", verification: "Inspect", criterionKeys: ["stored"] },
+        { id: "repair", title: "Repair", outcome: "Repaired", verification: "Verify", criterionKeys: ["stored"] },
+      ]));
+      const diagnose = store.createRun(workspace.id, "diagnose");
+      goals.linkRun({ goalId: goal.id, runId: diagnose.id, goalRevision: 1, roadmapRevisionId: revision.id, roadmapItemIds: ["diagnose"], criterionKeys: ["stored"], mode: "roadmap" });
+      const contradiction = recordSuccessfulBash(store, diagnose.id, "echo contradicted");
+      goals.linkEvidence({ goalId: goal.id, goalRevision: 1, criterionKey: "stored", runId: diagnose.id, operationId: contradiction.id, status: "contradicted" });
+      store.transitionRun(diagnose.id, ["running"], "blocked", "run.blocked", {}, "blocked", diagnose.attempt);
+      goals.recordRunOutcome(diagnose.id);
+
+      const repair = store.createRun(workspace.id, "repair");
+      goals.linkRun({ goalId: goal.id, runId: repair.id, goalRevision: 1, roadmapRevisionId: revision.id, roadmapItemIds: ["repair"], criterionKeys: ["stored"], mode: "roadmap" });
+      const valid = recordSuccessfulBash(store, repair.id, "echo valid");
+      goals.linkEvidence({ goalId: goal.id, goalRevision: 1, criterionKey: "stored", runId: repair.id, operationId: valid.id });
+      expect(goals.get(goal.id)).toMatchObject({ verifiedCriteria: 1 });
     } finally { store.close(); }
   });
 
@@ -552,6 +715,19 @@ describe("Workspace Goal Roadmap execution", () => {
       const replay = goals.decide({ goalId: goal.id, requestId: "cancel", targetRevisionId: goal.definition!.id, targetHash: goal.definition!.contentHash, kind: "cancel", actorId: "user" });
       expect(replay.id).toBe(cancelled.id);
       expect(() => goals.decide({ goalId: goal.id, targetRevisionId: goal.definition!.id, targetHash: goal.definition!.contentHash, kind: "resume", actorId: "user" })).toThrow("terminal");
+    } finally { store.close(); }
+  });
+
+  it("rejects lifecycle decisions bound to a stale Goal revision", () => {
+    const store = new Store(":memory:");
+    try {
+      const { goals, goal } = createApprovedGoal(store);
+      const stale = goal.definition!;
+      const current = goals.reviseDefinition(goal.id, { ...definition(), outcome: "Revised outcome" }, "user");
+      goals.decide({ goalId: goal.id, targetRevisionId: current.id, targetHash: current.contentHash, kind: "approve_goal", actorId: "user" });
+      expect(() => goals.decide({ goalId: goal.id, targetRevisionId: stale.id, targetHash: stale.contentHash, kind: "cancel", actorId: "stale-client" }))
+        .toThrow("lifecycle decision revision is stale");
+      expect(goals.get(goal.id)?.status).toBe("active");
     } finally { store.close(); }
   });
 });

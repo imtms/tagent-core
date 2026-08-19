@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## [0.8.10] - 2026-08-19
+
+### Workspace Goal execution and recovery
+
+- Made approved Roadmap admission one canonical, immutable binding across Inbox content, routing analysis, execution policy, Goal/revision, item, and criterion slice. Generic Inbox edit, merge, delete, defer, duplicate, and route paths can no longer rewrite Goal-owned work.
+- Made Inbox claim, TaskRun creation, Goal Run attachment, and immutable Goal snapshot publication atomic. Missing or invalid Roadmap authorization now fails closed as a non-retryable failed Run instead of falling back to ordinary Workspace guidance.
+- Added startup reconciliation for interrupted Inbox-to-Run attachment and idempotent Goal Run projections, while preventing queued Goal work from racing Goal revision, approval, pause, close, or cancellation.
+- Prevented duplicate or delayed outcomes from older Runs from reclaiming a Roadmap item or Goal attention after a newer Run took over.
+
+### Goal evidence and lifecycle correctness
+
+- Bound evidence to the Run link's current Goal definition revision and current Attempt, including inline Artifact provenance and Attempt identity in evidence digests. Supervisor evidence harvesting now ignores evaluations from earlier Attempts.
+- Made the newest non-stale evidence decisive per criterion, so newer valid evidence can resolve an older contradiction and newer contradictions revoke prior validity.
+- Required approval and lifecycle decisions to target the currently applicable immutable revision and mapped state/idempotency conflicts consistently to HTTP 409.
+- Preserved exact and semantic execution policy for ordinary Goal-guided TaskRuns unless the current Attempt observes mutation; approved Roadmap Runs retain full workspace-mutation governance.
+
+### Console and compatibility
+
+- Prioritized the active Goal TaskRun over Roadmap generation, exposed Roadmap `runStatus` and `retryable`, and added `nextAction.taskRunId` so a non-retryable blocked item opens its original Run. The Console offers Retry only for failed or cancelled work.
+- Removed the unreachable public `skipped` Roadmap status while retaining the immutable SQLite baseline for compatible schema validation.
+- The SQLite schema remains revision `2`, Memory schema and `tagent-core/state-0.8-r2` are unchanged, and no data migration is required. Deploy matching `0.8.10` Core, Web Console, ABI, and Core Client artifacts.
+
 ## [0.8.9] - 2026-08-19
 
 ### Authorization and security boundaries

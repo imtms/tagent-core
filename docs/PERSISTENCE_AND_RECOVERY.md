@@ -55,6 +55,8 @@ Startup never blindly repeats an effect whose outcome may have escaped Core:
 
 Callers must reconcile `outcome_unknown` explicitly. Automatic replay is forbidden.
 
+Workspace Goal recovery separately replays safe, idempotent projections rather than effects. Before queued Inbox dispatch, Core repairs any Goal Inbox item that already owns a Run but is missing its durable Run link/snapshot, then projects every linked Run's current status and evidence back into Goal state. Inbox claim, Run creation and Goal attachment are one transaction for new work. If a historical or corrupted internal Roadmap Run cannot prove its canonical Inbox authorization, mutation authorization remains fail-closed; it is never treated as an ordinary Workspace Run.
+
 An unexpectedly terminated or heartbeat-unresponsive Generation is restarted by the Host on the committed release with durable exponential backoff and a bounded crash budget. Pre-`READY` failures consume the same budget across Host restarts; release-resolution and verification failures do not. Startup may queue a crash-recovery Continuation only when all of these are true for an interrupted TaskRun:
 
 - no operation, control delivery, or TaskRun command is `outcome_unknown`;
