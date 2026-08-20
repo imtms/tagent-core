@@ -70,17 +70,29 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
     if (!claimed.claimed) {
       return encodeAbi(CommandResponseSchema, successEnvelope(request, { receipt: mapCommandReceipt(claimed.receipt, true) }));
     }
-    if (command.type === "task_run.submit_user_input"
-      && !run.userInputRequests.some((item) => item.id === command.payload.requestId && item.status === "pending")) {
-      const invalid = conflict("user_input.not_pending", "User input request is not pending for this TaskRun");
-      taskRunCommands.settleTaskRunCommand(principalId, taskRunId, command.commandId, "failed", {}, apiError(request, invalid));
-      throw invalid;
+    if (command.type === "task_run.submit_user_input") {
+      const input = run.userInputRequests.find((item) => item.id === command.payload.requestId);
+      const retryableSubmittedBoundary = input?.status === "submitted" && !run.pendingUserInput && (
+        run.status === "waiting_input"
+        || run.status === "blocked" && run.supervision.approvalRequests.some((approval) =>
+          approval.actionType === "execute_external_action" && approval.status === "pending")
+      );
+      if (input?.status !== "pending" && !retryableSubmittedBoundary) {
+        const invalid = conflict("user_input.not_pending", "User input request is not pending for this TaskRun");
+        taskRunCommands.settleTaskRunCommand(principalId, taskRunId, command.commandId, "failed", {}, apiError(request, invalid));
+        throw invalid;
+      }
     }
-    if (command.type === "task_run.resolve_approval"
-      && !run.supervision.approvalRequests.some((item) => item.id === command.payload.approvalRequestId && item.status === "pending")) {
-      const invalid = conflict("approval.not_pending", "Approval request is not pending for this TaskRun");
-      taskRunCommands.settleTaskRunCommand(principalId, taskRunId, command.commandId, "failed", {}, apiError(request, invalid));
-      throw invalid;
+    if (command.type === "task_run.resolve_approval") {
+      const approval = run.supervision.approvalRequests.find((item) => item.id === command.payload.approvalRequestId);
+      const retryableExternalApproval = command.payload.decision === "approved"
+        && approval?.actionType === "execute_external_action"
+        && (approval.status === "approved" || approval.status === "consumed");
+      if (approval?.status !== "pending" && !retryableExternalApproval) {
+        const invalid = conflict("approval.not_pending", "Approval request is not pending for this TaskRun");
+        taskRunCommands.settleTaskRunCommand(principalId, taskRunId, command.commandId, "failed", {}, apiError(request, invalid));
+        throw invalid;
+      }
     }
     const currentAttemptId = service.getCurrentAttemptId(taskRunId);
     if (command.expectedAttemptId !== null && command.expectedAttemptId !== currentAttemptId) {

@@ -198,6 +198,9 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     attemptExecutor: attemptLauncherRef.port,
     contextEnrichment: collaborators.contextEnrichment,
     continuation: continuationRef.port,
+    externalActionApproval: {
+      requestAfterUserInput: (input) => admissionRef.port.requestExternalActionApprovalAfterUserInput(input),
+    },
     eventHub,
     recovery: recoveryRef.port,
     runtimeRegistry,

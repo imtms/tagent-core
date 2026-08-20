@@ -25,7 +25,13 @@ export interface ToolCapabilityApplicationPort {
   getRunExecutionState?(): TaskRunExecutionState | undefined;
   isCurrentAttempt(): boolean;
   authorizeWorkspaceMutation(): { allowed: boolean; reason: string };
-  authorizeExternalAction(requireExplicit?: boolean): { allowed: boolean; reason: string };
+  inspectExternalActionAuthorization(requireExplicit?: boolean): { allowed: boolean; reason: string };
+  activateExternalActionAuthorization(
+    toolCallId: string,
+    toolName: string,
+    argsHash: string,
+    requireExplicit?: boolean,
+  ): { allowed: boolean; reason: string };
   requestExternalActionApproval?(
     toolCallId: string,
     toolName: string,

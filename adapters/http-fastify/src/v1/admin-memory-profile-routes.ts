@@ -26,7 +26,7 @@ import { profileRevision, runAdminProfileOperation } from "./admin-profile-suppo
 
 const memoryKinds = new Set<MemoryKind>(["fact", "preference", "episode", "procedure"]);
 
-function memory(request: FastifyRequest, dependencies: ChannelV1Dependencies) {
+function memory(dependencies: ChannelV1Dependencies) {
   if (!dependencies.memory) throw new V1HttpError(503, "memory.unavailable", "Memory is unavailable", "unavailable", true);
   return dependencies.memory;
 }
@@ -109,7 +109,7 @@ export function registerAdminMemoryProfileV1Routes(app: FastifyInstance, depende
   const write = authorizeProfile(dependencies, "admin:memory:write", "admin");
 
   app.get("/api/v1/admin/profiles/memory/status", { onRequest: read }, async (request) => {
-    const port = memory(request, dependencies);
+    const port = memory(dependencies);
     const readiness = await port.readiness(principalAccess(request, "memory_admin"));
     return encodeAbi(AdminMemoryStatusResponseSchema, successEnvelope(request, {
       status: { available: true, ready: Boolean(readiness.ready), degraded: Boolean(readiness.degraded),
@@ -122,7 +122,7 @@ export function registerAdminMemoryProfileV1Routes(app: FastifyInstance, depende
     schema: { body: PrincipalMemoryRecallRequestSchema },
   }, async (request, reply) => {
     const body = decodeAbi(PrincipalMemoryRecallRequestSchema, request.body);
-    const result = recallResult(await withRequestAbortSignal(request, reply, (signal) => memory(request, dependencies).recall({
+    const result = recallResult(await withRequestAbortSignal(request, reply, (signal) => memory(dependencies).recall({
       access: principalAccess(request, "memory_admin"), cue: body.cue.trim(), kinds: body.kinds,
       maxCards: body.maxCards, maxColdTopics: body.maxColdTopics,
     }, signal)));
@@ -141,7 +141,7 @@ export function registerAdminMemoryProfileV1Routes(app: FastifyInstance, depende
     const resourceId = `${scope.type}:${scope.id}`;
     const state: { snapshotRowId?: number; after?: { createdAt: number; id: string } } = query.cursor
       ? decodeProfileCursor(query.cursor, { kind: "admin_collection", resourceId }) : {};
-    const page = object(await memory(request, dependencies).listRecordsPage(
+    const page = object(await memory(dependencies).listRecordsPage(
       access(request, [scope], "memory_admin"), scope, {
         snapshotCreatedAt: state.snapshotRowId,
         after: state.after,
@@ -174,7 +174,7 @@ export function registerAdminMemoryProfileV1Routes(app: FastifyInstance, depende
     const operation = await runAdminProfileOperation(request, reply, dependencies, {
       profileId: "admin.memory.v1", endpointId: "admin.memory.capture", resourceType: "memory_scope",
       resourceId: body.scope.id, operation: "capture", payload: body,
-      effect: async () => object(await memory(request, dependencies).enqueueCapture({
+      effect: async () => object(await memory(dependencies).enqueueCapture({
         access: scoped,
         sourceRefs: [{ sourceType: "manual", sourceId: `profile:${principalOf(request).subjectId}` }],
         content: body.content.trim(),
@@ -191,7 +191,7 @@ export function registerAdminMemoryProfileV1Routes(app: FastifyInstance, depende
   }, async (request, reply) => {
     const memoryId = (request.params as { memoryId: string }).memoryId;
     const body = decodeAbi(AdminMemoryGovernRequestSchema, request.body);
-    const port = memory(request, dependencies);
+    const port = memory(dependencies);
     if (!port.govern) throw new V1HttpError(503, "memory.governance_unavailable", "Memory governance is unavailable", "unavailable", true);
     const scoped = access(request, [body.scope], "memory_admin");
     const operation = await runAdminProfileOperation(request, reply, dependencies, {
@@ -212,7 +212,7 @@ export function registerAdminMemoryProfileV1Routes(app: FastifyInstance, depende
     const operation = await runAdminProfileOperation(request, reply, dependencies, {
       profileId: "admin.memory.v1", endpointId: "admin.memory.forget", resourceType: "memory", resourceId: memoryId,
       operation: "forget", payload: { memoryId, ...body },
-      effect: async () => object(await memory(request, dependencies).forget({
+      effect: async () => object(await memory(dependencies).forget({
         access: scoped, scope: body.scope, ids: [memoryId], reason: body.reason, gracePeriodMs: body.gracePeriodMs,
       })),
     });

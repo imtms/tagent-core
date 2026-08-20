@@ -29,4 +29,11 @@ export interface AdmissionDispatchPort {
     toolCallId: string;
     toolName: string;
   }): { approvalId: string; reason: string };
+  requestExternalActionApprovalAfterUserInput(input: {
+    runId: RunId;
+    attemptId: string;
+    attempt: number;
+    expectedVersion: number;
+    inputRequestId: string;
+  }): { approvalId: string; reason: string };
 }

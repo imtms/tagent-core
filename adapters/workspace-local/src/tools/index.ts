@@ -15,7 +15,7 @@ export interface WorkspaceToolComposition {
 
 function createToolProviders(capabilities: ToolCapabilityApplicationPort, workspace: string, subprocess: SubprocessPort): readonly ToolProvider[] {
   return [
-    new ListToolProvider(capabilities, workspace), new ReadToolProvider(capabilities, workspace),
+    new ListToolProvider(workspace), new ReadToolProvider(capabilities, workspace),
     new WriteToolProvider(workspace), new EditToolProvider(capabilities), new PatchToolProvider(capabilities),
     new BashToolProvider(capabilities, workspace, subprocess), new TaskRunToolProvider(capabilities),
     new MemoryToolProvider(capabilities), new HistoryToolProvider(capabilities),

@@ -28,7 +28,8 @@ function tools(store: Store, runId: string, workspace: string) {
     getRun: () => store.getRun(runId),
     isCurrentAttempt: () => true,
     authorizeWorkspaceMutation: () => ({ allowed: true, reason: "ordinary TaskRun" }),
-    authorizeExternalAction: () => ({ allowed: true, reason: "ordinary TaskRun" }),
+    inspectExternalActionAuthorization: () => ({ allowed: true, reason: "ordinary TaskRun" }),
+    activateExternalActionAuthorization: () => ({ allowed: true, reason: "ordinary TaskRun" }),
     advanceRunPhase: (phase) => store.advanceRunPhase(runId, phase),
     setRunPhase: (phase) => store.setRunPhase(runId, phase),
     claimOperation: (id, operationType, payload) => store.claimOperation(id, runId, store.getRun(runId)!.attempt, operationType, payload),
@@ -112,7 +113,7 @@ describe("P0 reliable execution primitives", () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "cap");
     const capabilities: ToolCapabilityApplicationPort = {
       runId: run.id, artifactSink: createWorkspaceArtifactSink(workspace, 64_000), workspaceEdit: createWorkspaceEditPort(workspace),
-      getRun: () => store.getRun(run.id), isCurrentAttempt: () => true, authorizeWorkspaceMutation: () => ({ allowed: true, reason: "ordinary TaskRun" }), authorizeExternalAction: () => ({ allowed: true, reason: "ordinary TaskRun" }), advanceRunPhase: (phase) => store.advanceRunPhase(run.id, phase), setRunPhase: (phase) => store.setRunPhase(run.id, phase),
+      getRun: () => store.getRun(run.id), isCurrentAttempt: () => true, authorizeWorkspaceMutation: () => ({ allowed: true, reason: "ordinary TaskRun" }), inspectExternalActionAuthorization: () => ({ allowed: true, reason: "ordinary TaskRun" }), activateExternalActionAuthorization: () => ({ allowed: true, reason: "ordinary TaskRun" }), advanceRunPhase: (phase) => store.advanceRunPhase(run.id, phase), setRunPhase: (phase) => store.setRunPhase(run.id, phase),
       claimOperation: (id, operationType, payload) => store.claimOperation(id, run.id, store.getRun(run.id)!.attempt, operationType, payload), updateOperation: (id, update) => store.updateOperation(id, update), listOperations: (options) => store.listOperations(run.id, options),
       upsertPlanItem: (item) => store.upsertPlanItem(run.id, item), markChecksStale: () => store.markChecksStale(run.id), upsertCheck: (check) => store.upsertCheck(run.id, check), applyTaskRunBatch: (mutations) => applyTaskRunBatch(store, run.id, mutations), addArtifact: (artifact) => store.addArtifact(run.id, artifact), requestUserInput: (_id, prompt, fields) => store.requestUserInput(run.id, prompt, fields), recordToolAttempt: (toolCallId, toolName, args) => store.recordToolAttempt(run.id, store.getRun(run.id)!.attempt, toolCallId, toolName, args), completeToolAttempt: (toolCallId, success, error) => store.completeToolAttempt(run.id, store.getRun(run.id)!.attempt, toolCallId, success, error), consumeAtomicallySettledToolCall: () => false, publish: (type, data) => store.appendEvent(run.id, type, data),
     };

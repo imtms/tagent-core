@@ -17,7 +17,7 @@ const DEFAULT_RECALL_THRESHOLDS:MemoryRecallThresholds={lexicalMin:.04,topicMin:
 export class MemoryService implements MemoryFacade {
  private workerHeartbeatAt?:number;private lastConsolidationAt?:number;private readonly readinessCache=new Map<string,{at:number;value:MemoryReadiness}>();
  constructor(private readonly deps:MemoryServiceDependencies,private readonly thresholds:MemoryRecallThresholds=DEFAULT_RECALL_THRESHOLDS){}
- async listRecordsPage(access:RecallRequest["access"],scope:MemoryScope,query:MemoryRecordPageQuery){
+ async listRecordsPage(_access:RecallRequest["access"],scope:MemoryScope,query:MemoryRecordPageQuery){
   const page=await this.deps.records.listPage?.([scope],allKinds,query);
   if(page)return page;
   const snapshotCreatedAt=query.snapshotCreatedAt??Date.now();

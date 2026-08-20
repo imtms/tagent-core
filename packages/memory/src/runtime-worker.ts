@@ -5,7 +5,7 @@ import type { MemoryLifecycle } from "./lifecycle.js";
 import type { ColdStorageReconciler } from "./reconciler.js";
 import type { DurableReindexWorker } from "./reindex-worker.js";
 import type { CoreMemorySnapshotService } from "./core-snapshot.js";
-import type { BlobStorePort, OperationsStatePort, RecordStorePort } from "./ports.js";
+import type { OperationsStatePort, RecordStorePort } from "./ports.js";
 import type { MemoryHistoryBackfillPort } from "./history-backfill.js";
 
 type MemoryWorkerState = "idle" | "running" | "stopping" | "closed";
@@ -32,7 +32,6 @@ export class LocalMemoryWorker {
     private readonly reindex?: DurableReindexWorker,
     private readonly core?: CoreMemorySnapshotService,
     private readonly operations?: OperationsStatePort,
-    private readonly blobs?: BlobStorePort,
     private readonly records?: RecordStorePort,
     private readonly backfill?: MemoryHistoryBackfillPort,
   ) {}

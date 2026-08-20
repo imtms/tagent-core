@@ -121,6 +121,16 @@ export interface RunContextPort {
   publishContextEvents(runId: RunId, assembly: PreparedExecutionContext): void;
 }
 
+export interface ExternalActionApprovalBoundaryPort {
+  requestAfterUserInput(input: {
+    runId: RunId;
+    attemptId: string;
+    attempt: number;
+    expectedVersion: number;
+    inputRequestId: string;
+  }): { approvalId: string; reason: string };
+}
+
 /** Cross-domain follow-up owned by the composition root, not by Execution. */
 export interface PostAttemptPort {
   attemptFinalized(run: TaskRun, context: { shuttingDown: boolean }): void;

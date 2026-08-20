@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { symlinkSync, unlinkSync } from "node:fs";
+import { mkdtempSync, symlinkSync, unlinkSync } from "node:fs";
 import type { RuntimeMessage as AgentMessage, RuntimeTool } from "@tagent/execution/ports";
 import { createCoreApplication } from "@tagent/core-service/application";
 import { loadConfig } from "@tagent/core-service/config";
@@ -661,10 +661,11 @@ describe("Core application runtime boundary", () => {
   it("pauses external actions before runtime launch and binds approval to the resumed Attempt", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
+    const workspace = mkdtempSync("/tmp/tagent-external-approval-");
     let runtimeOptions: Parameters<RuntimeFactory>[0] | undefined;
     const service = createCoreApplication({
       persistence: corePersistence(store),
-      workspace: "/tmp",
+      workspace,
       runtimeFactory: (options) => {
         runtimeOptions = options;
         return new DeferredRuntime();
@@ -681,14 +682,46 @@ describe("Core application runtime boundary", () => {
     expect(runtimeOptions!.eventSink.beforeToolCall({ toolCallId: "external-read", toolName: "read", args: { path: "README.md" } })).toEqual({ blocked: false });
     expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "approved" });
     expect(runtimeOptions!.eventSink.beforeToolCall({ toolCallId: "external-call", toolName: "write", args: { path: "approved.txt", content: "approved" } })).toEqual({ blocked: false });
+    expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "approved" });
+    const write = runtimeOptions!.capabilities.tools.find((tool) => tool.name === "write")!;
+    await write.execute("external-call", { path: "approved.txt", content: "approved" }, new AbortController().signal);
     expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "consumed" });
-    expect(store.authorizeExternalAction(runId, 2)).toMatchObject({ allowed: false });
-    expect(store.authorizeExternalAction(runId, 3)).toMatchObject({ allowed: false });
+    expect(store.inspectExternalActionAuthorization(runId, 2)).toMatchObject({ allowed: true, approvalId: approval.id });
+    expect(store.inspectExternalActionAuthorization(runId, 3)).toMatchObject({ allowed: false });
+    const secondWrite = runtimeOptions!.capabilities.tools.find((tool) => tool.name === "write")!;
+    await expect(secondWrite.execute("external-call-2", { path: "approved-2.txt", content: "approved" }, new AbortController().signal)).resolves.toBeDefined();
+    expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "consumed" });
     await service.closeRuntimes();
     store.close();
   });
 
-  it("atomically enforces finite, unlimited, expired, and exhausted external-action approval reuse", async () => {
+  it("retries an approved external-action resume without approving twice", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime(),
+    });
+    const admitted = await service.enqueueSessionInput(session.id, "请部署到生产环境。", "external-approval-resume-recovery");
+    const runId = admitted.run!.id;
+    const approval = store.listApprovalRequests(runId)[0]!;
+    store.db.exec(`CREATE TEMP TRIGGER reject_external_approval_resume BEFORE UPDATE OF attempt ON runs
+      WHEN NEW.attempt > OLD.attempt BEGIN SELECT RAISE(ABORT,'reject external approval resume'); END`);
+
+    await expect(service.approveRunApproval(approval.id)).rejects.toThrow("reject external approval resume");
+    expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "approved" });
+    expect(store.getRun(runId)).toMatchObject({ status: "blocked", attempt: 1 });
+    expect(store.listEvents(runId).filter((event) => event.type === "supervisor.approval.approved")).toHaveLength(1);
+
+    store.db.exec("DROP TRIGGER reject_external_approval_resume");
+    await expect(service.approveRunApproval(approval.id)).resolves.toMatchObject({ status: "running", attempt: 2 });
+    expect(store.listEvents(runId).filter((event) => event.type === "supervisor.approval.approved")).toHaveLength(1);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("atomically activates external-action approval once for one Attempt", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const service = createCoreApplication({
@@ -703,31 +736,146 @@ describe("Core application runtime boundary", () => {
     const reuseState = () => store.db.prepare(`SELECT status,used_count as usedCount,max_uses as maxUses
       FROM approval_requests WHERE id=?`).get(approval.id) as { status: string; usedCount: number; maxUses: number | null };
 
-    store.db.prepare(`UPDATE approval_requests SET status='approved',reuse_mode='reusable',max_uses=2,used_count=0,expires_at=NULL
-      WHERE id=?`).run(approval.id);
-    expect(store.authorizeExternalAction(runId, 2)).toMatchObject({ allowed: true, approvalId: approval.id });
-    expect(reuseState()).toEqual({ status: "approved", usedCount: 1, maxUses: 2 });
-    expect(store.authorizeExternalAction(runId, 2)).toMatchObject({ allowed: true, approvalId: approval.id });
-    expect(reuseState()).toEqual({ status: "consumed", usedCount: 2, maxUses: 2 });
-    expect(store.authorizeExternalAction(runId, 2)).toMatchObject({ allowed: false });
-
-    store.db.prepare(`UPDATE approval_requests SET status='approved',reuse_mode='reusable',max_uses=NULL,used_count=0,expires_at=NULL
-      WHERE id=?`).run(approval.id);
-    expect(store.authorizeExternalAction(runId, 2).allowed).toBe(true);
-    expect(store.authorizeExternalAction(runId, 2).allowed).toBe(true);
-    expect(reuseState()).toEqual({ status: "approved", usedCount: 2, maxUses: null });
-
-    store.db.prepare(`UPDATE approval_requests SET status='approved',reuse_mode='one_time',max_uses=1,used_count=0,expires_at=?
-      WHERE id=?`).run(Date.now() - 1, approval.id);
-    expect(store.authorizeExternalAction(runId, 2)).toMatchObject({ allowed: false });
-    expect(reuseState()).toEqual({ status: "approved", usedCount: 0, maxUses: 1 });
-
-    store.db.prepare(`UPDATE approval_requests SET status='approved',reuse_mode='one_time',max_uses=1,used_count=0,expires_at=NULL
-      WHERE id=?`).run(approval.id);
-    const competing = [store.authorizeExternalAction(runId, 2), store.authorizeExternalAction(runId, 2)];
-    expect(competing.filter((result) => result.allowed)).toHaveLength(1);
+    const activation = (operationId: string, toolCallId = operationId) => ({
+      operationId,
+      toolCallId,
+      toolName: "write",
+      argsHash: "a".repeat(64),
+    });
+    const competing = [
+      store.activateExternalActionAuthorization(runId, 2, activation("attempt-2-activation")),
+      store.activateExternalActionAuthorization(runId, 2, activation("attempt-2-activation")),
+    ];
+    expect(competing.every((result) => result.allowed)).toBe(true);
     expect(reuseState()).toEqual({ status: "consumed", usedCount: 1, maxUses: 1 });
+    expect(store.inspectExternalActionAuthorization(runId, 2)).toMatchObject({ allowed: true, approvalId: approval.id });
+    expect(store.activateExternalActionAuthorization(runId, 2, activation("attempt-2-later-tool"))).toMatchObject({ allowed: true, approvalId: approval.id });
+    expect(reuseState()).toEqual({ status: "consumed", usedCount: 1, maxUses: 1 });
+    expect((store.db.prepare(`SELECT COUNT(*) count FROM approval_receipts
+      WHERE approval_id=? AND outcome='allow'`).get(approval.id) as { count: number }).count).toBe(2);
+    expect(store.inspectExternalActionAuthorization(runId, 3)).toMatchObject({ allowed: false });
 
+    store.db.prepare(`UPDATE approval_requests SET expires_at=? WHERE id=?`).run(Date.now() - 1, approval.id);
+    expect(store.inspectExternalActionAuthorization(runId, 2)).toMatchObject({ allowed: true });
+    store.db.prepare(`UPDATE approval_requests SET status='approved',used_count=0 WHERE id=?`).run(approval.id);
+    expect(store.inspectExternalActionAuthorization(runId, 2)).toMatchObject({ allowed: false });
+    expect(store.activateExternalActionAuthorization(runId, 2, activation("attempt-2-expired"))).toMatchObject({ allowed: false });
+
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("surfaces a real approval card when current-Attempt authority is genuinely unavailable", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let runtimeOptions: Parameters<RuntimeFactory>[0] | undefined;
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => {
+        runtimeOptions = options;
+        return new DeferredRuntime();
+      },
+    });
+    const admitted = await service.enqueueSessionInput(session.id, "请部署到生产环境。", "external-missing-authority-card");
+    const runId = admitted.run!.id;
+    const firstApproval = store.listApprovalRequests(runId)[0]!;
+    await service.approveRunApproval(firstApproval.id);
+    store.db.prepare("UPDATE approval_requests SET expires_at=? WHERE id=?").run(Date.now() - 1, firstApproval.id);
+
+    expect(runtimeOptions!.eventSink.beforeToolCall({
+      toolCallId: "expired-write",
+      toolName: "write",
+      args: { path: "never-written.txt", content: "unsafe" },
+    })).toMatchObject({ blocked: true, reason: expect.stringContaining("Approval requested") });
+    expect(store.getRun(runId)).toMatchObject({ status: "blocked", attempt: 2, pendingUserInput: null });
+    expect(store.listApprovalRequests(runId).find((item) => item.status === "pending")).toMatchObject({
+      actionType: "execute_external_action",
+      metadata: { approvedAttempt: 3, requestedAttempt: 2, requestedToolName: "write" },
+    });
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("requires a real fresh approval after user input would create a new external-action Attempt", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const runtimeOptions: Array<Parameters<RuntimeFactory>[0]> = [];
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => {
+        runtimeOptions.push(options);
+        return new DeferredRuntime();
+      },
+    });
+    const admitted = await service.enqueueSessionInput(session.id, "请部署到生产环境。", "external-input-reapproval");
+    const runId = admitted.run!.id;
+    await service.approveRunApproval(store.listApprovalRequests(runId)[0]!.id);
+    expect(runtimeOptions).toHaveLength(1);
+
+    const taskRunTool = runtimeOptions[0]!.capabilities.tools.find((tool) => tool.name === "task_run")!;
+    await taskRunTool.execute("need-target", {
+      action: "request_user_input",
+      prompt: "Choose the deployment target",
+      fields: [{ key: "target", label: "Target", required: true }],
+    }, new AbortController().signal);
+    const request = store.getRun(runId)!.pendingUserInput!;
+    expect(store.getRun(runId)).toMatchObject({ status: "waiting_input", attempt: 2 });
+
+    const submitted = await service.submitUserInput(request.id, { target: "production" });
+    expect(submitted).toMatchObject({ status: "blocked", attempt: 2, pendingUserInput: null });
+    expect(runtimeOptions).toHaveLength(1);
+    const reapproval = store.listApprovalRequests(runId).find((item) => item.status === "pending")!;
+    expect(reapproval).toMatchObject({
+      actionType: "execute_external_action",
+      metadata: { approvedAttempt: 3, requestedAttempt: 2, submittedInputRequestId: request.id },
+    });
+
+    await service.approveRunApproval(reapproval.id);
+    expect(store.getRun(runId)).toMatchObject({ status: "running", attempt: 3 });
+    expect(runtimeOptions).toHaveLength(2);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("recovers a submitted external-action input when approval persistence initially fails", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let runtimeOptions: Parameters<RuntimeFactory>[0] | undefined;
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => {
+        runtimeOptions = options;
+        return new DeferredRuntime();
+      },
+    });
+    const admitted = await service.enqueueSessionInput(session.id, "请部署到生产环境。", "external-input-recovery");
+    const runId = admitted.run!.id;
+    await service.approveRunApproval(store.listApprovalRequests(runId)[0]!.id);
+    const taskRunTool = runtimeOptions!.capabilities.tools.find((tool) => tool.name === "task_run")!;
+    await taskRunTool.execute("need-target-recovery", {
+      action: "request_user_input",
+      prompt: "Choose the deployment target",
+      fields: [{ key: "target", label: "Target", required: true }],
+    }, new AbortController().signal);
+    const request = store.getRun(runId)!.pendingUserInput!;
+    store.db.exec(`CREATE TEMP TRIGGER reject_post_input_approval BEFORE INSERT ON approval_requests
+      BEGIN SELECT RAISE(ABORT,'reject post-input approval'); END`);
+
+    await expect(service.submitUserInput(request.id, { target: "production" })).rejects.toThrow("reject post-input approval");
+    expect(store.getRun(runId)).toMatchObject({ status: "waiting_input", attempt: 2, pendingUserInput: null });
+    const messagesAfterFailure = store.listMessages(session.id).length;
+    const submittedEventsAfterFailure = store.listEvents(runId).filter((event) => event.type === "run.input.submitted").length;
+
+    await expect(service.submitUserInput(request.id, { target: "staging" }))
+      .rejects.toThrow("already submitted with a different response");
+    store.db.exec("DROP TRIGGER reject_post_input_approval");
+    await expect(service.submitUserInput(request.id, { target: "production" })).resolves.toMatchObject({ status: "blocked", attempt: 2 });
+    expect(store.listMessages(session.id)).toHaveLength(messagesAfterFailure);
+    expect(store.listEvents(runId).filter((event) => event.type === "run.input.submitted")).toHaveLength(submittedEventsAfterFailure);
+    expect(store.listApprovalRequests(runId).filter((item) => item.status === "pending")).toHaveLength(1);
     await service.closeRuntimes();
     store.close();
   });
@@ -800,6 +948,9 @@ describe("Core application runtime boundary", () => {
       toolName: externalTool.name,
       args: {},
     })).toEqual({ blocked: false });
+    expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "approved" });
+    await runtimeOptions[1]!.capabilities.tools.find((tool) => tool.name === externalTool.name)!
+      .execute("activate-2", {}, new AbortController().signal);
     expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "consumed" });
     runtimeOptions[1]!.eventSink.afterToolCall({ toolCallId: "activate-2", toolName: externalTool.name, success: true });
 
@@ -1754,7 +1905,7 @@ describe("Core application runtime boundary", () => {
     expect(captured).not.toHaveProperty("maxRunTokens"); expect(captured).not.toHaveProperty("softRunTokens");
     expect(captured).not.toHaveProperty("dynamicBudget"); expect(captured).not.toHaveProperty("maxModelCalls"); expect(captured).not.toHaveProperty("maxToolCalls");
     expect(captured?.model?.maxTokens).toBe(32_768);
-    expect(store.listEvents(store.getLatestRun(session.id)!.id).some((event) => /token_budget|budget_exhausted|call_budget/.test(event.type))).toBe(false); store.close();
+    expect(store.listEvents(store.listRuns(session.id, 1)[0]!.id).some((event) => /token_budget|budget_exhausted|call_budget/.test(event.type))).toBe(false); store.close();
   });
 
   it("launches each TaskRun with its persisted Workspace model and reasoning effort", async () => {

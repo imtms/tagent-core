@@ -48,8 +48,7 @@ export interface HttpPersistencePort {
   submissions: Pick<SubmissionQueue, "getSessionSubmission" | "getSubmissionAudit" | "listSessionInbox">;
   taskRuns: Pick<
     TaskRunRepository,
-    "hasRun" | "getRun" | "getRunReadView" | "getRunExecutionState"
-    | "listRuns" | "listRunSummaries" | "getLatestRun" | "listTaskRunEdges"
+    "getRunReadView" | "getRunExecutionState"
   >;
   taskRunCommands: TaskRunCommandReceiptRepository;
   supervisorDecisions: Pick<SupervisorDecisionJournal, "listSupervisorDecisions">;

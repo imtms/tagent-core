@@ -8,11 +8,13 @@ import { estimateContextTokens } from "./context-token-estimate.js";
 import { taskPolicyResumeInstructions } from "./llm-payload.js";
 import { buildRuntimeDynamicContext } from "./runtime-dynamic-context.js";
 import { loadProjectContext, projectContextItems } from "./project-context-projection.js";
+import { submitRunUserInput } from "./user-input-submission.js";
 import type { ExecutionStateView } from "./execution-state.js";
 import type {
   AttemptLauncherPort,
   ContextEnrichmentPort,
   ContinuationControlPort,
+  ExternalActionApprovalBoundaryPort,
   RecoveryControlPort,
   RunResumeOptions,
   RunEventPublisherPort,
@@ -31,6 +33,7 @@ export class RunContextService {
       attemptExecutor: AttemptLauncherPort;
       contextEnrichment: ContextEnrichmentPort;
       continuation: ContinuationControlPort;
+      externalActionApproval: ExternalActionApprovalBoundaryPort;
       eventHub: RunEventPublisherPort;
       recovery: RecoveryControlPort;
       runtimeRegistry: RuntimeControlPort; projectContextSource?: ContextSourcePort;
@@ -57,21 +60,13 @@ export class RunContextService {
   }
 
   async submitUserInput(requestId: string, response: Record<string, string>) {
-    if (this.state.closing) throw new Error("Service is shutting down");
-    const pending = this.state.persistence.taskRuns.getPendingUserInputRequestById(requestId);
-    if (!pending) throw new Error("User input request is not pending");
-    const runtime = this.state.runtimes.get(pending.runId);
-    if (runtime) {
-      await this.dependencies.runtimeRegistry.abortRuntime(runtime, pending.runId);
-      await this.state.executionTasks.get(pending.runId);
-    }
-    const submitted = this.state.persistence.taskRuns.submitUserInput(requestId, response);
-    const run = submitted.run;
-    const summary = submitted.request.fields.map((field) => `${field.label}: ${submitted.request.response[field.key] ?? ""}`).join("\n");
-    const message = this.state.persistence.sessions.appendMessage(run.sessionId, "user", summary);
-    this.dependencies.continuation.captureUserMessage(run, message.id, summary);
-    this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(run.id, "run.input.submitted", { requestId, fieldKeys: submitted.request.fields.map((field) => field.key), submittedAt: submitted.request.submittedAt }));
-    return this.resume(run.id, { inputRequest: submitted.request });
+    return submitRunUserInput(this.state, {
+      continuation: this.dependencies.continuation,
+      eventHub: this.dependencies.eventHub,
+      externalActionApproval: this.dependencies.externalActionApproval,
+      runtimeRegistry: this.dependencies.runtimeRegistry,
+      resume: (runId, request) => this.resume(runId, { inputRequest: request }),
+    }, requestId, response);
   }
 
   async resume(runId: RunId, options: RunResumeOptions = {}) {
@@ -88,6 +83,9 @@ export class RunContextService {
     this.dependencies.recovery.repairTranscript(runId, "resume");
     const sourceRun = this.state.persistence.taskRuns.getRun(runId);
     if (!sourceRun) throw new Error(`TaskRun ${runId} does not exist`);
+    if (effectiveTaskExecutionPolicy(sourceRun.contract).mode === "external_action" && !options.approvalId) {
+      throw new Error("External-action TaskRun requires an approval-bound resume");
+    }
     const sourceAttempt = this.state.persistence.attempts.getAttemptForRun(runId, sourceRun.attempt);
     if (!sourceAttempt) throw new Error(`TaskRun ${runId} has no source Attempt ${sourceRun.attempt}`);
     const transitionRequest: readonly [SystemTransitionCommand, SystemTransitionAuthority]
@@ -280,6 +278,7 @@ export class RunContextService {
       "You are TAgent Core, a practical persistent software agent.",
       `Current workspace: ${this.state.workspace}`,
       "If execution cannot continue without specific user-provided information, call task_run with action=request_user_input, a concise prompt, and only the necessary typed fields. Do not guess, continue, or fail the task after requesting input; the TaskRun will pause and resume when the user submits the form. Do not request input for information available from the workspace, tools, transcript, or durable state.",
+      "External-action approval is exclusively Core-owned. Never use request_user_input to ask the user to type approval text, an approval ID, an authorization token, or a platform operation receipt. If an external-action guard blocks a tool, stop that Attempt and let Core surface the real approval control.",
       "Assistant text streamed while a TaskRun is active is provisional. Only a Supervisor-approved final candidate is persisted to chat, so make the final candidate complete and standalone.",
       "Use read before modifying unfamiliar files. Keep changes focused and report verification evidence.",
       "Keep Bash stages small and separately evidenced. After a timeout or failure, inspect preserved output and change approach; never rerun an identical Bash command unchanged.",

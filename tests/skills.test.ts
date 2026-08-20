@@ -17,7 +17,6 @@ function application(store: Store, workspace: string) {
     listSkills: () => store.listSkills(),
     getSkill: (id) => store.getSkill(id),
     listRevisions: (id) => store.listSkillRevisions(id),
-    getRevision: (id) => store.getSkillRevision(id),
     listWorkspaceSkills: (id) => store.listWorkspaceSkills(id),
     replaceWorkspaceSkills: (workspaceId, skillIds) => store.replaceWorkspaceSkills(workspaceId, skillIds),
     deleteSkill: (id) => store.deleteSkill(id),

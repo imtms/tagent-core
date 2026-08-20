@@ -8,7 +8,6 @@ import type {
 } from "../domain/task-run.js";
 import type {
   Attempt,
-  AttemptTransitionAudit,
   CandidateResult,
   ExecutionLease,
   TerminalAttemptStatus,
@@ -21,7 +20,6 @@ export interface AttemptRepository {
   getAttemptForRun(runId: string, ordinal: number): Attempt | undefined;
   getActiveAttempt(runId: string): Attempt | undefined;
   listAttempts(runId: string): Attempt[];
-  listTransitionAudit(attemptId: string): AttemptTransitionAudit[];
   acquireExecutionLease(input: {
     attemptId: string;
     expectedVersion: number;

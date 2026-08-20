@@ -58,7 +58,7 @@ describe("GitHub issue regressions #24-#28", () => {
 
     const capabilities = {
       runId: "00000000-0000-4000-8000-000000000024", getRun: () => ({ attempt: 1 }),
-      isCurrentAttempt: () => true, authorizeExternalAction: () => ({ allowed: true, reason: "test" }),
+      isCurrentAttempt: () => true, inspectExternalActionAuthorization: () => ({ allowed: true, reason: "test" }), activateExternalActionAuthorization: () => ({ allowed: true, reason: "test" }),
       authorizeWorkspaceMutation: () => ({ allowed: true, reason: "test" }), advanceRunPhase: () => true, setRunPhase: () => true,
       claimOperation: () => ({ claimed: true, status: "running" }), updateOperation: () => ({}), listOperations: () => [], upsertPlanItem: () => ({}), markChecksStale: () => 0, upsertCheck: () => ({}), applyTaskRunBatch: () => undefined, addArtifact: () => ({}), requestUserInput: () => { throw new Error("unused"); }, publish: () => undefined,
       recordToolAttempt: () => ({ created: true, status: "running", guard: { blocked: false, reason: "" } }), completeToolAttempt: () => true, consumeAtomicallySettledToolCall: () => false,

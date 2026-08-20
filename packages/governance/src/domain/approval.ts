@@ -63,18 +63,6 @@ export function canonicalApprovalActionForSource(
   return source === "run" && runApprovalActions.has(action) ? canonicalApprovalAction(action) : undefined;
 }
 
-export function canonicalApprovalStatus(
-  source: ApprovalSource,
-  status: string,
-  reuse?: Pick<ApprovalReuse, "maxUses" | "usedCount">,
-): ApprovalStatus | undefined {
-  const allowed = ["pending", "approved", "rejected", "superseded", "consumed"];
-  if (!allowed.includes(status)) return undefined;
-  if (status === "approved" && reuse && reuse.maxUses !== null
-    && reuse.usedCount >= reuse.maxUses) return "consumed";
-  return status as ApprovalStatus;
-}
-
 export interface Approval {
   ref: ApprovalRef;
   subject: ApprovalSubject;

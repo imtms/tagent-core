@@ -31,7 +31,7 @@ const ATTEMPT_TRANSITIONS: Readonly<Record<AttemptStatus, readonly AttemptStatus
   starting: ["running", "failed", "cancelled", "interrupted"],
   running: ["settling", "waiting_input", "blocked", "failed", "cancelled", "interrupted"],
   settling: ["completed", "blocked", "failed", "cancelled", "interrupted"],
-  waiting_input: [],
+  waiting_input: ["blocked"],
   blocked: [],
   completed: [],
   failed: [],
@@ -86,21 +86,6 @@ export interface CandidateResult {
   status: "proposed" | "accepted" | "rejected";
   createdAt: number;
   settledAt: number | null;
-}
-
-export interface AttemptTransitionAudit {
-  id: string;
-  attemptId: AttemptId;
-  runId: string;
-  ordinal: number;
-  fromStatus: AttemptStatus | null;
-  toStatus: AttemptStatus;
-  trigger: AttemptTrigger;
-  scenario: string;
-  reason: string;
-  version: number;
-  eventSequence: number;
-  createdAt: number;
 }
 
 export function attemptIdFor(runId: string, ordinal: number): AttemptId {

@@ -1,4 +1,9 @@
-export type { ApprovalOptions, ApprovalRepository } from "./approval-repository.js";
+export type {
+  ApprovalOptions,
+  ApprovalRepository,
+  ExternalActionAuthorizationActivation,
+  ExternalActionAuthorizationResult,
+} from "./approval-repository.js";
 export type {
   ApprovalAuthorizationCommit,
   ApprovalAuthorizationReceiptInput,

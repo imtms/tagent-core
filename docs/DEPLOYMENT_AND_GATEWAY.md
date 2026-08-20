@@ -91,13 +91,13 @@ The Core archive includes `scripts/deploy-release.sh`. It rejects unsafe archive
 
 ```bash
 sudo /path/to/deploy-release.sh \
-  /path/to/tagent-core-v0.8.10-linux-x64-node24-abi137.tar.gz \
+  /path/to/tagent-core-v0.8.11-linux-x64-node24-abi137.tar.gz \
   /opt/tagent-core
 ```
 
 Set `TAGENT_SERVICE_USER` when the systemd account is not `tagent`. Run the deployment path with root ownership so published release directories and files settle at modes `0555`/`0444`; the service account needs read/execute access but no release-content write access.
 
-For an already running installation, submit `core_generation_activate` with the staged 40-character commit. The tool is available only under a managed immutable Host and always consumes an explicit human external-action approval. Its exact parameters are stored in a writer-fenced operation receipt before the Host is notified. `targetRelease=current` performs a same-release Generation restart.
+For an already running installation, submit `core_generation_activate` with the staged 40-character commit. The tool is available only under a managed immutable Host and requires explicit human external-action approval activated for its bound Attempt. Its exact parameters are stored in a writer-fenced operation receipt before the Host is notified. `targetRelease=current` performs a same-release Generation restart.
 
 The Host drains Runtime and background work, prepares a durable TaskRun handoff, releases writer authority, and starts the candidate. `READY` proves HTTP/writer bootstrap, but is not an immediate commit: the candidate must keep sending a writer-fenced IPC heartbeat through the default 12-second stabilization period. Only then does the Host change `current` and settle the activation. A pre-commit crash or heartbeat timeout restores the previous release and resumes the handoff there. A short API readiness gap is intentional; the Host does not proxy HTTP or allow overlapping SQLite writers.
 

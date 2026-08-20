@@ -6,6 +6,10 @@ interface ToolCallState {
   toolName: string;
   argsHash: string;
   blocked?: string;
+  externalAuthorization?: {
+    requireExplicit: boolean;
+    activated: boolean;
+  };
   executing: boolean;
   settled: boolean;
   recorded: boolean;
@@ -80,11 +84,15 @@ export class ToolExecutionPipeline {
     let blocked: string | undefined;
     let recorded = false;
     if (!this.capabilities.isCurrentAttempt()) blocked = "Attempt is no longer current";
-    if (!blocked && tool.policy?.externalAction) {
-      const approval = this.capabilities.authorizeExternalAction(tool.policy.externalAction === "explicit");
+    const access = typeof tool.policy?.workspaceAccess === "function" ? tool.policy.workspaceAccess(args) : tool.policy?.workspaceAccess;
+    const requireExplicit = tool.policy?.externalAction === "explicit";
+    const activatesExternalAuthorization = requireExplicit
+      || Boolean(tool.policy?.externalAction && access !== "read_only");
+    if (!blocked && activatesExternalAuthorization) {
+      const approval = this.capabilities.inspectExternalActionAuthorization(requireExplicit);
       if (!approval.allowed) {
         let reason = approval.reason;
-        if (tool.policy.externalAction === "explicit" && this.capabilities.requestExternalActionApproval) {
+        if (this.capabilities.requestExternalActionApproval) {
           try {
             const requested = this.capabilities.requestExternalActionApproval(toolCallId, toolName);
             reason = `${requested.reason} (approval ${requested.approvalId})`;
@@ -95,7 +103,6 @@ export class ToolExecutionPipeline {
         blocked = `External action approval guard: ${reason}`;
       }
     }
-    const access = typeof tool.policy?.workspaceAccess === "function" ? tool.policy.workspaceAccess(args) : tool.policy?.workspaceAccess;
     if (!blocked && access === "mutation") {
       const goal = this.capabilities.authorizeWorkspaceMutation();
       if (!goal.allowed) blocked = `Workspace Goal mutation guard: ${goal.reason}`;
@@ -109,7 +116,17 @@ export class ToolExecutionPipeline {
       else if (!attempt.created && !tool.policy?.operationType) blocked = `Tool attempt ${toolCallId} already succeeded without a replayable receipt`;
       else if (attempt.created && attempt.guard.blocked) blocked = attempt.guard.reason;
     }
-    this.calls.set(toolCallId, { toolName, argsHash: digest, blocked, executing: false, settled: false, recorded });
+    this.calls.set(toolCallId, {
+      toolName,
+      argsHash: digest,
+      blocked,
+      externalAuthorization: activatesExternalAuthorization
+        ? { requireExplicit, activated: false }
+        : undefined,
+      executing: false,
+      settled: false,
+      recorded,
+    });
     if (blocked) this.settle(toolCallId, false, blocked);
     return blocked ? { blocked: true, reason: blocked } : { blocked: false };
   }
@@ -157,10 +174,15 @@ export class ToolExecutionPipeline {
 
   private async executeWithReceipt(tool: RuntimeTool, toolCallId: string, args: unknown, signal: AbortSignal, onUpdate?: Parameters<RuntimeTool["execute"]>[3]): Promise<RuntimeToolResult> {
     const policy = tool.policy;
-    if (!policy?.operationType) return this.executeToolBody(tool, toolCallId, args, signal, onUpdate);
+    if (!policy?.operationType) {
+      this.activateExternalAuthorization(toolCallId);
+      return this.executeToolBody(tool, toolCallId, args, signal, onUpdate);
+    }
     const id = operationId(this.capabilities, toolCallId);
     const access = typeof policy.workspaceAccess === "function" ? policy.workspaceAccess(args) : policy.workspaceAccess;
-    if (access === "read_only") {
+    // An explicit remote effect needs a pre-dispatch claim even when workspace access is read-only.
+    if (access === "read_only" && policy.externalAction !== "explicit") {
+      this.activateExternalAuthorization(toolCallId);
       const result = await this.executeToolBody(tool, toolCallId, args, signal, onUpdate);
       const receipt = this.capabilities.claimOperation(id, policy.operationType, args);
       if (!receipt.claimed) {
@@ -178,6 +200,18 @@ export class ToolExecutionPipeline {
     if (!receipt.claimed) {
       if (receipt.status === "succeeded") return receipt.result as RuntimeToolResult;
       throw new Error(`Operation ${id} cannot be replayed from status ${receipt.status}`);
+    }
+    try {
+      this.activateExternalAuthorization(toolCallId);
+    } catch (error) {
+      const classified = classifyToolError(error, { signal });
+      this.capabilities.updateOperation(id, {
+        status: "pre_effect_rejected",
+        stage: "authorization_rejected",
+        effects: [{ kind: "external_action", action: "not_started" }],
+        error: classified.message,
+      });
+      throw classified;
     }
     const invalidates = typeof policy.invalidatesChecks === "function" ? policy.invalidatesChecks(args) : policy.invalidatesChecks !== false;
     let invalidatedChecks: number | undefined;
@@ -215,6 +249,25 @@ export class ToolExecutionPipeline {
       });
       throw classified;
     }
+  }
+
+  private activateExternalAuthorization(toolCallId: string) {
+    const state = this.calls.get(toolCallId);
+    const authorization = state?.externalAuthorization;
+    if (!state || !authorization || authorization.activated) return;
+    const activated = this.capabilities.activateExternalActionAuthorization(
+      toolCallId,
+      state.toolName,
+      state.argsHash,
+      authorization.requireExplicit,
+    );
+    if (!activated.allowed) {
+      throw new ToolExecutionError(
+        "NOT_AUTHORIZED",
+        `External action approval guard: ${activated.reason}`,
+      );
+    }
+    authorization.activated = true;
   }
 
   private async executeToolBody(

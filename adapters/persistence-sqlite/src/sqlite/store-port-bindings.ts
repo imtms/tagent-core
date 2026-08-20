@@ -46,7 +46,6 @@ export function createStoreBackedPorts(
       listSkills: query(store.listSkills.bind(store)),
       getSkill: query(store.getSkill.bind(store)),
       listRevisions: query(store.listSkillRevisions.bind(store)),
-      getRevision: query(store.getSkillRevision.bind(store)),
       listWorkspaceSkills: query(store.listWorkspaceSkills.bind(store)),
       replaceWorkspaceSkills: mutate(store.replaceWorkspaceSkills.bind(store)),
       deleteSkill: mutate(store.deleteSkill.bind(store)),
@@ -105,24 +104,18 @@ export function createStoreBackedPorts(
 
     taskRuns: Object.freeze({
       createRun: mutate(store.createRun.bind(store)),
-      hasRun: query(store.hasRun.bind(store)),
       getRun: query(store.getRun.bind(store)),
       getRunReadView: query(store.getRunReadView.bind(store)),
       getRunExecutionState: query(store.getRunExecutionState.bind(store)),
-      getRunByRequestId: query(store.getRunByRequestId.bind(store)),
       listRuns: query(store.listRuns.bind(store)),
       listRunSummaries: query(store.listRunSummaries.bind(store)),
-      getLatestRun: query(store.getLatestRun.bind(store)),
       getActiveRun: query(store.getActiveRun.bind(store)),
-      getPendingUserInputRequest: query(store.getPendingUserInputRequest.bind(store)),
-      getPendingUserInputRequestById: query(store.getPendingUserInputRequestById.bind(store)),
+      getUserInputRequestById: query(store.getUserInputRequestById.bind(store)),
       requestUserInput: mutate(store.requestUserInput.bind(store)),
       submitUserInput: mutate(store.submitUserInput.bind(store)),
       recordModelUsage: mutate(store.recordModelUsage.bind(store)),
       setRunPhase: mutate(store.setRunPhase.bind(store)),
       advanceRunPhase: mutate(store.advanceRunPhase.bind(store)),
-      listTaskRunEdges: query(store.listTaskRunEdges.bind(store)),
-      isRunResumable: query(store.isRunResumable.bind(store)),
     }),
 
     continuations: Object.freeze({
@@ -208,7 +201,6 @@ export function createStoreBackedPorts(
       recordContextManifest: mutate(store.recordContextManifest.bind(store)),
       listContextManifests: query(store.listContextManifests.bind(store)),
       getLatestContextManifest: query(store.getLatestContextManifest.bind(store)),
-      getContextManifestForAttempt: query(store.getContextManifestForAttempt.bind(store)),
     }),
     requestEnvelopes: Object.freeze({
       record: mutate(sqliteRequestEnvelopes.record.bind(sqliteRequestEnvelopes)),
@@ -225,10 +217,10 @@ export function createStoreBackedPorts(
     approvals: Object.freeze({
       ensureApprovalRequest: mutate(store.ensureApprovalRequest.bind(store)),
       getApprovalRequest: query(store.getApprovalRequest.bind(store)),
-      listApprovalRequests: query(store.listApprovalRequests.bind(store)),
       resolveApprovalRequest: mutate(store.resolveApprovalRequest.bind(store)),
       hasPendingApproval: query(store.hasPendingApproval.bind(store)),
-      authorizeExternalAction: mutate(store.authorizeExternalAction.bind(store)),
+      inspectExternalActionAuthorization: query(store.inspectExternalActionAuthorization.bind(store)),
+      activateExternalActionAuthorization: mutate(store.activateExternalActionAuthorization.bind(store)),
     }),
 
     supervisorDecisions: Object.freeze({

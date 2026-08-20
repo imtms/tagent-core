@@ -33,7 +33,7 @@ describe("Attempt shadow domain", () => {
       starting: ["running", "failed", "cancelled", "interrupted"],
       running: ["settling", "waiting_input", "blocked", "failed", "cancelled", "interrupted"],
       settling: ["completed", "blocked", "failed", "cancelled", "interrupted"],
-      waiting_input: [],
+      waiting_input: ["blocked"],
       blocked: [],
       completed: [],
       failed: [],

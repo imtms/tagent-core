@@ -40,7 +40,9 @@ Before this sequence, the Host resolves `current`, checks that it is a contained
 
 `SqliteUnitOfWork` is synchronous by design: work cannot cross an `await` while a SQLite transaction is open. Multi-repository mutations use this boundary. The active writer fence is checked by mutation adapters and connection guards, so reaching a lower repository directly does not grant write authority.
 
-TaskRun state changes use the closed `TaskRunTransitionPort`. Attempt identity, version, execution lease token, and fence are validated inside the same transaction as runtime mutations. Approval consumption, operation authorization, and the append-only allow receipt are also one atomic write.
+TaskRun state changes use the closed `TaskRunTransitionPort`. Attempt identity, version, execution lease token, and fence are validated inside the same transaction as runtime mutations. Approval-bound capability execution keeps approval use, operation authorization, and its append-only allow receipt in one atomic write. Runtime-tool external-action approval uses a separate Attempt activation: inspection is read-only, while activation revalidates the active persisted Attempt and atomically records its first-use state plus append-only receipt immediately before dispatch.
+
+User-input submission and human approval necessarily cross separate UI commands. Their intermediate states are recoverable without widening authority: retrying an already-submitted input must carry the same normalized values and can recreate only its missing next-Attempt approval boundary; retrying an already-approved external-action request can resume only its recorded `approvedAttempt`, and only when the Run is still on the immediately preceding Attempt. Repeated recovery does not append another user message or approval event, and an approval can never resume a later Attempt.
 
 ## Restart recovery
 

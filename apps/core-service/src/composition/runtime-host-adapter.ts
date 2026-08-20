@@ -114,9 +114,18 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     getRunExecutionState: currentRunExecutionState,
     isCurrentAttempt: () => Boolean(currentAttempt()),
     authorizeWorkspaceMutation: () => persistence.workspaceGoals.authorizeRunMutation(token.runId),
-    authorizeExternalAction: (requireExplicit = false) => requireExplicit
+    inspectExternalActionAuthorization: (requireExplicit = false) => requireExplicit
       || effectiveTaskExecutionPolicy(currentRun()?.contract ?? null).mode === "external_action"
-      ? persistence.approvals.authorizeExternalAction(token.runId, token.ordinal)
+      ? persistence.approvals.inspectExternalActionAuthorization(token.runId, token.ordinal)
+      : { allowed: true, reason: "TaskRun does not require external-action approval" },
+    activateExternalActionAuthorization: (toolCallId, toolName, argsHash, requireExplicit = false) => requireExplicit
+      || effectiveTaskExecutionPolicy(currentRun()?.contract ?? null).mode === "external_action"
+      ? persistence.approvals.activateExternalActionAuthorization(token.runId, token.ordinal, {
+        operationId: `external-action-attempt:${token.runId}:${token.ordinal}`,
+        toolCallId,
+        toolName,
+        argsHash,
+      })
       : { allowed: true, reason: "TaskRun does not require external-action approval" },
     requestExternalActionApproval: options.requestExternalActionApproval,
     advanceRunPhase: (phase) => persistence.runtimeMutations.advanceRunPhase(mutationContext, phase),

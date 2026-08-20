@@ -80,11 +80,11 @@ describe("SqlitePersistence", () => {
     expect(adapter).not.toHaveProperty("store");
   });
 
-  it("serves TaskRun idempotency and pending-input lookups through named ports", () => {
+  it("serves recovery-safe user-input lookups through the TaskRun port", () => {
     const store = new Store(":memory:");
     stores.push(store);
     const adapter = createAdapter(store);
-    const run = adapter.taskRuns.createRun(adapter.sessions.createSession().id, "lookup run", "run-request-1");
+    const run = adapter.taskRuns.createRun(adapter.sessions.createSession().id, "lookup run");
     const request = adapter.taskRuns.requestUserInput(run.id, "Choose", [{
       key: "choice",
       label: "Choice",
@@ -94,10 +94,13 @@ describe("SqlitePersistence", () => {
       placeholder: "option",
     }]);
 
-    expect(adapter.taskRuns.getRunByRequestId("run-request-1")?.id).toBe(run.id);
-    expect(adapter.taskRuns.getRunByRequestId("missing")).toBeUndefined();
-    expect(adapter.taskRuns.getPendingUserInputRequestById(request.id)).toEqual(request);
-    expect(adapter.taskRuns.getPendingUserInputRequestById("missing")).toBeUndefined();
+    expect(adapter.taskRuns.getUserInputRequestById(request.id)).toEqual(request);
+    adapter.taskRuns.submitUserInput(request.id, { choice: "accepted" });
+    expect(adapter.taskRuns.getUserInputRequestById(request.id)).toMatchObject({
+      status: "submitted",
+      response: { choice: "accepted" },
+    });
+    expect(adapter.taskRuns.getUserInputRequestById("missing")).toBeUndefined();
   });
 
   it("serves durable message sources without exposing SQLite", () => {

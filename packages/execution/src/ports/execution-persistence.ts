@@ -28,7 +28,8 @@ export interface ExecutionConversationPort {
 /** Consumer-owned Governance capabilities needed by Execution settlement and recovery. */
 export type ExecutionApprovalPort = Pick<
   ApprovalRepository,
-  "ensureApprovalRequest" | "resolveApprovalRequest" | "hasPendingApproval" | "authorizeExternalAction"
+  "ensureApprovalRequest" | "resolveApprovalRequest" | "hasPendingApproval"
+  | "inspectExternalActionAuthorization" | "activateExternalActionAuthorization"
 >;
 
 export interface ExecutionContextManifestPort {

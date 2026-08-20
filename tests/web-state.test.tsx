@@ -1258,14 +1258,17 @@ describe("Web workbench behavior", () => {
       onSubmit={async () => undefined}
     />);
     expect(input).toContain("Information needed to continue");
+    expect(input).toContain("does not approve or authorize an external action");
     expect(input).toContain("Submit and resume");
     expect(input).toContain("Target *");
     expect(input).toContain('disabled=""');
 
     const approval = {
-      id: "approval-1", status: "pending", actionType: "execute_external_action",
-      reason: "Deploy release", metadata: {},
-    } as RunApproval;
+      id: "approval-1", decisionId: "decision-1",
+      status: "pending", actionType: "execute_external_action", targetType: "taskrun", targetId: "run-1",
+      reason: "Deploy release", metadata: { approvedAttempt: 3 }, requestedAt: 1,
+      resolvedAt: null, resolvedBy: "", resolution: "",
+    } satisfies RunApproval;
     const dock = renderToStaticMarkup(<ApprovalDock
       run={run({ supervision: { ...run().supervision, approvalRequests: [approval] } })}
       approvals={[approval]}
@@ -1274,6 +1277,8 @@ describe("Web workbench behavior", () => {
       onResolve={async () => undefined}
     />);
     expect(dock).toContain("External action needs your approval");
+    expect(dock).toContain("Human checkpoint · Attempt 3");
+    expect(dock).toContain("Authorization is limited to Attempt 3");
     expect(dock).toContain("Approve &amp; execute");
     expect(approvalResolutionNotice("execute_external_action", "approved")).toBe("Approval recorded. External action authorized and TaskRun resumed.");
     expect(approvalResolutionNotice("start_parallel_taskrun", "approved")).toBe("Approval recorded. Parallel TaskRun started.");

@@ -98,7 +98,7 @@ export interface RuntimeToolPolicy {
   operationType?: string;
   workspaceAccess?: "none" | "read_only" | "mutation" | ((parameters: unknown) => "none" | "read_only" | "mutation");
   invalidatesChecks?: boolean | ((parameters: unknown) => boolean);
-  /** `explicit` requires a consumed human approval even for an otherwise non-external TaskRun. */
+  /** `explicit` requires Attempt-bound human-approval activation even for an otherwise non-external TaskRun. */
   externalAction?: boolean | "explicit";
 }
 

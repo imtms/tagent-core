@@ -72,6 +72,7 @@ export function UserInputCard({ request, submitting, onSubmit }: { request: User
   const missing = request.fields.some((field) => field.required && !values[field.key]?.trim());
   return <section className="user-input-card" aria-label="TaskRun needs more information">
     <div className="user-input-heading"><HelpCircle size={ICON_SIZE.lg} /><div><strong>Information needed to continue</strong><p>{request.prompt}</p></div><span>Paused</span></div>
+    <p className="user-input-boundary">This form only supplies requested information. It does not approve or authorize an external action.</p>
     <ul className="user-input-needed">{request.fields.map((field) => <li key={field.key}><strong>{field.label}{field.required ? " *" : ""}</strong>{field.description && <span>{field.description}</span>}</li>)}</ul>
     <form onSubmit={(event) => { event.preventDefault(); if (!missing && !submitting) void onSubmit(userInputValuesForRequest(request, values)); }}>
       {request.fields.map((field) => <label key={field.key}><span>{field.label}{field.required ? " *" : ""}</span>{field.inputType === "textarea" ? <textarea rows={3} value={values[field.key] ?? ""} placeholder={field.placeholder} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} /> : <input value={values[field.key] ?? ""} placeholder={field.placeholder} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} />}{field.description && <small>{field.description}</small>}</label>)}
@@ -436,6 +437,7 @@ export function ApprovalDock({ run, approvals, resolvingId, resolvingDecision, o
           <span>Human checkpoint · Attempt {attempt}</span>
           <strong>{approvalHeading(approval.actionType)}</strong>
           <p>{approval.reason}</p>
+          {approval.actionType === "execute_external_action" && <small>Authorization is limited to Attempt {attempt}; any later Attempt requires a new approval.</small>}
         </div>
         <div className="approval-card-actions">
           <button className="approval-approve" type="button" disabled={Boolean(resolvingId)} onClick={() => void onResolve(approval, "approved")}>{busy && resolvingDecision === "approved" ? <Activity className="spin" size={ICON_SIZE.md} /> : <ShieldCheck size={ICON_SIZE.md} />}{busy && resolvingDecision === "approved" ? "Approving…" : approvalActionLabel(approval.actionType)}</button>

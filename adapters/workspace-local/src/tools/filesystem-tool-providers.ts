@@ -20,7 +20,7 @@ const PatchSchema = Type.Object({
 
 export class ListToolProvider implements ToolProvider {
   readonly id = "workspace.list";
-  constructor(private readonly capabilities: ToolCapabilityApplicationPort, private readonly workspace: string) {}
+  constructor(private readonly workspace: string) {}
   provideTools(): readonly RuntimeTool[] {
     const tool: RuntimeTool<Static<typeof ListSchema>, Record<string, unknown>> = {
       name: "ls", label: "List directory", description: "List entries in a workspace directory.", parameters: ListSchema,

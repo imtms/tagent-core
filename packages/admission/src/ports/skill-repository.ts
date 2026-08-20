@@ -44,7 +44,6 @@ export interface SkillRepository {
   listSkills(): SkillSummary[];
   getSkill(skillId: string): SkillRevision | undefined;
   listRevisions(skillId: string): SkillRevision[];
-  getRevision(revisionId: string): SkillRevision | undefined;
   listWorkspaceSkills(workspaceId: string): SkillRevision[];
   replaceWorkspaceSkills(workspaceId: string, skillIds: readonly string[]): SkillRevision[] | undefined;
   deleteSkill(skillId: string): SkillRevision[] | undefined;

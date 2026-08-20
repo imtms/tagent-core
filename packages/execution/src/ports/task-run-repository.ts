@@ -6,7 +6,6 @@ import type {
   TaskRunReadView,
   TaskRunExecutionState,
   TaskRunSummary,
-  TaskRunEdge,
   UserInputField,
   UserInputRequest,
 } from "../domain/task-run.js";
@@ -23,22 +22,16 @@ export interface ModelUsage {
 
 export interface TaskRunRepository {
   createRun(sessionId: ExecutionSessionRef, goal: string, requestId?: string, contract?: TaskRunContractSnapshot | null): TaskRun;
-  hasRun(id: RunId): boolean;
   getRun(id: RunId): TaskRun | undefined;
   getRunReadView(id: RunId): TaskRunReadView | undefined;
   getRunExecutionState(id: RunId): TaskRunExecutionState | undefined;
-  getRunByRequestId(requestId: string): TaskRun | undefined;
   listRuns(sessionId: ExecutionSessionRef, limit?: number): TaskRun[];
   listRunSummaries?(sessionId: ExecutionSessionRef, limit?: number): TaskRunSummary[];
-  getLatestRun(sessionId: ExecutionSessionRef): TaskRun | undefined;
   getActiveRun(sessionId: ExecutionSessionRef): TaskRun | undefined;
-  getPendingUserInputRequest(runId: RunId): UserInputRequest | undefined;
-  getPendingUserInputRequestById(requestId: string): UserInputRequest | undefined;
+  getUserInputRequestById(requestId: string): UserInputRequest | undefined;
   requestUserInput(runId: RunId, prompt: string, fields: UserInputField[]): UserInputRequest;
   submitUserInput(requestId: string, response: Record<string, string>): { request: UserInputRequest; run: TaskRun };
   recordModelUsage(runId: RunId, component: string, model: string, usage: ModelUsage): void;
   setRunPhase(runId: RunId, phase: RunPhase): boolean;
   advanceRunPhase(runId: RunId, phase: Exclude<RunPhase, "done" | "blocked" | "waiting_input">): boolean;
-  listTaskRunEdges(runId: RunId): TaskRunEdge[];
-  isRunResumable(runId: RunId): boolean;
 }

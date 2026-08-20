@@ -478,10 +478,6 @@ export class Store {
     return this.skillRepository.createSkillRevision(input);
   }
 
-  getSkillRevision(revisionId: string): SkillRevision | undefined {
-    return this.skillRepository.getSkillRevision(revisionId);
-  }
-
   listSkills(): SkillSummary[] {
     return this.skillRepository.listSkills();
   }
@@ -1099,10 +1095,6 @@ ${source.content}`;
     return transaction();
   }
 
-  hasRun(id: RunId): boolean {
-    return Boolean(this.db.prepare("SELECT 1 FROM runs WHERE id = ?").get(id));
-  }
-
   getRun(id: RunId): TaskRun | undefined {
     return this.hydrateRun<Artifact>(id, true);
   }
@@ -1189,11 +1181,6 @@ ${source.content}`;
     return { ...state, counts: { plan: planCount, checks: checkCount, artifacts: artifactCount } };
   }
 
-  getRunByRequestId(requestId: string): TaskRun | undefined {
-    const row = this.db.prepare("SELECT id FROM runs WHERE request_id = ?").get(requestId) as { id: RunId } | undefined;
-    return row ? this.getRun(row.id) : undefined;
-  }
-
   listRuns(sessionId: SessionId, limit = 50): TaskRun[] {
     const rows = this.db.prepare("SELECT id FROM runs WHERE session_id = ? ORDER BY updated_at DESC LIMIT ?").all(sessionId, limit) as Array<{ id: string }>;
     return rows.map((row) => this.getRun(row.id)!);
@@ -1263,11 +1250,6 @@ ${source.content}`;
     `).get(sessionId) as OperatorTaskRunReadRow | undefined;
   }
 
-  getLatestRun(sessionId: SessionId): TaskRun | undefined {
-    const row = this.db.prepare("SELECT id FROM runs WHERE session_id = ? ORDER BY updated_at DESC,id DESC LIMIT 1").get(sessionId) as { id: string } | undefined;
-    return row ? this.getRun(row.id) : undefined;
-  }
-
   getActiveRun(sessionId: SessionId): TaskRun | undefined {
     const row = this.db.prepare("SELECT id FROM runs WHERE session_id = ? AND status = 'running' ORDER BY updated_at DESC LIMIT 1").get(sessionId) as { id: string } | undefined;
     return row ? this.getRun(row.id) : undefined;
@@ -1280,14 +1262,24 @@ ${source.content}`;
     return rows.map(({ fieldsJson, responseJson, ...row }) => ({ ...row, fields: JSON.parse(fieldsJson) as UserInputField[], response: JSON.parse(responseJson) as Record<string, string> }));
   }
 
-  getPendingUserInputRequest(runId: RunId) {
+  private getPendingUserInputRequest(runId: RunId) {
     return this.listUserInputRequests(runId).find((item) => item.status === "pending");
   }
 
-  getPendingUserInputRequestById(requestId: string): UserInputRequest | undefined {
-    const row = this.db.prepare(`SELECT run_id as runId FROM user_input_requests
-      WHERE id = ? AND status = 'pending'`).get(requestId) as { runId: RunId } | undefined;
-    return row ? this.getPendingUserInputRequest(row.runId) : undefined;
+  getUserInputRequestById(requestId: string): UserInputRequest | undefined {
+    const row = this.db.prepare(`SELECT id,run_id as runId,attempt,prompt,fields_json as fieldsJson,
+      status,response_json as responseJson,requested_at as requestedAt,submitted_at as submittedAt
+      FROM user_input_requests WHERE id=?`).get(requestId) as (Omit<UserInputRequest, "fields" | "response"> & {
+        fieldsJson: string;
+        responseJson: string;
+      }) | undefined;
+    if (!row) return undefined;
+    const { fieldsJson, responseJson, ...request } = row;
+    return {
+      ...request,
+      fields: JSON.parse(fieldsJson) as UserInputField[],
+      response: JSON.parse(responseJson || "{}") as Record<string, string>,
+    };
   }
 
   requestUserInput(runId: RunId, prompt: string, fields: UserInputField[]): UserInputRequest {
@@ -2239,14 +2231,6 @@ ${source.content}`;
 
   getLatestContextManifest(runId: RunId) { return this.listContextManifests(runId, 1)[0]; }
 
-  getContextManifestForAttempt(runId: RunId, attempt: number) {
-    const row = this.db.prepare(`SELECT id,run_id as runId,attempt,source,items_json as itemsJson,stats_json as statsJson,manifest_hash as manifestHash,created_at as createdAt
-      FROM context_manifests WHERE run_id=? AND attempt=? ORDER BY created_at DESC,id DESC LIMIT 1`).get(runId, attempt) as (Omit<ContextManifest,"items"|"stats"> & {itemsJson:string;statsJson:string}) | undefined;
-    if (!row) return undefined;
-    const { itemsJson, statsJson, ...manifest } = row;
-    return { ...manifest, items: JSON.parse(itemsJson) as ContextManifest["items"], stats: JSON.parse(statsJson) as ContextManifest["stats"] };
-  }
-
   recordSupervisorDecision(decision: SupervisorDecision) {
     this.db.prepare(`INSERT INTO supervisor_decisions
       (id,run_id,attempt,attempt_id,checkpoint_seq,trigger,action,reason_code,rationale,confidence,instruction,candidate_response_hash,status,error,created_at,executed_at,evaluator,evaluator_model)
@@ -2393,30 +2377,133 @@ ${source.content}`;
     return Boolean(this.db.prepare("SELECT 1 FROM approval_requests WHERE run_id=? AND status='pending'").get(runId));
   }
 
-  authorizeExternalAction(runId: RunId, attempt: number) {
+  inspectExternalActionAuthorization(runId: RunId, attempt: number) {
+    const timestamp = now();
+    const approved = this.db.prepare(`SELECT id,used_count as usedCount FROM approval_requests
+      WHERE run_id=? AND action_type='execute_external_action'
+        AND CAST(json_extract(metadata_json,'$.approvedAttempt') AS INTEGER)=?
+        AND EXISTS (SELECT 1 FROM runs current_run
+          JOIN attempts current_attempt ON current_attempt.run_id=current_run.id
+            AND current_attempt.ordinal=current_run.attempt
+          WHERE current_run.id=approval_requests.run_id AND current_run.attempt=?
+            AND current_run.status='running' AND current_attempt.active=1
+            AND current_attempt.status='running')
+        AND used_count IS NOT NULL AND used_count>=0
+        AND (((status='approved' OR status='consumed') AND used_count>0)
+          OR (status='approved' AND used_count=0 AND (
+            ((reuse_mode='one_time' AND max_uses=1)
+              OR (reuse_mode='reusable' AND (max_uses IS NULL OR max_uses>0)))
+            AND (max_uses IS NULL OR used_count<max_uses)
+            AND (expires_at IS NULL OR expires_at>?)
+          )))
+      ORDER BY requested_at DESC,id DESC LIMIT 1`).get(runId, attempt, attempt, timestamp) as {
+        id: string;
+        usedCount: number;
+      } | undefined;
+    if (!approved) return { allowed: false, reason: `Attempt ${attempt} has no approved external-action authorization` };
+    return {
+      allowed: true,
+      reason: approved.usedCount > 0
+        ? `External-action authorization is active for Attempt ${attempt}`
+        : `External action approved for Attempt ${attempt}`,
+      approvalId: approved.id,
+    };
+  }
+
+  activateExternalActionAuthorization(runId: RunId, attempt: number, activation: {
+    operationId: string;
+    toolCallId: string;
+    toolName: string;
+    argsHash: string;
+  }) {
+    for (const [name, value, maximum] of [
+      ["operationId", activation.operationId, 1_024],
+      ["toolCallId", activation.toolCallId, 512],
+      ["toolName", activation.toolName, 128],
+      ["argsHash", activation.argsHash, 128],
+    ] as const) {
+      if (!value || value.length > maximum || value.includes("\0")) {
+        throw new Error(`External-action authorization ${name} is invalid`);
+      }
+    }
+    if (!/^[0-9a-f]{64}$/.test(activation.argsHash)) {
+      throw new Error("External-action authorization argsHash is invalid");
+    }
     return this.db.transaction(() => {
       const timestamp = now();
-      const approved = this.db.prepare(`SELECT id FROM approval_requests
+      const approved = this.db.prepare(`SELECT id,status,used_count as usedCount,max_uses as maxUses,
+        operation_digest as operationDigest,resolved_by as resolvedBy FROM approval_requests
         WHERE run_id=? AND action_type='execute_external_action'
-          AND status='approved'
           AND CAST(json_extract(metadata_json,'$.approvedAttempt') AS INTEGER)=?
+          AND EXISTS (SELECT 1 FROM runs current_run
+            JOIN attempts current_attempt ON current_attempt.run_id=current_run.id
+              AND current_attempt.ordinal=current_run.attempt
+            WHERE current_run.id=approval_requests.run_id AND current_run.attempt=?
+              AND current_run.status='running' AND current_attempt.active=1
+              AND current_attempt.status='running')
           AND used_count IS NOT NULL AND used_count>=0
-          AND ((reuse_mode='one_time' AND max_uses=1)
-            OR (reuse_mode='reusable' AND (max_uses IS NULL OR max_uses>0)))
-          AND (max_uses IS NULL OR used_count<max_uses)
-          AND (expires_at IS NULL OR expires_at>?)
-        ORDER BY requested_at DESC,id DESC LIMIT 1`).get(runId, attempt, timestamp) as { id: string } | undefined;
-      if (!approved) return { allowed: false, reason: `Attempt ${attempt} has no remaining approved external-action authorization` };
-      const consumed = this.db.prepare(`UPDATE approval_requests
-        SET used_count=used_count+1,
-          status=CASE WHEN max_uses IS NOT NULL AND used_count+1>=max_uses THEN 'consumed' ELSE 'approved' END
-        WHERE id=? AND status='approved' AND used_count IS NOT NULL AND used_count>=0
-          AND ((reuse_mode='one_time' AND max_uses=1)
-            OR (reuse_mode='reusable' AND (max_uses IS NULL OR max_uses>0)))
-          AND (max_uses IS NULL OR used_count<max_uses)
-          AND (expires_at IS NULL OR expires_at>?)`).run(approved.id, timestamp);
-      if (consumed.changes !== 1) return { allowed: false, reason: "External-action authorization was exhausted or consumed concurrently" };
-      return { allowed: true, reason: `External action approved for Attempt ${attempt}`, approvalId: approved.id };
+          AND (((status='approved' OR status='consumed') AND used_count>0)
+            OR (status='approved' AND used_count=0 AND (
+              ((reuse_mode='one_time' AND max_uses=1)
+                OR (reuse_mode='reusable' AND (max_uses IS NULL OR max_uses>0)))
+              AND (max_uses IS NULL OR used_count<max_uses)
+              AND (expires_at IS NULL OR expires_at>?)
+            )))
+        ORDER BY requested_at DESC,id DESC LIMIT 1`).get(runId, attempt, attempt, timestamp) as {
+          id: string;
+          status: string;
+          usedCount: number;
+          maxUses: number | null;
+          operationDigest: string | null;
+          resolvedBy: string;
+        } | undefined;
+      if (!approved?.operationDigest) {
+        return { allowed: false, reason: `Attempt ${attempt} has no approved external-action authorization` };
+      }
+
+      const existing = this.db.prepare(`SELECT 1 FROM approval_receipts
+        WHERE approval_source='run' AND approval_id=? AND operation_id=? AND outcome='allow'`)
+        .get(approved.id, activation.operationId);
+      if (!existing) {
+        if (approved.usedCount === 0) {
+          const consumed = this.db.prepare(`UPDATE approval_requests
+            SET used_count=1,
+              status=CASE WHEN max_uses IS NOT NULL AND max_uses<=1 THEN 'consumed' ELSE 'approved' END
+            WHERE id=? AND status='approved' AND used_count=0
+              AND ((reuse_mode='one_time' AND max_uses=1)
+                OR (reuse_mode='reusable' AND (max_uses IS NULL OR max_uses>0)))
+              AND (expires_at IS NULL OR expires_at>?)`).run(approved.id, timestamp);
+          if (consumed.changes !== 1) {
+            return { allowed: false, reason: "External-action authorization activation raced with another writer" };
+          }
+        }
+        const receiptId = `external-action-activation:${createHash("sha256")
+          .update(`${approved.id}\0${activation.operationId}`)
+          .digest("hex")}`;
+        this.db.prepare(`INSERT INTO approval_receipts
+          (id,approval_source,approval_id,operation_id,operation_digest,outcome,actor_id,details_json,created_at)
+          VALUES (?,'run',?,?,?,'allow',?,?,?)`).run(
+          receiptId,
+          approved.id,
+          activation.operationId,
+          approved.operationDigest,
+          approved.resolvedBy || "user",
+          JSON.stringify({
+            kind: "external_action_attempt_activation",
+            runId,
+            attempt,
+            toolCallId: activation.toolCallId,
+            toolName: activation.toolName,
+            argsHash: activation.argsHash,
+          }),
+          timestamp,
+        );
+      }
+      return {
+        allowed: true,
+        reason: `External-action authorization is active for Attempt ${attempt}`,
+        approvalId: approved.id,
+      };
     })();
   }
 
@@ -2509,7 +2596,7 @@ ${source.content}`;
     transaction();
   }
 
-  isRunResumable(runId: RunId) {
+  private isRunResumable(runId: RunId) {
     const row = this.db.prepare(`SELECT status FROM runs WHERE id = ?`).get(runId) as { status: RunStatus } | undefined;
     if (!row) return false;
     if (["interrupted", "blocked"].includes(row.status)) return true;

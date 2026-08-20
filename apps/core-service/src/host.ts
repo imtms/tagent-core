@@ -139,7 +139,7 @@ export class CoreHost {
   private restartDelayCancel?: () => void;
   private heartbeatDeadline?: HostTimer;
 
-  constructor(private readonly options: CoreHostOptions) {
+  constructor(options: CoreHostOptions) {
     this.generationWorkingDirectory = path.resolve(options.releaseRoot);
     this.runtimeDirectory = path.resolve(options.runtimeDirectory ?? path.join(options.releaseRoot, "runtime"));
     this.stateStore = new CoreHostStateStore(this.runtimeDirectory);

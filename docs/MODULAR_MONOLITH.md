@@ -67,6 +67,8 @@ All control-plane writes pass through the active SQLite writer fence. Multi-repo
 
 Each governed state has one mutation entrance. Runtime completion, blocking, and failure use the fenced TaskRun transition port; cancellation uses the Attempt repository. Session Inbox collection edits use the receipt-backed Session Inbox capability profile. SQLite keeps one connection and synchronous Unit of Work while schema migration, Transcript, Skills, and port bindings live in focused internal modules; the compatibility `Store` delegates to those repositories and publishes no parallel terminal shortcuts or unreceipted Inbox application facades.
 
+Application ports expose consumer-owned capabilities, not the complete method inventory of a concrete Store. HTTP receives only its two TaskRun read projections; Execution, Admission, Skill, approval, Attempt, and Context Manifest bindings similarly include only methods used across their boundary. Store-level hydration and diagnostic queries may remain internal for aggregate construction or persistence tests, but they are not promoted into application contracts merely because SQLite can answer them.
+
 Core application construction accepts one named options object. Internally, Admission, Execution, Governance, Workspace Goals, Memory, and Skills stay grouped; the flat HTTP-facing application ABI is bound once from an explicit method whitelist with missing-method and collision checks. Web uses CoreClient for ABI/SSE transport and keeps workspace loading/preferences, transcript projection, ACK scheduling, and presentation components outside the root component.
 
 See [PERSISTENCE_AND_RECOVERY.md](PERSISTENCE_AND_RECOVERY.md) for the lifecycle and recovery contract.

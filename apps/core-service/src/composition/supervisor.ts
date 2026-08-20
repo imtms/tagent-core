@@ -232,7 +232,7 @@ export class TaskRunSupervisor {
     const failure: GateFailure = {
       kind: "approval",
       key: "external_action_attempt_authorization",
-      reason: "A new Attempt cannot inherit the consumed external-action authorization; explicit approval is required before continuation.",
+      reason: "A new Attempt cannot inherit external-action authorization activated for an earlier Attempt; explicit approval is required before continuation.",
       disposition: "needs_approval",
     };
     return {
@@ -296,7 +296,7 @@ export class TaskRunSupervisor {
       ...source,
       action: "pause_for_approval",
       reasonCode: "external_action_reapproval_required",
-      rationale: "A new Attempt cannot inherit the consumed external-action authorization; explicit approval is required before retrying the external action.",
+      rationale: "A new Attempt cannot inherit external-action authorization activated for an earlier Attempt; explicit approval is required before retrying the external action.",
     };
   }
 

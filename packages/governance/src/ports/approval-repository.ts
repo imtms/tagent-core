@@ -7,10 +7,22 @@ export interface ApprovalOptions {
   metadata?: Record<string, unknown>;
 }
 
+export interface ExternalActionAuthorizationActivation {
+  operationId: string;
+  toolCallId: string;
+  toolName: string;
+  argsHash: string;
+}
+
+export interface ExternalActionAuthorizationResult {
+  allowed: boolean;
+  reason: string;
+  approvalId?: string;
+}
+
 export interface ApprovalRepository {
   ensureApprovalRequest(runId: string, decisionId: string, reason: string, options?: ApprovalOptions): ApprovalRequest;
   getApprovalRequest(id: string): ApprovalRequest | undefined;
-  listApprovalRequests(runId: string): ApprovalRequest[];
   resolveApprovalRequest(
     id: string,
     status: "approved" | "rejected",
@@ -18,5 +30,10 @@ export interface ApprovalRepository {
     resolution?: string,
   ): ApprovalRequest | undefined;
   hasPendingApproval(runId: string): boolean;
-  authorizeExternalAction(runId: string, attempt: number): { allowed: boolean; reason: string; approvalId?: string };
+  inspectExternalActionAuthorization(runId: string, attempt: number): ExternalActionAuthorizationResult;
+  activateExternalActionAuthorization(
+    runId: string,
+    attempt: number,
+    activation: ExternalActionAuthorizationActivation,
+  ): ExternalActionAuthorizationResult;
 }

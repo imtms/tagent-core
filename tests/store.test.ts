@@ -1238,12 +1238,12 @@ describe("Store", () => {
     ]));
   });
 
-  it("returns the latest terminal run for a session", () => {
+  it("excludes a terminal run from the active-session lookup", () => {
     const store = createStore();
     const session = store.createSession();
     const run = store.createRun(session.id, "latest");
     transitionTaskRun(store, run.id, "complete");
-    expect(store.getLatestRun(session.id)?.id).toBe(run.id);
+    expect(store.listRuns(session.id, 1)[0]?.id).toBe(run.id);
     expect(store.getActiveRun(session.id)).toBeUndefined();
   });
 

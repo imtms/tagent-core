@@ -99,7 +99,7 @@ export async function createMemoryRuntime(config:MemoryRuntimeConfig,source:Memo
   const consolidator=new MemoryConsolidator(adapter,adapter,service,{minimumRecords:config.coldMinimumRecords},semanticConsolidator); const reconciler=new ColdStorageReconciler(adapter,blobs);
   const backfill=new MemoryHistoryBackfill(source,adapter,adapter,config.workspaceScopeId);
   const reindex=embeddings?new DurableReindexWorker(adapter,adapter,adapter,embeddings,adapter,access,config.embeddingBatchSize):undefined;if(reindex){const scopes=await adapter.listScopes();if(!scopes.some((scope)=>scope.type==="workspace"&&scope.id===config.workspaceScopeId))scopes.push(access.scopes[0]);for(const scope of scopes)await adapter.enqueueReindex(scope,embeddings!.generation);}
-  const worker=new LocalMemoryWorker(capture,lifecycle,consolidator,reconciler,access,config.workerIntervalMs,config.maintenanceIntervalMs,async()=>{service.noteWorkerHeartbeat();await adapter.heartbeat("local-memory",access.scopes[0],"memory",Date.now());},()=>service.noteConsolidation(),reindex,core,adapter,blobs,adapter,backfill);
+  const worker=new LocalMemoryWorker(capture,lifecycle,consolidator,reconciler,access,config.workerIntervalMs,config.maintenanceIntervalMs,async()=>{service.noteWorkerHeartbeat();await adapter.heartbeat("local-memory",access.scopes[0],"memory",Date.now());},()=>service.noteConsolidation(),reindex,core,adapter,adapter,backfill);
   let closeTask:Promise<void>|undefined;
   return{service,adapter,worker,lifecycle,consolidator,reconciler,start(){if(!closeTask)worker.start();},close(){if(!closeTask)closeTask=(async()=>{await worker.stop();if(postgresAdapter)await postgresAdapter.close();})();return closeTask;}};
 }

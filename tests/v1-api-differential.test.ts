@@ -129,7 +129,7 @@ describe("v1 API contracts", () => {
     expect(decodeAbi(SessionSchema, decodeAbi(SuccessEnvelopeSchema, read.json()).data)).toEqual(session);
     const capabilities = decodeAbi(CoreCapabilitiesResponseSchema, (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).data;
     expect(capabilities).toMatchObject({
-      releaseVersion: "0.8.10",
+      releaseVersion: "0.8.11",
       persistenceSchemaVersion: 2,
       interactions: { approvalResolution: true, userInputSubmission: true },
       operator: { roadmapGenerationIdempotent: true },
@@ -644,6 +644,72 @@ describe("v1 API contracts", () => {
       items: [{ kind: "user_input", interaction: { id: input.id, taskRunId: run.id, attempt: 1, prompt: "Target?", status: "pending", response: {} } }],
       pageInfo: { nextCursor: null, hasMore: false, limit: 1 },
     });
+  });
+
+  it("retries a submitted input boundary after external-approval persistence failed", async () => {
+    const { app, service, store } = await fixture();
+    const session = store.createSession();
+    const admitted = await service.enqueueSessionInput(session.id, "请部署到生产环境。", "api-input-approval-recovery");
+    const runId = admitted.run!.id;
+    await service.approveRunApproval(store.listApprovalRequests(runId)[0]!.id);
+    const input = store.requestUserInput(runId, "Target?", [{
+      key: "target",
+      label: "Target",
+      description: "Environment",
+      inputType: "text",
+      required: true,
+      placeholder: "production",
+    }]);
+    store.db.exec(`CREATE TEMP TRIGGER reject_api_post_input_approval BEFORE INSERT ON approval_requests
+      BEGIN SELECT RAISE(ABORT,'reject API post-input approval'); END`);
+    const command = (commandId: string) => ({
+      commandId,
+      expectedAttemptId: null,
+      type: "task_run.submit_user_input" as const,
+      payload: { requestId: input.id, response: { target: "production" } },
+    });
+
+    const failed = await app.inject({ method: "POST", url: `/api/v1/task-runs/${runId}/commands`, payload: command("input-recovery-failed") });
+    expect(failed.statusCode).toBe(409);
+    expect(store.getRun(runId)).toMatchObject({ status: "waiting_input", pendingUserInput: null });
+
+    store.db.exec("DROP TRIGGER reject_api_post_input_approval");
+    const recovered = await app.inject({ method: "POST", url: `/api/v1/task-runs/${runId}/commands`, payload: command("input-recovery-retry") });
+    expect(recovered.statusCode).toBe(200);
+    expect(decodeAbi(CommandResponseSchema, recovered.json()).data.receipt).toMatchObject({ state: "succeeded" });
+    expect(store.getRun(runId)).toMatchObject({ status: "blocked", attempt: 2, pendingUserInput: null });
+    expect(store.listApprovalRequests(runId).find((approval) => approval.status === "pending")).toMatchObject({
+      actionType: "execute_external_action",
+      metadata: { approvedAttempt: 3, submittedInputRequestId: input.id },
+    });
+  });
+
+  it("retries an approved external-action resume through the command API", async () => {
+    const { app, service, store } = await fixture();
+    const session = store.createSession();
+    const admitted = await service.enqueueSessionInput(session.id, "请部署到生产环境。", "api-external-approval-resume-recovery");
+    const runId = admitted.run!.id;
+    const approval = store.listApprovalRequests(runId)[0]!;
+    const command = (commandId: string) => ({
+      commandId,
+      expectedAttemptId: null,
+      type: "task_run.resolve_approval" as const,
+      payload: { approvalRequestId: approval.id, decision: "approved" as const, resolution: "Approved in API test" },
+    });
+    store.db.exec(`CREATE TEMP TRIGGER reject_api_external_approval_resume BEFORE UPDATE OF attempt ON runs
+      WHEN NEW.attempt > OLD.attempt BEGIN SELECT RAISE(ABORT,'reject API external approval resume'); END`);
+
+    const failed = await app.inject({ method: "POST", url: `/api/v1/task-runs/${runId}/commands`, payload: command("approval-resume-failed") });
+    expect(failed.statusCode).toBe(409);
+    expect(store.getApprovalRequest(approval.id)).toMatchObject({ status: "approved" });
+    expect(store.getRun(runId)).toMatchObject({ status: "blocked", attempt: 1 });
+
+    store.db.exec("DROP TRIGGER reject_api_external_approval_resume");
+    const recovered = await app.inject({ method: "POST", url: `/api/v1/task-runs/${runId}/commands`, payload: command("approval-resume-retry") });
+    expect(recovered.statusCode).toBe(200);
+    expect(decodeAbi(CommandResponseSchema, recovered.json()).data.receipt).toMatchObject({ state: "succeeded" });
+    expect(store.getRun(runId)).toMatchObject({ status: "running", attempt: 2 });
+    expect(store.listEvents(runId).filter((event) => event.type === "supervisor.approval.approved")).toHaveLength(1);
   });
 
   it("returns a retryable 429 envelope when the control inbox is full", async () => {

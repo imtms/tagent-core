@@ -159,7 +159,6 @@ export class SqlitePersistence {
       getAttemptForRun: query(sqliteAttempts.getAttemptForRun.bind(sqliteAttempts)),
       getActiveAttempt: query(sqliteAttempts.getActiveAttempt.bind(sqliteAttempts)),
       listAttempts: query(sqliteAttempts.listAttempts.bind(sqliteAttempts)),
-      listTransitionAudit: query(sqliteAttempts.listTransitionAudit.bind(sqliteAttempts)),
       acquireExecutionLease: mutate(sqliteAttempts.acquireExecutionLease.bind(sqliteAttempts)),
       renewExecutionLease: mutate(sqliteAttempts.renewExecutionLease.bind(sqliteAttempts)),
       releaseExecutionLease: mutate(sqliteAttempts.releaseExecutionLease.bind(sqliteAttempts)),

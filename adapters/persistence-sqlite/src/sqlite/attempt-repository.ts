@@ -3,7 +3,6 @@ import type Database from "better-sqlite3";
 import { assertAttemptTransition } from "@tagent/execution/domain";
 import type {
   Attempt,
-  AttemptTransitionAudit,
   CandidateResult,
   ExecutionLease,
 } from "@tagent/execution/domain";
@@ -46,13 +45,6 @@ export class SqliteAttemptRepository implements AttemptRepository {
       completed_at as completedAt
       FROM attempts WHERE run_id=? ORDER BY ordinal`).all(runId) as AttemptRow[])
       .map((row) => asAttempt(row)!);
-  }
-
-  listTransitionAudit(attemptId: string): AttemptTransitionAudit[] {
-    return this.db.prepare(`SELECT id,attempt_id as attemptId,run_id as runId,ordinal,
-      from_status as fromStatus,to_status as toStatus,trigger,scenario,reason,version,
-      event_sequence as eventSequence,created_at as createdAt
-      FROM attempt_transition_audit WHERE attempt_id=? ORDER BY created_at,rowid`).all(attemptId) as AttemptTransitionAudit[];
   }
 
   acquireExecutionLease(input: {

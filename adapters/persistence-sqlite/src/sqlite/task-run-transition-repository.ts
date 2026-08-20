@@ -179,22 +179,38 @@ export class SqliteTaskRunTransitionRepository implements TaskRunTransitionPort 
     command: Extract<SystemTransitionCommand, { kind: "require_external_approval" }>,
     scope: SystemAttemptScope,
   ): TaskRunTransitionResult {
-    if (!scope.active || scope.attemptStatus !== "running" || scope.runStatus !== "running") {
-      throw new Error(`External approval requires the active running Attempt ${scope.attemptId}`);
+    const runningBoundary = scope.active && scope.attemptStatus === "running" && scope.runStatus === "running";
+    const submittedInputBoundary = !scope.active
+      && scope.attemptStatus === "waiting_input"
+      && scope.runStatus === "waiting_input"
+      && Boolean(this.db.prepare(`SELECT 1 FROM user_input_requests submitted
+        WHERE submitted.run_id=? AND submitted.attempt=? AND submitted.status='submitted'
+          AND NOT EXISTS (SELECT 1 FROM user_input_requests pending
+            WHERE pending.run_id=submitted.run_id AND pending.status='pending') LIMIT 1`)
+        .get(scope.runId, scope.ordinal));
+    if (!runningBoundary && !submittedInputBoundary) {
+      throw new Error(`External approval requires a running Attempt or a submitted-input boundary for ${scope.attemptId}`);
     }
-    const approval = this.db.prepare(`SELECT 1 FROM approval_requests
-      WHERE id=? AND run_id=? AND action_type='execute_external_action' AND status='pending'`)
-      .get(command.approvalId, scope.runId);
+    const approval = this.db.prepare(`SELECT json_extract(metadata_json,'$.submittedInputRequestId') as submittedInputRequestId
+      FROM approval_requests
+      WHERE id=? AND run_id=? AND action_type='execute_external_action' AND status='pending'
+        AND CAST(json_extract(metadata_json,'$.approvedAttempt') AS INTEGER)=?`)
+      .get(command.approvalId, scope.runId, scope.ordinal + 1) as { submittedInputRequestId: string | null } | undefined;
     if (!approval) throw new Error(`External approval ${command.approvalId} is not pending for ${scope.runId}`);
+    if (submittedInputBoundary && (!approval.submittedInputRequestId || !this.db.prepare(`SELECT 1 FROM user_input_requests
+      WHERE id=? AND run_id=? AND attempt=? AND status='submitted'`)
+      .get(approval.submittedInputRequestId, scope.runId, scope.ordinal))) {
+      throw new Error(`External approval ${command.approvalId} is not bound to submitted input for ${scope.attemptId}`);
+    }
     const event = this.store.transitionRun(
-      scope.runId, ["running"], "blocked", "run.blocked",
+      scope.runId, [scope.runStatus], "blocked", "run.blocked",
       { reason: command.reason, approvalId: command.approvalId, action: "execute_external_action" },
       command.reason, scope.ordinal,
     );
     if (!event) throw new Error(`TaskRun ${scope.runId} external approval boundary lost its compare-and-set`);
     return { transitions: [{
       runId: scope.runId, sourceAttemptId: scope.attemptId, sourceOrdinal: scope.ordinal,
-      targetAttemptId: scope.attemptId, targetOrdinal: scope.ordinal, fromStatus: "running",
+      targetAttemptId: scope.attemptId, targetOrdinal: scope.ordinal, fromStatus: scope.runStatus,
       toStatus: "blocked", precedingEvents: [], event,
     }] };
   }
@@ -258,8 +274,12 @@ export class SqliteTaskRunTransitionRepository implements TaskRunTransitionPort 
     } else if (command.kind === "resume_approval") {
       if (authority.kind !== "approval_resume") throw new Error("Approval resume authority mismatch");
       const approved = this.db.prepare(`SELECT 1 FROM approval_requests
-        WHERE id=? AND run_id=? AND action_type='resume_taskrun' AND status='approved'`)
-        .get(command.approvalId, scope.runId);
+        WHERE id=? AND run_id=? AND status='approved' AND (
+          action_type='resume_taskrun'
+          OR (action_type='execute_external_action'
+            AND CAST(json_extract(metadata_json,'$.approvedAttempt') AS INTEGER)=?)
+        )`)
+        .get(command.approvalId, scope.runId, scope.ordinal + 1);
       if (!approved) throw new Error(`Approval ${command.approvalId} cannot resume ${scope.attemptId}`);
       if (scope.runStatus !== "blocked" && scope.runStatus !== "interrupted") {
         throw new Error(`Approval resume cannot continue TaskRun from ${scope.runStatus}`);

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## [0.8.11] - 2026-08-20
+
+### External-action approval correctness
+
+- Replaced per-tool exhaustion with one current-Attempt activation: approval remains valid for qualifying operations only inside its bound Attempt, while every later Attempt still requires fresh approval.
+- Moved activation after Workspace Goal, tool-attempt, and durable operation-claim guards and immediately before dispatch. Pre-dispatch cancellation and guard rejection no longer consume authority, and an activation race settles the operation as `pre_effect_rejected`.
+- Kept read-only workspace observations from activating approval, made submitted input in an external-action TaskRun surface a genuine next-Attempt approval instead of resuming unauthorized, and clarified the distinction between information forms and approval cards in the Console.
+- Made the two split persistence boundaries retry-safe: a submitted input cannot be replayed with changed values, and an approval committed before a failed resume can retry the same bound Attempt without a second approval or duplicate approval event.
+- Reused the existing append-only approval receipt store; the SQLite schema revision and public ABI remain unchanged.
+
+### Application-surface maintenance
+
+- Narrowed TaskRun, Skill, Context Manifest, approval, and Attempt persistence ports to methods with live application consumers, while keeping Store-only hydration and diagnostic queries internal.
+- Removed unused constructor dependencies and a dead approval-domain helper, and replaced brittle source-file/count assertions with behavior and ownership invariants.
+- Preserved the dormant fenced capability architecture and immutable retired-schema objects explicitly covered by compatibility tests; no public ABI, SQLite schema, Memory schema, or state protocol changed.
+
+### Compatibility and deployment
+
+- The public ABI, SQLite schema revision `2`, Memory schema, and `tagent-core/state-0.8-r2` protocol are unchanged; no data migration is required. Deploy matching `0.8.11` Core, Web Console, ABI, and Core Client artifacts.
+
 ## [0.8.10] - 2026-08-19
 
 ### Workspace Goal execution and recovery

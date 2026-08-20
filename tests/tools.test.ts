@@ -31,7 +31,8 @@ function createTestTools(
     getRunExecutionState: () => store.getRunExecutionState(runId),
     isCurrentAttempt: () => true,
     authorizeWorkspaceMutation: () => ({ allowed: true, reason: "ordinary TaskRun" }),
-    authorizeExternalAction: () => ({ allowed: true, reason: "ordinary TaskRun" }),
+    inspectExternalActionAuthorization: () => ({ allowed: true, reason: "ordinary TaskRun" }),
+    activateExternalActionAuthorization: () => ({ allowed: true, reason: "ordinary TaskRun" }),
     advanceRunPhase: (phase) => store.advanceRunPhase(runId, phase),
     setRunPhase: (phase) => store.setRunPhase(runId, phase),
     claimOperation: (id, operationType, payload) =>

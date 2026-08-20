@@ -159,25 +159,20 @@ function frozenTaskRunProperties(): string[] {
   return properties;
 }
 
-function transitionCalls(relativePath: string): { runtime: number; system: number } {
+function namedCallCount(relativePath: string, methods: ReadonlySet<string>): number {
   const source = parseSource(relativePath);
-  const result = { runtime: 0, system: 0 };
-  const runtimeMethods = new Set([
-    "failRuntimeTaskRun",
-    "settleRuntimeInitializationFailure",
-  ]);
+  let calls = 0;
   const visit = (node: ts.Node) => {
     if (ts.isCallExpression(node)) {
       const name = ts.isPropertyAccessExpression(node.expression)
         ? node.expression.name.text
         : ts.isIdentifier(node.expression) ? node.expression.text : undefined;
-      if (name && runtimeMethods.has(name)) result.runtime += 1;
-      if (name === "transitionSystem") result.system += 1;
+      if (name && methods.has(name)) calls += 1;
     }
     ts.forEachChild(node, visit);
   };
   visit(source);
-  return result;
+  return calls;
 }
 
 function directPortCalls(relativePath: string, method: "transitionRuntime" | "transitionSystem"): number {
@@ -239,20 +234,20 @@ describe("production TaskRun transition authority", () => {
   });
 
   it("routes the known production callers through the bounded transition port", () => {
-    expect(transitionCalls("packages/execution/src/application/attempt-executor.ts"))
-      .toEqual({ runtime: 2, system: 0 });
-    expect(transitionCalls("packages/execution/src/application/attempt-settlement-service.ts"))
-      .toEqual({ runtime: 0, system: 0 });
-    expect(transitionCalls("packages/execution/src/application/runtime-initialization-failure.ts"))
-      .toEqual({ runtime: 1, system: 0 });
-    expect(transitionCalls("packages/admission/src/application/admission-coordinator.ts"))
-      .toEqual({ runtime: 0, system: 3 });
-    expect(transitionCalls("packages/execution/src/application/execution-lifecycle-service.ts"))
-      .toEqual({ runtime: 0, system: 1 });
-    expect(transitionCalls("packages/execution/src/application/runtime-registry.ts"))
-      .toEqual({ runtime: 0, system: 1 });
-    expect(transitionCalls("packages/execution/src/application/run-context-service.ts"))
-      .toEqual({ runtime: 0, system: 1 });
+    const productionFiles = workspaceProductionFiles();
+    const runtimeHelpers = new Set(["failRuntimeTaskRun", "settleRuntimeInitializationFailure"]);
+    expect(productionFiles.filter((file) => namedCallCount(file, runtimeHelpers) > 0).sort()).toEqual([
+      "packages/execution/src/application/attempt-execution-failure.ts",
+      "packages/execution/src/application/attempt-executor.ts",
+      "packages/execution/src/application/runtime-factory-failure.ts",
+      "packages/execution/src/application/runtime-initialization-failure.ts",
+    ]);
+    expect(productionFiles.filter((file) => directPortCalls(file, "transitionSystem") > 0).sort()).toEqual([
+      "packages/admission/src/application/admission-coordinator.ts",
+      "packages/execution/src/application/execution-lifecycle-service.ts",
+      "packages/execution/src/application/run-context-service.ts",
+      "packages/execution/src/application/runtime-registry.ts",
+    ]);
     expect(sourceFiles("packages/execution/src/application")
       .map((file) => ({ file, calls: directPortCalls(file, "transitionRuntime") }))
       .filter(({ calls }) => calls > 0))

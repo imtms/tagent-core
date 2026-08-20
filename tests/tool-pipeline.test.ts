@@ -27,7 +27,8 @@ function capabilities(overrides: Partial<ToolCapabilityApplicationPort> = {}) {
     getRunExecutionState: () => ({ attempt: 1 }),
     isCurrentAttempt: vi.fn(() => true),
     authorizeWorkspaceMutation: vi.fn(() => ({ allowed: true, reason: "allowed" })),
-    authorizeExternalAction: vi.fn(() => ({ allowed: true, reason: "allowed" })),
+    inspectExternalActionAuthorization: vi.fn(() => ({ allowed: true, reason: "allowed" })),
+    activateExternalActionAuthorization: vi.fn(() => ({ allowed: true, reason: "active" })),
     advanceRunPhase: vi.fn(() => true),
     recordToolAttempt: vi.fn(() => ({ created: true, status: "running", guard: { blocked: false, reason: "" } })),
     completeToolAttempt: complete,
@@ -159,7 +160,7 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     const external = vi.fn(() => ({ allowed: true, reason: "approved" }));
     const workspace = vi.fn(() => ({ allowed: true, reason: "goal" }));
     const record = vi.fn(() => ({ created: true, status: "running" as const, guard: { blocked: false, reason: "" } }));
-    const { port } = capabilities({ isCurrentAttempt: () => false, authorizeExternalAction: external, authorizeWorkspaceMutation: workspace, recordToolAttempt: record });
+    const { port } = capabilities({ isCurrentAttempt: () => false, inspectExternalActionAuthorization: external, authorizeWorkspaceMutation: workspace, recordToolAttempt: record });
     const pipeline = new ToolExecutionPipeline(port);
     const wrapped = pipeline.bindCatalog({ tools: [tool("write", execute, true)] }).tools[0];
     await expect(wrapped.execute("call-1", {}, testSignal)).rejects.toThrow("no longer current");
@@ -169,7 +170,7 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     expect(execute).not.toHaveBeenCalled();
 
     const deniedApproval = vi.fn(() => ({ allowed: false, reason: "missing" }));
-    const second = capabilities({ authorizeExternalAction: deniedApproval, authorizeWorkspaceMutation: workspace, recordToolAttempt: record });
+    const second = capabilities({ inspectExternalActionAuthorization: deniedApproval, authorizeWorkspaceMutation: workspace, recordToolAttempt: record });
     const denied = new ToolExecutionPipeline(second.port).bindCatalog({ tools: [tool("write", execute, true)] }).tools[0];
     await expect(denied.execute("call-2", {}, testSignal)).rejects.toThrow("External action approval guard");
     expect(workspace).not.toHaveBeenCalled();
@@ -180,7 +181,7 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
   it("requests and blocks on explicit approval for maintenance outside external-action TaskRuns", () => {
     const approval = vi.fn(() => ({ allowed: false, reason: "missing" }));
     const request = vi.fn(() => ({ approvalId: "approval-1", reason: "Approval requested for the next Attempt" }));
-    const { port } = capabilities({ authorizeExternalAction: approval, requestExternalActionApproval: request });
+    const { port } = capabilities({ inspectExternalActionAuthorization: approval, requestExternalActionApproval: request });
     const maintenance = tool("maintenance", undefined, true);
     maintenance.policy = { ...maintenance.policy!, externalAction: "explicit" };
     const pipeline = new ToolExecutionPipeline(port);
@@ -194,6 +195,104 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     expect(request).toHaveBeenCalledWith("maintenance-1", "maintenance");
     expect(pipeline.beforeToolCall("maintenance-1", "maintenance", {})).toMatchObject({ blocked: true });
     expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("activates approval only after local guards and durable claim, immediately before dispatch", async () => {
+    const order: string[] = [];
+    const activate = vi.fn(() => { order.push("activate"); return { allowed: true, reason: "active" }; });
+    const execute = vi.fn(async () => { order.push("execute"); return { content: [{ type: "text" as const, text: "changed" }], details: {} }; });
+    const { port } = capabilities({
+      recordToolAttempt: vi.fn(() => { order.push("record"); return { created: true, status: "running" as const, guard: { blocked: false, reason: "" } }; }),
+      claimOperation: vi.fn(() => { order.push("claim"); return { claimed: true, status: "running" }; }),
+      activateExternalActionAuthorization: activate,
+    });
+    const wrapped = new ToolExecutionPipeline(port).bindCatalog({ tools: [tool("write", execute, true)] }).tools[0];
+    const pipeline = new ToolExecutionPipeline(capabilities({
+      authorizeWorkspaceMutation: () => ({ allowed: false, reason: "blocked" }),
+      activateExternalActionAuthorization: activate,
+    }).port);
+    const denied = pipeline.bindCatalog({ tools: [tool("denied", execute, true)] }).tools[0];
+    await expect(denied.execute("denied-call", {}, testSignal)).rejects.toThrow("Workspace Goal mutation guard");
+    expect(activate).not.toHaveBeenCalled();
+
+    await wrapped.execute("approved-call", {}, testSignal);
+    expect(order).toEqual(["record", "claim", "activate", "execute"]);
+    expect(activate).toHaveBeenCalledOnce();
+  });
+
+  it("does not activate an admitted tool call that is cancelled before dispatch", async () => {
+    const activate = vi.fn(() => ({ allowed: true, reason: "active" }));
+    const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "unsafe" }], details: {} }));
+    const { port } = capabilities({ activateExternalActionAuthorization: activate });
+    const pipeline = new ToolExecutionPipeline(port);
+    const wrapped = pipeline.bindCatalog({ tools: [tool("write", execute, true)] }).tools[0];
+    expect(pipeline.beforeToolCall("cancelled-call", "write", {})).toEqual({ blocked: false });
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled before dispatch"));
+    await expect(wrapped.execute("cancelled-call", {}, controller.signal)).rejects.toThrow("cancelled before dispatch");
+    expect(activate).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("settles an activation race as a proven pre-effect rejection", async () => {
+    const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "unsafe" }], details: {} }));
+    const updateOperation = vi.fn();
+    const markChecksStale = vi.fn(() => 0);
+    const { port } = capabilities({
+      activateExternalActionAuthorization: () => ({ allowed: false, reason: "Attempt is no longer current" }),
+      updateOperation,
+      markChecksStale,
+    });
+    const wrapped = new ToolExecutionPipeline(port).bindCatalog({ tools: [tool("write", execute, true)] }).tools[0];
+    await expect(wrapped.execute("raced-call", {}, testSignal)).rejects.toThrow("Attempt is no longer current");
+    expect(execute).not.toHaveBeenCalled();
+    expect(markChecksStale).not.toHaveBeenCalled();
+    expect(updateOperation).toHaveBeenCalledWith("run-1:1:raced-call", expect.objectContaining({
+      status: "pre_effect_rejected",
+      stage: "authorization_rejected",
+    }));
+  });
+
+  it("does not require or activate approval for a read-only external-policy observation", async () => {
+    const inspect = vi.fn(() => ({ allowed: true, reason: "approved" }));
+    const activate = vi.fn(() => ({ allowed: true, reason: "active" }));
+    const observation = tool("observe", undefined, false);
+    observation.policy = { ...observation.policy!, externalAction: true, workspaceAccess: "read_only" };
+    const wrapped = new ToolExecutionPipeline(capabilities({
+      inspectExternalActionAuthorization: inspect,
+      activateExternalActionAuthorization: activate,
+    }).port).bindCatalog({ tools: [observation] }).tools[0];
+    await wrapped.execute("observe-call", {}, testSignal);
+    expect(inspect).not.toHaveBeenCalled();
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it("claims an explicit remote operation before activating it even with read-only workspace access", async () => {
+    const order: string[] = [];
+    const explicit = tool("remote_publish", vi.fn(async () => {
+      order.push("execute");
+      return { content: [{ type: "text" as const, text: "published" }], details: {} };
+    }));
+    explicit.policy = { ...explicit.policy!, externalAction: "explicit" };
+    const { port } = capabilities({
+      recordToolAttempt: vi.fn(() => {
+        order.push("record");
+        return { created: true, status: "running" as const, guard: { blocked: false, reason: "" } };
+      }),
+      claimOperation: vi.fn(() => {
+        order.push("claim");
+        return { claimed: true, status: "running" };
+      }),
+      activateExternalActionAuthorization: vi.fn(() => {
+        order.push("activate");
+        return { allowed: true, reason: "active" };
+      }),
+    });
+    const wrapped = new ToolExecutionPipeline(port).bindCatalog({ tools: [explicit] }).tools[0];
+
+    await wrapped.execute("publish-call", {}, testSignal);
+
+    expect(order).toEqual(["record", "claim", "activate", "execute"]);
   });
 
   it("settles a successful mutation once and replays its receipt without repeating the provider", async () => {
