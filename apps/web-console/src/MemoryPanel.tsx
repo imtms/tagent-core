@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BrainCircuit,
+  ChevronLeft,
   Plus,
   RefreshCw,
   Search,
@@ -29,13 +30,20 @@ import {
   MemoryJobLists,
   MemoryRecallResults,
 } from "./MemoryBrowser";
-import { MemoryOverview } from "./MemoryOverview";
 import { memoryContent, memoryTitle } from "./memory-display";
 import {
   MEMORY_PAGE_REQUEST_LIMIT,
   memoryPageWindow,
   mergeMemoryPage,
 } from "./memory-pagination";
+
+const memoryKinds = [
+  { value: "all", label: "All" },
+  { value: "fact", label: "Facts" },
+  { value: "preference", label: "Preferences" },
+  { value: "episode", label: "Episodes" },
+  { value: "procedure", label: "Procedures" },
+] as const satisfies readonly { value: "all" | MemoryKind; label: string }[];
 
 export function MemoryPanel({
   runtime,
@@ -425,15 +433,9 @@ export function MemoryPanel({
       />
       <section className="memory-center">
         <header className="memory-header">
-          <div className="memory-heading-icon">
-            <BrainCircuit size={ICON_SIZE.xl} />
-          </div>
           <div>
-            <span className="eyebrow">Long-term memory</span>
-            <h2>Memory center</h2>
-            <p>
-              Inspect recall, memory tiers, provenance and canonical topics.
-            </p>
+            <BrainCircuit size={ICON_SIZE.xl} />
+            <h2>Memory</h2>
           </div>
           <div className="memory-header-actions">
             <button
@@ -452,8 +454,8 @@ export function MemoryPanel({
             </button>
           </div>
         </header>
-        <div className={`memory-toolbar ${hasCatalogData ? "" : "empty-catalog"}`}>
-          {hasCatalogData ? <form
+        {hasMemoryData && <div className="memory-toolbar">
+          {hasCatalogData && <form
               className="memory-search"
               onSubmit={(event) => {
                 event.preventDefault();
@@ -464,40 +466,49 @@ export function MemoryPanel({
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search facts, preferences, episodes, procedures or topics"
+                aria-label="Search memory"
+                placeholder="Search…"
               />
+              <select value={kind} aria-label="Filter memory kind" onChange={(event) => setKind(event.target.value as "all" | MemoryKind)}>
+                {memoryKinds.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
+              </select>
               <button type="submit">Recall</button>
-            </form> : <div className="memory-toolbar-context">
-              <strong>{scope.id}</strong>
-              <small>{runtime.memoryBackend ?? "memory"} metadata · {runtime.memoryColdBackend ?? "local"} Cold</small>
-            </div>}
-          {hasMemoryData && <button
-            className="memory-primary"
+            </form>}
+          <button
+            className="control"
+            data-variant="primary"
             onClick={() => setCaptureOpen(true)}
           >
             <Plus size={ICON_SIZE.md} />
             Add memory
-          </button>}
-        </div>
-        {error && <div className="memory-alert error" role="alert">{error}</div>}
-        {message && <div className="memory-alert success" role="status">{message}</div>}
-        <div className={`memory-content ${detailOpen ? "" : "detail-unavailable"} ${hasCatalogData ? "" : "empty-catalog"}`}>
-          {hasCatalogData && <MemoryOverview
-              scope={scope}
-              runtime={runtime}
-              status={status}
-              kind={kind}
-              onKindChange={setKind}
-              records={records}
-              topics={topics}
-            />}
-          <main className={`memory-browser ${hasCatalogData ? "" : "empty-catalog"}`}>
+          </button>
+        </div>}
+        <div className="memory-content">
+          {error && <div className="notice" data-tone="danger" role="alert">{error}</div>}
+          {message && <div className="notice" data-tone="success" role="status">{message}</div>}
+          {detailOpen ? <main className="memory-detail">
+            <button className="memory-detail-back" type="button" onClick={() => { setSelectedRecord(null); setSelectedTopic(null); }}><ChevronLeft size={ICON_SIZE.md} />All memory</button>
+            {selectedRecord ? (
+              <RecordDetail
+                record={selectedRecord}
+                onForget={() => void forgetRecord(selectedRecord)}
+                onGovern={(action) => void govern(selectedRecord, action)}
+                onFeedback={(signal) => void feedback(selectedRecord, signal)}
+              />
+            ) : selectedTopic ? (
+              <TopicDetail
+                topic={selectedTopic}
+                onForget={() => void forgetTopic(selectedTopic)}
+              />
+            ) : null}
+          </main> : <>
+            <main className="memory-browser">
             {initialLoading ? <div className="memory-loading" role="status" aria-label="Loading memory"><span /><span /><span /></div> : !hasMemoryData ? <>
-              <section className="memory-empty memory-empty-catalog">
+              <section className="memory-empty">
                 <BrainCircuit size={ICON_SIZE.xl} />
                 <strong>No durable memories yet</strong>
                 <p>Add a stable fact, preference, event or procedure. Search and filters appear after the first memory is stored.</p>
-                <button className="memory-primary" onClick={() => setCaptureOpen(true)}><Plus size={ICON_SIZE.sm} />Add first memory</button>
+                <button className="control" data-variant="primary" onClick={() => setCaptureOpen(true)}><Plus size={ICON_SIZE.sm} />Add first memory</button>
               </section>
               <MemoryJobLists reindexJobs={reindexJobs} jobs={jobs} busy={busy} onReindex={() => void runReindex()} />
             </> : <>
@@ -524,7 +535,7 @@ export function MemoryPanel({
                   hasMoreTopics={hasMoreTopics}
                   loadingMoreTopics={loadingMoreTopics}
                   onLoadMoreTopics={() => void loadMoreTopics()}
-                /> : <section className="memory-empty compact">
+                /> : <section className="memory-empty">
                   <Search size={ICON_SIZE.lg} />
                   <strong>No catalog matches</strong>
                   <p>Clear the search phrase or choose another memory kind.</p>
@@ -539,36 +550,23 @@ export function MemoryPanel({
               />
               <MemoryJobLists reindexJobs={reindexJobs} jobs={jobs} busy={busy} onReindex={() => void runReindex()} />
             </>}
-          </main>
-          {detailOpen && <aside className="memory-detail open">
-            {selectedRecord ? (
-              <RecordDetail
-                record={selectedRecord}
-                onForget={() => void forgetRecord(selectedRecord)}
-                onGovern={(action) => void govern(selectedRecord, action)}
-                onFeedback={(signal) => void feedback(selectedRecord, signal)}
-              />
-            ) : selectedTopic ? (
-              <TopicDetail
-                topic={selectedTopic}
-                onForget={() => void forgetTopic(selectedTopic)}
-              />
-            ) : null}
-          </aside>}
+            </main>
+          </>}
         </div>
       </section>
       {captureOpen && (
-        <div className="memory-modal-wrap">
-          <button
-            className="memory-modal-backdrop"
-            onClick={() => setCaptureOpen(false)}
-            aria-label="Close add memory"
-          />
-          <section className="memory-modal">
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setCaptureOpen(false);
+          }}
+        >
+          <section className="modal memory-modal" role="dialog" aria-modal="true" aria-labelledby="memory-capture-title">
             <header>
               <div>
                 <span className="eyebrow">Policy-gated capture</span>
-                <h3>Add a memory cue</h3>
+                <h3 id="memory-capture-title">Add a memory cue</h3>
               </div>
               <button
                 className="icon-button"
@@ -578,26 +576,29 @@ export function MemoryPanel({
                 <X size={ICON_SIZE.lg} />
               </button>
             </header>
-            <p>
-              Write a fact, preference, event or procedure. Sensitive values are
-              inspected before durable storage.
-            </p>
-            <textarea
-              autoFocus
-              value={captureText}
-              onChange={(event) => setCaptureText(event.target.value)}
-              placeholder="Example: I prefer concise Chinese answers, but architecture reviews should include trade-offs."
-              rows={7}
-            />
+            <section>
+              <p>
+                Write a fact, preference, event or procedure. Sensitive values are
+                inspected before durable storage.
+              </p>
+              <textarea
+                autoFocus
+                value={captureText}
+                onChange={(event) => setCaptureText(event.target.value)}
+                placeholder="Example: I prefer concise Chinese answers, but architecture reviews should include trade-offs."
+                rows={7}
+              />
+            </section>
             <footer>
               <span>
                 <ShieldCheck size={ICON_SIZE.sm} />
                 Scope: {scope.id}
               </span>
               <div>
-                <button onClick={() => setCaptureOpen(false)}>Cancel</button>
+                <button className="control" onClick={() => setCaptureOpen(false)}>Cancel</button>
                 <button
-                  className="memory-primary"
+                  className="control"
+                  data-variant="primary"
                   onClick={() => void capture()}
                   disabled={!captureText.trim() || busy}
                 >

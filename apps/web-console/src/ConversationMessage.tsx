@@ -17,7 +17,8 @@ function MemoryExtraction({ job }: { job?: CaptureJob | null }) {
     ? `${formatCount(count, "memory", "memories")} extracted`
     : failed ? `Extraction failed${job.errorCode ? ` · ${job.errorCode}` : ""}`
     : job.status === "running" ? "Extracting durable memory…" : "Queued for extraction";
-  return <div className={`turn-memory ${completed ? "completed" : failed ? "failed" : job.status}`} title={`Memory extraction · capture job ${job.id}`}><BrainCircuit size={ICON_SIZE.xs} /><span>{detail}</span></div>;
+  const tone = completed ? "success" : failed ? "danger" : job.status === "running" ? "info" : undefined;
+  return <div className="turn-memory" data-tone={tone} title={`Memory extraction · capture job ${job.id}`}><BrainCircuit size={ICON_SIZE.xs} /><span>{detail}</span></div>;
 }
 
 function copyTextWithSelection(content: string): boolean {
@@ -58,7 +59,7 @@ function MessageCopy({ content }: { content: string }) {
   }, [content]);
   const copied = state === "copied";
   const failed = state === "failed";
-  return <button className={`message-copy ${state}`} type="button" onClick={() => void copy()} aria-label={copied ? "Message copied" : failed ? "Copy unavailable" : "Copy message"} title={copied ? "Copied" : failed ? "Clipboard unavailable" : "Copy message"}>{copied ? <Check size={ICON_SIZE.xs} /> : failed ? <X size={ICON_SIZE.xs} /> : <Copy size={ICON_SIZE.xs} />}<span>{copied ? "Copied" : failed ? "Unavailable" : "Copy"}</span></button>;
+  return <button className="message-copy" data-tone={failed ? "danger" : undefined} type="button" onClick={() => void copy()} aria-label={copied ? "Message copied" : failed ? "Copy unavailable" : "Copy message"} title={copied ? "Copied" : failed ? "Clipboard unavailable" : "Copy message"}>{copied ? <Check size={ICON_SIZE.xs} /> : failed ? <X size={ICON_SIZE.xs} /> : <Copy size={ICON_SIZE.xs} />}<span>{copied ? "Copied" : failed ? "Unavailable" : "Copy"}</span></button>;
 }
 
 function MessageFooter({ createdAt, content, pending = false }: { createdAt?: number; content?: string; pending?: boolean }) {
@@ -67,9 +68,9 @@ function MessageFooter({ createdAt, content, pending = false }: { createdAt?: nu
 
 export const ConversationMessage = memo(function ConversationMessage({ message, memoryJob }: { message: Message; memoryJob?: CaptureJob | null }) {
   const speaker = message.role === "user" ? "You" : "TAgent";
-  return <article className={`message ${message.role}`} aria-label={`Message from ${speaker}`}><div className="message-body"><Markdown>{message.content}</Markdown></div><MessageFooter createdAt={message.createdAt} content={message.content} />{message.role === "user" && <MemoryExtraction job={memoryJob} />}</article>;
+  return <article className="message" data-role={message.role} aria-label={`Message from ${speaker}`}><div className="message-body"><Markdown>{message.content}</Markdown></div><MessageFooter createdAt={message.createdAt} content={message.content} />{message.role === "user" && <MemoryExtraction job={memoryJob} />}</article>;
 });
 
 export function PendingConversationMessage({ content }: { content: string }) {
-  return <article className="message user pending" aria-label="Sending message"><div className="message-body"><LiveText>{content}</LiveText></div><MessageFooter pending /></article>;
+  return <article className="message" data-role="user" aria-label="Sending message"><div className="message-body"><LiveText>{content}</LiveText></div><MessageFooter pending /></article>;
 }

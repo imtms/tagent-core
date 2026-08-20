@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Activity, ArrowRight, CornerDownLeft, Pin, Plus, Search, X } from "lucide-react";
 import type { Session } from "./api";
 import { ICON_SIZE } from "./icon-size";
-import { formatRunStatus } from "./run-state";
+import { formatRunStatus, runStatusTone } from "./run-state";
 import { TimeAgo } from "./TimeAgo";
 import { useModalFocus } from "./use-modal-focus";
 import { workspaceEmptyState } from "./workspace-navigation";
@@ -74,10 +74,10 @@ export function WorkspaceSwitcher({
     setActiveIndex((current) => (current + delta + visibleWorkspaces.length) % visibleWorkspaces.length);
   }
 
-  return createPortal(<div className="workspace-switcher-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section ref={dialogRef} className="workspace-switcher" role="dialog" aria-modal="true" aria-labelledby="workspace-switcher-title">
+  return createPortal(<div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section ref={dialogRef} className="modal workspace-switcher" role="dialog" aria-modal="true" aria-labelledby="workspace-switcher-title">
       <header>
-        <div><span>Navigate</span><h2 id="workspace-switcher-title">Switch workspace</h2></div>
+        <h2 id="workspace-switcher-title">Switch workspace</h2>
         <button type="button" onClick={onClose} aria-label="Close workspace switcher"><X size={ICON_SIZE.md} /></button>
       </header>
       {sortedWorkspaces.length > 0 && <label className="workspace-switcher-search">
@@ -96,11 +96,11 @@ export function WorkspaceSwitcher({
           const pinned = pinnedWorkspaceIds.includes(workspace.id);
           const selected = workspace.id === selectedWorkspaceId;
           const customWorkspaceEmoji = workspaceEmojiById[workspace.id];
-          return <button ref={(element) => { optionRefs.current[index] = element; }} id={`workspace-option-${workspace.id}`} type="button" role="option" tabIndex={-1} aria-selected={selected} className={`${index === activeIndex ? "highlighted" : ""} ${selected ? "selected" : ""}`} key={workspace.id} onMouseEnter={() => { setActiveIndex(index); onPrefetch(workspace.id); }} onClick={() => choose(workspace)}>
-            <span className={`workspace-switcher-avatar ${customWorkspaceEmoji ? "custom" : "monogram"}`}>{(customWorkspaceEmoji ?? workspace.title.trim().slice(0, 1).toLocaleUpperCase()) || "T"}</span>
-            <span className="workspace-switcher-copy"><strong>{workspace.title}</strong><small><TimeAgo value={workspace.updatedAt} />{workspace.latestRunStatus && <i className={`workspace-switcher-status ${workspace.latestRunStatus}`}>{workspace.latestRunStatus === "running" ? <Activity size={ICON_SIZE.micro} /> : <span className="workspace-switcher-dot" />}{formatRunStatus(workspace.latestRunStatus)}</i>}</small></span>
-            {pinned && <Pin className="workspace-switcher-pin" size={ICON_SIZE.sm} />}
-            {selected ? <span className="workspace-switcher-current">Current</span> : index === activeIndex ? <CornerDownLeft className="workspace-switcher-enter" size={ICON_SIZE.sm} /> : <ArrowRight className="workspace-switcher-arrow" size={ICON_SIZE.sm} />}
+          return <button ref={(element) => { optionRefs.current[index] = element; }} id={`workspace-option-${workspace.id}`} type="button" role="option" tabIndex={-1} aria-selected={selected} className={index === activeIndex ? "highlighted" : undefined} key={workspace.id} onMouseEnter={() => { setActiveIndex(index); onPrefetch(workspace.id); }} onClick={() => choose(workspace)}>
+            <span className={customWorkspaceEmoji ? "workspace-switcher-avatar custom" : "workspace-switcher-avatar"}>{(customWorkspaceEmoji ?? workspace.title.trim().slice(0, 1).toLocaleUpperCase()) || "T"}</span>
+            <span className="workspace-switcher-copy"><strong>{workspace.title}</strong><small><TimeAgo value={workspace.updatedAt} />{workspace.latestRunStatus && <i data-meta data-tone={runStatusTone(workspace.latestRunStatus)}>{workspace.latestRunStatus === "running" ? <Activity size={ICON_SIZE.micro} /> : <span className="status-dot" />}{formatRunStatus(workspace.latestRunStatus)}</i>}</small></span>
+            {pinned && <Pin data-meta size={ICON_SIZE.sm} />}
+            {selected ? <span data-meta>Current</span> : index === activeIndex ? <CornerDownLeft size={ICON_SIZE.sm} /> : <ArrowRight size={ICON_SIZE.sm} />}
           </button>;
         })}
         {emptyState && <div className="workspace-switcher-empty">{emptyState.kind === "no-workspaces" ? <Plus size={ICON_SIZE.xl} /> : <Search size={ICON_SIZE.xl} />}<strong>{emptyState.title}</strong><span>{emptyState.detail}</span></div>}

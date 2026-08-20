@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, type CaptureJob, type MemoryStatusResult, type Message, type RecallResult, type RuntimeStatus, type Session, type SessionInboxItem, type TaskRun, type TranscriptItem, type WarmMemory, type WorkspaceGoal, type WorkspaceGoalDefinition } from "../apps/web-console/src/api.js";
+import { api, type CaptureJob, type Message, type RecallResult, type RuntimeStatus, type Session, type SessionInboxItem, type TaskRun, type TranscriptItem, type WarmMemory, type WorkspaceGoal, type WorkspaceGoalDefinition } from "../apps/web-console/src/api.js";
 import { approvalResolutionNotice } from "../apps/web-console/src/approval-display.js";
 import {
   ApprovalDock,
@@ -15,12 +15,10 @@ import {
   type RunApproval,
 } from "../apps/web-console/src/AppPanels.js";
 import { ConversationMessage, PendingConversationMessage } from "../apps/web-console/src/ConversationMessage.js";
-import { GateProfileControl } from "../apps/web-console/src/GateProfileControl.js";
 import { GoalView } from "../apps/web-console/src/GoalsPanel.js";
 import { goalStatusTone } from "../apps/web-console/src/goal-display.js";
 import { MemoryCatalog, MemoryCoreProjection, MemoryJobLists, MemoryRecallResults } from "../apps/web-console/src/MemoryBrowser.js";
 import { RecordDetail } from "../apps/web-console/src/MemoryDetails.js";
-import { MemoryOverview } from "../apps/web-console/src/MemoryOverview.js";
 import { MemoryPanel } from "../apps/web-console/src/MemoryPanel.js";
 import { WorkspaceSkillsControl } from "../apps/web-console/src/WorkspaceSkillsControl.js";
 import { nextConversationPinState } from "../apps/web-console/src/conversation-scroll.js";
@@ -28,7 +26,7 @@ import { deriveCurrentOperation } from "../apps/web-console/src/current-operatio
 import { createEventAcknowledger } from "../apps/web-console/src/event-acknowledger.js";
 import { IntentPrefetchCache } from "../apps/web-console/src/intent-prefetch-cache.js";
 import { MEMORY_PAGE_REQUEST_LIMIT, memoryPageWindow, mergeMemoryPage } from "../apps/web-console/src/memory-pagination.js";
-import { canResumeRun, findActiveRun, formatRunStatus, formatRunValue, isActiveRunStatus, isRedundantRunPhase, runStatusNotice } from "../apps/web-console/src/run-state.js";
+import { canResumeRun, findActiveRun, formatRunStatus, formatRunValue, isActiveRunStatus, isRedundantRunPhase, runStatusNotice, runStatusTone } from "../apps/web-console/src/run-state.js";
 import { runViewForResolvedRuns, runViewForResumedRun, runViewForStartedRun, runViewFromWorkspaceSnapshot } from "../apps/web-console/src/use-run-view-state.js";
 import { mergeRefreshedMessages, shouldStreamWorkspaceRun, terminalStreamingAfterRefresh } from "../apps/web-console/src/use-workspace-live-sync.js";
 import { mergeTranscriptItems } from "../apps/web-console/src/transcript-projection.js";
@@ -42,7 +40,7 @@ import { deriveWorkspaceNavigation, workspaceEmptyState } from "../apps/web-cons
 import { mergeWorkspaceActivityBaseline } from "../apps/web-console/src/use-workspace-presentation.js";
 import { ConversationHistoryAuthority, mergeEarlierMessages, messagePageHasOlderHint } from "../apps/web-console/src/use-conversation-history.js";
 import { indexMemoryJobsByMessage } from "../apps/web-console/src/use-memory-annotations.js";
-import { clampComposerHeight, composerGateProfileNote, nextComposerHistoryView, type ComposerHistoryView } from "../apps/web-console/src/use-workspace-composer.js";
+import { clampComposerHeight, nextComposerHistoryView, type ComposerHistoryView } from "../apps/web-console/src/use-workspace-composer.js";
 import { replaceWorkspace, workspaceCreateGuardDelay, WorkspaceAuthority, WorkspaceCreationGuard } from "../apps/web-console/src/use-workspace-sessions.js";
 import { hasPersistedSubmission } from "../apps/web-console/src/use-workspace-submission.js";
 import { storedGateProfiles, storedStringLists, storedStringRecord } from "../apps/web-console/src/workspace-preferences.js";
@@ -309,37 +307,13 @@ describe("Web workbench behavior", () => {
       memoryBackend: "memory",
       memoryColdBackend: "local",
     } satisfies RuntimeStatus;
-    const status = {
-      records: { hot: 0, warm: 0, candidate: 0, active: 0, disputed: 0 },
-      topics: 0,
-      coldTopics: 0,
-    } satisfies MemoryStatusResult;
-    const overview = (value: MemoryStatusResult) => renderToStaticMarkup(<MemoryOverview
-      scope={{ type: "workspace", id: "default" }}
-      runtime={runtime}
-      status={value}
-      kind="all"
-      onKindChange={() => undefined}
-      records={[]}
-      topics={[]}
-    />);
-    const empty = overview(status);
-    const populated = overview({ ...status, records: { ...status.records, hot: 1, active: 1 } });
     const panel = renderToStaticMarkup(<MemoryPanel runtime={runtime} onClose={() => undefined} />);
 
     expect(panel).not.toContain("memory-live");
     expect(panel).not.toContain(">Enabled<");
-    expect(empty).toContain("Active scope");
-    expect(empty).not.toContain("Policy protected");
-    expect(empty).not.toContain("memory-tier-grid");
-    expect(empty).not.toContain("memory-health-ledger");
-    expect(empty).not.toContain("memory-kind-filter");
-    expect(empty).not.toContain("<dl>");
-    expect(empty).not.toContain(">0<");
-    expect(populated).toContain("memory-tier-grid");
-    expect(populated).toContain("memory-health-ledger");
-    expect(populated).toContain(">Hot<");
-    expect(populated).toContain("<dt>Active</dt><dd>1</dd>");
+    expect(panel).not.toContain("Filter memory kind");
+    expect(panel).not.toContain("Policy protected");
+    expect(panel).not.toContain("<dl>");
   });
 
   it("omits empty Memory detail routes and provenance", () => {
@@ -556,10 +530,9 @@ describe("Web workbench behavior", () => {
 
     expect(empty).not.toContain("Scope and boundaries");
     expect(empty).not.toContain("Linked TaskRuns");
-    expect(empty).not.toContain('<section class="goal-section-card">');
+    expect(empty).not.toContain("Roadmap v");
     expect(empty).not.toContain("No Roadmap yet");
     expect(empty).not.toContain("Approve the Goal, then generate its initial Roadmap.");
-    expect(empty).not.toContain('class="goal-next-card"');
     expect(empty).not.toContain("Next action");
     expect(empty).not.toContain("Goal ended");
     expect(empty).not.toContain("goal-progress-track");
@@ -569,10 +542,10 @@ describe("Web workbench behavior", () => {
     expect(awaitingRoadmap).toContain("Next action");
     expect(awaitingRoadmap).toContain("Generate Roadmap");
     expect(awaitingRoadmap).toContain("Create manually");
-    expect(awaitingRoadmap).not.toContain('<section class="goal-section-card">');
+    expect(awaitingRoadmap).not.toContain("Roadmap v");
     expect(awaitingRoadmap).not.toContain("No Roadmap yet");
     expect(awaitingRoadmap).not.toContain("goal-progress-track");
-    expect(readyToClose).toContain('class="goal-next-card"');
+    expect(readyToClose).toContain("Next action");
     expect(readyToClose).toContain("Verified criteria are ready");
     expect(readyToClose).toContain("Confirm closure");
     expect(readyToClose).toContain('class="goal-progress-track"');
@@ -583,7 +556,8 @@ describe("Web workbench behavior", () => {
     expect(populated).toContain("Linked TaskRuns");
     expect(populated).toContain("1 linked");
     expect(populated).toContain("1 Roadmap item");
-    expect(cancelled).toContain('class="goal-status-badge danger"');
+    expect(cancelled).toContain('data-tone="danger"');
+    expect(cancelled).toContain("Cancelled");
     expect(nonRetryable).toContain(">Open</button>");
     expect(nonRetryable).not.toContain(">Retry</button>");
     expect(nonRetryable).toContain("Open task");
@@ -864,13 +838,15 @@ describe("Web workbench behavior", () => {
     expect(nextComposerHistoryView(["first", "latest"], 1, view)).toEqual({ cursor: null, draft: "unfinished", seed: "unfinished" });
   });
 
-  it("keeps composer geometry and Gate guidance behind shared authorities", () => {
+  it("keeps composer geometry and status tone mapping behind shared authorities", () => {
     expect(clampComposerHeight(20, 36, 140)).toBe(36);
     expect(clampComposerHeight(88, 36, 140)).toBe(88);
     expect(clampComposerHeight(220, 36, 140)).toBe(140);
-    expect(composerGateProfileNote("off")).toContain("No completion review");
-    expect(composerGateProfileNote("relaxed")).toContain("result-oriented review");
-    expect(composerGateProfileNote("strict")).toContain("criterion-level coverage");
+    expect(runStatusTone("running")).toBe("info");
+    expect(runStatusTone("completed")).toBe("success");
+    expect(runStatusTone("blocked")).toBe("warning");
+    expect(runStatusTone("failed")).toBe("danger");
+    expect(runStatusTone("queued")).toBeUndefined();
   });
 
   it("replaces a pending tool projection with its later completed result", () => {
@@ -1032,9 +1008,9 @@ describe("Web workbench behavior", () => {
 
     expect(completed).not.toContain("visual audit fixture");
     expect(completed).not.toContain("run-status-note");
-    expect(blocked).toContain('class="run-status-note warning"');
+    expect(blocked).toContain('class="run-status-note" data-tone="warning"');
     expect(blocked).toContain("External evidence is missing");
-    expect(failed).toContain('class="run-status-note danger"');
+    expect(failed).toContain('class="run-status-note" data-tone="danger"');
     expect(failed).toContain("Provider failed");
   });
 
@@ -1081,22 +1057,6 @@ describe("Web workbench behavior", () => {
     expect(storedStringLists("lists")).toEqual({ valid: ["one", "two"] });
     expect(storedGateProfiles()).toEqual({ one: "strict" });
     expect(storedStringRecord("tagent.workspace-emojis")).toEqual({ one: "🧠" });
-  });
-
-  it("presents Gate configuration as one descriptive compact control", () => {
-    const markup = renderToStaticMarkup(<GateProfileControl
-      profile="relaxed"
-      note="One result-oriented review."
-      appliesToNextRun
-      onChange={() => undefined}
-    />);
-
-    expect(markup).toContain('aria-label="Gate acceptance style"');
-    expect(markup).toContain("<select");
-    expect(markup).toContain('value="relaxed" selected=""');
-    expect(markup).toContain("Relaxed · open research");
-    expect(markup).toContain("This applies only if the input creates a new TaskRun.");
-    expect(markup).not.toContain('role="radiogroup"');
   });
 
   it("merges earlier conversation pages without duplicates and recognizes a full page", () => {
@@ -1230,15 +1190,15 @@ describe("Web workbench behavior", () => {
     }
 
     const completed = renderMessage(capture({ status: "completed", proposalCount: 2, persistedCount: 2 }));
-    expect(completed).toContain('class="turn-memory completed"');
+    expect(completed).toContain('class="turn-memory" data-tone="success"');
     expect(completed).toContain("2 memories extracted");
 
     const running = renderMessage(capture({ status: "running", attempts: 1 }));
-    expect(running).toContain('class="turn-memory running"');
+    expect(running).toContain('class="turn-memory" data-tone="info"');
     expect(running).toContain("Extracting durable memory…");
 
     const failed = renderMessage(capture({ status: "retryable_failed", attempts: 2, errorCode: "provider_timeout" }));
-    expect(failed).toContain('class="turn-memory failed"');
+    expect(failed).toContain('class="turn-memory" data-tone="danger"');
     expect(failed).toContain("Extraction failed · provider_timeout");
 
     const pending = renderToStaticMarkup(<PendingConversationMessage content="Remember this" />);
@@ -1308,7 +1268,7 @@ describe("Web workbench behavior", () => {
     } as SessionInboxItem;
     const queue = renderToStaticMarkup(<QueuePrompt
       item={item} index={0} editing={false} draft={item.content} busy={false} starting={false}
-      dragging={false} canMoveUp={false} canMoveDown={false}
+      canMoveUp={false} canMoveDown={false}
       onEdit={() => undefined} onDraftChange={() => undefined} onSave={() => undefined}
       onCancelEdit={() => undefined} onStart={() => undefined} onToggleDefer={() => undefined}
       onMergeFirst={() => undefined} onDelete={() => undefined} onMoveUp={() => undefined}
@@ -1361,11 +1321,10 @@ describe("Web workbench behavior", () => {
     expect(details).toContain("6 rules");
     expect(details).toContain('<details class="run-contract">');
     expect(details).not.toContain('<details class="run-contract" open');
-    expect(details).toContain('<details class="audit-disclosure gate-standards-disclosure">');
-    expect(details).toContain('<details class="audit-disclosure gate-evaluations-disclosure">');
+    expect(details.match(/<details class="audit-disclosure">/g)).toHaveLength(2);
     expect(details).toContain("Evaluation history");
     expect(details).toContain("1 failed");
-    expect(details).not.toContain('<details class="audit-disclosure gate-evaluations-disclosure" open');
+    expect(details).not.toContain('<details class="audit-disclosure" open');
     expect(details).toContain("Settled candidate rejected");
     expect(details).toContain("1 blocker");
     expect(details).toContain("1 failure");
@@ -1542,7 +1501,7 @@ describe("Web workbench behavior", () => {
       },
     })} toolEvents={[]} transcriptTools={[]} />);
 
-    expect(selectedOnly).toContain('<details class="audit-section audit-disclosure context-manifest-disclosure">');
+    expect(selectedOnly).toContain('<details class="audit-section audit-disclosure">');
     expect(selectedOnly).toContain(">Context manifests<");
     expect(selectedOnly).toContain("1 selected");
     expect(selectedOnly).toContain("hash abcdef123456");
@@ -1584,7 +1543,7 @@ describe("Web workbench behavior", () => {
       usage: { input: 5, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
     })} toolEvents={[]} transcriptTools={[]} />);
 
-    expect(details).toContain('<div class="phase-line"><span class="phase-badge blocked">Blocked</span></div>');
+    expect(details).toContain('<div class="phase-line"><span class="phase-badge" data-tone="warning">Blocked</span></div>');
     expect(details).toContain("1 message");
     expect(details).not.toContain("1 messages");
     expect(details).not.toContain("Blocked</span><span>Blocked");
@@ -1639,9 +1598,9 @@ describe("Web workbench behavior", () => {
     expect(populated).toContain("Recorded tool calls");
     expect(populated).toContain("1 call");
     expect(populated).toContain(">Execution evidence<");
-    expect(populated).toContain('<span class="run-evidence-group-label"><span>Plan</span><small>1/1</small></span>');
-    expect(populated).toContain('<span class="run-evidence-group-label"><span>Checks</span><small>1/1</small></span>');
-    expect(populated).toContain('<span class="run-evidence-group-label"><span>Continuations</span><small>1</small></span>');
+    expect(populated).toContain('<span class="run-evidence-group-label" data-label="true"><span>Plan</span><small>1/1</small></span>');
+    expect(populated).toContain('<span class="run-evidence-group-label" data-label="true"><span>Checks</span><small>1/1</small></span>');
+    expect(populated).toContain('<span class="run-evidence-group-label" data-label="true"><span>Continuations</span><small>1</small></span>');
     expect(populated).toContain(">Plan<");
     expect(populated).toContain("Implement the refinement");
     expect(populated).toContain(">Checks<");

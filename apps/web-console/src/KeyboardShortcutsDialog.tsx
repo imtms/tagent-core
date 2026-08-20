@@ -26,9 +26,9 @@ export function KeyboardShortcutsDialog({ open, modifier, enterSubmits, onClose 
     ] },
   ];
 
-  return createPortal(<div className="shortcut-help-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section ref={dialogRef} className="shortcut-help" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title">
-      <header><span><Keyboard size={ICON_SIZE.lg} /></span><div><small>Keyboard first</small><h2 id="shortcut-help-title">Keyboard shortcuts</h2></div><button ref={closeRef} type="button" onClick={onClose} aria-label="Close keyboard shortcuts"><X size={ICON_SIZE.md} /></button></header>
+  return createPortal(<div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section ref={dialogRef} className="modal shortcut-help" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title">
+      <header><span><Keyboard size={ICON_SIZE.lg} /></span><h2 id="shortcut-help-title">Keyboard shortcuts</h2><button ref={closeRef} type="button" onClick={onClose} aria-label="Close keyboard shortcuts"><X size={ICON_SIZE.md} /></button></header>
       <div className="shortcut-help-groups">{groups.map((group) => <section key={group.label}><h3>{group.label}</h3><div>{group.shortcuts.map((shortcut) => <div className="shortcut-help-row" key={shortcut.label}><span>{shortcut.label}</span><kbd>{shortcut.keys.map((key) => <i key={key}>{key}</i>)}</kbd></div>)}</div></section>)}</div>
       <footer>Shortcuts are available wherever they do not interrupt typing.</footer>
     </section>

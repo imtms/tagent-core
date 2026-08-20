@@ -27,7 +27,7 @@ Keep one process, one SQLite connection and Unit of Work, and the existing domai
 - `App.tsx` delegates workspace/session/inbox, run/stream/transcript, and presentation/preferences transitions to testable state modules.
 - Stream snapshots and SSE deltas have one explicit ordering authority.
 - Memory administration uses cursor paging and loads Cold bodies on demand.
-- Layout mechanics and visual styling have separate cascade owners; dead lower-layer declarations and raw component colors are rejected.
+- Web layout and visual styling have one canonical stylesheet owner; dead selectors, unstyled JSX classes, raw component colors, and unbounded CSS complexity are rejected.
 - Focused type, lint, architecture, and behavior checks pass without requiring unrelated release-host provisioning.
 
 **Current progress.**
@@ -35,7 +35,7 @@ Keep one process, one SQLite connection and Unit of Work, and the existing domai
 - Workspace Goal transitions and evidence authorization now live behind Governance/application ports; HTTP only composes the typed transport boundary.
 - SQLite still owns one connection and Unit of Work, while bounded Workspace Goal, operation-receipt, Skill, Transcript, and Session/Message repositories own their aggregate SQL.
 - The Web console delegates Session lifecycle and execution preferences, presentation persistence, Session Inbox mutations, Run-view state, TaskRun input/approval/retry operations, Workspace submission orchestration, live Workspace/SSE ordering, paged conversation history, Memory annotation polling, and per-Workspace composer behavior to focused modules. Async operations carry Workspace-scoped authority; Session preferences, conversation history, and submissions reject an obsolete generation after an A→B→A switch. Memory uses bounded cursor paging and loads Cold bodies on demand.
-- Layout, design, and Goal feature CSS have explicit cascade owners. The durable color, geometry, interaction, and visual-QA contract belongs to `docs/WEB_CONSOLE_DESIGN.md` and its executable Web style checks instead of being duplicated in this decision record.
+- The former layout, design, Goal, and cascade stylesheets have converged into one bounded `app.css`. The durable color, geometry, component grammar, interaction, and visual-QA contract belongs to `docs/WEB_CONSOLE_DESIGN.md`; the executable style gate checks single-entry ownership, boot-shell parity, shared scales, complexity ceilings, and live class ownership in both JSX-to-CSS and CSS-to-JSX directions.
 - This record remains proposed because `App.tsx` still composes a large rendering surface, while `Store` still contains Submission, TaskRun-command, Evidence, and other aggregates. Those remaining extractions must preserve coherent state ownership and the single connection rather than becoming a mechanical component or repository rewrite.
 
 ## Risks

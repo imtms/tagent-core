@@ -16,7 +16,7 @@ Admission proposes an immutable execution policy for each new contract. Core con
 
 The proposal also declares side-effect risk, evidence policy and review policy. It is not an authority grant: Core raises the policy to full review and trusted checks whenever a Workspace Goal or a current-Attempt mutation-capable operation is observed, including one that failed after its effect started. A model can never lower this floor.
 
-Before a new TaskRun is created, the caller may choose a completion-acceptance `gateProfile`. The Web Console exposes the choice above the composer and remembers it per Workspace:
+Before a new TaskRun is created, the caller may choose a completion-acceptance `gateProfile`. The Web Console exposes it as Review in Workspace settings and remembers it per Workspace; it does not occupy the message composer because it configures the Workspace rather than one message:
 
 | Profile | Completion behavior | Intended use |
 | --- | --- | --- |

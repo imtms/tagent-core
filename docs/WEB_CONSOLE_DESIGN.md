@@ -1,69 +1,130 @@
-# Web Console design system
+# Web Console design
 
-The Web Console uses a quiet, high-density control-plane style: neutral surfaces carry the interface, one restrained green accent marks primary actions and focus, and semantic colors appear only where state has meaning. The reference is Hermit/Linear rather than a colorful card dashboard.
+The Web Console is a quiet, technical workspace rather than a colorful dashboard.
+Its reference is Hermit/Linear: flat neutral surfaces, compact typography, one restrained accent, and information revealed only when it becomes useful.
+
+## Product shape
+
+The desktop shell has five stable parts:
+
+1. A 280px Workspace sidebar.
+2. A 52px workspace bar.
+3. One centered conversation plane.
+4. One composer that contains only input, live state, and submit.
+5. An on-demand Run details drawer.
+
+Memory, Goals, Skills, shortcuts, and artifact previews are secondary tools.
+They appear as menus, drawers, or modal workspaces instead of permanent columns.
+Gate profile selection belongs in Workspace settings because it configures the workspace rather than the next message.
+
+The desktop Workspace sidebar does not collapse.
+Run details never occupy a permanent third column.
+On mobile, the Workspace sidebar and Run details are modal drawers over the same conversation plane.
 
 ## Style ownership
 
-The rendered style entrypoint is intentionally limited to four files, imported in this order from `apps/web-console/src/main.tsx`:
+`apps/web-console/src/app.css` is the only Web Console stylesheet.
+`apps/web-console/src/main.tsx` is its only importer.
 
-1. `cascade.css` declares `@layer layout, design, features`.
-2. `layout.css` owns only structure, positioning, overflow, responsive mechanics, and component geometry. Its ordered `layout.base` and `layout.refinement` sublayers preserve the distinction between structural primitives and component-specific geometry. It must not declare color, typography, borders, depth, cursor, or visual motion.
-3. `design-system.css` owns themes, tokens, typography, surfaces, borders, depth, interaction states, and shared component appearance. Its explicitly ordered `design.baseline` and `design.refinement` sublayers ensure component refinements remain authoritative regardless of selector specificity. It must not declare width, spacing, display, grid/flex, positioning, overflow, or other structural geometry.
-4. `goal-styles.css` owns the Workspace Goals feature layer.
+Keep layout, theme tokens, components, feature surfaces, and responsive rules in this file.
+Do not add feature CSS, package themes, cascade override files, or compatibility layers.
+When the file approaches the enforced size ceiling, simplify or remove rules instead of creating another stylesheet.
 
-Do not restore a catch-all `styles.css`, add an unlayered override file, put visual declarations into `layout.css`, put geometry into `design-system.css`, or duplicate a selector/property in a later layer. If a new feature genuinely needs its own file, first update the canonical layer and entrypoint contract instead of relying on import order.
+The first-paint shell in `apps/web-console/index.html` mirrors the application sidebar, bar, surface, border, text, and brand tokens.
+This prevents the deployed loading frame from changing width, height, or color when React mounts.
 
-Third-party components may provide behavior, but they must not import an independent visual theme. Syntax highlighting, editor chrome, charts, and similar rendered surfaces are styled from the same semantic tokens inside `design-system.css`; feature modules do not import package CSS directly.
+## Visual system
 
-## Live-data authority
+Neutral surfaces carry almost all of the interface:
 
-The visual contract also requires deterministic ownership of asynchronous state. SSE reconnect uses one jittered exponential backoff timer per active Run, starts at one second, caps at 30 seconds, and resets after a healthy stream, online/visibility recovery, Run change, or stream completion. Terminal refresh clears any local streaming buffer once authoritative Transcript or terminal-event output exists, even when replayed text differs byte-for-byte. Artifact previews use latest-request authority so a stale response cannot replace a newer selection or reopen a closed preview. Requested-input forms are keyed by request ID and submit only fields declared by the current request.
+- `--bg` and `--surface` form the reading plane.
+- `--sidebar`, `--muted`, and `--hover` provide shallow surface steps.
+- `--border` and `--border-strong` provide hairline separation.
+- `--text` and `--text-muted` carry hierarchy without opacity tricks.
 
-## Visual rules
+Green `--accent` is reserved for primary actions, focus, selection marks, progress, and unread activity.
+It is not a panel, card, header, or generic active-state background.
 
-- Use the shared semantic color tokens. Raw colors and component-local `color-mix()` formulas are not allowed outside the light/dark token definitions.
-- Semantic color is not a surface system. Do not add `accent-soft`, `danger-soft`, tinted-card, tinted-panel, or semantic-gradient tokens. Panels, cards, rows, empty states, notices, destructive controls, and secondary actions keep neutral backgrounds; reserve direct semantic fills for primary action buttons, status dots, unread indicators, and progress marks. Use semantic text, a restrained border, focus ring, or a two-pixel edge when a larger surface needs emphasis.
-- Text-bearing foreground tokens, including muted labels, placeholders, accent links, and semantic status labels, maintain at least 4.5:1 contrast on every neutral surface where they are used. Filled accent actions keep the same minimum between their foreground and fill. Lower-contrast subtle tokens are reserved for non-text decoration such as inactive dots and icons; visual quietness must come from hierarchy and density rather than illegibility.
-- Keep compact geometry on the shared scales too: indicators, count badges, keycaps, and chevron grid tracks use the indicator or control tokens; progress bars and every positioned chrome offset of 12px or less use spacing steps; optical transforms use spacing tokens rather than component-local pixel nudges. App shell columns use the semantic Workspace rail and Audit panel width tokens across regular, compact, and collapsed layouts rather than repeating raw pixels in responsive branches; compact `981–1280px` and regular `1281px+` column rules stay mutually exclusive so cascade order cannot silently widen a panel. The 60px collapsed Workspace rail keeps its 40px controls and rows inside a 40px content measure; its padding, row height, and avatar offsets belong to `layout.refinement`, while `layout.base` owns only collapse structure such as hidden labels and overflow, so later generic geometry cannot shadow the compact rules. Reserve unread-indicator space only on unread Workspace rows so ordinary names retain the full compact measure. Remove one-off responsive sizes and nudges when the same compact element can keep one geometry everywhere.
-- Content geometry has three shared measures instead of page-specific width guesses: `--content-measure` caps working surfaces such as conversations, Audit evidence, composer chrome, and Goals at 860px; `--empty-state-measure` gives creation and no-data states one 500px frame; and `--reading-measure` caps prose at 72 characters. A loading skeleton uses the same measure as the content it replaces so hydration or data arrival cannot produce a horizontal jump. Goal editors pair `--space-20` canvas insets with a `--space-12` form and section rhythm so the primary action row remains fully visible at the baseline 720px desktop height instead of requiring an initial scroll. Component-specific overlay, media, rail, and responsive breakpoint geometry may remain local when it does not express one of these shared reading roles.
-- React icons use the shared `ICON_SIZE` ladder from `icon-size.ts`: 10px micro status glyphs, then 12/14/16/18/20px controls and 24px hero marks. Component JSX must not choose raw icon pixels or restore near-duplicate odd sizes.
-- At mobile widths, every visible action and form control—including Goal creation, editing, management, and icon actions—uses the shared 44px touch target instead of inheriting desktop density.
-- Neutral surfaces should occupy most of the screen. Accent belongs on primary actions, focus, selection, progress, and sparse interaction feedback—not large panels and never as a generic synonym for activity or success.
-- Operational state has one fixed mapping everywhere: `info` means running, live, or an active Goal; `success` means completed or passed; `warning` means queued, waiting, paused, blocked, stale, or awaiting review; and `danger` means failed, cancelled, or interrupted. The same state must not change color between the Workspace rail, switcher, Run control, history, collapsed Audit indicator, tooltip, Memory annotation, and Goal or Gate evidence.
-- Ordinary hierarchy stays neutral. Eyebrows, category labels, Memory tiers, Inbox intent, artifact and policy icons, dialog identity marks, explanatory notes, and data totals do not earn accent or status color merely because they are visible. Omit static availability or implementation metadata when the visible surface already proves it is available; an open Audit panel does not label itself `On demand`, and the Workspace sidebar does not simulate live health with a static local-control-plane label or advertise the database schema revision.
-- Workspace icon customization remains available for recognition, but emoji render in grayscale in the rail, switcher, and picker. Selection is communicated by the shared neutral hover and border states rather than restoring a row of unrelated saturated colors.
-- Keep navigation chrome, menus, dialogs, tooltips, and modal surfaces opaque. Do not use translucent overlay tokens or `backdrop-filter`; hierarchy comes from neutral surface steps, hairlines, and restrained real elevation rather than glass effects.
-- Keep one filled accent action per local action group. Supporting search, filter, cancel, and navigation controls remain neutral so the primary action is immediately legible.
-- Keep the Composer Gate setting as one compact selector whose selected value includes its purpose. Do not restore a permanent three-button mode strip: it consumes the mobile action row, hides the setting's meaning at narrow widths, and gives configuration the same visual weight as submission.
-- Prefer hairline borders and surface steps over card walls and strong shadows. Persistent controls and content surfaces stay flat; use the shared depth ladder only for focus, semantic edge cues, drawers, menus, dialogs, and other real elevation.
-- Present repeated prompts and compact option sets as one shared ledger with internal hairlines. The Skills catalog, Workspace model/reasoning pair, and execution timeline follow the same rule: shared outer surfaces, zero inter-row gaps, square internal rows, and hairline separators instead of independent rounded cards.
-- Treat dense Run evidence and Memory diagnostics as continuous ledgers too. Task contracts and static acceptance standards stay collapsed until requested; checkpoints, Supervisor evidence, Gate evaluations, criteria, recall results, jobs, topics, and detail metrics use shared row boundaries instead of nested cards.
-- Keep Plan, Checks, and Continuations in one `Execution evidence` ledger when more than one class exists. The Gate verdict remains the current conclusion; these process records are supporting evidence, not three competing top-level panels. If only one evidence class exists, name that class directly and omit the extra group label.
-- Treat Context manifests as low-frequency diagnostics: show one compact, closed disclosure with the current selected/omitted summary, and request retained manifest history only after the operator opens it. Do not spend default Audit height or background requests on source-selection detail that is already persisted for inspection. Audit disclosures keep their title and metadata on two explicit lines inside the same compact row so the 284px panel never forces labels, counts, and chevrons to overlap or truncate.
-- Let operational chrome expire with the operation. Do not repeat terminal status as a stale “current operation,” render an actionless completed or cancelled Goal as a “Next action,” show preserved checkpoints only when they retain inspectable tool or partial-response content, retain terminal Supervisor or Gate review sections that contain no persisted review evidence, or render an empty Audit panel before TaskRun history exists. An explicit `off` Gate profile remains useful because it explains why acceptance was skipped.
-- Omit operational sections whose collections are empty instead of rendering headings, zero counters, and explanatory placeholder rows. Inside a retained section, omit zero-only metrics, empty source groups, unchanged comparisons, zero-progress decoration, and empty-history notices instead of filling the hierarchy with `0`, `None`, or no-op disclosures. Equivalent status and phase labels appear once, default first-attempt labels stay implicit, and visible counts use real singular/plural copy rather than `(s)`. Run metrics also disappear when both transcript and token usage are zero, the compact Run strip omits token usage until a nonzero observation exists, and a Goal shows its progress track only after verified evidence exists. Composer chrome names the concrete current status rather than calling blocked or waiting work generically active; while idle, `Ready` stands alone instead of being followed by a static `Supervisor inbox` capability label or repeated as a decorative empty-state eyebrow. In audit surfaces, put the current verdict before static rubric material, omit an empty Gate evaluation-history placeholder, and keep both the rubric and any real Gate evaluation history behind compact disclosures.
-- Navigation follows the same threshold: never render an empty group heading, a zero group count, or a `No tasks` status for a Workspace that has never run; its timestamp already provides enough orientation. Hide filtering when the collection itself is empty, and distinguish “nothing created yet” from “the current filter matched nothing.” A mobile drawer keeps only the create control for a truly empty Workspace collection instead of stacking a second empty-state explanation above the main canvas. Optional switcher rows use fixed named grid areas so removing the search field never displaces results or the bottom create action. Truncated Workspace names expose their complete title on hover in the expanded rail. A collapsed-rail tooltip appears only while its row is hovered or its primary Workspace button is keyboard `:focus-visible`; pointer focus and secondary-action focus must not leave a detached card hanging over the canvas.
-- Apply the same information threshold to domain panels. Memory omits the static policy explainer, empty job groups, zero-only diagnostic metrics, empty Topic-route or Provenance sections, empty card or Cold-topic catalog sections, and the detail column until a specific record or topic is selected; an ungenerated Core Memory snapshot stays a compact generation action instead of exposing an empty editor or save control, and recall uses a designed no-match state instead of a row of zero counters. If only one Memory catalog class has data, render only that class instead of preserving an empty companion section. The Memory catalog is the primary reading surface: cards and topics precede the generated Core projection, while Core editing and capture/index maintenance stay behind flat disclosures. Before the first durable memory exists, omit the empty summary rail and search control, show one creation state, and keep any background operation history on demand. An empty Skills center uses its upload target as the creation state instead of repeating a separate no-Skills row. Goals omit the entire navigation rail until a first Goal exists, leaving one creation state and one action. A Goal read view omits Roadmap, Scope, and linked-TaskRun sections when no corresponding data exists; Roadmap generation and manual creation stay together in the immediate Next action rather than preserving an empty Roadmap heading or placeholder. When only one Scope group is populated, do not preserve an empty companion column or placeholder card. Goal evidence, Roadmap items, Scope, and management controls form one flat reading ledger with hairline section or row boundaries; only the immediate Next action earns a raised callout. Goal definition and Roadmap editors follow the same continuous ledger: criteria groups, Roadmap items, and criterion links use transparent sections and hairline dividers instead of nested rounded cards around controls that already have their own boundaries.
-- Keep message-level Memory annotations event-driven: show a real queued or running capture, a successful persisted result, or a failure that needs attention. No capture job, a completed-empty job, and a completed job with no persisted output are normal non-events and must not add repetitive status chrome to the conversation.
-- Use the shared type size, weight, tracking, and leading scales. Use mono/tabular numerals for identifiers, timestamps, counts, revisions, and aligned metrics.
-- Typography has exactly two font-family authorities: `--font-sans` and `--font-mono`. Components must not copy or shorten fallback lists, because even visually similar local stacks produce platform-dependent drift. Do not add compatibility aliases for an existing radius, motion, spacing, or type token; direct token-to-token aliases are reserved for the intentional semantic row scale.
-- Keep the shared type ladder strictly increasing and readable at the default root size: micro labels start at `0.5625rem` (9px) and routine body copy at `0.8125rem` (13px). Do not recover density by shrinking labels or explanatory text below those floors; use omission, hierarchy, spacing, and disclosure instead.
-- Preserve model IDs and technical identifiers exactly. Do not use CSS `text-transform: capitalize`; format enum labels as deliberate sentence case in view logic instead of letting CSS rewrite data.
-- Do not use `!important` to win component cascade conflicts. Fix layer ownership or selector scope; reserve it for the `sr-only` accessibility primitive and reduced-motion overrides that must defeat authored animation or scrolling.
-- Use the spacing, compact-control, row-density, indicator/icon, radius, stroke, opacity, motion, and z-index scales. A component should not invent a near-duplicate size.
-- Use compact status dots for live/idle/running state. Use pills only when the text itself is useful.
-- Destructive actions remain tinted and quiet until invoked; avoid saturated red slabs.
-- Every interactive element needs hover, active, disabled where applicable, and visible `:focus-visible` treatment. Buttons, inputs, textareas, selects, and disclosure summaries inherit one explicit 120ms transition grammar for border, neutral surface, text, focus depth, and transform; do not restore component-local button transitions that silently change timing. Enabled buttons and summaries share the one-pixel press response, while controls with a persistent positioning transform compose their own active transform without discarding that position. Full-width ledger summaries use the neutral hover surface, bordered secondary actions strengthen their hairline on hover, and only a filled primary action may use `--accent-hover`. Touch targets are at least 44px on mobile.
-- Visible copy, tooltips, accessible names, visual class names, and UI-only presentation state use the same information architecture. The left navigation is the `Workspace sidebar` and the right execution surface is the `Audit panel`; selectors use the `workspace-*` and `audit-*` namespaces, including `audit-section`/`audit-section-heading`, rather than the retired `session-*`/`new-session`, `run-panel`, `panel-section`, `section-title`, or generic `panel-*` visual names. Workspace search, pinning, activity, and context-menu presentation state also use Workspace terminology; the transport/domain `Session` type may remain at API boundaries. TaskRun content may keep precise `run-*` names. Do not expose retired `Sessions` or generic `task panel` names to keyboard, screen-reader, automation, or future styling work.
-- State-specific appearance that intentionally overrides a generic component rule belongs in `design.refinement`: keyboard focus treatments, responsive action visibility, and redacted transcript hierarchy must not rely on selector specificity from `design.baseline`, because the later sublayer wins regardless of specificity.
-- Empty, loading, error, and partial-data states must remain designed and legible in both themes.
-- A mobile rail is modal only while the mobile breakpoint is active. Crossing to desktop must immediately remove drawer classes, backdrop visibility, focus trapping, `inert`, and `aria-modal`; a visible desktop workspace must never remain interaction-blocked after resize or rotation.
+Operational color has one mapping:
 
-## Theme contract
+- `info`: running or live.
+- `success`: completed or passed.
+- `warning`: waiting, blocked, paused, or requiring review.
+- `danger`: failed, cancelled, or interrupted.
 
-Light and dark base colors live at the beginning of `design-system.css`. Derived semantic colors are defined once from those bases. Dark surfaces elevate by becoming slightly lighter, with translucent light borders and reduced reliance on shadows; the surfaces themselves remain opaque.
+Semantic colors appear as small text, dots, progress marks, or a narrow edge.
+Do not create large semantic fills, gradients, or tinted dashboard regions.
 
-The boot shell in `index.html` mirrors the critical light/dark tokens so the first paint does not flash a different palette. Change both through the token contract; do not hand-tune boot colors independently.
+Light and dark themes use opaque surfaces.
+Dark elevated surfaces become slightly lighter and borders become translucent white.
+Shadows are limited to real elevation: menus, drawers, and dialogs.
+
+## Type and geometry
+
+Use the five-size type ladder and seven-step spacing rhythm defined in `app.css`.
+Do not introduce near-duplicate values to refine one component.
+
+Use the sans family for interface copy, mono/tabular numerals for data, and the serif family only for the TAgent wordmark.
+Technical identifiers, model names, timestamps, counts, and revisions retain exact casing.
+
+Use the shared radius ladder:
+
+- 6px for compact controls and avatars.
+- 10px for standard controls and rows.
+- 16px for composers, dialogs, and other top-level containers.
+- Pills only when the text benefits from a pill shape.
+
+The normal control height is 36px.
+Touch targets are 44px at mobile widths.
+Icons come from Lucide and use `ICON_SIZE`; component JSX does not choose raw icon sizes.
+
+## Hierarchy and density
+
+The conversation is the primary reading surface.
+Assistant prose sits directly on that plane; user text uses a compact sender-side bubble.
+Operational evidence stays in flat ledgers or Run details instead of creating a card wall.
+
+Repeated rows use one surface with hairline separators.
+Do not wrap every prompt, metric, rule, tool call, or setting in a separate rounded card.
+
+Use tiny uppercase tracked labels only where they genuinely group a list.
+Do not stack an eyebrow, title, paragraph, and another empty-state title that all explain the same screen.
+
+Empty states contain one mark, one heading, one short explanation, and one next action.
+If the main canvas explains an empty collection, the sidebar does not repeat the full explanation.
+
+## Shared component grammar
+
+Use the existing shared primitives before introducing a feature-specific selector:
+
+- `.control` is the base field and button geometry; `data-variant="primary"` identifies the one primary action.
+- `.modal-backdrop` and `.modal` own dialog elevation, spacing, and responsive behavior.
+- `.section-heading` owns headings in Goals, Memory, and other secondary workspaces.
+- `.memory-list` owns the separator-based list treatment for Memory results, feedback, and governance.
+- `data-tone="accent|info|success|warning|danger"` is the only semantic status-color interface.
+
+Feature names should describe structure or behavior, not redefine colors, control heights, modal shells, or status variants.
+
+## Information thresholds
+
+Hide empty groups, zero-only metrics, redundant phase labels, static capability descriptions, and completed operational chrome with no inspectable evidence.
+
+Keep standards, history, manifests, maintenance actions, and destructive controls behind disclosures or menus.
+Current state appears before reference material.
+
+Goals use one selector and one reading surface rather than an internal navigation rail.
+Memory shows either the catalog or one detail view, never a nested split view. The type filter lives beside search; scope/count summaries stay hidden, and feedback, governance, and Forget remain behind the detail controls disclosure.
+Skills use the upload target as their empty creation state.
+Run details do not exist until a TaskRun exists.
+
+## Interaction
+
+Every control needs hover, active, disabled where applicable, and visible `:focus-visible` treatment.
+Motion is limited to fast color, border, opacity, and transform changes.
+Respect reduced motion and never animate layout dimensions.
+
+Modal workspaces and drawers trap focus, restore focus on close, close with Escape, and make background content inert.
+Mobile drawers must not remain modal after crossing the desktop breakpoint.
 
 ## Validation
 
@@ -75,15 +136,16 @@ npm run build -w @tagent/web-console
 npx eslint apps/web-console/src apps/web-console/scripts --max-warnings=0
 ```
 
-The Web checks enforce the four-file style entrypoint, reject package or feature-level CSS imports, reject visual appearance and keyframes in the layout layer, reject structural geometry in the design layer, and verify the explicitly ordered layout and design sublayers, cascade ownership, opaque surfaces without backdrop blur, shared scales, content measures, and interaction grammar, a strictly increasing readable type ladder, canonical font stacks without component-local copies, absence of compatibility token aliases outside the semantic row scale, canonical Workspace/Audit accessible and visual-class terminology, live selectors, boot-theme parity, readable text-token contrast in both themes, starter-prompt, evidence-ledger, Skills, Workspace-profile, execution-timeline, optional Workspace-switcher row geometry, and monochrome custom Workspace icons, absence of shadowed declarations, and absence of `!important` cascade overrides outside accessibility and reduced-motion primitives. They also reject semantic color as a broad background fill, lock the operational `info`/`success`/`warning`/`danger` mapping, prevent neutral hierarchy from drifting back to accent, and reject non-component value exports from `.tsx` modules so React Fast Refresh boundaries stay stable.
+The style check enforces the single stylesheet entrypoint, the token scales, raw-color ownership, status mapping, boot-shell parity, mobile touch targets, retired layout names, duplicate declaration removal, and the limited `!important` exceptions. Class ownership is checked in both directions: JSX cannot use unstyled classes and CSS cannot retain selectors for classes no JSX renders.
 
-For a visible change, render rather than reviewing CSS alone. At minimum verify:
+The current complexity ceilings are deliberately small: at most 800 lines, 420 rules, 500 unique selectors, and 1450 declarations. Treat these as pressure to merge or delete exceptions, not as capacity to fill.
+
+For every visible change, render and inspect:
 
 - desktop light and dark;
-- 390px mobile light and dark with no horizontal overflow;
-- the Workspace sidebar and switcher;
-- the composer, Gate selector, and live Run surfaces;
-- Skills, keyboard shortcuts, Workspace Goals, and Memory overlays;
-- hover, keyboard focus, empty/loading/error states, and mobile drawers.
+- 390px mobile light and dark;
+- Workspace sidebar, switcher, composer, and Run details;
+- Skills, shortcuts, Goals, Memory, and artifact dialogs when applicable;
+- empty, loading, error, focus, and overflow states.
 
-Do not infer a visual pass from an earlier release or from static checks.
+A passing build is not a visual pass.

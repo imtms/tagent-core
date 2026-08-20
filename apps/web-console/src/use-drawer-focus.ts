@@ -17,7 +17,7 @@ export function useMobileDrawerLayout(): boolean {
 
 export function useDrawerFocus(open: boolean, drawerRef: RefObject<HTMLElement | null>) {
   useEffect(() => {
-    if (!open || !globalThis.matchMedia?.(mobileDrawerQuery).matches) return;
+    if (!open) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const drawer = drawerRef.current;
     const siblings = Array.from(drawer?.parentElement?.children ?? []).filter((element): element is HTMLElement => element instanceof HTMLElement && element !== drawer && !element.classList.contains("backdrop"));

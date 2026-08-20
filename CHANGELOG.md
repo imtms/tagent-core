@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## [0.8.12] - 2026-08-21
+
+### Web Console visual system
+
+- Replaced the four-layer Web styling cascade with one canonical `app.css`, one compact neutral light/dark token system, one restrained green accent, shared control/modal/list primitives, and a single `data-tone` mapping for operational state.
+- Simplified the desktop shell to a stable Workspace sidebar, compact workspace bar, centered conversation plane, focused composer, and on-demand Run details; removed the permanent multi-column and collapsible-sidebar variants.
+- Moved the per-Workspace completion Review setting out of the composer and into Workspace settings, leaving the composer responsible only for input, live state, and submission.
+- Flattened Goals, Memory, Run evidence, Skills, starter prompts, and Queue actions into separator-based reading surfaces; secondary Memory governance and Queue operations now remain behind disclosures instead of competing with the primary task.
+- Unified first-paint shell geometry with the mounted application and retained responsive modal drawers, focus ownership, visible keyboard focus, reduced motion, and 44px mobile touch targets.
+
+### Maintenance and verification
+
+- Removed the retired Gate and Memory overview components plus the former cascade, layout, design-system, and Goal stylesheets.
+- Rebuilt the Web style gate around bounded source complexity, raw-color ownership, boot-shell parity, duplicate declarations, retired layouts, and bidirectional class ownership so JSX cannot introduce unstyled classes and CSS cannot retain dead class selectors.
+- Documented the visual hierarchy, shared component grammar, information thresholds, responsive inspection matrix, and enforced ceilings of 800 lines, 420 rules, 500 selectors, and 1450 declarations.
+
+### Compatibility and deployment
+
+- The public ABI, SQLite schema revision `2`, Memory schema, and `tagent-core/state-0.8-r2` protocol are unchanged; no data migration is required. The Review selector is now under Workspace settings. Deploy matching `0.8.12` Core, Web Console, ABI, and Core Client artifacts.
+
 ## [0.8.11] - 2026-08-20
 
 ### External-action approval correctness

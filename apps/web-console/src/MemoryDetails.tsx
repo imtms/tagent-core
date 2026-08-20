@@ -1,4 +1,4 @@
-import { Check, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
+import { Check, ChevronRight, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
 import type { ColdTopic, PreferenceRecord, WarmMemory } from "./api";
 import { ICON_SIZE } from "./icon-size";
 import { Markdown } from "./LazyMarkdown";
@@ -17,49 +17,18 @@ export function RecordDetail({
 }) {
   return (
     <div className="memory-detail-content">
-      <header>
-        <span className={`memory-kind ${record.kind}`}>{record.kind}</span>
-        <button className="memory-danger" onClick={onForget}>
-          <Trash2 size={ICON_SIZE.sm} />
-          Forget
-        </button>
-      </header>
-      <div className="memory-inline-actions">
-        {record.status === "candidate" && (
-          <>
-            <button onClick={() => onGovern("approve")}>
-              <Check size={ICON_SIZE.sm} />
-              Approve
-            </button>
-            <button onClick={() => onGovern("reject")}>Reject</button>
-          </>
-        )}
-        {record.status === "disputed" && <button onClick={() => onGovern("resolve")}>Resolve</button>}
-        <button onClick={() => onFeedback("helpful")}>
-          <ThumbsUp size={ICON_SIZE.sm} />
-          Helpful
-        </button>
-        <button onClick={() => onFeedback("harmful")}>
-          <ThumbsDown size={ICON_SIZE.sm} />
-          Wrong
-        </button>
-      </div>
+      <span className="memory-kind">{record.kind}</span>
       <h3>{memoryTitle(record)}</h3>
       <div className="memory-detail-body">
         <Markdown>{memoryContent(record)}</Markdown>
       </div>
+      <small data-mono>{record.tier} · {record.status} · {Math.round(record.confidence * 100)}% confidence · {Math.round(memorySignal(record) * 100)}% {record.kind === "preference" ? "strength" : "importance"}</small>
       {record.summary && record.summary !== memoryContent(record) && (
         <section>
           <span>Summary</span>
           <p>{record.summary}</p>
         </section>
       )}
-      <dl>
-        <div><dt>Tier</dt><dd>{record.tier}</dd></div>
-        <div><dt>Status</dt><dd>{record.status}</dd></div>
-        <div><dt>Confidence</dt><dd>{Math.round(record.confidence * 100)}%</dd></div>
-        <div><dt>{record.kind === "preference" ? "Strength" : "Importance"}</dt><dd>{Math.round(memorySignal(record) * 100)}%</dd></div>
-      </dl>
       {record.kind === "preference" && (
         <section>
           <span>Preference semantics</span>
@@ -80,7 +49,17 @@ export function RecordDetail({
           ))}
         </div>
       </section>}
-      <small className="memory-updated">
+      <details className="memory-disclosure">
+        <summary><strong>Memory controls</strong><small>Feedback or forget</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+        <div className="memory-disclosure-body"><div className="memory-inline-actions">
+          {record.status === "candidate" && <><button className="control" onClick={() => onGovern("approve")}><Check size={ICON_SIZE.sm} />Approve</button><button className="control" onClick={() => onGovern("reject")}>Reject</button></>}
+          {record.status === "disputed" && <button className="control" onClick={() => onGovern("resolve")}>Resolve</button>}
+          <button className="control" onClick={() => onFeedback("helpful")}><ThumbsUp size={ICON_SIZE.sm} />Helpful</button>
+          <button className="control" onClick={() => onFeedback("harmful")}><ThumbsDown size={ICON_SIZE.sm} />Wrong</button>
+          <button className="control" data-tone="danger" onClick={onForget}><Trash2 size={ICON_SIZE.sm} />Forget</button>
+        </div></div>
+      </details>
+      <small data-mono>
         Created {formatMemoryDate(record.createdAt)} · updated {formatMemoryDate(record.updatedAt)}
       </small>
     </div>
@@ -89,22 +68,11 @@ export function RecordDetail({
 
 export function TopicDetail({ topic, onForget }: { topic: ColdTopic; onForget: () => void }) {
   return (
-    <div className="memory-detail-content topic-detail">
-      <header>
-        <span className="memory-kind cold">cold · {topic.descriptor.kind}</span>
-        <button className="memory-danger" onClick={onForget}>
-          <Trash2 size={ICON_SIZE.sm} />
-          Forget
-        </button>
-      </header>
+    <div className="memory-detail-content">
+      <span className="memory-kind">cold · {topic.descriptor.kind}</span>
       <h3>{topic.descriptor.title}</h3>
-      <p className="topic-description">{topic.descriptor.description}</p>
-      <dl>
-        <div><dt>Revision</dt><dd>{topic.revision.revision}</dd></div>
-        <div><dt>Tokens</dt><dd>{topic.revision.tokenCount.toLocaleString()}</dd></div>
-        <div><dt>Status</dt><dd>{topic.descriptor.status}</dd></div>
-        <div><dt>Storage</dt><dd>full page</dd></div>
-      </dl>
+      <p>{topic.descriptor.description}</p>
+      <small data-mono>revision {topic.revision.revision} · {topic.revision.tokenCount.toLocaleString()} tokens · {topic.descriptor.status} · full page</small>
       <section className="cold-document">
         <span>Canonical document</span>
         <div><Markdown>{topic.body}</Markdown></div>
@@ -113,7 +81,11 @@ export function TopicDetail({ topic, onForget }: { topic: ColdTopic; onForget: (
         <span>Topic ID</span>
         <code>{topic.descriptor.topicId}</code>
       </section>
-      <small className="memory-updated">
+      <details className="memory-disclosure">
+        <summary><strong>Topic controls</strong><small>Destructive</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+        <div className="memory-disclosure-body"><div className="memory-inline-actions"><button className="control" data-tone="danger" onClick={onForget}><Trash2 size={ICON_SIZE.sm} />Forget</button></div></div>
+      </details>
+      <small data-mono>
         Published {formatMemoryDate(topic.revision.publishedAt ?? topic.revision.createdAt)}
       </small>
     </div>

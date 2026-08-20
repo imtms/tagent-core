@@ -22,7 +22,7 @@ Place code in the workspace that owns the behavior:
 
 Keep the dependency graph acyclic. Domain packages depend on contracts and ports, not adapters. Adapters implement ports. The Core application composes domains and adapters. The Web Console may depend only on `@tagent/abi`, `@tagent/core-client`, and third-party UI libraries. Core must not depend on the Web Console.
 
-Web Console styling follows the maintained [design-system contract](docs/WEB_CONSOLE_DESIGN.md). Keep the canonical four-file entrypoint and named cascade ownership; extend shared semantic scales instead of adding component-local colors or near-duplicate geometry.
+Web Console styling follows the maintained [design contract](docs/WEB_CONSOLE_DESIGN.md). Keep `apps/web-console/src/app.css` as the single style entrypoint; simplify the shared system instead of adding feature stylesheets, component-local colors, or near-duplicate geometry.
 
 ## Imports and public ABI
 

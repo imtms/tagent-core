@@ -29,12 +29,6 @@ export function clampComposerHeight(scrollHeight: number, minHeight: number, max
   return Math.min(Math.max(scrollHeight, minHeight), maxHeight);
 }
 
-export function composerGateProfileNote(profile: GateProfile): string {
-  if (profile === "off") return "No completion review. External-action approvals and safety policies remain active.";
-  if (profile === "strict") return "Requires a plan, current trusted checks, and criterion-level coverage.";
-  return "One result-oriented review. Missing core outcomes still block; secondary uncertainty does not.";
-}
-
 function persist(key: string, value: unknown): void {
   try { globalThis.localStorage?.setItem(key, JSON.stringify(value)); } catch { /* Browser storage is optional. */ }
 }
@@ -120,7 +114,6 @@ export function useWorkspaceComposer(workspaceId: string) {
     isComposingRef,
     textareaRef,
     selectedGateProfile,
-    gateProfileNote: composerGateProfileNote(selectedGateProfile),
     updateDraft,
     navigateHistory,
     recordSubmission,

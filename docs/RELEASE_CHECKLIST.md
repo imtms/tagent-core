@@ -101,10 +101,10 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] The real provider harness and canonical fixture suite pass; no Fake Core or Gateway transport simulation has been moved into Core.
 - [ ] `scripts/gateway-readiness-probe.mjs` exits 0 with `ready=true` and no reasons.
 - [ ] Web is served from its independent artifact and targets the Gateway/Core origin; Core serves no static Web content.
-- [ ] The Web style gate confirms the canonical four-file entrypoint, named cascade ownership, semantic light/dark colors, shared visual scales, boot-theme parity, live selectors, and no shadowed declarations.
+- [ ] The Web style gate confirms `src/app.css` is the only style entrypoint, semantic light/dark colors and shared scales remain bounded, the boot shell matches mounted geometry, declarations do not duplicate, and JSX/CSS class ownership is live in both directions.
 - [ ] Workspace sidebar/switcher, composer and live Run surfaces, Skills, keyboard shortcuts, Workspace Goals, and Memory were rendered in desktop light/dark and 390px mobile light/dark with no horizontal overflow.
 - [ ] Web Skills center upload/drag-and-drop, edit/delete, multi-select Workspace references, empty/loading/error states, keyboard focus, light/dark theme, and mobile-width states were rendered and checked.
-- [ ] The Gate selector is visible above the composer, retains its per-Workspace setting, and renders correctly in light/dark themes and mobile widths; Run detail explains the frozen profile.
+- [ ] The Review/Gate selector is available in Workspace settings, retains its per-Workspace setting, and renders correctly in light/dark themes and mobile widths; the composer remains focused on input/live state/submission, and Run detail explains the frozen profile.
 - [ ] Web live-state tests prove bounded single-timer reconnect backoff, authoritative terminal-output replacement, latest-only Artifact preview commits, and request-keyed User Input form state.
 
 ## Artifact gate

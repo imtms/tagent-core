@@ -1,8 +1,7 @@
 import type { WorkspaceGoal } from "./api";
+import type { UiTone } from "./run-state";
 
-export type GoalStatusTone = "warning" | "info" | "success" | "danger";
-
-export function goalStatusTone(status: WorkspaceGoal["status"]): GoalStatusTone {
+export function goalStatusTone(status: WorkspaceGoal["status"]): UiTone {
   switch (status) {
     case "draft":
     case "ready_to_close":

@@ -34,7 +34,7 @@ This directory contains the maintained contracts for the current TAgent Core mai
 
 - [Security boundaries](SECURITY_BOUNDARIES.md) — Core authentication, principals, resource scopes, workspace, and writer authority.
 - [Web Console security](WEB_CONSOLE_SECURITY.md) — separate origin, CORS, OIDC hosting boundary, and browser storage.
-- [Web Console design system](WEB_CONSOLE_DESIGN.md) — cascade ownership, semantic tokens, Hermit/Linear visual rules, style gates, and required visual QA.
+- [Web Console design](WEB_CONSOLE_DESIGN.md) — single-stylesheet ownership, restrained Hermit/Linear visual rules, information thresholds, and required visual QA.
 - [Deployment and Gateway](DEPLOYMENT_AND_GATEWAY.md) — stable Host/Generation deployment, staging, activation, configuration, backup, and rollback.
 - [Gateway handoff status](GATEWAY_HANDOFF_STATUS.md) — evidence-based P0/P1/P2 implementation and acceptance gaps against the Gateway team's handoff.
 - [Gateway production readiness](GATEWAY_PRODUCTION_READINESS.md) — pre-deployment verification and probes.

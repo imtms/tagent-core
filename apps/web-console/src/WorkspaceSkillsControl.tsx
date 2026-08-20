@@ -228,7 +228,7 @@ export function WorkspaceSkillsControl({
         if (file) void uploadSkill(file);
       }} />
       <button
-        className={`skill-menu-toggle ${workspaceSkills.length ? "active" : ""} ${dragActive ? "drag-active" : ""}`}
+        className="control skill-menu-toggle"
         type="button"
         title="Workspace skills"
         aria-label={workspaceSkills.length > 0 ? `${formatCount(workspaceSkills.length, "skill")} referenced by this workspace` : "No skills referenced by this workspace"}
@@ -262,7 +262,7 @@ export function WorkspaceSkillsControl({
         >
           <div className="skill-loader-heading">
             <span className="skill-heading-icon"><WandSparkles size={ICON_SIZE.md} /></span>
-            <span><strong id="workspace-skill-heading">Skills center</strong><small>Shared library · choose references for this workspace</small></span>
+            <span><strong id="workspace-skill-heading">Skills</strong><small>Shared library</small></span>
             {skills.length > 0 && <em>{skills.length}</em>}
           </div>
           <button
@@ -274,7 +274,7 @@ export function WorkspaceSkillsControl({
             onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }}
           >
             <span className="skill-upload-icon">{busy ? <Activity className="spin" size={ICON_SIZE.lg} /> : <Upload size={ICON_SIZE.lg} />}</span>
-            <span><strong>{busy ? "Validating Skill…" : "Upload or drop a Skill"}</strong><small>SKILL.md or ZIP · available to every workspace</small></span>
+            <span><strong>{busy ? "Validating Skill…" : "Upload or drop a Skill"}</strong><small>SKILL.md or ZIP</small></span>
           </button>
           {skills.length > 0 && <div className="skill-catalog">
             <span>Shared Skills</span>
@@ -293,14 +293,14 @@ export function WorkspaceSkillsControl({
               </div>;
             })}
           </div>}
-          <p className="skill-snapshot-note"><ShieldCheck size={ICON_SIZE.sm} /><span>TaskRuns freeze referenced revisions; later edits or deletions never change running work.</span></p>
+          <p className="skill-snapshot-note"><ShieldCheck size={ICON_SIZE.sm} /><span>TaskRuns freeze referenced revisions.</span></p>
         </div>
       </>}
     </div>
-    {editor && createPortal(<div className="skill-editor-backdrop" role="presentation" onMouseDown={(event) => {
+    {editor && createPortal(<div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) closeEditor();
     }}>
-      <section ref={editorRef} className="skill-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="skill-editor-title" aria-describedby="skill-editor-note">
+      <section ref={editorRef} className="modal skill-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="skill-editor-title" aria-describedby="skill-editor-note">
         <header>
           <span><small>Shared Skill</small><h2 id="skill-editor-title">Edit {editor.name}</h2></span>
           <button type="button" aria-label="Close Skill editor" onClick={closeEditor}><X size={ICON_SIZE.lg} /></button>
@@ -313,7 +313,7 @@ export function WorkspaceSkillsControl({
         </div>
         <footer>
           <span id="skill-editor-note">Saving creates a new immutable revision.</span>
-          <div><button type="button" onClick={closeEditor}>Cancel</button><button className="primary" type="button" disabled={busy} onClick={() => void saveSkill()}>{busy ? "Saving…" : "Save revision"}</button></div>
+          <div><button className="control" type="button" onClick={closeEditor}>Cancel</button><button className="control" data-variant="primary" type="button" disabled={busy} onClick={() => void saveSkill()}>{busy ? "Saving…" : "Save revision"}</button></div>
         </footer>
       </section>
     </div>, document.body)}

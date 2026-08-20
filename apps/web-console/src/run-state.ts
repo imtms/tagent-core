@@ -2,6 +2,16 @@ import type { TaskRun, TaskRunSummary } from "./api";
 
 const activeRunStatuses = new Set<TaskRun["status"]>(["running", "waiting_input", "blocked"]);
 
+export type UiTone = "accent" | "info" | "success" | "warning" | "danger";
+
+export function runStatusTone(status: string | null | undefined): UiTone | undefined {
+  if (status === "running") return "info";
+  if (status === "completed" || status === "passed" || status === "verified") return "success";
+  if (status === "waiting_input" || status === "blocked" || status === "pending") return "warning";
+  if (status === "failed" || status === "cancelled" || status === "interrupted") return "danger";
+  return undefined;
+}
+
 export function formatRunValue(value: string): string {
   const words = value.replaceAll("_", " ").trim();
   return words ? `${words[0].toUpperCase()}${words.slice(1)}` : "";

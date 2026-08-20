@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Session } from "./api";
 import {
-  storedBoolean,
   storedNumberRecord,
   storedStringArray,
   storedStringRecord,
@@ -41,20 +40,15 @@ export function useWorkspacePresentation(workspaces: readonly Session[]) {
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [workspaceSwitcherOpen, setWorkspaceSwitcherOpen] = useState(false);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
-  const [workspaceSearch, setWorkspaceSearch] = useState("");
   const [pinnedWorkspaceIds, setPinnedWorkspaceIds] = useState<string[]>(() => storedStringArray("tagent.pinned-workspaces"));
   const [lastSeenByWorkspace, setLastSeenByWorkspace] = useState<Record<string, number>>(() => storedNumberRecord("tagent.workspace-last-seen"));
   const [workspaceActivityBaseline, setWorkspaceActivityBaseline] = useState<Record<string, number>>({});
   const [viewingEarlierHistory, setViewingEarlierHistory] = useState(false);
-  const [leftCollapsed, setLeftCollapsed] = useState(() => storedBoolean("tagent.left-rail-collapsed"));
-  const [rightCollapsed, setRightCollapsed] = useState(() => storedBoolean("tagent.right-panel-collapsed", true));
   const [theme, setTheme] = useState<Theme>(storedTheme);
   const [workspaceEmojiById, setWorkspaceEmojiById] = useState<Record<string, string>>(() => storedStringRecord("tagent.workspace-emojis"));
   const [workspaceContextMenuId, setWorkspaceContextMenuId] = useState("");
   const [workspaceContextMenuPosition, setWorkspaceContextMenuPosition] = useState({ top: 0, left: 0 });
 
-  useEffect(() => persist("tagent.left-rail-collapsed", String(leftCollapsed)), [leftCollapsed]);
-  useEffect(() => persist("tagent.right-panel-collapsed", String(rightCollapsed)), [rightCollapsed]);
   useEffect(() => persist("tagent.workspace-emojis", workspaceEmojiById), [workspaceEmojiById]);
   useEffect(() => persist("tagent.pinned-workspaces", pinnedWorkspaceIds), [pinnedWorkspaceIds]);
   useEffect(() => persist("tagent.workspace-last-seen", lastSeenByWorkspace), [lastSeenByWorkspace]);
@@ -72,13 +66,10 @@ export function useWorkspacePresentation(workspaces: readonly Session[]) {
     workspaceMenuOpen, setWorkspaceMenuOpen,
     workspaceSwitcherOpen, setWorkspaceSwitcherOpen,
     shortcutHelpOpen, setShortcutHelpOpen,
-    workspaceSearch, setWorkspaceSearch,
     pinnedWorkspaceIds, setPinnedWorkspaceIds,
     lastSeenByWorkspace, setLastSeenByWorkspace,
     workspaceActivityBaseline,
     viewingEarlierHistory, setViewingEarlierHistory,
-    leftCollapsed, setLeftCollapsed,
-    rightCollapsed, setRightCollapsed,
     theme, setTheme,
     workspaceEmojiById, setWorkspaceEmojiById,
     workspaceContextMenuId, setWorkspaceContextMenuId,
