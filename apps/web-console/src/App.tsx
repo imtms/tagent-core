@@ -44,16 +44,23 @@ const GoalsPanel = lazy(() => import("./GoalsPanel").then((module) => ({ default
 const workspaceEmojis = ["💬", "🧠", "🛠️", "🚀", "📚", "🔬", "🎨", "📦", "🧭", "⚙️"] as const;
 const reasoningEfforts = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const gateProfiles = [
-  { value: "off", label: "Off · direct delivery" },
-  { value: "relaxed", label: "Relaxed · outcome review" },
-  { value: "strict", label: "Strict · verified delivery" },
-] as const satisfies readonly { value: GateProfile; label: string }[];
+  { value: "off", label: "Review · Off", detail: "Direct delivery" },
+  { value: "relaxed", label: "Review · Relaxed", detail: "Outcome review" },
+  { value: "strict", label: "Review · Strict", detail: "Verified delivery" },
+] as const satisfies readonly { value: GateProfile; label: string; detail: string }[];
 const starterPrompts = [
   { label: "Analyze this repository", detail: "Prioritize improvements with evidence", prompt: "Analyze this repository and identify the highest-impact improvements, with evidence and a prioritized plan." },
   { label: "Fix failing tests", detail: "Diagnose causes and verify the suite", prompt: "Find the failing tests, diagnose their root causes, implement the fixes, and verify the full relevant test suite." },
   { label: "Review recent changes", detail: "Check regressions and coverage", prompt: "Review the recent changes for correctness, regressions, maintainability, and missing verification." },
   { label: "Improve the documentation", detail: "Refresh guidance and verify commands", prompt: "Audit the project documentation, fix stale or unclear guidance, and verify the documented commands." },
 ] as const;
+
+export function ReviewProfileControl({ value, onChange }: { value: GateProfile; onChange: (profile: GateProfile) => void }) {
+  const selected = gateProfiles.find((profile) => profile.value === value) ?? gateProfiles[1];
+  return <select className="control" value={value} aria-label="Review policy" title={`${selected.label}: ${selected.detail}`} onChange={(event) => onChange(event.target.value as GateProfile)}>
+    {gateProfiles.map((profile) => <option value={profile.value} key={profile.value}>{profile.label}</option>)}
+  </select>;
+}
 
 export function App() {
   const [conversationLoading, setConversationLoading] = useState(true);
@@ -391,7 +398,7 @@ export function App() {
           <button className="control workspace-menu-toggle" type="button" title="Workspace settings" aria-label="More workspace actions" aria-haspopup="dialog" aria-expanded={workspaceMenuOpen} onClick={() => { setSkillMenuOpen(false); setWorkspaceMenuOpen((current) => !current); }}><Settings2 size={ICON_SIZE.md} /><span className="desktop-only">Workspace</span><ChevronDown className="desktop-only" size={ICON_SIZE.xs} /></button>
           {workspaceMenuOpen && <><button className="workspace-menu-scrim" type="button" aria-label="Close workspace actions" onClick={() => setWorkspaceMenuOpen(false)} /><div ref={workspaceMenuRef} className="workspace-actions-menu" role="dialog" aria-label="Workspace settings">
             <div className="workspace-actions-heading"><span>Workspace settings</span><small>{selectedWorkspace?.title ?? "TAgent Core"}</small></div>
-            {selectedWorkspace && <div className="workspace-profile-settings"><label><span>Model</span><select value={selectedWorkspace.modelId || runtimeStatus?.modelId || "gpt-5.6-sol"} disabled={savingExecutionProfile} onChange={(event) => void updateExecutionProfile({ modelId: event.target.value })}>{selectableModels.map((modelId) => <option value={modelId} key={modelId}>{modelId}</option>)}</select></label><label><span>Reasoning</span><select value={selectedWorkspace.reasoningEffort} disabled={savingExecutionProfile} onChange={(event) => void updateExecutionProfile({ reasoningEffort: event.target.value as Session["reasoningEffort"] })}>{reasoningEfforts.map((effort) => <option value={effort} key={effort}>{effort}</option>)}</select></label><label><span>Review</span><select value={selectedGateProfile} onChange={(event) => selectGateProfile(event.target.value as GateProfile)}>{gateProfiles.map((profile) => <option value={profile.value} key={profile.value}>{profile.label}</option>)}</select></label></div>}
+            {selectedWorkspace && <div className="workspace-profile-settings"><label><span>Model</span><select value={selectedWorkspace.modelId || runtimeStatus?.modelId || "gpt-5.6-sol"} disabled={savingExecutionProfile} onChange={(event) => void updateExecutionProfile({ modelId: event.target.value })}>{selectableModels.map((modelId) => <option value={modelId} key={modelId}>{modelId}</option>)}</select></label><label><span>Reasoning</span><select value={selectedWorkspace.reasoningEffort} disabled={savingExecutionProfile} onChange={(event) => void updateExecutionProfile({ reasoningEffort: event.target.value as Session["reasoningEffort"] })}>{reasoningEfforts.map((effort) => <option value={effort} key={effort}>{effort}</option>)}</select></label></div>}
             {selectedRun?.status === "failed" && selectedRun.launchRetryable && !activeRun && <button onClick={() => { setWorkspaceMenuOpen(false); void retryLaunch(selectedRun); }} disabled={Boolean(retryingRunId)}><Play size={ICON_SIZE.md} /><span>{retryingRunId === selectedRun.id ? "Retrying launch…" : "Retry launch"}</span></button>}
             <div className="workspace-actions-separator" />
             <button onClick={() => { setShortcutHelpOpen(true); setWorkspaceMenuOpen(false); }}><Keyboard size={ICON_SIZE.md} /><span>Keyboard shortcuts</span><small>?</small></button>
@@ -427,7 +434,7 @@ export function App() {
           const caretAtEnd = event.currentTarget.selectionStart === draft.length && event.currentTarget.selectionEnd === draft.length;
           if (event.key === "ArrowUp" && (historyCursor !== null || caretAtStart)) { event.preventDefault(); navigateComposerHistory(-1); }
           if (event.key === "ArrowDown" && historyCursor !== null && caretAtEnd) { event.preventDefault(); navigateComposerHistory(1); }
-        }} placeholder="Ask TAgent to accomplish something…" rows={1} aria-label={enterSubmits ? "Message. Press Enter to send and Shift Enter for a new line." : "Message. Use the send button to submit."} /><div className="composer-footer">{activeRun && <span className="composer-run-state" data-tone="info"><Activity size={ICON_SIZE.xs} />{formatRunStatus(activeRun.status)}</span>}<button className="composer-send" data-variant="primary" type="button" onClick={() => void submit()} disabled={!draft.trim() || submitting} aria-label="Add to Supervisor queue">{submitting ? <Activity className="spin" size={ICON_SIZE.lg} /> : <Send size={ICON_SIZE.lg} />}</button></div></div>
+        }} placeholder="Ask TAgent to accomplish something…" rows={1} aria-label={enterSubmits ? "Message. Press Enter to send and Shift Enter for a new line." : "Message. Use the send button to submit."} /><div className="composer-footer"><ReviewProfileControl value={selectedGateProfile} onChange={selectGateProfile} />{activeRun && <span className="composer-run-state" data-tone="info"><Activity size={ICON_SIZE.xs} />{formatRunStatus(activeRun.status)}</span>}<button className="composer-send" data-variant="primary" type="button" onClick={() => void submit()} disabled={!draft.trim() || submitting} aria-label="Add to Supervisor queue">{submitting ? <Activity className="spin" size={ICON_SIZE.lg} /> : <Send size={ICON_SIZE.lg} />}</button></div></div>
         {hasSavedDraft && <div className="composer-hint"><span>Draft saved</span></div>}
         {inbox.length > 0 && <section className="supervisor-inbox"><div className="inbox-heading"><span>Up next</span><small>{inbox.length} queued</small></div>{inbox.map((item, index) => <QueuePrompt key={item.id} item={item} index={index} editing={editingInboxId === item.id} draft={editingInboxId === item.id ? inboxDraft : item.content} busy={Boolean(startingInboxId || savingInboxId || reorderingInbox || mutatingInboxId)} starting={startingInboxId === item.id} canMoveUp={index > 0} canMoveDown={index < inbox.length - 1} onEdit={() => startEditingInbox(item)} onDraftChange={setInboxDraft} onSave={() => void saveInbox(item)} onCancelEdit={cancelEditingInbox} onStart={() => void runInboxNow(item)} onToggleDefer={() => void toggleDeferredInbox(item)} onMergeFirst={() => void mergeInboxIntoFirst(item)} onDelete={() => void deleteInboxItem(item)} onMoveUp={() => void moveInbox(item.id, -1)} onMoveDown={() => void moveInbox(item.id, 1)} onDragStart={(event) => { setDraggingInboxId(item.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); }} onDragEnd={() => setDraggingInboxId("")} onDrop={(event) => { event.preventDefault(); void reorderInbox(item.id); }} />)}</section>}
       </footer>

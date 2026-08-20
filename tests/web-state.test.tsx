@@ -14,6 +14,7 @@ import {
   WorkspaceRunStatus,
   type RunApproval,
 } from "../apps/web-console/src/AppPanels.js";
+import { ReviewProfileControl } from "../apps/web-console/src/App.js";
 import { ConversationMessage, PendingConversationMessage } from "../apps/web-console/src/ConversationMessage.js";
 import { GoalView } from "../apps/web-console/src/GoalsPanel.js";
 import { goalStatusTone } from "../apps/web-console/src/goal-display.js";
@@ -90,6 +91,13 @@ function run(overrides: Partial<TaskRun> = {}): TaskRun {
 }
 
 describe("Web workbench behavior", () => {
+  it("keeps the completion Review policy visible in the composer control", () => {
+    const markup = renderToStaticMarkup(<ReviewProfileControl value="relaxed" onChange={() => undefined} />);
+    expect(markup).toContain('class="control"');
+    expect(markup).toContain('aria-label="Review policy"');
+    expect(markup).toContain('value="relaxed" selected="">Review · Relaxed');
+  });
+
   it("rejects obsolete Workspace generations after returning to the same Workspace", () => {
     const authority = new WorkspaceAuthority();
     const firstA = authority.enter("workspace-a");

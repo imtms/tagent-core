@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## [0.8.13] - 2026-08-21
+
+### Web Console hierarchy and Review visibility
+
+- Restored the completion Review selector to the composer footer, where `Off`, `Relaxed`, and `Strict` remain visible at the point of submission and retain their per-Workspace preference.
+- Removed the duplicate Review field from Workspace settings so the policy has one clear owner while Model and Reasoning remain secondary configuration.
+- Increased section gutters and group spacing across empty prompts, Run details, Workspace settings, Goals, and Memory without reintroducing card walls, large color fills, feature stylesheets, or new CSS selectors.
+- Preserved the quiet neutral light/dark palette, single restrained green accent, shared control grammar, and 390px responsive layout with no horizontal overflow.
+
+### Maintenance and verification
+
+- Added a rendered Review-control regression and documented the rule that related controls stay compact while unrelated sections receive at least one full spacing step.
+- Kept the canonical stylesheet at 756 lines, 391 rules, and 494 selectors; the visual refinement adds only one declaration and remains within the existing complexity ceilings.
+
+### Compatibility and deployment
+
+- The public ABI, SQLite schema revision `2`, Memory schema, and `tagent-core/state-0.8-r2` protocol are unchanged; no data migration is required. Deploy matching `0.8.13` Core, Web Console, ABI, and Core Client artifacts.
+
 ## [0.8.12] - 2026-08-21
 
 ### Web Console visual system

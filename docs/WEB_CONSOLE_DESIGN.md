@@ -10,12 +10,12 @@ The desktop shell has five stable parts:
 1. A 280px Workspace sidebar.
 2. A 52px workspace bar.
 3. One centered conversation plane.
-4. One composer that contains only input, live state, and submit.
+4. One composer that contains input, its compact Review policy, live state, and submit.
 5. An on-demand Run details drawer.
 
 Memory, Goals, Skills, shortcuts, and artifact previews are secondary tools.
 They appear as menus, drawers, or modal workspaces instead of permanent columns.
-Gate profile selection belongs in Workspace settings because it configures the workspace rather than the next message.
+The completion Review/Gate selector stays in the composer footer because its effect begins at submission and must remain visible at that decision point. It is remembered per Workspace, but is not duplicated in Workspace settings.
 
 The desktop Workspace sidebar does not collapse.
 Run details never occupy a permanent third column.
@@ -86,6 +86,8 @@ Operational evidence stays in flat ledgers or Run details instead of creating a 
 
 Repeated rows use one surface with hairline separators.
 Do not wrap every prompt, metric, rule, tool call, or setting in a separate rounded card.
+
+Keep related labels and controls within 4–12px, then separate unrelated sections by 24px or more. Flat ledgers still need section gutters and paragraph rhythm; removing cards must never mean removing the whitespace that makes groups readable.
 
 Use tiny uppercase tracked labels only where they genuinely group a list.
 Do not stack an eyebrow, title, paragraph, and another empty-state title that all explain the same screen.

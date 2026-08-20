@@ -1,6 +1,6 @@
 {
   "name": "@tagent/execution",
-  "version": "0.8.12",
+  "version": "0.8.13",
   "private": true,
   "type": "module",
   "sideEffects": false,
@@ -35,7 +35,7 @@
     "clean": "tsc -b --clean && rm -rf dist"
   },
   "dependencies": {
-    "@tagent/governance": "0.8.12"
+    "@tagent/governance": "0.8.13"
   },
   "engines": {
     "node": ">=24.18.1",

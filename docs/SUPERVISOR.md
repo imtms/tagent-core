@@ -16,7 +16,7 @@ Admission proposes an immutable execution policy for each new contract. Core con
 
 The proposal also declares side-effect risk, evidence policy and review policy. It is not an authority grant: Core raises the policy to full review and trusted checks whenever a Workspace Goal or a current-Attempt mutation-capable operation is observed, including one that failed after its effect started. A model can never lower this floor.
 
-Before a new TaskRun is created, the caller may choose a completion-acceptance `gateProfile`. The Web Console exposes it as Review in Workspace settings and remembers it per Workspace; it does not occupy the message composer because it configures the Workspace rather than one message:
+Before a new TaskRun is created, the caller may choose a completion-acceptance `gateProfile`. The Web Console exposes it as a compact Review selector in the composer footer and remembers it per Workspace, so the active policy remains visible at the point of submission:
 
 | Profile | Completion behavior | Intended use |
 | --- | --- | --- |
@@ -106,7 +106,7 @@ Runtime failures are classified separately from settled candidate quality. Known
 
 The Supervisor may request approval but cannot approve its own action. Governance owns canonical approval receipts. Early parallel related-task starts and high-impact operations remain subject to their explicit capability and approval policies.
 
-The Web Console surfaces pending TaskRun approvals directly above the chat composer, where the operator can approve or reject them without opening the audit sidebar. A compact `Off / Relaxed / Strict` selector appears before the input itself; the sidebar remains inspection-only and explains the frozen profile of the selected Run.
+The Web Console surfaces pending TaskRun approvals directly above the chat composer, where the operator can approve or reject them without opening the audit sidebar. A compact `Off / Relaxed / Strict` selector remains in the composer footer; Run details explains the frozen profile of the selected Run.
 
 ## Inspection
 

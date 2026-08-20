@@ -1,6 +1,6 @@
 {
   "name": "@tagent/http-fastify",
-  "version": "0.8.12",
+  "version": "0.8.13",
   "private": true,
   "type": "module",
   "sideEffects": false,
@@ -31,10 +31,10 @@
     "clean": "tsc -b --clean && rm -rf dist"
   },
   "dependencies": {
-    "@tagent/abi": "0.8.12",
-    "@tagent/admission": "0.8.12",
-    "@tagent/execution": "0.8.12",
-    "@tagent/governance": "0.8.12",
+    "@tagent/abi": "0.8.13",
+    "@tagent/admission": "0.8.13",
+    "@tagent/execution": "0.8.13",
+    "@tagent/governance": "0.8.13",
     "fastify": "^5.10.0",
     "typebox": "^1.1.24"
   },

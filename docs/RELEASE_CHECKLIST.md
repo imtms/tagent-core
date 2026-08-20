@@ -104,7 +104,7 @@ TAGENT_TEST_POSTGRES_URL=postgresql://tagent_test:tagent_test@127.0.0.1:5432/tag
 - [ ] The Web style gate confirms `src/app.css` is the only style entrypoint, semantic light/dark colors and shared scales remain bounded, the boot shell matches mounted geometry, declarations do not duplicate, and JSX/CSS class ownership is live in both directions.
 - [ ] Workspace sidebar/switcher, composer and live Run surfaces, Skills, keyboard shortcuts, Workspace Goals, and Memory were rendered in desktop light/dark and 390px mobile light/dark with no horizontal overflow.
 - [ ] Web Skills center upload/drag-and-drop, edit/delete, multi-select Workspace references, empty/loading/error states, keyboard focus, light/dark theme, and mobile-width states were rendered and checked.
-- [ ] The Review/Gate selector is available in Workspace settings, retains its per-Workspace setting, and renders correctly in light/dark themes and mobile widths; the composer remains focused on input/live state/submission, and Run detail explains the frozen profile.
+- [ ] The Review/Gate selector remains visible in the composer footer, retains its per-Workspace setting, and renders correctly in light/dark themes and mobile widths; it is not duplicated in Workspace settings, and Run detail explains the frozen profile.
 - [ ] Web live-state tests prove bounded single-timer reconnect backoff, authoritative terminal-output replacement, latest-only Artifact preview commits, and request-keyed User Input form state.
 
 ## Artifact gate
