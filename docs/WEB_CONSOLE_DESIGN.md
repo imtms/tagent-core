@@ -42,13 +42,13 @@ Neutral surfaces carry almost all of the interface:
 - `--border` and `--border-strong` provide hairline separation.
 - `--text` and `--text-muted` carry hierarchy without opacity tricks.
 
-Green `--accent` is reserved for primary actions, focus, selection marks, progress, and unread activity.
+Green `--accent` is reserved for primary actions, focus, selection marks, progress, live state, and successful completion.
 It is not a panel, card, header, or generic active-state background.
 
 Operational color has one mapping:
 
-- `info`: running or live.
-- `success`: completed or passed.
+- `info`: running or live; it shares the restrained accent hue.
+- `success`: completed or passed; it shares the restrained accent hue.
 - `warning`: waiting, blocked, paused, or requiring review.
 - `danger`: failed, cancelled, or interrupted.
 
@@ -89,6 +89,8 @@ Do not wrap every prompt, metric, rule, tool call, or setting in a separate roun
 
 Keep related labels and controls within 4–12px, then separate unrelated sections by 24px or more. Flat ledgers still need section gutters and paragraph rhythm; removing cards must never mean removing the whitespace that makes groups readable.
 
+High-density secondary surfaces use one order: section heading, primary content, compact ledger, then optional disclosures. Run details, Memory operations, Goal criteria, and execution evidence must not invent separate heading, row, or status grammars.
+
 Use tiny uppercase tracked labels only where they genuinely group a list.
 Do not stack an eyebrow, title, paragraph, and another empty-state title that all explain the same screen.
 
@@ -103,6 +105,8 @@ Use the existing shared primitives before introducing a feature-specific selecto
 - `.modal-backdrop` and `.modal` own dialog elevation, spacing, and responsive behavior.
 - `.section-heading` owns headings in Goals, Memory, and other secondary workspaces.
 - `.memory-list` owns the separator-based list treatment for Memory results, feedback, and governance.
+- `.run-step` is one reasoning-led execution stage; its nested `.tool-stack` is a subordinate ledger, not a second timeline.
+- `.run-metrics` owns wrap-safe observational counts and never compresses all usage into one unbreakable line.
 - `data-tone="accent|info|success|warning|danger"` is the only semantic status-color interface.
 
 Feature names should describe structure or behavior, not redefine colors, control heights, modal shells, or status variants.
@@ -115,9 +119,13 @@ Keep standards, history, manifests, maintenance actions, and destructive control
 Current state appears before reference material.
 
 Goals use one selector and one reading surface rather than an internal navigation rail.
+Completion criteria form one field group: one heading and explanation, one add action, then aligned criterion rows. At mobile widths the explanation and add action stack before the rows; criterion text occupies its own line above Required and remove controls.
 Memory shows either the catalog or one detail view, never a nested split view. The type filter lives beside search; scope/count summaries stay hidden, and feedback, governance, and Forget remain behind the detail controls disclosure.
+Memory operations use the same outer gutter as the catalog, keep job counts in section headings, and give each job a full-width status/source/metrics row.
 Skills use the upload target as their empty creation state.
 Run details do not exist until a TaskRun exists.
+
+The Execution trace groups the durable transcript by reasoning stage. Subsequent tool calls belong to that stage until model output settles it; a later reasoning item begins the next stage. Tool arguments and results remain disclosures inside the stage ledger, and live reasoning/tools/output occupy one final live stage. Gate audit does not restate an accepted Supervisor verdict; it retains blockers, standards, and evaluation history for inspection.
 
 ## Interaction
 
@@ -146,8 +154,9 @@ For every visible change, render and inspect:
 
 - desktop light and dark;
 - 390px mobile light and dark;
-- Workspace sidebar, switcher, composer, and Run details;
+- Workspace sidebar, switcher, composer, and dense Run details;
 - Skills, shortcuts, Goals, Memory, and artifact dialogs when applicable;
+- multi-stage Tool Calls, Goal criteria, and populated Memory job ledgers;
 - empty, loading, error, focus, and overflow states.
 
 A passing build is not a visual pass.

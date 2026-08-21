@@ -366,7 +366,7 @@ function GoalDefinitionForm({ definition, setDefinition, busy, editing, onSave, 
     <label className="goal-field"><span>Outcome</span><textarea rows={4} maxLength={4000} value={definition.outcome} onChange={(event) => setDefinition({ ...definition, outcome: event.target.value })} placeholder="Describe the Workspace state you want to reach" /></label>
     <fieldset>
       <legend>Completion criteria</legend>
-      <p>Supervisor evidence from Goal Roadmap TaskRuns will be checked against these criteria.</p>
+      <div className="section-heading"><p data-meta>Supervisor evidence from Goal Roadmap TaskRuns is checked against these criteria.</p><button className="control" type="button" onClick={addCriterion}><Plus size={ICON_SIZE.sm} />Add criterion</button></div>
       <div className="goal-criteria-editor">
         {definition.criteria.map((criterion, index) => <div className="goal-criterion-editor" key={`${criterion.key}:${index}`}>
           <input aria-label={`Criterion ${index + 1}`} value={criterion.title} onChange={(event) => updateCriterion(index, { title: event.target.value })} placeholder="A verifiable completion condition" />
@@ -375,7 +375,6 @@ function GoalDefinitionForm({ definition, setDefinition, busy, editing, onSave, 
         </div>)}
       </div>
       {!definition.criteria.some((item) => item.required) && <p className="goal-field-error">Keep at least one required criterion so evidence can close the Goal.</p>}
-      <button className="control" type="button" onClick={addCriterion}><Plus size={ICON_SIZE.sm} />Add criterion</button>
     </fieldset>
     <details open={Boolean(definition.scope.length || definition.nonGoals.length)}>
       <summary><span><ChevronRight size={ICON_SIZE.sm} />Scope and boundaries</span><small>Optional</small></summary>

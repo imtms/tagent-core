@@ -133,7 +133,7 @@ export function MemoryCoreProjection({
     );
   }
   return (
-    <details className="memory-disclosure">
+    <details className="memory-disclosure memory-list-section">
       <summary>
         <BrainCircuit size={ICON_SIZE.sm} />
         <strong>Core Memory snapshot</strong>
@@ -166,7 +166,7 @@ interface MemoryJobListsProps {
 export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex }: MemoryJobListsProps) {
   const total = reindexJobs.length + jobs.length;
   return (
-    <details className="memory-disclosure">
+    <details className="memory-disclosure memory-list-section">
       <summary>
         <Activity size={ICON_SIZE.sm} />
         <strong>Memory operations</strong>
@@ -181,7 +181,7 @@ export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex }: MemoryJob
           </button>
         </div>
         {reindexJobs.length > 0 && <section className="memory-operation-group">
-          <header><span>Durable index</span><small>{formatCount(reindexJobs.length, "job")}</small></header>
+          <header className="section-heading"><strong>Durable index</strong><small>{formatCount(reindexJobs.length, "job")}</small></header>
           <div className="memory-list">
             {reindexJobs.slice(0, 6).map((job) => (
               <div key={job.id}>
@@ -195,7 +195,7 @@ export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex }: MemoryJob
           </div>
         </section>}
         {jobs.length > 0 && <section className="memory-operation-group">
-          <header><span>Recent capture</span><small>{formatCount(jobs.length, "job")}</small></header>
+          <header className="section-heading"><strong>Recent captures</strong><small>{formatCount(jobs.length, "job")}</small></header>
           <div className="memory-list">
             {jobs.slice(0, 12).map((job) => {
               const summary = captureJobSummary(job);

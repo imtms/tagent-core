@@ -30,7 +30,7 @@ import { MEMORY_PAGE_REQUEST_LIMIT, memoryPageWindow, mergeMemoryPage } from "..
 import { canResumeRun, findActiveRun, formatRunStatus, formatRunValue, isActiveRunStatus, isRedundantRunPhase, runStatusNotice, runStatusTone } from "../apps/web-console/src/run-state.js";
 import { runViewForResolvedRuns, runViewForResumedRun, runViewForStartedRun, runViewFromWorkspaceSnapshot } from "../apps/web-console/src/use-run-view-state.js";
 import { mergeRefreshedMessages, shouldStreamWorkspaceRun, terminalStreamingAfterRefresh } from "../apps/web-console/src/use-workspace-live-sync.js";
-import { mergeTranscriptItems } from "../apps/web-console/src/transcript-projection.js";
+import { groupExecutionItems, mergeTranscriptItems } from "../apps/web-console/src/transcript-projection.js";
 import { createStreamingDeltaBatcher, type FrameScheduler } from "../apps/web-console/src/streaming-delta-batcher.js";
 import { loadWorkspaceSnapshot } from "../apps/web-console/src/workspace-controller.js";
 import { WorkspaceLiveSyncCoordinator, WorkspaceReconnectBackoff } from "../apps/web-console/src/workspace-live-sync.js";
@@ -869,6 +869,20 @@ describe("Web workbench behavior", () => {
     expect(mergeTranscriptItems([pending], [completed])).toEqual([completed]);
   });
 
+  it("groups reasoning, its tool ledger, and model output into one execution stage", () => {
+    const reasoning = { seq: 1, attempt: 1, kind: "thinking", text: "Inspect the UI structure", redacted: false, createdAt: 1 } satisfies TranscriptItem;
+    const firstTool = { seq: 2, index: 0, attempt: 1, kind: "tool", toolCallId: "call-1", toolName: "read", arguments: {}, result: "source", isError: false, status: "completed", createdAt: 2 } satisfies TranscriptItem;
+    const secondTool = { ...firstTool, seq: 3, toolCallId: "call-2", toolName: "bash", result: "passed", createdAt: 3 } satisfies TranscriptItem;
+    const output = { seq: 4, attempt: 1, kind: "assistant", text: "The refinement is complete.", createdAt: 4 } satisfies TranscriptItem;
+
+    const groups = groupExecutionItems([reasoning, firstTool, secondTool, output]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.reasoning).toBe(reasoning);
+    expect(groups[0]?.tools).toEqual([firstTool, secondTool]);
+    expect(groups[0]?.output).toBe(output);
+  });
+
   it("keeps non-tool transcript items ordered while deduplicating exact projections", () => {
     const assistant = { seq: 3, index: 0, attempt: 1, kind: "assistant", text: "done", createdAt: 3 } satisfies TranscriptItem;
     const user = { seq: 1, attempt: 1, kind: "user", text: "start", createdAt: 1 } satisfies TranscriptItem;
@@ -1254,15 +1268,20 @@ describe("Web workbench behavior", () => {
   });
 
   it("renders a live execution trace and queued prompt controls from state", () => {
+    const reasoning = { seq: 1, attempt: 1, kind: "thinking", text: "Verify the current state", redacted: false, createdAt: 1 } satisfies TranscriptItem;
     const tool = {
       seq: 2, index: 0, attempt: 1, kind: "tool", toolCallId: "call", toolName: "bash",
       arguments: { command: "npm test" }, result: "", isError: false, status: "pending", createdAt: 2,
     } satisfies TranscriptItem;
+    const output = { seq: 3, attempt: 1, kind: "assistant", text: "Tests are running.", createdAt: 3 } satisfies TranscriptItem;
     const trace = renderToStaticMarkup(<ExecutionTimeline
-      runId="run-1" isRunning items={[tool]} events={[]} liveThinking="" liveOutput=""
+      runId="run-1" isRunning items={[reasoning, tool, output]} events={[]} liveThinking="" liveOutput=""
     />);
     expect(trace).toContain("Execution trace");
     expect(trace).toContain("npm test");
+    expect(trace).toContain("1 stage");
+    expect(trace).toContain('aria-label="Stage 1 tool calls"');
+    expect(trace.match(/class="run-step"/g)).toHaveLength(1);
     expect(trace).toContain('aria-expanded="true"');
 
     const item = {
@@ -1333,12 +1352,12 @@ describe("Web workbench behavior", () => {
     expect(details).toContain("Evaluation history");
     expect(details).toContain("1 failed");
     expect(details).not.toContain('<details class="audit-disclosure" open');
-    expect(details).toContain("Settled candidate rejected");
+    expect(details).not.toContain("Settled candidate rejected");
     expect(details).toContain("1 blocker");
     expect(details).toContain("1 failure");
     expect(details).not.toContain("blocker(s)");
     expect(details).not.toContain("failure(s)");
-    expect(details.indexOf("Settled candidate rejected")).toBeLessThan(details.indexOf("Acceptance standard"));
+    expect(details.indexOf("1 blocker")).toBeLessThan(details.indexOf("Acceptance standard"));
     expect(details).toContain("gpt-5.6-sol");
     expect(details).not.toContain(">new_task<");
     expect(details).not.toContain(">pause_for_approval<");
@@ -1401,7 +1420,7 @@ describe("Web workbench behavior", () => {
     expect(active).toContain(">Supervisor review<");
     expect(active).toContain("Observing execution");
     expect(active).toContain("Gate audit · strict");
-    expect(active).toContain("Structural prerequisites incomplete");
+    expect(active).toContain("Plan or check prerequisites are still incomplete.");
     expect(active).not.toContain("No settled gate evaluation yet");
     expect(preserved).not.toContain("Current operation");
     expect(preserved).toContain(">Checkpoint<");

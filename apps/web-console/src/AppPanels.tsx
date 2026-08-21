@@ -23,6 +23,7 @@ import { deriveCurrentOperation } from "./current-operation";
 import { formatRunStatus, formatRunValue, isActiveRunStatus, isRedundantRunPhase, runStatusNotice, runStatusTone } from "./run-state";
 import { formatConversationDay, formatTime } from "./time-format";
 import { LatestRequestAuthority } from "./latest-request";
+import { groupExecutionItems, type ExecutionGroup } from "./transcript-projection";
 import { userInputValuesForRequest } from "./user-input-state";
 
 export function TAgentMark({ size = 18 }: { size?: number }) {
@@ -60,11 +61,21 @@ function ToolCall({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> })
   </details>;
 }
 
-function RunStep({ item }: { item: TranscriptItem }) {
-  if (item.kind === "assistant") return <article className="run-step"><div className="run-step-meta"><Bot size={ICON_SIZE.sm} /><strong>Model output</strong><small>attempt {item.attempt} · {formatTime(item.createdAt)}</small></div><div className="run-step-content"><Markdown>{item.text}</Markdown></div></article>;
-  if (item.kind === "thinking") return <details className="run-step" open={!item.redacted}><summary><BrainCircuit size={ICON_SIZE.sm} /><strong>{item.redacted ? "Model reasoning unavailable" : "Model reasoning"}</strong><small>attempt {item.attempt} · {formatTime(item.createdAt)}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div className="run-step-content"><Markdown>{item.text}</Markdown></div></details>;
-  if (item.kind === "tool") return <details className="run-step" data-tone={item.isError ? "danger" : undefined}><summary><Terminal size={ICON_SIZE.sm} /><strong>{item.toolName}</strong><small>{formatRunValue(item.status)} · attempt {item.attempt}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div className="run-step-content"><div><strong>Arguments</strong><pre>{JSON.stringify(item.arguments, null, 2)}</pre></div><div><strong>Result</strong><pre>{item.result || "Waiting for result…"}</pre></div></div></details>;
-  return null;
+function ExecutionGroupView({ group, ordinal }: { group: ExecutionGroup; ordinal: number }) {
+  const anchor = group.reasoning ?? group.tools[0] ?? group.output;
+  if (!anchor) return null;
+  const meta = [group.tools.length ? formatCount(group.tools.length, "tool call") : "", `attempt ${anchor.attempt}`, formatTime(anchor.createdAt)].filter(Boolean).join(" · ");
+  const tools = group.tools.length > 0 && <div className="tool-stack" aria-label={`Stage ${ordinal} tool calls`}>{group.tools.map((item) => <ToolCall key={`${item.seq}-${item.index}`} item={item} />)}</div>;
+  const output = group.output && <div className="run-step-content"><span data-label>Model output</span><Markdown>{group.output.text}</Markdown></div>;
+  if (group.reasoning) return <details className="run-step" open={!group.reasoning.redacted}>
+    <summary><BrainCircuit size={ICON_SIZE.sm} /><strong>{group.reasoning.redacted ? "Reasoning unavailable" : `Reasoning ${ordinal}`}</strong><small>{meta}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+    <div className="run-step-content"><Markdown>{group.reasoning.text}</Markdown></div>
+    {tools}{output}
+  </details>;
+  return <article className="run-step">
+    <div className="run-step-meta">{group.tools.length ? <Terminal size={ICON_SIZE.sm} /> : <Bot size={ICON_SIZE.sm} />}<strong>{group.tools.length ? `Execution ${ordinal}` : "Model output"}</strong><small>{meta}</small></div>
+    {tools}{output}
+  </article>;
 }
 
 export function UserInputCard({ request, submitting, onSubmit }: { request: UserInputRequest; submitting: boolean; onSubmit: (values: Record<string, string>) => Promise<void> }) {
@@ -85,6 +96,7 @@ export function ExecutionTimeline({ runId, isRunning, items, events, liveThinkin
   const [expanded, setExpanded] = useState(isRunning);
   const bodyRef = useRef<HTMLDivElement>(null);
   const visible = items.filter((item) => item.kind !== "user");
+  const groups = groupExecutionItems(visible);
   const completedToolIds = new Set(items.filter((item): item is Extract<TranscriptItem, { kind: "tool" }> => item.kind === "tool").map((item) => item.toolCallId));
   const liveTools = events.filter((event) => event.type.startsWith("tool.") && !completedToolIds.has(String(event.data.toolCallId ?? ""))).reduce<RunEvent[]>((latest, event) => {
     const id = String(event.data.toolCallId ?? event.seq);
@@ -102,17 +114,16 @@ export function ExecutionTimeline({ runId, isRunning, items, events, liveThinkin
     return () => cancelAnimationFrame(frame);
   }, [expanded, isRunning, visible.length, liveTools.length, liveThinking, liveOutput, events]);
   if (!visible.length && !liveThinking && !liveOutput && !liveTools.length) return null;
-  const stepCount = visible.length + liveTools.length;
+  const hasLiveStage = Boolean(liveThinking || liveOutput || liveTools.length);
+  const stageCount = groups.length + Number(hasLiveStage);
   return <section className="execution-timeline" aria-label="Agent execution timeline">
     <button className="execution-timeline-heading" type="button" aria-expanded={expanded} aria-controls={`execution-trace-${runId}`} onClick={() => setExpanded((current) => !current)}>
       <span>{expanded ? <ChevronDown size={ICON_SIZE.sm} /> : <ChevronRight size={ICON_SIZE.sm} />}<Activity size={ICON_SIZE.sm} />Execution trace{isRunning && <i><span className="pulse" />Live</i>}</span>
-      <small>{formatCount(stepCount, "step")}{!isRunning && !expanded ? " · expand to inspect" : ""}</small>
+      <small>{formatCount(stageCount, "stage")}{!isRunning && !expanded ? " · expand to inspect" : ""}</small>
     </button>
     {expanded && <div className="execution-timeline-body" id={`execution-trace-${runId}`} ref={bodyRef}>
-      {visible.map((item) => <RunStep key={`${item.seq}-${item.index ?? 0}-${item.kind}`} item={item} />)}
-      {liveThinking && <details className="run-step" open><summary><BrainCircuit size={ICON_SIZE.sm} /><strong>Model reasoning</strong><span className="live-label"><span className="pulse" />Live</span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div className="run-step-content"><LiveText>{liveThinking}</LiveText></div></details>}
-      {liveTools.map((event) => <div className="run-step" data-tone={event.data.isError ? "danger" : undefined} key={`${event.seq}-${event.type}`}><Terminal size={ICON_SIZE.sm} /><strong>{String(event.data.toolName ?? "tool")}</strong><small>{formatRunValue(event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "completed")}</small></div>)}
-      {liveOutput && <article className="run-step"><div className="run-step-meta"><Bot size={ICON_SIZE.sm} /><strong>Model output</strong><span className="live-label"><span className="pulse" />Live</span></div><div className="run-step-content"><LiveText>{liveOutput}</LiveText></div></article>}
+      {groups.map((group, index) => <ExecutionGroupView key={group.key} group={group} ordinal={index + 1} />)}
+      {hasLiveStage && <article className="run-step"><div className="run-step-meta"><Activity size={ICON_SIZE.sm} /><strong>Current stage</strong><span className="live-label"><span className="pulse" />Live</span></div>{liveThinking && <div className="run-step-content"><span data-label>Reasoning</span><LiveText>{liveThinking}</LiveText></div>}{liveTools.length > 0 && <div className="tool-stack">{liveTools.map((event) => <div className="tool-row" data-tone={event.data.isError ? "danger" : undefined} key={`${event.seq}-${event.type}`}><Terminal size={ICON_SIZE.sm} /><strong>{String(event.data.toolName ?? "tool")}</strong><small>{formatRunValue(event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "completed")}</small></div>)}</div>}{liveOutput && <div className="run-step-content"><span data-label>Model output</span><LiveText>{liveOutput}</LiveText></div>}</article>}
     </div>}
   </section>;
 }
@@ -133,7 +144,7 @@ function ToolActivityPanel({ transcriptItems, events }: { transcriptItems: Extra
       ? formatCount(transcriptItems.length, "call")
       : formatCount(live.length, "recent event");
   return <section className="audit-section">
-    <div className="section-heading" data-label><span>Tool activity</span><small>{activitySummary}{failed ? ` · ${failed} failed` : ""}</small></div>
+    <div className="section-heading"><span>Tool activity</span><small>{activitySummary}{failed ? ` · ${failed} failed` : ""}</small></div>
     <p data-meta>Operational detail is kept out of the conversation. Expand it here only when execution evidence needs inspection.</p>
     {live.length > 0 && <details className="audit-disclosure"><summary><Activity size={ICON_SIZE.sm} /><span>Live and recent activity</span><small>{live.length}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div className="tool-stack">{live.map((event) => <div className="tool-row" key={`${event.seq}-${event.type}`}><Terminal size={ICON_SIZE.sm} /><span>{String(event.data.toolName ?? "tool")}</span><small>{formatRunValue(event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "done")}</small></div>)}</div></details>}
     {transcriptItems.length > 0 && <details className="audit-disclosure"><summary><Terminal size={ICON_SIZE.sm} /><span>Recorded tool calls</span><small>{transcriptItems.length}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div className="tool-history-list">{transcriptItems.map((item) => <ToolCall key={`${item.seq}-${item.index}`} item={item} />)}</div></details>}
@@ -157,8 +168,8 @@ function GateFailureRow({ failure, label }: {
 function GateAuditPanel({ run }: { run: TaskRun }) {
   const gateProfile = run.contract?.executionPolicy?.gateProfile ?? "strict";
   if (gateProfile === "off") return <section className="audit-section">
-    <div className="section-heading" data-label><span>Gate audit</span><small>disabled</small></div>
-    <div className="completion-verdict" data-tone="success"><strong>Direct delivery</strong><span>This TaskRun skips completion acceptance. Safety approvals and tool policies still apply.</span></div>
+    <div className="section-heading"><span>Gate audit</span><small>Direct delivery</small></div>
+    <p data-meta>This TaskRun skips completion acceptance. Safety approvals and tool policies still apply.</p>
   </section>;
   const gates = run.supervision.latestGates;
   if (!gates.length && !isActiveRunStatus(run.status)) return null;
@@ -177,8 +188,8 @@ function GateAuditPanel({ run }: { run: TaskRun }) {
   const blockerLabel = completionFailures.length > 0 ? formatCount(completionFailures.length, "blocker") : "pending";
   const verdictLabel = settledCompletion ? (completionPassed ? "accepted" : blockerLabel) : (completionPassed ? (gateProfile === "relaxed" ? "ready for review" : "structurally ready") : blockerLabel);
   return <section className="audit-section">
-    <div className="section-heading" data-label><span>Gate audit · {gateProfile}</span><small data-tone={completionPassed ? "success" : "warning"}>{verdictLabel}</small></div>
-    <div className="completion-verdict" data-tone={completionPassed ? "success" : "warning"}><strong>{settledCompletion ? (completionPassed ? "Settled candidate accepted" : "Settled candidate rejected") : gateProfile === "relaxed" ? "Ready for outcome review" : (completionPassed ? "Structural prerequisites ready" : "Structural prerequisites incomplete")}</strong><span>{settledCompletion ? (completionPassed ? (gateProfile === "relaxed" ? "The result-oriented review accepted the core outcome; explicit secondary uncertainty did not force continuation." : "The latest persisted Supervisor evaluation accepted progress, evidence, contract coverage, claims, and delivery.") : "Supervisor must continue, request evidence, block, or seek approval before accepting delivery.") : gateProfile === "relaxed" ? "No plan or trusted-check prerequisite applies; one semantic review runs after the candidate settles." : (completionPassed ? "Plan and checks are ready; final semantic review still occurs after the candidate response settles." : "Plan or check prerequisites must be satisfied before final semantic review.")}</span></div>
+    <div className="section-heading"><span>Gate audit · {gateProfile}</span>{(!settledCompletion || !completionPassed) && <small data-tone={completionPassed ? "success" : "warning"}>{verdictLabel}</small>}</div>
+    {!settledCompletion && <p data-meta>{gateProfile === "relaxed" ? "One semantic review runs after the candidate settles." : completionPassed ? "Plan and checks are ready; semantic review follows the settled response." : "Plan or check prerequisites are still incomplete."}</p>}
     <details className="audit-disclosure"><summary><ShieldCheck size={ICON_SIZE.sm} /><span>Acceptance standard</span><small>{gateProfile === "relaxed" ? "4 rules" : "6 rules"}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div className="gate-standard-grid" aria-label="Supervisor gate standards">
       {gateProfile === "relaxed" ? <>
         <div><ShieldCheck size={ICON_SIZE.sm} /><strong>Core outcome</strong><small>Required deliverables must be materially present</small></div>
@@ -211,7 +222,7 @@ function CurrentOperationPanel({ run }: { run: TaskRun }) {
   if (run.status !== "running") return null;
   const operation = deriveCurrentOperation(run, now);
   return <section className="audit-section">
-    <div className="section-heading" data-label><span>Current operation</span><small>{operation.state}</small></div>
+    <div className="section-heading"><span>Current operation</span><small>{operation.state}</small></div>
     <div className="audit-ledger current-operation-ledger">
       <strong>{operation.toolName || "agent"}</strong>
     </div>
@@ -234,12 +245,12 @@ function SupervisorReviewPanel({ run }: { run: TaskRun }) {
     decision.attempt > 1 ? `attempt ${decision.attempt}` : "",
   ].filter(Boolean).join(" · ") : "";
   return <section className="audit-section">
-    <div className="section-heading" data-label><span>Supervisor review</span><small>{decision ? formatRunValue(decision.action) : hasProgressEvidence ? "Progress evidence" : "Observing"}</small></div>
+    <div className="section-heading"><span>Supervisor review</span><small>{decision ? formatRunValue(decision.action) : hasProgressEvidence ? "Progress evidence" : "Observing"}</small></div>
     <div className="supervisor-verdict">
-      {decision ? <><div><Eye size={ICON_SIZE.md} /><strong>{formatRunValue(decision.reasonCode)}</strong><span>{decisionMeta}</span></div><p>{decision.rationale}</p></>
+      {decision ? <><div><Eye size={ICON_SIZE.md} /><strong>{formatRunValue(decision.reasonCode)}</strong></div><small>{decisionMeta}</small><p>{decision.rationale}</p></>
         : hasProgressEvidence ? <div><Eye size={ICON_SIZE.md} /><strong>Recorded progress</strong></div>
         : <><div><Eye size={ICON_SIZE.md} /><strong>Observing execution</strong></div><p>No intervention decision has been persisted. The Supervisor is monitoring progress and will review the settled candidate against the standards below.</p></>}
-      {hasProgressEvidence && <div className="progress-audit">{progressMetrics.map((metric) => <span key={metric.singular}>{formatCount(metric.count, metric.singular, metric.plural)}</span>)}</div>}
+      {hasProgressEvidence && <div className="run-metrics">{progressMetrics.map((metric) => <span key={metric.singular}>{formatCount(metric.count, metric.singular, metric.plural)}</span>)}</div>}
     </div>
   </section>;
 }
@@ -308,7 +319,7 @@ function ArtifactsPanel({ run }: { run: TaskRun }) {
   const closePreview = () => { previewAuthorityRef.current.invalidate(); setSelectedId(""); setPreview(null); setError(""); setLoadingId(""); };
   const selectedArtifact = run.artifacts.find((item) => item.id === selectedId);
   return <section className="audit-section">
-    <div className="section-heading" data-label><span>Artifacts</span><small>{run.artifacts.length}</small></div>
+    <div className="section-heading"><span>Artifacts</span><small>{run.artifacts.length}</small></div>
     <div className="artifact-list">{run.artifacts.map((artifact) => {
       const selected = selectedId === artifact.id;
       return <div className="artifact-row" key={artifact.id}><FileText size={ICON_SIZE.md} /><button className="artifact-open" type="button" onClick={() => void openArtifact(artifact)} aria-expanded={selected}><strong>{artifact.title}</strong><small>{artifact.kind || "artifact"}</small></button><button className="artifact-download" type="button" onClick={() => void downloadArtifact(artifact)} disabled={downloadingId === artifact.id} title={`Download ${artifact.title}`} aria-label={`Download ${artifact.title}`}><Download size={ICON_SIZE.sm} /></button></div>;
@@ -358,7 +369,7 @@ function RunEvidencePanel({ run }: { run: TaskRun }) {
       : formatCount(run.continuations.length, "continuation");
 
   return <section className="audit-section">
-    <div className="section-heading" data-label><span>{title}</span>{groupCount === 1 && <small>{summary}</small>}</div>
+    <div className="section-heading"><span>{title}</span>{groupCount === 1 && <small>{summary}</small>}</div>
     <div className="run-evidence-ledger">
       {hasPlan && <div className="run-evidence-group">
         {groupCount > 1 && <span className="run-evidence-group-label" data-label><span>Plan</span><small>{planDone}/{run.plan.length}</small></span>}
@@ -392,7 +403,7 @@ export function RunDetails({ run, toolEvents, transcriptTools }: { run: TaskRun;
   return <div className="run-details">
     <CurrentOperationPanel run={run} />
     <section className="run-summary"><div className="phase-line"><span className="phase-badge" data-tone={runStatusTone(run.status)}>{statusLabel}</span>{showPhase && <span>{phaseLabel}</span>}{run.attempt > 1 && <span>attempt {run.attempt}</span>}</div><p>{run.goal}</p>{run.contract && <details className="run-contract"><summary><span>Task contract</span><small>{formatRunValue(run.contract.intent)} · {formatRunValue(run.contract.relation)}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div><strong>{formatContractDecisionReason(run.contract.decisionReason)}</strong><ul>{run.contract.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></div></details>}<RunMetrics run={run} />{statusNotice && <div className="run-status-note" data-tone={statusNotice.tone}>{statusNotice.text}</div>}</section>
-    {checkpoint && <section className="audit-section"><div className="section-heading" data-label><span>Checkpoint</span><small>preserved</small></div><div className="audit-ledger">{checkpointPosition && <span>{checkpointPosition}</span>}{checkpoint.currentTool && <strong>{checkpoint.currentTool.toolName}</strong>}{checkpoint.assistantPartial && <p>{checkpoint.assistantPartial.slice(-240)}</p>}</div></section>}
+    {checkpoint && <section className="audit-section"><div className="section-heading"><span>Checkpoint</span><small>preserved</small></div><div className="audit-ledger">{checkpointPosition && <span>{checkpointPosition}</span>}{checkpoint.currentTool && <strong>{checkpoint.currentTool.toolName}</strong>}{checkpoint.assistantPartial && <p>{checkpoint.assistantPartial.slice(-240)}</p>}</div></section>}
     <SupervisorReviewPanel run={run} />
     <GateAuditPanel run={run} />
     <ToolActivityPanel transcriptItems={transcriptTools} events={toolEvents} />

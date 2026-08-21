@@ -63,7 +63,8 @@ export interface EventConsumerCursor { runId: string; consumerId: string; genera
 export interface RunEvent { runId: string; seq: number; type: string; data: Record<string, unknown>; createdAt: number }
 type TranscriptBase = { seq: number; index?: number; attempt: number; createdAt: number };
 export type TranscriptItem =
-  | (TranscriptBase & { kind: "user" | "assistant"; text: string })
+  | (TranscriptBase & { kind: "user"; text: string })
+  | (TranscriptBase & { kind: "assistant"; text: string })
   | (TranscriptBase & { kind: "thinking"; text: string; redacted: boolean })
   | (TranscriptBase & { kind: "tool"; toolCallId: string; toolName: string; arguments: unknown; result: string; isError: boolean; error?: { name: string; code: string; message: string }; status: string });
 

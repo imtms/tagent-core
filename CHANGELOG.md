@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## [0.8.14] - 2026-08-21
+
+### Web Console structural refinement
+
+- Replaced the flat Execution trace with reasoning-led stages: each reasoning pass owns its compact tool-call ledger and settled model output, so consecutive Bash/read/edit calls no longer form an undifferentiated wall.
+- Consolidated Run details into one quiet section/ledger/disclosure grammar, separated Supervisor model metadata from its verdict, made token metrics wrap predictably, and removed the repeated settled Gate verdict while preserving failures and evaluation history.
+- Rebuilt Goal completion criteria as a compact field group with aligned inputs, required controls, removal actions, and a responsive add action; the 390px layout now stacks the group header without truncating its explanation.
+- Gave Core Memory and Memory operations the same outer gutter, section headings, count alignment, and full-width job rows; recent capture state, source identity, and job metrics now remain readable at narrow widths.
+- Unified live and successful status accents on the restrained green token while retaining warning and danger only for states that need attention; no semantic color is used as a large panel or dashboard fill.
+
+### Maintenance and verification
+
+- Added a pure transcript-to-stage projection and regression coverage proving that reasoning, tools, and output remain in one structural group.
+- Reduced obsolete and duplicate styling while extending the canonical stylesheet to 764 lines, 399 rules, 495 selectors, and 1437 declarations, within the existing hard ceilings.
+- Rendered dense Tool Call, Run details, Memory jobs, and Goal criteria states in desktop and 390px layouts across both light and dark themes.
+
+### Compatibility and deployment
+
+- The public ABI, SQLite schema revision `2`, Memory schema, and `tagent-core/state-0.8-r2` protocol are unchanged; no data migration is required. Deploy matching `0.8.14` Core, Web Console, ABI, and Core Client artifacts.
+
 ## [0.8.13] - 2026-08-21
 
 ### Web Console hierarchy and Review visibility

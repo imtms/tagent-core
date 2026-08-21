@@ -1,5 +1,47 @@
 import type { TranscriptItem } from "./api";
 
+export interface ExecutionGroup {
+  key: string;
+  reasoning: Extract<TranscriptItem, { kind: "thinking" }> | null;
+  tools: Extract<TranscriptItem, { kind: "tool" }>[];
+  output: Extract<TranscriptItem, { kind: "assistant" }> | null;
+}
+
+function executionItemKey(item: TranscriptItem): string {
+  return `${item.seq}:${item.index ?? 0}:${item.kind}`;
+}
+
+/** Project a flat transcript into reasoning-led stages for compact inspection. */
+export function groupExecutionItems(items: TranscriptItem[]): ExecutionGroup[] {
+  const groups: ExecutionGroup[] = [];
+  let current: ExecutionGroup | null = null;
+  const start = (item: TranscriptItem): ExecutionGroup => {
+    const group = { key: executionItemKey(item), reasoning: null, tools: [], output: null } satisfies ExecutionGroup;
+    groups.push(group);
+    current = group;
+    return group;
+  };
+
+  for (const item of items) {
+    if (item.kind === "user") continue;
+    if (item.kind === "thinking") {
+      current = start(item);
+      current.reasoning = item;
+      continue;
+    }
+    if (item.kind === "tool") {
+      if (!current || current.output) current = start(item);
+      current.tools.push(item);
+      continue;
+    }
+    if (!current || current.output) current = start(item);
+    current.output = item;
+    current = null;
+  }
+
+  return groups;
+}
+
 /** Merge a cursor delta while letting a later tool result replace its pending call. */
 export function mergeTranscriptItems(current: TranscriptItem[], incoming: TranscriptItem[]): TranscriptItem[] {
   const key = (item: TranscriptItem) => item.kind === "tool"

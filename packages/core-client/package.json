@@ -1,6 +1,6 @@
 {
   "name": "@tagent/core-client",
-  "version": "0.8.13",
+  "version": "0.8.14",
   "private": true,
   "type": "module",
   "sideEffects": false,
@@ -22,7 +22,7 @@
     "clean": "tsc -b --clean && rm -rf dist"
   },
   "dependencies": {
-    "@tagent/abi": "0.8.13"
+    "@tagent/abi": "0.8.14"
   },
   "engines": {
     "node": ">=24.18.1",
