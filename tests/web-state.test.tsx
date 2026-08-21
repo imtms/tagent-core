@@ -26,6 +26,7 @@ import { deriveCurrentOperation } from "../apps/web-console/src/current-operatio
 import { createEventAcknowledger } from "../apps/web-console/src/event-acknowledger.js";
 import { IntentPrefetchCache } from "../apps/web-console/src/intent-prefetch-cache.js";
 import { MEMORY_PAGE_REQUEST_LIMIT, memoryPageWindow, mergeMemoryPage } from "../apps/web-console/src/memory-pagination.js";
+import { memoryStatusSummary } from "../apps/web-console/src/memory-display.js";
 import { canResumeRun, findActiveRun, formatRunStatus, formatRunValue, isActiveRunStatus, isRedundantRunPhase, runStatusNotice, runStatusTone } from "../apps/web-console/src/run-state.js";
 import { runViewForResolvedRuns, runViewForResumedRun, runViewForStartedRun, runViewFromWorkspaceSnapshot } from "../apps/web-console/src/use-run-view-state.js";
 import { mergeRefreshedMessages, shouldStreamWorkspaceRun, terminalStreamingAfterRefresh } from "../apps/web-console/src/use-workspace-live-sync.js";
@@ -244,6 +245,20 @@ describe("Web workbench behavior", () => {
     expect(maintenance).not.toContain("Durable index</span>");
   });
 
+  it("keeps the Memory header focused on non-zero lifecycle state", () => {
+    const status = {
+      records: { hot: 1, warm: 2, candidate: 0, active: 3, disputed: 0 },
+      topics: 3,
+      coldTopics: 0,
+    };
+
+    expect(memoryStatusSummary(status)).toBe("3 active");
+    expect(memoryStatusSummary({ ...status, records: { ...status.records, candidate: 2 }, coldTopics: 1 }))
+      .toBe("3 active · 2 candidates · 1 cold topic");
+    expect(memoryStatusSummary({ ...status, records: { ...status.records, active: 0 } }))
+      .toBe("No durable memory");
+  });
+
   it("keeps an ungenerated Core Memory snapshot compact and actionable", () => {
     const handlers = {
       coreText: "",
@@ -330,9 +345,11 @@ describe("Web workbench behavior", () => {
     }} onForget={() => undefined} onRestore={() => undefined} />);
 
     expect(empty).toBe("");
-    expect(recordsOnly).toContain("Memory cards");
-    expect(recordsOnly).not.toContain("Canonical topic pages");
+    expect(recordsOnly).toContain("Hot + Warm memory");
+    expect(recordsOnly).not.toContain("Cold topic archive");
     expect(recordsOnly).not.toContain("No matching Cold topics");
+    expect(recordsOnly).toContain("fact · warm · active");
+    expect(recordsOnly).not.toContain('class="memory-kind"');
     expect(topicsOnly).not.toContain(`Fact: ${repeatedTopic}`);
     expect(topicsOnly.match(/Use the current release contract\./g)).toHaveLength(1);
     expect(topicDetail).not.toContain(`Fact: ${repeatedTopic}`);
@@ -643,6 +660,9 @@ describe("Web workbench behavior", () => {
     expect(nonRetryable).toContain(">Open</button>");
     expect(nonRetryable).not.toContain(">Retry</button>");
     expect(nonRetryable).toContain("Open task");
+    expect(nonRetryable).toContain("Criteria · Visual review passes");
+    expect(nonRetryable).toContain('class="status-label" data-tone="warning"');
+    expect(nonRetryable).not.toContain('class="section-heading" data-label');
     expect(retryable).toContain(">Retry</button>");
   });
 

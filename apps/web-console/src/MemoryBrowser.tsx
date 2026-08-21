@@ -95,13 +95,13 @@ export function MemoryRecallResults({
         {results.cards.map((card) => {
           const repeated = memoryTextRepeats(card.title, card.content);
           return <button key={card.id} onClick={() => onOpenRecord(card.id)}>
-            <div><span className="memory-kind">{card.kind}</span><strong>{repeated ? card.content : card.title}</strong>{!repeated && <p>{card.content}</p>}<small>{card.tier} · {Math.round(card.confidence * 100)}% confidence · {Math.round(card.score * 100)}% relevance{card.retrievalChannels?.length ? ` · ${card.retrievalChannels.join(" + ")}` : ""}</small></div>
+            <div><strong>{repeated ? card.content : card.title}</strong>{!repeated && <p>{card.content}</p>}<small data-mono>{card.kind} · {card.tier} · {Math.round(card.confidence * 100)}% confidence · {Math.round(card.score * 100)}% relevance{card.retrievalChannels?.length ? ` · ${card.retrievalChannels.join(" + ")}` : ""}</small></div>
           </button>;
         })}
         {results.coldTopics.map((topic) => {
           const repeated = memoryTextRepeats(topic.descriptor.title, topic.descriptor.description);
           return <button key={topic.descriptor.topicId} onClick={() => onSelectTopic(topic)}>
-            <div><span className="memory-kind">cold topic</span><strong>{repeated ? topic.descriptor.description : topic.descriptor.title}</strong>{!repeated && <p>{topic.descriptor.description}</p>}<small>revision {topic.revision.revision} · full page</small></div>
+            <div><strong>{repeated ? topic.descriptor.description : topic.descriptor.title}</strong>{!repeated && <p>{topic.descriptor.description}</p>}<small data-mono>cold topic · revision {topic.revision.revision} · full page</small></div>
           </button>;
         })}
       </div>}
@@ -287,10 +287,7 @@ export function MemoryCatalog({
     <>
       {showRecords && <section className="memory-list-section">
         <div className="section-heading">
-          <div>
-            <span className="eyebrow">Hot + Warm</span>
-            <h3>Memory cards</h3>
-          </div>
+          <h3>Hot + Warm memory</h3>
           {records.length > 0 && <small>{formatCount(records.length, "card")} loaded</small>}
         </div>
         {records.length > 0 && <div className="memory-list">
@@ -298,10 +295,9 @@ export function MemoryCatalog({
               <button key={record.id} onClick={() => onOpenRecord(record.id)} aria-current={selectedRecordId === record.id ? "true" : undefined}>
                 <span className="tier-dot" data-tone={record.tier === "hot" ? "accent" : undefined} />
                 <div>
-                  <span className="memory-kind">{record.kind}</span>
                   <strong>{memoryTitleRepeatsContent(record) ? memoryContent(record) : memoryTitle(record)}</strong>
                   {!memoryTitleRepeatsContent(record) && <p>{memoryContent(record)}</p>}
-                  <small>{record.tier} · {record.status} · {formatMemoryDate(record.updatedAt)}</small>
+                  <small data-mono>{record.kind} · {record.tier} · {record.status} · {formatMemoryDate(record.updatedAt)}</small>
                 </div>
                 <small data-mono>{Math.round(record.confidence * 100)}%</small>
               </button>
@@ -315,10 +311,7 @@ export function MemoryCatalog({
       </section>}
       {showTopics && <section className="memory-list-section">
         <div className="section-heading">
-          <div>
-            <span className="eyebrow">Cold archive</span>
-            <h3>Canonical topic pages</h3>
-          </div>
+          <h3>Cold topic archive</h3>
           {topics.length > 0 && <small>{formatCount(topics.length, "topic")} loaded</small>}
         </div>
         {topics.length > 0 && <div className="memory-list">
@@ -327,10 +320,9 @@ export function MemoryCatalog({
               return <button key={topic.topicId} onClick={() => onOpenTopic(topic.topicId)} aria-current={selectedTopicId === topic.topicId ? "true" : undefined}>
                 <Snowflake size={ICON_SIZE.md} />
                 <div>
-                  <span className="memory-kind">{topic.kind}</span>
                   <strong>{repeated ? topic.description : topic.title}</strong>
                   {!repeated && <p>{topic.description}</p>}
-                  <small>{topic.coldRevisionId ? "cold page" : "descriptor"} · {topic.status} · {formatMemoryDate(topic.updatedAt)}</small>
+                  <small data-mono>{topic.kind} · {topic.coldRevisionId ? "cold page" : "descriptor"} · {topic.status} · {formatMemoryDate(topic.updatedAt)}</small>
                 </div>
               </button>;
             })}

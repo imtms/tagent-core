@@ -1,4 +1,4 @@
-import type { WarmMemory } from "./api";
+import type { MemoryStatusResult, WarmMemory } from "./api";
 
 export const formatMemoryDate = (value: number) => new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -17,4 +17,14 @@ export const memoryTextRepeats = (titleValue: string, contentValue: string) => {
 };
 export const memoryTitleRepeatsContent = (record: WarmMemory) => {
   return memoryTextRepeats(memoryTitle(record), memoryContent(record));
+};
+
+export const memoryStatusSummary = (status: MemoryStatusResult) => {
+  const counts = [
+    status.records.active > 0 ? `${status.records.active} active` : "",
+    status.records.candidate > 0 ? `${status.records.candidate} candidate${status.records.candidate === 1 ? "" : "s"}` : "",
+    status.records.disputed > 0 ? `${status.records.disputed} disputed` : "",
+    status.coldTopics > 0 ? `${status.coldTopics} cold topic${status.coldTopics === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
+  return counts.join(" · ") || "No durable memory";
 };

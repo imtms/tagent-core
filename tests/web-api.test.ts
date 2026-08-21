@@ -87,6 +87,25 @@ describe("Web API request headers", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/v1/admin/memory/govern", expect.objectContaining({ method: "POST", body: JSON.stringify({ scope, id: "record-1", action: "correct", title: "Correct title", content: "Correct content", reason: "Operator correction" }) }));
   });
 
+  it("keeps every Goal and Memory console operation wired to a visible Web surface", async () => {
+    const goalSurface = await readFile(new URL("../apps/web-console/src/GoalsPanel.tsx", import.meta.url), "utf8");
+    const memorySurface = await readFile(new URL("../apps/web-console/src/MemoryPanel.tsx", import.meta.url), "utf8");
+    const goalOperations = [
+      "workspaceGoals", "workspaceGoal", "createWorkspaceGoal", "reviseWorkspaceGoal",
+      "addWorkspaceGoalRoadmap", "generateWorkspaceGoalRoadmap", "workspaceGoalOperation",
+      "startWorkspaceGoalRoadmapItem", "decideWorkspaceGoal",
+    ];
+    const memoryOperations = [
+      "memoryJobs", "memoryStatus", "memoryExport", "memoryRecordsPage", "memoryTopicsPage",
+      "memoryRecord", "memoryTopic", "memoryRecall", "memoryCapture", "memoryReindex",
+      "memoryReindexJobs", "memoryGovern", "memoryFeedback", "memoryCoreSnapshot",
+      "memoryRestore", "memoryForget",
+    ];
+
+    for (const operation of goalOperations) expect(goalSurface).toContain(`api.${operation}(`);
+    for (const operation of memoryOperations) expect(memorySurface).toContain(`api.${operation}(`);
+  });
+
   it("preserves the Goal request-change decision and its reason", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const goals = createGoalApi(async (url, init) => {

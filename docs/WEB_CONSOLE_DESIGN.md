@@ -119,14 +119,29 @@ Hide empty groups, zero-only metrics, redundant phase labels, static capability 
 Keep standards, history, manifests, maintenance actions, and destructive controls behind disclosures or menus.
 Current state appears before reference material.
 
+### Feature completeness contract
+
+Compactness means progressive disclosure and contextual controls, never deleting a workflow. A refactor is incomplete unless every operation below remains reachable from the Web Console and its result, failure, or durable receipt remains inspectable.
+
+| Surface | Primary path | Complete secondary path |
+| --- | --- | --- |
+| Goals | list/open Goals; create and revise a Definition; review criteria and boundaries | approve or request changes against the exact revision; pause, resume, close, or cancel |
+| Goal Roadmap | generate or author a Roadmap; edit and select approved items | start, retry, or open the bound TaskRun; inspect per-item verification and criterion mapping |
+| Goal audit | current action and progress | linked Runs, evidence, decisions, raw operation receipt recovery by request ID |
+| Memory catalog | status, local filtering, stable pagination, Record and Topic detail | dynamic Recall with routing/score diagnostics; JSON export |
+| Memory lifecycle | capture; approve, reject, resolve, reactivate, and correct Records | confirm/helpful/wrong feedback; Forget Record or Topic; immediate Undo and ID-based restore |
+| Memory context | full provenance, semantic identity, lifecycle, validity, relationships, and Cold storage | generate, edit, and save Core Memory; reindex and inspect capture/reindex jobs |
+
+Contextual simplification is allowed: for example, a Memory detail replaces catalog filters with `All memory` while keeping Export and Add memory visible. The underlying operation must never become unreachable or depend on undocumented API use.
+
 Operational state uses one shared dot-and-label grammar, not feature-specific colored pills. A terminal TaskRun status appears in the top bar and Run details; do not repeat it as a feed card or beside the composer. The composer shows live state only while execution is running, while pending input and approval retain their actionable surfaces. Long machine-generated status reasons show one readable clause first and retain the raw diagnostic behind a disclosure.
 
 Goals use one selector and one reading surface rather than an internal navigation rail.
 Completion criteria form one field group: one heading and explanation, one add action, then aligned criterion rows. At mobile widths the explanation and add action stack before the rows; criterion text occupies its own line above Required and remove controls.
 The active Goal definition and current Run stay visible in the hero. Completion criteria open when Goal review or closure needs them; an unapproved or revision-required Roadmap opens for review, then collapses to a completed/approved summary after approval. Linked TaskRuns, evidence, and decisions share one chronological Activity and audit disclosure, while pause, close, cancel, and revision requests share one lifecycle disclosure. Requesting changes must target the active Definition or Roadmap and retain an operator reason; it must not require leaving the Goal workspace.
 Durable Goal operation receipts remain recoverable by request ID from a secondary disclosure. Receipt lookup must expose state and identity first, keep raw payload/result/error behind a nested disclosure, and never encourage repeating an interrupted operation whose outcome is uncertain.
-Memory shows either the catalog or one detail view, never a nested split view. The type filter lives beside search; raw scope and backend descriptions stay hidden, and feedback, governance, and Forget remain behind the detail controls disclosure.
-The Memory header exposes only compact lifecycle counts. Kind and status filters share the search toolbar; correction, confirmation, helpful/wrong feedback, disputed resolution, reactivation, and Forget remain in the detail disclosure. Forget must expose immediate Undo for the returned grace period; recovery by Record/Topic ID remains in Memory operations because forgotten records are intentionally absent from the catalog. JSON export is a quiet toolbar action.
+Memory shows either the catalog or one detail view, never a nested split view. The type filter lives beside search; a detail replaces catalog-only filters with a clear back action while retaining global Export and Add actions. Raw scope and backend descriptions stay hidden, and feedback, governance, and Forget remain behind the detail controls disclosure.
+The Memory header exposes only non-zero lifecycle counts. Kind and status filters share the search toolbar; correction, confirmation, helpful/wrong feedback, disputed resolution, reactivation, and Forget remain in the detail disclosure. Forget must expose immediate Undo for the returned grace period; recovery by Record/Topic ID remains in Memory operations because forgotten records are intentionally absent from the catalog. JSON export is a quiet toolbar action.
 Record provenance, semantic identity, lifecycle, validity, storage identity, and Topic relationships belong in one metadata disclosure rather than separate cards. Recall routing, score construction, embedding degradation, policy transforms, and candidate outcomes belong in one diagnostics disclosure. Both stay collapsed until inspected, but complete operator data must remain available. Generated Record or Topic titles that merely prefix the body or description with a Memory kind are treated as labels and must not repeat the same content in catalog, Recall, or detail views.
 Memory operations use the same outer gutter as the catalog, keep job counts in section headings, and give each desktop job a full-width status/source/metrics row. At mobile widths, metrics move below and align with the source instead of compressing all three fields.
 Skills use the upload target as their empty creation state.

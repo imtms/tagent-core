@@ -33,7 +33,7 @@ import {
   MemoryJobLists,
   MemoryRecallResults,
 } from "./MemoryBrowser";
-import { memoryContent, memoryTextRepeats, memoryTitle, memoryTitleRepeatsContent } from "./memory-display";
+import { memoryContent, memoryStatusSummary, memoryTextRepeats, memoryTitle, memoryTitleRepeatsContent } from "./memory-display";
 import {
   MEMORY_PAGE_REQUEST_LIMIT,
   memoryPageWindow,
@@ -499,7 +499,7 @@ export function MemoryPanel({
         <header className="memory-header">
           <div>
             <BrainCircuit size={ICON_SIZE.xl} />
-            <span><h2>Memory</h2><small data-mono>{status ? `${status.records.active} active · ${status.records.candidate} candidate · ${status.records.disputed} disputed · ${status.coldTopics} cold` : `${scope.id} · ${runtime.memoryBackend ?? "memory"}/${runtime.memoryColdBackend ?? "local"}`}</small></span>
+            <span><h2>Memory</h2><small data-mono>{status ? memoryStatusSummary(status) : `${scope.id} · ${runtime.memoryBackend ?? "memory"}/${runtime.memoryColdBackend ?? "local"}`}</small></span>
           </div>
           <div className="memory-header-actions">
             <button
@@ -519,7 +519,7 @@ export function MemoryPanel({
           </div>
         </header>
         {hasMemoryData && <div className="memory-toolbar">
-          {hasCatalogData && <form
+          {detailOpen ? <button className="control memory-detail-back" type="button" onClick={() => { setSelectedRecord(null); setSelectedTopic(null); }}><ChevronLeft size={ICON_SIZE.md} />All memory</button> : hasCatalogData && <form
               className="memory-search"
               onSubmit={(event) => {
                 event.preventDefault();
@@ -539,7 +539,7 @@ export function MemoryPanel({
               <select value={memoryStatus} aria-label="Filter memory status" onChange={(event) => setMemoryStatus(event.target.value as "all" | MemoryStatus)}>
                 {memoryStatuses.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
               </select>
-              <button type="submit">Recall</button>
+              <button className="control" type="submit">Recall</button>
             </form>}
           <div className="memory-header-actions">
             <button className="control" onClick={() => void exportMemory()} disabled={busy}><Download size={ICON_SIZE.md} />Export</button>
@@ -551,7 +551,6 @@ export function MemoryPanel({
           {message && <div className="notice" data-tone="success" role="status">{message}</div>}
           {recentForget && <MemoryUndoNotice item={recentForget} busy={busy} onUndo={() => void restoreMemory(recentForget.ids, recentForget.topicIds)} />}
           {detailOpen ? <main className="memory-detail">
-            <button className="memory-detail-back" type="button" onClick={() => { setSelectedRecord(null); setSelectedTopic(null); }}><ChevronLeft size={ICON_SIZE.md} />All memory</button>
             {selectedRecord ? (
               <RecordDetail
                 record={selectedRecord}
@@ -606,7 +605,7 @@ export function MemoryPanel({
                   <Search size={ICON_SIZE.lg} />
                   <strong>{hasCatalogData ? "No catalog matches" : "No durable memories yet"}</strong>
                   <p>{hasCatalogData ? "Clear the search phrase or choose another memory kind or state." : "Add a stable fact, preference, event or procedure."}</p>
-                  <button onClick={() => {
+                  <button className="control" onClick={() => {
                     if (hasCatalogData) { setQuery(""); setKind("all"); setMemoryStatus("all"); setResults(null); }
                     else setCaptureOpen(true);
                   }}>{hasCatalogData ? "Clear filters" : "Add first memory"}</button>

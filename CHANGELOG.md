@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## [0.8.20] - 2026-08-22
+
+### Web Console hierarchy follow-up
+
+- Kept every Goal and Memory Console operation wired to a visible surface and added a regression contract covering all nine Goal and sixteen Memory client operations.
+- Replaced zero-value Memory header noise, stacked catalog labels, and per-row kind pills with non-zero status summaries, one semantic section heading, and compact mono metadata.
+- Made Memory detail actions contextual without hiding global Add or Export, corrected Goal Roadmap pending-state semantics, separated mapped criteria, restored Roadmap editor hairlines, and kept operation recovery, diagnostics, governance, Forget, and restore workflows intact.
+
+### Compatibility
+
+- The HTTP major, public ABI shapes, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` protocol are unchanged. No data migration is required. Deploy matching `0.8.20` Core, Web Console, ABI, and Core Client artifacts.
+
 ## [0.8.19] - 2026-08-21
 
 ### Goal operation recovery

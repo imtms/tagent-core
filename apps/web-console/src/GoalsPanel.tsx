@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
-  Check,
   CheckCircle2,
   ChevronRight,
   Circle,
@@ -512,7 +511,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
     </header>
 
     {showsNextAction && <section className="goal-next-card">
-      <div className="goal-next-copy"><span className="eyebrow">Next action</span><strong>{goal.nextAction.title}</strong><p>{goal.nextAction.explanation}</p></div>
+      <div className="goal-next-copy"><span className="eyebrow">Next action</span><strong>{goal.nextAction.title}</strong><small>{goal.nextAction.explanation}</small></div>
       <div className="goal-next-actions">
         {canCreateRoadmapManually && <button className="control" onClick={onEditRoadmap} disabled={busy}><Plus size={ICON_SIZE.sm} />Create manually</button>}
         <button className="control" data-variant="primary" disabled={actionDisabled} onClick={nextAction}>{busy ? "Working…" : goal.nextAction.primaryActionLabel}</button>
@@ -543,7 +542,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
     {roadmap && goal.roadmap && <details open={!approval || requiresRoadmapRevision}>
       <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Roadmap v{goal.roadmap.revision}</span><small>{requiresRoadmapRevision ? "Revision required" : approval ? `${completedRoadmapItems}/${approvedRoadmapItems} complete` : "Review and approve"}</small></summary>
       <div>
-        <div className="section-heading" data-label>
+        <div className="section-heading">
           <div><span className="eyebrow">Goal Roadmap</span><h3>{roadmap.summary || `Roadmap v${goal.roadmap.revision}`}</h3></div>
           {canEdit && goal.status !== "draft" && <button className="control" onClick={onEditRoadmap} disabled={busy}><Pencil size={ICON_SIZE.sm} />Edit</button>}
         </div>
@@ -555,12 +554,12 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
           const selectable = !approval && !requiresRoadmapRevision;
           const tone = itemStatus === "running" ? "info" : itemStatus === "completed" ? "success" : itemStatus === "blocked" ? "warning" : undefined;
           return <div className="goal-roadmap-item" key={item.id}>
-            <div className="goal-roadmap-leading" data-tone={tone}>
-              {selectable ? <input aria-label={`Approve ${item.title}`} type="checkbox" checked={selectedItems.includes(item.id)} disabled={busy} onChange={(event) => setSelectedItems((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /> : itemStatus === "completed" ? <CheckCircle2 size={ICON_SIZE.md} /> : itemStatus === "blocked" ? <AlertTriangle size={ICON_SIZE.md} /> : approved ? <Check size={ICON_SIZE.md} /> : <Circle size={ICON_SIZE.md} />}
+            <div className="goal-roadmap-leading status-label" data-tone={tone}>
+              {selectable ? <input aria-label={`Approve ${item.title}`} type="checkbox" checked={selectedItems.includes(item.id)} disabled={busy} onChange={(event) => setSelectedItems((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /> : itemStatus === "completed" ? <CheckCircle2 size={ICON_SIZE.md} /> : itemStatus === "blocked" ? <AlertTriangle size={ICON_SIZE.md} /> : <Circle size={ICON_SIZE.md} />}
               <span>{index + 1}</span>
             </div>
-            <div className="goal-roadmap-copy"><strong>{item.title}</strong><p>{item.outcome}</p><div>{item.criterionKeys.map((key) => <span key={key}>{definition?.criteria.find((criterion) => criterion.key === key)?.title ?? key}</span>)}</div><details><summary>Verification</summary><p>{item.verification}</p></details></div>
-            <div className="goal-roadmap-action"><em>{roadmapStatusLabel(itemStatus)}</em>{approved && (itemStatus === "pending" || itemStatus === "blocked" && itemProgress?.retryable && !goal.currentRunId) && <button className="control" disabled={busy || Boolean(goal.currentRunId)} onClick={() => void onStartRoadmapItem(item.id)}><Play size={ICON_SIZE.xs} />{itemStatus === "blocked" ? "Retry" : "Start"}</button>}{itemProgress?.runId && ["running", "blocked"].includes(itemStatus) && <button className="control" onClick={() => onOpenRun?.(itemProgress.runId!)}><ExternalLink size={ICON_SIZE.xs} />Open</button>}</div>
+            <div className="goal-roadmap-copy"><strong>{item.title}</strong><p>{item.outcome}</p><small>Criteria · {item.criterionKeys.map((key) => definition?.criteria.find((criterion) => criterion.key === key)?.title ?? key).join(" · ")}</small><details><summary>Verification</summary><p>{item.verification}</p></details></div>
+            <div className="goal-roadmap-action memory-inline-actions"><span className="status-label" data-tone={tone}><i className="status-dot" />{roadmapStatusLabel(itemStatus)}</span>{approved && (itemStatus === "pending" || itemStatus === "blocked" && itemProgress?.retryable && !goal.currentRunId) && <button className="control" disabled={busy || Boolean(goal.currentRunId)} onClick={() => void onStartRoadmapItem(item.id)}><Play size={ICON_SIZE.xs} />{itemStatus === "blocked" ? "Retry" : "Start"}</button>}{itemProgress?.runId && ["running", "blocked"].includes(itemStatus) && <button className="control" onClick={() => onOpenRun?.(itemProgress.runId!)}><ExternalLink size={ICON_SIZE.xs} />Open</button>}</div>
           </div>;
         })}
         {!approval && <p data-meta>{requiresRoadmapRevision ? "Changes were requested. Edit and save a new Roadmap revision before approval." : "Select the items that may drive TaskRuns, then approve the Roadmap above."}</p>}
