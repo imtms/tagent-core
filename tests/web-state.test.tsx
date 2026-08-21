@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, type CaptureJob, type Message, type RecallResult, type RuntimeStatus, type Session, type SessionInboxItem, type TaskRun, type TranscriptItem, type WarmMemory, type WorkspaceGoal, type WorkspaceGoalDefinition } from "../apps/web-console/src/api.js";
+import { api, type CaptureJob, type Message, type RecallResult, type RuntimeStatus, type Session, type SessionInboxItem, type TaskRun, type TopicDescriptor, type TranscriptItem, type WarmMemory, type WorkspaceGoal, type WorkspaceGoalDefinition } from "../apps/web-console/src/api.js";
 import { approvalResolutionNotice } from "../apps/web-console/src/approval-display.js";
 import {
   ApprovalDock,
@@ -331,10 +331,10 @@ describe("Web workbench behavior", () => {
     const empty = renderToStaticMarkup(<MemoryCatalog records={[]} topics={[]} {...props} />);
     const recordsOnly = renderToStaticMarkup(<MemoryCatalog records={[record]} topics={[]} {...props} />);
     const repeatedTopic = "Use the current release contract.";
-    const descriptor = {
+    const descriptor: TopicDescriptor = {
       topicId: "release", scope: record.scope, kind: "fact", title: `Fact: ${repeatedTopic}`, description: repeatedTopic,
       aliases: [], entityIds: [], relatedTopicIds: [], status: "active", createdAt: 1, updatedAt: 2,
-    } as const;
+    };
     const topicsOnly = renderToStaticMarkup(<MemoryCatalog records={[]} topics={[descriptor]} {...props} />);
     const topicDetail = renderToStaticMarkup(<TopicDetail topic={{
       descriptor,
