@@ -25,6 +25,7 @@ import {
 } from "./api";
 import { formatCount } from "./count-format";
 import { goalStatusTone } from "./goal-display";
+import { PanelTabs, type PanelTab } from "./PanelTabs";
 import { storedStringRecord, storeStringRecord } from "./workspace-preferences";
 
 const goalOperationRequestsKey = "tagent.goal-operation-requests";
@@ -58,6 +59,7 @@ function newRoadmapItem(existing: string[], definition?: WorkspaceGoalDefinition
 type GoalDecisionKind = "approve_goal" | "approve_roadmap" | "request_change" | "pause" | "resume" | "close" | "cancel";
 type GoalRevision = NonNullable<WorkspaceGoal["definition"]>;
 type EditorMode = "create" | "definition" | "roadmap" | null;
+type GoalSection = "overview" | "roadmap" | "activity" | "controls";
 
 export function GoalsPanel({
   workspaceId,
@@ -483,9 +485,11 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
   const [operationReceipt, setOperationReceipt] = useState<WorkspaceGoalOperationReceipt | null>(null);
   const [operationError, setOperationError] = useState("");
   const [operationBusy, setOperationBusy] = useState(false);
+  const [section, setSection] = useState<GoalSection>(() => goalSectionForAction(goal.nextAction.kind));
   useEffect(() => setSelectedItems(approval?.approvedItemIds ?? roadmap?.items.map((item) => item.id) ?? []), [goal.id, goal.roadmap?.id, goal.roadmap?.contentHash, approval?.id]);
   useEffect(() => { setChangeTargetId(defaultChangeTargetId); setChangeReason(""); }, [goal.id, defaultChangeTargetId]);
   useEffect(() => { setOperationRequestId(latestOperationRequestId); setOperationReceipt(null); setOperationError(""); }, [goal.id, latestOperationRequestId]);
+  useEffect(() => setSection(goalSectionForAction(goal.nextAction.kind)), [goal.id, goal.nextAction.kind]);
   const evidenceByCriterion = useMemo(() => new Map((definition?.criteria ?? []).map((criterion) => [criterion.key, goal.evidenceLinks.filter((link) => link.goalRevision === goal.definition?.revision && link.criterionKey === criterion.key)])), [definition, goal.definition?.revision, goal.evidenceLinks]);
   const progressByItem = useMemo(() => new Map(goal.roadmapProgress.map((item) => [item.itemId, item])), [goal.roadmapProgress]);
   const hasActiveRoadmapWork = goal.roadmapProgress.some((item) => item.status === "running");
@@ -495,6 +499,12 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
   const approvedRoadmapItems = approval?.approvedItemIds.length ?? 0;
   const completedRoadmapItems = approval?.approvedItemIds.filter((itemId) => progressByItem.get(itemId)?.status === "completed").length ?? 0;
   const auditCount = goal.runLinks.length + goal.evidenceLinks.length + goal.decisions.length;
+  const tabs = [
+    { value: "overview", label: "Overview", meta: `${goal.verifiedCriteria}/${goal.requiredCriteria}` },
+    { value: "roadmap", label: "Roadmap", meta: goal.roadmap ? `${completedRoadmapItems}/${approvedRoadmapItems || roadmap?.items.length || 0}` : "—" },
+    { value: "activity", label: "Activity", meta: String(auditCount) },
+    { value: "controls", label: "Controls" },
+  ] satisfies readonly PanelTab<GoalSection>[];
   const nextRoadmapItem = goal.nextAction.kind === "run_roadmap_item"
     ? roadmap?.items.find((item) => item.id === goal.nextAction.roadmapItemId)
     : undefined;
@@ -536,7 +546,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
 
   return <article className="goal-view">
     <header className="goal-hero">
-      <div className="goal-hero-meta"><StatusBadge status={goal.status} />{canEdit && <button className="control" onClick={onEditDefinition} disabled={busy}><Pencil size={ICON_SIZE.sm} />Edit Goal</button>}</div>
+      <div className="goal-hero-meta memory-inline-actions"><StatusBadge status={goal.status} />{canEdit && <button className="control" onClick={onEditDefinition} disabled={busy}><Pencil size={ICON_SIZE.sm} />Edit Goal</button>}</div>
       <h2>{definition?.title ?? "Untitled Goal"}</h2>
       <p>{definition?.outcome}</p>
       {goal.definition && <small data-mono>definition v{goal.definition.revision} · {dateLabel(goal.updatedAt)}{goal.currentRunId ? ` · run ${goal.currentRunId.slice(0, 12)}` : ""}</small>}
@@ -550,32 +560,36 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
       </div>
     </section>}
 
-    <details open={goal.nextAction.kind === "review_goal" || ["ready_to_close", "completed"].includes(goal.status)}>
-      <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Completion criteria</span><small>{goal.verifiedCriteria}/{goal.requiredCriteria} verified</small></summary>
-      <div>
-        {verifiedPercent > 0 && <div className="goal-progress-track" aria-label={`${verifiedPercent}% of required criteria verified`}><i style={{ width: `${verifiedPercent}%` }} /></div>}
-        <div className="goal-criteria-list">
-        {definition?.criteria.map((criterion) => {
-          const evidence = evidenceByCriterion.get(criterion.key) ?? [];
-          const validCount = evidence.filter((link) => link.status === "valid").length;
-          const decisive = [...evidence].filter((link) => link.status !== "stale")
-            .sort((left, right) => left.updatedAt - right.updatedAt || left.id.localeCompare(right.id)).at(-1);
-          const verified = decisive?.status === "valid";
-          const contradicted = decisive?.status === "contradicted";
-          return <div data-tone={verified ? "success" : contradicted ? "warning" : undefined} key={criterion.key}>
-            {verified ? <CheckCircle2 size={ICON_SIZE.md} /> : contradicted ? <AlertTriangle size={ICON_SIZE.md} /> : <Circle size={ICON_SIZE.md} />}
-            <span><strong>{criterion.title}</strong><small>{verified ? formatCount(validCount, "verified source") : contradicted ? "Latest evidence contradicted" : criterion.required ? "Required · pending" : "Optional"}</small></span>
-          </div>;
-        })}
-        </div>
-      </div>
-    </details>
+    <PanelTabs label="Goal views" value={section} tabs={tabs} onChange={setSection} />
 
-    {roadmap && goal.roadmap && <details open={!approval || requiresRoadmapRevision}>
-      <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Roadmap v{goal.roadmap.revision}</span><small>{requiresRoadmapRevision ? "Revision required" : approval ? `${completedRoadmapItems}/${approvedRoadmapItems} complete` : "Review and approve"}</small></summary>
-      <div>
+    <section hidden={section !== "overview"} aria-label="Goal overview">
+      <div className="section-heading"><strong>Completion criteria</strong><small>{goal.verifiedCriteria}/{goal.requiredCriteria} verified</small></div>
+      {verifiedPercent > 0 && <div className="goal-progress-track" aria-label={`${verifiedPercent}% of required criteria verified`}><i style={{ width: `${verifiedPercent}%` }} /></div>}
+      <div className="goal-criteria-list">
+      {definition?.criteria.map((criterion) => {
+        const evidence = evidenceByCriterion.get(criterion.key) ?? [];
+        const validCount = evidence.filter((link) => link.status === "valid").length;
+        const decisive = [...evidence].filter((link) => link.status !== "stale")
+          .sort((left, right) => left.updatedAt - right.updatedAt || left.id.localeCompare(right.id)).at(-1);
+        const verified = decisive?.status === "valid";
+        const contradicted = decisive?.status === "contradicted";
+        return <div data-tone={verified ? "success" : contradicted ? "warning" : undefined} key={criterion.key}>
+          {verified ? <CheckCircle2 size={ICON_SIZE.md} /> : contradicted ? <AlertTriangle size={ICON_SIZE.md} /> : <Circle size={ICON_SIZE.md} />}
+          <span><strong>{criterion.title}</strong><small>{verified ? formatCount(validCount, "verified source") : contradicted ? "Latest evidence contradicted" : criterion.required ? "Required · pending" : "Optional"}</small></span>
+        </div>;
+      })}
+      </div>
+    </section>
+
+    {definition && definition.scope.length + definition.nonGoals.length > 0 && <section hidden={section !== "overview"} aria-label="Goal scope and boundaries">
+      <div className="section-heading"><strong>Scope and boundaries</strong><small>{formatCount(definition.scope.length + definition.nonGoals.length, "item")}</small></div>
+      <div className="goal-scope-grid"><InfoList title="Included" items={definition.scope} /><InfoList title="Not included" items={definition.nonGoals} /></div>
+    </section>}
+
+    <section hidden={section !== "roadmap"} aria-label="Goal Roadmap">
+      {roadmap && goal.roadmap ? <>
         <div className="section-heading">
-          <div><span className="eyebrow">Goal Roadmap</span><h3>{roadmap.summary || `Roadmap v${goal.roadmap.revision}`}</h3></div>
+          <div><span className="eyebrow">Roadmap v{goal.roadmap.revision}</span><h3>{roadmap.summary || `Roadmap v${goal.roadmap.revision}`}</h3><small>{requiresRoadmapRevision ? "Revision required" : approval ? `${completedRoadmapItems}/${approvedRoadmapItems} complete` : "Review and approve"}</small></div>
           {canEdit && goal.status !== "draft" && <button className="control" onClick={onEditRoadmap} disabled={busy}><Pencil size={ICON_SIZE.sm} />Edit</button>}
         </div>
         <div className="goal-roadmap-list">
@@ -594,28 +608,23 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
             <div className="goal-roadmap-action memory-inline-actions"><span className="status-label" data-tone={tone}><i className="status-dot" />{roadmapStatusLabel(itemStatus)}</span>{approved && (itemStatus === "pending" || itemStatus === "blocked" && itemProgress?.retryable && !goal.currentRunId) && <button className="control" disabled={busy || Boolean(goal.currentRunId)} onClick={() => void onStartRoadmapItem(item.id)}><Play size={ICON_SIZE.xs} />{itemStatus === "blocked" ? "Retry" : "Start"}</button>}{itemProgress?.runId && ["running", "blocked"].includes(itemStatus) && <button className="control" onClick={() => onOpenRun?.(itemProgress.runId!)}><ExternalLink size={ICON_SIZE.xs} />Open</button>}</div>
           </div>;
         })}
-        {!approval && <p data-meta>{requiresRoadmapRevision ? "Changes were requested. Edit and save a new Roadmap revision before approval." : "Select the items that may drive TaskRuns, then approve the Roadmap above."}</p>}
+        {!approval && <p data-meta>{requiresRoadmapRevision ? "Changes were requested. Edit and save a new Roadmap revision before approval." : "Select the items that may drive TaskRuns, then approve them with the primary action above."}</p>}
         </div>
-      </div>
-    </details>}
+      </> : <div className="memory-empty"><Target size={ICON_SIZE.xl} /><strong>No Roadmap yet</strong><p>Generate a bounded Roadmap or create one manually after the Goal definition is approved.</p>{canCreateRoadmapManually && <button className="control" onClick={onEditRoadmap} disabled={busy}><Plus size={ICON_SIZE.sm} />Create manually</button>}</div>}
+    </section>
 
-    {definition && definition.scope.length + definition.nonGoals.length > 0 && <details>
-      <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Scope and boundaries</span><small>{formatCount(definition.scope.length + definition.nonGoals.length, "item")}</small></summary>
-      <div className="goal-scope-grid"><InfoList title="Included" items={definition.scope} /><InfoList title="Not included" items={definition.nonGoals} /></div>
-    </details>}
-
-    {auditCount > 0 && <details>
-      <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Activity and audit</span><small>{formatCount(auditCount, "entry", "entries")}</small></summary>
-      <div>
+    <section hidden={section !== "activity"} aria-label="Goal activity and audit">
+      <div className="section-heading"><strong>Activity and audit</strong><small>{formatCount(auditCount, "entry", "entries")}</small></div>
+      {auditCount === 0 ? <div className="memory-empty"><Target size={ICON_SIZE.xl} /><strong>No activity yet</strong><p>TaskRuns, evidence and Goal decisions will appear here without crowding the current plan.</p></div> : <>
         {goal.runLinks.length > 0 && <section><div className="section-heading"><strong>Linked TaskRuns</strong><small>{goal.runLinks.length} linked</small></div><div className="goal-run-links">{[...goal.runLinks].reverse().map((link) => <button key={link.runId} onClick={() => onOpenRun?.(link.runId)}><code>{link.runId.slice(0, 12)}</code><span>{runLinkLabel(link)}</span></button>)}</div></section>}
         {goal.evidenceLinks.length > 0 && <section><div className="section-heading"><strong>Evidence log</strong><small>{formatCount(goal.evidenceLinks.length, "link")}</small></div><div className="goal-run-links">{[...goal.evidenceLinks].reverse().map((link) => <button key={link.id} onClick={() => onOpenRun?.(link.runId)}><code>{link.criterionKey}</code><span>{statusLabelForValue(link.status)} · run {link.runId.slice(0, 12)}{link.artifactId ? ` · artifact ${link.artifactId.slice(0, 10)}` : ""}</span></button>)}</div></section>}
         {goal.decisions.length > 0 && <section><div className="section-heading"><strong>Decision history</strong><small>{formatCount(goal.decisions.length, "decision")}</small></div><div className="goal-run-links">{[...goal.decisions].reverse().map((decision) => <div key={decision.id}><code>{decisionLabel(decision.kind)}</code><span>{decision.reason ? `${decision.reason} · ` : ""}{decision.actorId} · {dateLabel(decision.createdAt)}</span></div>)}</div></section>}
-      </div>
-    </details>}
+      </>}
+    </section>
 
-    {!['completed', 'cancelled'].includes(goal.status) && <details>
-      <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Goal controls</span><small>Lifecycle and revision</small></summary>
-      <div>
+    <section hidden={section !== "controls"} aria-label="Goal controls">
+      <div className="section-heading"><strong>Goal controls</strong><small>Lifecycle and revision</small></div>
+      {['completed', 'cancelled'].includes(goal.status) ? <p data-meta>This Goal is terminal. Its definition, Roadmap and audit history remain available in the other views.</p> : <>
         {lifecycleLocked && <p data-meta>Finish or resolve the active Roadmap work before revising or changing this Goal's lifecycle.</p>}
         <div className="memory-inline-actions">{["active", "ready_to_close"].includes(goal.status) && <button className="control" disabled={busy || lifecycleLocked} onClick={() => void decide("pause")}>Pause Goal</button>}{goal.status === "paused" && <button className="control" data-variant="primary" disabled={busy} onClick={() => void decide("resume")}>Resume Goal</button>}{goal.status === "ready_to_close" && <button className="control" data-variant="primary" disabled={busy} onClick={() => { if (window.confirm("Close this Goal with the verified evidence? This cannot be undone.")) void decide("close"); }}>Close Goal</button>}<button className="control" data-tone="danger" disabled={busy || lifecycleLocked} onClick={() => { if (window.confirm("Cancel this Goal? This cannot be undone.")) void decide("cancel"); }}>Cancel Goal</button></div>
         {changeTargets.length > 0 && <div className="goal-form-columns">
@@ -623,29 +632,27 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
           <label className="goal-field"><span>Request a revision <small>reason required</small></span><textarea rows={3} value={changeReason} onChange={(event) => setChangeReason(event.target.value)} placeholder="What needs to change before this revision can guide work?" /></label>
           <div className="memory-inline-actions"><button className="control" disabled={busy || lifecycleLocked || !changeReason.trim()} onClick={() => { const target = changeTargets.find((item) => item.id === changeTargetId); if (target) void decide("request_change", target, [], changeReason.trim()); }}>Request changes</button></div>
         </div>}
-      </div>
-    </details>}
+      </>}
+    </section>
 
-    <details>
-      <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Operation recovery</span><small>{latestOperationRequestId ? `Last request ${latestOperationRequestId.slice(0, 12)}…` : "Receipt by request ID"}</small></summary>
-      <div>
-        <div className="goal-form-columns">
-          <label className="goal-field"><span>Request ID <small>definition, Roadmap, or generation</small></span><input maxLength={300} value={operationRequestId} onChange={(event) => setOperationRequestId(event.target.value)} placeholder="Paste the original request ID" /></label>
-          <div><span className="eyebrow">Durable receipt</span><p data-meta>Inspect an interrupted or uncertain Goal operation without repeating it.</p><button className="control" disabled={operationBusy || !operationRequestId.trim()} onClick={() => void recoverOperation()}>{operationBusy ? "Looking up…" : "Inspect receipt"}</button></div>
-        </div>
-        {operationError && <p className="goal-field-error" role="alert">{operationError}</p>}
-        {operationReceipt && <>
-          <div className="goal-run-links">
-            <div><code>{statusLabelForValue(operationReceipt.state)}</code><span>{statusLabelForValue(operationReceipt.operationType)} · updated {dateLabel(operationReceipt.updatedAt)}</span></div>
-            <div><code>{operationReceipt.requestId}</code><span data-mono>payload {operationReceipt.payloadHash}</span></div>
-          </div>
-          <details className="audit-disclosure">
-            <summary><span>Payload and outcome</span><small>Raw receipt</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
-            <div className="tool-call-body"><pre>{JSON.stringify({ payload: operationReceipt.payload, result: operationReceipt.result, error: operationReceipt.error, createdAt: operationReceipt.createdAt, completedAt: operationReceipt.completedAt }, null, 2)}</pre></div>
-          </details>
-        </>}
+    <section hidden={section !== "controls"} aria-label="Goal operation recovery">
+      <div className="section-heading"><strong>Operation recovery</strong><small>{latestOperationRequestId ? `Last request ${latestOperationRequestId.slice(0, 12)}…` : "Receipt by request ID"}</small></div>
+      <div className="goal-form-columns">
+        <label className="goal-field"><span>Request ID <small>definition, Roadmap, or generation</small></span><input maxLength={300} value={operationRequestId} onChange={(event) => setOperationRequestId(event.target.value)} placeholder="Paste the original request ID" /></label>
+        <div><span className="eyebrow">Durable receipt</span><p data-meta>Inspect an interrupted or uncertain Goal operation without repeating it.</p><button className="control" disabled={operationBusy || !operationRequestId.trim()} onClick={() => void recoverOperation()}>{operationBusy ? "Looking up…" : "Inspect receipt"}</button></div>
       </div>
-    </details>
+      {operationError && <p className="goal-field-error" role="alert">{operationError}</p>}
+      {operationReceipt && <>
+        <div className="goal-run-links">
+          <div><code>{statusLabelForValue(operationReceipt.state)}</code><span>{statusLabelForValue(operationReceipt.operationType)} · updated {dateLabel(operationReceipt.updatedAt)}</span></div>
+          <div><code>{operationReceipt.requestId}</code><span data-mono>payload {operationReceipt.payloadHash}</span></div>
+        </div>
+        <details className="audit-disclosure">
+          <summary><span>Payload and outcome</span><small>Raw receipt</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+          <div className="tool-call-body"><pre>{JSON.stringify({ payload: operationReceipt.payload, result: operationReceipt.result, error: operationReceipt.error, createdAt: operationReceipt.createdAt, completedAt: operationReceipt.completedAt }, null, 2)}</pre></div>
+        </details>
+      </>}
+    </section>
   </article>;
 }
 
@@ -662,6 +669,12 @@ function lines(value: string): string[] { return value.split("\n").map((item) =>
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }
 function nextKey(existing: string[], prefix: string): string { let index = existing.length + 1; while (existing.includes(`${prefix}_${index}`)) index += 1; return `${prefix}_${index}`; }
+
+function goalSectionForAction(kind: WorkspaceGoal["nextAction"]["kind"]): GoalSection {
+  return ["generate_roadmap", "review_roadmap", "run_roadmap_item", "view_running_task", "resolve_problem"].includes(kind)
+    ? "roadmap"
+    : "overview";
+}
 
 function statusLabel(status: WorkspaceGoal["status"]): string {
   return ({ draft: "Needs review", active: "In progress", paused: "Paused", ready_to_close: "Ready to close", completed: "Completed", cancelled: "Cancelled" } as const)[status];

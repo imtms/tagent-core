@@ -20,6 +20,7 @@ import { goalStatusTone } from "../apps/web-console/src/goal-display.js";
 import { MemoryCatalog, MemoryCoreProjection, MemoryJobLists, MemoryRecallResults } from "../apps/web-console/src/MemoryBrowser.js";
 import { RecordDetail, TopicDetail } from "../apps/web-console/src/MemoryDetails.js";
 import { MemoryPanel, MemoryUndoNotice } from "../apps/web-console/src/MemoryPanel.js";
+import { PanelTabs } from "../apps/web-console/src/PanelTabs.js";
 import { WorkspaceSkillsControl } from "../apps/web-console/src/WorkspaceSkillsControl.js";
 import { nextConversationPinState } from "../apps/web-console/src/conversation-scroll.js";
 import { deriveCurrentOperation } from "../apps/web-console/src/current-operation.js";
@@ -281,11 +282,33 @@ describe("Web workbench behavior", () => {
     expect(empty).not.toContain("textarea");
     expect(empty).not.toContain("Save projection");
     expect(generated).toContain("revision 2 · 2 tokens");
-    expect(generated).toContain("<details");
+    expect(generated).toContain('<section class="memory-list-section">');
+    expect(generated).not.toContain("<details");
     expect(generated).toContain("textarea");
     expect(generated).toContain("Regenerate");
     expect(generated).toContain("Save projection");
     expect(busy).toContain("disabled");
+  });
+
+  it("renders stable panel views with one current destination", () => {
+    const markup = renderToStaticMarkup(<PanelTabs
+      label="Memory views"
+      value="recall"
+      tabs={[
+        { value: "catalog", label: "Catalog", meta: "6" },
+        { value: "recall", label: "Recall", meta: "2" },
+        { value: "core", label: "Core", meta: "v1" },
+        { value: "operations", label: "Operations" },
+      ] as const}
+      onChange={() => undefined}
+    />);
+
+    expect(markup).toContain('<nav class="panel-tabs" aria-label="Memory views">');
+    expect(markup).toContain('aria-current="page"><span>Recall</span>');
+    expect(markup.match(/class="control"/g)).toHaveLength(4);
+    expect(markup).toContain("Catalog");
+    expect(markup).toContain("Core");
+    expect(markup).toContain("Operations");
   });
 
   it("keeps a forgotten Memory recoverable from the immediate result", () => {
@@ -465,7 +488,7 @@ describe("Web workbench behavior", () => {
     expect(goalStatusTone("cancelled")).toBe("danger");
   });
 
-  it("renders Goal supporting disclosures only when inspectable data exists", () => {
+  it("keeps complete Goal workflows reachable through stable views", () => {
     const definition: WorkspaceGoalDefinition = {
       title: "Refine the console",
       outcome: "The console has one coherent visual language.",
@@ -646,7 +669,7 @@ describe("Web workbench behavior", () => {
     expect(empty).not.toContain("Scope and boundaries");
     expect(empty).not.toContain("Linked TaskRuns");
     expect(empty).not.toContain("Roadmap v");
-    expect(empty).not.toContain("No Roadmap yet");
+    expect(empty).toContain("No Roadmap yet");
     expect(empty).not.toContain("Approve the Goal, then generate its initial Roadmap.");
     expect(empty).not.toContain("Next action");
     expect(empty).not.toContain("Goal ended");
@@ -654,6 +677,11 @@ describe("Web workbench behavior", () => {
     expect(empty).not.toContain("0% of required criteria verified");
     expect(empty).not.toContain("No explicit scope items");
     expect(empty).not.toContain("No TaskRun is linked yet");
+    expect(empty).toContain('aria-label="Goal views"');
+    expect(empty).toContain("Overview");
+    expect(empty).toContain("Roadmap");
+    expect(empty).toContain("Activity");
+    expect(empty).toContain("Controls");
     expect(awaitingRoadmap).toContain("Next action");
     expect(awaitingRoadmap).toContain("Generate Roadmap");
     expect(awaitingRoadmap).toContain("Create manually");
@@ -661,10 +689,11 @@ describe("Web workbench behavior", () => {
     expect(awaitingRoadmap).toContain("Request changes");
     expect(awaitingRoadmap).toContain("Operation recovery");
     expect(awaitingRoadmap).toContain("Receipt by request ID");
+    expect(awaitingRoadmap).toContain('aria-current="page"><span>Roadmap</span>');
     expect(recoverable).toContain("Last request request-1234…");
     expect(recoverable).toContain('value="request-1234567890"');
     expect(awaitingRoadmap).not.toContain("Roadmap v");
-    expect(awaitingRoadmap).not.toContain("No Roadmap yet");
+    expect(awaitingRoadmap).toContain("No Roadmap yet");
     expect(awaitingRoadmap).not.toContain("goal-progress-track");
     expect(readyToClose).toContain("Next action");
     expect(readyToClose).toContain("Verified criteria are ready");

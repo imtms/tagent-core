@@ -82,7 +82,7 @@ Core Memory is generated from high-value active records. A capture refreshes onl
 
 Memory administration uses `/api/v1/admin/memory/*`, including recall, capture, jobs/status, export, forget, restore, reindex, governance, feedback, and Core Memory snapshot operations. Use the `@tagent/abi/admin/v1` schemas rather than copying payload shapes from old routes.
 
-The first-party Console keeps Hot/Warm Records and Cold Topic descriptors as explicit catalog views rather than stacking equivalent text twice. Both remain searchable, pageable and governable; Record/Topic detail, lifecycle controls, Recall diagnostics, Core Memory projection, jobs, export and receipt-ID restore remain reachable from the same Memory center.
+The first-party Console separates four user tasks into stable Memory-center views: Catalog filters the loaded Hot/Warm Record or Cold Topic directory, Recall performs semantic retrieval across all tiers, Core edits the stable injection snapshot, and Operations owns Reindex, receipt-ID restore, and job history. Record/Topic detail returns to the Catalog or Recall view that opened it. Both catalog layers remain searchable, pageable and governable; lifecycle controls, Recall diagnostics, Core Memory projection, jobs, export and restore remain reachable without stacking equivalent text or hiding the complete workflow below a chain of disclosures.
 
 When service credentials are configured, routes require `admin` and/or their declared governance scope plus resource-scope checks. The independent Web Console uses versioned console/admin projections through the Core client.
 

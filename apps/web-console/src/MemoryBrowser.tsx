@@ -150,14 +150,12 @@ export function MemoryCoreProjection({
     );
   }
   return (
-    <details className="memory-disclosure memory-list-section">
-      <summary>
-        <BrainCircuit size={ICON_SIZE.sm} />
-        <strong>Core Memory snapshot</strong>
-        <small>revision {core.revision}{core.tokenCount > 0 ? ` · ${formatCount(core.tokenCount, "token")}` : ""}</small>
-        <ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />
-      </summary>
-      <div className="memory-disclosure-body">
+    <section className="memory-list-section">
+      <div className="section-heading">
+        <div><span className="eyebrow">Stable injection</span><h3>Core Memory snapshot</h3><small>revision {core.revision}{core.tokenCount > 0 ? ` · ${formatCount(core.tokenCount, "token")}` : ""}</small></div>
+        <button className="control" disabled={busy} onClick={onGenerate}>Regenerate</button>
+      </div>
+      <div>
         <div className="goal-field">
           <textarea
             aria-label="Core Memory projection"
@@ -168,11 +166,10 @@ export function MemoryCoreProjection({
           />
         </div>
         <div className="memory-inline-actions">
-          <button className="control" disabled={busy} onClick={onGenerate}>Regenerate</button>
           <button className="control" data-variant="primary" disabled={busy} onClick={onSave}>Save projection</button>
         </div>
       </div>
-    </details>
+    </section>
   );
 }
 
@@ -191,20 +188,17 @@ export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex, onRestore }
   const restoreRecords = ids(recordIds);
   const restoreTopics = ids(topicIds);
   return (
-    <details className="memory-disclosure memory-list-section">
-      <summary>
-        <Activity size={ICON_SIZE.sm} />
-        <strong>Memory operations</strong>
-        <small>{total > 0 ? formatCount(total, "job") : "Maintenance"}</small>
-        <ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />
-      </summary>
-      <div className="memory-disclosure-body">
+    <section className="memory-list-section">
+      <div className="section-heading">
+        <div><span className="eyebrow">Maintenance and recovery</span><h3>Memory operations</h3><small>{total > 0 ? formatCount(total, "job") : "No recent jobs"}</small></div>
         <div className="memory-operations-actions">
           <button className="control" onClick={onReindex} disabled={busy}>
             <RefreshCw size={ICON_SIZE.sm} className={busy ? "spin" : ""} />
             Reindex durable memory
           </button>
         </div>
+      </div>
+      <div>
         {onRestore && <details className="memory-disclosure">
           <summary><RotateCcw size={ICON_SIZE.sm} /><strong>Restore forgotten memory</strong><small>Requires a receipt ID</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
           <div className="memory-disclosure-body">
@@ -247,8 +241,9 @@ export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex, onRestore }
             })}
           </div>
         </section>}
+        {total === 0 && <p data-meta>Capture and reindex jobs will appear here with their current state and outcome.</p>}
       </div>
-    </details>
+    </section>
   );
 }
 

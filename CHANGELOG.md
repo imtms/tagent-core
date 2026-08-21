@@ -6,6 +6,9 @@
 
 - Made Goal definition, Roadmap revision, and Roadmap generation request IDs user-visible and directly reusable in operation recovery, made the next action name its concrete Roadmap item, and made lifecycle controls respect queued or running Roadmap work.
 - Replaced the duplicated Hot/Warm-plus-Cold Memory text wall with an explicit catalog-layer selector, invalidated stale Recall results when their cue or filters change, refreshed details after feedback, shared one mutation busy authority, limited deleted Records to recovery, and prevented repeated Core snapshot generation.
+- Replaced the remaining Goal accordion chain with stable Overview, Roadmap, Activity, and Controls views while keeping the current action and progress visible above the navigation; every definition, execution, audit, revision, lifecycle, and receipt-recovery workflow remains reachable.
+- Split Memory into stable Catalog, Recall, Core, and Operations views so local directory filtering no longer masquerades as semantic Recall, and made the Core editor and maintenance ledger directly visible in their own surfaces instead of burying them below the catalog.
+- Kept the shared neutral hairline system and restrained green selection mark; narrow layouts retain every view while suppressing non-essential tab counters to avoid cramped 390px navigation.
 
 ## [0.8.22] - 2026-08-22
 

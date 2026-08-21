@@ -105,6 +105,8 @@ Every write requires a stable request ID. Definition/Roadmap revision and genera
 
 The first-party Console creates definition-revision, Roadmap-revision and generation request IDs before dispatch, persists the latest ID per Goal in browser storage and pre-fills receipt recovery after Goal switches or reloads. This keeps an interrupted or outcome-unknown operation inspectable without asking the user for an identifier the UI never showed.
 
+The Goal reading surface keeps the definition, status, progress and concrete next action above four stable views. Overview contains completion criteria and boundaries; Roadmap contains revision, approval and TaskRun launch/open actions; Activity contains linked Runs, evidence and decisions; Controls contains lifecycle, revision requests and operation receipt recovery. The current next action selects the most relevant initial view, but all four remain one click away. Raw receipt payload and outcome stay in a nested disclosure after the durable operation identity. This hierarchy reduces the visible text wall without removing Goal operations or depending on a vertical chain of top-level accordions.
+
 Goal reads expose Roadmap `runStatus`/`retryable` and may include `nextAction.taskRunId` when the Run needing attention no longer owns `currentRunId`. State, stale-revision, pending-work and idempotency conflicts use HTTP 409 rather than being flattened into validation errors.
 
 ## Persistence
