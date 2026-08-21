@@ -10,7 +10,7 @@ export { authenticatedCoreRequest, downloadArtifact } from "./api-transport";
 export { subscribe } from "./api-transport";
 export type * from "./api-types";
 export type { SkillRevision, SkillSummary } from "./skill-api";
-export type { WorkspaceGoal, WorkspaceGoalSummary, WorkspaceGoalDefinition, WorkspaceGoalRoadmap, WorkspaceGoalRoadmapItem, WorkspaceGoalDecision, WorkspaceGoalTaskRunStart } from "./goal-api";
+export type { WorkspaceGoal, WorkspaceGoalSummary, WorkspaceGoalDefinition, WorkspaceGoalRoadmap, WorkspaceGoalRoadmapItem, WorkspaceGoalDecision, WorkspaceGoalOperationReceipt, WorkspaceGoalTaskRunStart } from "./goal-api";
 
 const webOrigin = { surface: "web" as const, gatewayActorId: "local-web", sourceId: "web-console" };
 

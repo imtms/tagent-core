@@ -18,6 +18,7 @@ import {
   api,
   type WorkspaceGoal,
   type WorkspaceGoalDefinition,
+  type WorkspaceGoalOperationReceipt,
   type WorkspaceGoalRoadmap,
   type WorkspaceGoalRoadmapItem,
   type WorkspaceGoalSummary,
@@ -452,8 +453,13 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
   const defaultChangeTargetId = changeTargets.at(-1)?.id ?? "";
   const [changeTargetId, setChangeTargetId] = useState(defaultChangeTargetId);
   const [changeReason, setChangeReason] = useState("");
+  const [operationRequestId, setOperationRequestId] = useState("");
+  const [operationReceipt, setOperationReceipt] = useState<WorkspaceGoalOperationReceipt | null>(null);
+  const [operationError, setOperationError] = useState("");
+  const [operationBusy, setOperationBusy] = useState(false);
   useEffect(() => setSelectedItems(approval?.approvedItemIds ?? roadmap?.items.map((item) => item.id) ?? []), [goal.id, goal.roadmap?.id, goal.roadmap?.contentHash, approval?.id]);
   useEffect(() => { setChangeTargetId(defaultChangeTargetId); setChangeReason(""); }, [goal.id, defaultChangeTargetId]);
+  useEffect(() => { setOperationRequestId(""); setOperationReceipt(null); setOperationError(""); }, [goal.id]);
   const evidenceByCriterion = useMemo(() => new Map((definition?.criteria ?? []).map((criterion) => [criterion.key, goal.evidenceLinks.filter((link) => link.goalRevision === goal.definition?.revision && link.criterionKey === criterion.key)])), [definition, goal.definition?.revision, goal.evidenceLinks]);
   const progressByItem = useMemo(() => new Map(goal.roadmapProgress.map((item) => [item.itemId, item])), [goal.roadmapProgress]);
   const canEdit = !["completed", "cancelled"].includes(goal.status) && !goal.currentRunId;
@@ -482,6 +488,20 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
   const showsNextAction = goal.nextAction.actor !== "none" && actionable;
   const actionDisabled = busy || goal.nextAction.kind === "review_roadmap" && selectedItems.length === 0;
   const canCreateRoadmapManually = showsNextAction && canEdit && goal.nextAction.kind === "generate_roadmap";
+  const recoverOperation = async () => {
+    const requestId = operationRequestId.trim();
+    if (!requestId || operationBusy) return;
+    setOperationBusy(true);
+    setOperationError("");
+    setOperationReceipt(null);
+    try {
+      setOperationReceipt(await api.workspaceGoalOperation(goal.id, requestId));
+    } catch (cause) {
+      setOperationError(message(cause));
+    } finally {
+      setOperationBusy(false);
+    }
+  };
 
   return <article className="goal-view">
     <header className="goal-hero">
@@ -562,7 +582,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
       </div>
     </details>}
 
-    {!['completed', 'cancelled'].includes(goal.status) && <details className="goal-management">
+    {!['completed', 'cancelled'].includes(goal.status) && <details>
       <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Goal controls</span><small>Lifecycle and revision</small></summary>
       <div>
         <div className="memory-inline-actions">{["active", "ready_to_close"].includes(goal.status) && <button className="control" disabled={busy || Boolean(goal.currentRunId)} onClick={() => void decide("pause")}>Pause Goal</button>}{goal.status === "paused" && <button className="control" data-variant="primary" disabled={busy} onClick={() => void decide("resume")}>Resume Goal</button>}{goal.status === "ready_to_close" && <button className="control" data-variant="primary" disabled={busy} onClick={() => { if (window.confirm("Close this Goal with the verified evidence? This cannot be undone.")) void decide("close"); }}>Close Goal</button>}<button className="control" data-tone="danger" disabled={busy || Boolean(goal.currentRunId)} onClick={() => { if (window.confirm("Cancel this Goal? This cannot be undone.")) void decide("cancel"); }}>Cancel Goal</button></div>
@@ -573,6 +593,27 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
         </div>}
       </div>
     </details>}
+
+    <details>
+      <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Operation recovery</span><small>Receipt by request ID</small></summary>
+      <div>
+        <div className="goal-form-columns">
+          <label className="goal-field"><span>Request ID <small>definition, Roadmap, or generation</small></span><input maxLength={300} value={operationRequestId} onChange={(event) => setOperationRequestId(event.target.value)} placeholder="Paste the original request ID" /></label>
+          <div><span className="eyebrow">Durable receipt</span><p data-meta>Inspect an interrupted or uncertain Goal operation without repeating it.</p><button className="control" disabled={operationBusy || !operationRequestId.trim()} onClick={() => void recoverOperation()}>{operationBusy ? "Looking up…" : "Inspect receipt"}</button></div>
+        </div>
+        {operationError && <p className="goal-field-error" role="alert">{operationError}</p>}
+        {operationReceipt && <>
+          <div className="goal-run-links">
+            <div><code>{statusLabelForValue(operationReceipt.state)}</code><span>{statusLabelForValue(operationReceipt.operationType)} · updated {dateLabel(operationReceipt.updatedAt)}</span></div>
+            <div><code>{operationReceipt.requestId}</code><span data-mono>payload {operationReceipt.payloadHash}</span></div>
+          </div>
+          <details className="audit-disclosure">
+            <summary><span>Payload and outcome</span><small>Raw receipt</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+            <div className="tool-call-body"><pre>{JSON.stringify({ payload: operationReceipt.payload, result: operationReceipt.result, error: operationReceipt.error, createdAt: operationReceipt.createdAt, completedAt: operationReceipt.completedAt }, null, 2)}</pre></div>
+          </details>
+        </>}
+      </div>
+    </details>
   </article>;
 }
 
@@ -620,7 +661,7 @@ function decisionLabel(kind: WorkspaceGoal["decisions"][number]["kind"]): string
 }
 
 function statusLabelForValue(value: string): string {
-  return value.replaceAll("_", " ").replace(/^./, (character) => character.toUpperCase());
+  return value.replaceAll("_", " ").replaceAll(".", " ").replace(/^./, (character) => character.toUpperCase());
 }
 
 function dateLabel(value: number): string {

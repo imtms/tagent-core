@@ -33,7 +33,7 @@ import {
   MemoryJobLists,
   MemoryRecallResults,
 } from "./MemoryBrowser";
-import { memoryContent, memoryTitle } from "./memory-display";
+import { memoryContent, memoryTextRepeats, memoryTitle, memoryTitleRepeatsContent } from "./memory-display";
 import {
   MEMORY_PAGE_REQUEST_LIMIT,
   memoryPageWindow,
@@ -347,13 +347,14 @@ export function MemoryPanel({
     }
   }
   async function forgetRecord(record: WarmMemory) {
-    if (!window.confirm(`Forget “${memoryTitle(record)}”?`)) return;
+    const label = memoryTitleRepeatsContent(record) ? memoryContent(record) : memoryTitle(record);
+    if (!window.confirm(`Forget “${label}”?`)) return;
     setBusy(true);
     try {
       const result = await api.memoryForget(scope, [record.id]);
       setSelectedRecord(null);
       setMessage("");
-      setRecentForget({ ids: [record.id], topicIds: [], label: memoryTitle(record), purgeAfter: result.purgeAfter });
+      setRecentForget({ ids: [record.id], topicIds: [], label, purgeAfter: result.purgeAfter });
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -424,14 +425,15 @@ export function MemoryPanel({
     }
   }
   async function forgetTopic(topic: ColdTopic) {
-    if (!window.confirm(`Forget the Cold topic “${topic.descriptor.title}”?`))
+    const label = memoryTextRepeats(topic.descriptor.title, topic.descriptor.description) ? topic.descriptor.description : topic.descriptor.title;
+    if (!window.confirm(`Forget the Cold topic “${label}”?`))
       return;
     setBusy(true);
     try {
       const result = await api.memoryForget(scope, undefined, [topic.descriptor.topicId]);
       setSelectedTopic(null);
       setMessage("");
-      setRecentForget({ ids: [], topicIds: [topic.descriptor.topicId], label: topic.descriptor.title, purgeAfter: result.purgeAfter });
+      setRecentForget({ ids: [], topicIds: [topic.descriptor.topicId], label, purgeAfter: result.purgeAfter });
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

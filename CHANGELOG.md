@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## [0.8.19] - 2026-08-21
+
+### Goal operation recovery
+
+- Added the previously missing Console lookup for durable Workspace Goal operation receipts, so an interrupted definition, Roadmap, or generation request can be inspected by request ID without repeating an uncertain operation.
+- Kept recovery secondary by default: state, operation identity, update time, request ID, and payload hash appear first, while raw payload, result, error, and timestamps remain in a nested disclosure.
+- Made Goal audit rows wrap-safe and normalized dotted operation labels for the compact activity ledger.
+
+### Memory hierarchy and readability
+
+- Removed generated title/content repetition consistently from Memory records, Topic catalogs, Recall results, Topic detail, Forget confirmations, and immediate Undo notices.
+- Restored outer gutters and section rhythm around Recall results, diagnostics, metadata, provenance, lifecycle, Topic routes, and storage details without adding card walls or broad color fills.
+- Kept Memory correction, confirmation, feedback, Forget, Undo, receipt recovery, diagnostics, and raw metadata fully available behind the existing quiet disclosure hierarchy.
+
+### Design maintenance and compatibility
+
+- Documented durable Goal receipt recovery and the shared Record/Topic de-duplication rule while retaining the Hermit/Linear neutral hairline system at 773 lines, 395 rules, 500 selectors, and 1,450 declarations.
+- The HTTP major, public ABI shapes, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` protocol are unchanged. No data migration is required. Deploy matching `0.8.19` Core, Web Console, ABI, and Core Client artifacts.
+
 ## [0.8.18] - 2026-08-21
 
 ### Goal hierarchy and audit

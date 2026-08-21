@@ -3,7 +3,7 @@ import { Check, ChevronRight, Pencil, RotateCcw, ThumbsDown, ThumbsUp, Trash2 } 
 import type { ColdTopic, PreferenceRecord, WarmMemory } from "./api";
 import { ICON_SIZE } from "./icon-size";
 import { Markdown } from "./LazyMarkdown";
-import { formatMemoryDate, memoryContent, memorySignal, memoryTitle, memoryTitleRepeatsContent } from "./memory-display";
+import { formatMemoryDate, memoryContent, memorySignal, memoryTextRepeats, memoryTitle, memoryTitleRepeatsContent } from "./memory-display";
 
 export function RecordDetail({
   record,
@@ -84,11 +84,12 @@ export function RecordDetail({
 }
 
 export function TopicDetail({ topic, onForget, onRestore }: { topic: ColdTopic; onForget: () => void; onRestore: () => void }) {
+  const repeatedDescription = memoryTextRepeats(topic.descriptor.title, topic.descriptor.description);
   return (
     <div className="memory-detail-content">
       <span className="memory-kind">cold · {topic.descriptor.kind}</span>
-      <h3>{topic.descriptor.title}</h3>
-      <p>{topic.descriptor.description}</p>
+      <h3>{repeatedDescription ? topic.descriptor.description : topic.descriptor.title}</h3>
+      {!repeatedDescription && <p>{topic.descriptor.description}</p>}
       <small data-mono>revision {topic.revision.revision} · {topic.revision.tokenCount.toLocaleString()} tokens · {topic.descriptor.status} · full page</small>
       <section className="cold-document"><span>Canonical document</span><div><Markdown>{topic.body}</Markdown></div></section>
       <details className="memory-disclosure">

@@ -18,7 +18,7 @@ import { ConversationMessage, PendingConversationMessage } from "../apps/web-con
 import { GoalView } from "../apps/web-console/src/GoalsPanel.js";
 import { goalStatusTone } from "../apps/web-console/src/goal-display.js";
 import { MemoryCatalog, MemoryCoreProjection, MemoryJobLists, MemoryRecallResults } from "../apps/web-console/src/MemoryBrowser.js";
-import { RecordDetail } from "../apps/web-console/src/MemoryDetails.js";
+import { RecordDetail, TopicDetail } from "../apps/web-console/src/MemoryDetails.js";
 import { MemoryPanel, MemoryUndoNotice } from "../apps/web-console/src/MemoryPanel.js";
 import { WorkspaceSkillsControl } from "../apps/web-console/src/WorkspaceSkillsControl.js";
 import { nextConversationPinState } from "../apps/web-console/src/conversation-scroll.js";
@@ -315,11 +315,28 @@ describe("Web workbench behavior", () => {
     };
     const empty = renderToStaticMarkup(<MemoryCatalog records={[]} topics={[]} {...props} />);
     const recordsOnly = renderToStaticMarkup(<MemoryCatalog records={[record]} topics={[]} {...props} />);
+    const repeatedTopic = "Use the current release contract.";
+    const topicsOnly = renderToStaticMarkup(<MemoryCatalog records={[]} topics={[{
+      topicId: "release", scope: record.scope, kind: "fact", title: `Fact: ${repeatedTopic}`, description: repeatedTopic,
+      aliases: [], entityIds: [], relatedTopicIds: [], status: "active", createdAt: 1, updatedAt: 2,
+    }]} {...props} />);
+    const topicDetail = renderToStaticMarkup(<TopicDetail topic={{
+      descriptor: {
+        topicId: "release", scope: record.scope, kind: "fact", title: `Fact: ${repeatedTopic}`, description: repeatedTopic,
+        aliases: [], entityIds: [], relatedTopicIds: [], status: "active", createdAt: 1, updatedAt: 2,
+      },
+      revision: { id: "revision-1", revision: 1, checksum: "abc", tokenCount: 4, createdAt: 1 },
+      body: "Canonical release contract.",
+    }} onForget={() => undefined} onRestore={() => undefined} />);
 
     expect(empty).toBe("");
     expect(recordsOnly).toContain("Memory cards");
     expect(recordsOnly).not.toContain("Canonical topic pages");
     expect(recordsOnly).not.toContain("No matching Cold topics");
+    expect(topicsOnly).not.toContain(`Fact: ${repeatedTopic}`);
+    expect(topicsOnly.match(/Use the current release contract\./g)).toHaveLength(1);
+    expect(topicDetail).not.toContain(`Fact: ${repeatedTopic}`);
+    expect(topicDetail.match(/Use the current release contract\./g)).toHaveLength(1);
   });
 
   it("omits static Memory availability chrome and zero-data summaries", () => {
@@ -600,6 +617,8 @@ describe("Web workbench behavior", () => {
     expect(awaitingRoadmap).toContain("Create manually");
     expect(awaitingRoadmap).toContain("Request a revision");
     expect(awaitingRoadmap).toContain("Request changes");
+    expect(awaitingRoadmap).toContain("Operation recovery");
+    expect(awaitingRoadmap).toContain("Receipt by request ID");
     expect(awaitingRoadmap).not.toContain("Roadmap v");
     expect(awaitingRoadmap).not.toContain("No Roadmap yet");
     expect(awaitingRoadmap).not.toContain("goal-progress-track");

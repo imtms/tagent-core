@@ -8,6 +8,7 @@ export type WorkspaceGoalDefinition = ConsoleV1.ConsoleWorkspaceGoalDefinition;
 export type WorkspaceGoalRoadmap = ConsoleV1.ConsoleWorkspaceGoalRoadmap;
 export type WorkspaceGoalRoadmapItem = ConsoleV1.ConsoleWorkspaceGoalRoadmapItem;
 export type WorkspaceGoalDecision = ConsoleV1.ConsoleWorkspaceGoalDecision;
+export type WorkspaceGoalOperationReceipt = ConsoleV1.ConsoleWorkspaceGoalOperationReceipt;
 
 export interface WorkspaceGoalTaskRunStart {
   goal: WorkspaceGoal;
@@ -27,6 +28,7 @@ export function createGoalApi(request: GoalApiRequest) {
     reviseWorkspaceGoal: (goalId: string, definition: WorkspaceGoalDefinition) => request(`/api/v1/console/workspace-goals/${goalId}/definition-revisions`, { method: "POST", body: JSON.stringify({ definition, requestId: createRequestId(), actorId: "web_console" }) }, (payload) => payload as Record<string, unknown>),
     addWorkspaceGoalRoadmap: (goalId: string, content: WorkspaceGoalRoadmap) => request(`/api/v1/console/workspace-goals/${goalId}/roadmaps`, { method: "POST", body: JSON.stringify({ content, requestId: createRequestId(), actorId: "web_console" }) }, (payload) => withCoreAbi((abi) => abi.decodeAbi(abi.ConsoleWorkspaceGoalSchema, payload))),
     generateWorkspaceGoalRoadmap: (goalId: string) => request(`/api/v1/console/workspace-goals/${goalId}/roadmap/generate`, { method: "POST", body: JSON.stringify({ requestId: createRequestId(), actorId: "web_console" }) }, (payload) => withCoreAbi((abi) => abi.decodeAbi(abi.ConsoleWorkspaceGoalSchema, payload))),
+    workspaceGoalOperation: (goalId: string, requestId: string) => request(`/api/v1/console/workspace-goals/${encodeURIComponent(goalId)}/operations/${encodeURIComponent(requestId)}`, undefined, (payload) => withCoreAbi((abi) => abi.decodeAbi(abi.ConsoleWorkspaceGoalOperationReceiptSchema, payload))),
     startWorkspaceGoalRoadmapItem: (goalId: string, roadmapItemId: string) => request(`/api/v1/console/workspace-goals/${goalId}/task-runs`, { method: "POST", body: JSON.stringify({ roadmapItemId, requestId: createRequestId() }) }, decodeWorkspaceGoalTaskRunStart),
     decideWorkspaceGoal: (goalId: string, targetRevisionId: string, targetHash: string, kind: "approve_goal" | "approve_roadmap" | "request_change" | "pause" | "resume" | "close" | "cancel", approvedItemIds: string[] = [], reason = "") => request(`/api/v1/console/workspace-goals/${goalId}/decisions`, { method: "POST", body: JSON.stringify({ requestId: createRequestId(), targetRevisionId, targetHash, kind, approvedItemIds, reason, actorId: "web_console" }) }, (payload) => withCoreAbi((abi) => abi.decodeAbi(abi.ConsoleWorkspaceGoalSchema, payload))),
   };

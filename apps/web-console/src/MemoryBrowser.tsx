@@ -18,7 +18,7 @@ import type {
 } from "./api";
 import { formatCount } from "./count-format";
 import { ICON_SIZE } from "./icon-size";
-import { formatMemoryDate, memoryContent, memoryTitle, memoryTitleRepeatsContent } from "./memory-display";
+import { formatMemoryDate, memoryContent, memoryTextRepeats, memoryTitle, memoryTitleRepeatsContent } from "./memory-display";
 
 interface MemoryRecallResultsProps {
   results: RecallResult | null;
@@ -83,25 +83,27 @@ export function MemoryRecallResults({
   const coldRoutes = results.trace.coldTopicRoutes ?? [];
   const hasDiagnostics = Boolean(results.trace.embedding || results.trace.policyTransforms || candidates.length || coldRoutes.length);
   return (
-    <section>
+    <section className="memory-list-section">
       <div className="section-heading">
         <div>
           <span className="eyebrow">Dynamic recall</span>
           <h3>Results for “{query.trim()}”</h3>
         </div>
-        <button onClick={onClear}>Clear</button>
+        <button className="control" onClick={onClear}>Clear</button>
       </div>
       {hasResults && <div className="memory-list">
-        {results.cards.map((card) => (
-          <button key={card.id} onClick={() => onOpenRecord(card.id)}>
-            <div><span className="memory-kind">{card.kind}</span><strong>{card.title}</strong><p>{card.content}</p><small>{card.tier} · {Math.round(card.confidence * 100)}% confidence · {Math.round(card.score * 100)}% relevance{card.retrievalChannels?.length ? ` · ${card.retrievalChannels.join(" + ")}` : ""}</small></div>
-          </button>
-        ))}
-        {results.coldTopics.map((topic) => (
-          <button key={topic.descriptor.topicId} onClick={() => onSelectTopic(topic)}>
-            <div><span className="memory-kind">cold topic</span><strong>{topic.descriptor.title}</strong><p>{topic.descriptor.description}</p><small>revision {topic.revision.revision} · full page</small></div>
-          </button>
-        ))}
+        {results.cards.map((card) => {
+          const repeated = memoryTextRepeats(card.title, card.content);
+          return <button key={card.id} onClick={() => onOpenRecord(card.id)}>
+            <div><span className="memory-kind">{card.kind}</span><strong>{repeated ? card.content : card.title}</strong>{!repeated && <p>{card.content}</p>}<small>{card.tier} · {Math.round(card.confidence * 100)}% confidence · {Math.round(card.score * 100)}% relevance{card.retrievalChannels?.length ? ` · ${card.retrievalChannels.join(" + ")}` : ""}</small></div>
+          </button>;
+        })}
+        {results.coldTopics.map((topic) => {
+          const repeated = memoryTextRepeats(topic.descriptor.title, topic.descriptor.description);
+          return <button key={topic.descriptor.topicId} onClick={() => onSelectTopic(topic)}>
+            <div><span className="memory-kind">cold topic</span><strong>{repeated ? topic.descriptor.description : topic.descriptor.title}</strong>{!repeated && <p>{topic.descriptor.description}</p>}<small>revision {topic.revision.revision} · full page</small></div>
+          </button>;
+        })}
       </div>}
       {!hasResults && <div className="memory-empty"><BrainCircuit size={ICON_SIZE.xl} /><strong>No recall matches</strong><p>Try a broader phrase or inspect the memory catalog below.</p></div>}
       {hasDiagnostics ? <details className="memory-disclosure">
@@ -320,17 +322,18 @@ export function MemoryCatalog({
           {topics.length > 0 && <small>{formatCount(topics.length, "topic")} loaded</small>}
         </div>
         {topics.length > 0 && <div className="memory-list">
-            {topics.map((topic) => (
-              <button key={topic.topicId} onClick={() => onOpenTopic(topic.topicId)} aria-current={selectedTopicId === topic.topicId ? "true" : undefined}>
+            {topics.map((topic) => {
+              const repeated = memoryTextRepeats(topic.title, topic.description);
+              return <button key={topic.topicId} onClick={() => onOpenTopic(topic.topicId)} aria-current={selectedTopicId === topic.topicId ? "true" : undefined}>
                 <Snowflake size={ICON_SIZE.md} />
                 <div>
                   <span className="memory-kind">{topic.kind}</span>
-                  <strong>{topic.title}</strong>
-                  <p>{topic.description}</p>
+                  <strong>{repeated ? topic.description : topic.title}</strong>
+                  {!repeated && <p>{topic.description}</p>}
                   <small>{topic.coldRevisionId ? "cold page" : "descriptor"} · {topic.status} · {formatMemoryDate(topic.updatedAt)}</small>
                 </div>
-              </button>
-            ))}
+              </button>;
+            })}
           </div>}
         {hasMoreTopics && (
           <button className="memory-load-more" onClick={onLoadMoreTopics} disabled={loadingMoreTopics}>

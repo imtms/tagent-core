@@ -648,6 +648,7 @@ details[open] > summary .tool-chevron { transform: rotate(90deg); }
 .memory-tags, .memory-source-list, .memory-inline-actions, .memory-operations-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .memory-tags code, .memory-source-list code { padding: 2px var(--space-2); border-radius: var(--radius-pill); color: var(--text-muted); background: var(--muted); font-size: var(--text-xs); }
 .memory-disclosure-body { padding: var(--space-4) 0; }
+.memory-disclosure-body > section + section { margin-top: var(--space-4); }
 .memory-operation-group { margin-top: var(--space-6); }
 .memory-operation-group .memory-list > div > div { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: var(--space-2); }
 .memory-modal { width: min(620px, 100%); }
@@ -679,8 +680,8 @@ details[open] > summary .tool-chevron { transform: rotate(90deg); }
 .goal-roadmap-item { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: var(--space-3); }
 .goal-roadmap-leading { color: var(--text-muted); }
 .goal-roadmap-copy p { margin: 0; }
+.goal-run-links > * { display: grid; grid-template-columns: minmax(0, .35fr) minmax(0, 1fr); gap: var(--space-3); overflow-wrap: anywhere; }
 .goal-form > details > div, .goal-view > details > div { padding: var(--space-4) 0; }
-.goal-management button { margin-right: var(--space-2); }
 
 [data-tone="accent"] { color: var(--accent); }
 [data-tone="info"] { color: var(--info); }

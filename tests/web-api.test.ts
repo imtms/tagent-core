@@ -102,6 +102,10 @@ describe("Web API request headers", () => {
       targetRevisionId: "roadmap-2", targetHash: "hash-2", kind: "request_change",
       approvedItemIds: [], reason: "Split the second step", actorId: "web_console",
     });
+
+    await goals.workspaceGoalOperation("goal/1", "request uncertain");
+    expect(calls[1]?.url).toBe("/api/v1/console/workspace-goals/goal%2F1/operations/request%20uncertain");
+    expect(calls[1]?.init).toBeUndefined();
   });
 
   it("accepts only a credential-free HTTP(S) origin", () => {
