@@ -106,6 +106,18 @@ describe("Web API request headers", () => {
     for (const operation of memoryOperations) expect(memorySurface).toContain(`api.${operation}(`);
   });
 
+  it("keeps New Goal cancellation anchored to the previously selected Goal", async () => {
+    const goalSurface = await readFile(new URL("../apps/web-console/src/GoalsPanel.tsx", import.meta.url), "utf8");
+    const actionStart = goalSurface.indexOf('{editor === null && <button className="control" data-variant="primary"');
+    const actionEnd = goalSurface.indexOf("<main className=\"goal-main\"", actionStart);
+    const newGoalAction = goalSurface.slice(actionStart, actionEnd);
+
+    expect(actionStart).toBeGreaterThan(-1);
+    expect(actionEnd).toBeGreaterThan(actionStart);
+    expect(newGoalAction).not.toContain("setSelected(null)");
+    expect(goalSurface).toContain('if (editor === "definition" && selected)');
+  });
+
   it("preserves the Goal request-change decision and its reason", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const goals = createGoalApi(async (url, init) => {

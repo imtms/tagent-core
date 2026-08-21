@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## [0.8.21] - 2026-08-22
+
+### Goal and Memory workflow integrity
+
+- Preserved the previously selected Goal while creating a new one, made the create state explicit in the selector, and returned Cancel to the original Goal instead of a contradictory empty surface.
+- Made descriptor-only Memory Topics open as real detail views even before a canonical Cold page exists, restoring metadata, Forget, and restore reachability for every catalog Topic.
+- Replaced stacked Memory metadata paragraphs with a compact two-column hairline ledger and gave the Core Memory projection editor the same full-width bounded input treatment as the rest of the Console.
+
 ## [0.8.20] - 2026-08-22
 
 ### Web Console hierarchy follow-up

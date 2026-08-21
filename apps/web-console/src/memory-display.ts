@@ -1,4 +1,6 @@
-import type { MemoryStatusResult, WarmMemory } from "./api";
+import type { ColdTopic, MemoryStatusResult, TopicDescriptor, WarmMemory } from "./api";
+
+export type MemoryTopicDetail = ColdTopic | TopicDescriptor;
 
 export const formatMemoryDate = (value: number) => new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -17,6 +19,14 @@ export const memoryTextRepeats = (titleValue: string, contentValue: string) => {
 };
 export const memoryTitleRepeatsContent = (record: WarmMemory) => {
   return memoryTextRepeats(memoryTitle(record), memoryContent(record));
+};
+
+export const memoryTopicDescriptor = (topic: MemoryTopicDetail): TopicDescriptor => {
+  return "descriptor" in topic ? topic.descriptor : topic;
+};
+
+export const selectMemoryTopicDetail = (topic: ColdTopic | null, descriptor?: TopicDescriptor): MemoryTopicDetail | null => {
+  return topic ?? descriptor ?? null;
 };
 
 export const memoryStatusSummary = (status: MemoryStatusResult) => {

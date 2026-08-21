@@ -156,12 +156,15 @@ export function MemoryCoreProjection({
         <ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />
       </summary>
       <div className="memory-disclosure-body">
-        <textarea
-          value={coreText}
-          onChange={(event) => onCoreTextChange(event.target.value)}
-          rows={10}
-          placeholder="# Core Memory"
-        />
+        <div className="goal-field">
+          <textarea
+            aria-label="Core Memory projection"
+            value={coreText}
+            onChange={(event) => onCoreTextChange(event.target.value)}
+            rows={10}
+            placeholder="# Core Memory"
+          />
+        </div>
         <div className="memory-inline-actions">
           <button className="control" onClick={onGenerate}>Regenerate</button>
           <button className="control" data-variant="primary" onClick={onSave}>Save projection</button>

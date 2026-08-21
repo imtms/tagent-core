@@ -1,9 +1,18 @@
 import { useEffect, useState } from "react";
 import { Check, ChevronRight, Pencil, RotateCcw, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
-import type { ColdTopic, PreferenceRecord, WarmMemory } from "./api";
+import type { PreferenceRecord, WarmMemory } from "./api";
 import { ICON_SIZE } from "./icon-size";
 import { Markdown } from "./LazyMarkdown";
-import { formatMemoryDate, memoryContent, memorySignal, memoryTextRepeats, memoryTitle, memoryTitleRepeatsContent } from "./memory-display";
+import {
+  formatMemoryDate,
+  memoryContent,
+  memorySignal,
+  memoryTextRepeats,
+  memoryTitle,
+  memoryTitleRepeatsContent,
+  memoryTopicDescriptor,
+  type MemoryTopicDetail,
+} from "./memory-display";
 
 export function RecordDetail({
   record,
@@ -45,15 +54,15 @@ export function RecordDetail({
       <details className="memory-disclosure">
         <summary><strong>Metadata and provenance</strong><small>{record.scope.type}:{record.scope.id}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
         <div className="memory-disclosure-body">
-          <section><span>Record identity</span><p data-mono>{record.id}</p></section>
-          {record.kind === "preference" && <section><span>Preference semantics</span><p>{(record as PreferenceRecord).applicability} · {(record as PreferenceRecord).origin}</p></section>}
-          {record.provenance && <section><span>Source authority</span><p>{record.provenance.evidenceClass.replaceAll("_", " ")} · {record.provenance.trustLevel} trust · {record.provenance.verificationState}{record.provenance.sourceReliability === undefined ? "" : ` · ${Math.round(record.provenance.sourceReliability * 100)}% reliability`}</p></section>}
-          {record.semantic && <section><span>Canonical meaning</span><p data-mono>{record.semantic.subject} · {record.semantic.predicate} · {record.semantic.object} · {record.semantic.polarity}</p></section>}
-          {record.lifecycle && <section><span>Lifecycle</span><p>{formatCount(record.lifecycle.confirmationCount, "confirmation")} · {formatCount(record.lifecycle.recallCount ?? 0, "recall")}{record.lifecycle.previousStatus ? ` · restored from ${record.lifecycle.previousStatus}` : ""}{record.lifecycle.deleteReason ? ` · ${record.lifecycle.deleteReason}` : ""}</p><small data-mono>First seen {formatMemoryDate(record.lifecycle.firstSeenAt)} · last seen {formatMemoryDate(record.lifecycle.lastSeenAt)}{record.lifecycle.lastRecalledAt ? ` · last recalled ${formatMemoryDate(record.lifecycle.lastRecalledAt)}` : ""}{record.lifecycle.purgeAfter ? ` · purge after ${formatMemoryDate(record.lifecycle.purgeAfter)}` : ""}</small></section>}
-          {record.topicIds.length > 0 && <section><span>Topic routes</span><div className="memory-tags">{record.topicIds.map((topic) => <code key={topic}>{topic}</code>)}</div></section>}
-          {record.entityIds.length > 0 && <section><span>Entities</span><div className="memory-tags">{record.entityIds.map((entity) => <code key={entity}>{entity}</code>)}</div></section>}
-          {record.sourceRefs.length > 0 && <section><span>Provenance</span><div className="memory-source-list">{record.sourceRefs.map((source, index) => <code key={`${source.sourceType}-${source.sourceId}-${index}`}>{source.sourceType}:{source.sourceId}{source.revision ? `@${source.revision}` : ""}</code>)}</div></section>}
-          {hasValidity && <section><span>Validity</span><p data-mono>{"validFrom" in record && record.validFrom ? `from ${formatMemoryDate(record.validFrom)}` : ""}{"validTo" in record && record.validTo ? ` · to ${formatMemoryDate(record.validTo)}` : ""}{record.supersedesId ? ` · supersedes ${record.supersedesId}` : ""}{record.expiresAt ? ` · expires ${formatMemoryDate(record.expiresAt)}` : ""}</p></section>}
+          <section><span data-meta>Record identity</span><div data-mono>{record.id}</div></section>
+          {record.kind === "preference" && <section><span data-meta>Preference semantics</span><div>{(record as PreferenceRecord).applicability} · {(record as PreferenceRecord).origin}</div></section>}
+          {record.provenance && <section><span data-meta>Source authority</span><div>{record.provenance.evidenceClass.replaceAll("_", " ")} · {record.provenance.trustLevel} trust · {record.provenance.verificationState}{record.provenance.sourceReliability === undefined ? "" : ` · ${Math.round(record.provenance.sourceReliability * 100)}% reliability`}</div></section>}
+          {record.semantic && <section><span data-meta>Canonical meaning</span><div data-mono>{record.semantic.subject} · {record.semantic.predicate} · {record.semantic.object} · {record.semantic.polarity}</div></section>}
+          {record.lifecycle && <section><span data-meta>Lifecycle</span><div><div>{formatCount(record.lifecycle.confirmationCount, "confirmation")} · {formatCount(record.lifecycle.recallCount ?? 0, "recall")}{record.lifecycle.previousStatus ? ` · restored from ${record.lifecycle.previousStatus}` : ""}{record.lifecycle.deleteReason ? ` · ${record.lifecycle.deleteReason}` : ""}</div><small data-mono>First seen {formatMemoryDate(record.lifecycle.firstSeenAt)} · last seen {formatMemoryDate(record.lifecycle.lastSeenAt)}{record.lifecycle.lastRecalledAt ? ` · last recalled ${formatMemoryDate(record.lifecycle.lastRecalledAt)}` : ""}{record.lifecycle.purgeAfter ? ` · purge after ${formatMemoryDate(record.lifecycle.purgeAfter)}` : ""}</small></div></section>}
+          {record.topicIds.length > 0 && <section><span data-meta>Topic routes</span><div className="memory-tags">{record.topicIds.map((topic) => <code key={topic}>{topic}</code>)}</div></section>}
+          {record.entityIds.length > 0 && <section><span data-meta>Entities</span><div className="memory-tags">{record.entityIds.map((entity) => <code key={entity}>{entity}</code>)}</div></section>}
+          {record.sourceRefs.length > 0 && <section><span data-meta>Provenance</span><div className="memory-source-list">{record.sourceRefs.map((source, index) => <code key={`${source.sourceType}-${source.sourceId}-${index}`}>{source.sourceType}:{source.sourceId}{source.revision ? `@${source.revision}` : ""}</code>)}</div></section>}
+          {hasValidity && <section><span data-meta>Validity</span><div data-mono>{"validFrom" in record && record.validFrom ? `from ${formatMemoryDate(record.validFrom)}` : ""}{"validTo" in record && record.validTo ? ` · to ${formatMemoryDate(record.validTo)}` : ""}{record.supersedesId ? ` · supersedes ${record.supersedesId}` : ""}{record.expiresAt ? ` · expires ${formatMemoryDate(record.expiresAt)}` : ""}</div></section>}
         </div>
       </details>
 
@@ -83,31 +92,33 @@ export function RecordDetail({
   );
 }
 
-export function TopicDetail({ topic, onForget, onRestore }: { topic: ColdTopic; onForget: () => void; onRestore: () => void }) {
-  const repeatedDescription = memoryTextRepeats(topic.descriptor.title, topic.descriptor.description);
+export function TopicDetail({ topic, onForget, onRestore }: { topic: MemoryTopicDetail; onForget: () => void; onRestore: () => void }) {
+  const descriptor = memoryTopicDescriptor(topic);
+  const fullTopic = "revision" in topic ? topic : null;
+  const repeatedDescription = memoryTextRepeats(descriptor.title, descriptor.description);
   return (
     <div className="memory-detail-content">
-      <span className="memory-kind">cold · {topic.descriptor.kind}</span>
-      <h3>{repeatedDescription ? topic.descriptor.description : topic.descriptor.title}</h3>
-      {!repeatedDescription && <p>{topic.descriptor.description}</p>}
-      <small data-mono>revision {topic.revision.revision} · {topic.revision.tokenCount.toLocaleString()} tokens · {topic.descriptor.status} · full page</small>
-      <section className="cold-document"><span>Canonical document</span><div><Markdown>{topic.body}</Markdown></div></section>
+      <span className="memory-kind">{fullTopic ? "cold" : "topic"} · {descriptor.kind}</span>
+      <h3>{repeatedDescription ? descriptor.description : descriptor.title}</h3>
+      {!repeatedDescription && <p>{descriptor.description}</p>}
+      <small data-mono>{fullTopic ? `revision ${fullTopic.revision.revision} · ${fullTopic.revision.tokenCount.toLocaleString()} tokens · ${descriptor.status} · full page` : `descriptor · ${descriptor.status} · no cold page`}</small>
+      {fullTopic && <section className="cold-document"><span>Canonical document</span><div><Markdown>{fullTopic.body}</Markdown></div></section>}
       <details className="memory-disclosure">
-        <summary><strong>Metadata and storage</strong><small>revision {topic.revision.revision}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+        <summary><strong>Metadata and storage</strong><small>{fullTopic ? `revision ${fullTopic.revision.revision}` : "descriptor only"}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
         <div className="memory-disclosure-body">
-          <section><span>Topic identity</span><p data-mono>{topic.descriptor.topicId} · {topic.descriptor.scope.type}:{topic.descriptor.scope.id}</p></section>
-          {topic.descriptor.aliases.length > 0 && <section><span>Aliases</span><div className="memory-tags">{topic.descriptor.aliases.map((alias) => <code key={alias}>{alias}</code>)}</div></section>}
-          {topic.descriptor.entityIds.length > 0 && <section><span>Entities</span><div className="memory-tags">{topic.descriptor.entityIds.map((entity) => <code key={entity}>{entity}</code>)}</div></section>}
-          {topic.descriptor.relatedTopicIds.length > 0 && <section><span>Related topics</span><div className="memory-tags">{topic.descriptor.relatedTopicIds.map((related) => <code key={related}>{related}</code>)}</div></section>}
-          {topic.descriptor.lifecycle && <section><span>Lifecycle</span><p>{topic.descriptor.lifecycle.previousStatus ? `Restorable from ${topic.descriptor.lifecycle.previousStatus}` : topic.descriptor.status}{topic.descriptor.lifecycle.deleteReason ? ` · ${topic.descriptor.lifecycle.deleteReason}` : ""}{topic.descriptor.lifecycle.purgeAfter ? ` · purge after ${formatMemoryDate(topic.descriptor.lifecycle.purgeAfter)}` : ""}</p></section>}
-          <section><span>Revision storage</span><p data-mono>{topic.revision.id}{topic.revision.state ? ` · ${topic.revision.state}` : ""}{topic.revision.byteLength === undefined ? "" : ` · ${topic.revision.byteLength.toLocaleString()} bytes`}</p><small data-mono>{topic.revision.objectKey ?? "Managed object"} · sha256:{topic.revision.checksum}</small></section>
+          <section><span data-meta>Topic identity</span><div data-mono>{descriptor.topicId} · {descriptor.scope.type}:{descriptor.scope.id}</div></section>
+          {descriptor.aliases.length > 0 && <section><span data-meta>Aliases</span><div className="memory-tags">{descriptor.aliases.map((alias) => <code key={alias}>{alias}</code>)}</div></section>}
+          {descriptor.entityIds.length > 0 && <section><span data-meta>Entities</span><div className="memory-tags">{descriptor.entityIds.map((entity) => <code key={entity}>{entity}</code>)}</div></section>}
+          {descriptor.relatedTopicIds.length > 0 && <section><span data-meta>Related topics</span><div className="memory-tags">{descriptor.relatedTopicIds.map((related) => <code key={related}>{related}</code>)}</div></section>}
+          {descriptor.lifecycle && <section><span data-meta>Lifecycle</span><div>{descriptor.lifecycle.previousStatus ? `Restorable from ${descriptor.lifecycle.previousStatus}` : descriptor.status}{descriptor.lifecycle.deleteReason ? ` · ${descriptor.lifecycle.deleteReason}` : ""}{descriptor.lifecycle.purgeAfter ? ` · purge after ${formatMemoryDate(descriptor.lifecycle.purgeAfter)}` : ""}</div></section>}
+          {fullTopic ? <section><span data-meta>Revision storage</span><div><div data-mono>{fullTopic.revision.id}{fullTopic.revision.state ? ` · ${fullTopic.revision.state}` : ""}{fullTopic.revision.byteLength === undefined ? "" : ` · ${fullTopic.revision.byteLength.toLocaleString()} bytes`}</div><small data-mono>{fullTopic.revision.objectKey ?? "Managed object"} · sha256:{fullTopic.revision.checksum}</small></div></section> : <section><span data-meta>Cold storage</span><div>No canonical page published</div></section>}
         </div>
       </details>
       <details className="memory-disclosure">
-        <summary><strong>Topic controls</strong><small>{topic.descriptor.status === "deleted" ? "Recovery" : "Destructive"}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
-        <div className="memory-disclosure-body"><div className="memory-inline-actions">{topic.descriptor.status === "deleted" ? <button className="control" onClick={onRestore}><RotateCcw size={ICON_SIZE.sm} />Restore</button> : <button className="control" data-tone="danger" onClick={onForget}><Trash2 size={ICON_SIZE.sm} />Forget</button>}</div></div>
+        <summary><strong>Topic controls</strong><small>{descriptor.status === "deleted" ? "Recovery" : "Review or forget"}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+        <div className="memory-disclosure-body"><div className="memory-inline-actions">{descriptor.status === "deleted" ? <button className="control" onClick={onRestore}><RotateCcw size={ICON_SIZE.sm} />Restore</button> : <button className="control" data-tone="danger" onClick={onForget}><Trash2 size={ICON_SIZE.sm} />Forget</button>}</div></div>
       </details>
-      <small data-mono>Published {formatMemoryDate(topic.revision.publishedAt ?? topic.revision.createdAt)}</small>
+      <small data-mono>{fullTopic ? `Published ${formatMemoryDate(fullTopic.revision.publishedAt ?? fullTopic.revision.createdAt)}` : `Updated ${formatMemoryDate(descriptor.updatedAt)}`}</small>
     </div>
   );
 }

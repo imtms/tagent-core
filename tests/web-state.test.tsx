@@ -26,7 +26,7 @@ import { deriveCurrentOperation } from "../apps/web-console/src/current-operatio
 import { createEventAcknowledger } from "../apps/web-console/src/event-acknowledger.js";
 import { IntentPrefetchCache } from "../apps/web-console/src/intent-prefetch-cache.js";
 import { MEMORY_PAGE_REQUEST_LIMIT, memoryPageWindow, mergeMemoryPage } from "../apps/web-console/src/memory-pagination.js";
-import { memoryStatusSummary } from "../apps/web-console/src/memory-display.js";
+import { memoryStatusSummary, memoryTopicDescriptor, selectMemoryTopicDetail } from "../apps/web-console/src/memory-display.js";
 import { canResumeRun, findActiveRun, formatRunStatus, formatRunValue, isActiveRunStatus, isRedundantRunPhase, runStatusNotice, runStatusTone } from "../apps/web-console/src/run-state.js";
 import { runViewForResolvedRuns, runViewForResumedRun, runViewForStartedRun, runViewFromWorkspaceSnapshot } from "../apps/web-console/src/use-run-view-state.js";
 import { mergeRefreshedMessages, shouldStreamWorkspaceRun, terminalStreamingAfterRefresh } from "../apps/web-console/src/use-workspace-live-sync.js";
@@ -331,18 +331,17 @@ describe("Web workbench behavior", () => {
     const empty = renderToStaticMarkup(<MemoryCatalog records={[]} topics={[]} {...props} />);
     const recordsOnly = renderToStaticMarkup(<MemoryCatalog records={[record]} topics={[]} {...props} />);
     const repeatedTopic = "Use the current release contract.";
-    const topicsOnly = renderToStaticMarkup(<MemoryCatalog records={[]} topics={[{
+    const descriptor = {
       topicId: "release", scope: record.scope, kind: "fact", title: `Fact: ${repeatedTopic}`, description: repeatedTopic,
       aliases: [], entityIds: [], relatedTopicIds: [], status: "active", createdAt: 1, updatedAt: 2,
-    }]} {...props} />);
+    } as const;
+    const topicsOnly = renderToStaticMarkup(<MemoryCatalog records={[]} topics={[descriptor]} {...props} />);
     const topicDetail = renderToStaticMarkup(<TopicDetail topic={{
-      descriptor: {
-        topicId: "release", scope: record.scope, kind: "fact", title: `Fact: ${repeatedTopic}`, description: repeatedTopic,
-        aliases: [], entityIds: [], relatedTopicIds: [], status: "active", createdAt: 1, updatedAt: 2,
-      },
+      descriptor,
       revision: { id: "revision-1", revision: 1, checksum: "abc", tokenCount: 4, createdAt: 1 },
       body: "Canonical release contract.",
     }} onForget={() => undefined} onRestore={() => undefined} />);
+    const descriptorDetail = renderToStaticMarkup(<TopicDetail topic={descriptor} onForget={() => undefined} onRestore={() => undefined} />);
 
     expect(empty).toBe("");
     expect(recordsOnly).toContain("Hot + Warm memory");
@@ -354,6 +353,13 @@ describe("Web workbench behavior", () => {
     expect(topicsOnly.match(/Use the current release contract\./g)).toHaveLength(1);
     expect(topicDetail).not.toContain(`Fact: ${repeatedTopic}`);
     expect(topicDetail.match(/Use the current release contract\./g)).toHaveLength(1);
+    expect(selectMemoryTopicDetail(null, descriptor)).toBe(descriptor);
+    expect(memoryTopicDescriptor(selectMemoryTopicDetail(null, descriptor)!)).toBe(descriptor);
+    expect(descriptorDetail).toContain("descriptor · active · no cold page");
+    expect(descriptorDetail).toContain("descriptor only");
+    expect(descriptorDetail).toContain("Topic controls");
+    expect(descriptorDetail).toContain(">Forget</button>");
+    expect(descriptorDetail).not.toContain("Canonical document");
   });
 
   it("omits static Memory availability chrome and zero-data summaries", () => {

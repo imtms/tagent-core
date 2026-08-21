@@ -243,16 +243,16 @@ export function GoalsPanel({
 
       <div className="goal-shell">
         {items.length > 0 && <div className="goal-toolbar">
-          <select aria-label="Workspace Goals" value={selected?.id ?? ""} disabled={busy} onChange={(event) => void openGoal(event.target.value)}>
+          <select aria-label="Workspace Goals" value={editor === "create" ? "" : selected?.id ?? ""} disabled={busy} onChange={(event) => void openGoal(event.target.value)}>
+            {editor === "create" && <option value="">New Goal draft</option>}
             {items.map((goal) => <option value={goal.id} key={goal.id}>{goal.title} · {statusLabel(goal.status)} · {goal.verifiedCriteria}/{goal.requiredCriteria}</option>)}
           </select>
-          <button className="control" data-variant="primary" onClick={() => {
-            setSelected(null);
+          {editor === null && <button className="control" data-variant="primary" onClick={() => {
             setDefinition(blankDefinition());
             setEditor("create");
             setError("");
             setNotice("");
-          }}><Plus size={ICON_SIZE.md} />New Goal</button>
+          }}><Plus size={ICON_SIZE.md} />New Goal</button>}
         </div>}
 
         <main className="goal-main" aria-busy={busy}>
@@ -269,7 +269,7 @@ export function GoalsPanel({
               setError("");
               setNotice("");
               try {
-                if (selected) {
+                if (editor === "definition" && selected) {
                   await api.reviseWorkspaceGoal(selected.id, definition);
                   await refresh(selected.id);
                   setNotice("Definition updated. Approve the new revision before generating a Roadmap.");
@@ -554,7 +554,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
           const selectable = !approval && !requiresRoadmapRevision;
           const tone = itemStatus === "running" ? "info" : itemStatus === "completed" ? "success" : itemStatus === "blocked" ? "warning" : undefined;
           return <div className="goal-roadmap-item" key={item.id}>
-            <div className="goal-roadmap-leading status-label" data-tone={tone}>
+            <div className="status-label" data-tone={tone}>
               {selectable ? <input aria-label={`Approve ${item.title}`} type="checkbox" checked={selectedItems.includes(item.id)} disabled={busy} onChange={(event) => setSelectedItems((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /> : itemStatus === "completed" ? <CheckCircle2 size={ICON_SIZE.md} /> : itemStatus === "blocked" ? <AlertTriangle size={ICON_SIZE.md} /> : <Circle size={ICON_SIZE.md} />}
               <span>{index + 1}</span>
             </div>

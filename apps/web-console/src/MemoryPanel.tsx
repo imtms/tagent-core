@@ -14,7 +14,6 @@ import { ICON_SIZE } from "./icon-size";
 import {
   api,
   type CaptureJob,
-  type ColdTopic,
   type MemoryKind,
   type MemoryScope,
   type MemoryStatus,
@@ -33,7 +32,16 @@ import {
   MemoryJobLists,
   MemoryRecallResults,
 } from "./MemoryBrowser";
-import { memoryContent, memoryStatusSummary, memoryTextRepeats, memoryTitle, memoryTitleRepeatsContent } from "./memory-display";
+import {
+  memoryContent,
+  memoryStatusSummary,
+  memoryTextRepeats,
+  memoryTitle,
+  memoryTitleRepeatsContent,
+  memoryTopicDescriptor,
+  selectMemoryTopicDetail,
+  type MemoryTopicDetail,
+} from "./memory-display";
 import {
   MEMORY_PAGE_REQUEST_LIMIT,
   memoryPageWindow,
@@ -95,7 +103,7 @@ export function MemoryPanel({
   const [memoryStatus, setMemoryStatus] = useState<"all" | MemoryStatus>("all");
   const [results, setResults] = useState<RecallResult | null>(null);
   const [selectedRecord, setSelectedRecord] = useState<WarmMemory | null>(null);
-  const [selectedTopic, setSelectedTopic] = useState<ColdTopic | null>(null);
+  const [selectedTopic, setSelectedTopic] = useState<MemoryTopicDetail | null>(null);
   const [recordSnapshotCreatedAt, setRecordSnapshotCreatedAt] =
     useState<number>();
   const [recordAfter, setRecordAfter] = useState<{
@@ -120,12 +128,14 @@ export function MemoryPanel({
   const [recentForget, setRecentForget] = useState<ForgottenMemoryUndo | null>(null);
   const selectedRecordIdRef = useRef("");
   const selectedTopicIdRef = useRef("");
+  const selectedTopicRef = useRef<MemoryTopicDetail | null>(null);
 
   useEffect(() => {
     selectedRecordIdRef.current = selectedRecord?.id ?? "";
   }, [selectedRecord]);
   useEffect(() => {
-    selectedTopicIdRef.current = selectedTopic?.descriptor.topicId ?? "";
+    selectedTopicRef.current = selectedTopic;
+    selectedTopicIdRef.current = selectedTopic ? memoryTopicDescriptor(selectedTopic).topicId : "";
   }, [selectedTopic]);
 
   const refresh = useCallback(async () => {
@@ -134,6 +144,7 @@ export function MemoryPanel({
     try {
       const selectedRecordId = selectedRecordIdRef.current;
       const selectedTopicId = selectedTopicIdRef.current;
+      const selectedTopicDetail = selectedTopicRef.current;
       const [
         nextStatus,
         recordPage,
@@ -179,7 +190,13 @@ export function MemoryPanel({
       setCore(nextCore);
       setCoreText(nextCore?.markdown ?? "");
       setSelectedRecord(refreshedRecord);
-      setSelectedTopic(refreshedTopic);
+      setSelectedTopic(selectMemoryTopicDetail(
+        refreshedTopic,
+        selectedTopicId
+          ? nextTopics.items.find((topic) => topic.topicId === selectedTopicId)
+            ?? (selectedTopicDetail ? memoryTopicDescriptor(selectedTopicDetail) : undefined)
+          : undefined,
+      ));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -317,10 +334,12 @@ export function MemoryPanel({
   }
   async function openTopic(topicId: string) {
     setSelectedRecord(null);
+    const descriptor = topics.find((topic) => topic.topicId === topicId);
+    if (descriptor) setSelectedTopic(descriptor);
     setBusy(true);
     setError("");
     try {
-      setSelectedTopic(await api.memoryTopic(scope, topicId));
+      setSelectedTopic(selectMemoryTopicDetail(await api.memoryTopic(scope, topicId), descriptor));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -424,16 +443,17 @@ export function MemoryPanel({
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   }
-  async function forgetTopic(topic: ColdTopic) {
-    const label = memoryTextRepeats(topic.descriptor.title, topic.descriptor.description) ? topic.descriptor.description : topic.descriptor.title;
+  async function forgetTopic(topic: MemoryTopicDetail) {
+    const descriptor = memoryTopicDescriptor(topic);
+    const label = memoryTextRepeats(descriptor.title, descriptor.description) ? descriptor.description : descriptor.title;
     if (!window.confirm(`Forget the Cold topic “${label}”?`))
       return;
     setBusy(true);
     try {
-      const result = await api.memoryForget(scope, undefined, [topic.descriptor.topicId]);
+      const result = await api.memoryForget(scope, undefined, [descriptor.topicId]);
       setSelectedTopic(null);
       setMessage("");
-      setRecentForget({ ids: [], topicIds: [topic.descriptor.topicId], label, purgeAfter: result.purgeAfter });
+      setRecentForget({ ids: [], topicIds: [descriptor.topicId], label, purgeAfter: result.purgeAfter });
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -564,7 +584,7 @@ export function MemoryPanel({
               <TopicDetail
                 topic={selectedTopic}
                 onForget={() => void forgetTopic(selectedTopic)}
-                onRestore={() => void restoreMemory([], [selectedTopic.descriptor.topicId])}
+                onRestore={() => void restoreMemory([], [memoryTopicDescriptor(selectedTopic).topicId])}
               />
             ) : null}
           </main> : <>
@@ -592,7 +612,7 @@ export function MemoryPanel({
                   records={filteredRecords}
                   topics={filteredTopics}
                   selectedRecordId={selectedRecord?.id ?? ""}
-                  selectedTopicId={selectedTopic?.descriptor.topicId ?? ""}
+                  selectedTopicId={selectedTopic ? memoryTopicDescriptor(selectedTopic).topicId : ""}
                   onOpenRecord={(recordId) => void openRecord(recordId)}
                   onOpenTopic={(topicId) => void openTopic(topicId)}
                   hasMoreRecords={hasMoreRecords}
