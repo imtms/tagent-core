@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## [0.8.16] - 2026-08-21
+
+### Web Console cohesion and overflow safety
+
+- Removed the duplicate settled Run activity strip and terminal composer state so completed and blocked state remains authoritative in the top bar and Run details instead of repeating through the conversation surface.
+- Unified Workspace, Run, Goal, and Memory job state under one compact dot-and-label grammar, and reduced Tool activity to its heading, counts, and inspectable disclosures.
+- Made Tool Call bodies and continuation ledgers zero-minimum-width, wrapped long handoff identifiers inside Run details, and collapsed long machine-generated status diagnostics behind a readable first clause.
+- Kept Memory job status, source, and metrics on one desktop scan line while moving metrics below the source at mobile widths; mobile Run metrics now retain two readable columns.
+
+### Design system maintenance and verification
+
+- Extended the canonical style contract to prevent restoration of retired status pills, duplicate Run chrome, intrinsic-width Tool Call layouts, and non-responsive Memory job rows.
+- Consolidated equivalent CSS declarations while retaining the single neutral light/dark system at 769 lines, 404 rules, 499 selectors, and 1,449 declarations within the existing ceilings.
+- Rendered the conversation, dense Run details, continuation reasons, and populated Memory operations at desktop and 390px widths in light and dark themes with no horizontal overflow or browser runtime errors.
+
+### Compatibility and deployment
+
+- The public ABI, SQLite schema revision `2`, Memory schema, and `tagent-core/state-0.8-r2` protocol are unchanged; no data migration is required. Deploy matching `0.8.16` Core, Web Console, ABI, and Core Client artifacts.
+
 ## [0.8.15] - 2026-08-21
 
 ### External-action resume correctness

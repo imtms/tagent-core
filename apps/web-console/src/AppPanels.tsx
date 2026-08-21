@@ -44,14 +44,10 @@ export function WorkspaceRunStatus({ workspace }: { workspace: Session }) {
   const status = workspace.latestRunStatus;
   if (!status) return null;
   const statusText = formatRunStatus(status);
-  return <span className="workspace-run-status" data-tone={runStatusTone(status)} title={`${statusText}${workspace.latestRunPhase && !isRedundantRunPhase(status, workspace.latestRunPhase) ? ` · ${formatRunValue(workspace.latestRunPhase)}` : ""}`}>
+  return <span className="status-label" data-tone={runStatusTone(status)} title={`${statusText}${workspace.latestRunPhase && !isRedundantRunPhase(status, workspace.latestRunPhase) ? ` · ${formatRunValue(workspace.latestRunPhase)}` : ""}`}>
     {status === "running" ? <Activity size={ICON_SIZE.micro} /> : <span className="status-dot" />}
     <span>{statusText}</span>
   </span>;
-}
-
-export function RunActivityStrip({ run }: { run: TaskRun }) {
-  return <div className="active-run-strip"><Activity size={ICON_SIZE.sm} /><span>Attempt {run.attempt}</span><strong data-tone="info">{formatRunValue(run.phase)}</strong>{run.usage.totalTokens > 0 && <small>{formatCount(run.usage.totalTokens, "token")}</small>}</div>;
 }
 
 function ToolCall({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> }) {
@@ -145,7 +141,6 @@ function ToolActivityPanel({ transcriptItems, events }: { transcriptItems: Extra
       : formatCount(live.length, "recent event");
   return <section className="audit-section">
     <div className="section-heading"><span>Tool activity</span><small>{activitySummary}{failed ? ` · ${failed} failed` : ""}</small></div>
-    <p data-meta>Operational detail is kept out of the conversation. Expand it here only when execution evidence needs inspection.</p>
     {live.length > 0 && <details className="audit-disclosure"><summary><Activity size={ICON_SIZE.sm} /><span>Live and recent activity</span><small>{live.length}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div className="tool-stack">{live.map((event) => <div className="tool-row" key={`${event.seq}-${event.type}`}><Terminal size={ICON_SIZE.sm} /><span>{String(event.data.toolName ?? "tool")}</span><small>{formatRunValue(event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "done")}</small></div>)}</div></details>}
     {transcriptItems.length > 0 && <details className="audit-disclosure"><summary><Terminal size={ICON_SIZE.sm} /><span>Recorded tool calls</span><small>{transcriptItems.length}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div className="tool-history-list">{transcriptItems.map((item) => <ToolCall key={`${item.seq}-${item.index}`} item={item} />)}</div></details>}
   </section>;
@@ -391,6 +386,19 @@ function formatContractDecisionReason(value: string): string {
   return value.replace(/\b(\d+) semantic objective\(s\)/g, (_, count: string) => `${count} semantic objective${count === "1" ? "" : "s"}`);
 }
 
+function RunStatusNotice({ notice }: { notice: NonNullable<ReturnType<typeof runStatusNotice>> }) {
+  const compact = notice.text.length > 240 || notice.text.includes(";");
+  if (!compact) return <div className="run-status-note" data-tone={notice.tone}>{notice.text}</div>;
+  const firstClause = notice.text.split(";", 1)[0]?.trim() ?? notice.text;
+  const machinePrefixed = /^[a-z0-9_]+:\s*/i.test(firstClause);
+  const readableClause = firstClause.replace(/^[a-z0-9_]+:\s*/i, "");
+  const summary = machinePrefixed ? readableClause.split(": ", 1)[0]?.trim() || readableClause : readableClause;
+  return <details className="run-status-note" data-tone={notice.tone}>
+    <summary><span>{summary}</span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+    <p>{notice.text}</p>
+  </details>;
+}
+
 export function RunDetails({ run, toolEvents, transcriptTools }: { run: TaskRun; toolEvents: RunEvent[]; transcriptTools: Extract<TranscriptItem, { kind: "tool" }>[] }) {
   const checkpoint = run.checkpoint && !run.checkpoint.active && (run.checkpoint.currentTool || run.checkpoint.assistantPartial.trim())
     ? run.checkpoint
@@ -402,7 +410,7 @@ export function RunDetails({ run, toolEvents, transcriptTools }: { run: TaskRun;
   const checkpointPosition = checkpoint ? [checkpoint.lastEventSeq > 0 ? `event ${checkpoint.lastEventSeq}` : "", checkpoint.lastTranscriptSeq > 0 ? `transcript ${checkpoint.lastTranscriptSeq}` : ""].filter(Boolean).join(" · ") : "";
   return <div className="run-details">
     <CurrentOperationPanel run={run} />
-    <section className="run-summary"><div className="phase-line"><span className="phase-badge" data-tone={runStatusTone(run.status)}>{statusLabel}</span>{showPhase && <span>{phaseLabel}</span>}{run.attempt > 1 && <span>attempt {run.attempt}</span>}</div><p>{run.goal}</p>{run.contract && <details className="run-contract"><summary><span>Task contract</span><small>{formatRunValue(run.contract.intent)} · {formatRunValue(run.contract.relation)}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div><strong>{formatContractDecisionReason(run.contract.decisionReason)}</strong><ul>{run.contract.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></div></details>}<RunMetrics run={run} />{statusNotice && <div className="run-status-note" data-tone={statusNotice.tone}>{statusNotice.text}</div>}</section>
+    <section className="run-summary"><div className="phase-line"><span className="status-label" data-tone={runStatusTone(run.status)}><span className="status-dot" />{statusLabel}</span>{showPhase && <span>{phaseLabel}</span>}{run.attempt > 1 && <span>attempt {run.attempt}</span>}</div><p>{run.goal}</p>{run.contract && <details className="run-contract"><summary><span>Task contract</span><small>{formatRunValue(run.contract.intent)} · {formatRunValue(run.contract.relation)}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div><strong>{formatContractDecisionReason(run.contract.decisionReason)}</strong><ul>{run.contract.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></div></details>}<RunMetrics run={run} />{statusNotice && <RunStatusNotice notice={statusNotice} />}</section>
     {checkpoint && <section className="audit-section"><div className="section-heading"><span>Checkpoint</span><small>preserved</small></div><div className="audit-ledger">{checkpointPosition && <span>{checkpointPosition}</span>}{checkpoint.currentTool && <strong>{checkpoint.currentTool.toolName}</strong>}{checkpoint.assistantPartial && <p>{checkpoint.assistantPartial.slice(-240)}</p>}</div></section>}
     <SupervisorReviewPanel run={run} />
     <GateAuditPanel run={run} />

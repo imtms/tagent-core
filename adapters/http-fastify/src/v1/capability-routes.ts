@@ -14,7 +14,7 @@ export function registerCapabilityV1Routes(app: FastifyInstance, dependencies: C
   const runtime = dependencies.runtimeConfig;
   app.get("/api/v1/capabilities", { onRequest: authorizeChannel(dependencies.serviceCredentials, "sessions:read") }, async (request) =>
     encodeAbi(CoreCapabilitiesResponseSchema, successEnvelope(request, {
-      releaseVersion: runtime?.releaseVersion?.trim() || "0.8.15",
+      releaseVersion: runtime?.releaseVersion?.trim() || "0.8.16",
       apiVersions: ["channel.v1", "operator.console.v1", "operator.read.v1"],
       eventSpecVersion: "1.0",
       persistenceSchemaVersion: runtime?.schemaVersion ?? 2,

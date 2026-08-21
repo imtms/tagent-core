@@ -90,6 +90,7 @@ Do not wrap every prompt, metric, rule, tool call, or setting in a separate roun
 Keep related labels and controls within 4–12px, then separate unrelated sections by 24px or more. Flat ledgers still need section gutters and paragraph rhythm; removing cards must never mean removing the whitespace that makes groups readable.
 
 High-density secondary surfaces use one order: section heading, primary content, compact ledger, then optional disclosures. Run details, Memory operations, Goal criteria, and execution evidence must not invent separate heading, row, or status grammars.
+At mobile widths, numeric Run metrics use two readable columns rather than squeezing three values into a wrapping row.
 
 Use tiny uppercase tracked labels only where they genuinely group a list.
 Do not stack an eyebrow, title, paragraph, and another empty-state title that all explain the same screen.
@@ -118,14 +119,16 @@ Hide empty groups, zero-only metrics, redundant phase labels, static capability 
 Keep standards, history, manifests, maintenance actions, and destructive controls behind disclosures or menus.
 Current state appears before reference material.
 
+Operational state uses one shared dot-and-label grammar, not feature-specific colored pills. A terminal TaskRun status appears in the top bar and Run details; do not repeat it as a feed card or beside the composer. The composer shows live state only while execution is running, while pending input and approval retain their actionable surfaces. Long machine-generated status reasons show one readable clause first and retain the raw diagnostic behind a disclosure.
+
 Goals use one selector and one reading surface rather than an internal navigation rail.
 Completion criteria form one field group: one heading and explanation, one add action, then aligned criterion rows. At mobile widths the explanation and add action stack before the rows; criterion text occupies its own line above Required and remove controls.
 Memory shows either the catalog or one detail view, never a nested split view. The type filter lives beside search; scope/count summaries stay hidden, and feedback, governance, and Forget remain behind the detail controls disclosure.
-Memory operations use the same outer gutter as the catalog, keep job counts in section headings, and give each job a full-width status/source/metrics row.
+Memory operations use the same outer gutter as the catalog, keep job counts in section headings, and give each desktop job a full-width status/source/metrics row. At mobile widths, metrics move below and align with the source instead of compressing all three fields.
 Skills use the upload target as their empty creation state.
-Run details do not exist until a TaskRun exists.
+Run details do not exist until a TaskRun exists. Continuation rows use zero-minimum grids and wrap long handoff identifiers so neither the row nor its content can widen the drawer.
 
-The Execution trace groups the durable transcript by reasoning stage. Subsequent tool calls belong to that stage until model output settles it; a later reasoning item begins the next stage. Tool arguments and results remain disclosures inside the stage ledger, and live reasoning/tools/output occupy one final live stage. Gate audit does not restate an accepted Supervisor verdict; it retains blockers, standards, and evaluation history for inspection.
+The Execution trace groups the durable transcript by reasoning stage. Its single hairline outer frame owns the whole trace; stage separators and the inset tool ledger express hierarchy without turning every call into a card. Subsequent tool calls belong to that stage until model output settles it; a later reasoning item begins the next stage. Tool arguments and results remain disclosures inside the stage ledger, and live reasoning/tools/output occupy one final live stage. Their grid tracks and sections must use zero-minimum sizing so long commands, paths, JSON, and results scroll inside the code surface instead of widening the trace. Gate audit does not restate an accepted Supervisor verdict; it retains blockers, standards, and evaluation history for inspection.
 
 ## Interaction
 

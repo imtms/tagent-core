@@ -60,7 +60,7 @@ function memoryJobLabel(status: CaptureJob["status"] | ReindexJob["status"]): st
 }
 
 function MemoryJobState({ status }: { status: CaptureJob["status"] | ReindexJob["status"] }) {
-  return <span className="memory-job-state" data-tone={memoryJobTone(status)}><i className="status-dot" />{memoryJobLabel(status)}</span>;
+  return <span className="status-label" data-tone={memoryJobTone(status)}><i className="status-dot" />{memoryJobLabel(status)}</span>;
 }
 
 export function MemoryRecallResults({

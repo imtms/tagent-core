@@ -7,7 +7,6 @@ import {
   ConversationDateDivider,
   ExecutionTimeline,
   QueuePrompt,
-  RunActivityStrip,
   RunDetails,
   TAgentMark,
   UserInputCard,
@@ -1027,6 +1026,10 @@ describe("Web workbench behavior", () => {
     const failed = renderToStaticMarkup(<RunDetails run={run({
       status: "failed", blockedReason: "Provider failed",
     })} toolEvents={[]} transcriptTools={[]} />);
+    const diagnostic = renderToStaticMarkup(<RunDetails run={run({
+      status: "blocked",
+      blockedReason: "semantic_review_unavailable: Semantic review was unavailable; acceptance_criterion_1: Evidence was not mapped to this criterion because the independent judge was unavailable.",
+    })} toolEvents={[]} transcriptTools={[]} />);
 
     expect(completed).not.toContain("visual audit fixture");
     expect(completed).not.toContain("run-status-note");
@@ -1034,6 +1037,9 @@ describe("Web workbench behavior", () => {
     expect(blocked).toContain("External evidence is missing");
     expect(failed).toContain('class="run-status-note" data-tone="danger"');
     expect(failed).toContain("Provider failed");
+    expect(diagnostic).toContain('<details class="run-status-note" data-tone="warning">');
+    expect(diagnostic).toContain("Semantic review was unavailable");
+    expect(diagnostic).toContain("semantic_review_unavailable:");
   });
 
   it("deduplicates intent prefetches, expires old values, and retries failures", async () => {
@@ -1173,15 +1179,6 @@ describe("Web workbench behavior", () => {
     const divider = renderToStaticMarkup(<ConversationDateDivider value={Date.UTC(2026, 7, 16)} />);
     expect(divider).toContain('role="separator"');
     expect(renderToStaticMarkup(<TAgentMark />)).toContain('aria-hidden="true"');
-
-    const zeroUsage = renderToStaticMarkup(<RunActivityStrip run={run({ status: "blocked", phase: "blocked" })} />);
-    const observedUsage = renderToStaticMarkup(<RunActivityStrip run={run({
-      usage: { input: 120, output: 45, cacheRead: 0, cacheWrite: 0, totalTokens: 165, cost: 0 },
-    })} />);
-    expect(zeroUsage).toContain("Attempt 1");
-    expect(zeroUsage).toContain("Blocked");
-    expect(zeroUsage).not.toContain("0 tokens");
-    expect(observedUsage).toContain("165 tokens");
   });
 
   it("renders message Memory annotations only for inspectable capture events", () => {
@@ -1570,7 +1567,7 @@ describe("Web workbench behavior", () => {
       usage: { input: 5, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
     })} toolEvents={[]} transcriptTools={[]} />);
 
-    expect(details).toContain('<div class="phase-line"><span class="phase-badge" data-tone="warning">Blocked</span></div>');
+    expect(details).toContain('<div class="phase-line"><span class="status-label" data-tone="warning"><span class="status-dot"></span>Blocked</span></div>');
     expect(details).toContain("1 message");
     expect(details).not.toContain("1 messages");
     expect(details).not.toContain("Blocked</span><span>Blocked");

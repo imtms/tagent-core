@@ -549,7 +549,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
 }
 
 function StatusBadge({ status }: { status: WorkspaceGoal["status"] }) {
-  return <span className="goal-status-badge" data-tone={goalStatusTone(status)}><i />{statusLabel(status)}</span>;
+  return <span className="status-label" data-tone={goalStatusTone(status)}><i className="status-dot" />{statusLabel(status)}</span>;
 }
 
 function InfoList({ title, items }: { title: string; items: string[] }) {

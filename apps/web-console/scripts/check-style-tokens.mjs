@@ -226,6 +226,7 @@ for (const retired of [
   "workspace-kicker", "composer-toolbar", "left-collapsed", "right-collapsed", "collapsed-workspace-tooltip", "collapsed-audit",
   "gate-profile-control", "memory-summary", "memory-kind-filter", "memory-record-list", "topic-grid", "recall-grid",
   "memory-job-row", "goal-section-card", "goal-progress-card", "goal-editor-section", "goal-disclosure",
+  "active-run-strip", "RunActivityStrip", "workspace-run-status", "memory-job-state", "phase-badge", "goal-status-badge",
 ]) {
   check(!uiSource.includes(retired), `${retired} is retired; do not restore the old multi-column/collapsed UI`);
 }
@@ -241,6 +242,16 @@ for (const [selector, property, value] of statusRules) check(ruleHasDeclaration(
 
 check(ruleHasDeclaration(root, ".icon-button", "width", "var(--touch)", "(max-width: 680px)"), "Mobile icon buttons must use the 44px touch target");
 check(ruleHasDeclaration(root, ".composer-send", "height", "var(--touch)", "(max-width: 680px)"), "Mobile send must use the 44px touch target");
+check(ruleHasDeclaration(root, ".run-metrics", "grid-template-columns", "repeat(2, minmax(0, 1fr))", "(max-width: 680px)"), "Mobile Run metrics must retain readable numeric columns");
+check(ruleHasDeclaration(root, ".tool-call-body", "grid-template-columns", "minmax(0, 1fr)"), "Tool call bodies must constrain intrinsic content to the available column");
+check(ruleHasDeclaration(root, ".tool-call-body > div", "min-width", "0"), "Tool call sections must allow long content to shrink before its preformatted child scrolls");
+check(ruleHasDeclaration(root, ".status-label", "display", "inline-flex"), "Operational states must share the compact dot-and-label grammar");
+check(ruleHasDeclaration(root, ".continuation-row", "grid-template-columns", "minmax(0, 1fr) auto"), "Continuation rows must reserve a shrink-safe reason column");
+check(ruleHasDeclaration(root, ".continuation-row > div", "grid-template-columns", "auto minmax(0, 1fr)"), "Continuation reasons must shrink within the Run details ledger");
+check(ruleHasDeclaration(root, ".continuation-row > div > span", "overflow-wrap", "anywhere"), "Continuation identifiers must wrap instead of widening the Run details drawer");
+check(ruleHasDeclaration(root, ".memory-operation-group .memory-list > div > div", "grid-template-columns", "auto minmax(0, 1fr) auto"), "Memory jobs must keep status, source, and metrics on one scan line");
+check(ruleHasDeclaration(root, ".memory-operation-group .memory-list > div > div", "grid-template-columns", "auto minmax(0, 1fr)", "(max-width: 680px)"), "Mobile Memory jobs must move metrics below the primary status and source line");
+check(ruleHasDeclaration(root, ".memory-operation-group .memory-list > div > div > small", "grid-column", "2", "(max-width: 680px)"), "Mobile Memory job metrics must align with their source");
 
 const index = read(indexPath);
 const styleMatch = index.match(/<style>([\s\S]*?)<\/style>/);
