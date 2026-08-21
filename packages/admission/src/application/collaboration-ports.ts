@@ -36,4 +36,12 @@ export interface AdmissionDispatchPort {
     expectedVersion: number;
     inputRequestId: string;
   }): { approvalId: string; reason: string };
+  requestExternalActionApprovalForResume(input: {
+    runId: RunId;
+    attemptId: string;
+    attempt: number;
+    expectedVersion: number;
+    actorId: string;
+    reason: string;
+  }): { approvalId: string; reason: string };
 }

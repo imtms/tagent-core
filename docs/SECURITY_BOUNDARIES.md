@@ -52,7 +52,7 @@ The following are server-owned and cannot be asserted by a caller:
 - OS instance lock, writer lease, fence, and connection mutation guard;
 - canonical TaskRun/Attempt transition authority and the closed `RunEventMap` event vocabulary;
 - approval and capability authorization receipts;
-- Attempt-bound external-action approval activation after pre-effect guards and immediately before qualifying tool dispatch, with an append-only activation receipt, continued authority only inside that same Attempt, and fresh approval required before any later Attempt retries or resumes the action;
+- Attempt-bound external-action approval activation after pre-effect guards and immediately before qualifying tool dispatch, with an append-only activation receipt, continued authority only inside that same Attempt, and fresh approval required before any later Attempt retries or resumes the action; manual Resume creates that next-Attempt approval instead of advancing directly, while automatic crash recovery and legacy Continuations cannot cross the boundary;
 - current-Attempt Bash bindings and Core-derived check evidence;
 - immutable ToolRegistry snapshots and the Core-owned ToolExecutionPipeline guard/receipt/settlement path;
 - explicit external-action approval and a writer-fenced successful operation receipt before a managed Generation activation can reach the Host;

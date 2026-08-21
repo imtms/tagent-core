@@ -188,15 +188,26 @@ export class SqliteTaskRunTransitionRepository implements TaskRunTransitionPort 
           AND NOT EXISTS (SELECT 1 FROM user_input_requests pending
             WHERE pending.run_id=submitted.run_id AND pending.status='pending') LIMIT 1`)
         .get(scope.runId, scope.ordinal));
-    if (!runningBoundary && !submittedInputBoundary) {
-      throw new Error(`External approval requires a running Attempt or a submitted-input boundary for ${scope.attemptId}`);
-    }
-    const approval = this.db.prepare(`SELECT json_extract(metadata_json,'$.submittedInputRequestId') as submittedInputRequestId
+    const approval = this.db.prepare(`SELECT
+        json_extract(metadata_json,'$.submittedInputRequestId') as submittedInputRequestId,
+        json_extract(metadata_json,'$.manualResumeRequested') as manualResumeRequested
       FROM approval_requests
       WHERE id=? AND run_id=? AND action_type='execute_external_action' AND status='pending'
         AND CAST(json_extract(metadata_json,'$.approvedAttempt') AS INTEGER)=?`)
-      .get(command.approvalId, scope.runId, scope.ordinal + 1) as { submittedInputRequestId: string | null } | undefined;
+      .get(command.approvalId, scope.runId, scope.ordinal + 1) as {
+        submittedInputRequestId: string | null;
+        manualResumeRequested: number | null;
+      } | undefined;
     if (!approval) throw new Error(`External approval ${command.approvalId} is not pending for ${scope.runId}`);
+    const resumableFailure = scope.runStatus === "failed" && Boolean(this.db.prepare(`SELECT 1 FROM run_events
+      WHERE run_id=? AND attempt_id=? AND type='run.failed'
+        AND json_extract(data,'$.reason') IN ('idle_timeout','hard_timeout')
+      ORDER BY seq DESC LIMIT 1`).get(scope.runId, scope.attemptId));
+    const manualResumeBoundary = !scope.active && approval.manualResumeRequested === 1
+      && (scope.runStatus === "blocked" || scope.runStatus === "interrupted" || resumableFailure);
+    if (!runningBoundary && !submittedInputBoundary && !manualResumeBoundary) {
+      throw new Error(`External approval requires a running, submitted-input, or resumable boundary for ${scope.attemptId}`);
+    }
     if (submittedInputBoundary && (!approval.submittedInputRequestId || !this.db.prepare(`SELECT 1 FROM user_input_requests
       WHERE id=? AND run_id=? AND attempt=? AND status='submitted'`)
       .get(approval.submittedInputRequestId, scope.runId, scope.ordinal))) {
@@ -281,7 +292,11 @@ export class SqliteTaskRunTransitionRepository implements TaskRunTransitionPort 
         )`)
         .get(command.approvalId, scope.runId, scope.ordinal + 1);
       if (!approved) throw new Error(`Approval ${command.approvalId} cannot resume ${scope.attemptId}`);
-      if (scope.runStatus !== "blocked" && scope.runStatus !== "interrupted") {
+      const resumableFailure = scope.runStatus === "failed" && Boolean(this.db.prepare(`SELECT 1 FROM run_events
+        WHERE run_id=? AND attempt_id=? AND type='run.failed'
+          AND json_extract(data,'$.reason') IN ('idle_timeout','hard_timeout')
+        ORDER BY seq DESC LIMIT 1`).get(scope.runId, scope.attemptId));
+      if (scope.runStatus !== "blocked" && scope.runStatus !== "interrupted" && !resumableFailure) {
         throw new Error(`Approval resume cannot continue TaskRun from ${scope.runStatus}`);
       }
     } else {

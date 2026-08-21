@@ -231,6 +231,8 @@ Commands are scoped by `(principal, taskRunId, commandId)`. Core checks the dura
 
 Supported commands are `task_run.steer`, `task_run.follow_up`, `task_run.cancel`, `task_run.resume`, `task_run.compact`, `task_run.submit_user_input`, and `task_run.resolve_approval`. `steer` and `follow_up` return after the fenced control intent is durable; Runtime delivery continues asynchronously. `TaskRun.pendingInteractions` is the typed source for pending Approval and User Input UI. Gateway needs only `runs:read` and `runs:control`.
 
+`task_run.resume` advances ordinary resumable Runs immediately. For a Run whose immutable policy or approval history includes an external action, the same command succeeds by creating a pending `execute_external_action` interaction bound to `currentAttempt + 1`; it normalizes interrupted or timeout-failed state to `blocked` but does not advance the Attempt or launch Runtime. The client must refresh the TaskRun, render that approval, and use `task_run.resolve_approval`. Only approval of that exact bound request advances the Run. This also applies after restart, a resumable idle/hard timeout, or dynamic discovery of an explicit external tool; automatic crash-recovery Continuations never bypass it.
+
 An interrupted command or Goal operation with no provable terminal receipt becomes `outcome_unknown` at restart and is never blindly re-executed. The caller must inspect the TaskRun/Goal and reconcile with a new identity if required.
 
 ## Bounded reads and artifacts

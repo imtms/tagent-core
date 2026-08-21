@@ -1,6 +1,6 @@
 {
   "name": "@tagent/core-service",
-  "version": "0.8.14",
+  "version": "0.8.15",
   "private": true,
   "type": "module",
   "sideEffects": false,
@@ -38,14 +38,14 @@
     "clean": "tsc -b --clean && rm -rf dist"
   },
   "dependencies": {
-    "@tagent/admission": "0.8.14",
-    "@tagent/execution": "0.8.14",
-    "@tagent/governance": "0.8.14",
-    "@tagent/http-fastify": "0.8.14",
-    "@tagent/memory": "0.8.14",
-    "@tagent/persistence-sqlite": "0.8.14",
-    "@tagent/runtime-pi": "0.8.14",
-    "@tagent/workspace-local": "0.8.14",
+    "@tagent/admission": "0.8.15",
+    "@tagent/execution": "0.8.15",
+    "@tagent/governance": "0.8.15",
+    "@tagent/http-fastify": "0.8.15",
+    "@tagent/memory": "0.8.15",
+    "@tagent/persistence-sqlite": "0.8.15",
+    "@tagent/runtime-pi": "0.8.15",
+    "@tagent/workspace-local": "0.8.15",
     "fflate": "^0.8.2",
     "yaml": "^2.9.0"
   },

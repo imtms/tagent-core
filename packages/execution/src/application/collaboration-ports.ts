@@ -122,6 +122,14 @@ export interface RunContextPort {
 }
 
 export interface ExternalActionApprovalBoundaryPort {
+  requestForResume(input: {
+    runId: RunId;
+    attemptId: string;
+    attempt: number;
+    expectedVersion: number;
+    actorId: string;
+    reason: string;
+  }): { approvalId: string; reason: string };
   requestAfterUserInput(input: {
     runId: RunId;
     attemptId: string;

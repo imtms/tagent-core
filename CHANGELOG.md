@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## [0.8.15] - 2026-08-21
+
+### External-action resume correctness
+
+- Changed manual Resume on an inactive external-action TaskRun from a rejected ordinary resume into a real approval request bound to the next Attempt; the Run is normalized to its blocked interaction boundary without advancing the Attempt, and approving that card is the only operation that launches Runtime.
+- Prevented safe-crash recovery and legacy queued Continuations from automatically advancing any Run that has external-action policy or approval history, including Tasks that discovered an explicit remote tool dynamically.
+- Added current-Attempt authorization state to the Core-owned runtime tail and approval-resume prompt so the Agent continues through normal tools after approval instead of asking users for approval IDs, tokens, or receipts.
+- Kept generic resume approvals from authorizing external-action Attempts and extended bound approval recovery to resumable idle/hard-timeout failures.
+- Limited timeout resumability to the current Attempt so an older timeout cannot make a later ordinary failure resumable.
+
+### Compatibility
+
+- The public ABI, SQLite schema revision `2`, Memory schema, and `tagent-core/state-0.8-r2` protocol are unchanged; no data migration is required.
+
 ## [0.8.14] - 2026-08-21
 
 ### Web Console structural refinement

@@ -44,6 +44,7 @@ export class ContinuationScheduler {
   public queueContinuation(runId: RunId, providerFailure?: RuntimeProviderFailure) {
     const run = this.state.persistence.taskRuns.getRun(runId);
     if (!run || run.status !== "blocked") return;
+    if (this.requiresExternalActionApproval(run)) return;
     const delayedProviderRetry = Boolean(providerFailure?.retryable && providerFailure.retryAfterMs);
     const currentSignature = continuationProgressSignature(run);
     const latestSignatures = run.continuations
@@ -79,6 +80,19 @@ export class ContinuationScheduler {
   public startQueuedContinuation(runId: RunId) {
     if (this.state.closing) return;
     if (this.state.runtimes.has(runId)) return;
+    const current = this.state.persistence.taskRuns.getRun(runId);
+    if (current && this.requiresExternalActionApproval(current)) {
+      const queued = current.continuations.some((continuation) => continuation.status === "queued");
+      this.state.persistence.continuations.cancelQueuedContinuations(
+        runId,
+        "External-action continuation requires a fresh Attempt-bound approval",
+      );
+      if (queued) this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "continuation.stalled", {
+        reason: "external_action_reapproval_required",
+        attempt: current.attempt,
+      }));
+      return;
+    }
     this.dependencies.recovery.repairTranscript(runId, "continuation");
     const claimed = this.state.persistence.continuations.claimContinuation(runId, this.state.continuationOwner, 30_000);
     if (!claimed) return;
@@ -169,6 +183,11 @@ export class ContinuationScheduler {
     this.state.preparationTasks.get(runId)?.controller.abort(new Error("Cancelled by user"));
     if (runtime) void this.dependencies.runtimeRegistry.abortRuntime(runtime, runId);
     return true;
+  }
+
+  private requiresExternalActionApproval(run: TaskRun) {
+    return effectiveTaskExecutionPolicy(run.contract).mode === "external_action"
+      || run.supervision.approvalRequests.some((approval) => approval.actionType === "execute_external_action");
   }
 }
 

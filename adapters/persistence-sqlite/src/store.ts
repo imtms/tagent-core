@@ -1217,6 +1217,7 @@ ${source.content}`;
         CASE WHEN runs.status IN ('interrupted','blocked') THEN 1
           WHEN runs.status='failed' AND EXISTS(
             SELECT 1 FROM run_events event WHERE event.run_id=runs.id AND event.type='run.failed'
+              AND event.attempt_id=('attempt:' || runs.id || ':' || runs.attempt)
               AND json_extract(event.data,'$.reason') IN ('idle_timeout','hard_timeout')
           ) THEN 1 ELSE 0 END as resumable
       FROM runs
@@ -1244,6 +1245,7 @@ ${source.content}`;
         CASE WHEN runs.status IN ('interrupted','blocked') THEN 1
           WHEN runs.status='failed' AND EXISTS(
             SELECT 1 FROM run_events event WHERE event.run_id=runs.id AND event.type='run.failed'
+              AND event.attempt_id=('attempt:' || runs.id || ':' || runs.attempt)
               AND json_extract(event.data,'$.reason') IN ('idle_timeout','hard_timeout')
           ) THEN 1 ELSE 0 END as resumable
       FROM runs WHERE runs.session_id=? ORDER BY runs.updated_at DESC,runs.id DESC LIMIT 1
@@ -1388,6 +1390,10 @@ ${source.content}`;
           AND interruption.seq=(SELECT MAX(latest.seq) FROM run_events latest
             WHERE latest.run_id=run.id AND latest.type='restart.interruption')
         WHERE run.status='interrupted'
+          AND COALESCE(json_extract(CASE WHEN json_valid(run.contract_json) THEN run.contract_json ELSE '{}' END,'$.executionPolicy.mode'),'') <> 'external_action'
+          AND COALESCE(json_extract(CASE WHEN json_valid(run.contract_json) THEN run.contract_json ELSE '{}' END,'$.executionPolicy.sideEffectRisk'),'') <> 'external_high'
+          AND NOT EXISTS (SELECT 1 FROM approval_requests external_approval
+            WHERE external_approval.run_id=run.id AND external_approval.action_type='execute_external_action')
           AND NOT EXISTS (SELECT 1 FROM run_continuations continuation
             WHERE continuation.run_id=run.id AND continuation.status IN ('queued','running'))
           AND NOT EXISTS (SELECT 1 FROM operations operation
@@ -2597,12 +2603,16 @@ ${source.content}`;
   }
 
   private isRunResumable(runId: RunId) {
-    const row = this.db.prepare(`SELECT status FROM runs WHERE id = ?`).get(runId) as { status: RunStatus } | undefined;
+    const row = this.db.prepare(`SELECT status,attempt FROM runs WHERE id = ?`).get(runId) as {
+      status: RunStatus;
+      attempt: number;
+    } | undefined;
     if (!row) return false;
     if (["interrupted", "blocked"].includes(row.status)) return true;
     if (row.status !== "failed") return false;
-    return Boolean(this.db.prepare(`SELECT 1 FROM run_events WHERE run_id = ? AND type = 'run.failed'
-      AND json_extract(data, '$.reason') IN ('idle_timeout', 'hard_timeout') ORDER BY seq DESC LIMIT 1`).get(runId));
+    return Boolean(this.db.prepare(`SELECT 1 FROM run_events WHERE run_id = ? AND attempt_id = ? AND type = 'run.failed'
+      AND json_extract(data, '$.reason') IN ('idle_timeout', 'hard_timeout') ORDER BY seq DESC LIMIT 1`)
+      .get(runId, this.attemptId(runId, row.attempt)));
   }
 
   resumeRun(runId: RunId) {

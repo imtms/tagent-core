@@ -10,6 +10,7 @@ import { buildRuntimeDynamicContext } from "./runtime-dynamic-context.js";
 import { loadProjectContext, projectContextItems } from "./project-context-projection.js";
 import { submitRunUserInput } from "./user-input-submission.js";
 import type { ExecutionStateView } from "./execution-state.js";
+import { prepareExternalActionResumeBoundary } from "./external-action-resume-boundary.js";
 import type {
   AttemptLauncherPort,
   ContextEnrichmentPort,
@@ -42,16 +43,13 @@ export class RunContextService {
   getRun(runId: RunId) {
     return this.state.persistence.taskRuns.getRun(runId);
   }
-
   getCurrentAttemptId(runId: RunId) {
     const run = this.state.persistence.taskRuns.getRun(runId);
     return run ? this.state.persistence.attempts.getAttemptForRun(runId, run.attempt)?.id ?? null : null;
   }
-
   requiresAsyncPreparation() {
     return this.dependencies.contextEnrichment.requiresAsyncPreparation();
   }
-
   rejectRunApproval(approvalId: string, resolution = "Rejected by user") {
     const approval = this.state.persistence.approvals.resolveApprovalRequest(approvalId, "rejected", "user", resolution);
     if (!approval) throw new Error("Approval request is not pending");
@@ -78,16 +76,16 @@ export class RunContextService {
       await this.state.executionTasks.get(runId);
     }
     if (this.state.runtimes.has(runId)) throw new Error("Run is already active");
-    if (this.state.persistence.approvals.hasPendingApproval(runId)) throw new Error("Run requires an approval decision before resume");
+    const boundary = prepareExternalActionResumeBoundary(
+      this.state,
+      this.dependencies.externalActionApproval,
+      runId,
+      options,
+    );
+    if (boundary.kind === "handled") return boundary.run;
+    const { sourceAttempt } = boundary;
     this.state.persistence.continuations.cancelQueuedContinuations(runId, "Superseded by manual resume");
     this.dependencies.recovery.repairTranscript(runId, "resume");
-    const sourceRun = this.state.persistence.taskRuns.getRun(runId);
-    if (!sourceRun) throw new Error(`TaskRun ${runId} does not exist`);
-    if (effectiveTaskExecutionPolicy(sourceRun.contract).mode === "external_action" && !options.approvalId) {
-      throw new Error("External-action TaskRun requires an approval-bound resume");
-    }
-    const sourceAttempt = this.state.persistence.attempts.getAttemptForRun(runId, sourceRun.attempt);
-    if (!sourceAttempt) throw new Error(`TaskRun ${runId} has no source Attempt ${sourceRun.attempt}`);
     const transitionRequest: readonly [SystemTransitionCommand, SystemTransitionAuthority]
       = options.inputRequest
         ? [{
@@ -128,9 +126,10 @@ export class RunContextService {
       || this.state.persistence.attempts.getAttempt(transition.targetAttemptId)?.runId !== runId) {
       throw new Error(`TaskRun ${runId} resume target does not match the persisted Run`);
     }
-    const provisionalPrompt = options?.inputRequest ? this.buildUserInputResumePrompt(run, options.inputRequest) : this.buildResumePrompt(run, this.state.persistence.transcript.getTranscriptCount(run.id));
+    const approvalBound = Boolean(options.approvalId);
+    const provisionalPrompt = options?.inputRequest ? this.buildUserInputResumePrompt(run, options.inputRequest) : this.buildResumePrompt(run, this.state.persistence.transcript.getTranscriptCount(run.id), approvalBound);
     const transcript = this.prepareTranscript(run, provisionalPrompt);
-    const prompt = options?.inputRequest ? this.buildUserInputResumePrompt(run, options.inputRequest) : this.buildResumePrompt(run, transcript.messages.length);
+    const prompt = options?.inputRequest ? this.buildUserInputResumePrompt(run, options.inputRequest) : this.buildResumePrompt(run, transcript.messages.length, approvalBound);
     this.publishContextEvents(run.id, transcript);
     const event = this.state.persistence.events.appendEvent(run.id, "run.resumed", { attempt: run.attempt, resumedAt: run.resumedAt, mode: transcript.messages.length ? "transcript-continuation" : "durable-snapshot-replay", transcriptCount: transcript.messages.length });
     this.dependencies.eventHub.publish(event);
@@ -253,7 +252,7 @@ export class RunContextService {
     ].join("\n\n");
   }
 
-  public buildResumePrompt(run: TaskRun, transcriptCount: number) {
+  public buildResumePrompt(run: TaskRun, transcriptCount: number, approvalBound = false) {
     const executionPolicy = effectiveTaskExecutionPolicy(run.contract);
     const governanceInstructions = taskPolicyResumeInstructions(executionPolicy);
     return [
@@ -263,10 +262,13 @@ export class RunContextService {
       transcriptCount
         ? "The prior user, assistant, tool-call, and tool-result messages are already loaded into the runtime context."
         : "The previous in-memory model transcript is unavailable. Reinspect the workspace and existing TaskRun state before acting.",
+      approvalBound && executionPolicy.mode === "external_action"
+        ? `Core has bound external-action approval to current Attempt ${run.attempt}. Do not ask the user for approval text, an approval ID, a token, or a receipt; continue with normal tools and let Core enforce the authorization at dispatch.`
+        : "",
       ...governanceInstructions,
       "Do not recreate already completed plan items or checks. Continue from the remaining incomplete work and verify before completion.",
       `Original goal: ${run.goal}`,
-    ].join("\n\n");
+    ].filter(Boolean).join("\n\n");
   }
 
   public buildSystemPrompt(projectContext = loadProjectContext(this.dependencies.projectContextSource)) {
@@ -291,6 +293,7 @@ export class RunContextService {
   public buildDynamicContext(runId: RunId, recalledMemory = "") {
     const run = this.state.persistence.taskRuns.getRun(runId);
     if (!run) throw new Error(`TaskRun ${runId} does not exist`);
-    return buildRuntimeDynamicContext(run, recalledMemory);
+    const externalAuthorization = this.state.persistence.approvals.inspectExternalActionAuthorization(runId, run.attempt);
+    return buildRuntimeDynamicContext(run, recalledMemory, externalAuthorization);
   }
 }

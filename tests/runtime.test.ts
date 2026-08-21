@@ -141,6 +141,14 @@ class DeferredRuntime implements AgentRuntime {
   getError() { return undefined; }
 }
 
+class PromptDeferredRuntime extends DeferredRuntime {
+  prompts: string[] = [];
+  override prompt(query = "") {
+    this.prompts.push(query);
+    return super.prompt();
+  }
+}
+
 class RejectingAbortRuntime extends DeferredRuntime {
   override async abort() {
     super.abort();
@@ -1018,6 +1026,241 @@ describe("Core application runtime boundary", () => {
       expect.objectContaining({ actionType: "execute_external_action", status: "approved", metadata: expect.objectContaining({ approvedAttempt: 2 }) }),
       expect.objectContaining({ actionType: "execute_external_action", status: "pending", metadata: expect.objectContaining({ approvedAttempt: 3 }) }),
     ]);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("turns manual resume of a blocked external-action Run into a fresh bound approval", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const policy = {
+      mode: "external_action", sideEffectRisk: "external_high", evidencePolicy: "trusted_check",
+      reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "external deployment",
+    } as const;
+    const contract = {
+      sourceInput: "deploy", summary: "deploy", objectives: [{ id: "o1", summary: "deploy", timing: "current" as const, kind: "release" as const }],
+      acceptanceCriteria: ["Deployment is verified"], scope: "production", nonGoals: [], sourceInboxIds: [],
+      parentRunId: null, relation: "independent" as const, intent: "new_task" as const,
+      decisionReason: "test", routerVersion: "test", executionPolicy: policy,
+    };
+    const run = store.createRun(session.id, "deploy", undefined, contract);
+    transitionTaskRun(store, run.id, "block", "Supervisor review unavailable");
+    const runtimeOptions: Array<Parameters<RuntimeFactory>[0]> = [];
+    const runtimes: PromptDeferredRuntime[] = [];
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => {
+        runtimeOptions.push(options);
+        const runtime = new PromptDeferredRuntime();
+        runtimes.push(runtime);
+        return runtime;
+      },
+    });
+
+    await expect(service.resume(run.id)).resolves.toMatchObject({ status: "blocked", attempt: 1 });
+    expect(runtimeOptions).toHaveLength(0);
+    const approval = store.listApprovalRequests(run.id).find((item) => item.status === "pending")!;
+    expect(approval).toMatchObject({
+      actionType: "execute_external_action",
+      metadata: {
+        approvedAttempt: 2,
+        requestedAttempt: 1,
+        manualResumeRequested: true,
+        resumeActorId: "user",
+        resumeReason: "Manual resume requested",
+      },
+    });
+    expect(store.listEvents(run.id).at(-1)).toMatchObject({
+      type: "supervisor.approval.requested",
+      data: { approvalId: approval.id, requestedAttempt: 1, approvedAttempt: 2, manualResumeRequested: true },
+    });
+    await expect(service.resume(run.id)).resolves.toMatchObject({ status: "blocked", attempt: 1 });
+    expect(store.listApprovalRequests(run.id).filter((item) => item.status === "pending")).toHaveLength(1);
+    expect(store.listEvents(run.id).filter((event) => event.type === "supervisor.approval.requested")).toHaveLength(1);
+
+    await expect(service.approveRunApproval(approval.id)).resolves.toMatchObject({ status: "running", attempt: 2 });
+    expect(runtimeOptions).toHaveLength(1);
+    expect(runtimes[0]!.prompts[0]).toContain("Core has bound external-action approval to current Attempt 2");
+    expect(runtimeOptions[0]!.dynamicContext?.()).toContain('EXTERNAL_ACTION_AUTHORIZATION: {"attempt":2,"status":"approved_for_current_attempt"}');
+    expect(runtimeOptions[0]!.dynamicContext?.()).toContain("do not ask for approval text, IDs, tokens, or receipts");
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("approval-resumes an external-action Run after a resumable timeout failure", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const policy = {
+      mode: "external_action", sideEffectRisk: "external_high", evidencePolicy: "trusted_check",
+      reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "external deployment",
+    } as const;
+    const contract = {
+      sourceInput: "deploy", summary: "deploy", objectives: [{ id: "o1", summary: "deploy", timing: "current" as const, kind: "release" as const }],
+      acceptanceCriteria: ["Deployment is verified"], scope: "production", nonGoals: [], sourceInboxIds: [],
+      parentRunId: null, relation: "independent" as const, intent: "new_task" as const,
+      decisionReason: "test", routerVersion: "test", executionPolicy: policy,
+    };
+    const run = store.createRun(session.id, "deploy", undefined, contract);
+    transitionTaskRun(store, run.id, "fail", "Run exceeded its idle timeout", { reason: "idle_timeout" });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime(),
+    });
+
+    await expect(service.resume(run.id)).resolves.toMatchObject({ status: "blocked", attempt: 1, resumable: true });
+    const approval = store.listApprovalRequests(run.id).find((item) => item.status === "pending")!;
+    await expect(service.approveRunApproval(approval.id)).resolves.toMatchObject({ status: "running", attempt: 2 });
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("recovers a timeout resume approval persisted before its blocked boundary", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const policy = {
+      mode: "external_action", sideEffectRisk: "external_high", evidencePolicy: "trusted_check",
+      reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "external deployment",
+    } as const;
+    const contract = {
+      sourceInput: "deploy", summary: "deploy", objectives: [{ id: "o1", summary: "deploy", timing: "current" as const, kind: "release" as const }],
+      acceptanceCriteria: ["Deployment is verified"], scope: "production", nonGoals: [], sourceInboxIds: [],
+      parentRunId: null, relation: "independent" as const, intent: "new_task" as const,
+      decisionReason: "test", routerVersion: "test", executionPolicy: policy,
+    };
+    const run = store.createRun(session.id, "deploy", undefined, contract);
+    transitionTaskRun(store, run.id, "fail", "Run exceeded its hard timeout", { reason: "hard_timeout" });
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime(),
+    });
+    store.db.exec(`CREATE TEMP TRIGGER reject_external_resume_boundary BEFORE UPDATE OF status ON runs
+      WHEN NEW.status='blocked' AND OLD.status='failed'
+      BEGIN SELECT RAISE(ABORT,'reject external resume boundary'); END`);
+
+    await expect(service.resume(run.id)).rejects.toThrow("reject external resume boundary");
+    const approval = store.listApprovalRequests(run.id).find((item) => item.status === "pending")!;
+    expect(store.getRun(run.id)).toMatchObject({ status: "failed", attempt: 1 });
+    expect(store.listEvents(run.id).filter((event) => event.type === "supervisor.approval.requested")).toHaveLength(0);
+    store.db.exec("DROP TRIGGER reject_external_resume_boundary");
+
+    await expect(service.resume(run.id)).resolves.toMatchObject({ status: "blocked", attempt: 1 });
+    expect(store.listApprovalRequests(run.id).filter((item) => item.status === "pending")).toHaveLength(1);
+    expect(store.listEvents(run.id).filter((event) => event.type === "supervisor.approval.requested")).toHaveLength(1);
+    expect(store.listSupervisorDecisions(run.id).find((decision) => decision.id === approval.decisionId))
+      .toMatchObject({ status: "executed" });
+    await expect(service.approveRunApproval(approval.id)).resolves.toMatchObject({ status: "running", attempt: 2 });
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("rejects a generic resume approval as external-action Attempt authority", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const policy = {
+      mode: "external_action", sideEffectRisk: "external_high", evidencePolicy: "trusted_check",
+      reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "external deployment",
+    } as const;
+    const contract = {
+      sourceInput: "deploy", summary: "deploy", objectives: [{ id: "o1", summary: "deploy", timing: "current" as const, kind: "release" as const }],
+      acceptanceCriteria: ["Deployment is verified"], scope: "production", nonGoals: [], sourceInboxIds: [],
+      parentRunId: null, relation: "independent" as const, intent: "new_task" as const,
+      decisionReason: "test", routerVersion: "test", executionPolicy: policy,
+    };
+    const run = store.createRun(session.id, "deploy", undefined, contract);
+    transitionTaskRun(store, run.id, "block", "Approval required");
+    const decision = new TaskRunSupervisor(store, reviewer()).proposeExternalActionStart(run.id, "generic resume fixture");
+    const generic = store.ensureApprovalRequest(run.id, decision.id, "generic resume approval");
+    store.resolveApprovalRequest(generic.id, "approved");
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime(),
+    });
+
+    await expect(service.resume(run.id, { approvalId: generic.id }))
+      .rejects.toThrow("requires approval bound to its next Attempt");
+    expect(store.getRun(run.id)).toMatchObject({ status: "blocked", attempt: 1 });
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("cancels a legacy queued external-action continuation instead of advancing Attempt", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const policy = {
+      mode: "external_action", sideEffectRisk: "external_high", evidencePolicy: "trusted_check",
+      reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "external deployment",
+    } as const;
+    const contract = {
+      sourceInput: "deploy", summary: "deploy", objectives: [{ id: "o1", summary: "deploy", timing: "current" as const, kind: "release" as const }],
+      acceptanceCriteria: ["Deployment is verified"], scope: "production", nonGoals: [], sourceInboxIds: [],
+      parentRunId: null, relation: "independent" as const, intent: "new_task" as const,
+      decisionReason: "test", routerVersion: "test", executionPolicy: policy,
+    };
+    const run = store.createRun(session.id, "deploy", undefined, contract);
+    transitionTaskRun(store, run.id, "block", "legacy continuation fixture");
+    const continuation = store.queueContinuation(run.id, "legacy external continuation");
+    let runtimeCalls = 0;
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => { runtimeCalls += 1; return new DeferredRuntime(); },
+    });
+
+    service.recoverContinuations();
+    await vi.waitFor(() => expect(store.listContinuations(run.id)[0]?.status).toBe("cancelled"));
+    expect(store.listContinuations(run.id)[0]).toMatchObject({
+      id: continuation.id,
+      error: "External-action continuation requires a fresh Attempt-bound approval",
+    });
+    expect(store.getRun(run.id)).toMatchObject({ status: "blocked", attempt: 1 });
+    expect(runtimeCalls).toBe(0);
+    expect(store.listEvents(run.id).at(-1)).toMatchObject({
+      type: "continuation.stalled",
+      data: { reason: "external_action_reapproval_required", attempt: 1 },
+    });
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("requires fresh approval when a prior Attempt discovered external authority dynamically", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const policy = {
+      mode: "workspace_mutation", sideEffectRisk: "workspace", evidencePolicy: "trusted_check",
+      reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "local change",
+    } as const;
+    const contract = {
+      sourceInput: "update", summary: "update", objectives: [{ id: "o1", summary: "update", timing: "current" as const, kind: "change" as const }],
+      acceptanceCriteria: ["Update is verified"], scope: "workspace", nonGoals: [], sourceInboxIds: [],
+      parentRunId: null, relation: "independent" as const, intent: "new_task" as const,
+      decisionReason: "test", routerVersion: "test", executionPolicy: policy,
+    };
+    const run = store.createRun(session.id, "update", undefined, contract);
+    const supervisor = new TaskRunSupervisor(store, reviewer());
+    const priorDecision = supervisor.proposeExternalActionStart(run.id, "discovered remote publish tool");
+    const priorApproval = store.ensureApprovalRequest(run.id, priorDecision.id, "approve discovered remote tool", {
+      actionType: "execute_external_action",
+      targetType: "taskrun",
+      targetId: run.id,
+      metadata: { sessionId: session.id, approvedAttempt: 1 },
+    });
+    store.resolveApprovalRequest(priorApproval.id, "approved");
+    transitionTaskRun(store, run.id, "block", "manual reconciliation required");
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => new DeferredRuntime(),
+    });
+
+    await expect(service.resume(run.id)).resolves.toMatchObject({ status: "blocked", attempt: 1 });
+    expect(store.listApprovalRequests(run.id).find((approval) => approval.status === "pending")).toMatchObject({
+      actionType: "execute_external_action",
+      metadata: { approvedAttempt: 2, requestedAttempt: 1, manualResumeRequested: true },
+    });
     await service.closeRuntimes();
     store.close();
   });

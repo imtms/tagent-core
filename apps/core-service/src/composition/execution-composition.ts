@@ -199,6 +199,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     contextEnrichment: collaborators.contextEnrichment,
     continuation: continuationRef.port,
     externalActionApproval: {
+      requestForResume: (input) => admissionRef.port.requestExternalActionApprovalForResume(input),
       requestAfterUserInput: (input) => admissionRef.port.requestExternalActionApprovalAfterUserInput(input),
     },
     eventHub,

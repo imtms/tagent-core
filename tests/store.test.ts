@@ -44,6 +44,10 @@ describe("Store", () => {
     store.transitionRun(timedOut.id, ["running"], "failed", "run.failed", { reason: "idle_timeout", limitMs: 120_000 }, "Run idle for 120000ms without progress", 1);
     expect(store.getRun(timedOut.id)).toMatchObject({ status: "failed", resumable: true });
     expect(store.resumeRun(timedOut.id)).toMatchObject({ status: "running", attempt: 2, resumable: false });
+    store.transitionRun(timedOut.id, ["running"], "failed", "run.failed", { reason: "runtime_initialization_failed" }, "failed", 2);
+    expect(store.getRun(timedOut.id)).toMatchObject({ status: "failed", attempt: 2, resumable: false });
+    expect(store.getLatestOperatorSessionTaskRun(session.id)).toMatchObject({ id: timedOut.id, resumable: 0 });
+    expect(() => store.resumeRun(timedOut.id)).toThrow("Run is not resumable");
 
     const ordinaryFailure = store.createRun(session.id, "ordinary failure");
     store.transitionRun(ordinaryFailure.id, ["running"], "failed", "run.failed", { reason: "runtime_initialization_failed" }, "failed", 1);
@@ -1057,6 +1061,27 @@ describe("Store", () => {
       type: "continuation.queued",
       data: { reason: "safe_crash_recovery" },
     });
+  });
+
+  it("never queues automatic crash recovery for an external-action TaskRun", () => {
+    const store = createStore();
+    const session = store.createSession();
+    const policy = {
+      mode: "external_action", sideEffectRisk: "external_high", evidencePolicy: "trusted_check",
+      reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "external deployment",
+    } as const;
+    const contract = {
+      sourceInput: "deploy", summary: "deploy", objectives: [{ id: "o1", summary: "deploy", timing: "current" as const, kind: "release" as const }],
+      acceptanceCriteria: ["Deployment is verified"], scope: "production", nonGoals: [], sourceInboxIds: [],
+      parentRunId: null, relation: "independent" as const, intent: "new_task" as const,
+      decisionReason: "test", routerVersion: "test", executionPolicy: policy,
+    };
+    const run = store.createRun(session.id, "deploy", undefined, contract);
+    store.markInterrupted();
+
+    expect(store.queueSafeCrashRecoveryContinuations()).toEqual([]);
+    expect(store.getRun(run.id)).toMatchObject({ status: "interrupted", attempt: 1, continuations: [] });
+    store.close();
   });
 
   it.each([

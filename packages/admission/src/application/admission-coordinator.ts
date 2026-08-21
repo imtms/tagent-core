@@ -442,22 +442,30 @@ export class AdmissionCoordinator {
       throw error;
     }
     input.onApprovalEnsured?.();
-    const transition = this.state.persistence.taskRunTransitions.transitionSystem({
-      kind: "require_external_approval",
-      attemptId: input.attempt.id,
-      expectedVersion: input.attempt.version,
-      approvalId: approval.id,
-      reason: input.reason,
-    }, {
-      kind: "external_action_guard",
-      component: "admission_coordinator",
-      approvalId: approval.id,
-    }).transitions[0];
+    let transition: ReturnType<typeof this.state.persistence.taskRunTransitions.transitionSystem>["transitions"][number] | undefined;
+    try {
+      transition = this.state.persistence.taskRunTransitions.transitionSystem({
+        kind: "require_external_approval",
+        attemptId: input.attempt.id,
+        expectedVersion: input.attempt.version,
+        approvalId: approval.id,
+        reason: input.reason,
+      }, {
+        kind: "external_action_guard",
+        component: "admission_coordinator",
+        approvalId: approval.id,
+      }).transitions[0];
+    } catch (error) {
+      this.dependencies.supervisor.markExecuted(decision.id, "failed", error instanceof Error ? error.message : String(error));
+      throw error;
+    }
     if (!transition?.event) throw new Error(input.transitionError);
-    this.dependencies.supervisor.markExecuted(
-      decision.id,
-      approval.decisionId === decision.id ? "executed" : "superseded",
-    );
+    if (approval.decisionId === decision.id) {
+      this.dependencies.supervisor.markExecuted(decision.id, "executed");
+    } else {
+      this.dependencies.supervisor.markExecuted(decision.id, "superseded");
+      this.dependencies.supervisor.markExecuted(approval.decisionId, "executed");
+    }
     this.dependencies.eventHub.publish(transition.event);
     this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(input.run.id, "supervisor.approval.requested", {
       approvalId: approval.id,
@@ -548,6 +556,53 @@ export class AdmissionCoordinator {
         inputRequestId: input.inputRequestId,
       },
       transitionError: `TaskRun ${run.id} post-input approval transition returned no event`,
+    });
+    return { approvalId: approval.id, reason };
+  }
+
+  public requestExternalActionApprovalForResume(input: {
+    runId: RunId;
+    attemptId: string;
+    attempt: number;
+    expectedVersion: number;
+    actorId: string;
+    reason: string;
+  }): { approvalId: string; reason: string } {
+    const run = this.state.persistence.taskRuns.getRun(input.runId);
+    const externalAction = run && (effectiveTaskExecutionPolicy(run.contract).mode === "external_action"
+      || run.supervision.approvalRequests.some((approval) => approval.actionType === "execute_external_action"));
+    if (!run || !run.resumable || run.attempt !== input.attempt || !externalAction) {
+      throw new Error(`TaskRun ${input.runId} is not an external-action resume boundary`);
+    }
+    const attempt = this.state.persistence.attempts.getAttempt(input.attemptId);
+    if (!attempt || attempt.runId !== run.id || attempt.ordinal !== input.attempt
+      || attempt.version !== input.expectedVersion || attempt.active) {
+      throw new Error(`Attempt ${input.attemptId} cannot request external-action resume approval`);
+    }
+    const actorId = input.actorId.trim();
+    if (!actorId || actorId.includes("\0")) throw new Error("External-action resume actor is invalid");
+    const resumeReason = input.reason.trim();
+    if (!resumeReason || resumeReason.includes("\0")) throw new Error("External-action resume reason is invalid");
+    const reason = `A fresh external-action approval is required before user-requested resume of TaskRun ${run.id} in Attempt ${run.attempt + 1}`;
+    const approval = this.requireExternalActionApprovalBoundary({
+      run,
+      attempt,
+      reason,
+      decisionSummary: resumeReason,
+      metadata: {
+        sessionId: run.sessionId,
+        approvedAttempt: run.attempt + 1,
+        requestedAttempt: run.attempt,
+        manualResumeRequested: true,
+        resumeActorId: actorId,
+        resumeReason,
+      },
+      requestedEventData: {
+        requestedAttempt: run.attempt,
+        approvedAttempt: run.attempt + 1,
+        manualResumeRequested: true,
+      },
+      transitionError: `TaskRun ${run.id} external resume approval transition returned no event`,
     });
     return { approvalId: approval.id, reason };
   }

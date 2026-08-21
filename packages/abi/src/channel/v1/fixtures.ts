@@ -89,7 +89,7 @@ export const commandResponseFixture = {
 
 export const coreCapabilitiesFixture = {
   data: {
-    releaseVersion: "0.8.14", apiVersions: ["channel.v1", "operator.console.v1", "operator.read.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 2,
+    releaseVersion: "0.8.15", apiVersions: ["channel.v1", "operator.console.v1", "operator.read.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 2,
     commandTypes: taskRunCommandFixtures.map((command) => command.type),
     eventTypes: ["task_run.started", "task_run.completed", "diagnostic.internal"],
     interactions: { approvalResolution: true, userInputSubmission: true },

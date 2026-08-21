@@ -24,7 +24,7 @@ import { ConsoleDecode } from "@tagent/core-client";
 import { createApp, type ServiceCredential } from "@tagent/http-fastify";
 import { createCoreApplication } from "@tagent/core-service/application";
 import { Store } from "@tagent/persistence-sqlite/store";
-import { corePersistence, httpTestResources } from "./support/test-persistence.js";
+import { corePersistence, httpTestResources, transitionTaskRun } from "./support/test-persistence.js";
 
 const apps: Array<ReturnType<typeof createApp>> = [];
 const temporaryDirectories: string[] = [];
@@ -129,7 +129,7 @@ describe("v1 API contracts", () => {
     expect(decodeAbi(SessionSchema, decodeAbi(SuccessEnvelopeSchema, read.json()).data)).toEqual(session);
     const capabilities = decodeAbi(CoreCapabilitiesResponseSchema, (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).data;
     expect(capabilities).toMatchObject({
-      releaseVersion: "0.8.14",
+      releaseVersion: "0.8.15",
       persistenceSchemaVersion: 2,
       interactions: { approvalResolution: true, userInputSubmission: true },
       operator: { roadmapGenerationIdempotent: true },
@@ -710,6 +710,47 @@ describe("v1 API contracts", () => {
     expect(decodeAbi(CommandResponseSchema, recovered.json()).data.receipt).toMatchObject({ state: "succeeded" });
     expect(store.getRun(runId)).toMatchObject({ status: "running", attempt: 2 });
     expect(store.listEvents(runId).filter((event) => event.type === "supervisor.approval.approved")).toHaveLength(1);
+  });
+
+  it("returns a pending bound approval instead of rejecting manual external-action resume", async () => {
+    const { app, store } = await fixture();
+    const session = store.createSession();
+    const policy = {
+      mode: "external_action", sideEffectRisk: "external_high", evidencePolicy: "trusted_check",
+      reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "external deployment",
+    } as const;
+    const contract = {
+      sourceInput: "deploy", summary: "deploy", objectives: [{ id: "o1", summary: "deploy", timing: "current" as const, kind: "release" as const }],
+      acceptanceCriteria: ["Deployment is verified"], scope: "production", nonGoals: [], sourceInboxIds: [],
+      parentRunId: null, relation: "independent" as const, intent: "new_task" as const,
+      decisionReason: "test", routerVersion: "test", executionPolicy: policy,
+    };
+    const run = store.createRun(session.id, "deploy", undefined, contract);
+    transitionTaskRun(store, run.id, "block", "Supervisor review unavailable");
+    const command = {
+      commandId: "external-manual-resume",
+      expectedAttemptId: null,
+      type: "task_run.resume" as const,
+      payload: { reason: "Resume requested by API test" },
+    };
+
+    const requested = await app.inject({ method: "POST", url: `/api/v1/task-runs/${run.id}/commands`, payload: command });
+    expect(requested.statusCode).toBe(200);
+    expect(decodeAbi(CommandResponseSchema, requested.json()).data.receipt).toMatchObject({ state: "succeeded" });
+    expect(store.getRun(run.id)).toMatchObject({ status: "blocked", attempt: 1 });
+    expect(store.listApprovalRequests(run.id)).toEqual([
+      expect.objectContaining({
+        actionType: "execute_external_action",
+        status: "pending",
+        metadata: expect.objectContaining({ approvedAttempt: 2, requestedAttempt: 1, manualResumeRequested: true }),
+      }),
+    ]);
+
+    const replayed = await app.inject({ method: "POST", url: `/api/v1/task-runs/${run.id}/commands`, payload: command });
+    expect(replayed.statusCode).toBe(200);
+    expect(decodeAbi(CommandResponseSchema, replayed.json()).data.receipt).toMatchObject({ state: "succeeded", replayed: true });
+    expect(store.listApprovalRequests(run.id)).toHaveLength(1);
+    expect(store.listEvents(run.id).filter((event) => event.type === "supervisor.approval.requested")).toHaveLength(1);
   });
 
   it("returns a retryable 429 envelope when the control inbox is full", async () => {

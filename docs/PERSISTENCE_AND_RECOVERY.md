@@ -42,7 +42,7 @@ Before this sequence, the Host resolves `current`, checks that it is a contained
 
 TaskRun state changes use the closed `TaskRunTransitionPort`. Attempt identity, version, execution lease token, and fence are validated inside the same transaction as runtime mutations. Approval-bound capability execution keeps approval use, operation authorization, and its append-only allow receipt in one atomic write. Runtime-tool external-action approval uses a separate Attempt activation: inspection is read-only, while activation revalidates the active persisted Attempt and atomically records its first-use state plus append-only receipt immediately before dispatch.
 
-User-input submission and human approval necessarily cross separate UI commands. Their intermediate states are recoverable without widening authority: retrying an already-submitted input must carry the same normalized values and can recreate only its missing next-Attempt approval boundary; retrying an already-approved external-action request can resume only its recorded `approvedAttempt`, and only when the Run is still on the immediately preceding Attempt. Repeated recovery does not append another user message or approval event, and an approval can never resume a later Attempt.
+User-input submission and human approval necessarily cross separate UI commands. Their intermediate states are recoverable without widening authority: retrying an already-submitted input must carry the same normalized values and can recreate only its missing next-Attempt approval boundary; retrying an already-approved external-action request can resume only its recorded `approvedAttempt`, and only when the Run is still on the immediately preceding Attempt. A manual Resume request on an inactive external-action Run does not advance the Attempt: it creates a real `execute_external_action` approval bound to the next Attempt, and only approval resolution can resume it. Generic `resume_taskrun` approval cannot substitute for that authority. Repeated command recovery does not append another user message or approval event, and an approval can never resume a later Attempt.
 
 ## Restart recovery
 
@@ -65,9 +65,10 @@ An unexpectedly terminated or heartbeat-unresponsive Generation is restarted by 
 - no tool attempt is still `running`;
 - no user input or approval is pending;
 - no Continuation is already queued or running;
+- the Run has neither external-action execution policy nor any external-action approval history;
 - the Run has used fewer than two automatic crash-recovery Continuations.
 
-The Continuation reason carries `[crash-recovery:<restart-event-sequence>]` and instructs the next Attempt to reuse transcript, receipts, Context Manifest, and checkpoints without repeating settled effects. Any ambiguity leaves the Run `interrupted` for human reconciliation.
+The Continuation reason carries `[crash-recovery:<restart-event-sequence>]` and instructs the next Attempt to reuse transcript, receipts, Context Manifest, and checkpoints without repeating settled effects. External-action Runs never cross this automatic boundary, even when no effect is ambiguous; a legacy queued external Continuation is cancelled before claim and the operator must request a fresh Attempt-bound approval. Any ambiguity leaves the Run `interrupted` for human reconciliation.
 
 ## Generation activation and handoff
 
