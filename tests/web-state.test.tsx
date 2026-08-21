@@ -44,7 +44,7 @@ import { indexMemoryJobsByMessage } from "../apps/web-console/src/use-memory-ann
 import { clampComposerHeight, nextComposerHistoryView, type ComposerHistoryView } from "../apps/web-console/src/use-workspace-composer.js";
 import { replaceWorkspace, workspaceCreateGuardDelay, WorkspaceAuthority, WorkspaceCreationGuard } from "../apps/web-console/src/use-workspace-sessions.js";
 import { hasPersistedSubmission } from "../apps/web-console/src/use-workspace-submission.js";
-import { storedGateProfiles, storedStringLists, storedStringRecord } from "../apps/web-console/src/workspace-preferences.js";
+import { storedGateProfiles, storedStringLists, storedStringRecord, storeStringRecord } from "../apps/web-console/src/workspace-preferences.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -274,6 +274,7 @@ describe("Web workbench behavior", () => {
       tokenCount: 2,
       generatedAt: 1,
     }} {...handlers} coreText="# Core Memory\n" />);
+    const busy = renderToStaticMarkup(<MemoryCoreProjection core={null} {...handlers} busy />);
 
     expect(empty).toContain("Generate snapshot");
     expect(empty).not.toContain("not generated");
@@ -284,6 +285,7 @@ describe("Web workbench behavior", () => {
     expect(generated).toContain("textarea");
     expect(generated).toContain("Regenerate");
     expect(generated).toContain("Save projection");
+    expect(busy).toContain("disabled");
   });
 
   it("keeps a forgotten Memory recoverable from the immediate result", () => {
@@ -336,6 +338,8 @@ describe("Web workbench behavior", () => {
       aliases: [], entityIds: [], relatedTopicIds: [], status: "active", createdAt: 1, updatedAt: 2,
     };
     const topicsOnly = renderToStaticMarkup(<MemoryCatalog records={[]} topics={[descriptor]} {...props} />);
+    const recordView = renderToStaticMarkup(<MemoryCatalog view="records" records={[record]} topics={[descriptor]} {...props} />);
+    const topicView = renderToStaticMarkup(<MemoryCatalog view="topics" records={[record]} topics={[descriptor]} {...props} />);
     const topicDetail = renderToStaticMarkup(<TopicDetail topic={{
       descriptor,
       revision: { id: "revision-1", revision: 1, checksum: "abc", tokenCount: 4, createdAt: 1 },
@@ -351,6 +355,10 @@ describe("Web workbench behavior", () => {
     expect(recordsOnly).not.toContain('class="memory-kind"');
     expect(topicsOnly).not.toContain(`Fact: ${repeatedTopic}`);
     expect(topicsOnly.match(/Use the current release contract\./g)).toHaveLength(1);
+    expect(recordView).toContain("Hot + Warm memory");
+    expect(recordView).not.toContain("Cold topic archive");
+    expect(topicView).toContain("Cold topic archive");
+    expect(topicView).not.toContain("Hot + Warm memory");
     expect(topicDetail).not.toContain(`Fact: ${repeatedTopic}`);
     expect(topicDetail.match(/Use the current release contract\./g)).toHaveLength(1);
     expect(selectMemoryTopicDetail(null, descriptor)).toBe(descriptor);
@@ -440,6 +448,11 @@ describe("Web workbench behavior", () => {
     expect(disputed).toContain("Resolve as valid");
     expect(disputed).toContain("Quarantine");
     expect(forgotten).toContain("Restore");
+    expect(forgotten).toContain("Recovery");
+    expect(forgotten).not.toContain(">Correct</button>");
+    expect(forgotten).not.toContain(">Confirm</button>");
+    expect(forgotten).not.toContain(">Helpful</button>");
+    expect(forgotten).not.toContain(">Wrong</button>");
     expect(forgotten).not.toContain(">Forget</button>");
   });
 
@@ -498,7 +511,7 @@ describe("Web workbench behavior", () => {
         roadmapItemId: null,
       },
     } satisfies WorkspaceGoal;
-    const renderGoal = (value: WorkspaceGoal) => renderToStaticMarkup(<GoalView
+    const renderGoal = (value: WorkspaceGoal, latestOperationRequestId = "") => renderToStaticMarkup(<GoalView
       goal={value}
       busy={false}
       decide={async () => undefined}
@@ -507,6 +520,7 @@ describe("Web workbench behavior", () => {
       onEditDefinition={() => undefined}
       onEditRoadmap={() => undefined}
       onOpenRun={() => undefined}
+      latestOperationRequestId={latestOperationRequestId}
     />);
     const empty = renderGoal(goal);
     const awaitingRoadmap = renderGoal({
@@ -536,6 +550,7 @@ describe("Web workbench behavior", () => {
         roadmapItemId: null,
       },
     });
+    const recoverable = renderGoal(goal, "request-1234567890");
     const populated = renderGoal({
       ...goal,
       definition: { ...goal.definition, content: { ...definition, scope: ["Web console"] } },
@@ -623,6 +638,10 @@ describe("Web workbench behavior", () => {
       roadmapProgress: [{ ...blockedProgress, runStatus: "failed", retryable: true }],
       nextAction: { ...blockedRoadmapGoal.nextAction, kind: "run_roadmap_item", primaryActionLabel: "Retry TaskRun" },
     });
+    const lifecycleLocked = renderGoal({
+      ...blockedRoadmapGoal,
+      roadmapProgress: [{ ...blockedProgress, status: "running", runStatus: "running", retryable: false }],
+    });
 
     expect(empty).not.toContain("Scope and boundaries");
     expect(empty).not.toContain("Linked TaskRuns");
@@ -642,6 +661,8 @@ describe("Web workbench behavior", () => {
     expect(awaitingRoadmap).toContain("Request changes");
     expect(awaitingRoadmap).toContain("Operation recovery");
     expect(awaitingRoadmap).toContain("Receipt by request ID");
+    expect(recoverable).toContain("Last request request-1234…");
+    expect(recoverable).toContain('value="request-1234567890"');
     expect(awaitingRoadmap).not.toContain("Roadmap v");
     expect(awaitingRoadmap).not.toContain("No Roadmap yet");
     expect(awaitingRoadmap).not.toContain("goal-progress-track");
@@ -670,6 +691,9 @@ describe("Web workbench behavior", () => {
     expect(nonRetryable).toContain('class="status-label" data-tone="warning"');
     expect(nonRetryable).not.toContain('class="section-heading" data-label');
     expect(retryable).toContain(">Retry</button>");
+    expect(retryable.match(/Inspect blocked Run/g)).toHaveLength(2);
+    expect(lifecycleLocked).toContain("Finish or resolve the active Roadmap work");
+    expect(lifecycleLocked).not.toContain(">Edit Goal</button>");
   });
 
   it("applies workspace and new-run view transitions atomically", () => {
@@ -1181,11 +1205,16 @@ describe("Web workbench behavior", () => {
       ["tagent.gate-profiles", JSON.stringify({ one: "strict", two: "unknown" })],
       ["tagent.workspace-emojis", JSON.stringify({ one: "🧠", invalid: 1 })],
     ]);
-    vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null });
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    });
     expect(storedStringRecord("strings")).toEqual({ valid: "value" });
     expect(storedStringLists("lists")).toEqual({ valid: ["one", "two"] });
     expect(storedGateProfiles()).toEqual({ one: "strict" });
     expect(storedStringRecord("tagent.workspace-emojis")).toEqual({ one: "🧠" });
+    storeStringRecord("tagent.goal-operation-requests", { "goal-1": "request-1" });
+    expect(storedStringRecord("tagent.goal-operation-requests")).toEqual({ "goal-1": "request-1" });
   });
 
   it("merges earlier conversation pages without duplicates and recognizes a full page", () => {

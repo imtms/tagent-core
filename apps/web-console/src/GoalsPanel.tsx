@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { ICON_SIZE } from "./icon-size";
+import { createRequestId } from "./id";
 import {
   api,
   type WorkspaceGoal,
@@ -24,6 +25,9 @@ import {
 } from "./api";
 import { formatCount } from "./count-format";
 import { goalStatusTone } from "./goal-display";
+import { storedStringRecord, storeStringRecord } from "./workspace-preferences";
+
+const goalOperationRequestsKey = "tagent.goal-operation-requests";
 
 const blankDefinition = (): WorkspaceGoalDefinition => ({
   title: "",
@@ -71,9 +75,18 @@ export function GoalsPanel({
   const [roadmap, setRoadmap] = useState<WorkspaceGoalRoadmap>(() => blankRoadmap());
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [lastOperationRequestId, setLastOperationRequestId] = useState("");
   const [busy, setBusy] = useState(true);
   const dialogRef = useRef<HTMLElement>(null);
   const onCloseRef = useRef(onClose);
+
+  const rememberOperationRequest = (goalId: string, requestId: string) => {
+    setLastOperationRequestId(requestId);
+    storeStringRecord(goalOperationRequestsKey, {
+      ...storedStringRecord(goalOperationRequestsKey),
+      [goalId]: requestId,
+    });
+  };
 
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
@@ -91,6 +104,7 @@ export function GoalsPanel({
     setEditor(null);
     setError("");
     setNotice("");
+    setLastOperationRequestId("");
     setBusy(true);
     void api.workspaceGoals(workspaceId)
       .then(async (next) => {
@@ -98,7 +112,10 @@ export function GoalsPanel({
         setItems(next);
         if (next[0]) {
           const first = await api.workspaceGoal(next[0].id);
-          if (active) setSelected(first);
+          if (active) {
+            setSelected(first);
+            setLastOperationRequestId(storedStringRecord(goalOperationRequestsKey)[first.id] ?? "");
+          }
         }
       })
       .catch((cause) => { if (active) setError(message(cause)); })
@@ -146,6 +163,7 @@ export function GoalsPanel({
     try {
       setSelected(await api.workspaceGoal(goalId));
       setEditor(null);
+      setLastOperationRequestId(storedStringRecord(goalOperationRequestsKey)[goalId] ?? "");
     } catch (cause) {
       setError(message(cause));
     } finally {
@@ -181,8 +199,10 @@ export function GoalsPanel({
     setBusy(true);
     setError("");
     setNotice("");
+    const requestId = createRequestId();
+    rememberOperationRequest(selected.id, requestId);
     try {
-      const next = await api.generateWorkspaceGoalRoadmap(selected.id);
+      const next = await api.generateWorkspaceGoalRoadmap(selected.id, requestId);
       setSelected(next);
       await refresh(next.id);
       setNotice("Roadmap draft generated. Review and edit it before approval.");
@@ -270,10 +290,13 @@ export function GoalsPanel({
               setNotice("");
               try {
                 if (editor === "definition" && selected) {
-                  await api.reviseWorkspaceGoal(selected.id, definition);
+                  const requestId = createRequestId();
+                  rememberOperationRequest(selected.id, requestId);
+                  await api.reviseWorkspaceGoal(selected.id, definition, requestId);
                   await refresh(selected.id);
                   setNotice("Definition updated. Approve the new revision before generating a Roadmap.");
                 } else {
+                  setLastOperationRequestId("");
                   const goal = await api.createWorkspaceGoal(workspaceId, definition);
                   setSelected(goal);
                   await refresh(goal.id);
@@ -297,7 +320,9 @@ export function GoalsPanel({
               setError("");
               setNotice("");
               try {
-                const next = await api.addWorkspaceGoalRoadmap(selected.id, roadmap);
+                const requestId = createRequestId();
+                rememberOperationRequest(selected.id, requestId);
+                const next = await api.addWorkspaceGoalRoadmap(selected.id, roadmap, requestId);
                 setSelected(next);
                 await refresh(selected.id);
                 setEditor(null);
@@ -317,6 +342,7 @@ export function GoalsPanel({
             onEditDefinition={beginDefinitionEdit}
             onEditRoadmap={beginRoadmapEdit}
             onOpenRun={onOpenRun}
+            latestOperationRequestId={lastOperationRequestId}
           /> : <GoalEmpty busy={busy} onCreate={beginDefinitionEdit} />}
         </main>
       </div>
@@ -429,7 +455,7 @@ function FormHeading({ eyebrow, title, description }: { eyebrow: string; title: 
   return <header className="goal-form-heading"><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></header>;
 }
 
-export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmapItem, onEditDefinition, onEditRoadmap, onOpenRun }: {
+export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmapItem, onEditDefinition, onEditRoadmap, onOpenRun, latestOperationRequestId = "" }: {
   goal: WorkspaceGoal;
   busy: boolean;
   decide: (kind: GoalDecisionKind, target?: GoalRevision | null, approvedItemIds?: string[], reason?: string) => Promise<void>;
@@ -438,6 +464,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
   onEditDefinition: () => void;
   onEditRoadmap: () => void;
   onOpenRun?: (runId: string) => void;
+  latestOperationRequestId?: string;
 }) {
   const definition = goal.definition?.content as WorkspaceGoalDefinition | undefined;
   const roadmap = goal.roadmap?.content as WorkspaceGoalRoadmap | undefined;
@@ -452,20 +479,25 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
   const defaultChangeTargetId = changeTargets.at(-1)?.id ?? "";
   const [changeTargetId, setChangeTargetId] = useState(defaultChangeTargetId);
   const [changeReason, setChangeReason] = useState("");
-  const [operationRequestId, setOperationRequestId] = useState("");
+  const [operationRequestId, setOperationRequestId] = useState(latestOperationRequestId);
   const [operationReceipt, setOperationReceipt] = useState<WorkspaceGoalOperationReceipt | null>(null);
   const [operationError, setOperationError] = useState("");
   const [operationBusy, setOperationBusy] = useState(false);
   useEffect(() => setSelectedItems(approval?.approvedItemIds ?? roadmap?.items.map((item) => item.id) ?? []), [goal.id, goal.roadmap?.id, goal.roadmap?.contentHash, approval?.id]);
   useEffect(() => { setChangeTargetId(defaultChangeTargetId); setChangeReason(""); }, [goal.id, defaultChangeTargetId]);
-  useEffect(() => { setOperationRequestId(""); setOperationReceipt(null); setOperationError(""); }, [goal.id]);
+  useEffect(() => { setOperationRequestId(latestOperationRequestId); setOperationReceipt(null); setOperationError(""); }, [goal.id, latestOperationRequestId]);
   const evidenceByCriterion = useMemo(() => new Map((definition?.criteria ?? []).map((criterion) => [criterion.key, goal.evidenceLinks.filter((link) => link.goalRevision === goal.definition?.revision && link.criterionKey === criterion.key)])), [definition, goal.definition?.revision, goal.evidenceLinks]);
   const progressByItem = useMemo(() => new Map(goal.roadmapProgress.map((item) => [item.itemId, item])), [goal.roadmapProgress]);
-  const canEdit = !["completed", "cancelled"].includes(goal.status) && !goal.currentRunId;
+  const hasActiveRoadmapWork = goal.roadmapProgress.some((item) => item.status === "running");
+  const lifecycleLocked = Boolean(goal.currentRunId) || hasActiveRoadmapWork;
+  const canEdit = !["completed", "cancelled"].includes(goal.status) && !lifecycleLocked;
   const verifiedPercent = goal.requiredCriteria ? Math.round(goal.verifiedCriteria / goal.requiredCriteria * 100) : 0;
   const approvedRoadmapItems = approval?.approvedItemIds.length ?? 0;
   const completedRoadmapItems = approval?.approvedItemIds.filter((itemId) => progressByItem.get(itemId)?.status === "completed").length ?? 0;
   const auditCount = goal.runLinks.length + goal.evidenceLinks.length + goal.decisions.length;
+  const nextRoadmapItem = goal.nextAction.kind === "run_roadmap_item"
+    ? roadmap?.items.find((item) => item.id === goal.nextAction.roadmapItemId)
+    : undefined;
 
   const nextAction = () => {
     if (goal.nextAction.kind === "review_goal") return void decide("approve_goal");
@@ -511,7 +543,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
     </header>
 
     {showsNextAction && <section className="goal-next-card">
-      <div className="goal-next-copy"><span className="eyebrow">Next action</span><strong>{goal.nextAction.title}</strong><small>{goal.nextAction.explanation}</small></div>
+      <div className="goal-next-copy"><span className="eyebrow">Next action</span><strong>{nextRoadmapItem?.title ?? goal.nextAction.title}</strong><small>{nextRoadmapItem?.outcome ?? goal.nextAction.explanation}</small></div>
       <div className="goal-next-actions">
         {canCreateRoadmapManually && <button className="control" onClick={onEditRoadmap} disabled={busy}><Plus size={ICON_SIZE.sm} />Create manually</button>}
         <button className="control" data-variant="primary" disabled={actionDisabled} onClick={nextAction}>{busy ? "Working…" : goal.nextAction.primaryActionLabel}</button>
@@ -584,17 +616,18 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
     {!['completed', 'cancelled'].includes(goal.status) && <details>
       <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Goal controls</span><small>Lifecycle and revision</small></summary>
       <div>
-        <div className="memory-inline-actions">{["active", "ready_to_close"].includes(goal.status) && <button className="control" disabled={busy || Boolean(goal.currentRunId)} onClick={() => void decide("pause")}>Pause Goal</button>}{goal.status === "paused" && <button className="control" data-variant="primary" disabled={busy} onClick={() => void decide("resume")}>Resume Goal</button>}{goal.status === "ready_to_close" && <button className="control" data-variant="primary" disabled={busy} onClick={() => { if (window.confirm("Close this Goal with the verified evidence? This cannot be undone.")) void decide("close"); }}>Close Goal</button>}<button className="control" data-tone="danger" disabled={busy || Boolean(goal.currentRunId)} onClick={() => { if (window.confirm("Cancel this Goal? This cannot be undone.")) void decide("cancel"); }}>Cancel Goal</button></div>
+        {lifecycleLocked && <p data-meta>Finish or resolve the active Roadmap work before revising or changing this Goal's lifecycle.</p>}
+        <div className="memory-inline-actions">{["active", "ready_to_close"].includes(goal.status) && <button className="control" disabled={busy || lifecycleLocked} onClick={() => void decide("pause")}>Pause Goal</button>}{goal.status === "paused" && <button className="control" data-variant="primary" disabled={busy} onClick={() => void decide("resume")}>Resume Goal</button>}{goal.status === "ready_to_close" && <button className="control" data-variant="primary" disabled={busy} onClick={() => { if (window.confirm("Close this Goal with the verified evidence? This cannot be undone.")) void decide("close"); }}>Close Goal</button>}<button className="control" data-tone="danger" disabled={busy || lifecycleLocked} onClick={() => { if (window.confirm("Cancel this Goal? This cannot be undone.")) void decide("cancel"); }}>Cancel Goal</button></div>
         {changeTargets.length > 0 && <div className="goal-form-columns">
           {changeTargets.length > 1 && <label className="goal-field"><span>Revision to reopen</span><select value={changeTargetId} onChange={(event) => setChangeTargetId(event.target.value)}>{changeTargets.map((target) => <option value={target.id} key={target.id}>{target.kind === "definition" ? "Goal definition" : "Roadmap"} v{target.revision}</option>)}</select></label>}
           <label className="goal-field"><span>Request a revision <small>reason required</small></span><textarea rows={3} value={changeReason} onChange={(event) => setChangeReason(event.target.value)} placeholder="What needs to change before this revision can guide work?" /></label>
-          <div className="memory-inline-actions"><button className="control" disabled={busy || Boolean(goal.currentRunId) || !changeReason.trim()} onClick={() => { const target = changeTargets.find((item) => item.id === changeTargetId); if (target) void decide("request_change", target, [], changeReason.trim()); }}>Request changes</button></div>
+          <div className="memory-inline-actions"><button className="control" disabled={busy || lifecycleLocked || !changeReason.trim()} onClick={() => { const target = changeTargets.find((item) => item.id === changeTargetId); if (target) void decide("request_change", target, [], changeReason.trim()); }}>Request changes</button></div>
         </div>}
       </div>
     </details>}
 
     <details>
-      <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Operation recovery</span><small>Receipt by request ID</small></summary>
+      <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Operation recovery</span><small>{latestOperationRequestId ? `Last request ${latestOperationRequestId.slice(0, 12)}…` : "Receipt by request ID"}</small></summary>
       <div>
         <div className="goal-form-columns">
           <label className="goal-field"><span>Request ID <small>definition, Roadmap, or generation</small></span><input maxLength={300} value={operationRequestId} onChange={(event) => setOperationRequestId(event.target.value)} placeholder="Paste the original request ID" /></label>

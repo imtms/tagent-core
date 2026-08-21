@@ -750,7 +750,7 @@ details[open] > summary .tool-chevron { transform: rotate(90deg); }
   .memory-toolbar { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .memory-search { height: auto; flex-wrap: wrap; }
   .memory-search input { flex-basis: calc(100% - 24px); }
-  .memory-search select { max-width: none; flex: 1; }
+  .memory-search select { min-width: 0; flex: 1; }
   .memory-toolbar > .memory-header-actions { justify-content: flex-end; }
   .skill-editor-grid { grid-template-columns: 1fr; }
   .skill-editor-content, .skill-editor-option { grid-column: 1; }

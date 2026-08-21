@@ -103,6 +103,8 @@ These routes are the Workspace Goal subset of the stable Operator profile, not C
 
 Every write requires a stable request ID. Definition/Roadmap revision and generation operations use `workspace_goal_operation_receipts`; Goal creation, decisions and TaskRun admission retain their existing durable identities. Reusing an identity with the same canonical payload returns the original result; different content is `workspace_goal.idempotency_conflict`. The operation GET exposes recovery state without another LLM call.
 
+The first-party Console creates definition-revision, Roadmap-revision and generation request IDs before dispatch, persists the latest ID per Goal in browser storage and pre-fills receipt recovery after Goal switches or reloads. This keeps an interrupted or outcome-unknown operation inspectable without asking the user for an identifier the UI never showed.
+
 Goal reads expose Roadmap `runStatus`/`retryable` and may include `nextAction.taskRunId` when the Run needing attention no longer owns `currentRunId`. State, stale-revision, pending-work and idempotency conflicts use HTTP 409 rather than being flattened into validation errors.
 
 ## Persistence

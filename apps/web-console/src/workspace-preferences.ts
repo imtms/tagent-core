@@ -17,6 +17,10 @@ export function storedStringRecord(key: string): Record<string, string> {
   } catch { return {}; }
 }
 
+export function storeStringRecord(key: string, value: Record<string, string>): void {
+  try { globalThis.localStorage?.setItem(key, JSON.stringify(value)); } catch { /* Browser storage is optional. */ }
+}
+
 export function storedGateProfiles(): Record<string, GateProfile> {
   const stored = storedStringRecord("tagent.gate-profiles");
   return Object.fromEntries(Object.entries(stored).filter((entry): entry is [string, GateProfile] => ["off", "relaxed", "strict"].includes(entry[1])));

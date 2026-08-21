@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Goal and Memory completeness follow-up
+
+- Made Goal definition, Roadmap revision, and Roadmap generation request IDs user-visible and directly reusable in operation recovery, made the next action name its concrete Roadmap item, and made lifecycle controls respect queued or running Roadmap work.
+- Replaced the duplicated Hot/Warm-plus-Cold Memory text wall with an explicit catalog-layer selector, invalidated stale Recall results when their cue or filters change, refreshed details after feedback, shared one mutation busy authority, limited deleted Records to recovery, and prevented repeated Core snapshot generation.
+
 ## [0.8.22] - 2026-08-22
 
 ### Goal and Memory workflow integrity

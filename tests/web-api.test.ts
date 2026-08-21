@@ -137,6 +137,21 @@ describe("Web API request headers", () => {
     await goals.workspaceGoalOperation("goal/1", "request uncertain");
     expect(calls[1]?.url).toBe("/api/v1/console/workspace-goals/goal%2F1/operations/request%20uncertain");
     expect(calls[1]?.init).toBeUndefined();
+
+    const definition = {
+      title: "Release safely", outcome: "The release is verified", scope: [], nonGoals: [],
+      criteria: [{ key: "verified", title: "CI passes", required: true }], completionPolicy: "user_confirm" as const,
+    };
+    await goals.reviseWorkspaceGoal("goal-1", definition, "definition-request");
+    await goals.addWorkspaceGoalRoadmap("goal-1", {
+      summary: "Verify and publish",
+      items: [{ id: "item-1", title: "Verify", outcome: "CI passes", verification: "Inspect CI", criterionKeys: ["verified"] }],
+    }, "roadmap-request");
+    await goals.generateWorkspaceGoalRoadmap("goal-1", "generation-request");
+
+    expect(JSON.parse(String(calls[2]?.init?.body))).toMatchObject({ requestId: "definition-request", actorId: "web_console" });
+    expect(JSON.parse(String(calls[3]?.init?.body))).toMatchObject({ requestId: "roadmap-request", actorId: "web_console" });
+    expect(JSON.parse(String(calls[4]?.init?.body))).toMatchObject({ requestId: "generation-request", actorId: "web_console" });
   });
 
   it("accepts only a credential-free HTTP(S) origin", () => {

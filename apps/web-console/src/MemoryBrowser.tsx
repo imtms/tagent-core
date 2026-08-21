@@ -122,6 +122,7 @@ export function MemoryRecallResults({
 interface MemoryCoreProjectionProps {
   core: CoreMemorySnapshot | null;
   coreText: string;
+  busy?: boolean;
   onCoreTextChange: (value: string) => void;
   onGenerate: () => void;
   onSave: () => void;
@@ -130,6 +131,7 @@ interface MemoryCoreProjectionProps {
 export function MemoryCoreProjection({
   core,
   coreText,
+  busy = false,
   onCoreTextChange,
   onGenerate,
   onSave,
@@ -142,7 +144,7 @@ export function MemoryCoreProjection({
             <span className="eyebrow">Stable injection</span>
             <h3>Core Memory Snapshot</h3>
           </div>
-          <button className="control" onClick={onGenerate}>Generate snapshot</button>
+          <button className="control" disabled={busy} onClick={onGenerate}>Generate snapshot</button>
         </div>
       </section>
     );
@@ -166,8 +168,8 @@ export function MemoryCoreProjection({
           />
         </div>
         <div className="memory-inline-actions">
-          <button className="control" onClick={onGenerate}>Regenerate</button>
-          <button className="control" data-variant="primary" onClick={onSave}>Save projection</button>
+          <button className="control" disabled={busy} onClick={onGenerate}>Regenerate</button>
+          <button className="control" data-variant="primary" disabled={busy} onClick={onSave}>Save projection</button>
         </div>
       </div>
     </details>
@@ -255,6 +257,7 @@ function ids(value: string): string[] {
 }
 
 interface MemoryCatalogProps {
+  view?: "all" | "records" | "topics";
   records: readonly WarmMemory[];
   topics: readonly TopicDescriptor[];
   selectedRecordId: string;
@@ -270,6 +273,7 @@ interface MemoryCatalogProps {
 }
 
 export function MemoryCatalog({
+  view = "all",
   records,
   topics,
   selectedRecordId,
@@ -283,8 +287,8 @@ export function MemoryCatalog({
   loadingMoreTopics,
   onLoadMoreTopics,
 }: MemoryCatalogProps) {
-  const showRecords = records.length > 0 || hasMoreRecords;
-  const showTopics = topics.length > 0 || hasMoreTopics;
+  const showRecords = view !== "topics" && (records.length > 0 || hasMoreRecords);
+  const showTopics = view !== "records" && (topics.length > 0 || hasMoreTopics);
   if (!showRecords && !showTopics) return null;
   return (
     <>

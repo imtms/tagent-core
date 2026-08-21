@@ -66,6 +66,8 @@ const memoryStatuses = [
   { value: "quarantined", label: "Quarantined" },
 ] as const satisfies readonly { value: "all" | MemoryStatus; label: string }[];
 
+type MemoryCatalogView = "records" | "topics";
+
 export interface ForgottenMemoryUndo {
   ids: string[];
   topicIds: string[];
@@ -99,6 +101,7 @@ export function MemoryPanel({
   const [core, setCore] = useState<CoreMemorySnapshot | null>(null);
   const [coreText, setCoreText] = useState("");
   const [query, setQuery] = useState("");
+  const [catalogView, setCatalogView] = useState<MemoryCatalogView>("records");
   const [kind, setKind] = useState<"all" | MemoryKind>("all");
   const [memoryStatus, setMemoryStatus] = useState<"all" | MemoryStatus>("all");
   const [results, setResults] = useState<RecallResult | null>(null);
@@ -236,6 +239,7 @@ export function MemoryPanel({
   }, [topics, query, kind, memoryStatus]);
 
   async function searchMemory() {
+    if (busy) return;
     const cue = query.trim();
     if (!cue) {
       setResults(null);
@@ -402,6 +406,7 @@ export function MemoryPanel({
     try {
       await api.memoryFeedback(scope, record.id, signal);
       setMessage(signal === "confirmed" ? "Memory confirmed as current." : signal === "helpful" ? "Helpful recall recorded." : "Incorrect recall recorded.");
+      await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -434,6 +439,8 @@ export function MemoryPanel({
   }
 
   async function generateCore() {
+    if (busy) return;
+    setBusy(true);
     setError("");
     setMessage("");
     try {
@@ -441,6 +448,8 @@ export function MemoryPanel({
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
     }
   }
   async function forgetTopic(topic: MemoryTopicDetail) {
@@ -500,7 +509,10 @@ export function MemoryPanel({
   const detailOpen = Boolean(selectedRecord || selectedTopic);
   const hasCatalogData = records.length > 0 || topics.length > 0;
   const hasMemoryData = hasCatalogData || core !== null;
-  const catalogHasMatches = filteredRecords.length > 0 || filteredTopics.length > 0 || hasMoreRecords || hasMoreTopics;
+  const catalogFiltersActive = Boolean(query.trim() || kind !== "all" || memoryStatus !== "all");
+  const catalogHasMatches = catalogView === "records"
+    ? filteredRecords.length > 0 || hasMoreRecords
+    : filteredTopics.length > 0 || hasMoreTopics;
   const initialLoading = status === null && busy;
 
   return (
@@ -525,6 +537,7 @@ export function MemoryPanel({
             <button
               className="icon-button"
               onClick={() => void refresh()}
+              disabled={busy}
               aria-label="Refresh memory"
             >
               <RefreshCw size={ICON_SIZE.lg} className={busy ? "spin" : ""} />
@@ -549,21 +562,25 @@ export function MemoryPanel({
               <Search size={ICON_SIZE.md} />
               <input
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => { setQuery(event.target.value); setResults(null); }}
                 aria-label="Search memory"
-                placeholder="Filter loaded catalog…"
+                placeholder={catalogView === "records" ? "Filter memory cards…" : "Filter Cold topics…"}
               />
-              <select value={kind} aria-label="Filter memory kind" onChange={(event) => setKind(event.target.value as "all" | MemoryKind)}>
+              <select value={catalogView} aria-label="Memory catalog view" onChange={(event) => { setCatalogView(event.target.value as MemoryCatalogView); setResults(null); }}>
+                <option value="records">Cards</option>
+                <option value="topics">Topics</option>
+              </select>
+              <select value={kind} aria-label="Filter memory kind" onChange={(event) => { setKind(event.target.value as "all" | MemoryKind); setResults(null); }}>
                 {memoryKinds.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
               </select>
-              <select value={memoryStatus} aria-label="Filter memory status" onChange={(event) => setMemoryStatus(event.target.value as "all" | MemoryStatus)}>
+              <select value={memoryStatus} aria-label="Filter memory status" onChange={(event) => { setMemoryStatus(event.target.value as "all" | MemoryStatus); setResults(null); }}>
                 {memoryStatuses.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
               </select>
-              <button className="control" type="submit">Recall</button>
+              <button className="control" type="submit" disabled={busy}>Recall</button>
             </form>}
           <div className="memory-header-actions">
             <button className="control" onClick={() => void exportMemory()} disabled={busy}><Download size={ICON_SIZE.md} />Export</button>
-            <button className="control" data-variant="primary" onClick={() => setCaptureOpen(true)}><Plus size={ICON_SIZE.md} />Add memory</button>
+            <button className="control" data-variant="primary" disabled={busy} onClick={() => setCaptureOpen(true)}><Plus size={ICON_SIZE.md} />Add memory</button>
           </div>
         </div>}
         <div className="memory-content">
@@ -574,6 +591,7 @@ export function MemoryPanel({
             {selectedRecord ? (
               <RecordDetail
                 record={selectedRecord}
+                busy={busy}
                 onForget={() => void forgetRecord(selectedRecord)}
                 onRestore={() => void restoreMemory([selectedRecord.id])}
                 onGovern={(action, resolution) => void govern(selectedRecord, action, { resolution })}
@@ -583,6 +601,7 @@ export function MemoryPanel({
             ) : selectedTopic ? (
               <TopicDetail
                 topic={selectedTopic}
+                busy={busy}
                 onForget={() => void forgetTopic(selectedTopic)}
                 onRestore={() => void restoreMemory([], [memoryTopicDescriptor(selectedTopic).topicId])}
               />
@@ -594,7 +613,7 @@ export function MemoryPanel({
                 <BrainCircuit size={ICON_SIZE.xl} />
                 <strong>No durable memories yet</strong>
                 <p>Add a stable fact, preference, event or procedure. Search and filters appear after the first memory is stored.</p>
-                <button className="control" data-variant="primary" onClick={() => setCaptureOpen(true)}><Plus size={ICON_SIZE.sm} />Add first memory</button>
+                <button className="control" data-variant="primary" disabled={busy} onClick={() => setCaptureOpen(true)}><Plus size={ICON_SIZE.sm} />Add first memory</button>
               </section>
               <MemoryJobLists reindexJobs={reindexJobs} jobs={jobs} busy={busy} onReindex={() => void runReindex()} onRestore={(ids, topicIds) => void restoreMemory(ids, topicIds)} />
             </> : <>
@@ -609,6 +628,7 @@ export function MemoryPanel({
                 }}
               />
               {catalogHasMatches ? <MemoryCatalog
+                  view={catalogView}
                   records={filteredRecords}
                   topics={filteredTopics}
                   selectedRecordId={selectedRecord?.id ?? ""}
@@ -623,16 +643,18 @@ export function MemoryPanel({
                   onLoadMoreTopics={() => void loadMoreTopics()}
                 /> : <section className="memory-empty">
                   <Search size={ICON_SIZE.lg} />
-                  <strong>{hasCatalogData ? "No catalog matches" : "No durable memories yet"}</strong>
-                  <p>{hasCatalogData ? "Clear the search phrase or choose another memory kind or state." : "Add a stable fact, preference, event or procedure."}</p>
-                  <button className="control" onClick={() => {
-                    if (hasCatalogData) { setQuery(""); setKind("all"); setMemoryStatus("all"); setResults(null); }
-                    else setCaptureOpen(true);
-                  }}>{hasCatalogData ? "Clear filters" : "Add first memory"}</button>
+                  <strong>{!hasCatalogData ? "No durable memories yet" : catalogFiltersActive ? "No catalog matches" : catalogView === "records" ? "No memory cards yet" : "No Cold topics yet"}</strong>
+                  <p>{!hasCatalogData ? "Add a stable fact, preference, event or procedure." : catalogFiltersActive ? "Clear the search phrase or choose another memory kind or state." : catalogView === "records" ? "Switch to Topics to inspect the Cold catalog." : "Switch to Cards to inspect Hot and Warm memory."}</p>
+                  <button className="control" disabled={busy} onClick={() => {
+                    if (!hasCatalogData) setCaptureOpen(true);
+                    else if (catalogFiltersActive) { setQuery(""); setKind("all"); setMemoryStatus("all"); setResults(null); }
+                    else setCatalogView(catalogView === "records" ? "topics" : "records");
+                  }}>{!hasCatalogData ? "Add first memory" : catalogFiltersActive ? "Clear filters" : catalogView === "records" ? "Browse topics" : "Browse cards"}</button>
                 </section>}
               <MemoryCoreProjection
                 core={core}
                 coreText={coreText}
+                busy={busy}
                 onCoreTextChange={setCoreText}
                 onGenerate={() => void generateCore()}
                 onSave={() => void saveCore()}
