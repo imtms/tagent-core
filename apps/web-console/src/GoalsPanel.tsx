@@ -445,7 +445,15 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
   const approval = goal.activeRoadmapRevisionId === goal.roadmap?.id ? matchingApproval : undefined;
   const requiresRoadmapRevision = Boolean(matchingApproval && !approval);
   const [selectedItems, setSelectedItems] = useState<string[]>(approval?.approvedItemIds ?? roadmap?.items.map((item) => item.id) ?? []);
+  const changeTargets = [
+    goal.activeDefinitionRevisionId === goal.definition?.id ? goal.definition : null,
+    goal.activeRoadmapRevisionId === goal.roadmap?.id ? goal.roadmap : null,
+  ].filter((item): item is GoalRevision => Boolean(item));
+  const defaultChangeTargetId = changeTargets.at(-1)?.id ?? "";
+  const [changeTargetId, setChangeTargetId] = useState(defaultChangeTargetId);
+  const [changeReason, setChangeReason] = useState("");
   useEffect(() => setSelectedItems(approval?.approvedItemIds ?? roadmap?.items.map((item) => item.id) ?? []), [goal.id, goal.roadmap?.id, goal.roadmap?.contentHash, approval?.id]);
+  useEffect(() => { setChangeTargetId(defaultChangeTargetId); setChangeReason(""); }, [goal.id, defaultChangeTargetId]);
   const evidenceByCriterion = useMemo(() => new Map((definition?.criteria ?? []).map((criterion) => [criterion.key, goal.evidenceLinks.filter((link) => link.goalRevision === goal.definition?.revision && link.criterionKey === criterion.key)])), [definition, goal.definition?.revision, goal.evidenceLinks]);
   const progressByItem = useMemo(() => new Map(goal.roadmapProgress.map((item) => [item.itemId, item])), [goal.roadmapProgress]);
   const canEdit = !["completed", "cancelled"].includes(goal.status) && !goal.currentRunId;
@@ -477,6 +485,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
       <div className="goal-hero-meta"><StatusBadge status={goal.status} />{canEdit && <button className="control" onClick={onEditDefinition} disabled={busy}><Pencil size={ICON_SIZE.sm} />Edit Goal</button>}</div>
       <h2>{definition?.title ?? "Untitled Goal"}</h2>
       <p>{definition?.outcome}</p>
+      {goal.definition && <small data-mono>definition v{goal.definition.revision} · {dateLabel(goal.updatedAt)}{goal.currentRunId ? ` · run ${goal.currentRunId.slice(0, 12)}` : ""}</small>}
     </header>
 
     {showsNextAction && <section className="goal-next-card">
@@ -541,9 +550,26 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
       <div className="goal-run-links">{[...goal.runLinks].reverse().map((link) => <button key={link.runId} onClick={() => onOpenRun?.(link.runId)}><code>{link.runId.slice(0, 12)}</code><span>{runLinkLabel(link)}</span></button>)}</div>
     </details>}
 
+    {goal.evidenceLinks.length > 0 && <details>
+      <summary><span><ChevronRight size={ICON_SIZE.sm} />Evidence log</span><small>{formatCount(goal.evidenceLinks.length, "link")}</small></summary>
+      <div className="goal-run-links">{[...goal.evidenceLinks].reverse().map((link) => <button key={link.id} onClick={() => onOpenRun?.(link.runId)}><code>{link.criterionKey}</code><span>{statusLabelForValue(link.status)} · run {link.runId.slice(0, 12)}{link.artifactId ? ` · artifact ${link.artifactId.slice(0, 10)}` : ""}</span></button>)}</div>
+    </details>}
+
+    {goal.decisions.length > 0 && <details>
+      <summary><span><ChevronRight size={ICON_SIZE.sm} />Decision history</span><small>{formatCount(goal.decisions.length, "decision")}</small></summary>
+      <div className="goal-run-links">{[...goal.decisions].reverse().map((decision) => <div key={decision.id}><code>{decisionLabel(decision.kind)}</code><span>{decision.reason ? `${decision.reason} · ` : ""}{decision.actorId} · {dateLabel(decision.createdAt)}</span></div>)}</div>
+    </details>}
+
     {!['completed', 'cancelled'].includes(goal.status) && <details className="goal-management">
-      <summary><span><ChevronRight size={ICON_SIZE.sm} />Goal controls</span><small>Pause or cancel</small></summary>
-      <div>{goal.status === "active" && <button className="control" disabled={busy || Boolean(goal.currentRunId)} onClick={() => void decide("pause")}>Pause Goal</button>}{goal.status === "paused" && <button className="control" data-variant="primary" disabled={busy} onClick={() => void decide("resume")}>Resume Goal</button>}<button className="control" data-tone="danger" disabled={busy || Boolean(goal.currentRunId)} onClick={() => { if (window.confirm("Cancel this Goal? This cannot be undone.")) void decide("cancel"); }}>Cancel Goal</button></div>
+      <summary><span><ChevronRight size={ICON_SIZE.sm} />Goal controls</span><small>Lifecycle and revision</small></summary>
+      <div>
+        <div className="memory-inline-actions">{["active", "ready_to_close"].includes(goal.status) && <button className="control" disabled={busy || Boolean(goal.currentRunId)} onClick={() => void decide("pause")}>Pause Goal</button>}{goal.status === "paused" && <button className="control" data-variant="primary" disabled={busy} onClick={() => void decide("resume")}>Resume Goal</button>}{goal.status === "ready_to_close" && <button className="control" data-variant="primary" disabled={busy} onClick={() => { if (window.confirm("Close this Goal with the verified evidence? This cannot be undone.")) void decide("close"); }}>Close Goal</button>}<button className="control" data-tone="danger" disabled={busy || Boolean(goal.currentRunId)} onClick={() => { if (window.confirm("Cancel this Goal? This cannot be undone.")) void decide("cancel"); }}>Cancel Goal</button></div>
+        {changeTargets.length > 0 && <div className="goal-form-columns">
+          {changeTargets.length > 1 && <label className="goal-field"><span>Revision to reopen</span><select value={changeTargetId} onChange={(event) => setChangeTargetId(event.target.value)}>{changeTargets.map((target) => <option value={target.id} key={target.id}>{target.kind === "definition" ? "Goal definition" : "Roadmap"} v{target.revision}</option>)}</select></label>}
+          <label className="goal-field"><span>Request a revision <small>reason required</small></span><textarea rows={3} value={changeReason} onChange={(event) => setChangeReason(event.target.value)} placeholder="What needs to change before this revision can guide work?" /></label>
+          <div className="memory-inline-actions"><button className="control" disabled={busy || Boolean(goal.currentRunId) || !changeReason.trim()} onClick={() => { const target = changeTargets.find((item) => item.id === changeTargetId); if (target) void decide("request_change", target, [], changeReason.trim()); }}>Request changes</button></div>
+        </div>}
+      </div>
     </details>}
   </article>;
 }
@@ -585,4 +611,16 @@ function decisionNotice(kind: GoalDecisionKind): string {
     close: "Goal closed with verified evidence.",
     cancel: "Goal cancelled.",
   } as const)[kind];
+}
+
+function decisionLabel(kind: WorkspaceGoal["decisions"][number]["kind"]): string {
+  return ({ approve_goal: "Goal approved", approve_roadmap: "Roadmap approved", request_change: "Changes requested", pause: "Paused", resume: "Resumed", close: "Closed", cancel: "Cancelled" } as const)[kind];
+}
+
+function statusLabelForValue(value: string): string {
+  return value.replaceAll("_", " ").replace(/^./, (character) => character.toUpperCase());
+}
+
+function dateLabel(value: number): string {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(value);
 }

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## [0.8.17] - 2026-08-21
+
+### Goal governance and audit visibility
+
+- Restored the operator-side `request_change` workflow for the active Goal Definition or Roadmap, including an explicit revision target and required reason, without adding a second navigation surface.
+- Added compact Definition revision, update, and current-Run context plus disclosure-led Evidence and Decision ledgers so Goal state can be audited from the same reading surface.
+- Made `ready_to_close` Goals pausable or directly closable while retaining the existing active-Run guards and keeping lifecycle actions subordinate to the current next action.
+
+### Memory lifecycle operations
+
+- Restored record correction, helpful/wrong feedback, disputed-record accept or quarantine decisions, inactive-record reactivation, and receipt-ID recovery for forgotten Records and Topics.
+- Added lifecycle filtering, compact active/candidate/disputed/cold counts, bounded JSON export, and a recovery form inside Memory operations; detailed governance remains behind the selected record or topic disclosure.
+- Reflowed the denser search/filter toolbar at 390px while preserving the neutral hairline hierarchy, full-width operational rows, and zero horizontal overflow.
+
+### Maintenance and compatibility
+
+- Extended API and rendered-state coverage for Goal change requests, Goal audit ledgers, Memory correction, restore, export, dispute resolution, reactivation, and forgotten-state controls.
+- Kept the canonical stylesheet within its existing ceilings at 772 lines, 394 rules, 500 selectors, and 1,442 declarations; desktop and 390px Goals and Memory were verified in light and dark themes without browser runtime errors.
+- The public ABI, SQLite schema revision `2`, Memory schema, and `tagent-core/state-0.8-r2` protocol are unchanged; no data migration is required. Deploy matching `0.8.17` Core, Web Console, ABI, and Core Client artifacts.
+
 ## [0.8.16] - 2026-08-21
 
 ### Web Console cohesion and overflow safety

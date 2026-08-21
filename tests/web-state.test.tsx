@@ -344,7 +344,9 @@ describe("Web workbench behavior", () => {
     const renderRecord = (value: WarmMemory) => renderToStaticMarkup(<RecordDetail
       record={value}
       onForget={() => undefined}
+      onRestore={() => undefined}
       onGovern={() => undefined}
+      onCorrect={() => undefined}
       onFeedback={() => undefined}
     />);
     const empty = renderRecord(record);
@@ -353,6 +355,8 @@ describe("Web workbench behavior", () => {
       topicIds: ["release"],
       sourceRefs: [{ sourceType: "message", sourceId: "message-1" }],
     });
+    const disputed = renderRecord({ ...record, status: "disputed" });
+    const forgotten = renderRecord({ ...record, status: "deleted" });
 
     expect(empty).not.toContain("Topic routes");
     expect(empty).not.toContain("Provenance");
@@ -362,6 +366,13 @@ describe("Web workbench behavior", () => {
     expect(populated).toContain(">release<");
     expect(populated).toContain("Provenance");
     expect(populated).toContain("message:message-1");
+    expect(populated).toContain("Correct");
+    expect(populated).toContain("Helpful");
+    expect(populated).toContain("Wrong");
+    expect(disputed).toContain("Resolve as valid");
+    expect(disputed).toContain("Quarantine");
+    expect(forgotten).toContain("Restore");
+    expect(forgotten).not.toContain(">Forget</button>");
   });
 
   it("maps Goal lifecycle states to shared semantic tones", () => {
@@ -460,6 +471,16 @@ describe("Web workbench behavior", () => {
     const populated = renderGoal({
       ...goal,
       definition: { ...goal.definition, content: { ...definition, scope: ["Web console"] } },
+      decisions: [{
+        id: "decision-1", requestId: "request-1", payloadHash: "payload-hash", goalId: goal.id,
+        targetRevisionId: "definition-1", targetHash: "definition-hash", kind: "approve_goal",
+        approvedItemIds: [], reason: "Ready to execute", actorId: "operator", createdAt: 1,
+      }],
+      evidenceLinks: [{
+        id: "evidence-1", goalId: goal.id, goalRevision: 1, criterionKey: "visual", runId: "run-1234567890",
+        checkKey: "visual-review", artifactId: "artifact-123456", operationId: null, sourceDigest: "digest",
+        status: "valid", createdAt: 2, updatedAt: 2,
+      }],
       runLinks: [{
         goalId: goal.id,
         runId: "run-1234567890",
@@ -549,6 +570,8 @@ describe("Web workbench behavior", () => {
     expect(awaitingRoadmap).toContain("Next action");
     expect(awaitingRoadmap).toContain("Generate Roadmap");
     expect(awaitingRoadmap).toContain("Create manually");
+    expect(awaitingRoadmap).toContain("Request a revision");
+    expect(awaitingRoadmap).toContain("Request changes");
     expect(awaitingRoadmap).not.toContain("Roadmap v");
     expect(awaitingRoadmap).not.toContain("No Roadmap yet");
     expect(awaitingRoadmap).not.toContain("goal-progress-track");
@@ -563,6 +586,10 @@ describe("Web workbench behavior", () => {
     expect(populated).toContain("Linked TaskRuns");
     expect(populated).toContain("1 linked");
     expect(populated).toContain("1 Roadmap item");
+    expect(populated).toContain("Evidence log");
+    expect(populated).toContain("Valid · run run-1234567");
+    expect(populated).toContain("Decision history");
+    expect(populated).toContain("Goal approved");
     expect(cancelled).toContain('data-tone="danger"');
     expect(cancelled).toContain("Cancelled");
     expect(nonRetryable).toContain(">Open</button>");

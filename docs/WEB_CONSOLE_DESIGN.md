@@ -123,7 +123,9 @@ Operational state uses one shared dot-and-label grammar, not feature-specific co
 
 Goals use one selector and one reading surface rather than an internal navigation rail.
 Completion criteria form one field group: one heading and explanation, one add action, then aligned criterion rows. At mobile widths the explanation and add action stack before the rows; criterion text occupies its own line above Required and remove controls.
-Memory shows either the catalog or one detail view, never a nested split view. The type filter lives beside search; scope/count summaries stay hidden, and feedback, governance, and Forget remain behind the detail controls disclosure.
+The active Goal definition and current Run stay visible in the hero. Evidence and decision history remain chronological ledgers behind disclosures, while pause, close, cancel, and revision requests share one lifecycle disclosure. Requesting changes must target the active Definition or Roadmap and retain an operator reason; it must not require leaving the Goal workspace.
+Memory shows either the catalog or one detail view, never a nested split view. The type filter lives beside search; raw scope and backend descriptions stay hidden, and feedback, governance, and Forget remain behind the detail controls disclosure.
+The Memory header exposes only compact lifecycle counts. Kind and status filters share the search toolbar; correction, disputed resolution, reactivation, feedback, and Forget remain in the detail disclosure. JSON export is a quiet toolbar action, and recovery by Record/Topic ID belongs in Memory operations because forgotten records are intentionally absent from the catalog.
 Memory operations use the same outer gutter as the catalog, keep job counts in section headings, and give each desktop job a full-width status/source/metrics row. At mobile widths, metrics move below and align with the source instead of compressing all three fields.
 Skills use the upload target as their empty creation state.
 Run details do not exist until a TaskRun exists. Continuation rows use zero-minimum grids and wrap long handoff identifiers so neither the row nor its content can widen the drawer.

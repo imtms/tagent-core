@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, drainTranscriptView, subscribe } from "../apps/web-console/src/api.js";
 import { normalizeCoreOrigin } from "../apps/web-console/src/api-transport.js";
+import { createGoalApi } from "../apps/web-console/src/goal-api.js";
 import { CoreClientError } from "@tagent/core-client";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -67,6 +68,40 @@ describe("Web API request headers", () => {
       method: "POST",
       body: JSON.stringify({ scope, snapshotCreatedAt: 600, after: { createdAt: 550, topicId: "topic-1" }, limit: 101 }),
     }));
+  });
+
+  it("keeps Memory correction, restore, and export reachable through the console client", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ records: [], topics: [] })), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ restoredRecords: 1, restoredTopics: 1 })), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ action: "correct", nextStatus: "active" })), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const scope = { type: "workspace" as const, id: "memory-admin" };
+
+    await api.memoryExport(scope, 500);
+    await api.memoryRestore(scope, ["record-1"], ["topic-1"]);
+    await api.memoryGovern(scope, "record-1", "correct", { title: "Correct title", content: "Correct content", reason: "Operator correction" });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/admin/memory/export", expect.objectContaining({ method: "POST", body: JSON.stringify({ scope, limit: 500 }) }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/admin/memory/restore", expect.objectContaining({ method: "POST", body: JSON.stringify({ scope, ids: ["record-1"], topicIds: ["topic-1"] }) }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/v1/admin/memory/govern", expect.objectContaining({ method: "POST", body: JSON.stringify({ scope, id: "record-1", action: "correct", title: "Correct title", content: "Correct content", reason: "Operator correction" }) }));
+  });
+
+  it("preserves the Goal request-change decision and its reason", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const goals = createGoalApi(async (url, init) => {
+      calls.push({ url, init });
+      return {} as never;
+    });
+
+    await goals.decideWorkspaceGoal("goal-1", "roadmap-2", "hash-2", "request_change", [], "Split the second step");
+
+    expect(calls[0]?.url).toBe("/api/v1/console/workspace-goals/goal-1/decisions");
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({
+      targetRevisionId: "roadmap-2", targetHash: "hash-2", kind: "request_change",
+      approvedItemIds: [], reason: "Split the second step", actorId: "web_console",
+    });
   });
 
   it("accepts only a credential-free HTTP(S) origin", () => {

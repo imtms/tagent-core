@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BrainCircuit,
   ChevronLeft,
+  Download,
   Plus,
   RefreshCw,
   Search,
@@ -15,6 +16,7 @@ import {
   type ColdTopic,
   type MemoryKind,
   type MemoryScope,
+  type MemoryStatus,
   type MemoryStatusResult,
   type RecallResult,
   type ReindexJob,
@@ -45,6 +47,16 @@ const memoryKinds = [
   { value: "procedure", label: "Procedures" },
 ] as const satisfies readonly { value: "all" | MemoryKind; label: string }[];
 
+const memoryStatuses = [
+  { value: "all", label: "Any state" },
+  { value: "active", label: "Active" },
+  { value: "candidate", label: "Candidates" },
+  { value: "disputed", label: "Disputed" },
+  { value: "stale", label: "Stale" },
+  { value: "superseded", label: "Superseded" },
+  { value: "quarantined", label: "Quarantined" },
+] as const satisfies readonly { value: "all" | MemoryStatus; label: string }[];
+
 export function MemoryPanel({
   runtime,
   onClose,
@@ -68,6 +80,7 @@ export function MemoryPanel({
   const [coreText, setCoreText] = useState("");
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<"all" | MemoryKind>("all");
+  const [memoryStatus, setMemoryStatus] = useState<"all" | MemoryStatus>("all");
   const [results, setResults] = useState<RecallResult | null>(null);
   const [selectedRecord, setSelectedRecord] = useState<WarmMemory | null>(null);
   const [selectedTopic, setSelectedTopic] = useState<ColdTopic | null>(null);
@@ -174,21 +187,23 @@ export function MemoryPanel({
     return records.filter(
       (record) =>
         (kind === "all" || record.kind === kind) &&
+        (memoryStatus === "all" || record.status === memoryStatus) &&
         (!needle ||
           `${memoryTitle(record)} ${memoryContent(record)} ${record.summary} ${record.topicIds.join(" ")}`
             .toLowerCase()
             .includes(needle)),
     );
-  }, [records, query, kind]);
+  }, [records, query, kind, memoryStatus]);
   const filteredTopics = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return topics.filter(
       (topic) =>
         (kind === "all" || topic.kind === kind) &&
+        (memoryStatus === "all" || topic.status === memoryStatus) &&
         (!needle ||
           `${topic.title} ${topic.description}`.toLowerCase().includes(needle)),
     );
-  }, [topics, query, kind]);
+  }, [topics, query, kind, memoryStatus]);
 
   async function searchMemory() {
     const cue = query.trim();
@@ -334,14 +349,13 @@ export function MemoryPanel({
   }
   async function govern(
     record: WarmMemory,
-    action: "approve" | "reject" | "resolve",
+    action: "approve" | "reject" | "resolve" | "correct",
+    options: { resolution?: "accept" | "reject"; title?: string; content?: string; reason?: string } = {},
   ) {
     setBusy(true);
     try {
-      await api.memoryGovern(scope, record.id, action, {
-        resolution: action === "resolve" ? "accept" : undefined,
-      });
-      setMessage(`Memory ${action}d.`);
+      await api.memoryGovern(scope, record.id, action, options);
+      setMessage(action === "correct" ? "Memory corrected and reindexed." : `Memory ${action}d.`);
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -413,6 +427,40 @@ export function MemoryPanel({
     }
   }
 
+  async function restoreMemory(ids: string[] = [], topicIds: string[] = []) {
+    if (!ids.length && !topicIds.length) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.memoryRestore(scope, ids.length ? ids : undefined, topicIds.length ? topicIds : undefined);
+      setMessage(`Restore requested for ${ids.length + topicIds.length} memory item${ids.length + topicIds.length === 1 ? "" : "s"}.`);
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportMemory() {
+    setBusy(true);
+    setError("");
+    try {
+      const snapshot = await api.memoryExport(scope, 500);
+      const url = URL.createObjectURL(new Blob([JSON.stringify({ scope, exportedAt: new Date().toISOString(), ...snapshot }, null, 2)], { type: "application/json" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `tagent-memory-${scope.id.replace(/[^a-z0-9._-]+/gi, "-") || "workspace"}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setMessage("Memory snapshot exported.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const detailOpen = Boolean(selectedRecord || selectedTopic);
   const hasCatalogData = records.length > 0 || topics.length > 0;
   const hasMemoryData = hasCatalogData || core !== null;
@@ -435,7 +483,7 @@ export function MemoryPanel({
         <header className="memory-header">
           <div>
             <BrainCircuit size={ICON_SIZE.xl} />
-            <h2>Memory</h2>
+            <span><h2>Memory</h2><small data-mono>{status ? `${status.records.active} active · ${status.records.candidate} candidate · ${status.records.disputed} disputed · ${status.coldTopics} cold` : `${scope.id} · ${runtime.memoryBackend ?? "memory"}/${runtime.memoryColdBackend ?? "local"}`}</small></span>
           </div>
           <div className="memory-header-actions">
             <button
@@ -472,16 +520,15 @@ export function MemoryPanel({
               <select value={kind} aria-label="Filter memory kind" onChange={(event) => setKind(event.target.value as "all" | MemoryKind)}>
                 {memoryKinds.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
               </select>
+              <select value={memoryStatus} aria-label="Filter memory status" onChange={(event) => setMemoryStatus(event.target.value as "all" | MemoryStatus)}>
+                {memoryStatuses.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
+              </select>
               <button type="submit">Recall</button>
             </form>}
-          <button
-            className="control"
-            data-variant="primary"
-            onClick={() => setCaptureOpen(true)}
-          >
-            <Plus size={ICON_SIZE.md} />
-            Add memory
-          </button>
+          <div className="memory-header-actions">
+            <button className="control" onClick={() => void exportMemory()} disabled={busy}><Download size={ICON_SIZE.md} />Export</button>
+            <button className="control" data-variant="primary" onClick={() => setCaptureOpen(true)}><Plus size={ICON_SIZE.md} />Add memory</button>
+          </div>
         </div>}
         <div className="memory-content">
           {error && <div className="notice" data-tone="danger" role="alert">{error}</div>}
@@ -492,13 +539,16 @@ export function MemoryPanel({
               <RecordDetail
                 record={selectedRecord}
                 onForget={() => void forgetRecord(selectedRecord)}
-                onGovern={(action) => void govern(selectedRecord, action)}
+                onRestore={() => void restoreMemory([selectedRecord.id])}
+                onGovern={(action, resolution) => void govern(selectedRecord, action, { resolution })}
+                onCorrect={(title, content, reason) => void govern(selectedRecord, "correct", { title, content, reason })}
                 onFeedback={(signal) => void feedback(selectedRecord, signal)}
               />
             ) : selectedTopic ? (
               <TopicDetail
                 topic={selectedTopic}
                 onForget={() => void forgetTopic(selectedTopic)}
+                onRestore={() => void restoreMemory([], [selectedTopic.descriptor.topicId])}
               />
             ) : null}
           </main> : <>
@@ -510,7 +560,7 @@ export function MemoryPanel({
                 <p>Add a stable fact, preference, event or procedure. Search and filters appear after the first memory is stored.</p>
                 <button className="control" data-variant="primary" onClick={() => setCaptureOpen(true)}><Plus size={ICON_SIZE.sm} />Add first memory</button>
               </section>
-              <MemoryJobLists reindexJobs={reindexJobs} jobs={jobs} busy={busy} onReindex={() => void runReindex()} />
+              <MemoryJobLists reindexJobs={reindexJobs} jobs={jobs} busy={busy} onReindex={() => void runReindex()} onRestore={(ids, topicIds) => void restoreMemory(ids, topicIds)} />
             </> : <>
               <MemoryRecallResults
                 results={results}
@@ -537,9 +587,12 @@ export function MemoryPanel({
                   onLoadMoreTopics={() => void loadMoreTopics()}
                 /> : <section className="memory-empty">
                   <Search size={ICON_SIZE.lg} />
-                  <strong>No catalog matches</strong>
-                  <p>Clear the search phrase or choose another memory kind.</p>
-                  <button onClick={() => { setQuery(""); setKind("all"); setResults(null); }}>Clear filters</button>
+                  <strong>{hasCatalogData ? "No catalog matches" : "No durable memories yet"}</strong>
+                  <p>{hasCatalogData ? "Clear the search phrase or choose another memory kind or state." : "Add a stable fact, preference, event or procedure."}</p>
+                  <button onClick={() => {
+                    if (hasCatalogData) { setQuery(""); setKind("all"); setMemoryStatus("all"); setResults(null); }
+                    else setCaptureOpen(true);
+                  }}>{hasCatalogData ? "Clear filters" : "Add first memory"}</button>
                 </section>}
               <MemoryCoreProjection
                 core={core}
@@ -548,7 +601,7 @@ export function MemoryPanel({
                 onGenerate={() => void generateCore()}
                 onSave={() => void saveCore()}
               />
-              <MemoryJobLists reindexJobs={reindexJobs} jobs={jobs} busy={busy} onReindex={() => void runReindex()} />
+              <MemoryJobLists reindexJobs={reindexJobs} jobs={jobs} busy={busy} onReindex={() => void runReindex()} onRestore={(ids, topicIds) => void restoreMemory(ids, topicIds)} />
             </>}
             </main>
           </>}

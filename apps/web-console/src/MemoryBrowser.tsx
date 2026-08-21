@@ -1,8 +1,10 @@
+import { useState } from "react";
 import {
   Activity,
   BrainCircuit,
   ChevronRight,
   RefreshCw,
+  RotateCcw,
   Snowflake,
 } from "lucide-react";
 import type {
@@ -161,10 +163,15 @@ interface MemoryJobListsProps {
   jobs: readonly CaptureJob[];
   busy: boolean;
   onReindex: () => void;
+  onRestore?: (recordIds: string[], topicIds: string[]) => void;
 }
 
-export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex }: MemoryJobListsProps) {
+export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex, onRestore }: MemoryJobListsProps) {
   const total = reindexJobs.length + jobs.length;
+  const [recordIds, setRecordIds] = useState("");
+  const [topicIds, setTopicIds] = useState("");
+  const restoreRecords = ids(recordIds);
+  const restoreTopics = ids(topicIds);
   return (
     <details className="memory-disclosure memory-list-section">
       <summary>
@@ -180,6 +187,17 @@ export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex }: MemoryJob
             Reindex durable memory
           </button>
         </div>
+        {onRestore && <details className="memory-disclosure">
+          <summary><RotateCcw size={ICON_SIZE.sm} /><strong>Restore forgotten memory</strong><small>Requires a receipt ID</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+          <div className="memory-disclosure-body">
+            <p data-meta>Forgotten items are hidden from the catalog. Paste record or topic IDs from an audit receipt before their grace period ends.</p>
+            <div className="goal-form-columns">
+              <label className="goal-field"><span>Record IDs <small>comma or line separated</small></span><textarea rows={3} value={recordIds} onChange={(event) => setRecordIds(event.target.value)} /></label>
+              <label className="goal-field"><span>Topic IDs <small>comma or line separated</small></span><textarea rows={3} value={topicIds} onChange={(event) => setTopicIds(event.target.value)} /></label>
+            </div>
+            <div className="memory-inline-actions"><button className="control" data-variant="primary" disabled={busy || restoreRecords.length + restoreTopics.length === 0} onClick={() => onRestore(restoreRecords, restoreTopics)}><RotateCcw size={ICON_SIZE.sm} />Restore selected IDs</button></div>
+          </div>
+        </details>}
         {reindexJobs.length > 0 && <section className="memory-operation-group">
           <header className="section-heading"><strong>Durable index</strong><small>{formatCount(reindexJobs.length, "job")}</small></header>
           <div className="memory-list">
@@ -214,6 +232,10 @@ export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex }: MemoryJob
       </div>
     </details>
   );
+}
+
+function ids(value: string): string[] {
+  return [...new Set(value.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean))];
 }
 
 interface MemoryCatalogProps {

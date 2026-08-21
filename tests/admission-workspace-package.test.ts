@@ -87,12 +87,12 @@ describe("Admission workspace package", () => {
     const root = readJson<{ devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const admission = readJson<PackageManifest>("packages/admission/package.json");
 
-    expect(admission).toMatchObject({ name: "@tagent/admission", version: "0.8.16", private: true });
+    expect(admission).toMatchObject({ name: "@tagent/admission", version: "0.8.17", private: true });
     expect(root.devDependencies[admission.name]).toBe(admission.version);
     expect(Object.keys(admission.exports).sort()).toEqual(expectedExports);
     expect(admission.dependencies).toEqual({
-      "@tagent/execution": "0.8.16",
-      "@tagent/governance": "0.8.16",
+      "@tagent/execution": "0.8.17",
+      "@tagent/governance": "0.8.17",
     });
     for (const [subpath, target] of Object.entries(admission.exports)) {
       expect(subpath).not.toContain("*");
