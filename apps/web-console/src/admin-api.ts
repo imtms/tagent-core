@@ -18,9 +18,9 @@ export function createAdminApi(request: ApiRequest) {
     memoryReindex: (scope: MemoryScope) => request("/api/v1/admin/memory/reindex", { method: "POST", body: JSON.stringify({ scope }) }, ConsoleDecode.reindexJob),
     memoryReindexJobs: (scope: MemoryScope) => request("/api/v1/admin/memory/reindex/jobs", { method: "POST", body: JSON.stringify({ scopes: [scope], limit: 20 }) }, ConsoleDecode.reindexJobs),
     memoryGovern: (scope: MemoryScope, id: string, action: "approve" | "reject" | "correct" | "resolve", options: Record<string, unknown> = {}) => request("/api/v1/admin/memory/govern", { method: "POST", body: JSON.stringify({ scope, id, action, ...options }) }, ConsoleDecode.jsonObject),
-    memoryFeedback: (scope: MemoryScope, recordId: string, signal: string) => request("/api/v1/admin/memory/feedback", { method: "POST", body: JSON.stringify({ scope, recordId, signal }) }, ConsoleDecode.jsonObject),
+    memoryFeedback: (scope: MemoryScope, recordId: string, signal: "helpful" | "confirmed" | "harmful") => request("/api/v1/admin/memory/feedback", { method: "POST", body: JSON.stringify({ scope, recordId, signal }) }, ConsoleDecode.jsonObject),
     memoryCoreSnapshot: (scope: MemoryScope, options: Record<string, unknown> = {}) => request("/api/v1/admin/memory/core-snapshot", { method: "POST", body: JSON.stringify({ scope, ...options }) }, ConsoleDecode.coreMemorySnapshot),
     memoryRestore: (scope: MemoryScope, ids?: string[], topicIds?: string[]) => request("/api/v1/admin/memory/restore", { method: "POST", body: JSON.stringify({ scope, ids, topicIds }) }, ConsoleDecode.jsonObject),
-    memoryForget: (scope: MemoryScope, ids?: string[], topicIds?: string[]) => request("/api/v1/admin/memory/forget", { method: "POST", body: JSON.stringify({ scope, ids, topicIds }) }, ConsoleDecode.forgetResult),
+    memoryForget: (scope: MemoryScope, ids?: string[], topicIds?: string[], reason = "forgotten_from_web_console") => request("/api/v1/admin/memory/forget", { method: "POST", body: JSON.stringify({ scope, ids, topicIds, reason }) }, ConsoleDecode.forgetResult),
   };
 }

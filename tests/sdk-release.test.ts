@@ -31,7 +31,7 @@ describe("Gateway SDK release artifacts", () => {
         stdio: ["ignore", "pipe", "pipe"],
         timeout: 160_000,
       });
-      for (const name of ["tagent-abi-0.8.17.tgz", "tagent-core-client-0.8.17.tgz"]) {
+      for (const name of ["tagent-abi-0.8.18.tgz", "tagent-core-client-0.8.18.tgz"]) {
         const archive = path.join(output, name);
         const checksum = readFileSync(`${archive}.sha256`, "utf8");
         const expectedHash = createHash("sha256").update(readFileSync(archive)).digest("hex");

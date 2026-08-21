@@ -244,7 +244,7 @@ export function GoalsPanel({
       <div className="goal-shell">
         {items.length > 0 && <div className="goal-toolbar">
           <select aria-label="Workspace Goals" value={selected?.id ?? ""} disabled={busy} onChange={(event) => void openGoal(event.target.value)}>
-            {items.map((goal) => <option value={goal.id} key={goal.id}>{goal.title} · {statusLabel(goal.status)}</option>)}
+            {items.map((goal) => <option value={goal.id} key={goal.id}>{goal.title} · {statusLabel(goal.status)} · {goal.verifiedCriteria}/{goal.requiredCriteria}</option>)}
           </select>
           <button className="control" data-variant="primary" onClick={() => {
             setSelected(null);
@@ -377,7 +377,7 @@ function GoalDefinitionForm({ definition, setDefinition, busy, editing, onSave, 
       {!definition.criteria.some((item) => item.required) && <p className="goal-field-error">Keep at least one required criterion so evidence can close the Goal.</p>}
     </fieldset>
     <details open={Boolean(definition.scope.length || definition.nonGoals.length)}>
-      <summary><span><ChevronRight size={ICON_SIZE.sm} />Scope and boundaries</span><small>Optional</small></summary>
+      <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Scope and boundaries</span><small>Optional</small></summary>
       <div className="goal-form-columns">
         <label className="goal-field"><span>Included <small>one item per line</small></span><textarea rows={4} value={definition.scope.join("\n")} onChange={(event) => setDefinition({ ...definition, scope: lines(event.target.value) })} /></label>
         <label className="goal-field"><span>Not included <small>one item per line</small></span><textarea rows={4} value={definition.nonGoals.join("\n")} onChange={(event) => setDefinition({ ...definition, nonGoals: lines(event.target.value) })} /></label>
@@ -458,6 +458,9 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
   const progressByItem = useMemo(() => new Map(goal.roadmapProgress.map((item) => [item.itemId, item])), [goal.roadmapProgress]);
   const canEdit = !["completed", "cancelled"].includes(goal.status) && !goal.currentRunId;
   const verifiedPercent = goal.requiredCriteria ? Math.round(goal.verifiedCriteria / goal.requiredCriteria * 100) : 0;
+  const approvedRoadmapItems = approval?.approvedItemIds.length ?? 0;
+  const completedRoadmapItems = approval?.approvedItemIds.filter((itemId) => progressByItem.get(itemId)?.status === "completed").length ?? 0;
+  const auditCount = goal.runLinks.length + goal.evidenceLinks.length + goal.decisions.length;
 
   const nextAction = () => {
     if (goal.nextAction.kind === "review_goal") return void decide("approve_goal");
@@ -496,10 +499,11 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
       </div>
     </section>}
 
-    <section>
-      <div className="section-heading" data-label><div><span className="eyebrow">Verified evidence</span><h3>Completion criteria</h3></div><strong>{goal.verifiedCriteria}/{goal.requiredCriteria}</strong></div>
-      {verifiedPercent > 0 && <div className="goal-progress-track" aria-label={`${verifiedPercent}% of required criteria verified`}><i style={{ width: `${verifiedPercent}%` }} /></div>}
-      <div className="goal-criteria-list">
+    <details open={goal.nextAction.kind === "review_goal" || ["ready_to_close", "completed"].includes(goal.status)}>
+      <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Completion criteria</span><small>{goal.verifiedCriteria}/{goal.requiredCriteria} verified</small></summary>
+      <div>
+        {verifiedPercent > 0 && <div className="goal-progress-track" aria-label={`${verifiedPercent}% of required criteria verified`}><i style={{ width: `${verifiedPercent}%` }} /></div>}
+        <div className="goal-criteria-list">
         {definition?.criteria.map((criterion) => {
           const evidence = evidenceByCriterion.get(criterion.key) ?? [];
           const validCount = evidence.filter((link) => link.status === "valid").length;
@@ -512,15 +516,18 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
             <span><strong>{criterion.title}</strong><small>{verified ? formatCount(validCount, "verified source") : contradicted ? "Latest evidence contradicted" : criterion.required ? "Required · pending" : "Optional"}</small></span>
           </div>;
         })}
+        </div>
       </div>
-    </section>
+    </details>
 
-    {roadmap && goal.roadmap && <section>
-      <div className="section-heading" data-label>
-        <div><span className="eyebrow">Goal Roadmap</span><h3>{`Roadmap v${goal.roadmap.revision}`}</h3>{roadmap.summary && <p>{roadmap.summary}</p>}</div>
-        {canEdit && goal.status !== "draft" && <button className="control" onClick={onEditRoadmap} disabled={busy}><Pencil size={ICON_SIZE.sm} />Edit</button>}
-      </div>
-      <div className="goal-roadmap-list">
+    {roadmap && goal.roadmap && <details open={!approval || requiresRoadmapRevision}>
+      <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Roadmap v{goal.roadmap.revision}</span><small>{requiresRoadmapRevision ? "Revision required" : approval ? `${completedRoadmapItems}/${approvedRoadmapItems} complete` : "Review and approve"}</small></summary>
+      <div>
+        <div className="section-heading" data-label>
+          <div><span className="eyebrow">Goal Roadmap</span><h3>{roadmap.summary || `Roadmap v${goal.roadmap.revision}`}</h3></div>
+          {canEdit && goal.status !== "draft" && <button className="control" onClick={onEditRoadmap} disabled={busy}><Pencil size={ICON_SIZE.sm} />Edit</button>}
+        </div>
+        <div className="goal-roadmap-list">
         {roadmap.items.map((item, index) => {
           const approved = approval?.approvedItemIds.includes(item.id) ?? false;
           const itemProgress = progressByItem.get(item.id);
@@ -537,31 +544,26 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
           </div>;
         })}
         {!approval && <p data-meta>{requiresRoadmapRevision ? "Changes were requested. Edit and save a new Roadmap revision before approval." : "Select the items that may drive TaskRuns, then approve the Roadmap above."}</p>}
+        </div>
       </div>
-    </section>}
+    </details>}
 
     {definition && definition.scope.length + definition.nonGoals.length > 0 && <details>
-      <summary><span><ChevronRight size={ICON_SIZE.sm} />Scope and boundaries</span><small>{formatCount(definition.scope.length + definition.nonGoals.length, "item")}</small></summary>
+      <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Scope and boundaries</span><small>{formatCount(definition.scope.length + definition.nonGoals.length, "item")}</small></summary>
       <div className="goal-scope-grid"><InfoList title="Included" items={definition.scope} /><InfoList title="Not included" items={definition.nonGoals} /></div>
     </details>}
 
-    {goal.runLinks.length > 0 && <details>
-      <summary><span><ChevronRight size={ICON_SIZE.sm} />Linked TaskRuns</span><small>{goal.runLinks.length} linked</small></summary>
-      <div className="goal-run-links">{[...goal.runLinks].reverse().map((link) => <button key={link.runId} onClick={() => onOpenRun?.(link.runId)}><code>{link.runId.slice(0, 12)}</code><span>{runLinkLabel(link)}</span></button>)}</div>
-    </details>}
-
-    {goal.evidenceLinks.length > 0 && <details>
-      <summary><span><ChevronRight size={ICON_SIZE.sm} />Evidence log</span><small>{formatCount(goal.evidenceLinks.length, "link")}</small></summary>
-      <div className="goal-run-links">{[...goal.evidenceLinks].reverse().map((link) => <button key={link.id} onClick={() => onOpenRun?.(link.runId)}><code>{link.criterionKey}</code><span>{statusLabelForValue(link.status)} · run {link.runId.slice(0, 12)}{link.artifactId ? ` · artifact ${link.artifactId.slice(0, 10)}` : ""}</span></button>)}</div>
-    </details>}
-
-    {goal.decisions.length > 0 && <details>
-      <summary><span><ChevronRight size={ICON_SIZE.sm} />Decision history</span><small>{formatCount(goal.decisions.length, "decision")}</small></summary>
-      <div className="goal-run-links">{[...goal.decisions].reverse().map((decision) => <div key={decision.id}><code>{decisionLabel(decision.kind)}</code><span>{decision.reason ? `${decision.reason} · ` : ""}{decision.actorId} · {dateLabel(decision.createdAt)}</span></div>)}</div>
+    {auditCount > 0 && <details>
+      <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Activity and audit</span><small>{formatCount(auditCount, "entry", "entries")}</small></summary>
+      <div>
+        {goal.runLinks.length > 0 && <section><div className="section-heading"><strong>Linked TaskRuns</strong><small>{goal.runLinks.length} linked</small></div><div className="goal-run-links">{[...goal.runLinks].reverse().map((link) => <button key={link.runId} onClick={() => onOpenRun?.(link.runId)}><code>{link.runId.slice(0, 12)}</code><span>{runLinkLabel(link)}</span></button>)}</div></section>}
+        {goal.evidenceLinks.length > 0 && <section><div className="section-heading"><strong>Evidence log</strong><small>{formatCount(goal.evidenceLinks.length, "link")}</small></div><div className="goal-run-links">{[...goal.evidenceLinks].reverse().map((link) => <button key={link.id} onClick={() => onOpenRun?.(link.runId)}><code>{link.criterionKey}</code><span>{statusLabelForValue(link.status)} · run {link.runId.slice(0, 12)}{link.artifactId ? ` · artifact ${link.artifactId.slice(0, 10)}` : ""}</span></button>)}</div></section>}
+        {goal.decisions.length > 0 && <section><div className="section-heading"><strong>Decision history</strong><small>{formatCount(goal.decisions.length, "decision")}</small></div><div className="goal-run-links">{[...goal.decisions].reverse().map((decision) => <div key={decision.id}><code>{decisionLabel(decision.kind)}</code><span>{decision.reason ? `${decision.reason} · ` : ""}{decision.actorId} · {dateLabel(decision.createdAt)}</span></div>)}</div></section>}
+      </div>
     </details>}
 
     {!['completed', 'cancelled'].includes(goal.status) && <details className="goal-management">
-      <summary><span><ChevronRight size={ICON_SIZE.sm} />Goal controls</span><small>Lifecycle and revision</small></summary>
+      <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Goal controls</span><small>Lifecycle and revision</small></summary>
       <div>
         <div className="memory-inline-actions">{["active", "ready_to_close"].includes(goal.status) && <button className="control" disabled={busy || Boolean(goal.currentRunId)} onClick={() => void decide("pause")}>Pause Goal</button>}{goal.status === "paused" && <button className="control" data-variant="primary" disabled={busy} onClick={() => void decide("resume")}>Resume Goal</button>}{goal.status === "ready_to_close" && <button className="control" data-variant="primary" disabled={busy} onClick={() => { if (window.confirm("Close this Goal with the verified evidence? This cannot be undone.")) void decide("close"); }}>Close Goal</button>}<button className="control" data-tone="danger" disabled={busy || Boolean(goal.currentRunId)} onClick={() => { if (window.confirm("Cancel this Goal? This cannot be undone.")) void decide("cancel"); }}>Cancel Goal</button></div>
         {changeTargets.length > 0 && <div className="goal-form-columns">

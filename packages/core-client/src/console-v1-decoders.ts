@@ -138,13 +138,14 @@ async function coreMemorySnapshot(payload: unknown): Promise<ConsoleCoreMemorySn
   return abi.decodeAbi(abi.ConsoleCoreMemorySnapshotSchema, payload);
 }
 
-async function forgetResult(payload: unknown): Promise<{ records: number; topics: number; objects: number }> {
+async function forgetResult(payload: unknown): Promise<{ records: number; topics: number; objects: number; purgeAfter?: number }> {
   const abi = await loadCoreAbi();
   const value = objectPayload(abi, payload);
   if (typeof value.records !== "number" || typeof value.topics !== "number" || typeof value.objects !== "number") {
     throw new TypeError("Expected memory forget counts");
   }
-  return { records: value.records, topics: value.topics, objects: value.objects };
+  if (value.purgeAfter !== undefined && typeof value.purgeAfter !== "number") throw new TypeError("Expected a memory purge deadline");
+  return { records: value.records, topics: value.topics, objects: value.objects, ...(value.purgeAfter === undefined ? {} : { purgeAfter: value.purgeAfter }) };
 }
 
 export const ConsoleDecode = {

@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## [0.8.18] - 2026-08-21
+
+### Goal hierarchy and audit
+
+- Made completion criteria and Roadmap state-aware disclosures: review-critical content opens when action is required, while an approved Roadmap collapses to a compact completed/approved summary after review.
+- Added verified/required progress to the Goal selector and consolidated linked TaskRuns, evidence, and decisions into one chronological `Activity and audit` disclosure without removing any underlying history or lifecycle controls.
+- Kept scope, revision requests, execution controls, current-Run context, and completion evidence available on the same Goal reading surface while reducing repeated headings and competing sections.
+
+### Memory completeness and recovery
+
+- Exposed provenance, semantic triples, lifecycle and validity state, Topic relationships, cold-storage identity, retrieval channels, score breakdowns, embedding degradation, policy transforms, route decisions, and candidate outcomes through compact metadata and recall-diagnostic disclosures.
+- Added an explicit Confirm feedback action alongside Helpful, Wrong, correction, dispute resolution, reactivation, export, reindex, and Core Memory snapshot controls.
+- Made Record and Topic Forget reversible from an immediate Undo notice using the returned purge deadline, retained the Web Console reason in the operation, and removed generated title/body repetition from the catalog and detail view.
+
+### Design maintenance and compatibility
+
+- Documented state-aware disclosure and metadata-density rules for Goal and Memory workspaces, and kept the neutral hairline visual system at 772 lines, 394 rules, 500 selectors, and 1,446 declarations.
+- Extended only the version-matched Console ABI projections and Core Client decoder; the HTTP major, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` protocol are unchanged. No data migration is required. Deploy matching `0.8.18` Core, Web Console, ABI, and Core Client artifacts.
+
 ## [0.8.17] - 2026-08-21
 
 ### Goal governance and audit visibility

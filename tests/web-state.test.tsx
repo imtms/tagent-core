@@ -19,7 +19,7 @@ import { GoalView } from "../apps/web-console/src/GoalsPanel.js";
 import { goalStatusTone } from "../apps/web-console/src/goal-display.js";
 import { MemoryCatalog, MemoryCoreProjection, MemoryJobLists, MemoryRecallResults } from "../apps/web-console/src/MemoryBrowser.js";
 import { RecordDetail } from "../apps/web-console/src/MemoryDetails.js";
-import { MemoryPanel } from "../apps/web-console/src/MemoryPanel.js";
+import { MemoryPanel, MemoryUndoNotice } from "../apps/web-console/src/MemoryPanel.js";
 import { WorkspaceSkillsControl } from "../apps/web-console/src/WorkspaceSkillsControl.js";
 import { nextConversationPinState } from "../apps/web-console/src/conversation-scroll.js";
 import { deriveCurrentOperation } from "../apps/web-console/src/current-operation.js";
@@ -195,6 +195,18 @@ describe("Web workbench behavior", () => {
       ...emptyRecall,
       trace: { ...emptyRecall.trace, candidateCount: 1, deniedCount: 1, topicIds: ["release"] },
     }} {...recallProps} />);
+    const diagnostic = renderToStaticMarkup(<MemoryRecallResults results={{
+      ...emptyRecall,
+      trace: {
+        ...emptyRecall.trace,
+        version: 2,
+        candidateCount: 1,
+        embedding: { configured: true, degraded: false, generation: "embed-v2" },
+        policyTransforms: 1,
+        coldTopicRoutes: [{ topicId: "release", channels: ["topic"], selected: true, reason: "matched route" }],
+        candidates: [{ id: "memory-1", channels: ["lexical"], rawScores: { lexical: 0.8 }, finalScore: 0.7, outcome: "selected" }],
+      },
+    }} {...recallProps} />);
     const captureJob = {
       id: "capture-1",
       request: {
@@ -216,6 +228,9 @@ describe("Web workbench behavior", () => {
     expect(empty).not.toContain("0 denied");
     expect(traced).toContain("1 candidate · 1 cold route · 1 denied");
     expect(traced).not.toContain("route(s)");
+    expect(diagnostic).toContain("Recall diagnostics");
+    expect(diagnostic).toContain("Candidate outcomes");
+    expect(diagnostic).toContain("embed-v2");
     expect(jobs).toContain("1 job");
     expect(jobs).toContain("1 attempt");
     expect(jobs).not.toContain("1 jobs");
@@ -254,6 +269,18 @@ describe("Web workbench behavior", () => {
     expect(generated).toContain("textarea");
     expect(generated).toContain("Regenerate");
     expect(generated).toContain("Save projection");
+  });
+
+  it("keeps a forgotten Memory recoverable from the immediate result", () => {
+    const undo = renderToStaticMarkup(<MemoryUndoNotice
+      item={{ ids: ["memory-1"], topicIds: [], label: "Release policy", purgeAfter: Date.UTC(2026, 7, 30, 12) }}
+      busy={false}
+      onUndo={() => undefined}
+    />);
+
+    expect(undo).toContain("Forgot “Release policy”");
+    expect(undo).toContain("Restorable until");
+    expect(undo).toContain(">Undo</button>");
   });
 
   it("omits empty Memory catalog sections and their companion placeholders", () => {
@@ -367,6 +394,7 @@ describe("Web workbench behavior", () => {
     expect(populated).toContain("Provenance");
     expect(populated).toContain("message:message-1");
     expect(populated).toContain("Correct");
+    expect(populated).toContain("Confirm");
     expect(populated).toContain("Helpful");
     expect(populated).toContain("Wrong");
     expect(disputed).toContain("Resolve as valid");
@@ -584,6 +612,7 @@ describe("Web workbench behavior", () => {
     expect(populated).toContain("1 item");
     expect(populated).not.toContain("1 items");
     expect(populated).toContain("Linked TaskRuns");
+    expect(populated).toContain("Activity and audit");
     expect(populated).toContain("1 linked");
     expect(populated).toContain("1 Roadmap item");
     expect(populated).toContain("Evidence log");

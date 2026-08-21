@@ -42,6 +42,31 @@ describe("console v1 response decoders", () => {
 
     await expect(ConsoleDecode.captureJobs(jobs)).resolves.toEqual(jobs);
   });
+
+  it("preserves Memory lifecycle, provenance, recall diagnostics, and forget deadlines", async () => {
+    const record = {
+      id: "memory-1", kind: "fact" as const, tier: "warm" as const,
+      scope: { type: "workspace" as const, id: "workspace-1" },
+      title: "Release policy", content: "Verify before publishing.", summary: "Verify before publishing.",
+      topicIds: ["release"], entityIds: ["tagent"], status: "active" as const,
+      confidence: 0.95, importance: 0.9,
+      sourceRefs: [{ sourceType: "check" as const, sourceId: "check-1", revision: "2" }],
+      provenance: { evidenceClass: "tool_verified_fact" as const, trustLevel: "high" as const, sourceRole: "tool" as const, verificationState: "verified" as const, sourceReliability: 0.98 },
+      semantic: { subject: "release", predicate: "requires", object: "verification", polarity: "positive" as const },
+      lifecycle: { firstSeenAt: 10, lastSeenAt: 20, confirmationCount: 2, recallCount: 3, lastRecalledAt: 30 },
+      validFrom: 10, expiresAt: 1_000, createdAt: 10, updatedAt: 20,
+    };
+    await expect(ConsoleDecode.memoryRecord(record)).resolves.toEqual(record);
+
+    const breakdown = { route: 0.9, confidence: 0.95, importance: 0.9, recency: 0.8, scope: 1, trust: 0.98, validity: 1, currentState: 1, feedback: 1, final: 0.92 };
+    const recall = {
+      cards: [{ id: record.id, kind: record.kind, tier: record.tier, title: record.title, content: record.content, score: 0.92, topicIds: record.topicIds, confidence: record.confidence, status: record.status, provenance: record.provenance, semantic: record.semantic, retrievalChannels: ["lexical" as const, "vector" as const], scoreBreakdown: breakdown }],
+      coldTopics: [],
+      trace: { version: 2 as const, topicIds: ["release"], candidateCount: 1, deniedCount: 0, embedding: { configured: true, degraded: false, generation: "embed-v2" }, policyTransforms: 0, coldTopicRoutes: [], candidates: [{ id: record.id, channels: ["lexical" as const, "vector" as const], rawScores: { lexical: 0.8, vector: 0.9 }, finalScore: 0.92, scoreBreakdown: breakdown, outcome: "selected" as const }] },
+    };
+    await expect(ConsoleDecode.recallResult(recall)).resolves.toEqual(recall);
+    await expect(ConsoleDecode.forgetResult({ records: 1, topics: 0, objects: 0, purgeAfter: 1_000 })).resolves.toEqual({ records: 1, topics: 0, objects: 0, purgeAfter: 1_000 });
+  });
 });
 
 describe("core-client transport", () => {
@@ -325,7 +350,7 @@ describe("channel v1 helpers", () => {
   it("sends explicit Session idempotency and decodes capabilities", async () => {
     const session = { id: "session-1", title: "Gateway", modelId: "gpt-5.6-sol", reasoningEffort: "high", createdAt: "2026-08-04T12:34:56.789Z", updatedAt: "2026-08-04T12:34:56.789Z", latestTaskRunStatus: null, latestTaskRunPhase: null };
     const capabilities = {
-      releaseVersion: "0.8.17", apiVersions: ["channel.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 2,
+      releaseVersion: "0.8.18", apiVersions: ["channel.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 2,
       commandTypes: ["task_run.steer"], eventTypes: ["task_run.started"],
       interactions: { approvalResolution: true, userInputSubmission: true },
       operator: { profileVersion: "1.0", endpointIds: ["channel.capabilities.get"], workspaceGoals: true, roadmapGenerationIdempotent: true },

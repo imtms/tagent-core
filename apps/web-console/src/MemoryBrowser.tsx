@@ -18,7 +18,7 @@ import type {
 } from "./api";
 import { formatCount } from "./count-format";
 import { ICON_SIZE } from "./icon-size";
-import { formatMemoryDate, memoryContent, memoryTitle } from "./memory-display";
+import { formatMemoryDate, memoryContent, memoryTitle, memoryTitleRepeatsContent } from "./memory-display";
 
 interface MemoryRecallResultsProps {
   results: RecallResult | null;
@@ -79,6 +79,9 @@ export function MemoryRecallResults({
     results.trace.topicIds.length > 0 ? formatCount(results.trace.topicIds.length, "cold route") : "",
     results.trace.deniedCount > 0 ? `${results.trace.deniedCount} denied` : "",
   ].filter(Boolean);
+  const candidates = results.trace.candidates ?? [];
+  const coldRoutes = results.trace.coldTopicRoutes ?? [];
+  const hasDiagnostics = Boolean(results.trace.embedding || results.trace.policyTransforms || candidates.length || coldRoutes.length);
   return (
     <section>
       <div className="section-heading">
@@ -91,7 +94,7 @@ export function MemoryRecallResults({
       {hasResults && <div className="memory-list">
         {results.cards.map((card) => (
           <button key={card.id} onClick={() => onOpenRecord(card.id)}>
-            <div><span className="memory-kind">{card.kind}</span><strong>{card.title}</strong><p>{card.content}</p><small>{card.tier} · {Math.round(card.confidence * 100)}% confidence</small></div>
+            <div><span className="memory-kind">{card.kind}</span><strong>{card.title}</strong><p>{card.content}</p><small>{card.tier} · {Math.round(card.confidence * 100)}% confidence · {Math.round(card.score * 100)}% relevance{card.retrievalChannels?.length ? ` · ${card.retrievalChannels.join(" + ")}` : ""}</small></div>
           </button>
         ))}
         {results.coldTopics.map((topic) => (
@@ -101,7 +104,15 @@ export function MemoryRecallResults({
         ))}
       </div>}
       {!hasResults && <div className="memory-empty"><BrainCircuit size={ICON_SIZE.xl} /><strong>No recall matches</strong><p>Try a broader phrase or inspect the memory catalog below.</p></div>}
-      {trace.length > 0 && <small>{trace.join(" · ")}</small>}
+      {hasDiagnostics ? <details className="memory-disclosure">
+        <summary><Activity size={ICON_SIZE.sm} /><strong>Recall diagnostics</strong><small>{trace.join(" · ") || "Trace"}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+        <div className="memory-disclosure-body">
+          {results.trace.embedding && <section><strong>Embedding</strong><p>{results.trace.embedding.configured ? results.trace.embedding.degraded ? "Degraded; lexical and graph paths remained available" : "Available" : "Not configured"}{results.trace.embedding.generation ? ` · ${results.trace.embedding.generation}` : ""}</p>{results.trace.embedding.error && <small>{results.trace.embedding.error}</small>}</section>}
+          {Boolean(results.trace.policyTransforms) && <section><strong>Policy transforms</strong><p>{formatCount(results.trace.policyTransforms ?? 0, "candidate")} transformed before presentation.</p></section>}
+          {coldRoutes.length > 0 && <section><strong>Cold routes</strong><div className="memory-list">{coldRoutes.map((route) => <div key={route.topicId}><div><strong>{route.topicId}</strong><small>{route.selected ? "selected" : "not selected"} · {route.channels.join(" + ")} · {route.reason}</small></div></div>)}</div></section>}
+          {candidates.length > 0 && <section><strong>Candidate outcomes</strong><div className="memory-list">{candidates.map((candidate) => <div key={`${candidate.id}:${candidate.outcome}`}><div><strong>{candidate.id}</strong><small>{candidate.outcome.replaceAll("_", " ")} · {candidate.channels.join(" + ")}{candidate.finalScore === undefined ? "" : ` · ${Math.round(candidate.finalScore * 100)}% final`}{candidate.reason ? ` · ${candidate.reason}` : ""}</small>{candidate.scoreBreakdown && <small data-mono>{Object.entries(candidate.scoreBreakdown).map(([key, value]) => `${key} ${Math.round(value * 100)}%`).join(" · ")}</small>}</div></div>)}</div></section>}
+        </div>
+      </details> : trace.length > 0 && <small>{trace.join(" · ")}</small>}
     </section>
   );
 }
@@ -286,8 +297,8 @@ export function MemoryCatalog({
                 <span className="tier-dot" data-tone={record.tier === "hot" ? "accent" : undefined} />
                 <div>
                   <span className="memory-kind">{record.kind}</span>
-                  <strong>{memoryTitle(record)}</strong>
-                  <p>{memoryContent(record)}</p>
+                  <strong>{memoryTitleRepeatsContent(record) ? memoryContent(record) : memoryTitle(record)}</strong>
+                  {!memoryTitleRepeatsContent(record) && <p>{memoryContent(record)}</p>}
                   <small>{record.tier} · {record.status} · {formatMemoryDate(record.updatedAt)}</small>
                 </div>
                 <small data-mono>{Math.round(record.confidence * 100)}%</small>

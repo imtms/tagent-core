@@ -5,6 +5,7 @@ import {
   Download,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldCheck,
   X,
@@ -57,6 +58,17 @@ const memoryStatuses = [
   { value: "quarantined", label: "Quarantined" },
 ] as const satisfies readonly { value: "all" | MemoryStatus; label: string }[];
 
+export interface ForgottenMemoryUndo {
+  ids: string[];
+  topicIds: string[];
+  label: string;
+  purgeAfter?: number;
+}
+
+export function MemoryUndoNotice({ item, busy, onUndo }: { item: ForgottenMemoryUndo; busy: boolean; onUndo: () => void }) {
+  return <div className="notice" data-tone="warning" role="status"><span><strong>Forgot “{item.label}”</strong>{item.purgeAfter && <small> · Restorable until {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(item.purgeAfter)}</small>}</span><button className="control" disabled={busy} onClick={onUndo}><RotateCcw size={ICON_SIZE.sm} />Undo</button></div>;
+}
+
 export function MemoryPanel({
   runtime,
   onClose,
@@ -105,6 +117,7 @@ export function MemoryPanel({
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [recentForget, setRecentForget] = useState<ForgottenMemoryUndo | null>(null);
   const selectedRecordIdRef = useRef("");
   const selectedTopicIdRef = useRef("");
 
@@ -337,9 +350,10 @@ export function MemoryPanel({
     if (!window.confirm(`Forget “${memoryTitle(record)}”?`)) return;
     setBusy(true);
     try {
-      await api.memoryForget(scope, [record.id]);
+      const result = await api.memoryForget(scope, [record.id]);
       setSelectedRecord(null);
-      setMessage("Memory forgotten.");
+      setMessage("");
+      setRecentForget({ ids: [record.id], topicIds: [], label: memoryTitle(record), purgeAfter: result.purgeAfter });
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -363,11 +377,11 @@ export function MemoryPanel({
       setBusy(false);
     }
   }
-  async function feedback(record: WarmMemory, signal: "helpful" | "harmful") {
+  async function feedback(record: WarmMemory, signal: "helpful" | "confirmed" | "harmful") {
     setBusy(true);
     try {
       await api.memoryFeedback(scope, record.id, signal);
-      setMessage("Recall feedback recorded.");
+      setMessage(signal === "confirmed" ? "Memory confirmed as current." : signal === "helpful" ? "Helpful recall recorded." : "Incorrect recall recorded.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -414,11 +428,10 @@ export function MemoryPanel({
       return;
     setBusy(true);
     try {
-      await api.memoryForget(scope, undefined, [topic.descriptor.topicId]);
+      const result = await api.memoryForget(scope, undefined, [topic.descriptor.topicId]);
       setSelectedTopic(null);
-      setMessage(
-        "Cold topic tombstoned; revisions remain restorable during grace period.",
-      );
+      setMessage("");
+      setRecentForget({ ids: [], topicIds: [topic.descriptor.topicId], label: topic.descriptor.title, purgeAfter: result.purgeAfter });
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -433,6 +446,7 @@ export function MemoryPanel({
     setError("");
     try {
       await api.memoryRestore(scope, ids.length ? ids : undefined, topicIds.length ? topicIds : undefined);
+      setRecentForget(null);
       setMessage(`Restore requested for ${ids.length + topicIds.length} memory item${ids.length + topicIds.length === 1 ? "" : "s"}.`);
       await refresh();
     } catch (cause) {
@@ -515,7 +529,7 @@ export function MemoryPanel({
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 aria-label="Search memory"
-                placeholder="Search…"
+                placeholder="Filter loaded catalog…"
               />
               <select value={kind} aria-label="Filter memory kind" onChange={(event) => setKind(event.target.value as "all" | MemoryKind)}>
                 {memoryKinds.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
@@ -533,6 +547,7 @@ export function MemoryPanel({
         <div className="memory-content">
           {error && <div className="notice" data-tone="danger" role="alert">{error}</div>}
           {message && <div className="notice" data-tone="success" role="status">{message}</div>}
+          {recentForget && <MemoryUndoNotice item={recentForget} busy={busy} onUndo={() => void restoreMemory(recentForget.ids, recentForget.topicIds)} />}
           {detailOpen ? <main className="memory-detail">
             <button className="memory-detail-back" type="button" onClick={() => { setSelectedRecord(null); setSelectedTopic(null); }}><ChevronLeft size={ICON_SIZE.md} />All memory</button>
             {selectedRecord ? (

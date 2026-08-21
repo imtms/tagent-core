@@ -382,7 +382,7 @@ kbd, code, pre, time, .workspace-meta, .run-metrics, [data-mono] { font-family: 
 .composer-send { width: 32px; height: 32px; flex: none; display: grid; place-items: center; margin-left: auto; padding: 0; border-radius: 50%; }
 .composer-send:disabled { color: var(--text-muted); background: var(--muted); }
 .composer-hint { width: min(100%, var(--content-width)); margin: var(--space-1) auto 0; color: var(--text-muted); font-size: var(--text-xs); text-align: right; }
-.notice { width: min(100%, var(--content-width)); margin: 0 auto var(--space-2); padding: var(--space-2) var(--space-3); border-left: 2px solid currentColor; background: var(--surface); font-size: var(--text-sm); }
+.notice { width: min(100%, var(--content-width)); display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin: 0 auto var(--space-2); padding: var(--space-2) var(--space-3); border-left: 2px solid currentColor; background: var(--surface); font-size: var(--text-sm); }
 
 /* Live activity and queue */
 .execution-timeline, .approval-dock, .supervisor-inbox { width: min(100%, var(--content-width)); margin: 0 auto var(--space-2); }

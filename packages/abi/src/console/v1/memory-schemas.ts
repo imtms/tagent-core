@@ -28,6 +28,35 @@ export type ConsoleMemoryScope = Static<typeof ConsoleMemoryScopeSchema>;
 export const ConsoleMemorySourceRefSchema = MemorySourceReferenceSchema;
 export type ConsoleMemorySourceRef = MemorySourceReference;
 
+export const ConsoleMemoryProvenanceSchema = Type.Object({
+  evidenceClass: Type.Union([
+    Type.Literal("user_explicit"), Type.Literal("user_context_summary"), Type.Literal("tool_verified_fact"),
+    Type.Literal("task_outcome"), Type.Literal("assistant_inference"),
+  ]),
+  trustLevel: Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low"), Type.Literal("untrusted")]),
+  sourceRole: Type.Union([Type.Literal("user"), Type.Literal("tool"), Type.Literal("task"), Type.Literal("assistant"), Type.Literal("system")]),
+  verificationState: Type.Union([Type.Literal("explicit"), Type.Literal("verified"), Type.Literal("structured"), Type.Literal("inferred"), Type.Literal("unverified")]),
+  sourceReliability: Type.Optional(Type.Number()),
+});
+
+export const ConsoleMemorySemanticSchema = Type.Object({
+  subject: Type.String(), predicate: Type.String(), object: Type.String(),
+  polarity: Type.Union([Type.Literal("positive"), Type.Literal("negative"), Type.Literal("unknown")]),
+});
+
+export const ConsoleMemoryLifecycleSchema = Type.Object({
+  firstSeenAt: TimestampMillisecondsSchema,
+  lastSeenAt: TimestampMillisecondsSchema,
+  confirmationCount: Type.Number(),
+  lastRecalledAt: Type.Optional(TimestampMillisecondsSchema),
+  recallCount: Type.Optional(Type.Number()),
+  staleAt: Type.Optional(TimestampMillisecondsSchema),
+  deletedAt: Type.Optional(TimestampMillisecondsSchema),
+  purgeAfter: Type.Optional(TimestampMillisecondsSchema),
+  deleteReason: Type.Optional(Type.String()),
+  previousStatus: Type.Optional(ConsoleMemoryStatusSchema),
+});
+
 export const ConsoleMemoryRecordSchema = Type.Object({
   id: Type.String(),
   kind: Type.Union([Type.Literal("fact"), Type.Literal("episode"), Type.Literal("procedure")]),
@@ -42,6 +71,13 @@ export const ConsoleMemoryRecordSchema = Type.Object({
   confidence: Type.Number(),
   importance: Type.Number(),
   sourceRefs: Type.Array(ConsoleMemorySourceRefSchema),
+  provenance: Type.Optional(ConsoleMemoryProvenanceSchema),
+  semantic: Type.Optional(ConsoleMemorySemanticSchema),
+  lifecycle: Type.Optional(ConsoleMemoryLifecycleSchema),
+  validFrom: Type.Optional(TimestampMillisecondsSchema),
+  validTo: Type.Optional(TimestampMillisecondsSchema),
+  supersedesId: Type.Optional(Type.String()),
+  expiresAt: Type.Optional(TimestampMillisecondsSchema),
   createdAt: TimestampMillisecondsSchema,
   updatedAt: TimestampMillisecondsSchema,
 });
@@ -63,6 +99,11 @@ export const ConsolePreferenceRecordSchema = Type.Object({
   status: ConsoleMemoryStatusSchema,
   confidence: Type.Number(),
   sourceRefs: Type.Array(ConsoleMemorySourceRefSchema),
+  provenance: Type.Optional(ConsoleMemoryProvenanceSchema),
+  semantic: Type.Optional(ConsoleMemorySemanticSchema),
+  lifecycle: Type.Optional(ConsoleMemoryLifecycleSchema),
+  supersedesId: Type.Optional(Type.String()),
+  expiresAt: Type.Optional(TimestampMillisecondsSchema),
   createdAt: TimestampMillisecondsSchema,
   updatedAt: TimestampMillisecondsSchema,
 });
@@ -79,6 +120,11 @@ export const ConsoleTopicDescriptorSchema = Type.Object({
   title: Type.String(), description: Type.String(), aliases: Type.Array(Type.String()),
   entityIds: Type.Array(Type.String()), relatedTopicIds: Type.Array(Type.String()),
   coldRevisionId: Type.Optional(Type.String()), status: ConsoleMemoryStatusSchema,
+  embeddingText: Type.Optional(Type.String()),
+  lifecycle: Type.Optional(Type.Object({
+    deletedAt: Type.Optional(TimestampMillisecondsSchema), purgeAfter: Type.Optional(TimestampMillisecondsSchema),
+    deleteReason: Type.Optional(Type.String()), previousStatus: Type.Optional(ConsoleMemoryStatusSchema),
+  })),
   createdAt: TimestampMillisecondsSchema, updatedAt: TimestampMillisecondsSchema,
 });
 export type ConsoleTopicDescriptor = Static<typeof ConsoleTopicDescriptorSchema>;
@@ -90,6 +136,8 @@ export const ConsoleColdTopicSchema = Type.Object({
   descriptor: ConsoleTopicDescriptorSchema,
   revision: Type.Object({
     id: Type.String(), revision: Type.Number(), checksum: Type.String(), tokenCount: Type.Number(),
+    state: Type.Optional(Type.Union([Type.Literal("staged"), Type.Literal("published"), Type.Literal("superseded")])),
+    objectKey: Type.Optional(Type.String()), byteLength: Type.Optional(Type.Number()),
     createdAt: TimestampMillisecondsSchema, publishedAt: Type.Optional(TimestampMillisecondsSchema),
   }),
   body: Type.String(),
@@ -138,15 +186,51 @@ export const ConsoleMemoryExportSchema = Type.Object({
 });
 export type ConsoleMemoryExport = Static<typeof ConsoleMemoryExportSchema>;
 
+export const ConsoleMemoryRetrievalChannelSchema = Type.Union([
+  Type.Literal("lexical"), Type.Literal("vector"), Type.Literal("topic"), Type.Literal("graph"), Type.Literal("canonical"),
+]);
+
+export const ConsoleMemoryScoreBreakdownSchema = Type.Object({
+  route: Type.Number(), confidence: Type.Number(), importance: Type.Number(), recency: Type.Number(),
+  scope: Type.Number(), trust: Type.Number(), validity: Type.Number(), currentState: Type.Number(),
+  feedback: Type.Number(), final: Type.Number(),
+});
+
 export const ConsoleMemoryCardSchema = Type.Object({
   id: Type.String(), kind: ConsoleMemoryKindSchema, tier: ConsoleMemoryTierSchema,
   title: Type.String(), content: Type.String(), score: Type.Number(), topicIds: Type.Array(Type.String()),
   confidence: Type.Number(),
+  status: Type.Optional(ConsoleMemoryStatusSchema),
+  provenance: Type.Optional(ConsoleMemoryProvenanceSchema),
+  semantic: Type.Optional(ConsoleMemorySemanticSchema),
+  validFrom: Type.Optional(TimestampMillisecondsSchema), validTo: Type.Optional(TimestampMillisecondsSchema),
+  retrievalChannels: Type.Optional(Type.Array(ConsoleMemoryRetrievalChannelSchema)),
+  scoreBreakdown: Type.Optional(ConsoleMemoryScoreBreakdownSchema),
 });
 export type ConsoleMemoryCard = Static<typeof ConsoleMemoryCardSchema>;
 
 export const ConsoleRecallResultSchema = Type.Object({
   cards: Type.Array(ConsoleMemoryCardSchema), coldTopics: Type.Array(ConsoleColdTopicSchema),
-  trace: Type.Object({ topicIds: Type.Array(Type.String()), candidateCount: Type.Number(), deniedCount: Type.Number() }),
+  trace: Type.Object({
+    topicIds: Type.Array(Type.String()), candidateCount: Type.Number(), deniedCount: Type.Number(),
+    version: Type.Optional(Type.Literal(2)),
+    embedding: Type.Optional(Type.Object({
+      configured: Type.Boolean(), degraded: Type.Boolean(), generation: Type.Optional(Type.String()), error: Type.Optional(Type.String()),
+    })),
+    policyTransforms: Type.Optional(Type.Number()),
+    coldTopicRoutes: Type.Optional(Type.Array(Type.Object({
+      topicId: Type.String(), channels: Type.Array(ConsoleMemoryRetrievalChannelSchema), selected: Type.Boolean(), reason: Type.String(),
+    }))),
+    candidates: Type.Optional(Type.Array(Type.Object({
+      id: Type.String(), channels: Type.Array(ConsoleMemoryRetrievalChannelSchema),
+      rawScores: Type.Record(Type.String(), Type.Number()), finalScore: Type.Optional(Type.Number()),
+      scoreBreakdown: Type.Optional(ConsoleMemoryScoreBreakdownSchema),
+      outcome: Type.Union([
+        Type.Literal("selected"), Type.Literal("below_threshold"), Type.Literal("domain_filtered"), Type.Literal("duplicate"),
+        Type.Literal("conflict"), Type.Literal("policy_denied"), Type.Literal("mmr_dropped"),
+      ]),
+      reason: Type.Optional(Type.String()),
+    }))),
+  }),
 });
 export type ConsoleRecallResult = Static<typeof ConsoleRecallResultSchema>;
