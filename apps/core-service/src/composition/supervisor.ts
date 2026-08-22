@@ -81,7 +81,8 @@ export class TaskRunSupervisor {
     const executionPolicy = effectiveTaskExecutionPolicy(run.contract, operations, run.attempt);
     const exactAudit = prerequisiteAudit || gateProfile !== "strict" ? undefined : this.reviewExactCompletion(run, response, operations, options, executionPolicy);
     const deterministicAudit = prerequisiteAudit ?? exactAudit;
-    const progress = deterministicAudit ? undefined : this.store.getProgressSnapshot(run.id);
+    const storedProgress = deterministicAudit ? undefined : this.store.getProgressSnapshot(run.id);
+    const progress = storedProgress?.attempt === run.attempt ? storedProgress : undefined;
     const contextManifest = deterministicAudit ? undefined : this.store.getLatestContextManifest(run.id);
     const reviewInput = { run, response, modelOutputTruncated: options.modelOutputTruncated, operations, progress, contextManifest };
     const reviewedAudit = deterministicAudit ?? (gateProfile === "relaxed" && this.reviewer.reviewRelaxed

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- Scoped Full Supervisor trajectory failures and progress snapshots to the candidate's current Attempt. Earlier operation failures remain bounded audit context, while Core now ignores history-only Progress findings after recovery and still blocks genuinely unresolved problems through current evidence, contract, or completion failures.
+
 ### Maintenance
 
 - Removed the uncomposed CapabilityCommand domain, execution handler, persistence repository, private Execution application subpath, and tests that existed only to exercise or preserve that dormant alternate effect path.

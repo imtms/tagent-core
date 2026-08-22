@@ -57,13 +57,25 @@ function object(value: unknown, label: string): Record<string, unknown> {
 }
 function text(value: unknown, label: string) { if (typeof value !== "string" || !value.trim()) throw new Error(`Supervisor LLM returned invalid ${label}`); return value.trim(); }
 function confidence(value: unknown) { if (typeof value !== "number" || value < 0 || value > 1) throw new Error("Supervisor LLM returned invalid confidence"); return value; }
-function parseFailures(value: unknown): GateFailure[] {
+interface ParsedSemanticFailure {
+  failure: GateFailure;
+  operationRefs: string[];
+}
+
+function parseFailures(value: unknown, validOperationRefs: Set<string>): ParsedSemanticFailure[] {
   if (!Array.isArray(value)) throw new Error("Supervisor LLM returned invalid failures");
   return value.map((entry) => {
     const item = object(entry, "failure");
     const disposition = text(item.disposition, "failure disposition") as GateFailure["disposition"];
     if (!failureDispositions.has(disposition)) throw new Error("Supervisor LLM returned unknown failure disposition");
-    return { kind: text(item.kind, "failure kind"), key: text(item.key, "failure key"), reason: text(item.reason, "failure reason"), disposition };
+    if (!Array.isArray(item.operationRefs)
+      || !item.operationRefs.every((ref) => typeof ref === "string" && validOperationRefs.has(ref))) {
+      throw new Error("Supervisor LLM returned invalid failure operation references");
+    }
+    return {
+      failure: { kind: text(item.kind, "failure kind"), key: text(item.key, "failure key"), reason: text(item.reason, "failure reason"), disposition },
+      operationRefs: item.operationRefs as string[],
+    };
   });
 }
 function criterionId(index: number) { return `ac-${index + 1}`; }
@@ -404,6 +416,19 @@ Return compact JSON only: {"delivery":{"complete":true,"relevant":true,"contradi
       ...memoryEvidence.map((item) => item.ref),
     ]);
     const candidateProjection = projectUtf8HeadTail(input.response, 8_000, 3_000);
+    const operationProjection = (operation: OperationRecord, settlementRole: "current_attempt" | "audit_context_only") => ({
+      id: operation.id, attempt: operation.attempt, operationType: operation.operationType,
+      status: operation.status, stage: operation.stage, completedAt: operation.completedAt,
+      error: truncateUtf8(operation.error, 500), payload: boundedReceipt(operation.payload, 2_000),
+      effects: boundedReceipt(operation.effects, 1_000), result: boundedReceipt(operation.result, 4_000),
+      usableEvidence: validEvidenceRefs.has(`operation:${operation.id}`), settlementRole,
+    });
+    const currentAttemptOperations = recentOperations
+      .filter((operation) => operation.attempt === input.run.attempt)
+      .map((operation) => operationProjection(operation, "current_attempt"));
+    const historicalAttemptOperations = recentOperations
+      .filter((operation) => operation.attempt !== input.run.attempt)
+      .map((operation) => operationProjection(operation, "audit_context_only"));
     const workspaceGoal = input.run.contract?.workspaceGoal as TaskRunWorkspaceGoalSnapshot | null | undefined;
     const supervisorGoalContext = workspaceGoal ? {
       goalId: workspaceGoal.goalId,
@@ -425,6 +450,7 @@ Return compact JSON only: {"delivery":{"complete":true,"relevant":true,"contradi
       })),
     } : null;
     const payload = {
+      currentAttempt: input.run.attempt,
       goal: truncateUtf8(input.run.goal, 2_000),
       contract: input.run.contract ? {
         summary: truncateUtf8(input.run.contract.summary, 2_000),
@@ -442,11 +468,8 @@ Return compact JSON only: {"delivery":{"complete":true,"relevant":true,"contradi
         observedAt: observedAt ?? null, trusted: trusted.trustedCheckRefs.has(`check:${key}`),
       })),
       artifacts: reviewArtifacts.map((artifact) => artifactProjection(artifact, validEvidenceRefs.has(`artifact:${artifact.id}`), artifactContentBudget)),
-      operations: recentOperations.map(({ id, attempt, operationType, status, stage, error, payload, effects, result, completedAt }) => ({
-        id, attempt, operationType, status, stage, completedAt, error: truncateUtf8(error, 500),
-        payload: boundedReceipt(payload, 2_000), effects: boundedReceipt(effects, 1_000),
-        result: boundedReceipt(result, 4_000), usableEvidence: validEvidenceRefs.has(`operation:${id}`),
-      })),
+      currentAttemptOperations,
+      historicalAttemptOperations,
       operationsOmitted: input.operations.length - recentOperations.length,
       allowedEvidenceRefs: [...validEvidenceRefs],
       memoryEvidence,
@@ -476,6 +499,9 @@ Authoritative audit rules:
 - Recalled facts may be supported by supplied memory:* evidence. Do not reject a memory-derived answer merely because it lacks an operation receipt.
 - Never demand operation receipts for task_run plan/check mutations or chronology; those receipts do not exist.
 - Grade the trajectory as well as the final answer: repeated calls, failures, or no meaningful changes increase risk.
+- Only currentAttemptOperations and the current Attempt's progress counters may establish a progress failure. Every operation-based progress failure must cite its supporting current operation:* values in operationRefs.
+- historicalAttemptOperations are audit context, not current progress evidence. A historical failure may inform rationale, but it is never independently fatal after the final state is recovered and current evidence and contract coverage pass.
+- If a historical problem remains unresolved, report the current missing evidence, contradicted criterion, or incomplete delivery as an evidence, contract, or completion failure. Core ignores history-only progress failures.
 - A candidate may report a real blocker; classify whether it needs user input, approval, external dependency, transient retry, automatic repair, or is non-recoverable.
 - Approval boundaries must not be bypassed, and confidence alone must never open a gate.
 - Final delivery must be accurate, substantive, standalone, and directly answer the contract.
@@ -486,13 +512,16 @@ Authoritative audit rules:
 - Report only semantic failures not already expressed by criterion coverage. Do not invent plan/check prerequisite failures.
 
 Return compact JSON only. Keep every reason under 160 characters. Use this exact shape:
-{"delivery":{"complete":true,"relevant":true,"contradictory":false,"reason":"..."},"criterionCoverage":[{"criterionId":"ac-1","status":"covered|unsupported|contradicted|blocked","evidenceRefs":["check:key|artifact:id|operation:id|memory:record-or-revision"],"reason":"..."}],"failures":[{"kind":"progress|evidence|check|contract|completion","key":"...","reason":"...","disposition":"auto_fixable|needs_user_input|needs_approval|external_dependency|runtime_transient|non_recoverable"}]}
-Each failure is {"kind":"...","key":"...","reason":"...","disposition":"auto_fixable|needs_user_input|needs_approval|external_dependency|runtime_transient|non_recoverable"}.
+{"delivery":{"complete":true,"relevant":true,"contradictory":false,"reason":"..."},"criterionCoverage":[{"criterionId":"ac-1","status":"covered|unsupported|contradicted|blocked","evidenceRefs":["check:key|artifact:id|operation:id|memory:record-or-revision"],"reason":"..."}],"failures":[{"kind":"progress|evidence|check|contract|completion","key":"...","reason":"...","disposition":"auto_fixable|needs_user_input|needs_approval|external_dependency|runtime_transient|non_recoverable","operationRefs":["operation:id"]}]}
+Each failure is {"kind":"...","key":"...","reason":"...","disposition":"auto_fixable|needs_user_input|needs_approval|external_dependency|runtime_transient|non_recoverable","operationRefs":["operation:id"]}. operationRefs may be empty except that operation-based progress failures must cite current-Attempt operations.
 TASKRUN_DATA=${JSON.stringify(payload)}`;
     try {
       const response = await this.request(basePrompt, input.run.id);
       try {
-        const audit = this.parseSemanticVerdict(object(repairJsonSyntax(response), "audit"), criteria, validEvidenceRefs, input, trusted);
+        const audit = this.parseSemanticVerdict(
+          object(repairJsonSyntax(response), "audit"), criteria, validEvidenceRefs, input, trusted,
+          new Set(recentOperations.map((operation) => `operation:${operation.id}`)),
+        );
         return this.removeProjectionOnlyFailures(audit, input.modelOutputTruncated === true, candidateProjection.strategy);
       } catch (validationError) {
         throw new SupervisorReviewError(`Supervisor LLM audit failed local validation; no repair LLM was called: ${validationError instanceof Error ? validationError.message : String(validationError)}`);
@@ -552,6 +581,7 @@ TASKRUN_DATA=${JSON.stringify(payload)}`;
     validEvidenceRefs: Set<string>,
     input: SupervisorSettledReviewInput,
     trusted: TrustedEvidenceSet,
+    validOperationRefs: Set<string>,
   ): SupervisorAudit {
     const delivery = object(result.delivery, "delivery verdict");
     if (typeof delivery.complete !== "boolean" || typeof delivery.relevant !== "boolean" || typeof delivery.contradictory !== "boolean") {
@@ -559,11 +589,27 @@ TASKRUN_DATA=${JSON.stringify(payload)}`;
     }
     const deliveryReason = text(delivery.reason, "delivery reason");
     const coverage = parseCoverage(result.criterionCoverage, criteria, validEvidenceRefs);
-    const semanticFailures = parseFailures(result.failures);
-    const progressFailures = semanticFailures.filter((failure) => failure.kind === "progress");
-    const evidenceFailures = semanticFailures.filter((failure) => failure.kind === "evidence" || failure.kind === "check");
-    const contractFailures = semanticFailures.filter((failure) => failure.kind === "contract");
-    const explicitCompletionFailures = semanticFailures.filter((failure) => failure.kind === "completion");
+    const semanticFailures = parseFailures(result.failures, validOperationRefs);
+    const currentOperationRefs = new Set(input.operations
+      .filter((operation) => operation.attempt === input.run.attempt)
+      .map((operation) => `operation:${operation.id}`));
+    const currentProgress = input.progress?.attempt === input.run.attempt ? input.progress : undefined;
+    const hasCurrentTrajectoryRisk = input.operations.some((operation) =>
+      operation.attempt === input.run.attempt && operation.status !== "succeeded")
+      || Boolean(currentProgress && (currentProgress.consecutiveFailures > 0 || currentProgress.repeatedOperations > 1));
+    let ignoredNonCurrentProgress = 0;
+    const progressFailures = semanticFailures.flatMap((item) => {
+      if (item.failure.kind !== "progress") return [];
+      if (item.operationRefs.some((ref) => currentOperationRefs.has(ref))
+        || item.operationRefs.length === 0 && hasCurrentTrajectoryRisk) return [item.failure];
+      ignoredNonCurrentProgress += 1;
+      return [];
+    });
+    const failuresOfKind = (...kinds: string[]) => semanticFailures
+      .filter((item) => kinds.includes(item.failure.kind)).map((item) => item.failure);
+    const evidenceFailures = failuresOfKind("evidence", "check");
+    const contractFailures = failuresOfKind("contract");
+    const explicitCompletionFailures = failuresOfKind("completion");
     const requiresTrustedVerification = effectiveTaskExecutionPolicy(input.run.contract, input.operations, input.run.attempt).evidencePolicy === "trusted_check";
     const trustedRequiredChecks = input.run.checks.filter((check) => check.required && trusted.trustedCheckRefs.has(`check:${check.key}`));
     if (requiresTrustedVerification && trustedRequiredChecks.length === 0) {
@@ -592,8 +638,12 @@ TASKRUN_DATA=${JSON.stringify(payload)}`;
     });
     return {
       action,
-      reasonCode: action === "complete_taskrun" ? "semantic_audit_passed" : `authoritative_${action}`,
-      rationale: deliveryReason,
+      reasonCode: action === "complete_taskrun"
+        ? ignoredNonCurrentProgress ? "non_current_progress_ignored" : "semantic_audit_passed"
+        : `authoritative_${action}`,
+      rationale: ignoredNonCurrentProgress
+        ? `${deliveryReason} Core ignored ${ignoredNonCurrentProgress} progress failure(s) unsupported by the current Attempt.`
+        : deliveryReason,
       confidence: 1,
       gates: {
         progress: gate(normalizedProgress, "The execution trajectory is acceptable.", "The execution trajectory has unresolved semantic failures."),

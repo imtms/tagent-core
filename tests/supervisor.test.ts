@@ -32,7 +32,7 @@ function semanticVerdict(options: {
       reason: options.reason ?? "Complete.",
     },
     criterionCoverage: options.criterionCoverage ?? [],
-    failures: options.failures ?? [],
+    failures: (options.failures ?? []).map((failure) => ({ operationRefs: [], ...(failure as Record<string, unknown>) })),
   };
 }
 
@@ -354,6 +354,125 @@ describe("TaskRunSupervisor LLM audit", () => {
     } finally { globalThis.fetch = original; store.close(); }
   });
 
+  it("treats recovered prior-Attempt failures as audit context instead of current progress blockers", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "repair and verify the migration");
+    const criterion = "The repaired migration passes its final verification";
+    store.db.prepare("UPDATE runs SET contract_json=? WHERE id=?").run(JSON.stringify({
+      sourceInput: run.goal, summary: run.goal,
+      objectives: [{ id: "change-1", summary: run.goal, timing: "current", kind: "change" }],
+      acceptanceCriteria: [criterion], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null,
+      relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test",
+    }), run.id);
+    store.claimOperation("prior-failure", run.id, 1, "tool.bash", { command: "npm run migrate" });
+    const priorFailure = store.updateOperation("prior-failure", {
+      status: "failed", stage: "execution_failed", error: "migration failed before the repair",
+      result: { content: [{ type: "text", text: "migration failed" }], details: { exitCode: 1 } },
+    });
+    store.db.prepare("UPDATE runs SET attempt=2 WHERE id=?").run(run.id);
+    const verification = upsertTrustedCheck(store, run.id, {
+      key: "verify", title: "Verify repaired migration", command: "npm test", output: "migration and regression tests passed",
+    });
+    const verdict = semanticVerdict({
+      criterionCoverage: [{ criterionId: "ac-1", status: "covered", evidenceRefs: ["check:verify"], reason: "The current verification covers the repaired final state." }],
+      failures: [{
+        kind: "progress", key: "historical_migration_failure", reason: "Attempt 1 contained a failed migration.",
+        disposition: "auto_fixable", operationRefs: [`operation:${priorFailure.id}`],
+      }],
+    });
+    let prompt = "";
+    const original = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => {
+      prompt = (JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> }).messages[0].content;
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(verdict) } }] }), { status: 200 });
+    };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({
+        run: store.getRun(run.id)!, response: "The migration was repaired and the current verification passed.",
+        operations: store.listOperations(run.id), progress: undefined,
+      });
+      expect(audit).toMatchObject({
+        action: "complete_taskrun", reasonCode: "non_current_progress_ignored",
+        gates: { progress: { passed: true, failures: [] }, completion: { passed: true } },
+      });
+      expect(prompt).toContain('"currentAttempt":2');
+      expect(prompt).toContain('"currentAttemptOperations"');
+      expect(prompt).toContain(verification.id);
+      expect(prompt).toContain('"historicalAttemptOperations"');
+      expect(prompt).toContain(priorFailure.id);
+      expect(prompt).toContain("audit context, not current progress evidence");
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("keeps a current-Attempt operation failure eligible to block progress", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "repair current failure");
+    store.claimOperation("current-failure", run.id, run.attempt, "tool.bash", { command: "npm test" });
+    const currentFailure = store.updateOperation("current-failure", {
+      status: "failed", stage: "execution_failed", error: "tests failed",
+      result: { content: [{ type: "text", text: "1 test failed" }], details: { exitCode: 1 } },
+    });
+    const verdict = semanticVerdict({
+      failures: [{
+        kind: "progress", key: "current_tests_failed", reason: "The current Attempt still has a failing test operation.",
+        disposition: "auto_fixable", operationRefs: [`operation:${currentFailure.id}`],
+      }],
+    });
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(verdict) } }] }), { status: 200 });
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({
+        run: store.getRun(run.id)!, response: "The test failure still needs repair.", operations: store.listOperations(run.id), progress: undefined,
+      });
+      expect(audit).toMatchObject({ action: "start_continuation", gates: { progress: { passed: false }, completion: { passed: false } } });
+      expect(audit.gates.progress.failures).toEqual([expect.objectContaining({ key: "current_tests_failed" })]);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("keeps an unresolved historical problem blocking through current completion semantics", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "verify whether recovery is complete");
+    store.claimOperation("unresolved-prior-failure", run.id, 1, "tool.bash", { command: "npm run migrate" });
+    const priorFailure = store.updateOperation("unresolved-prior-failure", {
+      status: "failed", stage: "execution_failed", error: "migration failed",
+      result: { content: [{ type: "text", text: "migration failed" }], details: { exitCode: 1 } },
+    });
+    store.db.prepare("UPDATE runs SET attempt=2 WHERE id=?").run(run.id);
+    const reason = "The final delivery provides no current verification that the failed migration was repaired.";
+    const verdict = semanticVerdict({
+      complete: false, reason,
+      failures: [{
+        kind: "completion", key: "recovery_not_verified", reason, disposition: "auto_fixable",
+        operationRefs: [`operation:${priorFailure.id}`],
+      }],
+    });
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(verdict) } }] }), { status: 200 });
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({
+        run: store.getRun(run.id)!, response: "The earlier migration failed.", operations: store.listOperations(run.id), progress: undefined,
+      });
+      expect(audit).toMatchObject({ action: "start_continuation", gates: { completion: { passed: false } } });
+      expect(audit.gates.completion.failures).toEqual(expect.arrayContaining([expect.objectContaining({ key: "recovery_not_verified" })]));
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("does not carry a prior-Attempt progress snapshot into settlement review", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "recover in a later Attempt");
+    store.updateProgressSnapshot(run, failingEvent(run.id, 1));
+    store.db.prepare("UPDATE runs SET attempt=2 WHERE id=?").run(run.id);
+    let reviewedProgress: unknown = "not-called";
+    const reviewer = {
+      evaluator: "llm" as const, model: "capture-progress",
+      async reviewSettled(input: { progress: unknown }) { reviewedProgress = input.progress; return passingTestAudit(); },
+      async reviewAttemptFailure() { return { action: "block_taskrun" as const, reasonCode: "unused", rationale: "unused", confidence: 1 }; },
+    };
+    const review = await new TaskRunSupervisor(store, reviewer).reviewSettled(store.getRun(run.id)!, 2, "Recovered.");
+    expect(review.decision.action).toBe("complete_taskrun");
+    expect(reviewedProgress).toBeUndefined();
+    store.close();
+  });
+
 
   it("rejects hallucinated evidence references from the LLM", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "strict evidence refs");
@@ -365,6 +484,24 @@ describe("TaskRunSupervisor LLM audit", () => {
     try {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
       await expect(new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(run.id)!, response: "done", operations: [], progress: undefined })).rejects.toThrow("unknown evidence reference");
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("rejects hallucinated operation references on semantic failures", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "strict failure refs");
+    const payload = semanticVerdict({
+      failures: [{
+        kind: "completion", key: "invented_receipt", reason: "An invented operation allegedly failed.",
+        disposition: "auto_fixable", operationRefs: ["operation:invented"],
+      }],
+    });
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(payload) } }] }), { status: 200 });
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      await expect(new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({
+        run, response: "done", operations: [], progress: undefined,
+      })).rejects.toThrow("invalid failure operation references");
     } finally { globalThis.fetch = original; store.close(); }
   });
 
