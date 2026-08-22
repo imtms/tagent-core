@@ -6,11 +6,18 @@ import { downloadArtifact, request, withCoreAbi } from "./api-transport";
 import type { EventConsumerCursor, GateProfile, Session, SessionInboxItem, TaskRun, TranscriptItem } from "./api-types";
 import { createGoalApi } from "./goal-api";
 import { createSkillApi } from "./skill-api";
-export { authenticatedCoreRequest, downloadArtifact } from "./api-transport";
 export { subscribe } from "./api-transport";
-export type * from "./api-types";
+export type {
+  Artifact, ArtifactContent, CaptureJob, ColdTopic, ContextManifest, CoreMemorySnapshot, GateProfile,
+  MemoryKind, MemoryScope, MemoryStatus, MemoryStatusResult, Message, PreferenceRecord, RecallResult,
+  ReindexJob, RunEvent, RuntimeStatus, Session, SessionInboxItem, TaskRun, TaskRunSummary, TopicDescriptor,
+  TranscriptItem, UserInputRequest, WarmMemory,
+} from "./api-types";
 export type { SkillRevision, SkillSummary } from "./skill-api";
-export type { WorkspaceGoal, WorkspaceGoalSummary, WorkspaceGoalDefinition, WorkspaceGoalRoadmap, WorkspaceGoalRoadmapItem, WorkspaceGoalDecision, WorkspaceGoalOperationReceipt, WorkspaceGoalTaskRunStart } from "./goal-api";
+export type {
+  WorkspaceGoal, WorkspaceGoalDefinition, WorkspaceGoalOperationReceipt,
+  WorkspaceGoalRoadmap, WorkspaceGoalRoadmapItem, WorkspaceGoalSummary,
+} from "./goal-api";
 
 const webOrigin = { surface: "web" as const, gatewayActorId: "local-web", sourceId: "web-console" };
 

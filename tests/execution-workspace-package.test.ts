@@ -4,12 +4,11 @@ import path from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { ExecutionCoordinator } from "@tagent/execution";
-import { ExecuteCapabilityHandler } from "@tagent/execution/application";
 import type { ExecutionSessionRef, TaskRun } from "@tagent/execution/domain";
 import { AttemptExecutor } from "@tagent/execution/composition";
 
 const repoRoot = process.cwd();
-const expectedExports = [".", "./application", "./composition", "./domain", "./ports"];
+const expectedExports = [".", "./composition", "./domain", "./ports"];
 
 interface PackageManifest {
   name: string;
@@ -159,30 +158,21 @@ describe("Execution workspace package", () => {
     expect(referenceCompatibility).toBe(true);
   });
 
-  it("keeps application internals off the root export while exposing reviewed subpaths explicitly", async () => {
+  it("keeps application internals off the root export while exposing reviewed composition explicitly", async () => {
     const root = await import("@tagent/execution");
-    const application = await import("@tagent/execution/application");
     expect(Object.keys(root)).toEqual(["ExecutionCoordinator"]);
     expect(root.ExecutionCoordinator).toBe(ExecutionCoordinator);
     expect(root).not.toHaveProperty("AttemptExecutor");
-    expect(root).not.toHaveProperty("ExecuteCapabilityHandler");
     expect(AttemptExecutor).toBeTypeOf("function");
-    expect(ExecuteCapabilityHandler).toBeTypeOf("function");
-    expect(Object.keys(application).sort()).toEqual([
-      "CapabilityGrantUnsupportedError",
-      "CapabilityOutcomeUnknownError",
-      "ExecuteCapabilityHandler",
-    ]);
   });
 
   it("resolves every public export through compiled Node ESM", () => {
     const script = `
       const root = await import("@tagent/execution");
-      const application = await import("@tagent/execution/application");
       const domain = await import("@tagent/execution/domain");
       await import("@tagent/execution/ports");
       const composition = await import("@tagent/execution/composition");
-      if (!root.ExecutionCoordinator || !application.ExecuteCapabilityHandler || !domain.attemptIdFor || !composition.AttemptExecutor || !composition.createOneShotPort) process.exit(1);
+      if (!root.ExecutionCoordinator || !domain.attemptIdFor || !composition.AttemptExecutor || !composition.createOneShotPort) process.exit(1);
     `;
     expect(() => execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
       cwd: repoRoot,

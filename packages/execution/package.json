@@ -21,10 +21,6 @@
       "types": "./dist/ports.d.ts",
       "import": "./dist/ports.js"
     },
-    "./application": {
-      "types": "./dist/application.d.ts",
-      "import": "./dist/application.js"
-    },
     "./composition": {
       "types": "./dist/composition.d.ts",
       "import": "./dist/composition.js"

@@ -4,13 +4,6 @@ import { protocolError } from "./errors.js";
 import { OperatorInboxClient } from "./operator-inbox-v1-client.js";
 import type { CoreCallOptions } from "./transport.js";
 
-function pageQuery(query: ProfileListQuery): string {
-  const search = new URLSearchParams();
-  if (query.cursor !== undefined) search.set("cursor", query.cursor);
-  if (query.limit !== undefined) search.set("limit", String(query.limit));
-  return search.size ? `?${search}` : "";
-}
-
 export class OperatorContextManifestClient extends OperatorInboxClient {
   async listOperatorContextManifests(
     taskRunId: string,
@@ -24,7 +17,7 @@ export class OperatorContextManifestClient extends OperatorInboxClient {
     catch (error) {
       throw protocolError("GET", this.resolve(basePath), `TAgent Core request validation failed: ${error instanceof Error ? error.message : String(error)}`, "", {}, error);
     }
-    return this.request(`${basePath}${pageQuery(input)}`, {
+    return this.request(`${basePath}${this.queryString(input)}`, {
       ...options,
       decode: (payload) => abi.decodeAbi(abi.OperatorContextManifestListResponseSchema, payload),
     });

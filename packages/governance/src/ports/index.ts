@@ -4,17 +4,6 @@ export type {
   ExternalActionAuthorizationActivation,
   ExternalActionAuthorizationResult,
 } from "./approval-repository.js";
-export type {
-  ApprovalAuthorizationCommit,
-  ApprovalAuthorizationReceiptInput,
-  ApprovalAuthorizationTransactionInput,
-  ApprovalUseCommit,
-  AuthorizationReceiptReadPort,
-  AuthorizedOperationClaim,
-  CapabilityGrantReadPort,
-  CapabilityPolicyPort,
-  CapabilityAuthorizationTransactionPort,
-} from "./capability-port.js";
 export type { ContextManifestRepository } from "./context-manifest-repository.js";
 export type { ArtifactMetadata, EvidenceRepository } from "./evidence-repository.js";
 export type { GateEvaluationRepository } from "./gate-evaluation-repository.js";

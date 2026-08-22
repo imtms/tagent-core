@@ -1,17 +1,6 @@
 export type { ArtifactSinkPort, ArtifactSinkWriteInput, ArtifactSinkWriteResult } from "./artifact-sink-port.js";
 export type { CheckpointRepository } from "./checkpoint-repository.js";
 export type {
-  CapabilityEffectBeginResult,
-  CapabilityEffectPort,
-  CapabilityEffectSettlement,
-  CapabilityExecutionAuthorization,
-  CapabilityExecutionFence,
-  CapabilityExecutionPersistencePort,
-  CapabilityExecutionRequest,
-  CapabilityExecutionState,
-  CapabilityExecutionStatus,
-} from "./capability-execution-port.js";
-export type {
   AttemptExecutionToken,
   AttemptRuntimeFactory,
   AttemptRuntimePort,

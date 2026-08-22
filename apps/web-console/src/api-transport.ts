@@ -40,12 +40,12 @@ const coreClient = createCoreClient({
   fetch: coreFetch,
 });
 
-export interface AuthenticatedCoreRequestOptions {
+interface AuthenticatedCoreRequestOptions {
   origin?: string;
   accessToken?: string;
 }
 
-export function authenticatedCoreRequest(
+function authenticatedCoreRequest(
   pathname: string,
   init: RequestInit = {},
   options: AuthenticatedCoreRequestOptions = {},

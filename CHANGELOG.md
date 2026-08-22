@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Maintenance
+
+- Removed the uncomposed CapabilityCommand domain, execution handler, persistence repository, private Execution application subpath, and tests that existed only to exercise or preserve that dormant alternate effect path.
+- Removed closed-issue audit snapshots and a negative retired-Learning architecture test whose durable compatibility guarantee is already enforced by exact SQLite schema and migration checks.
+- Narrowed the Web Console API type barrel to actual consumers, removed an unused storage reader, and renamed the remaining Memory scope regression for its maintained responsibility.
+- Consolidated duplicate Skill bundle mutations, Web storage decoding, profile-operation orchestration, Inbox/Skill response mapping, Core Client query encoding, and the two namespace-compatible cursor codecs.
+
+### Compatibility
+
+- User-visible behavior, published Gateway ABI and SDKs, cursor and snapshot tokens, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` are unchanged. The removed `@tagent/execution/application` subpath belonged to a private package and had no production consumer.
+
 ## [0.8.24] - 2026-08-22
 
 ### Goal and Memory hierarchy refinement

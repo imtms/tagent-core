@@ -22,7 +22,7 @@ import { successEnvelope, V1HttpError } from "./errors.js";
 import { withRequestAbortSignal } from "./console-route-support.js";
 import { decodeProfileCursor, encodeProfileCursor, encodeProfileSnapshot } from "./profile-cursor.js";
 import { assertProfileResourceScope, authorizeProfile, profileListQuery } from "./profile-route-support.js";
-import { profileRevision, runAdminProfileOperation } from "./admin-profile-support.js";
+import { profileRevision, runAdminProfileOperation } from "./profile-operation-support.js";
 
 const memoryKinds = new Set<MemoryKind>(["fact", "preference", "episode", "procedure"]);
 

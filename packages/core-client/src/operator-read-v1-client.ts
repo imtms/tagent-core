@@ -12,13 +12,6 @@ function encodePathSegment(value: string): string {
   return encodeURIComponent(value);
 }
 
-function pageQuery(options: { cursor?: string; limit?: number }): string {
-  const query = new URLSearchParams();
-  if (options.cursor !== undefined) query.set("cursor", options.cursor);
-  if (options.limit !== undefined) query.set("limit", String(options.limit));
-  return query.size ? `?${query}` : "";
-}
-
 function validatePageOptions<T>(url: string, input: unknown, decode: (value: unknown) => T): T {
   try { return decode(input); }
   catch (error) {
@@ -38,7 +31,7 @@ export class OperatorReadClient extends ConsoleGoalClient {
     const abi = await loadCoreAbi();
     const basePath = "/api/v1/operator/sessions";
     const query = validatePageOptions(this.resolve(basePath), options, (value) => abi.decodeAbi(abi.OperatorListQuerySchema, value));
-    return this.request(`${basePath}${pageQuery(query)}`, {
+    return this.request(`${basePath}${this.queryString(query)}`, {
       decode: (payload) => abi.decodeAbi(abi.OperatorSessionListResponseSchema, payload),
     });
   }
@@ -50,7 +43,7 @@ export class OperatorReadClient extends ConsoleGoalClient {
     const abi = await loadCoreAbi();
     const basePath = `/api/v1/operator/sessions/${encodePathSegment(sessionId)}/task-runs`;
     const query = validatePageOptions(this.resolve(basePath), options, (value) => abi.decodeAbi(abi.OperatorListQuerySchema, value));
-    const path = `${basePath}${pageQuery(query)}`;
+    const path = `${basePath}${this.queryString(query)}`;
     return this.request(path, {
       decode: (payload) => abi.decodeAbi(abi.OperatorSessionTaskRunListResponseSchema, payload),
     });

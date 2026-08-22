@@ -7,10 +7,9 @@ export type WorkspaceGoalSummary = ConsoleV1.ConsoleWorkspaceGoalSummary;
 export type WorkspaceGoalDefinition = ConsoleV1.ConsoleWorkspaceGoalDefinition;
 export type WorkspaceGoalRoadmap = ConsoleV1.ConsoleWorkspaceGoalRoadmap;
 export type WorkspaceGoalRoadmapItem = ConsoleV1.ConsoleWorkspaceGoalRoadmapItem;
-export type WorkspaceGoalDecision = ConsoleV1.ConsoleWorkspaceGoalDecision;
 export type WorkspaceGoalOperationReceipt = ConsoleV1.ConsoleWorkspaceGoalOperationReceipt;
 
-export interface WorkspaceGoalTaskRunStart {
+interface WorkspaceGoalTaskRunStart {
   goal: WorkspaceGoal;
   inboxItemId: string;
   runId: string | null;

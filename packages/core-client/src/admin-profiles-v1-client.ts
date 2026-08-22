@@ -17,12 +17,6 @@ import type { CoreCallOptions, CoreRequestOptions } from "./transport.js";
 
 type SchemaName = keyof CoreAbi;
 
-function queryString(values: Record<string, string | number | undefined>): string {
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(values)) if (value !== undefined) query.set(key, String(value));
-  return query.size ? `?${query}` : "";
-}
-
 export class AdminProfilesClient extends OperatorSkillsClient {
   private async validated<T>(method: string, path: string, schemaName: SchemaName, value: unknown): Promise<T> {
     const abi = await loadCoreAbi();
@@ -56,7 +50,7 @@ export class AdminProfilesClient extends OperatorSkillsClient {
   }
 
   listAdminMemoryRecords(scope: MemoryScope, query: ProfileListQuery = {}, options: CoreCallOptions = {}): Promise<AdminMemoryRecordsResponse> {
-    const path = `/api/v1/admin/profiles/memory/records${queryString({ scopeType: scope.type, scopeId: scope.id, ...query })}`;
+    const path = `/api/v1/admin/profiles/memory/records${this.queryString({ scopeType: scope.type, scopeId: scope.id, ...query })}`;
     return this.profileRequest(path, "AdminMemoryRecordsResponseSchema", options);
   }
 

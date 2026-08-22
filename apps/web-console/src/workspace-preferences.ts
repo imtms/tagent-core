@@ -2,19 +2,21 @@ import type { GateProfile } from "./api";
 
 export type Theme = "light" | "dark";
 
-export function storedBoolean(key: string, fallback = false): boolean {
+function storedJson(key: string, fallback: unknown): unknown {
   try {
     const value = globalThis.localStorage?.getItem(key);
-    return value === null || value === undefined ? fallback : value === "true";
+    return value === null || value === undefined ? fallback : JSON.parse(value);
   } catch { return fallback; }
 }
 
+function storedRecord<Value>(key: string, valid: (value: unknown) => value is Value): Record<string, Value> {
+  const parsed = storedJson(key, {});
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, Value] => valid(entry[1])));
+}
+
 export function storedStringRecord(key: string): Record<string, string> {
-  try {
-    const parsed = JSON.parse(globalThis.localStorage?.getItem(key) ?? "{}");
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
-  } catch { return {}; }
+  return storedRecord(key, (value): value is string => typeof value === "string");
 }
 
 export function storeStringRecord(key: string, value: Record<string, string>): void {
@@ -27,26 +29,16 @@ export function storedGateProfiles(): Record<string, GateProfile> {
 }
 
 export function storedNumberRecord(key: string): Record<string, number> {
-  try {
-    const parsed = JSON.parse(globalThis.localStorage?.getItem(key) ?? "{}");
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1])));
-  } catch { return {}; }
+  return storedRecord(key, (value): value is number => typeof value === "number" && Number.isFinite(value));
 }
 
 export function storedStringLists(key: string): Record<string, string[]> {
-  try {
-    const parsed = JSON.parse(globalThis.localStorage?.getItem(key) ?? "{}");
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string[]] => Array.isArray(entry[1]) && entry[1].every((item) => typeof item === "string")));
-  } catch { return {}; }
+  return storedRecord(key, (value): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string"));
 }
 
 export function storedStringArray(key: string): string[] {
-  try {
-    const parsed = JSON.parse(globalThis.localStorage?.getItem(key) ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
-  } catch { return []; }
+  const parsed = storedJson(key, []);
+  return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
 }
 
 export function storedTheme(): Theme {

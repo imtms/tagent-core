@@ -8,10 +8,6 @@ export {
 } from "./sqlite/task-run-execution-fence.js";
 export { SqliteTaskRunTransitionRepository } from "./sqlite/task-run-transition-repository.js";
 export {
-  SqliteFencedCapabilityAuthorizationRepository,
-  type SqliteFencedCapabilityAuthorizationOptions,
-} from "./sqlite/fenced-capability-authorization-repository.js";
-export {
   GuardedSqliteUnitOfWork,
   SqlitePersistence,
   createGuardedSqlitePersistence,

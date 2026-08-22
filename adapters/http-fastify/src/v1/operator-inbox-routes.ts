@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   decodeAbi,
   encodeAbi,
@@ -57,6 +57,36 @@ function mapItem(item: ProfileInboxItemRecord): OperatorInboxItem {
   };
 }
 
+function inboxMutationResponse(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  result: { value: ProfileInboxMutationValue; replayed: boolean },
+) {
+  setRevisionEtag(reply, result.value.collectionRevision);
+  if (result.replayed) reply.header("Idempotency-Replayed", "true");
+  return encodeAbi(OperatorInboxMutationResponseSchema, successEnvelope(request, {
+    ok: true,
+    items: result.value.items.map(mapItem),
+    collectionRevision: result.value.collectionRevision,
+  }));
+}
+
+function inboxItemMutationResponse(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  result: { value: ProfileInboxMutationValue; replayed: boolean },
+  itemId: string,
+) {
+  const item = result.value.items.find((candidate) => candidate.id === itemId);
+  if (!item) throw new V1HttpError(500, "inbox.snapshot_missing", "Inbox mutation response is incomplete", "internal");
+  setRevisionEtag(reply, result.value.collectionRevision);
+  if (result.replayed) reply.header("Idempotency-Replayed", "true");
+  return encodeAbi(OperatorInboxItemResponseSchema, successEnvelope(request, {
+    item: mapItem(item),
+    collectionRevision: result.value.collectionRevision,
+  }));
+}
+
 export function registerOperatorInboxV1Routes(app: FastifyInstance, dependencies: ChannelV1Dependencies): void {
   const read = authorizeProfile(dependencies, "operator:inbox:read", "operator");
   const write = authorizeProfile(dependencies, "operator:inbox:write", "operator");
@@ -107,14 +137,7 @@ export function registerOperatorInboxV1Routes(app: FastifyInstance, dependencies
     const result = profileMutationValue(replay ?? dependencies.service.reorderSessionInputsProfile(
       sessionId, body.itemIds, mutation,
     ));
-    const items = result.value.items.map(mapItem);
-    setRevisionEtag(reply, result.value.collectionRevision);
-    if (result.replayed) reply.header("Idempotency-Replayed", "true");
-    return encodeAbi(OperatorInboxMutationResponseSchema, successEnvelope(request, {
-      ok: true,
-      items,
-      collectionRevision: result.value.collectionRevision,
-    }));
+    return inboxMutationResponse(request, reply, result);
   });
 
   app.patch("/api/v1/operator/sessions/:sessionId/inbox/:itemId", {
@@ -134,14 +157,7 @@ export function registerOperatorInboxV1Routes(app: FastifyInstance, dependencies
     const result = profileMutationValue(replay ?? await dependencies.service.updateSessionInputProfile(
       sessionId, itemId, normalized.content, mutation,
     ));
-    const item = result.value.items.find((candidate) => candidate.id === itemId);
-    if (!item) throw new V1HttpError(500, "inbox.snapshot_missing", "Inbox mutation response is incomplete", "internal");
-    setRevisionEtag(reply, result.value.collectionRevision);
-    if (result.replayed) reply.header("Idempotency-Replayed", "true");
-    return encodeAbi(OperatorInboxItemResponseSchema, successEnvelope(request, {
-      item: mapItem(item),
-      collectionRevision: result.value.collectionRevision,
-    }));
+    return inboxItemMutationResponse(request, reply, result, itemId);
   });
 
   app.post("/api/v1/operator/sessions/:sessionId/inbox/:itemId/decision", {
@@ -160,14 +176,7 @@ export function registerOperatorInboxV1Routes(app: FastifyInstance, dependencies
     const result = profileMutationValue(replay ?? dependencies.service.decideSessionInputProfile(
       sessionId, itemId, body.decision, mutation,
     ));
-    const item = result.value.items.find((candidate) => candidate.id === itemId);
-    if (!item) throw new V1HttpError(500, "inbox.snapshot_missing", "Inbox mutation response is incomplete", "internal");
-    setRevisionEtag(reply, result.value.collectionRevision);
-    if (result.replayed) reply.header("Idempotency-Replayed", "true");
-    return encodeAbi(OperatorInboxItemResponseSchema, successEnvelope(request, {
-      item: mapItem(item),
-      collectionRevision: result.value.collectionRevision,
-    }));
+    return inboxItemMutationResponse(request, reply, result, itemId);
   });
 
   app.post("/api/v1/operator/sessions/:sessionId/inbox/:itemId/merge", {
@@ -186,14 +195,7 @@ export function registerOperatorInboxV1Routes(app: FastifyInstance, dependencies
     const result = profileMutationValue(replay ?? dependencies.service.mergeSessionInputsProfile(
       sessionId, itemId, body.targetId, mutation,
     ));
-    const items = result.value.items.map(mapItem);
-    setRevisionEtag(reply, result.value.collectionRevision);
-    if (result.replayed) reply.header("Idempotency-Replayed", "true");
-    return encodeAbi(OperatorInboxMutationResponseSchema, successEnvelope(request, {
-      ok: true,
-      items,
-      collectionRevision: result.value.collectionRevision,
-    }));
+    return inboxMutationResponse(request, reply, result);
   });
 
   app.delete("/api/v1/operator/sessions/:sessionId/inbox/:itemId", {
@@ -211,14 +213,7 @@ export function registerOperatorInboxV1Routes(app: FastifyInstance, dependencies
     const result = profileMutationValue(replay ?? dependencies.service.deleteSessionInputProfile(
       sessionId, itemId, mutation,
     ));
-    const items = result.value.items.map(mapItem);
-    setRevisionEtag(reply, result.value.collectionRevision);
-    if (result.replayed) reply.header("Idempotency-Replayed", "true");
-    return encodeAbi(OperatorInboxMutationResponseSchema, successEnvelope(request, {
-      ok: true,
-      items,
-      collectionRevision: result.value.collectionRevision,
-    }));
+    return inboxMutationResponse(request, reply, result);
   });
 
   registerOperatorInboxOperationV1Routes(app, dependencies);

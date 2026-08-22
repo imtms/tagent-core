@@ -14,13 +14,6 @@ import { protocolError } from "./errors.js";
 import { OperatorContextManifestClient } from "./operator-context-manifest-v1-client.js";
 import type { CoreCallOptions } from "./transport.js";
 
-function pageQuery(query: ProfileListQuery): string {
-  const search = new URLSearchParams();
-  if (query.cursor !== undefined) search.set("cursor", query.cursor);
-  if (query.limit !== undefined) search.set("limit", String(query.limit));
-  return search.size ? `?${search}` : "";
-}
-
 export class OperatorSkillsClient extends OperatorContextManifestClient {
   private async list<T>(path: string, query: ProfileListQuery, schemaName:
     "OperatorSkillCatalogResponseSchema" | "OperatorSkillRevisionsResponseSchema" | "OperatorWorkspaceSkillsResponseSchema",
@@ -31,7 +24,7 @@ export class OperatorSkillsClient extends OperatorContextManifestClient {
     catch (error) {
       throw protocolError("GET", this.resolve(path), `TAgent Core request validation failed: ${error instanceof Error ? error.message : String(error)}`, "", {}, error);
     }
-    return this.request(`${path}${pageQuery(input)}`, {
+    return this.request(`${path}${this.queryString(input)}`, {
       ...options,
       decode: (payload) => abi.decodeAbi(abi[schemaName], payload) as T,
     });

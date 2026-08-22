@@ -112,6 +112,12 @@ export class CoreTransport {
     return resolveUrl(this.baseUrl, path);
   }
 
+  protected queryString(values: Record<string, string | number | undefined>): string {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(values)) if (value !== undefined) query.set(key, String(value));
+    return query.size ? `?${query}` : "";
+  }
+
   async request<T>(path: string, options: CoreRequestOptions<T> & { decode: (payload: unknown) => T | Promise<T> }): Promise<T>;
   async request(path: string, options?: CoreRequestOptions<unknown>): Promise<unknown>;
   async request<T>(path: string, options: CoreRequestOptions<T> = {}): Promise<T | unknown> {

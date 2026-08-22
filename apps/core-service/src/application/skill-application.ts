@@ -384,50 +384,51 @@ export class CoreSkillApplication {
       : this.skills.createRevision(input);
   }
 
-  async uploadSkill(input: SkillUploadInput) {
+  private uploadSkillBundle(input: SkillUploadInput): Promise<SkillRevision>;
+  private uploadSkillBundle(input: SkillUploadInput, mutation: ProfileMutationContext): Promise<ProfileMutationResult<ProfileSkillMutationValue>>;
+  private uploadSkillBundle(input: SkillUploadInput, mutation?: ProfileMutationContext) {
     const filename = path.basename(input.filename.trim());
     if (!filename || filename.length > 255 || (!filename.toLowerCase().endsWith(".zip") && !filename.toLowerCase().endsWith(".md"))) {
       throw new Error("Upload a SKILL.md or .zip Skill bundle");
     }
     const bundle = extractBundle(filename, decodeBase64(input.contentBase64));
     const parsed = parseSkill(bundle.files.find((file) => file.relativePath === bundle.skillPath)!.data);
-    return this.persistBundle(parsed, bundle, filename);
+    return mutation
+      ? this.persistBundle(parsed, bundle, filename, undefined, mutation)
+      : this.persistBundle(parsed, bundle, filename);
+  }
+
+  async uploadSkill(input: SkillUploadInput) {
+    return this.uploadSkillBundle(input);
   }
 
   async uploadSkillProfile(input: SkillUploadInput, mutation: ProfileMutationContext) {
-    const filename = path.basename(input.filename.trim());
-    if (!filename || filename.length > 255 || (!filename.toLowerCase().endsWith(".zip") && !filename.toLowerCase().endsWith(".md"))) {
-      throw new Error("Upload a SKILL.md or .zip Skill bundle");
-    }
-    const bundle = extractBundle(filename, decodeBase64(input.contentBase64));
-    const parsed = parseSkill(bundle.files.find((file) => file.relativePath === bundle.skillPath)!.data);
-    return this.persistBundle(parsed, bundle, filename, undefined, mutation);
+    return this.uploadSkillBundle(input, mutation);
+  }
+
+  private updateSkillBundle(skillId: string, input: SkillUpdateInput, sourceFilename: string): Promise<SkillRevision>;
+  private updateSkillBundle(skillId: string, input: SkillUpdateInput, sourceFilename: string, mutation: ProfileMutationContext): Promise<ProfileMutationResult<ProfileSkillMutationValue>>;
+  private async updateSkillBundle(skillId: string, input: SkillUpdateInput, sourceFilename: string, mutation?: ProfileMutationContext) {
+    const current = this.getSkill(skillId);
+    const edited = editorSkillFile(input);
+    const parsed = parseSkill(edited.data);
+    const duplicateName = this.skills.listSkills().find((skill) => skill.id !== skillId && skill.name === parsed.name);
+    if (duplicateName) throw new Error(`Skill name ${parsed.name} already exists`);
+    const managedRoot = path.join(this.workspace, ".tagent", "skills");
+    const files = await readManagedBundle(current.filePath, this.workspace, managedRoot);
+    const nextFiles = files.filter((file) => file.relativePath !== "SKILL.md");
+    nextFiles.push(edited);
+    return mutation
+      ? this.persistBundle(parsed, { files: nextFiles }, sourceFilename, skillId, mutation)
+      : this.persistBundle(parsed, { files: nextFiles }, sourceFilename, skillId);
   }
 
   async updateSkill(skillId: string, input: SkillUpdateInput) {
-    const current = this.getSkill(skillId);
-    const edited = editorSkillFile(input);
-    const parsed = parseSkill(edited.data);
-    const duplicateName = this.skills.listSkills().find((skill) => skill.id !== skillId && skill.name === parsed.name);
-    if (duplicateName) throw new Error(`Skill name ${parsed.name} already exists`);
-    const managedRoot = path.join(this.workspace, ".tagent", "skills");
-    const files = await readManagedBundle(current.filePath, this.workspace, managedRoot);
-    const nextFiles = files.filter((file) => file.relativePath !== "SKILL.md");
-    nextFiles.push(edited);
-    return this.persistBundle(parsed, { files: nextFiles }, "web-editor", skillId);
+    return this.updateSkillBundle(skillId, input, "web-editor");
   }
 
   async updateSkillProfile(skillId: string, input: SkillUpdateInput, mutation: ProfileMutationContext) {
-    const current = this.getSkill(skillId);
-    const edited = editorSkillFile(input);
-    const parsed = parseSkill(edited.data);
-    const duplicateName = this.skills.listSkills().find((skill) => skill.id !== skillId && skill.name === parsed.name);
-    if (duplicateName) throw new Error(`Skill name ${parsed.name} already exists`);
-    const managedRoot = path.join(this.workspace, ".tagent", "skills");
-    const files = await readManagedBundle(current.filePath, this.workspace, managedRoot);
-    const nextFiles = files.filter((file) => file.relativePath !== "SKILL.md");
-    nextFiles.push(edited);
-    return this.persistBundle(parsed, { files: nextFiles }, "profile-editor", skillId, mutation);
+    return this.updateSkillBundle(skillId, input, "profile-editor", mutation);
   }
 
   deleteSkill(skillId: string) {

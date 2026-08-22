@@ -12,8 +12,6 @@ export interface Session {
 }
 
 export type GateProfile = "off" | "relaxed" | "strict";
-export type SessionInputAnalysis = ConsoleV1.ConsoleSessionInputAnalysis;
-export type TaskRunContract = ConsoleV1.ConsoleTaskRunContract;
 
 export interface SessionInboxItem {
   id: string;
@@ -39,13 +37,9 @@ export interface SessionInboxItem {
 }
 
 export type Message = ConsoleV1.ConsoleMessage;
-export type ContextManifestItem = ConsoleV1.ConsoleContextManifestItem;
 export type ContextManifest = ConsoleV1.ConsoleContextManifest;
-export type PlanItem = ConsoleV1.ConsoleTaskRunPlanItem;
-export type RunCheck = ConsoleV1.ConsoleTaskRunCheck;
 export type Artifact = ConsoleV1.ConsoleArtifact;
 export interface ArtifactContent extends Artifact { content: string; format: "markdown" | "text"; bytes: number; source: "inline" | "file" }
-export type UserInputField = ConsoleV1.ConsoleUserInputField;
 export type UserInputRequest = ConsoleV1.ConsoleUserInputRequest;
 export type TaskRun = ConsoleV1.ConsoleTaskRun;
 
@@ -70,11 +64,8 @@ export type TranscriptItem =
 
 export type RuntimeStatus = import("@tagent/abi").AdminConfigStatus;
 export type MemoryKind = ConsoleV1.ConsoleMemoryKind;
-export type MemoryTier = ConsoleV1.ConsoleMemoryTier;
 export type MemoryStatus = ConsoleV1.ConsoleMemoryStatus;
 export type MemoryScope = ConsoleV1.ConsoleMemoryScope;
-export type MemorySourceRef = ConsoleV1.ConsoleMemorySourceRef;
-export type MemoryRecord = ConsoleV1.ConsoleMemoryRecord;
 export type PreferenceRecord = ConsoleV1.ConsolePreferenceRecord;
 export type WarmMemory = ConsoleV1.ConsoleWarmMemory;
 export type TopicDescriptor = ConsoleV1.ConsoleTopicDescriptor;
@@ -83,8 +74,4 @@ export type CaptureJob = ConsoleV1.ConsoleCaptureJob;
 export type MemoryStatusResult = ConsoleV1.ConsoleMemoryStatusResult;
 export type ReindexJob = ConsoleV1.ConsoleReindexJob;
 export type CoreMemorySnapshot = ConsoleV1.ConsoleCoreMemorySnapshot;
-export type MemoryExport = ConsoleV1.ConsoleMemoryExport;
-export type MemoryRecordPage=ConsoleV1.ConsoleMemoryRecordPage;
-export type MemoryTopicPage=ConsoleV1.ConsoleMemoryTopicPage;
-export type MemoryCard = ConsoleV1.ConsoleMemoryCard;
 export type RecallResult = ConsoleV1.ConsoleRecallResult;

@@ -45,7 +45,7 @@ function runtimeHost(store: Store, sessionId: string, subjectId: string, memory:
   const persistence = corePersistence(store);
   const run = store.createRun(sessionId, "memory scope regression");
   const attempt = persistence.attempts.getAttemptForRun(run.id, run.attempt)!;
-  const ownerId = `issue-36:${run.id}`;
+  const ownerId = `memory-scope:${run.id}`;
   const lease = persistence.attempts.acquireExecutionLease({ attemptId: attempt.id, expectedVersion: attempt.version, ownerId, leaseMs: 30_000 });
   return createRuntimeHost({
     persistence,
@@ -69,11 +69,11 @@ function runtimeHost(store: Store, sessionId: string, subjectId: string, memory:
 
 async function executeMemorySearch(host: ReturnType<typeof createRuntimeHost>) {
   const tool = host.capabilities.tools.find((candidate) => candidate.name === "memory_search")!;
-  await tool.execute("issue-36-search", { query: "configured subject" } as never, testSignal);
+  await tool.execute("memory-scope-search", { query: "configured subject" } as never, testSignal);
 }
 
-describe("GitHub issue regressions #36-#38", () => {
-  it("#36 retains user scope for configured subject IDs beginning with session: while omitting only the exact fallback identity", async () => {
+describe("Memory subject scope authority", () => {
+  it("retains user scope for configured subject IDs beginning with session: while omitting only the exact fallback identity", async () => {
     const { store, session, adapters, captureRequests } = collaborationFixture();
     const run = store.createRun(session.id, "configured identity capture");
     const message = store.appendMessage(session.id, "user", "记住我使用 PostgreSQL");
@@ -101,5 +101,4 @@ describe("GitHub issue regressions #36-#38", () => {
       { type: "session", id: fallbackSession.id },
     ]);
   });
-
 });

@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   decodeAbi,
   encodeAbi,
@@ -107,6 +107,23 @@ function skillError(error: unknown): never {
   throw new V1HttpError(400, "skill.invalid", message, "validation");
 }
 
+type SkillMutationEffect = () => Promise<ProfileMutationResult<ProfileSkillMutationValue>> | ProfileMutationResult<ProfileSkillMutationValue>;
+
+async function skillMutationResponse(request: FastifyRequest, reply: FastifyReply, effect: SkillMutationEffect) {
+  try {
+    const result = profileMutationValue(await effect());
+    setRevisionEtag(reply, result.value.resourceRevision);
+    if (result.replayed) reply.header("Idempotency-Replayed", "true");
+    return encodeAbi(OperatorSkillResponseSchema, successEnvelope(request, {
+      skill: mapRevision(result.value.skill), resourceRevision: result.value.resourceRevision,
+      catalogRevision: result.value.catalogRevision,
+    }));
+  } catch (error) {
+    if (error instanceof V1HttpError) throw error;
+    return skillError(error);
+  }
+}
+
 export function registerOperatorSkillV1Routes(app: FastifyInstance, dependencies: ChannelV1Dependencies): void {
   const read = authorizeProfile(dependencies, "operator:skills:read", "operator");
   const write = authorizeProfile(dependencies, "operator:skills:write", "operator");
@@ -184,23 +201,14 @@ export function registerOperatorSkillV1Routes(app: FastifyInstance, dependencies
     const body = decodeAbi(OperatorSkillUploadRequestSchema, request.body);
     const headers = profileMutationHeaders(request);
     const mutationContext = profileMutationContext(request, headers, body);
-    try {
+    return skillMutationResponse(request, reply, async () => {
       const replay = replayProfileMutation<ProfileSkillMutationValue>(dependencies, {
         profileId: "operator.skills.v1", endpointId: "operator.skills.create", resourceType: "skill_catalog", resourceId: "catalog",
       }, mutationContext);
-      const mutation = replay ?? await dependencies.service.uploadSkillProfile(
+      return replay ?? await dependencies.service.uploadSkillProfile(
         body, mutationContext,
       ) as ProfileMutationResult<ProfileSkillMutationValue>;
-      const result = profileMutationValue(mutation);
-      setRevisionEtag(reply, result.value.resourceRevision);
-      if (result.replayed) reply.header("Idempotency-Replayed", "true");
-      return encodeAbi(OperatorSkillResponseSchema, successEnvelope(request, {
-        skill: mapRevision(result.value.skill), resourceRevision: result.value.resourceRevision, catalogRevision: result.value.catalogRevision,
-      }));
-    } catch (error) {
-      if (error instanceof V1HttpError) throw error;
-      return skillError(error);
-    }
+    });
   });
 
   app.patch("/api/v1/operator/skills/:skillId", {
@@ -212,23 +220,14 @@ export function registerOperatorSkillV1Routes(app: FastifyInstance, dependencies
     const body = decodeAbi(OperatorSkillUpdateRequestSchema, request.body);
     const headers = profileMutationHeaders(request);
     const mutationContext = profileMutationContext(request, headers, body);
-    try {
+    return skillMutationResponse(request, reply, async () => {
       const replay = replayProfileMutation<ProfileSkillMutationValue>(dependencies, {
         profileId: "operator.skills.v1", endpointId: "operator.skills.update", resourceType: "skill", resourceId: skillId,
       }, mutationContext);
-      const mutation = replay ?? await dependencies.service.updateSkillProfile(
+      return replay ?? await dependencies.service.updateSkillProfile(
         skillId, body, mutationContext,
       ) as ProfileMutationResult<ProfileSkillMutationValue>;
-      const result = profileMutationValue(mutation);
-      setRevisionEtag(reply, result.value.resourceRevision);
-      if (result.replayed) reply.header("Idempotency-Replayed", "true");
-      return encodeAbi(OperatorSkillResponseSchema, successEnvelope(request, {
-        skill: mapRevision(result.value.skill), resourceRevision: result.value.resourceRevision, catalogRevision: result.value.catalogRevision,
-      }));
-    } catch (error) {
-      if (error instanceof V1HttpError) throw error;
-      return skillError(error);
-    }
+    });
   });
 
   app.delete("/api/v1/operator/skills/:skillId", {

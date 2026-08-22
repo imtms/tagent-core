@@ -14,13 +14,6 @@ import { protocolError } from "./errors.js";
 import { OperatorSessionSettingsClient } from "./operator-session-settings-v1-client.js";
 import type { CoreCallOptions } from "./transport.js";
 
-function pageQuery(query: ProfileListQuery): string {
-  const search = new URLSearchParams();
-  if (query.cursor !== undefined) search.set("cursor", query.cursor);
-  if (query.limit !== undefined) search.set("limit", String(query.limit));
-  return search.size ? `?${search}` : "";
-}
-
 export class OperatorInboxClient extends OperatorSessionSettingsClient {
   async listOperatorInbox(
     sessionId: string,
@@ -34,7 +27,7 @@ export class OperatorInboxClient extends OperatorSessionSettingsClient {
     catch (error) {
       throw protocolError("GET", this.resolve(basePath), `TAgent Core request validation failed: ${error instanceof Error ? error.message : String(error)}`, "", {}, error);
     }
-    return this.request(`${basePath}${pageQuery(input)}`, {
+    return this.request(`${basePath}${this.queryString(input)}`, {
       ...options,
       decode: (payload) => abi.decodeAbi(abi.OperatorInboxListResponseSchema, payload),
     });

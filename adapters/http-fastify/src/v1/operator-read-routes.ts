@@ -22,7 +22,7 @@ import {
   encodeOperatorReadCursor,
   encodeOperatorReadSnapshot,
   type OperatorReadCursorKind,
-} from "./operator-read-cursor.js";
+} from "./profile-cursor.js";
 
 const SESSION_LIST_DEFAULT = 50;
 const SESSION_LIST_MAX = 200;
