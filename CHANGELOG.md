@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.8.24] - 2026-08-22
+
 ### Goal and Memory hierarchy refinement
 
 - Kept Goal Roadmap criterion mappings visible during approval review, then combined criteria and verification into one explicit per-item disclosure after approval while retaining every status and execution action in the scan layer.
@@ -12,6 +14,10 @@
 - Reduced Memory Operations from a three-line repeated identity block to one quiet maintenance label while retaining Reindex, Record/Topic ID restore, per-group job counts, and complete job ledgers; the restore disclosure now names the IDs it actually accepts.
 - Removed the redundant Stable injection eyebrow from Core Memory while retaining snapshot identity, revision and token metadata, generation, full-width editing, and save operations.
 - Removed expired lifecycle-and-revision chrome from terminal Goal Controls while retaining the terminal explanation, all historical views, and operation receipt recovery.
+
+### Compatibility
+
+- The HTTP major, public ABI shapes, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` protocol are unchanged; no data migration is required. Deploy matching `0.8.24` Core, Web Console, ABI, and Core Client artifacts.
 
 ## [0.8.23] - 2026-08-22
 
