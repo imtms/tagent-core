@@ -112,7 +112,7 @@ export class ContinuationScheduler {
       const transcript = this.dependencies.contextService.prepareContinuationTranscript(run, prompt);
       this.dependencies.contextService.publishContextEvents(runId, transcript);
       this.dependencies.eventHub.publish(event);
-      this.dependencies.attemptExecutor.launch(run, prompt, transcript.messages, continuation.id);
+      this.dependencies.attemptExecutor.launch(run, prompt, transcript.messages, continuation.id, { attemptContext: transcript.attemptContext });
     } catch (error) {
       const message = `Continuation preparation failed safely: ${error instanceof Error ? error.message : String(error)}`;
       this.state.persistence.continuations.releaseContinuationLease(continuation.id, this.state.continuationOwner, message);

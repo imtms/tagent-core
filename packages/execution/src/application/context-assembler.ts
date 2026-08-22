@@ -43,11 +43,21 @@ interface Turn {
 export class ContextAssembler {
   constructor(private readonly options: ContextAssemblerOptions) {}
 
-  assemble(source: ContextSource, messages: AgentMessage[], systemPrompt: string, prompt: string, sourceIds: string[] = [], tailContext = ""): ContextAssembly {
+  assemble(
+    source: ContextSource,
+    messages: AgentMessage[],
+    systemPrompt: string,
+    prompt: string,
+    sourceIds: string[] = [],
+    attemptContext = "",
+    liveContext = "",
+  ): ContextAssembly {
     const contextWindow = this.options.contextWindow;
-    // The dynamic tail is not part of the system prompt, but it consumes the
-    // same provider context budget and must participate in history pruning.
-    const systemTokens = estimateTextTokens(systemPrompt) + estimateTextTokens(tailContext);
+    // Runtime contexts are not part of the system prompt, but both consume the
+    // provider budget and must participate in history pruning.
+    const systemTokens = estimateTextTokens(systemPrompt)
+      + estimateTextTokens(attemptContext)
+      + estimateTextTokens(liveContext);
     const promptTokens = estimateTextTokens(prompt);
     const entries = messages.map((message, index) => ({ message, sourceId: sourceIds[index] || synthesizedMessageIdentity(message, index) }));
     const originalTurns = identifyTurns(entries);

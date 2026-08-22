@@ -44,9 +44,19 @@ export function providerRetryAfterHeaderMs(headers: Headers, timestamp = Date.no
   return boundedRetryAfterMs(Number.isNaN(seconds) ? Date.parse(retryAfter) - timestamp : seconds * 1_000);
 }
 
-export function describeProviderFailure(message: AssistantMessage, contextWindow?: number): ProviderFailure | undefined {
+function isRecoverableLength(message: AssistantMessage, desiredMaxOutput: number | undefined) {
+  if (message.stopReason !== "length" || desiredMaxOutput === undefined) return false;
+  // usage.output already includes reasoning/thinking tokens. Compare with the
+  // caller's intended cap, never the smaller value a provider adapter may have
+  // clamped to the remaining context window.
+  if (desiredMaxOutput > 0 && message.usage.output >= desiredMaxOutput) return false;
+  return true;
+}
+
+export function describeProviderFailure(message: AssistantMessage, contextWindow?: number, desiredMaxOutput?: number): ProviderFailure | undefined {
   if (message.stopReason === "aborted") return { kind: "aborted" };
   if (isContextOverflow(message, contextWindow)) return { kind: "context_overflow" };
+  if (isRecoverableLength(message, desiredMaxOutput)) return { kind: "context_overflow" };
   const meaningfulCompletion = message.content.some((part) => part.type === "toolCall"
     || part.type === "text" && Boolean(part.text.trim()));
   if (message.stopReason === "stop" && !meaningfulCompletion) return { kind: "empty_response" };
@@ -66,8 +76,8 @@ export function describeProviderFailure(message: AssistantMessage, contextWindow
   return { kind: "unknown", ...(retryAfterMs ? { retryAfterMs } : {}) };
 }
 
-export function classifyProviderFailure(message: AssistantMessage, contextWindow?: number): ProviderFailureKind | undefined {
-  return describeProviderFailure(message, contextWindow)?.kind;
+export function classifyProviderFailure(message: AssistantMessage, contextWindow?: number, desiredMaxOutput?: number): ProviderFailureKind | undefined {
+  return describeProviderFailure(message, contextWindow, desiredMaxOutput)?.kind;
 }
 
 export function isRetryableProviderFailure(kind: ProviderFailureKind) {

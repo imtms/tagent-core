@@ -4,7 +4,6 @@ import {
   DEFAULT_COMPACTION_SETTINGS,
   InMemorySessionStorage,
   Session,
-  estimateContextTokens,
   shouldCompact,
   type AgentHarnessEvent,
   type AgentHarnessTool,
@@ -41,6 +40,29 @@ import {
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const RETRY_DELAY_SAFETY_MARGIN_MS = 1;
+const CORE_CONTEXT_CHECKPOINT_ENTRY = "tagent_core_context_checkpoint";
+
+interface CoreContextCheckpoint {
+  hash: string;
+  text: string;
+  timestamp: number;
+}
+
+interface ProviderContextBudget {
+  inputTokens: number;
+  outputReserveTokens: number;
+  compact: boolean;
+}
+
+type PendingCompactionReason = "manual" | "threshold" | "overflow";
+
+interface PendingCompaction {
+  reason: PendingCompactionReason;
+  instructions?: string;
+  promise?: Promise<void>;
+  resolve?: () => void;
+  reject?: (error: unknown) => void;
+}
 
 export function providerRetryDelayMs(retryAttempt: number, runTimeoutMs?: number, runHardTimeoutMs?: number, retryAfterMs?: number) {
   const idleBudget = runTimeoutMs === undefined ? Number.POSITIVE_INFINITY : Math.max(0, runTimeoutMs - RETRY_DELAY_SAFETY_MARGIN_MS);
@@ -174,16 +196,30 @@ function messageText(message: AgentMessage | undefined) {
   return message.content.filter((part) => part.type === "text").map((part) => part.text).join("");
 }
 
+/** One classification owner for Session retention, public runtime history, and transcript visibility. */
+function retainInActiveContext(message: AgentMessage, contextWindow?: number, desiredMaxOutput?: number) {
+  if (message.role !== "assistant") return true;
+  if (message.stopReason === "error" || message.stopReason === "aborted") return false;
+  const failure = describeProviderFailure(message, contextWindow, desiredMaxOutput);
+  if (failure?.kind === "empty_response") return false;
+  // A successful stop may merely report input usage above the compaction
+  // threshold. Keep that answer; omit only an overflow response that will be
+  // replaced by recovery.
+  if (failure?.kind === "context_overflow" && message.stopReason !== "stop") return false;
+  return true;
+}
+
 function projectRuntimeHistory(
   messages: AgentMessage[],
   toolResultLimit: number,
   taskRunReceiptLimit: number,
   isInternalMessage: (message: AgentMessage) => boolean,
+  isCoreContextMessage: (message: AgentMessage) => boolean,
 ): AgentMessage[] {
   const visibleMessages = messages.filter((message) => !isInternalMessage(message));
-  const latestUserIndex = visibleMessages.reduce((latest, message, index) => message.role === "user" ? index : latest, -1);
+  const latestUserIndex = visibleMessages.reduce((latest, message, index) => message.role === "user" && !isCoreContextMessage(message) ? index : latest, -1);
   return visibleMessages.map((message, index) => {
-    if (index >= latestUserIndex || (message.role !== "assistant" && message.role !== "toolResult")) return message;
+    if (isCoreContextMessage(message) || index >= latestUserIndex || (message.role !== "assistant" && message.role !== "toolResult")) return message;
     let changed = false;
     const content = message.content.flatMap((part) => {
       if (part.type === "thinking") { changed = true; return []; }
@@ -216,16 +252,161 @@ function projectRuntimeHistory(
 }
 
 class RuntimeSession extends Session {
-  constructor(private readonly isInternalMessage: (message: AgentMessage) => boolean) {
-    super(new InMemorySessionStorage());
+  private readonly coreContextMessages: WeakSet<AgentMessage>;
+
+  constructor(
+    private readonly isInternalMessage: (message: AgentMessage) => boolean,
+    private readonly retainMessage: (message: AgentMessage) => boolean,
+  ) {
+    const coreContextMessages = new WeakSet<AgentMessage>();
+    super(new InMemorySessionStorage(), {
+      entryProjectors: {
+        [CORE_CONTEXT_CHECKPOINT_ENTRY]: (entry) => {
+          const checkpoint = entry.data as Partial<CoreContextCheckpoint> | undefined;
+          if (!checkpoint || typeof checkpoint.hash !== "string" || typeof checkpoint.text !== "string" || typeof checkpoint.timestamp !== "number") return [];
+          const message: AgentMessage = {
+            role: "user",
+            content: [{ type: "text", text: checkpoint.text }],
+            timestamp: checkpoint.timestamp,
+          };
+          coreContextMessages.add(message);
+          return [message];
+        },
+      },
+    });
+    this.coreContextMessages = coreContextMessages;
   }
 
   override async appendMessage(message: AgentMessage) {
-    if (!this.isInternalMessage(message)) return super.appendMessage(message);
+    if (!this.isInternalMessage(message) && this.retainMessage(message)) return super.appendMessage(message);
     const leafId = await this.getLeafId();
-    if (!leafId) throw new Error("Internal continuation requires an existing session context");
+    if (!leafId) throw new Error("Transient message requires an existing session context");
     return leafId;
   }
+
+  async appendCoreContextCheckpoint(checkpoint: CoreContextCheckpoint) {
+    await this.appendCustomEntry(CORE_CONTEXT_CHECKPOINT_ENTRY, checkpoint);
+    return this.projectCoreContextCheckpoint(checkpoint);
+  }
+
+  projectCoreContextCheckpoint(checkpoint: CoreContextCheckpoint) {
+    const message: AgentMessage = {
+      role: "user",
+      content: [{ type: "text", text: checkpoint.text }],
+      timestamp: checkpoint.timestamp,
+    };
+    this.coreContextMessages.add(message);
+    return message;
+  }
+
+  isCoreContextMessage(message: AgentMessage) {
+    return this.coreContextMessages.has(message);
+  }
+}
+
+function estimateTextTokens(text: string) {
+  return Math.ceil(text.length / 4);
+}
+
+function estimateContentTokens(content: string | Array<{ type: string; text?: string; data?: string }>) {
+  if (typeof content === "string") return estimateTextTokens(content);
+  const chars = content.reduce((total, part) => total + (part.type === "text" ? part.text?.length ?? 0 : 4_800), 0);
+  return Math.ceil(chars / 4);
+}
+
+function estimateAgentMessageTokens(message: AgentMessage) {
+  if (message.role === "user" || message.role === "toolResult") return estimateContentTokens(message.content);
+  if (message.role === "assistant") {
+    let chars = 0;
+    for (const part of message.content) {
+      if (part.type === "text") chars += part.text.length;
+      else if (part.type === "thinking") chars += part.thinking.length;
+      else {
+        try { chars += part.name.length + JSON.stringify(part.arguments).length; }
+        catch { chars += part.name.length + 64; }
+      }
+    }
+    return Math.ceil(chars / 4);
+  }
+  if (message.role === "bashExecution") return estimateTextTokens(message.command + message.output);
+  if (message.role === "compactionSummary" || message.role === "branchSummary") return estimateTextTokens(message.summary);
+  if (message.role === "custom") return estimateContentTokens(message.content);
+  return 0;
+}
+
+function estimateProjectedMessages(messages: AgentMessage[]) {
+  let latestPrefixTimestamp = Number.NEGATIVE_INFINITY;
+  let usageInfo: { index: number; tokens: number } | undefined;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.role === "assistant") {
+      const usageTokens = message.usage.totalTokens
+        || message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite;
+      if (message.timestamp >= latestPrefixTimestamp
+        && message.stopReason !== "error" && message.stopReason !== "aborted" && usageTokens > 0) {
+        usageInfo = { index, tokens: usageTokens };
+      }
+    }
+    latestPrefixTimestamp = Math.max(latestPrefixTimestamp, message.timestamp);
+  }
+  if (!usageInfo) return {
+    tokens: messages.reduce((tokens, message) => tokens + estimateAgentMessageTokens(message), 0),
+    lastUsageIndex: null,
+  };
+  return {
+    tokens: usageInfo.tokens + messages.slice(usageInfo.index + 1).reduce((tokens, message) => tokens + estimateAgentMessageTokens(message), 0),
+    lastUsageIndex: usageInfo.index,
+  };
+}
+
+function estimateToolSchemaTokens(tools: readonly AgentHarnessTool<undefined>[]) {
+  if (tools.length === 0) return 0;
+  const schemas = tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
+  try { return estimateTextTokens(JSON.stringify(schemas)); }
+  catch { return estimateTextTokens("[unserializable tool schemas]"); }
+}
+
+function providerPrefixHash(systemPrompt: string, tools: readonly AgentHarnessTool<undefined>[], model: Model<Api>) {
+  return requestHash({
+    model: `${model.provider}:${model.id}`,
+    systemPrompt,
+    tools: tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
+  });
+}
+
+/** Estimate the exact projected input plus a conservative, intended output reserve. */
+function providerContextBudget(
+  messages: AgentMessage[],
+  systemPrompt: string,
+  tools: readonly AgentHarnessTool<undefined>[],
+  model: Model<Api>,
+  measuredPrefixHash?: string,
+): ProviderContextBudget {
+  const estimate = estimateProjectedMessages(messages);
+  // A valid assistant usage block already measures the system prompt, tools,
+  // and all messages through that response. Add the fixed prefix only when no
+  // provider measurement is available, avoiding systematic double counting.
+  const currentPrefixHash = providerPrefixHash(systemPrompt, tools, model);
+  const unmeasuredPrefixTokens = estimate.lastUsageIndex === null || measuredPrefixHash !== currentPrefixHash
+    ? estimateTextTokens(systemPrompt) + estimateToolSchemaTokens(tools)
+    : 0;
+  const inputTokens = estimate.tokens + unmeasuredPrefixTokens;
+  // Pi's fixed 16k reserve is appropriate for large windows but would leave
+  // almost no usable input on small local/test models. Scale that safety band
+  // down while always reserving the model's intended (pre-clamp) output cap.
+  const adaptiveSafetyReserve = Math.min(
+    DEFAULT_COMPACTION_SETTINGS.reserveTokens,
+    Math.max(1_024, Math.floor(model.contextWindow * 0.25)),
+  );
+  const outputReserveTokens = Math.max(adaptiveSafetyReserve, Math.max(0, model.maxTokens));
+  return {
+    inputTokens,
+    outputReserveTokens,
+    compact: shouldCompact(inputTokens, model.contextWindow, {
+      ...DEFAULT_COMPACTION_SETTINGS,
+      reserveTokens: outputReserveTokens,
+    }),
+  };
 }
 
 function compactTaskRunReceipt(text: string, limit: number) {
@@ -245,7 +426,7 @@ function compactTaskRunReceipt(text: string, limit: number) {
 
 export class PiRuntime implements AttemptRuntimePort {
   private harness?: AgentHarness<undefined>;
-  private session?: Session;
+  private session?: RuntimeSession;
   private initializing?: Promise<AgentHarness<undefined>>;
   private unsubscribe?: () => void;
   private disposed = false;
@@ -277,12 +458,15 @@ export class PiRuntime implements AttemptRuntimePort {
   private deferredControls: DeferredRuntimeControl[] = [];
   private harnessPendingMessageCount = 0;
   private retryDelayAbort?: AbortController;
-  private pendingManualCompaction?: {
-    instructions?: string;
-    promise: Promise<void>;
-    resolve: () => void;
-    reject: (error: unknown) => void;
-  };
+  private pendingCompaction?: PendingCompaction;
+  private attemptContextMessage?: AgentMessage;
+  private lastLiveContextHash?: string;
+  private lastMeasuredProviderPrefixHash?: string;
+  private turnNeedsProviderContinuation = false;
+  private currentTurnTerminated = false;
+  private recoverableOverflowPending = false;
+  private readonly discardedProviderMessages = new WeakSet<AgentMessage>();
+  private readonly discardedToolCallIds = new Set<string>();
 
   constructor(private readonly options: PiRuntimeOptions) {
     this.messages = [...(options.initialMessages ?? [])];
@@ -303,9 +487,22 @@ export class PiRuntime implements AttemptRuntimePort {
     const models = buildModels(this.options, [primary, ...fallbacks], this.lifetimeAbort.signal, (retryAfterMs) => {
       this.transportRetryAfterMs = retryAfterMs;
     });
-    const session = new RuntimeSession((message) => this.isInternalMessage(message));
+    const session = new RuntimeSession(
+      (message) => this.isInternalMessage(message),
+      (message) => this.shouldRetainSessionMessage(message),
+    );
     this.session = session;
     for (const message of this.options.initialMessages ?? []) await session.appendMessage(message as AgentMessage);
+    const attemptContext = this.options.attemptContext?.trim();
+    const attemptContextMessage: AgentMessage | undefined = attemptContext
+      ? {
+        role: "user",
+        content: [{ type: "text", text: attemptContext }],
+        timestamp: Date.now(),
+      }
+      : undefined;
+    this.attemptContextMessage = attemptContextMessage;
+    if (attemptContextMessage) await session.appendMessage(attemptContextMessage);
     const harness = new AgentHarness({
       session,
       models,
@@ -328,19 +525,17 @@ export class PiRuntime implements AttemptRuntimePort {
       if (this.options.eventSink.isRunning() && !this.options.eventSink.isWaitingForInput()) return undefined;
       throw new Error("Provider continuation blocked because the TaskRun is paused");
     });
-    harness.on("context", ({ messages }) => {
-      const projected = projectRuntimeHistory(
-        messages,
-        this.options.historicalToolResultChars ?? 4_000,
-        this.options.historicalTaskRunReceiptChars ?? 600,
-        (message) => this.isInternalMessage(message),
-      );
-      const dynamicContext = this.options.dynamicContext?.().trim();
-      return { messages: dynamicContext ? [...projected, {
-        role: "user",
-        content: [{ type: "text", text: dynamicContext }],
-        timestamp: Date.now(),
-      }] : projected };
+    harness.on("before_provider_request", () => {
+      if (!this.pendingCompaction) return undefined;
+      throw new Error(`Provider dispatch deferred for ${this.pendingCompaction.reason} context compaction`);
+    });
+    harness.on("context", async ({ messages }) => {
+      const checkpoint = await this.appendLiveContextCheckpoint(session);
+      const contextMessages = checkpoint ? [...messages, checkpoint] : messages;
+      const projected = this.projectProviderMessages(contextMessages, session);
+      const budget = providerContextBudget(projected, this.options.systemPrompt, harness.getActiveTools(), harness.getModel(), this.lastMeasuredProviderPrefixHash);
+      if (budget.compact && !this.compacting && !this.pendingCompaction) this.schedulePendingCompaction("threshold");
+      return { messages: projected };
     });
     harness.on("before_provider_payload", ({ model, payload }) => {
       if (!this.options.requestEnvelopes) return undefined;
@@ -396,6 +591,7 @@ export class PiRuntime implements AttemptRuntimePort {
       this.blockedToolErrors.delete(toolCallId);
       this.options.eventSink.afterToolCall({ toolCallId, toolName, success: !error && !isError, error });
       const terminate = !this.options.eventSink.isRunning() || this.options.eventSink.isWaitingForInput();
+      if (terminate) this.currentTurnTerminated = true;
       if (error) return { details: mergeToolErrorDetails(details, error), isError: true, terminate };
       return terminate ? { terminate: true } : undefined;
     });
@@ -404,7 +600,7 @@ export class PiRuntime implements AttemptRuntimePort {
     return harness;
   }
 
-  private handleEvent(event: AgentHarnessEvent) {
+  private async handleEvent(event: AgentHarnessEvent) {
     this.options.eventSink.activity();
     if (event.type === "message_start" && event.message.role === "assistant") {
       if (this.suppressApprovalPauseFailure(event.message as RuntimeMessage)) return;
@@ -421,19 +617,21 @@ export class PiRuntime implements AttemptRuntimePort {
       if (this.isInternalMessage(message as AgentMessage)) return;
       if (message.role === "assistant") this.lastError = message.stopReason === "error" || message.stopReason === "aborted" ? message.errorMessage : undefined;
       if (this.abortRequested && message.role === "assistant" && message.stopReason === "aborted") return;
-      this.messages.push(message);
-      // Failed provider turns are retained in provider-failure events, but their
-      // partial assistant content must never become visible durable history or
-      // contaminate a retry context.
-      const suppressFailedAssistant = message.role === "assistant"
-        && (message.stopReason === "error" || message.stopReason === "aborted"
-          || classifyProviderFailure(message, this.harness?.getModel().contextWindow ?? this.options.model?.contextWindow) === "empty_response");
-      const transcriptSeq = suppressFailedAssistant
-        ? undefined
-        : this.options.eventSink.appendTranscript(message);
-      if (transcriptSeq !== undefined) this.emit("transcript.updated", { transcriptSeq, role: message.role, ordinal: message.role === "assistant" ? this.assistantMessageOrdinal : undefined });
+      const model = this.harness?.getModel();
+      const retained = !this.isDiscardedProviderMessage(sourceMessage as AgentMessage)
+        && retainInActiveContext(message as AgentMessage, model?.contextWindow ?? this.options.model?.contextWindow, model?.maxTokens ?? this.options.model?.maxTokens);
+      if (retained) {
+        this.messages.push(message);
+        const transcriptSeq = this.options.eventSink.appendTranscript(message);
+        if (transcriptSeq !== undefined) this.emit("transcript.updated", { transcriptSeq, role: message.role, ordinal: message.role === "assistant" ? this.assistantMessageOrdinal : undefined });
+      }
       if (message.role === "assistant") {
-        const failure = describeProviderFailure(message, this.harness?.getModel().contextWindow ?? this.options.model?.contextWindow);
+        const usageTokens = message.usage.totalTokens
+          || message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite;
+        if (usageTokens > 0 && message.stopReason !== "error" && message.stopReason !== "aborted" && this.harness) {
+          this.lastMeasuredProviderPrefixHash = providerPrefixHash(this.options.systemPrompt, this.harness.getActiveTools(), this.harness.getModel());
+        }
+        const failure = describeProviderFailure(message, model?.contextWindow ?? this.options.model?.contextWindow, model?.maxTokens ?? this.options.model?.maxTokens);
         const kind = failure?.kind;
         const retryAfterMs = failure?.retryAfterMs ?? this.transportRetryAfterMs;
         this.lastProviderFailure = failure ? {
@@ -442,10 +640,26 @@ export class PiRuntime implements AttemptRuntimePort {
           ...(retryAfterMs ? { retryAfterMs } : {}),
         } : undefined;
         const summary = (message.errorMessage ?? "").replace(/\s+/g, " ").slice(0, 500);
-        if (kind && !(kind === "aborted" && this.pendingManualCompaction)) {
+        if (kind && !this.pendingCompaction) {
           this.emit("provider.failure", { kind, retryable: isRetryableProviderFailure(kind), summary, stopReason: message.stopReason, ...(retryAfterMs ? { retryAfterMs } : {}) });
         }
       }
+    }
+    if (event.type === "turn_end") {
+      this.turnNeedsProviderContinuation = (event.toolResults.length > 0 && !this.currentTurnTerminated
+        || this.harnessPendingMessageCount > 0 || this.deferredControls.length > 0)
+        && this.options.eventSink.isRunning() && !this.options.eventSink.isWaitingForInput();
+      this.currentTurnTerminated = false;
+    }
+    if (event.type === "save_point") {
+      await this.appendLiveContextCheckpoint();
+      if (this.recoverableOverflowPending) {
+        this.recoverableOverflowPending = false;
+        this.schedulePendingCompaction("overflow", "Recover from provider context overflow. Preserve unresolved work, completed tool effects, blockers, and exact file paths.");
+      } else if (this.turnNeedsProviderContinuation && !this.pendingCompaction && await this.providerContextNeedsCompaction()) {
+        this.schedulePendingCompaction("threshold");
+      }
+      this.turnNeedsProviderContinuation = false;
     }
     if (event.type === "tool_execution_start") {
       this.emit("tool.started", { toolCallId: event.toolCallId, toolName: event.toolName });
@@ -492,7 +706,10 @@ export class PiRuntime implements AttemptRuntimePort {
     if (this.abortRequested) throw new Error("Runtime aborted");
     this.streaming = true;
     try {
-      await this.compactIfNeeded();
+      const skillPrompt = skillName
+        ? `${this.options.skills?.find((skill) => skill.name === skillName)?.content ?? ""}\n${query}`
+        : query;
+      await this.compactIfNeeded(skillPrompt);
       let assistant = skillName
         ? await this.runHarnessSkill(harness, skillName, query)
         : await this.runHarnessPrompt(harness, query, false);
@@ -500,18 +717,24 @@ export class PiRuntime implements AttemptRuntimePort {
       const maxRetries = this.options.providerMaxRetries ?? 1;
       let overflowRecoveryAttempted = false;
       while (!this.abortRequested && this.options.eventSink.isRunning()) {
-        if (this.pendingManualCompaction) {
-          await this.removeTrailingAssistantFromActiveContext(assistant);
-          await this.runPendingManualCompaction();
+        if (this.pendingCompaction) {
+          const reason = this.pendingCompaction.reason;
+          if (reason === "overflow" && overflowRecoveryAttempted) {
+            this.rejectPendingCompaction(new Error("Context overflow recovery already attempted for this input"));
+            break;
+          }
+          const compacted = await this.runPendingCompaction();
+          if (!compacted) break;
+          if (reason === "overflow") overflowRecoveryAttempted = true;
           if (this.abortRequested || !this.options.eventSink.isRunning()) break;
           assistant = await this.continueHarness(harness);
           continue;
         }
-        const failure = classifyProviderFailure(assistant, harness.getModel().contextWindow);
+        const failure = classifyProviderFailure(assistant, harness.getModel().contextWindow, harness.getModel().maxTokens);
         if (failure === "context_overflow" && !overflowRecoveryAttempted) {
           overflowRecoveryAttempted = true;
+          this.recoverableOverflowPending = false;
           const willRetry = assistant.stopReason !== "stop";
-          if (willRetry) await this.removeTrailingAssistantFromActiveContext(assistant);
           const compacted = await this.tryAutomaticCompaction(
             "overflow",
             "Recover from provider context overflow. Preserve unresolved work, completed tool effects, blockers, and exact file paths.",
@@ -537,25 +760,23 @@ export class PiRuntime implements AttemptRuntimePort {
           const retryDelay = this.waitForRetry(delayMs);
           this.emit("provider.retry", { attempt: retryAttempt, maxAttempts: maxRetries, delayMs, summary });
           this.emit("message.retrying", { content: messageText(assistant), willRetry: true, ordinal: this.assistantMessageOrdinal });
-          await this.removeTrailingAssistantFromActiveContext(assistant);
           if (!await retryDelay) {
             this.emit("provider.retry.completed", {
               success: false,
               attempt: retryAttempt,
-              finalError: this.pendingManualCompaction ? "Retry superseded by manual compaction" : "Retry cancelled",
+              finalError: this.pendingCompactionReason() === "manual" ? "Retry superseded by manual compaction" : "Retry cancelled",
             });
-            if (this.pendingManualCompaction) continue;
+            if (this.pendingCompaction) continue;
             break;
           }
           assistant = await this.continueHarness(harness);
-          const nextFailure = classifyProviderFailure(assistant, harness.getModel().contextWindow);
+          const nextFailure = classifyProviderFailure(assistant, harness.getModel().contextWindow, harness.getModel().maxTokens);
           this.emit("provider.retry.completed", { success: !nextFailure, attempt: retryAttempt, finalError: assistant.errorMessage?.replace(/\s+/g, " ").slice(0, 500) });
           continue;
         }
         if (failure === "rate_limit" || failure === "model_cooldown") {
           const fallback = this.options.fallbackModels?.[this.fallbackIndex++];
           if (fallback) {
-            await this.removeTrailingAssistantFromActiveContext(assistant);
             const previousModel = harness.getModel().id;
             await harness.setModel(toPiModel(fallback));
             retryAttempt = 0;
@@ -565,7 +786,6 @@ export class PiRuntime implements AttemptRuntimePort {
           }
         }
         if (failure && (this.harnessPendingMessageCount > 0 || this.deferredControls.length > 0)) {
-          await this.removeTrailingAssistantFromActiveContext(assistant);
           retryAttempt = 0;
           assistant = await this.continueHarness(harness);
           continue;
@@ -573,8 +793,8 @@ export class PiRuntime implements AttemptRuntimePort {
         if (failure) break;
         retryAttempt = 0;
         if (!overflowRecoveryAttempted) await this.compactIfNeeded();
-        if (this.pendingManualCompaction || this.harnessPendingMessageCount > 0 || this.deferredControls.length > 0) {
-          if (this.pendingManualCompaction) continue;
+        if (this.pendingCompaction || this.harnessPendingMessageCount > 0 || this.deferredControls.length > 0) {
+          if (this.pendingCompaction) continue;
           assistant = await this.continueHarness(harness);
           continue;
         }
@@ -590,11 +810,7 @@ export class PiRuntime implements AttemptRuntimePort {
         this.lastError = undefined;
         this.lastProviderFailure = undefined;
       }
-      if (this.pendingManualCompaction) {
-        const pending = this.pendingManualCompaction;
-        this.pendingManualCompaction = undefined;
-        pending.reject(new Error("Runtime settled before manual compaction could run"));
-      }
+      if (this.pendingCompaction) this.rejectPendingCompaction(new Error("Runtime settled before pending compaction could run"));
       this.emit("runtime.settled", { pendingMessageCount: this.harnessPendingMessageCount + this.deferredControls.length });
     }
   }
@@ -614,38 +830,38 @@ export class PiRuntime implements AttemptRuntimePort {
     const harness = await this.initialize();
     if (this.compactionPromise) return this.compactionPromise;
     if (!this.streaming) return this.compactWithReason("manual", instructions);
-    if (this.pendingManualCompaction) return this.pendingManualCompaction.promise;
+    if (this.pendingCompaction?.promise) return this.pendingCompaction.promise;
     let resolve!: () => void;
     let reject!: (error: unknown) => void;
     const promise = new Promise<void>((onResolve, onReject) => { resolve = onResolve; reject = onReject; });
-    this.pendingManualCompaction = { instructions, promise, resolve, reject };
+    this.pendingCompaction = { reason: "manual", instructions, promise, resolve, reject };
     this.retryDelayAbort?.abort();
     await harness.abort();
     return promise;
   }
-  private async compactIfNeeded() {
+  private async compactIfNeeded(upcomingInput?: string) {
     if (!this.session || !this.harness || this.compacting) return;
-    const context = await this.session.buildContext();
-    const contextTokens = estimateContextTokens(context.messages).tokens;
-    if (!shouldCompact(contextTokens, this.harness.getModel().contextWindow, DEFAULT_COMPACTION_SETTINGS)) return;
-    await this.tryAutomaticCompaction("threshold");
+    if (!await this.providerContextNeedsCompaction(upcomingInput)) return false;
+    return this.tryAutomaticCompaction("threshold");
   }
   private async tryAutomaticCompaction(reason: "threshold" | "overflow", instructions?: string, willRetry = reason === "overflow") {
     try { await this.compactWithReason(reason, instructions, willRetry); return true; }
     catch { return false; }
   }
-  private async runPendingManualCompaction() {
-    const pending = this.pendingManualCompaction;
-    if (!pending) return;
+  private async runPendingCompaction() {
+    const pending = this.pendingCompaction;
+    if (!pending) return false;
+    this.pendingCompaction = undefined;
     try {
-      await this.compactWithReason("manual", pending.instructions);
+      await this.compactWithReason(pending.reason, pending.instructions, pending.reason === "overflow");
       this.lastError = undefined;
-      pending.resolve();
+      this.lastProviderFailure = undefined;
+      pending.resolve?.();
+      return true;
     } catch (error) {
-      pending.reject(error);
-      throw error;
-    } finally {
-      if (this.pendingManualCompaction === pending) this.pendingManualCompaction = undefined;
+      pending.reject?.(error);
+      if (pending.reason === "manual") throw error;
+      return false;
     }
   }
   private async waitForRetry(delayMs: number) {
@@ -678,6 +894,9 @@ export class PiRuntime implements AttemptRuntimePort {
     this.emit("context.compaction.started", { reason });
     try {
       const result = await harness.compact(instructions);
+      this.lastLiveContextHash = undefined;
+      this.discardedToolCallIds.clear();
+      this.recoverableOverflowPending = false;
       await this.refreshActiveMessages();
       this.emit("context.compaction.completed", { reason, aborted: false, willRetry, tokensBefore: result.tokensBefore });
     } catch (error) {
@@ -692,11 +911,7 @@ export class PiRuntime implements AttemptRuntimePort {
     this.lifetimeAbort.abort(new Error("Runtime aborted"));
     this.retryDelayAbort?.abort();
     this.clearDeferredControls();
-    if (this.pendingManualCompaction) {
-      const pending = this.pendingManualCompaction;
-      this.pendingManualCompaction = undefined;
-      pending.reject(new Error("Runtime aborted"));
-    }
+    if (this.pendingCompaction) this.rejectPendingCompaction(new Error("Runtime aborted"));
     if (!this.abortPromise) this.abortPromise = (async () => {
       const harness = this.harness ?? await this.initializing?.catch(() => undefined);
       if (harness) await harness.abort();
@@ -721,6 +936,104 @@ export class PiRuntime implements AttemptRuntimePort {
   getError() { return this.lastError; }
   getProviderFailure() { return this.lastProviderFailure; }
   getActiveToolNames() { return this.harness?.getActiveTools().map((tool) => tool.name) ?? []; }
+
+  private shouldRetainSessionMessage(message: AgentMessage) {
+    const model = this.harness?.getModel();
+    if (message.role === "toolResult" && this.discardedToolCallIds.has(message.toolCallId)) {
+      this.discardedProviderMessages.add(message);
+      return false;
+    }
+    const retained = retainInActiveContext(
+      message,
+      model?.contextWindow ?? this.options.model?.contextWindow,
+      model?.maxTokens ?? this.options.model?.maxTokens,
+    );
+    if (!retained && message.role === "assistant") {
+      this.discardedProviderMessages.add(message);
+      const failure = describeProviderFailure(
+        message,
+        model?.contextWindow ?? this.options.model?.contextWindow,
+        model?.maxTokens ?? this.options.model?.maxTokens,
+      );
+      if (failure?.kind === "context_overflow" && message.stopReason !== "stop") {
+        this.recoverableOverflowPending = true;
+        for (const part of message.content) if (part.type === "toolCall") this.discardedToolCallIds.add(part.id);
+      }
+    }
+    return retained;
+  }
+
+  private isDiscardedProviderMessage(message: AgentMessage) {
+    return this.discardedProviderMessages.has(message)
+      || message.role === "toolResult" && this.discardedToolCallIds.has(message.toolCallId);
+  }
+
+  private currentLiveContextCheckpoint(): CoreContextCheckpoint | undefined {
+    const text = this.options.liveContext?.().trim();
+    if (!text) return undefined;
+    return { hash: requestHash(text), text, timestamp: Date.now() };
+  }
+
+  private async appendLiveContextCheckpoint(session = this.session) {
+    if (!session) return undefined;
+    const checkpoint = this.currentLiveContextCheckpoint();
+    if (!checkpoint || checkpoint.hash === this.lastLiveContextHash) return undefined;
+    const previousHash = this.lastLiveContextHash;
+    this.lastLiveContextHash = checkpoint.hash;
+    try { return await session.appendCoreContextCheckpoint(checkpoint); }
+    catch (error) { this.lastLiveContextHash = previousHash; throw error; }
+  }
+
+  private projectProviderMessages(messages: AgentMessage[], session = this.session) {
+    if (!session) return messages;
+    let projected = projectRuntimeHistory(
+      messages.filter((message) => !this.isDiscardedProviderMessage(message)),
+      this.options.historicalToolResultChars ?? 4_000,
+      this.options.historicalTaskRunReceiptChars ?? 600,
+      (message) => this.isInternalMessage(message),
+      (message) => session.isCoreContextMessage(message),
+    );
+    if (this.attemptContextMessage && !projected.some((message) => this.isAttemptContextMessage(message))) {
+      projected = [this.attemptContextMessage, ...projected];
+    }
+    return projected;
+  }
+
+  private async providerContextNeedsCompaction(upcomingInput?: string) {
+    if (!this.session || !this.harness) return false;
+    const context = await this.session.buildContext();
+    const messages = [...context.messages];
+    if (upcomingInput) {
+      messages.push({ role: "user", content: [{ type: "text", text: upcomingInput }], timestamp: Date.now() });
+    }
+    const liveCheckpoint = this.currentLiveContextCheckpoint();
+    if (liveCheckpoint && liveCheckpoint.hash !== this.lastLiveContextHash) {
+      messages.push(this.session.projectCoreContextCheckpoint(liveCheckpoint));
+    }
+    const projected = this.projectProviderMessages(messages);
+    const budget = providerContextBudget(projected, this.options.systemPrompt, this.harness.getActiveTools(), this.harness.getModel(), this.lastMeasuredProviderPrefixHash);
+    return budget.compact;
+  }
+
+  private schedulePendingCompaction(reason: Exclude<PendingCompactionReason, "manual">, instructions?: string) {
+    if (this.pendingCompaction?.reason === "manual") return;
+    if (this.pendingCompaction) {
+      if (reason === "overflow") this.pendingCompaction = { ...this.pendingCompaction, reason, instructions };
+      return;
+    }
+    this.pendingCompaction = { reason, instructions };
+    this.retryDelayAbort?.abort();
+  }
+
+  private rejectPendingCompaction(error: Error) {
+    const pending = this.pendingCompaction;
+    this.pendingCompaction = undefined;
+    pending?.reject?.(error);
+  }
+
+  private pendingCompactionReason() {
+    return this.pendingCompaction?.reason;
+  }
 
   private suppressApprovalPauseFailure(message: RuntimeMessage) {
     return this.approvalPauseActive
@@ -798,20 +1111,21 @@ export class PiRuntime implements AttemptRuntimePort {
       followUp: controls.filter((control) => control.mode === "followUp").map((control) => control.instruction),
     });
   }
-  private async removeTrailingAssistantFromActiveContext(assistant: AgentMessage) {
-    if (!this.session || assistant.role !== "assistant") return;
-    const leafId = await this.session.getLeafId();
-    if (!leafId) return;
-    const leaf = await this.session.getEntry(leafId);
-    if (leaf?.type !== "message" || leaf.message !== assistant) return;
-    await this.session.getStorage().setLeafId(leaf.parentId);
-    const index = this.messages.lastIndexOf(assistant as RuntimeMessage);
-    if (index !== -1) this.messages.splice(index, 1);
-  }
   private async refreshActiveMessages() {
     if (!this.session) return;
     const context = await this.session.buildContext();
-    this.messages = context.messages as RuntimeMessage[];
+    this.messages = context.messages.filter((message) => !this.isAttemptContextMessage(message)
+      && !this.session?.isCoreContextMessage(message)
+      && !this.isDiscardedProviderMessage(message)) as RuntimeMessage[];
+  }
+
+  private isAttemptContextMessage(message: AgentMessage) {
+    const attemptContext = this.options.attemptContext?.trim();
+    if (!attemptContext || message.role !== "user") return false;
+    const text = typeof message.content === "string"
+      ? message.content
+      : message.content.filter((part) => part.type === "text").map((part) => part.text).join("");
+    return text === attemptContext;
   }
 
   private queueDelta(delta: string) { this.pendingDelta += delta; if (this.pendingDelta.length >= 1024) return this.flushDelta(); if (!this.deltaTimer) { this.deltaTimer = setTimeout(() => this.flushDelta(), 150); this.deltaTimer.unref?.(); } }

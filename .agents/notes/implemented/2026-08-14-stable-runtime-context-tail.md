@@ -1,30 +1,34 @@
-# Decision: Stable system prompt with dynamic runtime tail
+# Decision: Stable system and Attempt context with a live runtime tail
 
 Status: implemented
 Kind: architecture
 
 ## Problem
 
-The system prompt embedded mutable TaskRun state, execution policy, Workspace Goal direction, and recalled Memory. Phase, status, Attempt, or other state changes therefore changed the earliest provider-request prefix. Resume prompts also duplicated the durable snapshot, while a long-lived Harness could retain a stale copy instead of refreshing current Core state.
+The system prompt embedded mutable TaskRun state, execution policy, Workspace Goal direction, and recalled Memory. Phase, status, Attempt, or other state changes therefore changed the earliest provider-request prefix. Moving all of that data to a per-request tail fixed the prefix, but repeated a large contract, Goal, Skill, and Memory snapshot on every provider call and allowed context budgeting to use a different recomputed string from the runtime request.
 
 ## Decision
 
-`RunContextService.buildSystemPrompt` accepts no TaskRun or Memory arguments. Its fixed content is limited to Core instructions, the Workspace path, and the selected project-rule snapshot. `buildRuntimeDynamicContext` owns current TaskRun, policy, Workspace Goal, and recalled-Memory projection.
+`RunContextService.buildSystemPrompt` accepts no TaskRun or Memory arguments. Its fixed content is limited to Core instructions, the Workspace path, and the selected project-rule snapshot.
 
-Immediately before every Pi provider request, the Harness context hook reloads current durable state and appends that projection as one ephemeral final user message after projected history. Context assembly reserves the tail's token budget. The real provider payload and durable request envelope include the tail, but the Harness Session and durable transcript do not persist it.
+Context preparation builds one exact Attempt-stable projection containing policy, contract, bounded Workspace Goal direction, stable Skill metadata, and recalled Memory. Context assembly budgets that same string, and Execution passes it with the prepared history rather than rebuilding it at runtime. Pi inserts it once into the in-memory Session after imported history and before the real Attempt prompt. It is provider-visible and request-enveloped but absent from public runtime messages and the durable transcript.
+
+At the first provider dispatch after the real prompt, Pi records a compact live checkpoint containing status, phase, concise plan/check/Artifact/gate state, and current external-action authorization as an in-memory custom Session entry. Later dispatches append another checkpoint only when that projection's hash changes. The Harness context hook only projects Session state; it does not rebuild or replace a request-local tail. Checkpoints are budgeted and request-enveloped but excluded from public messages and the durable transcript. Full check commands/evidence and non-target Goal/Roadmap detail remain available through Core tools and durable history instead of being repeated in each checkpoint.
 
 ## Alternatives considered
 
 **Keep mutable state in the system prompt.** Rejected because every state change destabilizes the request prefix and stale long-lived prompts can disagree with durable authority.
 
-**Append the dynamic context once at Attempt start.** Rejected because tools and control events can change authoritative state between provider requests.
+**Append the entire runtime context once at Attempt start.** Rejected because tools and control events can change authoritative phase, completion, and authorization state between provider requests. Only immutable or Attempt-stable data is fixed.
+
+**Repeat the complete durable snapshot before every request.** Rejected because it wastes context, weakens provider-prefix reuse, and can drift from the snapshot used for history budgeting.
 
 **Persist each generated tail in transcript history.** Rejected because repeated snapshots would grow durable history and cause later requests to carry obsolete authority alongside the current projection.
 
 ## Verification
 
-`tests/runtime.test.ts` proves the system prompt excludes Active TaskRun state and remains identical across Attempts under the same Workspace/project rules. `tests/pi-session.test.ts` proves the tail refreshes on every request, is last in the transmitted payload and request envelope, and is absent from persisted runtime messages. Context and package-boundary tests cover budgeting and ownership. The full `npm test` suite passes.
+`tests/runtime.test.ts` proves the system prompt excludes Active TaskRun state and remains identical across Attempts under the same Workspace/project rules. `tests/pi-session.test.ts` proves the stable Attempt projection appears once before the real prompt, the first live checkpoint follows that prompt, changed checkpoints extend the exact provider prefix, unchanged retries remain byte-identical, and neither context form enters public or durable transcript history. `tests/context-assembler.test.ts` covers budgeting both exact strings. Package-boundary tests cover ownership.
 
 ## Consequences
 
-Mutable runtime data has one request-local owner and cannot accidentally re-enter the fixed prompt through the removed parameters. Project-rule or Workspace changes may still change the prefix intentionally. The dynamic message consumes provider context on every request and is explicitly treated as Core-generated context whose nested task strings are untrusted data.
+Large immutable context has one Attempt-local owner and a stable provider prefix, while mutable authority advances through hash-deduplicated Session checkpoints. Project-rule or Workspace changes may still change the prefix intentionally. Compaction remains Session-local, and each changed checkpoint consumes a small bounded amount of provider context until compaction. Nested task strings in both projections remain untrusted data.

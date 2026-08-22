@@ -23,6 +23,8 @@ export {
 } from "./application/execution-state.js";
 export {
   projectUtf8HeadTail,
+  runtimeAttemptRunContext,
+  runtimeLiveRunContext,
   runtimeRunContext,
   truncateUtf8,
   utf8Bytes,

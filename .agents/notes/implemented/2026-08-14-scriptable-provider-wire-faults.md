@@ -11,7 +11,7 @@ Provider recovery tests mostly injected completed SDK messages or built one-off 
 
 `tests/support/wire-fault-server.ts` owns a deterministic scripted fixture for reset-before-headers, partial-SSE reset, clean EOF without `[DONE]`, malformed SSE, empty completion, HTTP 429 with `Retry-After`, and success. It records request arrival times so retry-window behavior can be asserted. A seeded selector produces repeatable randomized sequences.
 
-OpenAI-compatible SSE transport requires the `[DONE]` sentinel, and an otherwise successful empty completion is a retryable `empty_response`. Failed assistant partials remain failure events but are excluded from durable visible transcript history and retry context. Full-turn retries persist a new envelope while preserving an identical provider payload hash.
+OpenAI-compatible SSE transport requires the `[DONE]` sentinel, and an otherwise successful empty completion is a retryable `empty_response`. One response-disposition rule excludes failed, aborted, empty, and recoverable-overflow assistant responses as the Harness Session appends them, while retaining their failure events. Runtime does not rewind Pi storage leaves after the fact. Full-turn retries persist a new envelope while preserving an identical provider payload hash.
 
 ## Alternatives considered
 
@@ -23,7 +23,7 @@ OpenAI-compatible SSE transport requires the `[DONE]` sentinel, and an otherwise
 
 ## Verification
 
-`tests/pi-session.test.ts` runs every fault followed by success against the real OpenAI-compatible adapter. It asserts exactly two requests, canonical body and hash identity, one durable successful assistant response, retry lifecycle events, absence of failed partial content from the second request and transcript, and no rate-limit retry before the fixture's `Retry-After` window.
+`tests/pi-session.test.ts` runs every fault followed by success against the real OpenAI-compatible adapter. It asserts exactly two requests, canonical body and hash identity, one durable successful assistant response, retry lifecycle events, absence of failed partial content from the active Session, second request, and transcript, no direct Session-storage access, and no rate-limit retry before the fixture's `Retry-After` window.
 
 ## Consequences
 

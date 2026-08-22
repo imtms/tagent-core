@@ -38,4 +38,11 @@ describe("provider failure classification", () => {
     expect(classifyProviderFailure({ ...error(""), stopReason: "stop" })).toBe("empty_response");
     expect(isRetryableProviderFailure("empty_response")).toBe(true);
   });
+
+  it("distinguishes genuine output caps from context-clamped length stops", () => {
+    const genuine = { ...error("", "length"), usage: { ...error("").usage, output: 1_024, totalTokens: 2_024 } };
+    const contextClamped = { ...error("", "length"), usage: { ...error("").usage, output: 16, reasoning: 16, totalTokens: 1_016 } };
+    expect(classifyProviderFailure(genuine, 128_000, 1_024)).toBeUndefined();
+    expect(classifyProviderFailure(contextClamped, 128_000, 128_000)).toBe("context_overflow");
+  });
 });

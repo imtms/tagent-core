@@ -33,7 +33,7 @@ export class AttemptExecutor {
       supervisor: SupervisorPort;
     },
   ) {}
-  public launch(run: TaskRun, prompt: string, initialMessages: AgentMessage[] = [], continuationId?: string, launchOptions?: { initialize?: boolean; inboxItemId?: string; retry?: boolean }) {
+  public launch(run: TaskRun, prompt: string, initialMessages: AgentMessage[] = [], continuationId?: string, launchOptions?: { initialize?: boolean; inboxItemId?: string; retry?: boolean; attemptContext?: string }) {
     if (this.state.closing) return;
     const idleTimeoutMs = this.state.runtimeDefaults.runTimeoutMs ?? 120_000;
     const hardTimeoutMs = this.state.runtimeDefaults.runHardTimeoutMs ?? 86_400_000;
@@ -179,7 +179,8 @@ export class AttemptExecutor {
         runHardTimeoutMs: this.state.runtimeDefaults.runHardTimeoutMs,
         historicalToolResultChars: this.state.runtimeDefaults.historicalToolResultChars,
         historicalTaskRunReceiptChars: this.state.runtimeDefaults.historicalTaskRunReceiptChars,
-        dynamicContext: () => this.dependencies.contextService.buildDynamicContext(run.id, this.state.recalledMemory.get(run.id) ?? ""),
+        attemptContext: launchOptions?.attemptContext,
+        liveContext: () => this.dependencies.contextService.buildLiveContext(run.id),
         requestEnvelopes: this.dependencies.requestEnvelopes,
       });
     } catch (error) {

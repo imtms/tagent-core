@@ -94,12 +94,13 @@ export function taskPolicyResumeInstructions(policy: TaskExecutionPolicy): [stri
   ];
 }
 
-/** Minimal, bounded TaskRun projection used at the LLM boundary. Durable state remains in Store. */
-export function runtimeRunContext(run: TaskRun) {
+/** Large immutable projection reused for every provider request in one Attempt. */
+export function runtimeAttemptRunContext(run: TaskRun) {
+  const workspaceGoal = run.contract?.workspaceGoal;
+  const targetRoadmapItemIds = new Set(workspaceGoal?.targetRoadmapItemIds ?? []);
+  const targetCriterionKeys = new Set(workspaceGoal?.targetCriterionKeys ?? []);
   return {
     id: run.id,
-    status: run.status,
-    phase: run.phase,
     attempt: run.attempt,
     goal: truncateUtf8(run.goal, 4_000),
     contract: run.contract ? {
@@ -114,32 +115,56 @@ export function runtimeRunContext(run: TaskRun) {
       skills: (run.contract.skills ?? []).slice(0, 32).map((skill) => ({
         skillId: skill.skillId, revisionId: skill.revisionId, revision: skill.revision, name: skill.name,
         description: truncateUtf8(skill.description, 1_000), filePath: skill.filePath, sha256: skill.sha256,
+        disableModelInvocation: skill.disableModelInvocation,
       })),
-      workspaceGoal: run.contract.workspaceGoal ? {
-        goalId: run.contract.workspaceGoal.goalId,
-        mode: run.contract.workspaceGoal.mode,
-        definitionRevision: run.contract.workspaceGoal.definitionRevision,
-        definitionHash: run.contract.workspaceGoal.definitionHash,
-        title: truncateUtf8(run.contract.workspaceGoal.title, 500),
-        outcome: truncateUtf8(run.contract.workspaceGoal.outcome, 3_000),
-        scope: run.contract.workspaceGoal.scope.slice(0, 30).map((item) => truncateUtf8(item, 1_000)),
-        nonGoals: run.contract.workspaceGoal.nonGoals.slice(0, 30).map((item) => truncateUtf8(item, 1_000)),
-        criteria: run.contract.workspaceGoal.criteria.slice(0, 100).map((item) => ({ ...item, title: truncateUtf8(item.title, 1_000) })),
-        roadmapRevision: run.contract.workspaceGoal.roadmapRevision,
-        approvedRoadmapItemIds: run.contract.workspaceGoal.approvedRoadmapItemIds.slice(0, 50),
-        targetRoadmapItemIds: run.contract.workspaceGoal.targetRoadmapItemIds.slice(0, 20),
-        roadmapItems: run.contract.workspaceGoal.roadmapItems.slice(0, 20).map((item) => ({
+      workspaceGoal: workspaceGoal ? {
+        goalId: workspaceGoal.goalId,
+        mode: workspaceGoal.mode,
+        definitionRevision: workspaceGoal.definitionRevision,
+        definitionHash: workspaceGoal.definitionHash,
+        title: truncateUtf8(workspaceGoal.title, 500),
+        outcome: truncateUtf8(workspaceGoal.outcome, 3_000),
+        scope: workspaceGoal.scope.slice(0, 30).map((item) => truncateUtf8(item, 1_000)),
+        nonGoals: workspaceGoal.nonGoals.slice(0, 30).map((item) => truncateUtf8(item, 1_000)),
+        criteria: workspaceGoal.mode === "roadmap"
+          ? workspaceGoal.criteria.filter((item) => targetCriterionKeys.has(item.key)).slice(0, 50).map((item) => ({ ...item, title: truncateUtf8(item.title, 1_000) }))
+          : [],
+        roadmapRevision: workspaceGoal.roadmapRevision,
+        targetRoadmapItemIds: workspaceGoal.targetRoadmapItemIds.slice(0, 20),
+        roadmapItems: workspaceGoal.mode === "roadmap"
+          ? workspaceGoal.roadmapItems.filter((item) => targetRoadmapItemIds.has(item.id)).slice(0, 20).map((item) => ({
           ...item,
           title: truncateUtf8(item.title, 500),
           outcome: truncateUtf8(item.outcome, 2_000),
           verification: truncateUtf8(item.verification, 2_000),
-        })),
-        targetCriterionKeys: run.contract.workspaceGoal.targetCriterionKeys.slice(0, 100),
+          }))
+          : [],
+        targetCriterionKeys: workspaceGoal.targetCriterionKeys.slice(0, 50),
       } : null,
     } : null,
-    plan: run.plan.slice(0, 50).map(({ key, title, status, required, position }) => ({ key, title: truncateUtf8(title, 500), status, required, position })),
-    checks: run.checks.slice(0, 50).map(({ key, title, status, required, command, evidence, stale, sourceOperationId, observedAt }) => ({ key, title: truncateUtf8(title, 500), status, required, command: truncateUtf8(command, 500), evidence: truncateUtf8(evidence, 1_000), stale, sourceOperationId: sourceOperationId ?? null, observedAt: observedAt ?? null })),
-    artifacts: run.artifacts.slice(0, 30).map(({ id, title, kind, uri }) => ({ id, title: truncateUtf8(title, 500), kind, uri: truncateUtf8(uri, 1_000) })),
-    completionGate: run.completionGate,
   };
+}
+
+/** Small mutable projection refreshed immediately before each provider request. */
+export function runtimeLiveRunContext(run: TaskRun) {
+  return {
+    id: run.id,
+    attempt: run.attempt,
+    status: run.status,
+    phase: run.phase,
+    plan: run.plan.slice(0, 50).map(({ key, title, status, required, position }) => ({ key, title: truncateUtf8(title, 500), status, required, position })),
+    checks: run.checks.slice(0, 50).map(({ key, title, status, required, stale, sourceOperationId }) => ({
+      key, title: truncateUtf8(title, 500), status, required, stale, sourceOperationId: sourceOperationId ?? null,
+    })),
+    artifacts: run.artifacts.slice(0, 30).map(({ id, title, kind, uri }) => ({ id, title: truncateUtf8(title, 500), kind, uri: truncateUtf8(uri, 1_000) })),
+    completionGate: {
+      passed: run.completionGate.passed,
+      failures: run.completionGate.failures.slice(0, 30).map(({ kind, key, reason }) => ({ kind, key, reason: truncateUtf8(reason, 1_000) })),
+    },
+  };
+}
+
+/** Compatibility projection for consumers that need the complete bounded model view. */
+export function runtimeRunContext(run: TaskRun) {
+  return { ...runtimeAttemptRunContext(run), ...runtimeLiveRunContext(run) };
 }

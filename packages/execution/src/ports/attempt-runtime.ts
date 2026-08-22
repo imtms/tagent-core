@@ -190,8 +190,10 @@ export interface AttemptRuntimeSpec {
   runHardTimeoutMs?: number;
   historicalToolResultChars?: number;
   historicalTaskRunReceiptChars?: number;
-  /** Core-owned, ephemeral context refreshed and appended after history for every provider request. */
-  dynamicContext?: () => string;
+  /** Core-owned large context fixed and reused for every provider request in this Attempt. */
+  attemptContext?: string;
+  /** Source for Core-owned compact checkpoints appended to Session only when their hash changes. */
+  liveContext?: () => string;
   requestEnvelopes?: import("./attempt-request-envelope-repository.js").AttemptRequestEnvelopeRepository;
 }
 

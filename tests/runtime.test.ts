@@ -1082,8 +1082,8 @@ describe("Core application runtime boundary", () => {
     await expect(service.approveRunApproval(approval.id)).resolves.toMatchObject({ status: "running", attempt: 2 });
     expect(runtimeOptions).toHaveLength(1);
     expect(runtimes[0]!.prompts[0]).toContain("Core has bound external-action approval to current Attempt 2");
-    expect(runtimeOptions[0]!.dynamicContext?.()).toContain('EXTERNAL_ACTION_AUTHORIZATION: {"attempt":2,"status":"approved_for_current_attempt"}');
-    expect(runtimeOptions[0]!.dynamicContext?.()).toContain("do not ask for approval text, IDs, tokens, or receipts");
+    expect(runtimeOptions[0]!.liveContext?.()).toContain('EXTERNAL_ACTION_AUTHORIZATION: {"attempt":2,"status":"approved_for_current_attempt"}');
+    expect(runtimeOptions[0]!.liveContext?.()).toContain("do not ask for approval text, IDs, tokens, or receipts");
     await service.closeRuntimes();
     store.close();
   });
@@ -1402,17 +1402,19 @@ describe("Core application runtime boundary", () => {
     store.close();
   });
 
-  it("keeps the system prompt stable across Attempts and supplies current Run state through the dynamic tail", async () => {
+  it("keeps the system prompt stable across Attempts and partitions stable and live Run context", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const systemPrompts: string[] = [];
-    const dynamicContexts: string[] = [];
+    const attemptContexts: string[] = [];
+    const liveContexts: string[] = [];
     const service = createCoreApplication({
       persistence: corePersistence(store),
       workspace: "/tmp",
       runtimeFactory: (options) => {
         systemPrompts.push(options.systemPrompt);
-        dynamicContexts.push(options.dynamicContext?.() ?? "");
+        attemptContexts.push(options.attemptContext ?? "");
+        liveContexts.push(options.liveContext?.() ?? "");
         return new CallbackRuntime(assistantMessage("candidate"), () => {
           store.upsertPlanItem(options.token.runId, { key: "work", title: "Work", status: "done", required: true, position: 1 });
         });
@@ -1429,9 +1431,11 @@ describe("Core application runtime boundary", () => {
     expect(systemPrompts[1]).toBe(systemPrompts[0]);
     expect(systemPrompts[0]).not.toContain("Active TaskRun");
     expect(systemPrompts[0]).not.toContain("stable-prefix-regression-marker");
-    expect(dynamicContexts[0]).toContain('"attempt":1');
-    expect(dynamicContexts[1]).toContain('"attempt":2');
-    expect(dynamicContexts[1]).toContain("TAGENT_CORE_RUNTIME_CONTEXT");
+    expect(attemptContexts[0]).toContain('"attempt":1');
+    expect(attemptContexts[1]).toContain('"attempt":2');
+    expect(attemptContexts[1]).toContain("TAGENT_CORE_ATTEMPT_CONTEXT");
+    expect(liveContexts[1]).toContain('"attempt":2');
+    expect(liveContexts[1]).toContain("TAGENT_CORE_RUNTIME_CONTEXT");
     await service.closeRuntimes();
     store.close();
   });
@@ -1939,7 +1943,7 @@ describe("Core application runtime boundary", () => {
       persistence: corePersistence(store),
       workspace: "/tmp",
       runtimeFactory: (value) => { options = value; return new FakeRuntime([assistantMessage("done")]); },
-      runtimeDefaults: { maxContinuations: 0, contextWindow: 1000, maxContextTurns: 1, model: { contextWindow: 1000, maxTokens: 100 } as never }
+      runtimeDefaults: { maxContinuations: 0, contextWindow: 10_000, maxContextTurns: 1, model: { contextWindow: 10_000, maxTokens: 100 } as never }
     });
     await service.resume(run.id);
     await new Promise((resolve) => setTimeout(resolve, 0));

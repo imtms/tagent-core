@@ -14,7 +14,7 @@ import type {
   SubmissionAuditInput,
   SubmissionQueue,
 } from "../ports/index.js";
-import type { ContextManifestItem, RunId, TaskRun } from "@tagent/execution/domain";
+import type { RunId, TaskRun } from "@tagent/execution/domain";
 import type {
   AttemptRepository,
   RunEventJournal,
@@ -30,7 +30,7 @@ import type {
   AttemptSettlementPort,
   ContinuationControlPort,
   ControlCommandPort,
-  ContextAssembly,
+  PreparedExecutionContext,
   RunContextPort,
   RunEventPublisherPort,
 } from "@tagent/execution/composition";
@@ -607,7 +607,7 @@ export class AdmissionCoordinator {
     return { approvalId: approval.id, reason };
   }
 
-  public completeClaimedSessionLaunch(item: Submission, run: TaskRun, sessionHistory: ContextAssembly & { recalledMemory?: string; memoryContextItems?: ContextManifestItem[] }, retry: boolean) {
+  public completeClaimedSessionLaunch(item: Submission, run: TaskRun, sessionHistory: PreparedExecutionContext, retry: boolean) {
     const current = this.currentLaunchRun(run);
     if (!current) return;
     run = current;
@@ -616,7 +616,12 @@ export class AdmissionCoordinator {
     }
     this.dependencies.contextService.publishContextEvents(run.id, sessionHistory);
     this.state.recalledMemory.set(run.id, sessionHistory.recalledMemory ?? "");
-    this.dependencies.attemptExecutor.launch(run, this.buildContractPrompt(run, item.content), sessionHistory.messages, undefined, { initialize: true, inboxItemId: item.id, retry });
+    this.dependencies.attemptExecutor.launch(run, this.buildContractPrompt(run, item.content), sessionHistory.messages, undefined, {
+      initialize: true,
+      inboxItemId: item.id,
+      retry,
+      attemptContext: sessionHistory.attemptContext,
+    });
     if (!this.state.runtimes.has(run.id)) {
       const current = this.state.persistence.taskRuns.getRun(run.id);
       if (current && current.status !== "running") return;

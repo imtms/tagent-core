@@ -26,6 +26,17 @@ describe("ContextAssembler", () => {
     expect(result.stats).not.toHaveProperty("messageBudgetTokens");
   });
 
+  it("reserves the exact stable Attempt context and live tail used at runtime", () => {
+    const system = "system";
+    const attempt = "attempt-stable";
+    const live = "live-tail";
+    const result = new ContextAssembler({ contextWindow: 20_000, maxOutputTokens: 4_000, maxTurns: 10 })
+      .assemble("session", [], system, "prompt", [], attempt, live);
+    expect(result.stats.systemTokens).toBe(
+      estimateTextTokens(system) + estimateTextTokens(attempt) + estimateTextTokens(live),
+    );
+  });
+
   it("preserves stable durable source IDs through selection and omission", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "old", timestamp: 1 }, assistant("old answer"),

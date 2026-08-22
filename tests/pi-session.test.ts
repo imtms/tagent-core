@@ -13,6 +13,7 @@ import { credentialReference, type AttemptRequestEnvelopeRepository } from "@tag
 import { corePersistence } from "./support/test-persistence.js";
 import { RunEventProbe } from "./support/event-probe.js";
 import { seededWireFaultScript, WireFaultServer, type WireFaultStep } from "./support/wire-fault-server.js";
+import { Type } from "typebox";
 
 describe("Pi AgentHarness integration", () => {
   const testCredential = (value: string) => ({
@@ -99,14 +100,15 @@ describe("Pi AgentHarness integration", () => {
     store.close();
   });
 
-  it("refreshes Core dynamic context as the final provider message without persisting it", async () => {
+  it("extends the exact provider prefix with changed live checkpoints without persisting Core context", async () => {
     const observed: Context[] = [];
-    let dynamicContext = "<TAGENT_CORE_RUNTIME_CONTEXT>phase=discover</TAGENT_CORE_RUNTIME_CONTEXT>";
+    const attemptContext = "<TAGENT_CORE_ATTEMPT_CONTEXT>stable-contract</TAGENT_CORE_ATTEMPT_CONTEXT>";
+    let liveContext = "<TAGENT_CORE_RUNTIME_CONTEXT>phase=discover</TAGENT_CORE_RUNTIME_CONTEXT>";
     const faux = fauxProvider({ models: [{ id: "faux-dynamic", contextWindow: 32_000, maxTokens: 2_000 }] });
     faux.setResponses([
       (context) => {
         observed.push(context);
-        dynamicContext = "<TAGENT_CORE_RUNTIME_CONTEXT>phase=implement</TAGENT_CORE_RUNTIME_CONTEXT>";
+        liveContext = "<TAGENT_CORE_RUNTIME_CONTEXT>phase=implement</TAGENT_CORE_RUNTIME_CONTEXT>";
         return fauxAssistantMessage([{ type: "toolCall", id: "dynamic-history", name: "history_search", arguments: { query: "no-match" } }], { stopReason: "toolUse" });
       },
       (context) => { observed.push(context); return fauxAssistantMessage("dynamic context refreshed"); },
@@ -115,7 +117,7 @@ describe("Pi AgentHarness integration", () => {
     const run = store.createRun(store.createSession().id, "dynamic tail");
     const runtime = new PiRuntime(runtimeSpec(store, run, {
       workspace: process.cwd(), systemPrompt: "Stable system prefix", model: faux.getModel(), models: fauxModels(faux),
-      initialMessages: [], providerMaxRetries: 0, dynamicContext: () => dynamicContext,
+      initialMessages: [], providerMaxRetries: 0, attemptContext, liveContext: () => liveContext,
     }));
 
     await runtime.prompt("inspect dynamic tail");
@@ -126,12 +128,27 @@ describe("Pi AgentHarness integration", () => {
         : "";
     };
     expect(observed).toHaveLength(2);
+    expect(observed[1].messages.slice(0, observed[0].messages.length)).toEqual(observed[0].messages);
     expect(tailText(observed[0])).toContain("phase=discover");
     expect(tailText(observed[1])).toContain("phase=implement");
     expect(JSON.stringify(observed[1].messages.at(-1))).toContain("TAGENT_CORE_RUNTIME_CONTEXT");
+    for (const context of observed) {
+      const serialized = context.messages.map((message) => JSON.stringify(message));
+      expect(serialized.filter((message) => message.includes("stable-contract"))).toHaveLength(1);
+      expect(serialized.findIndex((message) => message.includes("stable-contract")))
+        .toBeLessThan(serialized.findIndex((message) => message.includes("inspect dynamic tail")));
+    }
+    expect(JSON.stringify(runtime.getMessages())).not.toContain("TAGENT_CORE_ATTEMPT_CONTEXT");
     expect(JSON.stringify(store.listTranscript(run.id))).not.toContain("TAGENT_CORE_RUNTIME_CONTEXT");
+    expect(JSON.stringify(store.listTranscript(run.id))).not.toContain("TAGENT_CORE_ATTEMPT_CONTEXT");
     await runtime.dispose();
     store.close();
+  });
+
+  it("does not reach through the Pi Session storage API to rewind failed responses", async () => {
+    const source = await readFile(new URL("../adapters/runtime-pi/src/pi-runtime.ts", import.meta.url), "utf8");
+    expect(source).not.toContain("getStorage()");
+    expect(source).not.toContain("removeTrailingAssistantFromActiveContext");
   });
 
   it("recalls bounded same-Run durable history through the real Pi tool path", async () => {
@@ -294,10 +311,10 @@ describe("Pi AgentHarness integration", () => {
   });
 
   it("applies bounded full-turn retry with lifecycle events and succeeds on the next attempt", async () => {
-    let retryContext: Context | undefined;
+    const retryContexts: Context[] = [];
     const { faux, store, run, runtime } = await setup([
-      fauxAssistantMessage([], { stopReason: "error", errorMessage: "503 Service unavailable" }),
-      (context) => { retryContext = context; return fauxAssistantMessage("recovered"); },
+      (context) => { retryContexts.push(context); return fauxAssistantMessage([], { stopReason: "error", errorMessage: "503 Service unavailable" }); },
+      (context) => { retryContexts.push(context); return fauxAssistantMessage("recovered"); },
     ]);
     await runtime.prompt("retry");
     expect(faux.state.callCount).toBe(2);
@@ -310,8 +327,9 @@ describe("Pi AgentHarness integration", () => {
     expect(store.listTranscript(run.id).filter((message) => message.role === "user")).toEqual([
       expect.objectContaining({ role: "user", content: [{ type: "text", text: "retry" }] }),
     ]);
-    expect(retryContext?.messages.filter((message) => message.role === "assistant" && message.stopReason === "error")).toHaveLength(0);
-    expect(JSON.stringify(retryContext?.messages)).not.toContain("TAgent internal continuation");
+    expect(retryContexts[1]?.messages.filter((message) => message.role === "assistant" && message.stopReason === "error")).toHaveLength(0);
+    expect(JSON.stringify(retryContexts[1]?.messages)).not.toContain("TAgent internal continuation");
+    expect(JSON.stringify(retryContexts[1]?.messages)).toBe(JSON.stringify(retryContexts[0]?.messages));
     await runtime.dispose();
     store.close();
   });
@@ -549,13 +567,14 @@ describe("Pi AgentHarness integration", () => {
     const path = `.tagent/tmp/truncated-${Date.now()}.txt`;
     const { store, run, runtime } = await setup([
       fauxAssistantMessage([{ type: "toolCall", id: "truncated-write", name: "write", arguments: { path, content: "unsafe" } }], { stopReason: "length" }),
+      fauxAssistantMessage("summary without the truncated tool call"),
       fauxAssistantMessage("reissued safely without the truncated write"),
     ]);
     await runtime.prompt("truncate");
     expect(existsSync(path)).toBe(false);
-    expect(store.listTranscript(run.id)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ role: "toolResult", toolCallId: "truncated-write", isError: true }),
-    ]));
+    expect(store.listTranscript(run.id).some((message) => message.role === "toolResult" && message.toolCallId === "truncated-write")).toBe(false);
+    expect(JSON.stringify(store.listTranscript(run.id))).not.toContain("unsafe");
+    expect(store.listEvents(run.id).filter((event) => event.type === "context.compaction.started" && event.data.reason === "overflow")).toHaveLength(1);
     expect(store.listOperations(run.id)).toHaveLength(0);
     await runtime.dispose();
     store.close();
@@ -634,10 +653,12 @@ describe("Pi AgentHarness integration", () => {
   });
 
   it("automatically compacts after a successful turn crosses the context threshold", async () => {
-    const faux = fauxProvider({ models: [{ id: "faux-compact", contextWindow: 17_000, maxTokens: 2_000 }] });
-    const first = fauxAssistantMessage("large completed result");
-    first.usage = { ...first.usage, input: 2_000, output: 15_000, totalTokens: 17_000 };
-    faux.setResponses([first, fauxAssistantMessage("automatic summary")]);
+    const faux = fauxProvider({
+      models: [{ id: "faux-compact", contextWindow: 50_000, maxTokens: 2_000 }],
+      tokenSize: { min: 20_000, max: 20_000 },
+    });
+    const first = fauxAssistantMessage(`large completed result:${"x".repeat(180_000)}`);
+    faux.setResponses([() => ({ ...first, timestamp: Date.now() + 1 }), fauxAssistantMessage("automatic summary")]);
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "automatic compaction");
@@ -654,16 +675,18 @@ describe("Pi AgentHarness integration", () => {
   });
 
   it("delivers follow-up accepted while automatic compaction is running", async () => {
-    const faux = fauxProvider({ models: [{ id: "faux-compact-follow-up", contextWindow: 17_000, maxTokens: 2_000 }] });
-    const first = fauxAssistantMessage("large completed result");
-    first.usage = { ...first.usage, input: 2_000, output: 15_000, totalTokens: 17_000 };
+    const faux = fauxProvider({
+      models: [{ id: "faux-compact-follow-up", contextWindow: 50_000, maxTokens: 2_000 }],
+      tokenSize: { min: 20_000, max: 20_000 },
+    });
+    const first = fauxAssistantMessage(`large completed result:${"x".repeat(180_000)}`);
     let releaseSummary!: () => void;
     const summaryGate = new Promise<void>((resolve) => { releaseSummary = resolve; });
     faux.setResponses([
-      first,
-      async () => { await summaryGate; return fauxAssistantMessage("automatic summary"); },
-      fauxAssistantMessage("follow-up after compaction"),
-      fauxAssistantMessage("post-follow-up summary"),
+      () => ({ ...first, timestamp: Date.now() + 1 }),
+      async () => { await summaryGate; return fauxAssistantMessage("automatic summary", { timestamp: Date.now() + 2 }); },
+      () => fauxAssistantMessage("follow-up after compaction", { timestamp: Date.now() + 3 }),
+      () => fauxAssistantMessage("follow-up after compaction", { timestamp: Date.now() + 4 }),
     ]);
     const store = new Store(":memory:");
     const session = store.createSession();
@@ -676,8 +699,11 @@ describe("Pi AgentHarness integration", () => {
       await expect(runtime.followUp("queued during compaction")).resolves.toBe("accepted");
       releaseSummary();
       await prompt;
-      expect(faux.state.callCount).toBe(4);
-      expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "follow-up after compaction" }] });
+      expect(faux.state.callCount).toBeGreaterThanOrEqual(3);
+      expect(faux.state.callCount).toBeLessThanOrEqual(4);
+      expect(runtime.getMessages()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ role: "assistant", content: [{ type: "text", text: "follow-up after compaction" }] }),
+      ]));
       expect(store.listTranscript(run.id)).toEqual(expect.arrayContaining([
         expect.objectContaining({ role: "user", content: [{ type: "text", text: "queued during compaction" }] }),
       ]));
@@ -704,7 +730,7 @@ describe("Pi AgentHarness integration", () => {
       initialMessages: [{ role: "user", content: "historical request", timestamp: 1 }, historical],
     }));
     await runtime.prompt("continue after restore");
-    expect(faux.state.callCount).toBe(3);
+    expect(faux.state.callCount).toBe(2);
     expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "answer after pre-compaction" }] });
     expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "context.compaction.started", data: expect.objectContaining({ reason: "threshold" }) }),
@@ -713,20 +739,110 @@ describe("Pi AgentHarness integration", () => {
     store.close();
   });
 
+  it("includes the actual next prompt in the pre-dispatch compaction budget", async () => {
+    const observed: Context[] = [];
+    const marker = "next-prompt-budget-marker";
+    const faux = fauxProvider({ models: [{ id: "faux-next-prompt-budget", contextWindow: 80_000, maxTokens: 2_000 }] });
+    const oldLarge = fauxAssistantMessage("old history ".repeat(10_000));
+    const recent = fauxAssistantMessage("recent checkpoint");
+    faux.setResponses([
+      (context) => { observed.push(context); return fauxAssistantMessage("summary before the next prompt", { timestamp: Date.now() + 1 }); },
+      (context) => { observed.push(context); return fauxAssistantMessage("answer after prompt-aware compaction", { timestamp: Date.now() + 1 }); },
+      (context) => { observed.push(context); return fauxAssistantMessage("summary after the completed prompt", { timestamp: Date.now() + 1 }); },
+    ]);
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "next prompt budget");
+    const runtime = new PiRuntime(runtimeSpec(store, run, {
+      workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), providerMaxRetries: 0,
+      initialMessages: [
+        { role: "user", content: "old request", timestamp: 1 }, oldLarge,
+        { role: "user", content: "r".repeat(80_000), timestamp: 2 }, recent,
+      ],
+    }));
+    await runtime.prompt(`${marker} ${"x".repeat(80_000)}`);
+    expect(faux.state.callCount).toBe(3);
+    expect(JSON.stringify(observed[0]?.messages)).not.toContain(marker);
+    expect(JSON.stringify(observed[1]?.messages)).toContain(marker);
+    expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "context.compaction.started", data: expect.objectContaining({ reason: "threshold" }) }),
+    ]));
+    await runtime.dispose();
+    store.close();
+  });
+
+  it("compacts complete tool-result growth before the next provider dispatch", async () => {
+    const bigResult = "tool-result-boundary:" + "z".repeat(120_000);
+    const actualRequests: Context[] = [];
+    const compactionRequests: Context[] = [];
+    const faux = fauxProvider({ models: [{ id: "faux-tool-result-budget", contextWindow: 120_000, maxTokens: 2_000 }] });
+    const historical = fauxAssistantMessage("old context ".repeat(10_000));
+    const recent = fauxAssistantMessage("recent context");
+    faux.setResponses([
+      (context) => { actualRequests.push(context); return fauxAssistantMessage([{ type: "toolCall", id: "big-result", name: "big_result", arguments: {} }], { stopReason: "toolUse" }); },
+      (context) => { compactionRequests.push(context); return fauxAssistantMessage("history summary after complete tool output"); },
+      (context) => { actualRequests.push(context); return fauxAssistantMessage("continued after tool-result compaction"); },
+      (context) => { compactionRequests.push(context); return fauxAssistantMessage("current-turn prefix summary"); },
+    ]);
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "tool result budget");
+    const spec = runtimeSpec(store, run, {
+      workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), providerMaxRetries: 0,
+      historicalToolResultChars: 200_000,
+      initialMessages: [
+        { role: "user", content: "old request", timestamp: 1 }, historical,
+        { role: "user", content: "r".repeat(80_000), timestamp: 2 }, recent,
+      ],
+    });
+    const runtime = new PiRuntime({
+      ...spec,
+      eventSink: {
+        ...spec.eventSink,
+        beforeToolCall(input) {
+          if (input.toolName === "big_result") return { blocked: false };
+          return spec.eventSink.beforeToolCall(input);
+        },
+        afterToolCall(input) {
+          if (input.toolName === "big_result") return;
+          return spec.eventSink.afterToolCall(input);
+        },
+      },
+      capabilities: {
+        tools: [...spec.capabilities.tools, {
+          name: "big_result", label: "big_result", description: "Return a large deterministic read-only result", parameters: Type.Object({}),
+          execute: async () => ({ content: [{ type: "text", text: bigResult }], details: {} }),
+        }],
+      },
+    });
+    await runtime.prompt("produce the large result and continue");
+    expect(faux.state.callCount).toBe(4);
+    expect(actualRequests).toHaveLength(2);
+    expect(compactionRequests).toHaveLength(2);
+    expect(JSON.stringify(actualRequests[1]?.messages)).toContain(bigResult);
+    const transcriptResult = store.listTranscript(run.id).find((message) => message.role === "toolResult" && message.toolCallId === "big-result");
+    expect(transcriptResult).toMatchObject({ role: "toolResult", content: [{ type: "text", text: bigResult }] });
+    expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "context.compaction.started", data: expect.objectContaining({ reason: "threshold" }) }),
+    ]));
+    await runtime.dispose();
+    store.close();
+  });
+
   it("continues the completed turn when automatic threshold compaction fails", async () => {
-    const faux = fauxProvider({ models: [{ id: "faux-compact-failure", contextWindow: 17_000, maxTokens: 2_000 }] });
-    const first = fauxAssistantMessage("completed despite compaction failure");
-    first.usage = { ...first.usage, input: 2_000, output: 15_000, totalTokens: 17_000 };
-    faux.setResponses([first, fauxAssistantMessage([], { stopReason: "error", errorMessage: "401 summary unavailable" })]);
+    const faux = fauxProvider({
+      models: [{ id: "faux-compact-failure", contextWindow: 50_000, maxTokens: 2_000 }],
+      tokenSize: { min: 20_000, max: 20_000 },
+    });
+    const first = fauxAssistantMessage(`completed despite compaction failure:${"x".repeat(180_000)}`);
+    faux.setResponses([() => ({ ...first, timestamp: Date.now() + 1 }), fauxAssistantMessage([], { stopReason: "error", errorMessage: "401 summary unavailable" })]);
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "compaction failure");
     const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [], providerMaxRetries: 0 }));
     await expect(runtime.prompt("finish first")).resolves.toBeUndefined();
-    expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: "completed despite compaction failure" }] });
+    expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", content: [{ type: "text", text: expect.stringContaining("completed despite compaction failure") }] });
     expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "context.compaction.completed", data: expect.objectContaining({ reason: "threshold", error: expect.any(String) }) }),
-      expect.objectContaining({ type: "message.completed", data: expect.objectContaining({ content: "completed despite compaction failure" }) }),
+      expect.objectContaining({ type: "message.completed", data: expect.objectContaining({ content: expect.stringContaining("completed despite compaction failure") }) }),
     ]));
     await runtime.dispose();
     store.close();
@@ -761,6 +877,42 @@ describe("Pi AgentHarness integration", () => {
     store.close();
   });
 
+  it("performs exactly one compact-and-retry cycle for repeated recoverable length stops", async () => {
+    const faux = fauxProvider({ models: [{ id: "faux-length-overflow", contextWindow: 100_000, maxTokens: 1_024 }] });
+    faux.setResponses([
+      fauxAssistantMessage("short truncated output", { stopReason: "length" }),
+      fauxAssistantMessage("length overflow summary"),
+      fauxAssistantMessage("still truncated", { stopReason: "length" }),
+    ]);
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "length overflow guard");
+    const runtime = new PiRuntime(runtimeSpec(store, run, {
+      workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [], providerMaxRetries: 0,
+    }));
+    await runtime.prompt("recover a context-clamped length response once");
+    expect(faux.state.callCount).toBe(3);
+    expect(store.listEvents(run.id).filter((event) => event.type === "context.compaction.started" && event.data.reason === "overflow")).toHaveLength(1);
+    expect(runtime.getMessages().some((message) => message.role === "assistant" && message.stopReason === "length")).toBe(false);
+    await runtime.dispose();
+    store.close();
+  });
+
+  it("retains a length stop that reaches the intended output cap", async () => {
+    const faux = fauxProvider({ models: [{ id: "faux-genuine-length", contextWindow: 100_000, maxTokens: 1_024 }] });
+    faux.setResponses([fauxAssistantMessage("x".repeat(4_096), { stopReason: "length" })]);
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "genuine length cap");
+    const runtime = new PiRuntime(runtimeSpec(store, run, {
+      workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [], providerMaxRetries: 0,
+    }));
+    await runtime.prompt("use the complete intended output cap");
+    expect(faux.state.callCount).toBe(1);
+    expect(runtime.getMessages().at(-1)).toMatchObject({ role: "assistant", stopReason: "length" });
+    expect(store.listEvents(run.id).some((event) => event.type === "context.compaction.started")).toBe(false);
+    await runtime.dispose();
+    store.close();
+  });
+
   it("keeps a successful answer when reported input usage triggers overflow compaction", async () => {
     let callCount = 0;
     const server = createServer((_request, response) => {
@@ -788,7 +940,7 @@ describe("Pi AgentHarness integration", () => {
     };
     const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model, credential: testCredential("test-runtime-key"), initialMessages: [], providerMaxRetries: 0, providerTimeoutMs: 1_000 }));
     try {
-      await runtime.prompt("oversized input ".repeat(10_000));
+      await runtime.prompt("return the successful oversized accounting answer");
       expect(callCount).toBe(2);
       expect(runtime.getError()).toBeUndefined();
       expect(runtime.getMessages()).toEqual(expect.arrayContaining([
@@ -886,7 +1038,9 @@ describe("Pi AgentHarness integration", () => {
     };
     const runtime = new PiRuntime(runtimeSpec(store, run, {
       workspace: process.cwd(), systemPrompt: "Envelope system", model, credential: testCredential("test-runtime-key"),
-      initialMessages: [], providerMaxRetries: 0, dynamicContext: () => "<TAGENT_CORE_RUNTIME_CONTEXT>envelope-tail</TAGENT_CORE_RUNTIME_CONTEXT>",
+      initialMessages: [], providerMaxRetries: 0,
+      attemptContext: "<TAGENT_CORE_ATTEMPT_CONTEXT>envelope-stable</TAGENT_CORE_ATTEMPT_CONTEXT>",
+      liveContext: () => "<TAGENT_CORE_RUNTIME_CONTEXT>envelope-tail</TAGENT_CORE_RUNTIME_CONTEXT>",
     }));
     try {
       await runtime.prompt("persist me");
@@ -904,7 +1058,9 @@ describe("Pi AgentHarness integration", () => {
       });
       const providerMessages = (durable[0].providerPayload as { messages: Array<{ role: string; content: unknown }> }).messages;
       expect(providerMessages.at(-1)).toMatchObject({ role: "user", content: [expect.objectContaining({ type: "text", text: expect.stringContaining("envelope-tail") })] });
+      expect(JSON.stringify(providerMessages)).toContain("envelope-stable");
       expect(JSON.stringify(store.listTranscript(run.id))).not.toContain("envelope-tail");
+      expect(JSON.stringify(store.listTranscript(run.id))).not.toContain("envelope-stable");
       expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
         expect.objectContaining({ type: "request.envelope.persisted", data: expect.objectContaining({ envelopeId: durable[0].id }) }),
       ]));

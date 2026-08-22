@@ -146,10 +146,11 @@ describe("Workspace Goal Core execution", () => {
       };
     });
     const generator: WorkspaceGoalRoadmapGenerator = { model: "roadmap-light", generate };
+    let runtimeSpec: AttemptRuntimeSpec | undefined;
     const service = createCoreApplication({
       persistence: corePersistence(store),
       workspace: "/tmp",
-      runtimeFactory: () => new DeferredRuntime(),
+      runtimeFactory: (spec) => { runtimeSpec = spec; return new DeferredRuntime(); },
       runtimeDefaults: { workspaceGoalRoadmapGenerator: generator }
     });
     try {
@@ -175,6 +176,8 @@ describe("Workspace Goal Core execution", () => {
       });
       expect(started.run?.contract?.acceptanceCriteria).toContain("[Workspace Goal criterion stored] State is stored");
       expect(goals.get(goal.id)?.roadmapProgress).toContainEqual(expect.objectContaining({ itemId: "persist", status: "running", runId: started.run!.id }));
+      expect(runtimeSpec?.attemptContext).toContain("State is stored");
+      expect(runtimeSpec?.attemptContext).not.toContain("Behavior is verified");
 
       const replay = service.startWorkspaceGoalRoadmapItem(goal.id, "persist", "start-persist");
       expect(replay.item.id).toBe(started.item.id);
@@ -369,8 +372,8 @@ describe("Workspace Goal Core execution", () => {
       expect(goals.get(goal.id)?.runLinks).toContainEqual(expect.objectContaining({ runId: admitted.run!.id, mode: "workspace" }));
       expect(corePersistence(store).workspaceGoals.authorizeRunMutation(admitted.run!.id).allowed).toBe(true);
       expect(specs[0].systemPrompt).not.toContain("user-started TaskRun");
-      expect(specs[0].dynamicContext?.()).toContain("user-started TaskRun");
-      expect(specs[0].dynamicContext?.()).toContain("do not treat this Run as responsible for completing every Goal criterion");
+      expect(specs[0].attemptContext).toContain("user-started TaskRun");
+      expect(specs[0].attemptContext).toContain("do not treat this Run as responsible for completing every Goal criterion");
       const manifest = store.getLatestContextManifest(admitted.run!.id)!;
       expect(manifest.items).toEqual(expect.arrayContaining([
         expect.objectContaining({ kind: "taskrun_contract", selected: true }),

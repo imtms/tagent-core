@@ -26,7 +26,7 @@ export interface AttemptLauncherPort {
     prompt: string,
     initialMessages?: RuntimeMessage[],
     continuationId?: string,
-    launchOptions?: { initialize?: boolean; inboxItemId?: string; retry?: boolean },
+    launchOptions?: { initialize?: boolean; inboxItemId?: string; retry?: boolean; attemptContext?: string },
   ): void;
 }
 
@@ -83,6 +83,8 @@ export interface ExecutionMemoryAccess {
 }
 
 export interface PreparedExecutionContext {
+  /** Exact large model context selected and budgeted for this Attempt. */
+  attemptContext: string;
   messages: RuntimeMessage[];
   droppedMessages: RuntimeMessage[];
   contextItems: ContextManifestItem[];
@@ -113,7 +115,7 @@ export type RunResumeOptions =
 export interface RunContextPort {
   resume(runId: RunId, options?: RunResumeOptions): Promise<unknown>;
   buildSystemPrompt(): string;
-  buildDynamicContext(runId: RunId, recalledMemory?: string): string;
+  buildLiveContext(runId: RunId): string;
   requiresAsyncPreparation(): boolean;
   prepareContinuationTranscript(run: TaskRun, prompt: string): PreparedExecutionContext;
   prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter: number | undefined, signal: AbortSignal): Promise<PreparedExecutionContext>;

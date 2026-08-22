@@ -51,7 +51,7 @@ Historical provider context is projected on every Pi request:
 - head/tail and durable Artifact references are retained;
 - the latest active turn stays complete.
 
-The Core system prompt is stable across Attempts while the Workspace and selected project rules are unchanged. Mutable TaskRun state, execution policy, Workspace Goal direction, and recalled Memory are refreshed from durable state and appended as one ephemeral final request message. The dynamic tail is included in context-budget pruning and the exact request envelope, but it is not persisted into Session or TaskRun transcript history.
+The Core system prompt is stable across Attempts while the Workspace and selected project rules are unchanged. Each Attempt adds one large stable projection containing policy, contract, only the targeted Roadmap slice, Skill metadata, and recalled Memory. Context assembly budgets and passes that exact string to Runtime, which reuses it before the Attempt prompt. Compact mutable state—phase/status, concise plan/check/Artifact/gate state, and current external authorization—is appended after the real prompt as an in-memory Session checkpoint at first dispatch and thereafter only when its hash changes. The provider context hook projects those checkpoints instead of replacing a request-local tail, preserving an exact prefix across tool loops and retries. Both context forms enter exact request envelopes; neither enters public or durable transcript history. Live checkpoints omit commands, evidence, and timestamps because full state remains available through `task_run` and `history_search`.
 
 Configuration:
 
