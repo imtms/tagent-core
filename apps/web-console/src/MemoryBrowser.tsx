@@ -141,7 +141,6 @@ export function MemoryCoreProjection({
       <section className="memory-list-section">
         <div className="section-heading">
           <div>
-            <span className="eyebrow">Stable injection</span>
             <h3>Core Memory Snapshot</h3>
           </div>
           <button className="control" disabled={busy} onClick={onGenerate}>Generate snapshot</button>
@@ -152,7 +151,7 @@ export function MemoryCoreProjection({
   return (
     <section className="memory-list-section">
       <div className="section-heading">
-        <div><span className="eyebrow">Stable injection</span><h3>Core Memory snapshot</h3><small>revision {core.revision}{core.tokenCount > 0 ? ` · ${formatCount(core.tokenCount, "token")}` : ""}</small></div>
+        <div><h3>Core Memory snapshot</h3><small>revision {core.revision}{core.tokenCount > 0 ? ` · ${formatCount(core.tokenCount, "token")}` : ""}</small></div>
         <button className="control" disabled={busy} onClick={onGenerate}>Regenerate</button>
       </div>
       <div>
@@ -190,7 +189,7 @@ export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex, onRestore }
   return (
     <section className="memory-list-section">
       <div className="section-heading">
-        <div><span className="eyebrow">Maintenance and recovery</span><h3>Memory operations</h3><small>{total > 0 ? formatCount(total, "job") : "No recent jobs"}</small></div>
+        <div><span className="eyebrow">Maintenance and recovery</span></div>
         <div className="memory-operations-actions">
           <button className="control" onClick={onReindex} disabled={busy}>
             <RefreshCw size={ICON_SIZE.sm} className={busy ? "spin" : ""} />
@@ -200,7 +199,7 @@ export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex, onRestore }
       </div>
       <div>
         {onRestore && <details className="memory-disclosure">
-          <summary><RotateCcw size={ICON_SIZE.sm} /><strong>Restore forgotten memory</strong><small>Requires a receipt ID</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+          <summary><RotateCcw size={ICON_SIZE.sm} /><strong>Restore forgotten memory</strong><small>Record or Topic IDs</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
           <div className="memory-disclosure-body">
             <p data-meta>Forgotten items are hidden from the catalog. Paste record or topic IDs from an audit receipt before their grace period ends.</p>
             <div className="goal-form-columns">

@@ -239,8 +239,11 @@ describe("Web workbench behavior", () => {
     expect(jobs).not.toContain("attempt(s)");
     expect(jobs).not.toContain("0 proposed");
     expect(jobs).not.toContain("0 persisted");
-    const maintenance = renderToStaticMarkup(<MemoryJobLists reindexJobs={[]} jobs={[]} {...jobProps} />);
-    expect(maintenance).toContain("Memory operations");
+    const maintenance = renderToStaticMarkup(<MemoryJobLists reindexJobs={[]} jobs={[]} {...jobProps} onRestore={() => undefined} />);
+    expect(maintenance).toContain("Maintenance and recovery");
+    expect(maintenance).not.toContain("Memory operations");
+    expect(maintenance).toContain("Record or Topic IDs");
+    expect(maintenance).not.toContain("Requires a receipt ID");
     expect(maintenance).toContain("Reindex durable memory");
     expect(maintenance).not.toContain("Recent capture");
     expect(maintenance).not.toContain("Durable index</span>");
@@ -281,7 +284,9 @@ describe("Web workbench behavior", () => {
     expect(empty).not.toContain("not generated");
     expect(empty).not.toContain("textarea");
     expect(empty).not.toContain("Save projection");
+    expect(empty).not.toContain("Stable injection");
     expect(generated).toContain("revision 2 · 2 tokens");
+    expect(generated).not.toContain("Stable injection");
     expect(generated).toContain('<section class="memory-list-section">');
     expect(generated).not.toContain("<details");
     expect(generated).toContain("textarea");
@@ -386,7 +391,7 @@ describe("Web workbench behavior", () => {
     expect(topicDetail.match(/Use the current release contract\./g)).toHaveLength(1);
     expect(selectMemoryTopicDetail(null, descriptor)).toBe(descriptor);
     expect(memoryTopicDescriptor(selectMemoryTopicDetail(null, descriptor)!)).toBe(descriptor);
-    expect(descriptorDetail).toContain("descriptor · active · no cold page");
+    expect(descriptorDetail).toContain("topic · fact · descriptor · active · no cold page");
     expect(descriptorDetail).toContain("descriptor only");
     expect(descriptorDetail).toContain("Topic controls");
     expect(descriptorDetail).toContain('aria-label="Memory topic views"');
@@ -455,7 +460,9 @@ describe("Web workbench behavior", () => {
       topicIds: ["release"],
       sourceRefs: [{ sourceType: "message", sourceId: "message-1" }],
     });
+    const candidate = renderRecord({ ...record, status: "candidate" });
     const disputed = renderRecord({ ...record, status: "disputed" });
+    const stale = renderRecord({ ...record, status: "stale" });
     const forgotten = renderRecord({ ...record, status: "deleted" });
 
     expect(empty).not.toContain("Topic routes");
@@ -464,6 +471,8 @@ describe("Web workbench behavior", () => {
     expect(empty).not.toContain("No source reference");
     expect(empty).toContain('aria-label="Memory record views"');
     expect(empty).not.toContain('<details class="memory-disclosure">');
+    expect(empty).not.toContain('class="memory-kind"');
+    expect(empty).toContain("fact · warm · active · 90% confidence · 80% importance");
     expect(populated).toContain("Topic routes");
     expect(populated).toContain(">release<");
     expect(populated).toContain("Provenance");
@@ -472,8 +481,11 @@ describe("Web workbench behavior", () => {
     expect(populated).toContain("Confirm");
     expect(populated).toContain("Helpful");
     expect(populated).toContain("Wrong");
+    expect(candidate).toContain(">Approve</button>");
+    expect(candidate).toContain(">Reject</button>");
     expect(disputed).toContain("Resolve as valid");
     expect(disputed).toContain("Quarantine");
+    expect(stale).toContain(">Reactivate</button>");
     expect(forgotten).toContain("Restore");
     expect(forgotten).toContain("Recovery");
     expect(forgotten).not.toContain(">Correct</button>");
@@ -577,6 +589,19 @@ describe("Web workbench behavior", () => {
         roadmapItemId: null,
       },
     });
+    const paused = renderGoal({
+      ...goal,
+      status: "paused",
+      completedAt: null,
+      nextAction: {
+        actor: "user",
+        kind: "resume",
+        title: "Resume this Goal",
+        explanation: "Continue from the approved definition and Roadmap.",
+        primaryActionLabel: "Resume Goal",
+        roadmapItemId: null,
+      },
+    });
     const recoverable = renderGoal(goal, "request-1234567890");
     const populated = renderGoal({
       ...goal,
@@ -659,6 +684,20 @@ describe("Web workbench behavior", () => {
         taskRunId: "blocked-run",
       },
     } satisfies WorkspaceGoal;
+    const reviewing = renderGoal({
+      ...blockedRoadmapGoal,
+      activeRoadmapRevisionId: null,
+      decisions: [],
+      roadmapProgress: [],
+      nextAction: {
+        actor: "user",
+        kind: "review_roadmap",
+        title: "Review the Goal Roadmap",
+        explanation: "Select the bounded items that may drive TaskRuns.",
+        primaryActionLabel: "Approve Roadmap",
+        roadmapItemId: null,
+      },
+    });
     const nonRetryable = renderGoal(blockedRoadmapGoal);
     const retryable = renderGoal({
       ...blockedRoadmapGoal,
@@ -710,7 +749,9 @@ describe("Web workbench behavior", () => {
     expect(awaitingRoadmap).toContain("Next action");
     expect(awaitingRoadmap).toContain("Generate Roadmap");
     expect(awaitingRoadmap).toContain("Create manually");
-    expect(awaitingRoadmap).toContain("Request a revision");
+    expect(awaitingRoadmap).toContain("Revision request");
+    expect(awaitingRoadmap).toContain("Reopen approved guidance");
+    expect(awaitingRoadmap).toContain("Reason");
     expect(awaitingRoadmap).toContain("Request changes");
     expect(awaitingRoadmap).toContain("Operation recovery");
     expect(awaitingRoadmap).toContain("Receipt by request ID");
@@ -725,11 +766,17 @@ describe("Web workbench behavior", () => {
     expect(readyToClose).toContain("Confirm closure");
     expect(readyToClose).toContain('class="goal-progress-track"');
     expect(readyToClose).toContain('aria-label="100% of required criteria verified"');
+    expect(readyToClose).toContain(">Pause Goal</button>");
+    expect(readyToClose).toContain(">Close Goal</button>");
+    expect(readyToClose).toContain(">Cancel Goal</button>");
+    expect(paused).toContain(">Resume Goal</button>");
+    expect(paused).toContain(">Cancel Goal</button>");
+    expect(paused).not.toContain(">Pause Goal</button>");
     expect(populated).toContain("Scope and boundaries");
     expect(populated).toContain("1 item");
     expect(populated).not.toContain("1 items");
     expect(populated).toContain("Linked TaskRuns");
-    expect(populated).toContain("Activity and audit");
+    expect(populated).not.toContain("<strong>Activity and audit</strong>");
     expect(populated).toContain("1 linked");
     expect(populated).toContain("1 Roadmap item");
     expect(populated).toContain("Evidence log");
@@ -738,10 +785,21 @@ describe("Web workbench behavior", () => {
     expect(populated).toContain("Goal approved");
     expect(cancelled).toContain('data-tone="danger"');
     expect(cancelled).toContain("Cancelled");
+    expect(cancelled).toContain("This Goal is terminal");
+    expect(cancelled).not.toContain("<strong>Lifecycle</strong>");
+    expect(awaitingRoadmap).toContain("<strong>Lifecycle</strong>");
     expect(nonRetryable).toContain(">Open</button>");
     expect(nonRetryable).not.toContain(">Retry</button>");
     expect(nonRetryable).toContain("Open task");
-    expect(nonRetryable).toContain("Criteria · Visual review passes");
+    expect(reviewing).toContain("Criteria · Visual review passes");
+    expect(reviewing).toContain("<strong>Verification</strong>");
+    expect(reviewing).not.toContain("Criteria and verification");
+    expect(nonRetryable).not.toContain("Criteria · Visual review passes");
+    expect(nonRetryable).toContain("Criteria and verification");
+    expect(nonRetryable).toContain("1 criterion mapped");
+    expect(nonRetryable).not.toContain("criterions");
+    expect(nonRetryable).toContain("Visual review passes");
+    expect(nonRetryable).toContain("Open it");
     expect(nonRetryable).toContain('class="status-label" data-tone="warning"');
     expect(nonRetryable).not.toContain('class="section-heading" data-label');
     expect(retryable).toContain(">Retry</button>");

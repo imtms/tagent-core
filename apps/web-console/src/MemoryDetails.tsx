@@ -58,9 +58,8 @@ export function RecordDetail({
 
   return (
     <div className="memory-detail-content">
-      <span className="memory-kind">{record.kind}</span>
+      <small data-mono>{record.kind} · {record.tier} · {record.status} · {Math.round(record.confidence * 100)}% confidence · {Math.round(memorySignal(record) * 100)}% {record.kind === "preference" ? "strength" : "importance"}</small>
       <h3>{repeatedContent ? memoryContent(record) : memoryTitle(record)}</h3>
-      <small data-mono>{record.tier} · {record.status} · {Math.round(record.confidence * 100)}% confidence · {Math.round(memorySignal(record) * 100)}% {record.kind === "preference" ? "strength" : "importance"}</small>
       <PanelTabs label="Memory record views" value={section} tabs={tabs} onChange={setSection} />
 
       <section hidden={section !== "overview"} aria-label="Memory record overview">
@@ -120,9 +119,8 @@ export function TopicDetail({ topic, onForget, onRestore, busy = false }: { topi
   ] satisfies readonly PanelTab<TopicDetailSection>[];
   return (
     <div className="memory-detail-content">
-      <span className="memory-kind">{fullTopic ? "cold" : "topic"} · {descriptor.kind}</span>
+      <small data-mono>{fullTopic ? `cold · ${descriptor.kind} · revision ${fullTopic.revision.revision} · ${fullTopic.revision.tokenCount.toLocaleString()} tokens · ${descriptor.status} · full page` : `topic · ${descriptor.kind} · descriptor · ${descriptor.status} · no cold page`}</small>
       <h3>{repeatedDescription ? descriptor.description : descriptor.title}</h3>
-      <small data-mono>{fullTopic ? `revision ${fullTopic.revision.revision} · ${fullTopic.revision.tokenCount.toLocaleString()} tokens · ${descriptor.status} · full page` : `descriptor · ${descriptor.status} · no cold page`}</small>
       <PanelTabs label="Memory topic views" value={section} tabs={tabs} onChange={setSection} />
 
       <section hidden={section !== "overview"} aria-label="Memory topic overview">

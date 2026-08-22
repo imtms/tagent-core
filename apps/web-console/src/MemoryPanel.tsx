@@ -642,10 +642,10 @@ export function MemoryPanel({
 
               <div hidden={section !== "recall"}>
                 <section className="memory-list-section">
-                  <div className="section-heading"><div><span className="eyebrow">Semantic retrieval</span><h3>Recall across every memory tier</h3><small>Search Hot, Warm and Cold memory by meaning, not only loaded text.</small></div></div>
+                  <div className="section-heading"><div><span className="eyebrow">Semantic recall</span><h3>Search every memory tier</h3></div></div>
                   <form className="memory-search" onSubmit={(event) => { event.preventDefault(); void searchMemory(); }}>
                     <Search size={ICON_SIZE.md} />
-                    <input value={recallCue} onChange={(event) => { setRecallCue(event.target.value); setResults(null); }} aria-label="Recall cue" placeholder="What do you want TAgent to remember?" />
+                    <input value={recallCue} onChange={(event) => { setRecallCue(event.target.value); setResults(null); }} aria-label="Recall cue" placeholder="Describe what TAgent should recall" />
                     <select value={recallKind} aria-label="Recall memory kind" onChange={(event) => { setRecallKind(event.target.value as "all" | MemoryKind); setResults(null); }}>{memoryKinds.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select>
                     <button className="control" type="submit" disabled={busy || !recallCue.trim()}>Recall</button>
                   </form>
@@ -656,7 +656,7 @@ export function MemoryPanel({
                   onClear={() => setResults(null)}
                   onOpenRecord={(recordId) => void openRecord(recordId, "recall")}
                   onSelectTopic={(topic) => { setDetailReturnSection("recall"); setSelectedRecord(null); setSelectedTopic(topic); }}
-                /> : <section className="memory-empty"><Search size={ICON_SIZE.xl} /><strong>Recall by meaning</strong><p>Enter a cue above to inspect selected cards, Cold routes and retrieval diagnostics.</p></section>}
+                /> : <section className="memory-empty"><Search size={ICON_SIZE.xl} /><p>Enter a cue to retrieve cards, Cold topics and routing diagnostics.</p></section>}
               </div>
 
               <div hidden={section !== "core"}>

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Goal and Memory hierarchy refinement
+
+- Kept Goal Roadmap criterion mappings visible during approval review, then combined criteria and verification into one explicit per-item disclosure after approval while retaining every status and execution action in the scan layer.
+- Reduced the idle Memory Recall surface to one task heading, its complete semantic-search controls, and one concise prompt instead of repeating the same explanation across the heading and empty state.
+- Combined complete Memory Record and Topic identity metadata into one quiet mono line above the title, reserving uppercase tracking for short section labels and removing the remaining detail-only kind pill without dropping tier, state, score, revision, token, or storage information.
+- Removed the redundant aggregate heading inside populated Goal Activity views and separated Lifecycle from a clearly named Revision request group while preserving every Run, evidence, decision, lifecycle, revision, and recovery path.
+- Replaced filled Goal/Memory tab states with a quiet line indicator and bounded lists, metadata, criteria, Roadmaps and audit history as single hairline ledgers rather than disconnected rows or colored card walls.
+- Reduced Memory Operations from a three-line repeated identity block to one quiet maintenance label while retaining Reindex, Record/Topic ID restore, per-group job counts, and complete job ledgers; the restore disclosure now names the IDs it actually accepts.
+- Removed the redundant Stable injection eyebrow from Core Memory while retaining snapshot identity, revision and token metadata, generation, full-width editing, and save operations.
+- Removed expired lifecycle-and-revision chrome from terminal Goal Controls while retaining the terminal explanation, all historical views, and operation receipt recovery.
+
 ## [0.8.23] - 2026-08-22
 
 ### Goal and Memory completeness follow-up

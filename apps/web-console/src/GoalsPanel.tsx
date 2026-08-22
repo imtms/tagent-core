@@ -602,13 +602,25 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
           const queued = Boolean(itemProgress?.queueStatus);
           const itemStatus = queued ? "queued" as const : itemProgress?.status ?? (approved ? "pending" : "unapproved");
           const selectable = !approval && !requiresRoadmapRevision;
+          const criterionTitles = item.criterionKeys.map((key) => definition?.criteria.find((criterion) => criterion.key === key)?.title ?? key);
           const tone = itemStatus === "running" ? "info" : itemStatus === "completed" ? "success" : itemStatus === "blocked" || itemStatus === "queued" ? "warning" : undefined;
           return <div className="goal-roadmap-item" key={item.id}>
             <div className="status-label" data-tone={tone}>
               {selectable ? <input aria-label={`Approve ${item.title}`} type="checkbox" checked={selectedItems.includes(item.id)} disabled={busy} onChange={(event) => setSelectedItems((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /> : itemStatus === "completed" ? <CheckCircle2 size={ICON_SIZE.md} /> : itemStatus === "blocked" ? <AlertTriangle size={ICON_SIZE.md} /> : <Circle size={ICON_SIZE.md} />}
               <span>{index + 1}</span>
             </div>
-            <div className="goal-roadmap-copy"><strong>{item.title}</strong><p>{item.outcome}</p><small>Criteria · {item.criterionKeys.map((key) => definition?.criteria.find((criterion) => criterion.key === key)?.title ?? key).join(" · ")}</small><details><summary>Verification</summary><p>{item.verification}</p></details></div>
+            <div className="goal-roadmap-copy">
+              <strong>{item.title}</strong>
+              <p>{item.outcome}</p>
+              {!approval && <small>Criteria · {criterionTitles.join(" · ")}</small>}
+              <details className="memory-disclosure">
+                <summary><strong>{approval ? "Criteria and verification" : "Verification"}</strong>{approval && <small>{formatCount(criterionTitles.length, "criterion", "criteria")} mapped</small>}<ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+                <div className="memory-disclosure-body">
+                  {approval && <section><strong>Criteria</strong><p>{criterionTitles.join(" · ")}</p></section>}
+                  <section><strong>Verification</strong><p>{item.verification}</p></section>
+                </div>
+              </details>
+            </div>
             <div className="goal-roadmap-action memory-inline-actions"><span className="status-label" data-tone={tone}><i className="status-dot" />{roadmapStatusLabel(itemStatus)}</span>{approved && (itemStatus === "pending" || itemStatus === "blocked" && itemProgress?.retryable && !goal.currentRunId) && <button className="control" disabled={busy || Boolean(goal.currentRunId)} onClick={() => void onStartRoadmapItem(item.id)}><Play size={ICON_SIZE.xs} />{itemStatus === "blocked" ? "Retry" : "Start"}</button>}{itemProgress?.runId && ["running", "blocked"].includes(itemStatus) && <button className="control" onClick={() => onOpenRun?.(itemProgress.runId!)}><ExternalLink size={ICON_SIZE.xs} />Open</button>}</div>
           </div>;
         })}
@@ -618,7 +630,6 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
     </section>
 
     <section hidden={section !== "activity"} aria-label="Goal activity and audit">
-      <div className="section-heading"><strong>Activity and audit</strong><small>{formatCount(auditCount, "entry", "entries")}</small></div>
       {auditCount === 0 ? <div className="memory-empty"><Target size={ICON_SIZE.xl} /><strong>No activity yet</strong><p>TaskRuns, evidence and Goal decisions will appear here without crowding the current plan.</p></div> : <>
         {goal.runLinks.length > 0 && <section><div className="section-heading"><strong>Linked TaskRuns</strong><small>{goal.runLinks.length} linked</small></div><div className="goal-run-links">{[...goal.runLinks].reverse().map((link) => <button key={link.runId} onClick={() => onOpenRun?.(link.runId)}><code>{link.runId.slice(0, 12)}</code><span>{runLinkLabel(link)}</span></button>)}</div></section>}
         {goal.evidenceLinks.length > 0 && <section><div className="section-heading"><strong>Evidence log</strong><small>{formatCount(goal.evidenceLinks.length, "link")}</small></div><div className="goal-run-links">{[...goal.evidenceLinks].reverse().map((link) => <button key={link.id} onClick={() => onOpenRun?.(link.runId)}><code>{link.criterionKey}</code><span>{statusLabelForValue(link.status)} · run {link.runId.slice(0, 12)}{link.artifactId ? ` · artifact ${link.artifactId.slice(0, 10)}` : ""}</span></button>)}</div></section>}
@@ -627,14 +638,17 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
     </section>
 
     <section hidden={section !== "controls"} aria-label="Goal controls">
-      <div className="section-heading"><strong>Goal controls</strong><small>Lifecycle and revision</small></div>
       {['completed', 'cancelled'].includes(goal.status) ? <p data-meta>This Goal is terminal. Its definition, Roadmap and audit history remain available in the other views.</p> : <>
+        <div className="section-heading"><strong>Lifecycle</strong><small>{statusLabel(goal.status)}</small></div>
         {hasQueuedRoadmapWork ? <p data-meta>Wait for the queued Roadmap work to attach its TaskRun before revising or changing this Goal's lifecycle.</p> : lifecycleLocked && <p data-meta>Finish or resolve the active Roadmap work before revising or changing this Goal's lifecycle.</p>}
         <div className="memory-inline-actions">{["active", "ready_to_close"].includes(goal.status) && <button className="control" disabled={busy || lifecycleLocked} onClick={() => void decide("pause")}>Pause Goal</button>}{goal.status === "paused" && <button className="control" data-variant="primary" disabled={busy} onClick={() => void decide("resume")}>Resume Goal</button>}{goal.status === "ready_to_close" && <button className="control" data-variant="primary" disabled={busy} onClick={() => { if (window.confirm("Close this Goal with the verified evidence? This cannot be undone.")) void decide("close"); }}>Close Goal</button>}<button className="control" data-tone="danger" disabled={busy || lifecycleLocked} onClick={() => { if (window.confirm("Cancel this Goal? This cannot be undone.")) void decide("cancel"); }}>Cancel Goal</button></div>
-        {changeTargets.length > 0 && <div className="goal-form-columns">
-          {changeTargets.length > 1 && <label className="goal-field"><span>Revision to reopen</span><select value={changeTargetId} onChange={(event) => setChangeTargetId(event.target.value)}>{changeTargets.map((target) => <option value={target.id} key={target.id}>{target.kind === "definition" ? "Goal definition" : "Roadmap"} v{target.revision}</option>)}</select></label>}
-          <label className="goal-field"><span>Request a revision <small>reason required</small></span><textarea rows={3} value={changeReason} onChange={(event) => setChangeReason(event.target.value)} placeholder="What needs to change before this revision can guide work?" /></label>
-          <div className="memory-inline-actions"><button className="control" disabled={busy || lifecycleLocked || !changeReason.trim()} onClick={() => { const target = changeTargets.find((item) => item.id === changeTargetId); if (target) void decide("request_change", target, [], changeReason.trim()); }}>Request changes</button></div>
+        {changeTargets.length > 0 && <div className="goal-control-group">
+          <div className="section-heading"><strong>Revision request</strong><small>Reopen approved guidance</small></div>
+          <div className="goal-form-columns">
+            {changeTargets.length > 1 && <label className="goal-field"><span>Target</span><select value={changeTargetId} onChange={(event) => setChangeTargetId(event.target.value)}>{changeTargets.map((target) => <option value={target.id} key={target.id}>{target.kind === "definition" ? "Goal definition" : "Roadmap"} v{target.revision}</option>)}</select></label>}
+            <label className="goal-field"><span>Reason <small>required</small></span><textarea rows={3} value={changeReason} onChange={(event) => setChangeReason(event.target.value)} placeholder="What must change before this revision can guide work?" /></label>
+            <div className="memory-inline-actions"><button className="control" disabled={busy || lifecycleLocked || !changeReason.trim()} onClick={() => { const target = changeTargets.find((item) => item.id === changeTargetId); if (target) void decide("request_change", target, [], changeReason.trim()); }}>Request changes</button></div>
+          </div>
         </div>}
       </>}
     </section>
