@@ -91,7 +91,7 @@ The Core archive includes `scripts/deploy-release.sh`. It rejects unsafe archive
 
 ```bash
 sudo /path/to/deploy-release.sh \
-  /path/to/tagent-core-v0.8.22-linux-x64-node24-abi137.tar.gz \
+  /path/to/tagent-core-v0.8.23-linux-x64-node24-abi137.tar.gz \
   /opt/tagent-core
 ```
 

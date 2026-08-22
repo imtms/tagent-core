@@ -361,7 +361,7 @@ export interface PublicRuntimeConfig {
 
 export function publicRuntimeConfig(config: AppConfig, schemaVersion?: number): PublicRuntimeConfig {
   return {
-    releaseVersion: "0.8.22",
+    releaseVersion: "0.8.23",
     runtime: config.runtime,
     provider: config.model.provider,
     api: config.model.api,

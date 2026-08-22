@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.8.23] - 2026-08-22
+
 ### Goal and Memory completeness follow-up
 
 - Projected queued and claimed Supervisor Inbox work into Goal Roadmap progress before a TaskRun exists, labeled the item as queued, and locked duplicate launch, revision, and lifecycle actions until the TaskRun attaches.
@@ -11,6 +13,10 @@
 - Replaced the remaining Goal accordion chain with stable Overview, Roadmap, Activity, and Controls views while keeping the current action and progress visible above the navigation; every definition, execution, audit, revision, lifecycle, and receipt-recovery workflow remains reachable.
 - Split Memory into stable Catalog, Recall, Core, and Operations views so local directory filtering no longer masquerades as semantic Recall, and made the Core editor and maintenance ledger directly visible in their own surfaces instead of burying them below the catalog.
 - Kept the shared neutral hairline system and restrained green selection mark; narrow layouts retain every view while suppressing non-essential tab counters to avoid cramped 390px navigation.
+
+### Compatibility
+
+- Added optional Goal Roadmap `queueStatus` and `inboxItemId` fields to the version-matched Console projection. The HTTP major, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` protocol are unchanged; no data migration is required. Deploy matching `0.8.23` Core, Web Console, ABI, and Core Client artifacts.
 
 ## [0.8.22] - 2026-08-22
 
