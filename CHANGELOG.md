@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## [0.8.27] - 2026-08-23
+
+### Runtime context and performance
+
+- Split Core-owned provider context into one Attempt-stable policy/contract/Goal/Skill/Memory projection and compact hash-deduplicated live-state checkpoints. Changed checkpoints extend the in-memory Session tail, while unchanged tool loops and retries keep an exact provider prefix without persisting Core context into public messages or the durable transcript.
+- Unified context budgeting across the system prompt, active tool schemas, the upcoming prompt, complete current-turn tool output, and the intended output reserve. Small context windows now use an adaptive safety reserve, and threshold compaction happens before a request that would not fit instead of repeatedly compacting after dispatch.
+- Reduced repeated Goal, Skill, Memory, check evidence, command, and timestamp payloads while keeping full durable detail available through bounded Core tools and history.
+
+### Reliability
+
+- Excluded failed, aborted, empty, and recoverable-overflow assistant responses when Pi appends Session state, eliminating storage rewinds and preserving byte-identical retry context.
+- Classified a `length` stop below the intended output cap as recoverable context pressure, while retaining genuine output-cap completions. Recovery performs at most one compact-and-retry cycle per input, and truncated tool calls and their results are neither executed nor retained.
+- Deferred provider dispatch while threshold, manual, or overflow compaction is pending, including prompt-aware pre-dispatch checks and completed tool-result growth at Pi save points.
+
+### Compatibility
+
+- The HTTP major, public ABI/profile shapes, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` protocol are unchanged; no data migration is required. Deploy matching `0.8.27` Core, Web Console, ABI, and Core Client artifacts.
+
 ## [0.8.26] - 2026-08-22
 
 ### Release validation
