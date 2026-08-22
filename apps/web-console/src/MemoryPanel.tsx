@@ -546,7 +546,7 @@ export function MemoryPanel({
     { value: "operations", label: "Operations", meta: String(jobs.length + reindexJobs.length) },
   ] satisfies readonly PanelTab<MemorySection>[];
 
-  return createPortal(<>
+  const content = <>
     <div
       className="modal-backdrop"
       role="presentation"
@@ -741,5 +741,6 @@ export function MemoryPanel({
           </section>
         </div>
       )}
-  </>, document.body);
+  </>;
+  return typeof document === "undefined" ? content : createPortal(content, document.body);
 }

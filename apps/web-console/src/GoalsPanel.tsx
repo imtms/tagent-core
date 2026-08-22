@@ -218,7 +218,7 @@ export function GoalsPanel({
     setNotice("");
   };
 
-  return createPortal(<div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+  const content = <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="modal-workspace" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="workspace-goals-title">
       <header className="modal-workspace-header">
         <div className="modal-heading">
@@ -316,7 +316,8 @@ export function GoalsPanel({
         </main>
       </div>
     </section>
-  </div>, document.body);
+  </div>;
+  return typeof document === "undefined" ? content : createPortal(content, document.body);
 }
 
 function GoalEmpty({ busy, onCreate }: { busy: boolean; onCreate: () => void }) {

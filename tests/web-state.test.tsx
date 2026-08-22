@@ -1814,7 +1814,7 @@ describe("Web workbench behavior", () => {
       usage: { input: 5, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
     })} toolEvents={[]} transcriptTools={[]} />);
 
-    expect(details).toContain('<div class="phase-line"><span class="status-label" data-tone="warning"><span class="status-dot"></span>Blocked</span></div>');
+    expect(details).toContain('<div class="phase-line meta-line"><span class="status-label" data-tone="warning"><span class="status-dot"></span>Blocked</span></div>');
     expect(details).toContain("1 message");
     expect(details).not.toContain("1 messages");
     expect(details).not.toContain("Blocked</span><span>Blocked");

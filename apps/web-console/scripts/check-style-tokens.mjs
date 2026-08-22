@@ -385,11 +385,13 @@ const appPanelsSource = read(path.join(srcRoot, "AppPanels.tsx"));
 check(appPanelsSource.includes("selectedId && createPortal("), "Artifact previews must escape the Run details drawer through the shared modal portal");
 check(appPanelsSource.includes("useModalFocus(Boolean(selectedId)"), "Artifact previews must share modal focus, Escape, and restoration behavior");
 const memoryPanelSource = read(path.join(srcRoot, "MemoryPanel.tsx"));
-check(memoryPanelSource.includes("return createPortal("), "Memory must render through the shared document-level portal");
+check(memoryPanelSource.includes("createPortal(content, document.body)"), "Memory must render through the shared document-level portal");
+check(memoryPanelSource.includes('typeof document === "undefined"'), "Memory portal rendering must retain its server-rendering fallback");
 check(memoryPanelSource.includes("useModalFocus(true") && memoryPanelSource.includes("useModalFocus(captureOpen"), "Memory and nested capture must share modal focus, Escape, and restoration behavior");
 check(memoryPanelSource.includes("inert={captureOpen ? true : undefined}"), "Nested Memory capture must make the parent workspace inert");
 const goalsPanelSource = read(path.join(srcRoot, "GoalsPanel.tsx"));
-check(goalsPanelSource.includes("return createPortal("), "Goals must render through the shared document-level portal");
+check(goalsPanelSource.includes("createPortal(content, document.body)"), "Goals must render through the shared document-level portal");
+check(goalsPanelSource.includes('typeof document === "undefined"'), "Goals portal rendering must retain its server-rendering fallback");
 check(goalsPanelSource.includes("useModalFocus(true"), "Goals must share modal focus, Escape, and restoration behavior");
 
 const index = read(indexPath);
