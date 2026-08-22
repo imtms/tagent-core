@@ -75,7 +75,7 @@ describe("Pi runtime adapter workspace package", () => {
     const root = readJson<{ workspaces: string[]; devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const runtime = readJson<PackageManifest>("adapters/runtime-pi/package.json");
 
-    expect(runtime).toMatchObject({ name: "@tagent/runtime-pi", version: "0.8.24", private: true });
+    expect(runtime).toMatchObject({ name: "@tagent/runtime-pi", version: "0.8.25", private: true });
     expect(root.workspaces).toContain("adapters/*");
     expect(root.devDependencies[runtime.name]).toBe(runtime.version);
     expect(Object.keys(runtime.exports).sort()).toEqual(expectedExports);
@@ -83,7 +83,7 @@ describe("Pi runtime adapter workspace package", () => {
     expect(runtime.dependencies).toEqual({
       "@earendil-works/pi-agent-core": "0.83.0",
       "@earendil-works/pi-ai": "0.83.0",
-      "@tagent/execution": "0.8.24",
+      "@tagent/execution": "0.8.25",
     });
     for (const target of Object.values(runtime.exports)) {
       expect(target.types).toMatch(/^\.\/dist\/.+\.d\.ts$/);

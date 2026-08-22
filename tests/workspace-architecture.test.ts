@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = process.cwd();
 const workspaceGroups = ["packages", "adapters", "apps"] as const;
-const internalVersion = "0.8.24";
+const internalVersion = "0.8.25";
 const expectedInternalGraph = {
   "@tagent/abi": [],
   "@tagent/core-client": ["@tagent/abi"],

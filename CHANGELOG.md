@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## [0.8.25] - 2026-08-22
+
+### Web Console visual system
+
+- Consolidated long-label truncation, metadata rows, status dots, section headings, form fields, empty/loading states, compact actions, modal focus behavior, and responsive targets into shared Console grammars instead of feature-local near-duplicates.
+- Reduced the canonical stylesheet from 414 rules, 484 selectors, and 1,424 declarations to 411 rules, 476 selectors, and 1,380 declarations while strengthening the style contract against dead classes, duplicate declarations, arbitrary scales, hidden disabled states, and mobile overflow regressions.
+- Standardized neutral light/dark surfaces, semantic contrast, focus boundaries, hover/press feedback, visible dense actions, skeleton timing, long Tool Call containment, and quiet ledger boundaries across Conversation, Run details, Workspace, Skills, Goals, and Memory.
+- Made every mobile application-bar action—including the Workspace title and compact Run status—use the shared 44px touch target, and kept Workspace creation/search, context icons, dialogs, forms, Goal controls, and Memory jobs inside the same responsive geometry.
+
 ### Fixes
 
 - Scoped Full Supervisor trajectory failures and progress snapshots to the candidate's current Attempt. Earlier operation failures remain bounded audit context, while Core now ignores history-only Progress findings after recovery and still blocks genuinely unresolved problems through current evidence, contract, or completion failures.
@@ -15,7 +24,7 @@
 
 ### Compatibility
 
-- User-visible behavior, published Gateway ABI and SDKs, cursor and snapshot tokens, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` are unchanged. The removed `@tagent/execution/application` subpath belonged to a private package and had no production consumer.
+- Published Gateway ABI and SDK shapes, cursor and snapshot tokens, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` are unchanged. The removed `@tagent/execution/application` subpath belonged to a private package and had no production consumer. Deploy matching `0.8.25` Core, Web Console, ABI, and Core Client artifacts.
 
 ## [0.8.24] - 2026-08-22
 
