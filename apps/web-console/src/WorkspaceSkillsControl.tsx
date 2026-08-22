@@ -302,8 +302,8 @@ export function WorkspaceSkillsControl({
     }}>
       <section ref={editorRef} className="modal skill-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="skill-editor-title" aria-describedby="skill-editor-note">
         <header>
-          <span><small>Shared Skill</small><h2 id="skill-editor-title">Edit {editor.name}</h2></span>
-          <button type="button" aria-label="Close Skill editor" onClick={closeEditor}><X size={ICON_SIZE.lg} /></button>
+          <div className="modal-title-group"><small>Shared Skill</small><h2 className="truncate" id="skill-editor-title" title={`Edit ${editor.name}`}>Edit {editor.name}</h2></div>
+          <button className="icon-button" type="button" aria-label="Close Skill editor" onClick={closeEditor}><X size={ICON_SIZE.md} /></button>
         </header>
         <div className="skill-editor-grid">
           <label><span>Name</span><input ref={editorNameRef} type="text" autoComplete="off" value={editorDraft.name} onChange={(event) => setEditorDraft((current) => ({ ...current, name: event.target.value }))} /></label>

@@ -59,11 +59,11 @@ function MessageCopy({ content }: { content: string }) {
   }, [content]);
   const copied = state === "copied";
   const failed = state === "failed";
-  return <button className="message-copy" data-tone={failed ? "danger" : undefined} type="button" onClick={() => void copy()} aria-label={copied ? "Message copied" : failed ? "Copy unavailable" : "Copy message"} title={copied ? "Copied" : failed ? "Clipboard unavailable" : "Copy message"}>{copied ? <Check size={ICON_SIZE.xs} /> : failed ? <X size={ICON_SIZE.xs} /> : <Copy size={ICON_SIZE.xs} />}<span>{copied ? "Copied" : failed ? "Unavailable" : "Copy"}</span></button>;
+  return <button className="message-copy" data-tone={copied ? "success" : failed ? "danger" : undefined} type="button" onClick={() => void copy()} aria-label={copied ? "Message copied" : failed ? "Copy unavailable" : "Copy message"} title={copied ? "Copied" : failed ? "Clipboard unavailable" : "Copy message"}>{copied ? <Check size={ICON_SIZE.xs} /> : failed ? <X size={ICON_SIZE.xs} /> : <Copy size={ICON_SIZE.xs} />}<span>{copied ? "Copied" : failed ? "Unavailable" : "Copy"}</span></button>;
 }
 
 function MessageFooter({ createdAt, content, pending = false }: { createdAt?: number; content?: string; pending?: boolean }) {
-  return <footer className="message-footer">{pending ? <span>Sending…</span> : createdAt !== undefined && <TimeAgo value={createdAt} />}{content && !pending && <MessageCopy content={content} />}</footer>;
+  return <footer className="message-footer meta-line">{pending ? <span>Sending…</span> : createdAt !== undefined && <TimeAgo value={createdAt} />}{content && !pending && <MessageCopy content={content} />}</footer>;
 }
 
 export const ConversationMessage = memo(function ConversationMessage({ message, memoryJob }: { message: Message; memoryJob?: CaptureJob | null }) {

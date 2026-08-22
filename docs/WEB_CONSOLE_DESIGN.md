@@ -28,6 +28,7 @@ On mobile, the Workspace sidebar and Run details are modal drawers over the same
 
 Keep layout, theme tokens, components, feature surfaces, and responsive rules in this file.
 Do not add feature CSS, package themes, cascade override files, or compatibility layers.
+When multiple elements share the same declaration set and specificity, express that ownership once with `:is(...)` instead of counting each feature as a separate selector.
 When the file approaches the enforced size ceiling, simplify or remove rules instead of creating another stylesheet.
 
 The first-paint shell in `apps/web-console/index.html` mirrors the application sidebar, bar, surface, border, text, and brand tokens.
@@ -38,12 +39,13 @@ This prevents the deployed loading frame from changing width, height, or color w
 Neutral surfaces carry almost all of the interface:
 
 - `--bg` and `--surface` form the reading plane.
-- `--sidebar`, `--muted`, and `--hover` provide shallow surface steps.
+- `--sidebar` and `--muted` provide the only shallow surface steps; ordinary hover feedback reuses `--muted` instead of introducing another near-duplicate gray.
 - `--border` and `--border-strong` provide hairline separation.
 - `--text` and `--text-muted` carry hierarchy without opacity tricks.
 
 Green `--accent` is reserved for primary actions, focus, selection marks, progress, live state, and successful completion.
 It is not a panel, card, header, or generic active-state background.
+`--focus-ring`, `--focus-border`, and `--focus-soft` derive every keyboard and composite-field focus effect from that same accent; features do not invent their own ring color, thickness, or glow.
 
 Operational color has one mapping:
 
@@ -53,7 +55,10 @@ Operational color has one mapping:
 - `danger`: failed, cancelled, or interrupted.
 
 Semantic colors appear as small text, dots, progress marks, or a narrow edge.
+Apply `data-tone` to the status atom that communicates the state, not to an outer disclosure or ledger that owns neutral child text. Tool outcomes, Gate verdicts, Plan items, Checks, and current-operation state therefore share the same mapping without tinting their full row.
 Do not create large semantic fills, gradients, or tinted dashboard regions.
+
+All semantic text tokens retain at least WCAG AA 4.5:1 contrast on the theme surface. This includes muted text and warning labels; “quiet” must never mean barely visible.
 
 Light and dark themes use opaque surfaces.
 Dark elevated surfaces become slightly lighter and borders become translucent white.
@@ -61,11 +66,12 @@ Shadows are limited to real elevation: menus, drawers, and dialogs.
 
 ## Type and geometry
 
-Use the five-size type ladder and seven-step spacing rhythm defined in `app.css`.
+Use the six-size type ladder and seven-step spacing rhythm defined in `app.css`; the 10px micro size is reserved for tiny revision/count badges, not ordinary labels or metadata.
 Do not introduce near-duplicate values to refine one component.
 
 Use the sans family for interface copy, mono/tabular numerals for data, and the serif family only for the TAgent wordmark.
 Technical identifiers, model names, timestamps, counts, and revisions retain exact casing.
+Long empty-state and Goal headings use balanced wrapping; their short explanatory copy uses pretty wrapping so narrow layouts do not leave avoidable orphan words.
 
 Use the shared radius ladder:
 
@@ -75,7 +81,11 @@ Use the shared radius ladder:
 - Pills only when the text benefits from a pill shape.
 
 The normal control height is 36px.
-Touch targets are 44px at mobile widths.
+Repeated leading icons use the shared 20px layout slot, micro metadata uses the shared 22px row, compact inline actions and avatars use the shared 28px geometry, and application bars, drawer/dialog headers, and search rows use the shared bar height instead of feature-specific values.
+Operational dots use the shared 6px status indicator instead of feature-specific circles.
+Controls and non-checkbox fields expand to the shared 44px touch height at mobile widths; icon-only actions, Workspace creation/search, menus, and form fields must not retain mixed 36px/44px rows.
+The Workspace context menu keeps its five-column icon rhythm but expands to the mobile rail width so every icon choice also reaches that touch target.
+The application bar keeps `min-width: 0` inside the conversation grid so the Workspace title truncates before 320px layouts clip fixed-size status and action targets.
 Icons come from Lucide and use `ICON_SIZE`; component JSX does not choose raw icon sizes.
 
 ## Hierarchy and density
@@ -83,9 +93,11 @@ Icons come from Lucide and use `ICON_SIZE`; component JSX does not choose raw ic
 The conversation is the primary reading surface.
 Assistant prose sits directly on that plane; user text uses a compact sender-side bubble.
 Operational evidence stays in flat ledgers or Run details instead of creating a card wall.
+The conversation feed reserves its horizontal gutters outside the 820px reading measure, so execution traces align with notices, approvals, and the composer instead of becoming an accidental narrower column.
 
 Repeated rows use one surface with hairline separators.
 Do not wrap every prompt, metric, rule, tool call, or setting in a separate rounded card.
+Sidebar creation and search actions remain transparent on the sidebar surface until interaction; selected Workspace state is the only broad navigation fill.
 
 Keep related labels and controls within 4–12px, then separate unrelated sections by 24px or more. Flat ledgers still need section gutters and paragraph rhythm; removing cards must never mean removing the whitespace that makes groups readable.
 
@@ -95,16 +107,19 @@ At mobile widths, numeric Run metrics use two readable columns rather than squee
 Use tiny uppercase tracked labels only where they genuinely group a list.
 Do not stack an eyebrow, title, paragraph, and another empty-state title that all explain the same screen.
 
-Empty states contain one mark, one heading, one short explanation, and one next action.
+Empty states contain one quiet bounded mark, one foreground heading, one short explanation, and one next action. Their rows remain centered as a group instead of stretching spare height into arbitrary gaps.
 If the main canvas explains an empty collection, the sidebar does not repeat the full explanation.
+Memory and Goals loading states use the same visible three-row skeleton stack and bar-height geometry; a loading container must never rely on empty zero-height elements.
 
 ## Shared component grammar
 
 Use the existing shared primitives before introducing a feature-specific selector:
 
 - `.control` is the base field and button geometry; `data-variant="primary"` identifies the one primary action.
-- `.modal-backdrop` and `.modal` own dialog elevation, spacing, and responsive behavior.
+- `.meta-line` owns muted inline metadata alignment and `.truncate` owns shrink-safe single-line ellipsis; feature selectors must not reimplement either declaration set.
+- `.modal-backdrop`, `.modal`, and `.modal-workspace` own dialog elevation, spacing, and responsive behavior; Goals never borrows a Memory feature class for its shell.
 - `.section-heading` owns headings in Goals, Memory, and other secondary workspaces.
+- `.form-field`, `.form-columns`, `.inline-actions`, `.panel-empty`, and `.detail-disclosure` own the form, action, empty, and key/value disclosure grammar shared by Goals and Memory.
 - `.memory-list` owns the separator-based list treatment for Memory results, feedback, and governance.
 - `.run-step` is one reasoning-led execution stage; its nested `.tool-stack` is a subordinate ledger, not a second timeline.
 - `.run-metrics` owns wrap-safe observational counts and never compresses all usage into one unbreakable line.
@@ -166,10 +181,17 @@ The Execution trace groups the durable transcript by reasoning stage. Its single
 ## Interaction
 
 Every control needs hover, active, disabled where applicable, and visible `:focus-visible` treatment.
+Hover may strengthen a quiet action but must never change its geometry or be the only way to discover an action or its success/failure feedback. Workspace row actions and message copy therefore remain visible without a pointing-device hover and expand to the shared touch target on mobile.
+The mobile application bar applies that same 44px target to navigation, Workspace title, Run status, Skills, and Workspace actions; a visually tiny status dot never implies a tiny hit area.
+Disabled controls use the shared muted text, border, and surface instead of stacking opacity over already-muted colors; unavailable must remain legible rather than visually disappearing into its background.
+Error, success, warning, and Undo feedback share the neutral `.notice` boundary. Generated copy wraps and shrinks before its action, while the action retains the shared control geometry.
 Motion is limited to fast color, border, opacity, and transform changes.
+Controls and chevrons use `--duration-fast`, drawers use `--duration-base`, and skeleton/live-state breathing uses `--duration-pulse`; features do not choose one-off timings for the same effect class.
 Respect reduced motion and never animate layout dimensions.
 
-Modal workspaces and drawers trap focus, restore focus on close, close with Escape, and make background content inert.
+Modal workspaces and dialogs trap focus, restore focus on close, close with Escape, and make background content inert. Memory, Goals, Workspace Switcher, Shortcuts, Skill editing, and Artifact preview all render through the shared document-level portal instead of inheriting the shell or a drawer's width, clipping, or stacking context. A nested dialog makes its parent workspace inert, then returns focus to the launching control before the parent focus trap resumes.
+Dialog headers use one title group and the shared `ICON_SIZE` ladder. Scrollable dialog bodies consume the remaining height while action footers stay at the bottom of a full-screen mobile dialog; long titles truncate on one line and expose the full value on demand.
+Composite borderless inputs move focus feedback to their enclosing control: Workspace search uses the shared accent underline and Memory search uses the shared focus border and soft ring. A nested outline may be cancelled only when that enclosing `:focus-within` boundary is present and enforced by the style contract.
 Mobile drawers must not remain modal after crossing the desktop breakpoint.
 
 ## Validation
@@ -182,7 +204,7 @@ npm run build -w @tagent/web-console
 npx eslint apps/web-console/src apps/web-console/scripts --max-warnings=0
 ```
 
-The style check enforces the single stylesheet entrypoint, the token scales, raw-color ownership, status mapping, boot-shell parity, mobile touch targets, retired layout names, duplicate declaration removal, and the limited `!important` exceptions. Class ownership is checked in both directions: JSX cannot use unstyled classes and CSS cannot retain selectors for classes no JSX renders.
+The style check enforces the single stylesheet entrypoint, the token scales, raw-color ownership, semantic 4.5:1 contrast, status mapping, content-column alignment, boot-shell parity, mobile touch targets, retired layout names, duplicate declaration removal, and the limited `!important` exceptions. Class ownership is checked in both directions: JSX cannot use unstyled classes and CSS cannot retain selectors for classes no JSX renders.
 
 The current complexity ceilings are deliberately small: at most 800 lines, 420 rules, 500 unique selectors, and 1450 declarations. Treat these as pressure to merge or delete exceptions, not as capacity to fill.
 

@@ -370,9 +370,9 @@ export function App() {
             <span><input className="workspace-title-input" value={workspaceTitleDraft} autoFocus onChange={(event) => setWorkspaceTitleDraft(event.target.value)} onKeyDown={(event) => {
               if (event.key === "Enter") { event.preventDefault(); void commitRenameWorkspace(workspace); }
               if (event.key === "Escape") { event.preventDefault(); cancelRenameWorkspace(); event.currentTarget.blur(); }
-            }} onBlur={() => void commitRenameWorkspace(workspace)} aria-label="Workspace name" /><span className="workspace-meta"><TimeAgo value={workspace.updatedAt} /><WorkspaceRunStatus workspace={workspace} /></span></span>
+            }} onBlur={() => void commitRenameWorkspace(workspace)} aria-label="Workspace name" /><span className="workspace-meta meta-line"><TimeAgo value={workspace.updatedAt} /><WorkspaceRunStatus workspace={workspace} /></span></span>
           </div> : <>
-            <button className="workspace-select" onMouseEnter={() => prefetchWorkspace(workspace.id)} onFocus={() => prefetchWorkspace(workspace.id)} onClick={() => handleWorkspaceSelect(workspace)} title={workspace.title} aria-label={`Open workspace ${workspace.title}${unread ? ". Unread activity" : ""}`}><span><strong>{workspace.title}{unread && <i className="status-dot" data-tone="accent" aria-label="Unread activity" />}</strong><span className="workspace-meta"><TimeAgo value={workspace.updatedAt} /><WorkspaceRunStatus workspace={workspace} /></span></span></button>
+            <button className="workspace-select" onMouseEnter={() => prefetchWorkspace(workspace.id)} onFocus={() => prefetchWorkspace(workspace.id)} onClick={() => handleWorkspaceSelect(workspace)} title={workspace.title} aria-label={`Open workspace ${workspace.title}${unread ? ". Unread activity" : ""}`}><span><strong className="truncate">{workspace.title}{unread && <i className="status-dot" data-tone="accent" aria-label="Unread activity" />}</strong><span className="workspace-meta meta-line"><TimeAgo value={workspace.updatedAt} /><WorkspaceRunStatus workspace={workspace} /></span></span></button>
             <button className="workspace-more" type="button" onClick={(event) => {
               if (workspaceContextMenuId === workspace.id) { setWorkspaceContextMenuId(""); return; }
               const item = event.currentTarget.closest(".workspace-item")?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
@@ -388,9 +388,9 @@ export function App() {
     <main className="conversation">
       <header className="topbar">
         <button className="icon-button mobile-only" onClick={() => setLeftOpen(true)} aria-label="Open workspace sidebar"><Menu size={ICON_SIZE.xl} /></button>
-        <div className="workspace-heading"><h1><button type="button" onClick={() => setWorkspaceSwitcherOpen(true)} title={`Switch workspace (${workspaceShortcut})`}>{selectedWorkspace?.title ?? "TAgent"}<ChevronDown size={ICON_SIZE.sm} /></button></h1><p>{workspaceMeta}</p></div>
+        <div className="workspace-heading"><h1><button type="button" onClick={() => setWorkspaceSwitcherOpen(true)} title={`Switch workspace (${workspaceShortcut})`}>{selectedWorkspace?.title ?? "TAgent"}<ChevronDown size={ICON_SIZE.sm} /></button></h1><p className="truncate">{workspaceMeta}</p></div>
         <div className="top-actions">
-          {auditAvailable && selectedRunStatus && <button className="run-status-control" data-tone={runStatusTone(selectedRunStatus)} onClick={() => { setWorkspaceMenuOpen(false); setRightOpen(true); }} aria-label={`Open audit panel. Task status: ${formatRunStatus(selectedRunStatus)}`}><span /><strong>{formatRunStatus(selectedRunStatus)}</strong></button>}
+          {auditAvailable && selectedRunStatus && <button className="run-status-control" data-tone={runStatusTone(selectedRunStatus)} onClick={() => { setWorkspaceMenuOpen(false); setRightOpen(true); }} aria-label={`Open audit panel. Task status: ${formatRunStatus(selectedRunStatus)}`}><span className="status-dot" /><strong>{formatRunStatus(selectedRunStatus)}</strong></button>}
           {canResumeRun(selectedRun, activeRun) && <button className="control resume-button" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={ICON_SIZE.md} /><span>Resume</span></button>}
           {activeRun?.status === "running" && <button className="icon-button" data-tone="danger" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={ICON_SIZE.lg} /></button>}
           {workspaceId && <WorkspaceSkillsControl workspaceId={workspaceId} open={skillMenuOpen} onOpenChange={setSkillMenuOpen} onBeforeOpen={() => setWorkspaceMenuOpen(false)} onError={setError} onNotice={setNotice} />}
@@ -419,7 +419,7 @@ export function App() {
         {(activeRun || selectedRun) && transcript.length + events.length + Number(Boolean(liveThinking || streaming)) > 0 && <ExecutionTimeline runId={(activeRun ?? selectedRun)!.id} isRunning={activeRun?.status === "running"} items={transcript} events={activeRun ? events : []} liveThinking={activeRun ? liveThinking : ""} liveOutput={activeRun ? streaming : ""} />}
           </div>
         </section>
-        {!pinnedToLatest && <button className="jump-to-latest" type="button" onClick={jumpToLatest} aria-label={hasNewActivity ? "New activity. Jump to latest" : "Jump to latest"}><ArrowDown size={ICON_SIZE.sm} /><span>{hasNewActivity ? "New activity" : "Latest"}</span>{hasNewActivity && <i aria-hidden="true" />}</button>}
+        {!pinnedToLatest && <button className="jump-to-latest" type="button" onClick={jumpToLatest} aria-label={hasNewActivity ? "New activity. Jump to latest" : "Jump to latest"}><ArrowDown size={ICON_SIZE.sm} /><span>{hasNewActivity ? "New activity" : "Latest"}</span>{hasNewActivity && <i className="status-dot" aria-hidden="true" />}</button>}
       </div>
 
       <footer className="composer-wrap">
@@ -449,7 +449,7 @@ export function App() {
           }} aria-expanded={expanded}>
             {expanded ? <ChevronDown size={ICON_SIZE.md} /> : <ChevronRight size={ICON_SIZE.md} />}
             <span className="status-dot" data-tone={runStatusTone(item.status)} />
-            <span className="history-copy"><strong>{item.goal}</strong><small>{formatRunStatus(item.status)}{item.attempt > 1 ? ` · attempt ${item.attempt}` : ""}</small></span>
+            <span className="history-copy"><strong className="truncate">{item.goal}</strong><small>{formatRunStatus(item.status)}{item.attempt > 1 ? ` · attempt ${item.attempt}` : ""}</small></span>
             {index === 0 && item.status === "running" ? <time>current</time> : <TimeAgo value={item.updatedAt ?? item.createdAt} />}
           </button>
           {expanded && selectedRun?.id === item.id && <RunDetails run={selectedRun} toolEvents={activeRun?.id === item.id ? activeTools : []} transcriptTools={transcriptTools} />}

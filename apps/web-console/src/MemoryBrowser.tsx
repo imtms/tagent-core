@@ -105,10 +105,10 @@ export function MemoryRecallResults({
           </button>;
         })}
       </div>}
-      {!hasResults && <div className="memory-empty"><BrainCircuit size={ICON_SIZE.xl} /><strong>No recall matches</strong><p>Try a broader phrase or inspect the memory catalog below.</p></div>}
-      {hasDiagnostics ? <details className="memory-disclosure">
+      {!hasResults && <div className="panel-empty"><BrainCircuit size={ICON_SIZE.xl} /><strong>No recall matches</strong><p>Try a broader phrase or inspect the memory catalog below.</p></div>}
+      {hasDiagnostics ? <details className="detail-disclosure">
         <summary><Activity size={ICON_SIZE.sm} /><strong>Recall diagnostics</strong><small>{trace.join(" · ") || "Trace"}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
-        <div className="memory-disclosure-body">
+        <div className="detail-disclosure-body">
           {results.trace.embedding && <section><strong>Embedding</strong><p>{results.trace.embedding.configured ? results.trace.embedding.degraded ? "Degraded; lexical and graph paths remained available" : "Available" : "Not configured"}{results.trace.embedding.generation ? ` · ${results.trace.embedding.generation}` : ""}</p>{results.trace.embedding.error && <small>{results.trace.embedding.error}</small>}</section>}
           {Boolean(results.trace.policyTransforms) && <section><strong>Policy transforms</strong><p>{formatCount(results.trace.policyTransforms ?? 0, "candidate")} transformed before presentation.</p></section>}
           {coldRoutes.length > 0 && <section><strong>Cold routes</strong><div className="memory-list">{coldRoutes.map((route) => <div key={route.topicId}><div><strong>{route.topicId}</strong><small>{route.selected ? "selected" : "not selected"} · {route.channels.join(" + ")} · {route.reason}</small></div></div>)}</div></section>}
@@ -155,7 +155,7 @@ export function MemoryCoreProjection({
         <button className="control" disabled={busy} onClick={onGenerate}>Regenerate</button>
       </div>
       <div>
-        <div className="goal-field">
+        <div className="form-field">
           <textarea
             aria-label="Core Memory projection"
             value={coreText}
@@ -164,7 +164,7 @@ export function MemoryCoreProjection({
             placeholder="# Core Memory"
           />
         </div>
-        <div className="memory-inline-actions">
+        <div className="inline-actions">
           <button className="control" data-variant="primary" disabled={busy} onClick={onSave}>Save projection</button>
         </div>
       </div>
@@ -198,15 +198,15 @@ export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex, onRestore }
         </div>
       </div>
       <div>
-        {onRestore && <details className="memory-disclosure">
+        {onRestore && <details className="detail-disclosure">
           <summary><RotateCcw size={ICON_SIZE.sm} /><strong>Restore forgotten memory</strong><small>Record or Topic IDs</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
-          <div className="memory-disclosure-body">
+          <div className="detail-disclosure-body">
             <p data-meta>Forgotten items are hidden from the catalog. Paste record or topic IDs from an audit receipt before their grace period ends.</p>
-            <div className="goal-form-columns">
-              <label className="goal-field"><span>Record IDs <small>comma or line separated</small></span><textarea rows={3} value={recordIds} onChange={(event) => setRecordIds(event.target.value)} /></label>
-              <label className="goal-field"><span>Topic IDs <small>comma or line separated</small></span><textarea rows={3} value={topicIds} onChange={(event) => setTopicIds(event.target.value)} /></label>
+            <div className="form-columns">
+              <label className="form-field"><span>Record IDs <small>comma or line separated</small></span><textarea rows={3} value={recordIds} onChange={(event) => setRecordIds(event.target.value)} /></label>
+              <label className="form-field"><span>Topic IDs <small>comma or line separated</small></span><textarea rows={3} value={topicIds} onChange={(event) => setTopicIds(event.target.value)} /></label>
             </div>
-            <div className="memory-inline-actions"><button className="control" data-variant="primary" disabled={busy || restoreRecords.length + restoreTopics.length === 0} onClick={() => onRestore(restoreRecords, restoreTopics)}><RotateCcw size={ICON_SIZE.sm} />Restore selected IDs</button></div>
+            <div className="inline-actions"><button className="control" data-variant="primary" disabled={busy || restoreRecords.length + restoreTopics.length === 0} onClick={() => onRestore(restoreRecords, restoreTopics)}><RotateCcw size={ICON_SIZE.sm} />Restore selected IDs</button></div>
           </div>
         </details>}
         {reindexJobs.length > 0 && <section className="memory-operation-group">
@@ -216,7 +216,7 @@ export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex, onRestore }
               <div key={job.id}>
                 <div>
                   <MemoryJobState status={job.status} />
-                  <strong>{job.generation}</strong>
+                  <strong className="truncate">{job.generation}</strong>
                   <small>{reindexJobSummary(job)}</small>
                 </div>
               </div>
@@ -231,7 +231,7 @@ export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex, onRestore }
               return <div key={job.id}>
                 <div>
                   <MemoryJobState status={job.status} />
-                  <strong>
+                  <strong className="truncate">
                     {job.request.sourceRefs.map((source) => `${source.sourceType}:${source.sourceId}`).join(", ") || "manual capture"}
                   </strong>
                   {summary && <small>{summary}</small>}

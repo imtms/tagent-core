@@ -58,7 +58,7 @@ export function WorkspaceContextMenu({
     <div ref={menuRef} className="workspace-context-menu" role="menu" aria-label={`Actions for ${workspace.title}`} style={position} onKeyDown={handleKeyDown}>
       <button type="button" role="menuitem" onClick={() => { onTogglePinned(); onClose(); }}><Pin size={ICON_SIZE.sm} /><span>{pinned ? "Unpin workspace" : "Pin workspace"}</span></button>
       <button type="button" role="menuitem" onClick={() => { restoreFocusRef.current = false; onRename(); onClose(); }}><Pencil size={ICON_SIZE.sm} /><span>Rename workspace</span></button>
-      <div className="workspace-avatar-options" role="group" aria-label="Workspace icon"><span>Icon</span><div>{emojis.map((emoji) => <button type="button" role="menuitemradio" aria-label={`Use ${emoji} for ${workspace.title}`} aria-checked={currentEmoji === emoji} key={emoji} onClick={() => { onChooseEmoji(emoji); onClose(); }}>{emoji}</button>)}</div></div>
+      <div className="workspace-avatar-options" role="group" aria-label="Workspace icon"><span data-label>Icon</span><div>{emojis.map((emoji) => <button type="button" role="menuitemradio" aria-label={`Use ${emoji} for ${workspace.title}`} aria-checked={currentEmoji === emoji} key={emoji} onClick={() => { onChooseEmoji(emoji); onClose(); }}>{emoji}</button>)}</div></div>
     </div>
   </>, document.body);
 }

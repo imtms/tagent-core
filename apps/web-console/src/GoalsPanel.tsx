@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -26,6 +27,7 @@ import {
 import { formatCount } from "./count-format";
 import { goalStatusTone } from "./goal-display";
 import { PanelTabs, type PanelTab } from "./PanelTabs";
+import { useModalFocus } from "./use-modal-focus";
 import { storedStringRecord, storeStringRecord } from "./workspace-preferences";
 
 const goalOperationRequestsKey = "tagent.goal-operation-requests";
@@ -80,7 +82,8 @@ export function GoalsPanel({
   const [lastOperationRequestId, setLastOperationRequestId] = useState("");
   const [busy, setBusy] = useState(true);
   const dialogRef = useRef<HTMLElement>(null);
-  const onCloseRef = useRef(onClose);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  useModalFocus(true, dialogRef, onClose, closeRef);
 
   const rememberOperationRequest = (goalId: string, requestId: string) => {
     setLastOperationRequestId(requestId);
@@ -89,8 +92,6 @@ export function GoalsPanel({
       [goalId]: requestId,
     });
   };
-
-  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
   const refresh = async (selectId?: string) => {
     const nextItems = await api.workspaceGoals(workspaceId);
@@ -124,39 +125,6 @@ export function GoalsPanel({
       .finally(() => { if (active) setBusy(false); });
     return () => { active = false; };
   }, [workspaceId]);
-
-  useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const focusable = () => [...(dialogRef.current?.querySelectorAll<HTMLElement>(
-      'button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),summary,[href],[tabindex]:not([tabindex="-1"])',
-    ) ?? [])].filter((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden");
-    const frame = requestAnimationFrame(() => focusable()[0]?.focus());
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onCloseRef.current();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const elements = focusable();
-      if (!elements.length) return event.preventDefault();
-      const first = elements[0];
-      const last = elements[elements.length - 1];
-      if (event.shiftKey && (document.activeElement === first || !dialogRef.current?.contains(document.activeElement))) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (document.activeElement === last || !dialogRef.current?.contains(document.activeElement))) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", handleKey);
-    return () => {
-      cancelAnimationFrame(frame);
-      window.removeEventListener("keydown", handleKey);
-      if (previousFocus?.isConnected) previousFocus.focus();
-    };
-  }, []);
 
   const openGoal = async (goalId: string) => {
     setBusy(true);
@@ -250,16 +218,15 @@ export function GoalsPanel({
     setNotice("");
   };
 
-  return <div className="memory-overlay" role="dialog" aria-modal="true" aria-labelledby="workspace-goals-title">
-    <button className="memory-backdrop" onClick={onClose} aria-label="Close Goals" />
-    <section className="memory-center" ref={dialogRef}>
-      <header className="memory-header">
-        <div>
+  return createPortal(<div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="modal-workspace" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="workspace-goals-title">
+      <header className="modal-workspace-header">
+        <div className="modal-heading">
           <Target size={ICON_SIZE.xl} />
-          <h2 id="workspace-goals-title">Workspace Goals</h2>
+          <div className="modal-title-group"><h2 className="truncate" id="workspace-goals-title">Workspace Goals</h2></div>
         </div>
-        <div className="memory-header-actions">
-          <button className="icon-button" onClick={onClose} aria-label="Close Goals"><X size={ICON_SIZE.lg} /></button>
+        <div className="modal-workspace-actions">
+          <button ref={closeRef} className="icon-button" onClick={onClose} aria-label="Close Goals"><X size={ICON_SIZE.lg} /></button>
         </div>
       </header>
 
@@ -349,7 +316,7 @@ export function GoalsPanel({
         </main>
       </div>
     </section>
-  </div>;
+  </div>, document.body);
 }
 
 function GoalEmpty({ busy, onCreate }: { busy: boolean; onCreate: () => void }) {
@@ -390,8 +357,8 @@ function GoalDefinitionForm({ definition, setDefinition, busy, editing, onSave, 
 
   return <div className="goal-form">
     <FormHeading eyebrow={editing ? "Definition revision" : "New Goal"} title={editing ? "Update the outcome" : "What should this Workspace achieve?"} description={editing ? "A new definition must be approved before it can guide TaskRuns." : "Describe the outcome and the evidence required to close it."} />
-    <label className="goal-field"><span>Title</span><input autoFocus maxLength={200} value={definition.title} onChange={(event) => setDefinition({ ...definition, title: event.target.value })} placeholder="A short, outcome-focused name" /></label>
-    <label className="goal-field"><span>Outcome</span><textarea rows={4} maxLength={4000} value={definition.outcome} onChange={(event) => setDefinition({ ...definition, outcome: event.target.value })} placeholder="Describe the Workspace state you want to reach" /></label>
+    <label className="form-field"><span>Title</span><input autoFocus maxLength={200} value={definition.title} onChange={(event) => setDefinition({ ...definition, title: event.target.value })} placeholder="A short, outcome-focused name" /></label>
+    <label className="form-field"><span>Outcome</span><textarea rows={4} maxLength={4000} value={definition.outcome} onChange={(event) => setDefinition({ ...definition, outcome: event.target.value })} placeholder="Describe the Workspace state you want to reach" /></label>
     <fieldset>
       <legend>Completion criteria</legend>
       <div className="section-heading"><p data-meta>Supervisor evidence from Goal Roadmap TaskRuns is checked against these criteria.</p><button className="control" type="button" onClick={addCriterion}><Plus size={ICON_SIZE.sm} />Add criterion</button></div>
@@ -406,9 +373,9 @@ function GoalDefinitionForm({ definition, setDefinition, busy, editing, onSave, 
     </fieldset>
     <details open={Boolean(definition.scope.length || definition.nonGoals.length)}>
       <summary><span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} />Scope and boundaries</span><small>Optional</small></summary>
-      <div className="goal-form-columns">
-        <label className="goal-field"><span>Included <small>one item per line</small></span><textarea rows={4} value={definition.scope.join("\n")} onChange={(event) => setDefinition({ ...definition, scope: lines(event.target.value) })} /></label>
-        <label className="goal-field"><span>Not included <small>one item per line</small></span><textarea rows={4} value={definition.nonGoals.join("\n")} onChange={(event) => setDefinition({ ...definition, nonGoals: lines(event.target.value) })} /></label>
+      <div className="form-columns">
+        <label className="form-field"><span>Included <small>one item per line</small></span><textarea rows={4} value={definition.scope.join("\n")} onChange={(event) => setDefinition({ ...definition, scope: lines(event.target.value) })} /></label>
+        <label className="form-field"><span>Not included <small>one item per line</small></span><textarea rows={4} value={definition.nonGoals.join("\n")} onChange={(event) => setDefinition({ ...definition, nonGoals: lines(event.target.value) })} /></label>
       </div>
     </details>
     <div className="goal-form-actions"><button className="control" onClick={onCancel} disabled={busy}>Cancel</button><button className="control" data-variant="primary" disabled={busy || !valid} onClick={() => void onSave()}>{busy ? "Saving…" : editing ? "Save revision" : "Create draft"}</button></div>
@@ -437,13 +404,13 @@ function GoalRoadmapForm({ roadmap, setRoadmap, definition, busy, onSave, onCanc
 
   return <div className="goal-form">
     <FormHeading eyebrow="Goal Roadmap" title="Review the TaskRun-sized steps" description="Edit the LLM draft, map each item to Goal criteria, then save it for approval." />
-    <label className="goal-field"><span>Roadmap summary</span><textarea autoFocus rows={3} value={roadmap.summary} onChange={(event) => setRoadmap({ ...roadmap, summary: event.target.value })} /></label>
+    <label className="form-field"><span>Roadmap summary</span><textarea autoFocus rows={3} value={roadmap.summary} onChange={(event) => setRoadmap({ ...roadmap, summary: event.target.value })} /></label>
     <div className="goal-roadmap-editor">
       {roadmap.items.map((item, index) => <section key={`${item.id}:${index}`}>
         <header><div><span>Item {index + 1}</span><strong>{item.title.trim() || "Untitled item"}</strong></div><button className="icon-button" type="button" aria-label={`Remove Roadmap item ${index + 1}`} disabled={roadmap.items.length === 1} onClick={() => setRoadmap({ ...roadmap, items: roadmap.items.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 size={ICON_SIZE.sm} /></button></header>
-        <label className="goal-field"><span>Title</span><input value={item.title} onChange={(event) => update(index, { title: event.target.value })} placeholder="One TaskRun-sized item" /></label>
-        <label className="goal-field"><span>Expected outcome</span><textarea rows={2} value={item.outcome} onChange={(event) => update(index, { outcome: event.target.value })} /></label>
-        <label className="goal-field"><span>Verification</span><textarea rows={2} value={item.verification} onChange={(event) => update(index, { verification: event.target.value })} /></label>
+        <label className="form-field"><span>Title</span><input value={item.title} onChange={(event) => update(index, { title: event.target.value })} placeholder="One TaskRun-sized item" /></label>
+        <label className="form-field"><span>Expected outcome</span><textarea rows={2} value={item.outcome} onChange={(event) => update(index, { outcome: event.target.value })} /></label>
+        <label className="form-field"><span>Verification</span><textarea rows={2} value={item.verification} onChange={(event) => update(index, { verification: event.target.value })} /></label>
         <fieldset><legend>Advances Goal criteria</legend><div>{definition.criteria.map((criterion) => <label key={criterion.key}><input type="checkbox" checked={item.criterionKeys.includes(criterion.key)} onChange={(event) => update(index, { criterionKeys: event.target.checked ? [...item.criterionKeys, criterion.key] : item.criterionKeys.filter((key) => key !== criterion.key) })} /><span>{criterion.title}</span></label>)}</div></fieldset>
         {!item.criterionKeys.length && <p className="goal-field-error">Select at least one Goal criterion.</p>}
       </section>)}
@@ -549,7 +516,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
 
   return <article className="goal-view">
     <header className="goal-hero">
-      <div className="goal-hero-meta memory-inline-actions"><StatusBadge status={goal.status} />{canEdit && <button className="control" onClick={onEditDefinition} disabled={busy}><Pencil size={ICON_SIZE.sm} />Edit Goal</button>}</div>
+      <div className="goal-hero-meta inline-actions"><StatusBadge status={goal.status} />{canEdit && <button className="control" onClick={onEditDefinition} disabled={busy}><Pencil size={ICON_SIZE.sm} />Edit Goal</button>}</div>
       <h2>{definition?.title ?? "Untitled Goal"}</h2>
       <p>{definition?.outcome}</p>
       {goal.definition && <small data-mono>definition v{goal.definition.revision} · {dateLabel(goal.updatedAt)}{goal.currentRunId ? ` · run ${goal.currentRunId.slice(0, 12)}` : ""}</small>}
@@ -613,24 +580,24 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
               <strong>{item.title}</strong>
               <p>{item.outcome}</p>
               {!approval && <small>Criteria · {criterionTitles.join(" · ")}</small>}
-              <details className="memory-disclosure">
+              <details className="detail-disclosure">
                 <summary><strong>{approval ? "Criteria and verification" : "Verification"}</strong>{approval && <small>{formatCount(criterionTitles.length, "criterion", "criteria")} mapped</small>}<ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
-                <div className="memory-disclosure-body">
+                <div className="detail-disclosure-body">
                   {approval && <section><strong>Criteria</strong><p>{criterionTitles.join(" · ")}</p></section>}
                   <section><strong>Verification</strong><p>{item.verification}</p></section>
                 </div>
               </details>
             </div>
-            <div className="goal-roadmap-action memory-inline-actions"><span className="status-label" data-tone={tone}><i className="status-dot" />{roadmapStatusLabel(itemStatus)}</span>{approved && (itemStatus === "pending" || itemStatus === "blocked" && itemProgress?.retryable && !goal.currentRunId) && <button className="control" disabled={busy || Boolean(goal.currentRunId)} onClick={() => void onStartRoadmapItem(item.id)}><Play size={ICON_SIZE.xs} />{itemStatus === "blocked" ? "Retry" : "Start"}</button>}{itemProgress?.runId && ["running", "blocked"].includes(itemStatus) && <button className="control" onClick={() => onOpenRun?.(itemProgress.runId!)}><ExternalLink size={ICON_SIZE.xs} />Open</button>}</div>
+            <div className="goal-roadmap-action inline-actions"><span className="status-label" data-tone={tone}><i className="status-dot" />{roadmapStatusLabel(itemStatus)}</span>{approved && (itemStatus === "pending" || itemStatus === "blocked" && itemProgress?.retryable && !goal.currentRunId) && <button className="control" disabled={busy || Boolean(goal.currentRunId)} onClick={() => void onStartRoadmapItem(item.id)}><Play size={ICON_SIZE.xs} />{itemStatus === "blocked" ? "Retry" : "Start"}</button>}{itemProgress?.runId && ["running", "blocked"].includes(itemStatus) && <button className="control" onClick={() => onOpenRun?.(itemProgress.runId!)}><ExternalLink size={ICON_SIZE.xs} />Open</button>}</div>
           </div>;
         })}
         {!approval && <p data-meta>{requiresRoadmapRevision ? "Changes were requested. Edit and save a new Roadmap revision before approval." : "Select the items that may drive TaskRuns, then approve them with the primary action above."}</p>}
         </div>
-      </> : <div className="memory-empty"><Target size={ICON_SIZE.xl} /><strong>No Roadmap yet</strong><p>Generate a bounded Roadmap or create one manually after the Goal definition is approved.</p>{canCreateRoadmapManually && <button className="control" onClick={onEditRoadmap} disabled={busy}><Plus size={ICON_SIZE.sm} />Create manually</button>}</div>}
+      </> : <div className="panel-empty"><Target size={ICON_SIZE.xl} /><strong>No Roadmap yet</strong><p>Generate a bounded Roadmap or create one manually after the Goal definition is approved.</p>{canCreateRoadmapManually && <button className="control" onClick={onEditRoadmap} disabled={busy}><Plus size={ICON_SIZE.sm} />Create manually</button>}</div>}
     </section>
 
     <section hidden={section !== "activity"} aria-label="Goal activity and audit">
-      {auditCount === 0 ? <div className="memory-empty"><Target size={ICON_SIZE.xl} /><strong>No activity yet</strong><p>TaskRuns, evidence and Goal decisions will appear here without crowding the current plan.</p></div> : <>
+      {auditCount === 0 ? <div className="panel-empty"><Target size={ICON_SIZE.xl} /><strong>No activity yet</strong><p>TaskRuns, evidence and Goal decisions will appear here without crowding the current plan.</p></div> : <>
         {goal.runLinks.length > 0 && <section><div className="section-heading"><strong>Linked TaskRuns</strong><small>{goal.runLinks.length} linked</small></div><div className="goal-run-links">{[...goal.runLinks].reverse().map((link) => <button key={link.runId} onClick={() => onOpenRun?.(link.runId)}><code>{link.runId.slice(0, 12)}</code><span>{runLinkLabel(link)}</span></button>)}</div></section>}
         {goal.evidenceLinks.length > 0 && <section><div className="section-heading"><strong>Evidence log</strong><small>{formatCount(goal.evidenceLinks.length, "link")}</small></div><div className="goal-run-links">{[...goal.evidenceLinks].reverse().map((link) => <button key={link.id} onClick={() => onOpenRun?.(link.runId)}><code>{link.criterionKey}</code><span>{statusLabelForValue(link.status)} · run {link.runId.slice(0, 12)}{link.artifactId ? ` · artifact ${link.artifactId.slice(0, 10)}` : ""}</span></button>)}</div></section>}
         {goal.decisions.length > 0 && <section><div className="section-heading"><strong>Decision history</strong><small>{formatCount(goal.decisions.length, "decision")}</small></div><div className="goal-run-links">{[...goal.decisions].reverse().map((decision) => <div key={decision.id}><code>{decisionLabel(decision.kind)}</code><span>{decision.reason ? `${decision.reason} · ` : ""}{decision.actorId} · {dateLabel(decision.createdAt)}</span></div>)}</div></section>}
@@ -641,13 +608,13 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
       {['completed', 'cancelled'].includes(goal.status) ? <p data-meta>This Goal is terminal. Its definition, Roadmap and audit history remain available in the other views.</p> : <>
         <div className="section-heading"><strong>Lifecycle</strong><small>{statusLabel(goal.status)}</small></div>
         {hasQueuedRoadmapWork ? <p data-meta>Wait for the queued Roadmap work to attach its TaskRun before revising or changing this Goal's lifecycle.</p> : lifecycleLocked && <p data-meta>Finish or resolve the active Roadmap work before revising or changing this Goal's lifecycle.</p>}
-        <div className="memory-inline-actions">{["active", "ready_to_close"].includes(goal.status) && <button className="control" disabled={busy || lifecycleLocked} onClick={() => void decide("pause")}>Pause Goal</button>}{goal.status === "paused" && <button className="control" data-variant="primary" disabled={busy} onClick={() => void decide("resume")}>Resume Goal</button>}{goal.status === "ready_to_close" && <button className="control" data-variant="primary" disabled={busy} onClick={() => { if (window.confirm("Close this Goal with the verified evidence? This cannot be undone.")) void decide("close"); }}>Close Goal</button>}<button className="control" data-tone="danger" disabled={busy || lifecycleLocked} onClick={() => { if (window.confirm("Cancel this Goal? This cannot be undone.")) void decide("cancel"); }}>Cancel Goal</button></div>
+        <div className="inline-actions">{["active", "ready_to_close"].includes(goal.status) && <button className="control" disabled={busy || lifecycleLocked} onClick={() => void decide("pause")}>Pause Goal</button>}{goal.status === "paused" && <button className="control" data-variant="primary" disabled={busy} onClick={() => void decide("resume")}>Resume Goal</button>}{goal.status === "ready_to_close" && <button className="control" data-variant="primary" disabled={busy} onClick={() => { if (window.confirm("Close this Goal with the verified evidence? This cannot be undone.")) void decide("close"); }}>Close Goal</button>}<button className="control" data-tone="danger" disabled={busy || lifecycleLocked} onClick={() => { if (window.confirm("Cancel this Goal? This cannot be undone.")) void decide("cancel"); }}>Cancel Goal</button></div>
         {changeTargets.length > 0 && <div className="goal-control-group">
           <div className="section-heading"><strong>Revision request</strong><small>Reopen approved guidance</small></div>
-          <div className="goal-form-columns">
-            {changeTargets.length > 1 && <label className="goal-field"><span>Target</span><select value={changeTargetId} onChange={(event) => setChangeTargetId(event.target.value)}>{changeTargets.map((target) => <option value={target.id} key={target.id}>{target.kind === "definition" ? "Goal definition" : "Roadmap"} v{target.revision}</option>)}</select></label>}
-            <label className="goal-field"><span>Reason <small>required</small></span><textarea rows={3} value={changeReason} onChange={(event) => setChangeReason(event.target.value)} placeholder="What must change before this revision can guide work?" /></label>
-            <div className="memory-inline-actions"><button className="control" disabled={busy || lifecycleLocked || !changeReason.trim()} onClick={() => { const target = changeTargets.find((item) => item.id === changeTargetId); if (target) void decide("request_change", target, [], changeReason.trim()); }}>Request changes</button></div>
+          <div className="form-columns">
+            {changeTargets.length > 1 && <label className="form-field"><span>Target</span><select value={changeTargetId} onChange={(event) => setChangeTargetId(event.target.value)}>{changeTargets.map((target) => <option value={target.id} key={target.id}>{target.kind === "definition" ? "Goal definition" : "Roadmap"} v{target.revision}</option>)}</select></label>}
+            <label className="form-field"><span>Reason <small>required</small></span><textarea rows={3} value={changeReason} onChange={(event) => setChangeReason(event.target.value)} placeholder="What must change before this revision can guide work?" /></label>
+            <div className="inline-actions"><button className="control" disabled={busy || lifecycleLocked || !changeReason.trim()} onClick={() => { const target = changeTargets.find((item) => item.id === changeTargetId); if (target) void decide("request_change", target, [], changeReason.trim()); }}>Request changes</button></div>
           </div>
         </div>}
       </>}
@@ -655,8 +622,8 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
 
     <section hidden={section !== "controls"} aria-label="Goal operation recovery">
       <div className="section-heading"><strong>Operation recovery</strong><small>{latestOperationRequestId ? `Last request ${latestOperationRequestId.slice(0, 12)}…` : "Receipt by request ID"}</small></div>
-      <div className="goal-form-columns">
-        <label className="goal-field"><span>Request ID <small>definition, Roadmap, or generation</small></span><input maxLength={300} value={operationRequestId} onChange={(event) => setOperationRequestId(event.target.value)} placeholder="Paste the original request ID" /></label>
+      <div className="form-columns">
+        <label className="form-field"><span>Request ID <small>definition, Roadmap, or generation</small></span><input maxLength={300} value={operationRequestId} onChange={(event) => setOperationRequestId(event.target.value)} placeholder="Paste the original request ID" /></label>
         <div><span className="eyebrow">Durable receipt</span><p data-meta>Inspect an interrupted or uncertain Goal operation without repeating it.</p><button className="control" disabled={operationBusy || !operationRequestId.trim()} onClick={() => void recoverOperation()}>{operationBusy ? "Looking up…" : "Inspect receipt"}</button></div>
       </div>
       {operationError && <p className="goal-field-error" role="alert">{operationError}</p>}

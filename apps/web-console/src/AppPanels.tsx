@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
+import { createPortal } from "react-dom";
 import {
   Activity, Bot, BrainCircuit, Check, ChevronDown, ChevronRight, Circle, Download, Eye,
   FileText, GripVertical, HelpCircle, Pencil, Send, ShieldAlert, ShieldCheck, Terminal, X,
@@ -24,6 +25,7 @@ import { formatRunStatus, formatRunValue, isActiveRunStatus, isRedundantRunPhase
 import { formatConversationDay, formatTime } from "./time-format";
 import { LatestRequestAuthority } from "./latest-request";
 import { groupExecutionItems, type ExecutionGroup } from "./transcript-projection";
+import { useModalFocus } from "./use-modal-focus";
 import { userInputValuesForRequest } from "./user-input-state";
 
 export function TAgentMark({ size = 18 }: { size?: number }) {
@@ -33,6 +35,16 @@ export function TAgentMark({ size = 18 }: { size?: number }) {
     <circle cx="19" cy="6.5" r="2" fill="currentColor" />
     <circle cx="12" cy="18" r="2" fill="currentColor" />
   </svg>;
+}
+
+type OperationalTone = "info" | "success" | "warning" | "danger";
+
+function operationalTone(status: string): OperationalTone | undefined {
+  if (["failed", "error", "rejected"].includes(status)) return "danger";
+  if (["blocked", "stale", "stalled", "waiting"].includes(status)) return "warning";
+  if (["running", "in_progress"].includes(status)) return "info";
+  if (["completed", "done", "passed"].includes(status)) return "success";
+  return undefined;
 }
 
 export function ConversationDateDivider({ value }: { value: number }) {
@@ -51,8 +63,9 @@ export function WorkspaceRunStatus({ workspace }: { workspace: Session }) {
 }
 
 function ToolCall({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> }) {
-  return <details className="tool-call" data-tone={item.isError ? "danger" : undefined}>
-    <summary><Terminal size={ICON_SIZE.sm} /><span>{item.toolName}</span><small>{formatRunValue(item.isError ? "failed" : item.status)}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+  const status = item.isError ? "failed" : item.status;
+  return <details className="tool-call">
+    <summary><Terminal size={ICON_SIZE.sm} /><span className="truncate">{item.toolName}</span><small data-tone={operationalTone(status)}>{formatRunValue(status)}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
     <div className="tool-call-body"><div><strong>Arguments</strong><pre>{JSON.stringify(item.arguments, null, 2)}</pre></div><div><strong>Result</strong><pre>{item.result || "No result recorded"}</pre></div></div>
   </details>;
 }
@@ -78,12 +91,12 @@ export function UserInputCard({ request, submitting, onSubmit }: { request: User
   const [values, setValues] = useState<Record<string, string>>(() => userInputValuesForRequest(request));
   const missing = request.fields.some((field) => field.required && !values[field.key]?.trim());
   return <section className="user-input-card" aria-label="TaskRun needs more information">
-    <div className="user-input-heading"><HelpCircle size={ICON_SIZE.lg} /><div><strong>Information needed to continue</strong><p>{request.prompt}</p></div><span>Paused</span></div>
+    <div className="section-heading"><HelpCircle size={ICON_SIZE.lg} /><div><strong>Information needed to continue</strong><p>{request.prompt}</p></div><span data-tone="warning">Paused</span></div>
     <p>This form only supplies requested information. It does not approve or authorize an external action.</p>
     <ul>{request.fields.map((field) => <li key={field.key}><strong>{field.label}{field.required ? " *" : ""}</strong>{field.description && <span>{field.description}</span>}</li>)}</ul>
     <form onSubmit={(event) => { event.preventDefault(); if (!missing && !submitting) void onSubmit(userInputValuesForRequest(request, values)); }}>
       {request.fields.map((field) => <label key={field.key}><span>{field.label}{field.required ? " *" : ""}</span>{field.inputType === "textarea" ? <textarea rows={3} value={values[field.key] ?? ""} placeholder={field.placeholder} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} /> : <input value={values[field.key] ?? ""} placeholder={field.placeholder} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} />}{field.description && <small>{field.description}</small>}</label>)}
-      <button type="submit" disabled={missing || submitting}>{submitting ? <Activity className="spin" size={ICON_SIZE.md} /> : <Send size={ICON_SIZE.md} />}{submitting ? "Resuming…" : "Submit and resume"}</button>
+      <button className="control" data-variant="primary" type="submit" disabled={missing || submitting}>{submitting ? <Activity className="spin" size={ICON_SIZE.md} /> : <Send size={ICON_SIZE.md} />}{submitting ? "Resuming…" : "Submit and resume"}</button>
     </form>
   </section>;
 }
@@ -114,12 +127,12 @@ export function ExecutionTimeline({ runId, isRunning, items, events, liveThinkin
   const stageCount = groups.length + Number(hasLiveStage);
   return <section className="execution-timeline" aria-label="Agent execution timeline">
     <button className="execution-timeline-heading" type="button" aria-expanded={expanded} aria-controls={`execution-trace-${runId}`} onClick={() => setExpanded((current) => !current)}>
-      <span>{expanded ? <ChevronDown size={ICON_SIZE.sm} /> : <ChevronRight size={ICON_SIZE.sm} />}<Activity size={ICON_SIZE.sm} />Execution trace{isRunning && <i><span className="pulse" />Live</i>}</span>
+      <span>{expanded ? <ChevronDown size={ICON_SIZE.sm} /> : <ChevronRight size={ICON_SIZE.sm} />}<Activity size={ICON_SIZE.sm} />Execution trace{isRunning && <i><span className="status-dot pulse" />Live</i>}</span>
       <small>{formatCount(stageCount, "stage")}{!isRunning && !expanded ? " · expand to inspect" : ""}</small>
     </button>
     {expanded && <div className="execution-timeline-body" id={`execution-trace-${runId}`} ref={bodyRef}>
       {groups.map((group, index) => <ExecutionGroupView key={group.key} group={group} ordinal={index + 1} />)}
-      {hasLiveStage && <article className="run-step"><div className="run-step-meta"><Activity size={ICON_SIZE.sm} /><strong>Current stage</strong><span className="live-label"><span className="pulse" />Live</span></div>{liveThinking && <div className="run-step-content"><span data-label>Reasoning</span><LiveText>{liveThinking}</LiveText></div>}{liveTools.length > 0 && <div className="tool-stack">{liveTools.map((event) => <div className="tool-row" data-tone={event.data.isError ? "danger" : undefined} key={`${event.seq}-${event.type}`}><Terminal size={ICON_SIZE.sm} /><strong>{String(event.data.toolName ?? "tool")}</strong><small>{formatRunValue(event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "completed")}</small></div>)}</div>}{liveOutput && <div className="run-step-content"><span data-label>Model output</span><LiveText>{liveOutput}</LiveText></div>}</article>}
+      {hasLiveStage && <article className="run-step"><div className="run-step-meta"><Activity size={ICON_SIZE.sm} /><strong>Current stage</strong><span className="meta-line"><span className="status-dot pulse" />Live</span></div>{liveThinking && <div className="run-step-content"><span data-label>Reasoning</span><LiveText>{liveThinking}</LiveText></div>}{liveTools.length > 0 && <div className="tool-stack">{liveTools.map((event) => { const status = event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "completed"; return <div className="tool-row" key={`${event.seq}-${event.type}`}><Terminal size={ICON_SIZE.sm} /><strong>{String(event.data.toolName ?? "tool")}</strong><small data-tone={operationalTone(status)}>{formatRunValue(status)}</small></div>; })}</div>}{liveOutput && <div className="run-step-content"><span data-label>Model output</span><LiveText>{liveOutput}</LiveText></div>}</article>}
     </div>}
   </section>;
 }
@@ -141,7 +154,7 @@ function ToolActivityPanel({ transcriptItems, events }: { transcriptItems: Extra
       : formatCount(live.length, "recent event");
   return <section className="audit-section">
     <div className="section-heading"><span>Tool activity</span><small>{activitySummary}{failed ? ` · ${failed} failed` : ""}</small></div>
-    {live.length > 0 && <details className="audit-disclosure"><summary><Activity size={ICON_SIZE.sm} /><span>Live and recent activity</span><small>{live.length}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div className="tool-stack">{live.map((event) => <div className="tool-row" key={`${event.seq}-${event.type}`}><Terminal size={ICON_SIZE.sm} /><span>{String(event.data.toolName ?? "tool")}</span><small>{formatRunValue(event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "done")}</small></div>)}</div></details>}
+    {live.length > 0 && <details className="audit-disclosure"><summary><Activity size={ICON_SIZE.sm} /><span>Live and recent activity</span><small>{live.length}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div className="tool-stack">{live.map((event) => { const status = event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "done"; return <div className="tool-row" key={`${event.seq}-${event.type}`}><Terminal size={ICON_SIZE.sm} /><span>{String(event.data.toolName ?? "tool")}</span><small data-tone={operationalTone(status)}>{formatRunValue(status)}</small></div>; })}</div></details>}
     {transcriptItems.length > 0 && <details className="audit-disclosure"><summary><Terminal size={ICON_SIZE.sm} /><span>Recorded tool calls</span><small>{transcriptItems.length}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div className="tool-history-list">{transcriptItems.map((item) => <ToolCall key={`${item.seq}-${item.index}`} item={item} />)}</div></details>}
   </section>;
 }
@@ -201,7 +214,7 @@ function GateAuditPanel({ run }: { run: TaskRun }) {
       </>}
     </div></details>
     {completionFailures.length > 0 && <div className="gate-failure-list">{completionFailures.map((failure) => <GateFailureRow failure={failure} label={failure.kind} key={`${failure.kind}:${failure.key}`} />)}</div>}
-    {gates.length > 0 && <details className="audit-disclosure"><summary><ShieldCheck size={ICON_SIZE.sm} /><span>Evaluation history</span><small>{evaluationSummary}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div className="gate-evaluation-list">{gates.map((gate) => <details className="gate-evaluation" data-tone={gate.failures.length ? "danger" : undefined} key={gate.id}><summary><span>{gate.passed ? <Check size={ICON_SIZE.sm} /> : gate.failures.length ? <X size={ICON_SIZE.sm} /> : <Circle size={ICON_SIZE.sm} />}{formatRunValue(gate.gateType)}</span><small>{formatRunValue(gate.passed ? "passed" : gate.failures.length ? formatCount(gate.failures.length, "failure") : "deferred")}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div><p className="gate-evaluator">{gate.evaluator === "llm" ? `LLM evaluation · ${gate.evaluatorModel}` : "System invariant"} · {gate.summary}</p>{gate.criterionCoverage?.length ? <div className="criterion-list">{gate.criterionCoverage.map((criterion) => <div className="criterion-row" data-tone={criterion.status === "covered" ? "success" : criterion.status === "blocked" ? "warning" : "danger"} key={criterion.criterion}><strong>{formatRunValue(criterion.status)}</strong><p>{criterion.criterion}</p><small>{criterion.reason}{criterion.evidenceRefs.length ? ` · ${criterion.evidenceRefs.join(", ")}` : ""}</small></div>)}</div> : null}{gate.failures.map((failure) => <GateFailureRow failure={failure} label={failure.disposition} key={`${failure.kind}:${failure.key}`} />)}</div></details>)}</div></details>}
+    {gates.length > 0 && <details className="audit-disclosure"><summary><ShieldCheck size={ICON_SIZE.sm} /><span>Evaluation history</span><small>{evaluationSummary}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div className="gate-evaluation-list">{gates.map((gate) => { const status = gate.passed ? "passed" : gate.failures.length ? "failed" : "deferred"; return <details className="gate-evaluation" key={gate.id}><summary><span data-tone={operationalTone(status)}>{gate.passed ? <Check size={ICON_SIZE.sm} /> : gate.failures.length ? <X size={ICON_SIZE.sm} /> : <Circle size={ICON_SIZE.sm} />}{formatRunValue(gate.gateType)}</span><small data-tone={operationalTone(status)}>{formatRunValue(gate.passed ? "passed" : gate.failures.length ? formatCount(gate.failures.length, "failure") : "deferred")}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div><p className="gate-evaluator">{gate.evaluator === "llm" ? `LLM evaluation · ${gate.evaluatorModel}` : "System invariant"} · {gate.summary}</p>{gate.criterionCoverage?.length ? <div className="criterion-list">{gate.criterionCoverage.map((criterion) => <div className="criterion-row" data-tone={criterion.status === "covered" ? "success" : criterion.status === "blocked" ? "warning" : "danger"} key={criterion.criterion}><strong>{formatRunValue(criterion.status)}</strong><p>{criterion.criterion}</p><small>{criterion.reason}{criterion.evidenceRefs.length ? ` · ${criterion.evidenceRefs.join(", ")}` : ""}</small></div>)}</div> : null}{gate.failures.map((failure) => <GateFailureRow failure={failure} label={failure.disposition} key={`${failure.kind}:${failure.key}`} />)}</div></details>; })}</div></details>}
     {failedGates.length > 0 && <small>Latest evaluation contains {formatCount(failedGates.length, "failed gate")}; the latest Supervisor decision determines the next action.</small>}
   </section>;
 }
@@ -217,7 +230,7 @@ function CurrentOperationPanel({ run }: { run: TaskRun }) {
   if (run.status !== "running") return null;
   const operation = deriveCurrentOperation(run, now);
   return <section className="audit-section">
-    <div className="section-heading"><span>Current operation</span><small>{operation.state}</small></div>
+    <div className="section-heading"><span>Current operation</span><small data-tone={operationalTone(operation.state)}>{operation.state}</small></div>
     <div className="audit-ledger current-operation-ledger">
       <strong>{operation.toolName || "agent"}</strong>
     </div>
@@ -291,6 +304,8 @@ function ArtifactsPanel({ run }: { run: TaskRun }) {
   const [error, setError] = useState("");
   const [downloadError, setDownloadError] = useState("");
   const previewAuthorityRef = useRef(new LatestRequestAuthority());
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => { previewAuthorityRef.current.invalidate(); setSelectedId(""); setPreview(null); setError(""); setLoadingId(""); setDownloadingId(""); setDownloadError(""); }, [run.id]);
   const openArtifact = async (artifact: Artifact) => {
     if (selectedId === artifact.id && preview) { previewAuthorityRef.current.invalidate(); setSelectedId(""); setPreview(null); setError(""); setLoadingId(""); return; }
@@ -312,22 +327,23 @@ function ArtifactsPanel({ run }: { run: TaskRun }) {
     finally { setDownloadingId(""); }
   };
   const closePreview = () => { previewAuthorityRef.current.invalidate(); setSelectedId(""); setPreview(null); setError(""); setLoadingId(""); };
+  useModalFocus(Boolean(selectedId), dialogRef, closePreview, closeRef);
   const selectedArtifact = run.artifacts.find((item) => item.id === selectedId);
   return <section className="audit-section">
     <div className="section-heading"><span>Artifacts</span><small>{run.artifacts.length}</small></div>
     <div className="artifact-list">{run.artifacts.map((artifact) => {
       const selected = selectedId === artifact.id;
-      return <div className="artifact-row" key={artifact.id}><FileText size={ICON_SIZE.md} /><button className="artifact-open" type="button" onClick={() => void openArtifact(artifact)} aria-expanded={selected}><strong>{artifact.title}</strong><small>{artifact.kind || "artifact"}</small></button><button className="artifact-download" type="button" onClick={() => void downloadArtifact(artifact)} disabled={downloadingId === artifact.id} title={`Download ${artifact.title}`} aria-label={`Download ${artifact.title}`}><Download size={ICON_SIZE.sm} /></button></div>;
+      return <div className="artifact-row" key={artifact.id}><FileText size={ICON_SIZE.md} /><button className="artifact-open" type="button" onClick={() => void openArtifact(artifact)} aria-expanded={selected}><strong className="truncate">{artifact.title}</strong><small className="truncate">{artifact.kind || "artifact"}</small></button><button className="artifact-download" type="button" onClick={() => void downloadArtifact(artifact)} disabled={downloadingId === artifact.id} title={`Download ${artifact.title}`} aria-label={`Download ${artifact.title}`}><Download size={ICON_SIZE.sm} /></button></div>;
     })}</div>{downloadError && <small data-tone="danger">{downloadError}</small>}
-    {selectedId && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closePreview(); }}>
-      <section className="modal artifact-modal" role="dialog" aria-modal="true" aria-labelledby="artifact-modal-title">
-        <header><div><span>Artifact preview</span><strong id="artifact-modal-title">{selectedArtifact?.title ?? "Artifact"}</strong></div><span><button type="button" disabled={!selectedArtifact || downloadingId === selectedId} onClick={() => { if (selectedArtifact) void downloadArtifact(selectedArtifact); }} aria-label="Download artifact"><Download size={ICON_SIZE.sm} /></button><button type="button" onClick={closePreview} aria-label="Close artifact preview"><X size={ICON_SIZE.md} /></button></span></header>
+    {selectedId && createPortal(<div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closePreview(); }}>
+      <section ref={dialogRef} className="modal artifact-modal" role="dialog" aria-modal="true" aria-labelledby="artifact-modal-title">
+        <header><div className="modal-title-group"><span>Artifact preview</span><strong className="truncate" id="artifact-modal-title" title={selectedArtifact?.title ?? "Artifact"}>{selectedArtifact?.title ?? "Artifact"}</strong></div><span><button className="icon-button" type="button" disabled={!selectedArtifact || downloadingId === selectedId} onClick={() => { if (selectedArtifact) void downloadArtifact(selectedArtifact); }} aria-label="Download artifact"><Download size={ICON_SIZE.sm} /></button><button ref={closeRef} className="icon-button" type="button" onClick={closePreview} aria-label="Close artifact preview"><X size={ICON_SIZE.md} /></button></span></header>
         <div className="artifact-modal-body">{loadingId === selectedId ? <div className="artifact-preview-state"><Activity className="spin" size={ICON_SIZE.md} />Loading preview…</div>
           : error ? <div className="artifact-preview-state" data-tone="danger">{error}<small>Unsupported or unavailable artifacts can still be downloaded.</small></div>
           : preview ? <><div className="artifact-preview-meta"><span>{preview.format} · {formatCount(preview.bytes, "byte")}</span><small>{preview.source === "file" ? "loaded from workspace file" : "stored content"}</small></div>{preview.format === "markdown" ? <Markdown>{preview.content}</Markdown> : <pre className="artifact-text-preview">{preview.content}</pre>}</>
           : null}</div>
       </section>
-    </div>}
+    </div>, document.body)}
   </section>;
 }
 
@@ -368,11 +384,11 @@ function RunEvidencePanel({ run }: { run: TaskRun }) {
     <div className="run-evidence-ledger">
       {hasPlan && <div className="run-evidence-group">
         {groupCount > 1 && <span className="run-evidence-group-label" data-label><span>Plan</span><small>{planDone}/{run.plan.length}</small></span>}
-        <div className="task-list">{run.plan.map((item) => <div className="task-row" data-status={item.status} key={item.key}>{item.status === "done" ? <Check size={ICON_SIZE.md} /> : <Circle size={ICON_SIZE.sm} />}<span>{item.title}</span><small>{formatRunValue(item.status)}</small></div>)}</div>
+        <div className="task-list">{run.plan.map((item) => <div className="task-row" data-status={item.status} key={item.key}>{item.status === "done" ? <Check size={ICON_SIZE.md} /> : <Circle size={ICON_SIZE.sm} />}<span>{item.title}</span><small data-tone={operationalTone(item.status)}>{formatRunValue(item.status)}</small></div>)}</div>
       </div>}
       {hasChecks && <div className="run-evidence-group">
         {groupCount > 1 && <span className="run-evidence-group-label" data-label><span>Checks</span><small>{checksPassed}/{run.checks.length}</small></span>}
-        <div className="task-list">{run.checks.map((check) => <div className="task-row" data-status={check.stale ? "stale" : check.status} key={check.key}>{check.status === "passed" && !check.stale ? <Check size={ICON_SIZE.md} /> : <Circle size={ICON_SIZE.sm} />}<span>{check.title}</span><small>{formatRunValue(check.stale ? "stale" : check.status)}</small></div>)}</div>
+        <div className="task-list">{run.checks.map((check) => { const status = check.stale ? "stale" : check.status; return <div className="task-row" data-status={status} key={check.key}>{check.status === "passed" && !check.stale ? <Check size={ICON_SIZE.md} /> : <Circle size={ICON_SIZE.sm} />}<span>{check.title}</span><small data-tone={operationalTone(status)}>{formatRunValue(status)}</small></div>; })}</div>
       </div>}
       {hasContinuations && <div className="run-evidence-group">
         {groupCount > 1 && <span className="run-evidence-group-label" data-label><span>Continuations</span><small>{run.continuations.length}</small></span>}
@@ -410,7 +426,7 @@ export function RunDetails({ run, toolEvents, transcriptTools }: { run: TaskRun;
   const checkpointPosition = checkpoint ? [checkpoint.lastEventSeq > 0 ? `event ${checkpoint.lastEventSeq}` : "", checkpoint.lastTranscriptSeq > 0 ? `transcript ${checkpoint.lastTranscriptSeq}` : ""].filter(Boolean).join(" · ") : "";
   return <div className="run-details">
     <CurrentOperationPanel run={run} />
-    <section className="run-summary"><div className="phase-line"><span className="status-label" data-tone={runStatusTone(run.status)}><span className="status-dot" />{statusLabel}</span>{showPhase && <span>{phaseLabel}</span>}{run.attempt > 1 && <span>attempt {run.attempt}</span>}</div><p>{run.goal}</p>{run.contract && <details className="run-contract"><summary><span>Task contract</span><small>{formatRunValue(run.contract.intent)} · {formatRunValue(run.contract.relation)}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div><strong>{formatContractDecisionReason(run.contract.decisionReason)}</strong><ul>{run.contract.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></div></details>}<RunMetrics run={run} />{statusNotice && <RunStatusNotice notice={statusNotice} />}</section>
+    <section className="run-summary"><div className="phase-line meta-line"><span className="status-label" data-tone={runStatusTone(run.status)}><span className="status-dot" />{statusLabel}</span>{showPhase && <span>{phaseLabel}</span>}{run.attempt > 1 && <span>attempt {run.attempt}</span>}</div><p>{run.goal}</p>{run.contract && <details className="run-contract"><summary><span>Task contract</span><small>{formatRunValue(run.contract.intent)} · {formatRunValue(run.contract.relation)}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div><strong>{formatContractDecisionReason(run.contract.decisionReason)}</strong><ul>{run.contract.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></div></details>}<RunMetrics run={run} />{statusNotice && <RunStatusNotice notice={statusNotice} />}</section>
     {checkpoint && <section className="audit-section"><div className="section-heading"><span>Checkpoint</span><small>preserved</small></div><div className="audit-ledger">{checkpointPosition && <span>{checkpointPosition}</span>}{checkpoint.currentTool && <strong>{checkpoint.currentTool.toolName}</strong>}{checkpoint.assistantPartial && <p>{checkpoint.assistantPartial.slice(-240)}</p>}</div></section>}
     <SupervisorReviewPanel run={run} />
     <GateAuditPanel run={run} />
@@ -443,7 +459,7 @@ export function ApprovalDock({ run, approvals, resolvingId, resolvingDecision, o
   onResolve: (approval: RunApproval, decision: "approved" | "rejected") => Promise<void>;
 }) {
   return <section className="approval-dock" aria-label="Pending approvals" aria-live="polite">
-    <header className="approval-dock-heading"><span><ShieldAlert size={ICON_SIZE.sm} />Approval required</span><small>{approvals.length} {approvals.length === 1 ? "action is" : "actions are"} paused</small></header>
+    <header className="section-heading approval-dock-heading"><span><ShieldAlert size={ICON_SIZE.sm} />Approval required</span><small>{approvals.length} {approvals.length === 1 ? "action is" : "actions are"} paused</small></header>
     {approvals.map((approval) => {
       const approvedAttempt = approval.metadata.approvedAttempt;
       const attempt = typeof approvedAttempt === "number" ? approvedAttempt : run.attempt;

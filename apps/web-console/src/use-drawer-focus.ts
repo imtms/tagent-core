@@ -1,4 +1,5 @@
 import { useEffect, useState, type RefObject } from "react";
+import { focusableElements } from "./focusable-elements";
 
 const mobileDrawerQuery = "(max-width: 980px)";
 
@@ -25,7 +26,7 @@ export function useDrawerFocus(open: boolean, drawerRef: RefObject<HTMLElement |
     for (const element of siblings) { element.inert = true; element.setAttribute("aria-hidden", "true"); }
     const trapFocus = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
-      const focusable = Array.from(drawer?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])') ?? []).filter((element) => element.getClientRects().length > 0);
+      const focusable = focusableElements(drawer);
       if (!focusable.length) return;
       const current = focusable.indexOf(document.activeElement as HTMLElement);
       event.preventDefault();

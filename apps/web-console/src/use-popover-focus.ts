@@ -1,13 +1,17 @@
-import { useEffect, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
+import { focusableElements } from "./focusable-elements";
 
 export function usePopoverFocus(open: boolean, popoverRef: RefObject<HTMLElement | null>, onClose: () => void) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const popover = popoverRef.current;
-    const focusableItems = () => Array.from(popover?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])') ?? []).filter((element) => element.getClientRects().length > 0);
+    const focusableItems = () => focusableElements(popover);
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); return; }
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onCloseRef.current(); return; }
       if (event.key !== "Tab") return;
       const focusable = focusableItems();
       if (!focusable.length) return;
@@ -23,5 +27,5 @@ export function usePopoverFocus(open: boolean, popoverRef: RefObject<HTMLElement
       popover?.removeEventListener("keydown", handleKeyDown);
       previous?.focus({ preventScroll: true });
     };
-  }, [onClose, open, popoverRef]);
+  }, [open, popoverRef]);
 }

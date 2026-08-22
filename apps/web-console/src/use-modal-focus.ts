@@ -1,6 +1,5 @@
 import { useEffect, useRef, type RefObject } from "react";
-
-const focusableSelector = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])';
+import { focusableElements } from "./focusable-elements";
 
 export function useModalFocus(
   open: boolean,
@@ -20,7 +19,7 @@ export function useModalFocus(
     const previousAriaHidden = appShell?.getAttribute("aria-hidden") ?? null;
     if (appShell) { appShell.inert = true; appShell.setAttribute("aria-hidden", "true"); }
 
-    const focusableItems = () => Array.from(dialog?.querySelectorAll<HTMLElement>(focusableSelector) ?? []).filter((element) => element.getClientRects().length > 0);
+    const focusableItems = () => focusableElements(dialog);
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onCloseRef.current(); return; }
       if (event.key !== "Tab") return;

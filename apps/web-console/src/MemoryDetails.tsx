@@ -69,7 +69,7 @@ export function RecordDetail({
 
       <section hidden={section !== "metadata"} aria-label="Memory metadata and provenance">
         <div className="section-heading"><strong>Metadata and provenance</strong><small>{record.scope.type}:{record.scope.id}</small></div>
-        <div className="memory-disclosure-body">
+        <div className="detail-disclosure-body">
           <section><span data-meta>Record identity</span><div data-mono>{record.id}</div></section>
           {record.kind === "preference" && <section><span data-meta>Preference semantics</span><div>{(record as PreferenceRecord).applicability} · {(record as PreferenceRecord).origin}</div></section>}
           {record.provenance && <section><span data-meta>Source authority</span><div>{record.provenance.evidenceClass.replaceAll("_", " ")} · {record.provenance.trustLevel} trust · {record.provenance.verificationState}{record.provenance.sourceReliability === undefined ? "" : ` · ${Math.round(record.provenance.sourceReliability * 100)}% reliability`}</div></section>}
@@ -85,7 +85,7 @@ export function RecordDetail({
       <section hidden={section !== "controls"} aria-label="Memory controls">
         <div className="section-heading"><strong>Memory controls</strong><small>{record.status === "deleted" ? "Recovery" : "Review, correct, rate or forget"}</small></div>
         <div>
-          <div className="memory-inline-actions">
+          <div className="inline-actions">
             {record.status === "candidate" && <><button className="control" disabled={busy} onClick={() => onGovern("approve")}><Check size={ICON_SIZE.sm} />Approve</button><button className="control" disabled={busy} onClick={() => onGovern("reject")}>Reject</button></>}
             {record.status === "disputed" && <><button className="control" disabled={busy} onClick={() => onGovern("resolve", "accept")}><Check size={ICON_SIZE.sm} />Resolve as valid</button><button className="control" disabled={busy} onClick={() => onGovern("resolve", "reject")}>Quarantine</button></>}
             {!['active', 'candidate', 'disputed', 'deleted'].includes(record.status) && <button className="control" disabled={busy} onClick={() => onGovern("approve")}><Check size={ICON_SIZE.sm} />Reactivate</button>}
@@ -93,11 +93,11 @@ export function RecordDetail({
             {record.status !== "deleted" && <><button className="control" disabled={busy} onClick={() => onFeedback("confirmed")}><Check size={ICON_SIZE.sm} />Confirm</button><button className="control" disabled={busy} onClick={() => onFeedback("helpful")}><ThumbsUp size={ICON_SIZE.sm} />Helpful</button><button className="control" disabled={busy} onClick={() => onFeedback("harmful")}><ThumbsDown size={ICON_SIZE.sm} />Wrong</button></>}
             {record.status === "deleted" ? <button className="control" disabled={busy} onClick={onRestore}><RotateCcw size={ICON_SIZE.sm} />Restore</button> : <button className="control" data-tone="danger" disabled={busy} onClick={onForget}><Trash2 size={ICON_SIZE.sm} />Forget</button>}
           </div>
-          {correcting && <div className="goal-form-columns">
-            {record.kind !== "preference" && <label className="goal-field"><span>Title</span><input value={title} onChange={(event) => setTitle(event.target.value)} /></label>}
-            <label className="goal-field"><span>{record.kind === "preference" ? "Preference value" : "Content"}</span><textarea rows={4} value={content} onChange={(event) => setContent(event.target.value)} /></label>
-            <label className="goal-field"><span>Correction reason <small>optional</small></span><input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Why this memory changed" /></label>
-            <div className="memory-inline-actions"><button className="control" disabled={busy} onClick={() => setCorrecting(false)}>Cancel</button><button className="control" data-variant="primary" disabled={busy || !canSaveCorrection} onClick={() => onCorrect(title.trim(), content.trim(), reason.trim())}>Save correction</button></div>
+          {correcting && <div className="form-columns">
+            {record.kind !== "preference" && <label className="form-field"><span>Title</span><input value={title} onChange={(event) => setTitle(event.target.value)} /></label>}
+            <label className="form-field"><span>{record.kind === "preference" ? "Preference value" : "Content"}</span><textarea rows={4} value={content} onChange={(event) => setContent(event.target.value)} /></label>
+            <label className="form-field"><span>Correction reason <small>optional</small></span><input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Why this memory changed" /></label>
+            <div className="inline-actions"><button className="control" disabled={busy} onClick={() => setCorrecting(false)}>Cancel</button><button className="control" data-variant="primary" disabled={busy || !canSaveCorrection} onClick={() => onCorrect(title.trim(), content.trim(), reason.trim())}>Save correction</button></div>
           </div>}
         </div>
       </section>
@@ -130,7 +130,7 @@ export function TopicDetail({ topic, onForget, onRestore, busy = false }: { topi
 
       <section hidden={section !== "metadata"} aria-label="Memory topic metadata and storage">
         <div className="section-heading"><strong>Metadata and storage</strong><small>{fullTopic ? `revision ${fullTopic.revision.revision}` : "descriptor only"}</small></div>
-        <div className="memory-disclosure-body">
+        <div className="detail-disclosure-body">
           <section><span data-meta>Topic identity</span><div data-mono>{descriptor.topicId} · {descriptor.scope.type}:{descriptor.scope.id}</div></section>
           {descriptor.aliases.length > 0 && <section><span data-meta>Aliases</span><div className="memory-tags">{descriptor.aliases.map((alias) => <code key={alias}>{alias}</code>)}</div></section>}
           {descriptor.entityIds.length > 0 && <section><span data-meta>Entities</span><div className="memory-tags">{descriptor.entityIds.map((entity) => <code key={entity}>{entity}</code>)}</div></section>}
@@ -142,7 +142,7 @@ export function TopicDetail({ topic, onForget, onRestore, busy = false }: { topi
 
       <section hidden={section !== "controls"} aria-label="Memory topic controls">
         <div className="section-heading"><strong>Topic controls</strong><small>{descriptor.status === "deleted" ? "Recovery" : "Review or forget"}</small></div>
-        <div className="memory-inline-actions">{descriptor.status === "deleted" ? <button className="control" disabled={busy} onClick={onRestore}><RotateCcw size={ICON_SIZE.sm} />Restore</button> : <button className="control" data-tone="danger" disabled={busy} onClick={onForget}><Trash2 size={ICON_SIZE.sm} />Forget</button>}</div>
+        <div className="inline-actions">{descriptor.status === "deleted" ? <button className="control" disabled={busy} onClick={onRestore}><RotateCcw size={ICON_SIZE.sm} />Restore</button> : <button className="control" data-tone="danger" disabled={busy} onClick={onForget}><Trash2 size={ICON_SIZE.sm} />Forget</button>}</div>
       </section>
       <small data-mono>{fullTopic ? `Published ${formatMemoryDate(fullTopic.revision.publishedAt ?? fullTopic.revision.createdAt)}` : `Updated ${formatMemoryDate(descriptor.updatedAt)}`}</small>
     </div>

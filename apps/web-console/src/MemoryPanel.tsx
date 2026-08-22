@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   BrainCircuit,
   ChevronLeft,
@@ -48,6 +49,7 @@ import {
   memoryPageWindow,
   mergeMemoryPage,
 } from "./memory-pagination";
+import { useModalFocus } from "./use-modal-focus";
 
 const memoryKinds = [
   { value: "all", label: "All" },
@@ -138,6 +140,14 @@ export function MemoryPanel({
   const selectedRecordIdRef = useRef("");
   const selectedTopicIdRef = useRef("");
   const selectedTopicRef = useRef<MemoryTopicDetail | null>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const captureDialogRef = useRef<HTMLElement>(null);
+  const captureInputRef = useRef<HTMLTextAreaElement>(null);
+
+  const closeCapture = useCallback(() => setCaptureOpen(false), []);
+  useModalFocus(true, dialogRef, onClose, closeRef);
+  useModalFocus(captureOpen, captureDialogRef, closeCapture, captureInputRef);
 
   useEffect(() => {
     selectedRecordIdRef.current = selectedRecord?.id ?? "";
@@ -536,25 +546,29 @@ export function MemoryPanel({
     { value: "operations", label: "Operations", meta: String(jobs.length + reindexJobs.length) },
   ] satisfies readonly PanelTab<MemorySection>[];
 
-  return (
+  return createPortal(<>
     <div
-      className="memory-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Memory center"
+      className="modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
     >
-      <button
-        className="memory-backdrop"
-        onClick={onClose}
-        aria-label="Close memory center"
-      />
-      <section className="memory-center">
-        <header className="memory-header">
-          <div>
+      <section
+        ref={dialogRef}
+        className="modal-workspace"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="memory-center-title"
+        aria-hidden={captureOpen ? "true" : undefined}
+        inert={captureOpen ? true : undefined}
+      >
+        <header className="modal-workspace-header">
+          <div className="modal-heading">
             <BrainCircuit size={ICON_SIZE.xl} />
-            <span><h2>Memory</h2><small data-mono>{status ? memoryStatusSummary(status) : `${scope.id} · ${runtime.memoryBackend ?? "memory"}/${runtime.memoryColdBackend ?? "local"}`}</small></span>
+            <div className="modal-title-group"><h2 className="truncate" id="memory-center-title">Memory</h2><small data-mono>{status ? memoryStatusSummary(status) : `${scope.id} · ${runtime.memoryBackend ?? "memory"}/${runtime.memoryColdBackend ?? "local"}`}</small></div>
           </div>
-          <div className="memory-header-actions">
+          <div className="modal-workspace-actions">
             <button
               className="icon-button"
               onClick={() => void refresh()}
@@ -564,6 +578,7 @@ export function MemoryPanel({
               <RefreshCw size={ICON_SIZE.lg} className={busy ? "spin" : ""} />
             </button>
             <button
+              ref={closeRef}
               className="icon-button"
               onClick={onClose}
               aria-label="Close memory center"
@@ -573,8 +588,8 @@ export function MemoryPanel({
           </div>
         </header>
         <div className="memory-toolbar">
-          {detailOpen ? <div className="memory-header-actions"><button className="control" type="button" onClick={() => { setSelectedRecord(null); setSelectedTopic(null); setSection(detailReturnSection); }}><ChevronLeft size={ICON_SIZE.md} />Back to {detailReturnSection}</button></div> : <PanelTabs label="Memory views" value={section} tabs={tabs} onChange={setSection} />}
-          <div className="memory-header-actions">
+          {detailOpen ? <div className="modal-workspace-actions"><button className="control" type="button" onClick={() => { setSelectedRecord(null); setSelectedTopic(null); setSection(detailReturnSection); }}><ChevronLeft size={ICON_SIZE.md} />Back to {detailReturnSection}</button></div> : <PanelTabs label="Memory views" value={section} tabs={tabs} onChange={setSection} />}
+          <div className="modal-workspace-actions">
             <button className="control" onClick={() => void exportMemory()} disabled={busy}><Download size={ICON_SIZE.md} />Export</button>
             <button className="control" data-variant="primary" disabled={busy} onClick={() => setCaptureOpen(true)}><Plus size={ICON_SIZE.md} />Add memory</button>
           </div>
@@ -628,7 +643,7 @@ export function MemoryPanel({
                     hasMoreTopics={hasMoreTopics}
                     loadingMoreTopics={loadingMoreTopics}
                     onLoadMoreTopics={() => void loadMoreTopics()}
-                  /> : <section className="memory-empty">
+                  /> : <section className="panel-empty">
                     <Search size={ICON_SIZE.lg} />
                     <strong>{!hasCatalogData ? "No durable memories yet" : catalogFiltersActive ? "No catalog matches" : catalogView === "records" ? "No memory cards yet" : "No Cold topics yet"}</strong>
                     <p>{!hasCatalogData ? "Add a stable fact, preference, event or procedure." : catalogFiltersActive ? "Clear the search phrase or choose another memory kind or state." : catalogView === "records" ? "Switch to Topics to inspect the Cold catalog." : "Switch to Cards to inspect Hot and Warm memory."}</p>
@@ -656,7 +671,7 @@ export function MemoryPanel({
                   onClear={() => setResults(null)}
                   onOpenRecord={(recordId) => void openRecord(recordId, "recall")}
                   onSelectTopic={(topic) => { setDetailReturnSection("recall"); setSelectedRecord(null); setSelectedTopic(topic); }}
-                /> : <section className="memory-empty"><Search size={ICON_SIZE.xl} /><p>Enter a cue to retrieve cards, Cold topics and routing diagnostics.</p></section>}
+                /> : <section className="panel-empty"><Search size={ICON_SIZE.xl} /><p>Enter a cue to retrieve cards, Cold topics and routing diagnostics.</p></section>}
               </div>
 
               <div hidden={section !== "core"}>
@@ -670,26 +685,27 @@ export function MemoryPanel({
           </main>}
         </div>
       </section>
-      {captureOpen && (
+    </div>
+    {captureOpen && (
         <div
           className="modal-backdrop"
           role="presentation"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setCaptureOpen(false);
+            if (event.target === event.currentTarget) closeCapture();
           }}
         >
-          <section className="modal memory-modal" role="dialog" aria-modal="true" aria-labelledby="memory-capture-title">
+          <section ref={captureDialogRef} className="modal memory-modal" role="dialog" aria-modal="true" aria-labelledby="memory-capture-title">
             <header>
-              <div>
+              <div className="modal-title-group">
                 <span className="eyebrow">Policy-gated capture</span>
-                <h3 id="memory-capture-title">Add a memory cue</h3>
+                <h3 className="truncate" id="memory-capture-title">Add a memory cue</h3>
               </div>
               <button
                 className="icon-button"
-                onClick={() => setCaptureOpen(false)}
+                onClick={closeCapture}
                 aria-label="Close add memory"
               >
-                <X size={ICON_SIZE.lg} />
+                <X size={ICON_SIZE.md} />
               </button>
             </header>
             <section>
@@ -698,7 +714,7 @@ export function MemoryPanel({
                 inspected before durable storage.
               </p>
               <textarea
-                autoFocus
+                ref={captureInputRef}
                 value={captureText}
                 onChange={(event) => setCaptureText(event.target.value)}
                 placeholder="Example: I prefer concise Chinese answers, but architecture reviews should include trade-offs."
@@ -711,7 +727,7 @@ export function MemoryPanel({
                 Scope: {scope.id}
               </span>
               <div>
-                <button className="control" onClick={() => setCaptureOpen(false)}>Cancel</button>
+                <button className="control" onClick={closeCapture}>Cancel</button>
                 <button
                   className="control"
                   data-variant="primary"
@@ -725,6 +741,5 @@ export function MemoryPanel({
           </section>
         </div>
       )}
-    </div>
-  );
+  </>, document.body);
 }
