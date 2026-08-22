@@ -653,24 +653,36 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
       p.updated_at as updatedAt,p.completed_at as completedAt,r.status as runStatus
       FROM workspace_goal_roadmap_item_progress p LEFT JOIN runs r ON r.id=p.run_id
       WHERE p.goal_id=? AND p.roadmap_revision_id=?`).all(goalId, roadmap.id) as Array<WorkspaceGoalRoadmapItemProgress & { runStatus: RunStatus | null }>;
+    const queuedRows = this.db.prepare(`SELECT l.inbox_item_id as inboxItemId,l.roadmap_item_ids_json as roadmapItemIdsJson,
+      i.status as queueStatus,l.created_at as createdAt FROM workspace_goal_inbox_links l
+      JOIN session_supervisor_inbox i ON i.id=l.inbox_item_id
+      WHERE l.goal_id=? AND l.roadmap_revision_id=? AND i.status IN ('queued','claimed')
+      ORDER BY l.created_at,l.rowid`).all(goalId, roadmap.id) as Array<{ inboxItemId: string; roadmapItemIdsJson: string; queueStatus: "queued" | "claimed"; createdAt: number }>;
+    const queuedByItem = new Map<string, { inboxItemId: string; queueStatus: "queued" | "claimed"; createdAt: number }>();
+    for (const queued of queuedRows) {
+      for (const itemId of JSON.parse(queued.roadmapItemIdsJson) as string[]) queuedByItem.set(itemId, queued);
+    }
     const byItem = new Map(rows.map(({ runStatus, ...row }) => {
       const status = projectedRoadmapStatus(row.status, runStatus);
       return [row.itemId, { ...row, status, runStatus, retryable: status === "blocked" && Boolean(runStatus && ["failed", "cancelled"].includes(runStatus)) }];
     }));
     const approved = new Set(approvedItemIds);
     return roadmapContent(roadmap).items.map((item) => {
+      const queued = queuedByItem.get(item.id);
       if (!approved.has(item.id)) return {
         goalId,
         roadmapRevisionId: roadmap.id,
         itemId: item.id,
         status: "unapproved" as const,
+        queueStatus: null,
+        inboxItemId: null,
         runId: null,
         runStatus: null,
         retryable: false,
         updatedAt: roadmap.createdAt,
         completedAt: null,
       };
-      return byItem.get(item.id) ?? {
+      const progress = byItem.get(item.id) ?? {
         goalId,
         roadmapRevisionId: roadmap.id,
         itemId: item.id,
@@ -681,6 +693,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
         updatedAt: roadmap.createdAt,
         completedAt: null,
       };
+      return { ...progress, queueStatus: queued?.queueStatus ?? null, inboxItemId: queued?.inboxItemId ?? null, updatedAt: Math.max(progress.updatedAt, queued?.createdAt ?? 0) };
     });
   }
 

@@ -493,7 +493,8 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
   const evidenceByCriterion = useMemo(() => new Map((definition?.criteria ?? []).map((criterion) => [criterion.key, goal.evidenceLinks.filter((link) => link.goalRevision === goal.definition?.revision && link.criterionKey === criterion.key)])), [definition, goal.definition?.revision, goal.evidenceLinks]);
   const progressByItem = useMemo(() => new Map(goal.roadmapProgress.map((item) => [item.itemId, item])), [goal.roadmapProgress]);
   const hasActiveRoadmapWork = goal.roadmapProgress.some((item) => item.status === "running");
-  const lifecycleLocked = Boolean(goal.currentRunId) || hasActiveRoadmapWork;
+  const hasQueuedRoadmapWork = goal.roadmapProgress.some((item) => Boolean(item.queueStatus));
+  const lifecycleLocked = Boolean(goal.currentRunId) || hasActiveRoadmapWork || hasQueuedRoadmapWork;
   const canEdit = !["completed", "cancelled"].includes(goal.status) && !lifecycleLocked;
   const verifiedPercent = goal.requiredCriteria ? Math.round(goal.verifiedCriteria / goal.requiredCriteria * 100) : 0;
   const approvedRoadmapItems = approval?.approvedItemIds.length ?? 0;
@@ -508,6 +509,8 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
   const nextRoadmapItem = goal.nextAction.kind === "run_roadmap_item"
     ? roadmap?.items.find((item) => item.id === goal.nextAction.roadmapItemId)
     : undefined;
+  const nextRoadmapProgress = nextRoadmapItem ? progressByItem.get(nextRoadmapItem.id) : undefined;
+  const nextRoadmapQueued = Boolean(nextRoadmapProgress?.queueStatus);
 
   const nextAction = () => {
     if (goal.nextAction.kind === "review_goal") return void decide("approve_goal");
@@ -527,7 +530,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
   };
   const actionable = goal.nextAction.kind !== "view_result" || goal.status === "ready_to_close";
   const showsNextAction = goal.nextAction.actor !== "none" && actionable;
-  const actionDisabled = busy || goal.nextAction.kind === "review_roadmap" && selectedItems.length === 0;
+  const actionDisabled = busy || nextRoadmapQueued || goal.nextAction.kind === "review_roadmap" && selectedItems.length === 0;
   const canCreateRoadmapManually = showsNextAction && canEdit && goal.nextAction.kind === "generate_roadmap";
   const recoverOperation = async () => {
     const requestId = operationRequestId.trim();
@@ -553,10 +556,10 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
     </header>
 
     {showsNextAction && <section className="goal-next-card">
-      <div className="goal-next-copy"><span className="eyebrow">Next action</span><strong>{nextRoadmapItem?.title ?? goal.nextAction.title}</strong><small>{nextRoadmapItem?.outcome ?? goal.nextAction.explanation}</small></div>
+      <div className="goal-next-copy"><span className="eyebrow">{nextRoadmapQueued ? "Queued" : "Next action"}</span><strong>{nextRoadmapItem?.title ?? goal.nextAction.title}</strong><small>{nextRoadmapQueued ? "Waiting in the Supervisor queue; TAgent will attach the TaskRun when execution capacity is available." : nextRoadmapItem?.outcome ?? goal.nextAction.explanation}</small></div>
       <div className="goal-next-actions">
         {canCreateRoadmapManually && <button className="control" onClick={onEditRoadmap} disabled={busy}><Plus size={ICON_SIZE.sm} />Create manually</button>}
-        <button className="control" data-variant="primary" disabled={actionDisabled} onClick={nextAction}>{busy ? "Working…" : goal.nextAction.primaryActionLabel}</button>
+        <button className="control" data-variant="primary" disabled={actionDisabled} onClick={nextAction}>{nextRoadmapQueued ? "Queued" : busy ? "Working…" : goal.nextAction.primaryActionLabel}</button>
       </div>
     </section>}
 
@@ -596,9 +599,10 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
         {roadmap.items.map((item, index) => {
           const approved = approval?.approvedItemIds.includes(item.id) ?? false;
           const itemProgress = progressByItem.get(item.id);
-          const itemStatus = itemProgress?.status ?? (approved ? "pending" : "unapproved");
+          const queued = Boolean(itemProgress?.queueStatus);
+          const itemStatus = queued ? "queued" as const : itemProgress?.status ?? (approved ? "pending" : "unapproved");
           const selectable = !approval && !requiresRoadmapRevision;
-          const tone = itemStatus === "running" ? "info" : itemStatus === "completed" ? "success" : itemStatus === "blocked" ? "warning" : undefined;
+          const tone = itemStatus === "running" ? "info" : itemStatus === "completed" ? "success" : itemStatus === "blocked" || itemStatus === "queued" ? "warning" : undefined;
           return <div className="goal-roadmap-item" key={item.id}>
             <div className="status-label" data-tone={tone}>
               {selectable ? <input aria-label={`Approve ${item.title}`} type="checkbox" checked={selectedItems.includes(item.id)} disabled={busy} onChange={(event) => setSelectedItems((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /> : itemStatus === "completed" ? <CheckCircle2 size={ICON_SIZE.md} /> : itemStatus === "blocked" ? <AlertTriangle size={ICON_SIZE.md} /> : <Circle size={ICON_SIZE.md} />}
@@ -625,7 +629,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
     <section hidden={section !== "controls"} aria-label="Goal controls">
       <div className="section-heading"><strong>Goal controls</strong><small>Lifecycle and revision</small></div>
       {['completed', 'cancelled'].includes(goal.status) ? <p data-meta>This Goal is terminal. Its definition, Roadmap and audit history remain available in the other views.</p> : <>
-        {lifecycleLocked && <p data-meta>Finish or resolve the active Roadmap work before revising or changing this Goal's lifecycle.</p>}
+        {hasQueuedRoadmapWork ? <p data-meta>Wait for the queued Roadmap work to attach its TaskRun before revising or changing this Goal's lifecycle.</p> : lifecycleLocked && <p data-meta>Finish or resolve the active Roadmap work before revising or changing this Goal's lifecycle.</p>}
         <div className="memory-inline-actions">{["active", "ready_to_close"].includes(goal.status) && <button className="control" disabled={busy || lifecycleLocked} onClick={() => void decide("pause")}>Pause Goal</button>}{goal.status === "paused" && <button className="control" data-variant="primary" disabled={busy} onClick={() => void decide("resume")}>Resume Goal</button>}{goal.status === "ready_to_close" && <button className="control" data-variant="primary" disabled={busy} onClick={() => { if (window.confirm("Close this Goal with the verified evidence? This cannot be undone.")) void decide("close"); }}>Close Goal</button>}<button className="control" data-tone="danger" disabled={busy || lifecycleLocked} onClick={() => { if (window.confirm("Cancel this Goal? This cannot be undone.")) void decide("cancel"); }}>Cancel Goal</button></div>
         {changeTargets.length > 0 && <div className="goal-form-columns">
           {changeTargets.length > 1 && <label className="goal-field"><span>Revision to reopen</span><select value={changeTargetId} onChange={(event) => setChangeTargetId(event.target.value)}>{changeTargets.map((target) => <option value={target.id} key={target.id}>{target.kind === "definition" ? "Goal definition" : "Roadmap"} v{target.revision}</option>)}</select></label>}
@@ -680,8 +684,8 @@ function statusLabel(status: WorkspaceGoal["status"]): string {
   return ({ draft: "Needs review", active: "In progress", paused: "Paused", ready_to_close: "Ready to close", completed: "Completed", cancelled: "Cancelled" } as const)[status];
 }
 
-function roadmapStatusLabel(status: WorkspaceGoal["roadmapProgress"][number]["status"]): string {
-  return ({ unapproved: "Not approved", pending: "Ready", running: "Running", completed: "Done", blocked: "Needs attention", skipped: "Skipped" } as const)[status];
+function roadmapStatusLabel(status: WorkspaceGoal["roadmapProgress"][number]["status"] | "queued"): string {
+  return ({ unapproved: "Not approved", pending: "Ready", queued: "Queued", running: "Running", completed: "Done", blocked: "Needs attention", skipped: "Skipped" } as const)[status];
 }
 
 function runLinkLabel(link: WorkspaceGoal["runLinks"][number]): string {

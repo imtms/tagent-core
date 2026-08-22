@@ -389,6 +389,8 @@ describe("Web workbench behavior", () => {
     expect(descriptorDetail).toContain("descriptor · active · no cold page");
     expect(descriptorDetail).toContain("descriptor only");
     expect(descriptorDetail).toContain("Topic controls");
+    expect(descriptorDetail).toContain('aria-label="Memory topic views"');
+    expect(descriptorDetail).not.toContain('<details class="memory-disclosure">');
     expect(descriptorDetail).toContain(">Forget</button>");
     expect(descriptorDetail).not.toContain("Canonical document");
   });
@@ -460,6 +462,8 @@ describe("Web workbench behavior", () => {
     expect(empty).not.toContain("Provenance");
     expect(empty).not.toContain("No topic route");
     expect(empty).not.toContain("No source reference");
+    expect(empty).toContain('aria-label="Memory record views"');
+    expect(empty).not.toContain('<details class="memory-disclosure">');
     expect(populated).toContain("Topic routes");
     expect(populated).toContain(">release<");
     expect(populated).toContain("Provenance");
@@ -665,6 +669,27 @@ describe("Web workbench behavior", () => {
       ...blockedRoadmapGoal,
       roadmapProgress: [{ ...blockedProgress, status: "running", runStatus: "running", retryable: false }],
     });
+    const queued = renderGoal({
+      ...blockedRoadmapGoal,
+      roadmapProgress: [{
+        ...blockedProgress,
+        status: "pending",
+        queueStatus: "queued",
+        inboxItemId: "inbox-queued",
+        runId: null,
+        runStatus: null,
+        retryable: false,
+      }],
+      nextAction: {
+        actor: "user",
+        kind: "run_roadmap_item",
+        title: "Run the next Roadmap item",
+        explanation: "Start one bounded TaskRun.",
+        primaryActionLabel: "Start TaskRun",
+        roadmapItemId: "item-1",
+        taskRunId: null,
+      },
+    });
 
     expect(empty).not.toContain("Scope and boundaries");
     expect(empty).not.toContain("Linked TaskRuns");
@@ -723,6 +748,11 @@ describe("Web workbench behavior", () => {
     expect(retryable.match(/Inspect blocked Run/g)).toHaveLength(2);
     expect(lifecycleLocked).toContain("Finish or resolve the active Roadmap work");
     expect(lifecycleLocked).not.toContain(">Edit Goal</button>");
+    expect(queued).toContain("Waiting in the Supervisor queue");
+    expect(queued).toContain(">Queued</button>");
+    expect(queued).toContain("Wait for the queued Roadmap work");
+    expect(queued).not.toContain(">Start</button>");
+    expect(queued).not.toContain(">Edit Goal</button>");
   });
 
   it("applies workspace and new-run view transitions atomically", () => {

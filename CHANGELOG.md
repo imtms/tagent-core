@@ -4,6 +4,8 @@
 
 ### Goal and Memory completeness follow-up
 
+- Projected queued and claimed Supervisor Inbox work into Goal Roadmap progress before a TaskRun exists, labeled the item as queued, and locked duplicate launch, revision, and lifecycle actions until the TaskRun attaches.
+- Replaced top-level Memory Record and Topic accordion chains with stable Overview, Metadata, and Controls views; inactive records and deleted Topics open directly on the recovery or governance surface while every detail and operation remains reachable.
 - Made Goal definition, Roadmap revision, and Roadmap generation request IDs user-visible and directly reusable in operation recovery, made the next action name its concrete Roadmap item, and made lifecycle controls respect queued or running Roadmap work.
 - Replaced the duplicated Hot/Warm-plus-Cold Memory text wall with an explicit catalog-layer selector, invalidated stale Recall results when their cue or filters change, refreshed details after feedback, shared one mutation busy authority, limited deleted Records to recovery, and prevented repeated Core snapshot generation.
 - Replaced the remaining Goal accordion chain with stable Overview, Roadmap, Activity, and Controls views while keeping the current action and progress visible above the navigation; every definition, execution, audit, revision, lifecycle, and receipt-recovery workflow remains reachable.

@@ -76,6 +76,9 @@ export interface WorkspaceGoalRoadmapItemProgress {
   roadmapRevisionId: string;
   itemId: string;
   status: WorkspaceGoalRoadmapItemStatus;
+  /** Supervisor Inbox work that has been admitted but has not attached a TaskRun yet. */
+  queueStatus?: "queued" | "claimed" | null;
+  inboxItemId?: string | null;
   runId: string | null;
   runStatus: "running" | "waiting_input" | "completed" | "blocked" | "interrupted" | "cancelled" | "failed" | null;
   retryable: boolean;

@@ -665,7 +665,7 @@ details[open] > summary .tool-chevron { transform: rotate(90deg); }
 .goal-empty p { margin: 0 0 var(--space-4); color: var(--text-muted); }
 .goal-form-heading h2, .goal-hero h2 { margin: 0; font-size: var(--text-xl); }
 .goal-field textarea { min-height: 100px; resize: vertical; }
-.goal-form > fieldset, .goal-view > section { padding: var(--space-4) 0; border-top: 1px solid var(--border); }
+.goal-form > fieldset, .goal-view > section, .memory-detail-content > section { padding: var(--space-4) 0; border-top: 1px solid var(--border); }
 .goal-criterion-editor, .goal-roadmap-editor > section, .goal-criteria-list > div, .goal-roadmap-item, .goal-run-links > * { padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
 .goal-criterion-editor { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-2); }
 .goal-criterion-editor > label { display: flex; align-items: center; gap: var(--space-1); }

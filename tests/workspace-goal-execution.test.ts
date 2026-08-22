@@ -259,6 +259,9 @@ describe("Workspace Goal Core execution", () => {
     try {
       const queued = enqueueUnlinkedRoadmapItem(store, { workspaceId: workspace.id, goalId: goal.id, goalOutcome: definition().outcome, item, requestId: "immutable-roadmap" });
       goals.linkInbox({ goalId: goal.id, inboxItemId: queued.id, goalRevision: 1, roadmapRevisionId: roadmap.id, roadmapItemIds: [item.id], criterionKeys: item.criterionKeys });
+      expect(goals.get(goal.id)?.roadmapProgress).toContainEqual(expect.objectContaining({
+        itemId: item.id, status: "pending", queueStatus: "queued", inboxItemId: queued.id, runId: null,
+      }));
       const unrelated = store.enqueueSessionInbox(workspace.id, "ordinary", { ...queued.analysis, routerVersion: "ordinary", reason: "ordinary" }, "ordinary");
       expect(store.updateSessionInboxItem(queued.id, workspace.id, "Delete unrelated files", { ...queued.analysis, summary: "Delete unrelated files" })).toBeUndefined();
       expect(store.mergeSessionInboxItems(unrelated.id, queued.id, workspace.id)).toBe(false);
@@ -269,6 +272,9 @@ describe("Workspace Goal Core execution", () => {
       const claimed = store.claimSessionInboxNow(queued.id, workspace.id);
       expect(claimed).toMatchObject({ status: "started", run: { contract: { sourceInput: expect.stringContaining("Persist"), workspaceGoal: { goalId: goal.id, mode: "roadmap", targetRoadmapItemIds: [item.id] } } } });
       if (claimed.status !== "started") throw new Error("Goal Inbox item did not start");
+      expect(goals.get(goal.id)?.roadmapProgress).toContainEqual(expect.objectContaining({
+        itemId: item.id, status: "running", queueStatus: null, inboxItemId: null, runId: claimed.run.id,
+      }));
       expect(corePersistence(store).workspaceGoals.authorizeRunMutation(claimed.run.id)).toEqual({ allowed: true, reason: "Goal Roadmap slice is approved" });
     } finally { store.close(); }
   });

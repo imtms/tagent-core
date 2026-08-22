@@ -66,7 +66,7 @@ active or ready_to_close -> cancelled
 
 An active guided TaskRun prevents Goal pause, revision and cancellation so its immutable execution contract cannot diverge from the Goal state. Queued or claimed approved Roadmap work provides the same protection before a Run exists. A paused Goal does not guide newly started Workspace TaskRuns. Approval and lifecycle decisions must bind to the currently applicable immutable revision. `completed` and `cancelled` are terminal.
 
-Roadmap progress is durable and projected as `unapproved`, `pending`, `running`, `completed` or `blocked`, together with the underlying `runStatus` and a derived `retryable` flag. The same item cannot be launched again while it already has queued, running or completed work. A `failed` or `cancelled` Run makes the item explicitly retryable; a `blocked` or `interrupted` Run is not duplicated and must be opened, resolved and resumed. Delayed outcomes from older Runs cannot replace the newer owner of an item.
+Roadmap progress is durable and projected as `unapproved`, `pending`, `running`, `completed` or `blocked`, together with the underlying `runStatus` and a derived `retryable` flag. Before a Run attaches, an admitted Supervisor Inbox link additionally projects `queueStatus` (`queued` or `claimed`) and `inboxItemId`; after transactional attachment, Run progress becomes authoritative and those queue fields clear. The Console renders this interval as `Queued` and locks duplicate launch, revision, and lifecycle actions. The same item cannot be launched again while it already has queued, running or completed work. A `failed` or `cancelled` Run makes the item explicitly retryable; a `blocked` or `interrupted` Run is not duplicated and must be opened, resolved and resumed. Delayed outcomes from older Runs cannot replace the newer owner of an item.
 
 ## Gate and evidence model
 
@@ -107,7 +107,7 @@ The first-party Console creates definition-revision, Roadmap-revision and genera
 
 The Goal reading surface keeps the definition, status, progress and concrete next action above four stable views. Overview contains completion criteria and boundaries; Roadmap contains revision, approval and TaskRun launch/open actions; Activity contains linked Runs, evidence and decisions; Controls contains lifecycle, revision requests and operation receipt recovery. The current next action selects the most relevant initial view, but all four remain one click away. Raw receipt payload and outcome stay in a nested disclosure after the durable operation identity. This hierarchy reduces the visible text wall without removing Goal operations or depending on a vertical chain of top-level accordions.
 
-Goal reads expose Roadmap `runStatus`/`retryable` and may include `nextAction.taskRunId` when the Run needing attention no longer owns `currentRunId`. State, stale-revision, pending-work and idempotency conflicts use HTTP 409 rather than being flattened into validation errors.
+Goal reads expose Roadmap `queueStatus`/`inboxItemId` before Run attachment, `runStatus`/`retryable` after attachment, and may include `nextAction.taskRunId` when the Run needing attention no longer owns `currentRunId`. State, stale-revision, pending-work and idempotency conflicts use HTTP 409 rather than being flattened into validation errors.
 
 ## Persistence
 

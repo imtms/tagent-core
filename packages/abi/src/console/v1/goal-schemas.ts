@@ -43,6 +43,8 @@ export const ConsoleWorkspaceGoalRunLinkSchema = Type.Object({
 export const ConsoleWorkspaceGoalRoadmapProgressSchema = Type.Object({
   goalId: Type.String(), roadmapRevisionId: Type.String(), itemId: Type.String(),
   status: Type.Union([Type.Literal("unapproved"), Type.Literal("pending"), Type.Literal("running"), Type.Literal("completed"), Type.Literal("blocked")]),
+  queueStatus: Type.Optional(Type.Union([Type.Literal("queued"), Type.Literal("claimed"), Type.Null()])),
+  inboxItemId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   runId: Type.Union([Type.String(), Type.Null()]),
   runStatus: Type.Union([
     Type.Literal("running"), Type.Literal("waiting_input"), Type.Literal("completed"), Type.Literal("blocked"),
