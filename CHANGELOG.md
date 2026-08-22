@@ -2,7 +2,12 @@
 
 ## Unreleased
 
-## [0.8.25] - 2026-08-22
+## [0.8.26] - 2026-08-22
+
+### Release validation
+
+- Preserved the document-level Memory and Goals portals in the browser while restoring their server-rendering fallback for static behavior tests.
+- Updated the exact Run summary regression to recognize the shared metadata-row class introduced by the visual-system consolidation.
 
 ### Web Console visual system
 
@@ -24,7 +29,13 @@
 
 ### Compatibility
 
-- Published Gateway ABI and SDK shapes, cursor and snapshot tokens, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` are unchanged. The removed `@tagent/execution/application` subpath belonged to a private package and had no production consumer. Deploy matching `0.8.25` Core, Web Console, ABI, and Core Client artifacts.
+- Published Gateway ABI and SDK shapes, cursor and snapshot tokens, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` are unchanged. The removed `@tagent/execution/application` subpath belonged to a private package and had no production consumer. Deploy matching `0.8.26` Core, Web Console, ABI, and Core Client artifacts.
+
+## [0.8.25] - 2026-08-22
+
+### Release status
+
+- Withheld after CI rejected a missing Web modal server-rendering fallback and an obsolete exact class-string assertion before any GitHub Release or artifacts were published; superseded by `v0.8.26`.
 
 ## [0.8.24] - 2026-08-22
 
