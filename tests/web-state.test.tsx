@@ -225,12 +225,16 @@ describe("Web workbench behavior", () => {
     const jobs = renderToStaticMarkup(<MemoryJobLists reindexJobs={[]} jobs={[captureJob]} {...jobProps} />);
 
     expect(empty).toContain("No recall matches");
+    expect(empty).toContain("Try a broader phrase or open Catalog.");
+    expect(empty).not.toContain("catalog below");
+    expect(empty).not.toContain("Dynamic recall");
     expect(empty).not.toContain("0 candidates");
     expect(empty).not.toContain("0 cold routes");
     expect(empty).not.toContain("0 denied");
     expect(traced).toContain("1 candidate · 1 cold route · 1 denied");
     expect(traced).not.toContain("route(s)");
     expect(diagnostic).toContain("Recall diagnostics");
+    expect(diagnostic).not.toContain(">Trace<");
     expect(diagnostic).toContain("Candidate outcomes");
     expect(diagnostic).toContain("embed-v2");
     expect(jobs).toContain("1 job");
@@ -260,7 +264,7 @@ describe("Web workbench behavior", () => {
     expect(memoryStatusSummary({ ...status, records: { ...status.records, candidate: 2 }, coldTopics: 1 }))
       .toBe("3 active · 2 candidates · 1 cold topic");
     expect(memoryStatusSummary({ ...status, records: { ...status.records, active: 0 } }))
-      .toBe("No durable memory");
+      .toBe("");
   });
 
   it("keeps an ungenerated Core Memory snapshot compact and actionable", () => {
@@ -464,6 +468,8 @@ describe("Web workbench behavior", () => {
     const disputed = renderRecord({ ...record, status: "disputed" });
     const stale = renderRecord({ ...record, status: "stale" });
     const forgotten = renderRecord({ ...record, status: "deleted" });
+    const titleSummary = renderRecord({ ...record, summary: record.title });
+    const distinctSummary = renderRecord({ ...record, summary: "This policy governs release verification." });
 
     expect(empty).not.toContain("Topic routes");
     expect(empty).not.toContain("Provenance");
@@ -493,6 +499,10 @@ describe("Web workbench behavior", () => {
     expect(forgotten).not.toContain(">Helpful</button>");
     expect(forgotten).not.toContain(">Wrong</button>");
     expect(forgotten).not.toContain(">Forget</button>");
+    expect(titleSummary.match(/Release policy/g)).toHaveLength(1);
+    expect(titleSummary).not.toContain('<span class="eyebrow">Summary</span>');
+    expect(distinctSummary).toContain('<span class="eyebrow">Summary</span>');
+    expect(distinctSummary).toContain("This policy governs release verification.");
   });
 
   it("maps Goal lifecycle states to shared semantic tones", () => {
@@ -704,6 +714,10 @@ describe("Web workbench behavior", () => {
       roadmapProgress: [{ ...blockedProgress, runStatus: "failed", retryable: true }],
       nextAction: { ...blockedRoadmapGoal.nextAction, kind: "run_roadmap_item", primaryActionLabel: "Retry TaskRun" },
     });
+    const roadmapWithoutSummary = renderGoal({
+      ...blockedRoadmapGoal,
+      roadmap: { ...roadmap, content: { ...roadmap.content, summary: "" } },
+    });
     const lifecycleLocked = renderGoal({
       ...blockedRoadmapGoal,
       roadmapProgress: [{ ...blockedProgress, status: "running", runStatus: "running", retryable: false }],
@@ -777,10 +791,15 @@ describe("Web workbench behavior", () => {
     expect(populated).not.toContain("1 items");
     expect(populated).toContain("Linked TaskRuns");
     expect(populated).not.toContain("<strong>Activity and audit</strong>");
-    expect(populated).toContain("1 linked");
+    expect(populated).toContain('<strong>Linked TaskRuns</strong><small data-mono="true">1</small>');
+    expect(populated).not.toContain("1 linked");
+    expect(populated).toContain("Roadmap TaskRun");
     expect(populated).toContain("1 Roadmap item");
     expect(populated).toContain("Evidence log");
-    expect(populated).toContain("Valid · run run-1234567");
+    expect(populated).toContain("Visual review passes");
+    expect(populated).toContain("Valid · Artifact evidence");
+    expect(populated).not.toContain("run-1234567890");
+    expect(populated).not.toContain("artifact-123456");
     expect(populated).toContain("Decision history");
     expect(populated).toContain("Goal approved");
     expect(cancelled).toContain('data-tone="danger"');
@@ -788,7 +807,7 @@ describe("Web workbench behavior", () => {
     expect(cancelled).toContain("This Goal is terminal");
     expect(cancelled).not.toContain("<strong>Lifecycle</strong>");
     expect(awaitingRoadmap).toContain("<strong>Lifecycle</strong>");
-    expect(nonRetryable).toContain(">Open</button>");
+    expect(nonRetryable).not.toContain(">Open</button>");
     expect(nonRetryable).not.toContain(">Retry</button>");
     expect(nonRetryable).toContain("Open task");
     expect(reviewing).toContain("Criteria · Visual review passes");
@@ -801,13 +820,20 @@ describe("Web workbench behavior", () => {
     expect(nonRetryable).toContain("Visual review passes");
     expect(nonRetryable).toContain("Open it");
     expect(nonRetryable).toContain('class="status-label" data-tone="warning"');
+    expect(nonRetryable.match(/class="status-label" data-tone="warning"/g)).toHaveLength(1);
+    expect(nonRetryable).toContain('class="goal-roadmap-index"');
     expect(nonRetryable).not.toContain('class="section-heading" data-label');
-    expect(retryable).toContain(">Retry</button>");
-    expect(retryable.match(/Inspect blocked Run/g)).toHaveLength(2);
+    expect(retryable).not.toContain(">Retry</button>");
+    expect(retryable).toContain("Retry TaskRun");
+    expect(retryable.match(/Inspect blocked Run/g)).toHaveLength(1);
+    expect(roadmapWithoutSummary).toContain('<div class="section-heading"><div><h3>Roadmap v1</h3>');
+    expect(roadmapWithoutSummary).not.toContain('<span class="eyebrow">Roadmap v1</span><h3>Roadmap v1</h3>');
     expect(lifecycleLocked).toContain("Finish or resolve the active Roadmap work");
     expect(lifecycleLocked).not.toContain(">Edit Goal</button>");
-    expect(queued).toContain("Waiting in the Supervisor queue");
-    expect(queued).toContain(">Queued</button>");
+    expect(queued).not.toContain("goal-next-card");
+    expect(queued).not.toContain("Waiting in the Supervisor queue");
+    expect(queued).not.toContain(">Queued</button>");
+    expect(queued).toContain(">Queued</span>");
     expect(queued).toContain("Wait for the queued Roadmap work");
     expect(queued).not.toContain(">Start</button>");
     expect(queued).not.toContain(">Edit Goal</button>");
@@ -1261,17 +1287,17 @@ describe("Web workbench behavior", () => {
 
     const completed = renderToStaticMarkup(<RunDetails run={run({
       status: "completed", phase: "done", blockedReason: "visual audit fixture",
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
     const blocked = renderToStaticMarkup(<RunDetails run={run({
       status: "blocked", phase: "blocked", blockedReason: "External evidence is missing",
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
     const failed = renderToStaticMarkup(<RunDetails run={run({
       status: "failed", blockedReason: "Provider failed",
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
     const diagnostic = renderToStaticMarkup(<RunDetails run={run({
       status: "blocked",
       blockedReason: "semantic_review_unavailable: Semantic review was unavailable; acceptance_criterion_1: Evidence was not mapped to this criterion because the independent judge was unavailable.",
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
 
     expect(completed).not.toContain("visual audit fixture");
     expect(completed).not.toContain("run-status-note");
@@ -1405,6 +1431,83 @@ describe("Web workbench behavior", () => {
     expect(deriveCurrentOperation(run({ status: "completed", completedAt: 5 }), 10).state).toBe("completed");
   });
 
+  it("shows only abnormal Current operation state", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(200_000);
+    const quietRunning = renderToStaticMarkup(<RunDetails run={run({
+      createdAt: 199_000, updatedAt: 199_000,
+    })} />);
+    const longToolName = "core_generation_operation_with_an_intentionally_long_identifier_that_must_not_expand_the_drawer";
+    const toolRunning = renderToStaticMarkup(<RunDetails run={run({
+      createdAt: 199_000, updatedAt: 199_000,
+      checkpoint: {
+        runId: "run-1", active: true, attempt: 1, assistantPartial: "", lastEventSeq: 1, lastTranscriptSeq: 0,
+        currentTool: { toolCallId: "call", toolName: longToolName, startedAt: 199_000, lastActivityAt: 199_000 },
+        updatedAt: 199_000,
+      },
+    })} />);
+    const waiting = renderToStaticMarkup(<RunDetails run={run({
+      createdAt: 160_000, updatedAt: 180_000,
+      checkpoint: {
+        runId: "run-1", active: true, attempt: 1, assistantPartial: "", lastEventSeq: 1, lastTranscriptSeq: 0,
+        currentTool: null, updatedAt: 180_000,
+      },
+    })} />);
+    const stalled = renderToStaticMarkup(<RunDetails run={run({
+      createdAt: 1_000, updatedAt: 1_000,
+    })} />);
+
+    expect(quietRunning).not.toContain("Current operation");
+    expect(toolRunning).not.toContain("Current operation");
+    expect(toolRunning).not.toContain(longToolName);
+    expect(waiting).toContain('<small data-tone="warning">Waiting · 20s idle</small>');
+    expect(waiting).toContain('title="Agent response"');
+    expect(stalled).toContain('<small data-tone="warning">Stalled · 3m idle</small>');
+  });
+
+  it("keeps recorded and live tool names on the execution trace truncation boundary", () => {
+    const recordedName = "recorded_tool_with_an_intentionally_long_identifier_that_must_stay_inside_run_details";
+    const liveName = "live_tool_with_an_intentionally_long_identifier_that_must_stay_inside_run_details";
+    const recorded = {
+      seq: 4, index: 0, attempt: 1, kind: "tool", toolCallId: "recorded-call", toolName: recordedName,
+      arguments: {}, result: "done", isError: false, status: "completed", createdAt: 4,
+    } satisfies Extract<TranscriptItem, { kind: "tool" }>;
+    const markup = renderToStaticMarkup(<ExecutionTimeline runId="run-1" isRunning items={[recorded]} events={[{
+      runId: "run-1", seq: 5, type: "tool.started",
+      data: { toolCallId: "live-call", toolName: liveName }, createdAt: 5,
+    }]} liveThinking="" liveOutput="" />);
+
+    expect(markup).toContain(`<span class="truncate" title="${recordedName}">${recordedName}</span>`);
+    expect(markup).toContain(`<strong class="truncate" title="${liveName}">${liveName}</strong>`);
+  });
+
+  it("renders Tool call details only for populated arguments, results, or errors", () => {
+    const base = {
+      seq: 4, index: 0, attempt: 1, kind: "tool", toolCallId: "call", toolName: "read",
+      arguments: {}, result: "", isError: false, status: "completed", createdAt: 4,
+    } satisfies Extract<TranscriptItem, { kind: "tool" }>;
+    const renderTool = (item: Extract<TranscriptItem, { kind: "tool" }>) => renderToStaticMarkup(<ExecutionTimeline runId="run-1" isRunning items={[item]} events={[]} liveThinking="" liveOutput="" />);
+    const empty = renderTool(base);
+    const result = renderTool({ ...base, result: "contents" });
+    const failed = renderTool({
+      ...base, result: "Path is outside the workspace", isError: true, status: "failed",
+      error: { name: "ToolExecutionError", code: "PATH_REJECTED", message: "Path is outside the workspace" },
+    });
+
+    expect(empty).toContain('class="tool-call tool-call-static"');
+    expect(empty).not.toContain('<details class="tool-call">');
+    expect(empty).not.toContain("Arguments");
+    expect(empty).not.toContain("Result");
+    expect(empty).not.toContain("No result recorded");
+    expect(result).toContain('<details class="tool-call">');
+    expect(result).toContain("Result");
+    expect(result).not.toContain("Arguments");
+    expect(failed).toContain("Error");
+    expect(failed.match(/Path is outside the workspace/g)).toHaveLength(1);
+    expect(failed).toContain("Code: PATH_REJECTED");
+    expect(failed).not.toContain("Result");
+  });
+
   it("omits idle workspace chrome and renders meaningful status accessibly", () => {
     const idle = renderToStaticMarkup(<WorkspaceRunStatus workspace={{
       id: "session", title: "Workspace", modelId: "model", reasoningEffort: "high",
@@ -1447,6 +1550,8 @@ describe("Web workbench behavior", () => {
     for (const markup of [
       renderMessage(),
       renderMessage(null),
+      renderMessage(capture({ status: "queued" })),
+      renderMessage(capture({ status: "running", attempts: 1 })),
       renderMessage(capture({ status: "completed_empty", proposalCount: 0, persistedCount: 0 })),
       renderMessage(capture({ status: "completed", proposalCount: 2, persistedCount: 0 })),
     ]) {
@@ -1457,15 +1562,16 @@ describe("Web workbench behavior", () => {
 
     const completed = renderMessage(capture({ status: "completed", proposalCount: 2, persistedCount: 2 }));
     expect(completed).toContain('class="turn-memory" data-tone="success"');
-    expect(completed).toContain("2 memories extracted");
-
-    const running = renderMessage(capture({ status: "running", attempts: 1 }));
-    expect(running).toContain('class="turn-memory" data-tone="info"');
-    expect(running).toContain("Extracting durable memory…");
+    expect(completed).toContain("2 memories saved");
 
     const failed = renderMessage(capture({ status: "retryable_failed", attempts: 2, errorCode: "provider_timeout" }));
     expect(failed).toContain('class="turn-memory" data-tone="danger"');
-    expect(failed).toContain("Extraction failed · provider_timeout");
+    expect(failed).toContain("<span>Memory extraction failed</span>");
+    expect(failed).not.toContain("Extraction failed · provider_timeout");
+
+    const idleCopy = renderMessage();
+    expect(idleCopy).toContain('aria-label="Copy message"');
+    expect(idleCopy).not.toContain(">Copy</");
 
     const pending = renderToStaticMarkup(<PendingConversationMessage content="Remember this" />);
     expect(pending).toContain("Sending…");
@@ -1483,11 +1589,27 @@ describe("Web workbench behavior", () => {
       submitting={false}
       onSubmit={async () => undefined}
     />);
-    expect(input).toContain("Information needed to continue");
-    expect(input).toContain("does not approve or authorize an external action");
+    expect(input).toContain("<strong>Choose target</strong>");
+    expect(input).not.toContain("Information needed to continue");
+    expect(input).toContain("Supplying these answers does not approve external actions.");
     expect(input).toContain("Submit and resume");
-    expect(input).toContain("Target *");
+    expect(input.match(/Target \*/g)).toHaveLength(1);
+    expect(input.match(/Environment/g)).toHaveLength(1);
+    expect(input).not.toContain(">Paused<");
     expect(input).toContain('disabled=""');
+
+    const deduplicatedInput = renderToStaticMarkup(<UserInputCard
+      request={{
+        id: "input-2", runId: "run-1", prompt: "Target",
+        fields: [{ key: "target", label: "Target", description: "Target", inputType: "text", required: true, placeholder: "Target" }],
+        attempt: 1, status: "pending", response: {}, requestedAt: 1, submittedAt: null,
+      }}
+      submitting={false}
+      onSubmit={async () => undefined}
+    />);
+    expect(deduplicatedInput).toContain("Information needed to continue");
+    expect(deduplicatedInput.match(/Target/g)).toHaveLength(1);
+    expect(deduplicatedInput).not.toContain('placeholder="Target"');
 
     const approval = {
       id: "approval-1", decisionId: "decision-1",
@@ -1502,10 +1624,47 @@ describe("Web workbench behavior", () => {
       resolvingDecision=""
       onResolve={async () => undefined}
     />);
-    expect(dock).toContain("External action needs your approval");
-    expect(dock).toContain("Human checkpoint · Attempt 3");
+    expect(dock).toContain("Approval required");
+    expect(dock).not.toContain(">1 action<");
+    expect(dock).not.toContain("action is paused");
+    expect(dock).toContain("External action · Attempt 3");
+    expect(dock.match(/Deploy release/g)).toHaveLength(1);
+    expect(dock).not.toContain("needs your approval");
+    expect(dock).not.toContain("Human checkpoint");
     expect(dock).toContain("Authorization is limited to Attempt 3");
     expect(dock).toContain("Approve &amp; execute");
+    const multipleDock = renderToStaticMarkup(<ApprovalDock
+      run={run()}
+      approvals={[approval, { ...approval, id: "approval-2", reason: "Publish release notes" }]}
+      resolvingId=""
+      resolvingDecision=""
+      onResolve={async () => undefined}
+    />);
+    expect(multipleDock).toContain(">2 actions<");
+    const approvalDetails = renderToStaticMarkup(<RunDetails run={run({
+      status: "blocked", phase: "waiting_approval", blockedReason: "Deploy release",
+      supervision: {
+        ...run().supervision,
+        latestDecision: {
+          id: "decision-1", evaluator: "system", evaluatorModel: "", action: "pause_for_approval",
+          reasonCode: "approval_required", rationale: "Deploy release",
+          confidence: 1, status: "settled", attempt: 1, checkpointSeq: 3,
+        },
+        approvalRequests: [approval],
+      },
+    })} showIdentity={false} />);
+    expect(approvalDetails).toContain("Review details");
+    expect(approvalDetails).not.toContain('class="review-outcome"');
+    expect(approvalDetails).not.toContain("Deploy release");
+    const inputDetails = renderToStaticMarkup(<RunDetails run={run({
+      status: "waiting_input", phase: "waiting_input", blockedReason: "Choose target",
+      pendingUserInput: {
+        id: "input-1", runId: "run-1", prompt: "Choose target", fields: [], attempt: 1,
+        status: "pending", response: {}, requestedAt: 1, submittedAt: null,
+      },
+    })} showIdentity={false} />);
+    expect(inputDetails).not.toContain("Choose target");
+    expect(inputDetails).not.toContain("Needs input");
     expect(approvalResolutionNotice("execute_external_action", "approved")).toBe("Approval recorded. External action authorized and TaskRun resumed.");
     expect(approvalResolutionNotice("start_parallel_taskrun", "approved")).toBe("Approval recorded. Parallel TaskRun started.");
     expect(approvalResolutionNotice("resume_taskrun", "rejected")).toBe("Approval rejected. TaskRun remains paused.");
@@ -1527,6 +1686,23 @@ describe("Web workbench behavior", () => {
     expect(trace).toContain('aria-label="Stage 1 tool calls"');
     expect(trace.match(/class="run-step"/g)).toHaveLength(1);
     expect(trace).toContain('aria-expanded="true"');
+    expect(trace).not.toContain('<details class="run-step" open');
+    expect(trace).toContain(">Pending<");
+    expect(trace).not.toContain("attempt 1");
+    const completedTrace = renderToStaticMarkup(<ExecutionTimeline
+      runId="run-completed" isRunning items={[reasoning, { ...tool, status: "completed" }, output]} events={[]} liveThinking="" liveOutput=""
+    />);
+    expect(completedTrace).not.toContain(">Completed<");
+    expect(completedTrace).not.toContain("expand to inspect");
+    const retryTrace = renderToStaticMarkup(<ExecutionTimeline
+      runId="run-2" isRunning items={[{ ...reasoning, attempt: 2 }]} events={[]} liveThinking="" liveOutput=""
+    />);
+    expect(retryTrace).toContain("attempt 2");
+    const liveTrace = renderToStaticMarkup(<ExecutionTimeline
+      runId="run-live" isRunning items={[]} events={[]} liveThinking="Inspecting the interface" liveOutput=""
+    />);
+    expect(liveTrace.match(/>Live</g)).toHaveLength(1);
+    expect(liveTrace).toContain("Current stage");
 
     const item = {
       id: "item-1", sessionId: "session-1", content: "Fix tests", status: "queued",
@@ -1553,6 +1729,31 @@ describe("Web workbench behavior", () => {
     expect(queue).toContain("New task");
     expect(queue).toContain("Normal · priority 10");
     expect(queue).not.toContain(">new_task<");
+    expect(queue).toContain('<details class="queue-details">');
+    expect(queue).not.toContain('<details class="queue-details" open');
+    expect(queue).toContain("Task details");
+    const taskDetails = queue.slice(queue.indexOf('<details class="queue-details">'), queue.indexOf("</details>"));
+    expect(taskDetails).toContain("New task");
+    expect(taskDetails).toContain("Normal · priority 10");
+    expect(taskDetails).toContain("100% confidence");
+    expect(taskDetails).toContain("ready");
+    expect(queue.match(/Fix tests/g)).toHaveLength(1);
+
+    const summarizedQueue = renderToStaticMarkup(<QueuePrompt
+      item={{ ...item, content: "Fix all failing tests and preserve the deployment flow", analysis: { ...item.analysis, summary: "Fix failing tests" } }}
+      index={0} editing={false} draft={item.content} busy={false} starting={false}
+      canMoveUp={false} canMoveDown={false}
+      onEdit={() => undefined} onDraftChange={() => undefined} onSave={() => undefined}
+      onCancelEdit={() => undefined} onStart={() => undefined} onToggleDefer={() => undefined}
+      onMergeFirst={() => undefined} onDelete={() => undefined} onMoveUp={() => undefined}
+      onMoveDown={() => undefined} onDragStart={() => undefined} onDragEnd={() => undefined}
+      onDrop={() => undefined}
+    />);
+    expect(summarizedQueue.match(/Fix failing tests/g)).toHaveLength(1);
+    expect(summarizedQueue.match(/Fix all failing tests and preserve the deployment flow/g)).toHaveLength(1);
+    const summarizedDetails = summarizedQueue.slice(summarizedQueue.indexOf('<details class="queue-details">'), summarizedQueue.indexOf("</details>"));
+    expect(summarizedDetails).toContain("Original request");
+    expect(summarizedDetails).toContain("Fix all failing tests and preserve the deployment flow");
   });
 
   it("formats audit enums while preserving technical model identifiers", () => {
@@ -1562,7 +1763,7 @@ describe("Web workbench behavior", () => {
       completedAt: 20,
       contract: {
         sourceInput: "Ship it", summary: "Ship it", acceptanceCriteria: ["Checks pass"],
-        scope: "Repository", nonGoals: [], sourceInboxIds: [], parentRunId: null,
+        scope: "Repository", nonGoals: ["Do not publish"], sourceInboxIds: [], parentRunId: null,
         relation: "follow_up", intent: "new_task", decisionReason: "New bounded work", routerVersion: "v1",
       },
       supervision: {
@@ -1580,29 +1781,56 @@ describe("Web workbench behavior", () => {
         progress: { meaningfulChanges: 2, consecutiveFailures: 0, repeatedOperations: 1, checkpointSeq: 3, lastProgressAt: 10 },
         approvalRequests: [], latestContextManifest: null,
       },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
 
+    expect(details).toContain('<summary><span>Task contract</span><small>1 criterion</small>');
+    expect(details).toContain("Acceptance criteria");
+    expect(details).toContain("Included");
+    expect(details).toContain("Repository");
+    expect(details).toContain("Not included");
+    expect(details).toContain("Do not publish");
+    expect(details).toContain(">Routing details<");
+    expect(details).toContain("Classification");
     expect(details).toContain("New task · Follow up");
-    expect(details).toContain("Pause for approval");
+    expect(details.indexOf("Acceptance criteria")).toBeLessThan(details.indexOf("Routing details"));
+    expect(details.match(/Approval required/g)).toHaveLength(1);
+    expect(details).toContain('<div class="gate-failure-list"><div class="gate-detail"><strong>Release</strong><p>Target is not confirmed.</p></div></div>');
+    expect(details).not.toContain("Decision record");
+    expect(details).not.toContain("Progress signals");
+    expect(details).not.toContain("meaningful changes");
+    expect(details).not.toContain("repeated operations");
     expect(details).toContain("Needs user input");
     expect(details).toContain("Completion");
-    expect(details).toContain("Needs approval");
     expect(details).toContain("Covered");
-    expect(details).toContain("Acceptance standard");
-    expect(details).toContain("6 rules");
+    expect(details).toContain("Verified.");
+    expect(details).not.toContain("check:test");
+    expect(details).toContain("Review policy");
+    expect(details).toContain("Strict · 6 rules");
     expect(details).toContain('<details class="run-contract">');
     expect(details).not.toContain('<details class="run-contract" open');
-    expect(details.match(/<details class="audit-disclosure">/g)).toHaveLength(2);
+    expect(details.match(/<details class="audit-disclosure">/g)).toHaveLength(1);
+    expect(details).toContain("Review outcome");
+    expect(details).toContain("Review details");
     expect(details).toContain("Evaluation history");
-    expect(details).toContain("1 failed");
+    expect(details).not.toContain("1 failed");
     expect(details).not.toContain('<details class="audit-disclosure" open');
     expect(details).not.toContain("Settled candidate rejected");
-    expect(details).toContain("1 blocker");
-    expect(details).toContain("1 failure");
+    expect(details).not.toContain("1 blocker");
+    expect(details).not.toContain("1 failure");
+    expect(details).toContain(">Failed<");
     expect(details).not.toContain("blocker(s)");
     expect(details).not.toContain("failure(s)");
-    expect(details.indexOf("1 blocker")).toBeLessThan(details.indexOf("Acceptance standard"));
+    expect(details.indexOf("Review outcome")).toBeLessThan(details.indexOf("Review details"));
+    expect(details.indexOf("Review outcome")).toBeLessThan(details.indexOf("Task contract"));
+    expect(details.indexOf("Task contract")).toBeLessThan(details.indexOf("Review details"));
     expect(details).toContain("gpt-5.6-sol");
+    expect(details).toContain("Review provenance");
+    expect(details).toContain("Reason code");
+    expect(details).toContain("Decision evaluator");
+    expect(details.match(/gpt-5\.6-sol/g)).toHaveLength(1);
+    expect(details.indexOf("Evaluation history")).toBeLessThan(details.indexOf("Review policy"));
+    expect(details).toContain('<details class="detail-disclosure"><summary><span>Review policy</span><small>Strict · 6 rules</small>');
+    expect(details.indexOf("One approval remains.")).toBeLessThan(details.indexOf("Decision evaluator"));
     expect(details).not.toContain(">new_task<");
     expect(details).not.toContain(">pause_for_approval<");
   });
@@ -1616,27 +1844,27 @@ describe("Web workbench behavior", () => {
         runId: "run-1", attempt: 1, active: false, assistantPartial: "", currentTool: null,
         lastEventSeq: 8, lastTranscriptSeq: 3, updatedAt: 20,
       },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
     const active = renderToStaticMarkup(<RunDetails run={run({
       checkpoint: {
         runId: "run-1", attempt: 1, active: true, assistantPartial: "Inspecting styles", currentTool: { toolCallId: "call-1", toolName: "read" },
         lastEventSeq: 4, lastTranscriptSeq: 2, updatedAt: 10,
       },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
     const preserved = renderToStaticMarkup(<RunDetails run={run({
       status: "interrupted",
       checkpoint: {
         runId: "run-1", attempt: 1, active: false, assistantPartial: "Preserved response", currentTool: null,
         lastEventSeq: 6, lastTranscriptSeq: 2, updatedAt: 15,
       },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
     const preservedWithoutPosition = renderToStaticMarkup(<RunDetails run={run({
       status: "interrupted",
       checkpoint: {
         runId: "run-1", attempt: 1, active: false, assistantPartial: "Response without a sequence", currentTool: null,
         lastEventSeq: 0, lastTranscriptSeq: 0, updatedAt: 15,
       },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
 
     expect(terminal).not.toContain("Current operation");
     expect(terminal).not.toContain(">Checkpoint<");
@@ -1661,16 +1889,19 @@ describe("Web workbench behavior", () => {
     expect(terminal).not.toContain("No artifacts");
     expect(active).toContain("Current operation");
     expect(active).not.toContain(">Checkpoint<");
-    expect(active).toContain(">Supervisor review<");
-    expect(active).toContain("Observing execution");
-    expect(active).toContain("Gate audit · strict");
-    expect(active).toContain("Plan or check prerequisites are still incomplete.");
-    expect(active).not.toContain("No settled gate evaluation yet");
+    expect(active).not.toContain("Review outcome");
+    expect(active).not.toContain("Review details");
+    expect(active).not.toContain("Review policy");
+    expect(active).not.toContain("Observing execution");
     expect(preserved).not.toContain("Current operation");
-    expect(preserved).toContain(">Checkpoint<");
+    expect(preserved).toContain(">Preserved work<");
+    expect(preserved).not.toContain('<span>Preserved work</span><small>');
+    expect(preserved).toContain(">Partial response<");
     expect(preserved).toContain("Preserved response");
     expect(preserved).toContain('<div class="audit-ledger">');
     expect(preserved).not.toContain("checkpoint-card");
+    expect(preserved).not.toContain("event 6");
+    expect(preserved).not.toContain("transcript 2");
     expect(preservedWithoutPosition).toContain("Response without a sequence");
     expect(preservedWithoutPosition).not.toContain("event 0");
     expect(preservedWithoutPosition).not.toContain("transcript 0");
@@ -1685,14 +1916,79 @@ describe("Web workbench behavior", () => {
           { kind: "check", key: "lint", reason: "Lint evidence is missing" },
         ],
       },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
 
     expect(markup).toContain('<div class="gate-detail"><span>Plan</span><p>No required plan items</p></div>');
     expect(markup).not.toContain("<strong>Plan</strong>");
     expect(markup).toContain('<div class="gate-detail"><span>Check</span><strong>Lint</strong><p>Lint evidence is missing</p></div>');
   });
 
-  it("retains recorded Supervisor evidence without live-monitoring copy after a run settles", () => {
+  it("shows one authoritative explanation when status, Review, and blocker reasons match", () => {
+    const repeatedReason = "Required release evidence is missing.";
+    const markup = renderToStaticMarkup(<RunDetails run={run({
+      status: "blocked", phase: "blocked", blockedReason: repeatedReason,
+      supervision: {
+        ...run().supervision,
+        latestDecision: {
+          id: "decision-1", evaluator: "system", evaluatorModel: "", action: "block_taskrun",
+          reasonCode: "required_evidence_missing", rationale: repeatedReason,
+          confidence: 1, status: "settled", attempt: 1, checkpointSeq: 3,
+        },
+        latestGates: [{
+          id: "gate-1", evaluator: "system", evaluatorModel: "", summary: "Completion is blocked.",
+          gateType: "completion", passed: false,
+          failures: [
+            { kind: "check", key: "release", reason: repeatedReason, disposition: "needs_approval" },
+            { kind: "check", key: "deployment", reason: repeatedReason, disposition: "needs_approval" },
+          ],
+          criterionCoverage: [{
+            criterion: "Attach release evidence", status: "blocked", evidenceRefs: [], reason: repeatedReason,
+          }],
+        }],
+      },
+    })} />);
+
+    expect(markup.match(/Required release evidence is missing\./g)).toHaveLength(1);
+    expect(markup).toContain("Attach release evidence");
+    expect(markup).toContain(">Blocked<");
+    expect(markup).not.toContain("Completion is blocked.");
+    expect(markup).not.toContain("run-status-note");
+    expect(markup).toContain("Why it stopped");
+    expect(markup).not.toContain(">Check<");
+    expect(markup).not.toContain("Release-evidence");
+    expect(markup).not.toContain('<strong data-tone="danger">Blocked</strong>');
+    expect(markup).not.toContain("1 blocker");
+  });
+
+  it("keeps a concise Run reason visible and moves a different technical rationale behind Review details", () => {
+    const conciseReason = "Provider is not configured: openai-compatible";
+    const technicalRationale = "Runtime failed because Supervisor credential resolution could not find OPENAI_API_KEY.";
+    const markup = renderToStaticMarkup(<RunDetails run={run({
+      status: "blocked", phase: "blocked", blockedReason: conciseReason,
+      supervision: {
+        ...run().supervision,
+        latestDecision: {
+          id: "decision-1", evaluator: "system", evaluatorModel: "", action: "block_taskrun",
+          reasonCode: "provider_not_configured", rationale: technicalRationale,
+          confidence: 1, status: "settled", attempt: 1, checkpointSeq: 3,
+        },
+      },
+    })} />);
+
+    expect(markup.match(/Provider is not configured: openai-compatible/g)).toHaveLength(1);
+    expect(markup).not.toContain("run-status-note");
+    expect(markup).toContain("Why it stopped");
+    expect(markup).not.toContain('<strong data-tone="danger">Blocked</strong>');
+    expect(markup).not.toContain("<strong>Blocked</strong>");
+    expect(markup).toContain("Recorded rationale");
+    expect(markup).toContain("Review provenance");
+    expect(markup.indexOf("Recorded rationale")).toBeLessThan(markup.indexOf("Review provenance"));
+    expect(markup.indexOf(technicalRationale)).toBeGreaterThan(markup.indexOf("Review details"));
+    expect(markup).not.toContain("Recorded review");
+    expect(markup).not.toContain("Review policy");
+  });
+
+  it("keeps internal Supervisor progress counters out of Run details", () => {
     const progressOnly = renderToStaticMarkup(<RunDetails run={run({
       status: "completed",
       phase: "done",
@@ -1701,37 +1997,58 @@ describe("Web workbench behavior", () => {
         ...run().supervision,
         progress: { meaningfulChanges: 3, consecutiveFailures: 1, repeatedOperations: 2, checkpointSeq: 7, lastProgressAt: 18 },
       },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
 
-    expect(progressOnly).toContain(">Supervisor review<");
-    expect(progressOnly).toContain("Recorded progress");
-    expect(progressOnly).toContain("3 meaningful changes");
-    expect(progressOnly).toContain("1 consecutive failure");
-    expect(progressOnly).toContain("2 repeated operations");
+    expect(progressOnly).not.toContain("Review details");
+    expect(progressOnly).not.toContain("progress signals");
+    expect(progressOnly).not.toContain("Progress signals");
+    expect(progressOnly).not.toContain("meaningful changes");
+    expect(progressOnly).not.toContain("consecutive failure");
+    expect(progressOnly).not.toContain("repeated operations");
+    expect(progressOnly).not.toContain("Review outcome");
     expect(progressOnly).not.toContain("0 meaningful changes");
     expect(progressOnly).not.toContain("Observing execution");
     expect(progressOnly).not.toContain("monitoring progress");
-    expect(progressOnly).not.toContain("Gate audit");
+    expect(progressOnly).not.toContain("Review policy");
   });
 
-  it("omits zero-only Supervisor evidence after settlement and observes it only while running", () => {
+  it("omits zero-only Supervisor evidence in terminal and active Runs", () => {
     const zeroProgress = { meaningfulChanges: 0, consecutiveFailures: 0, repeatedOperations: 0, checkpointSeq: 7, lastProgressAt: 18 };
     const terminal = renderToStaticMarkup(<RunDetails run={run({
       status: "completed", phase: "done", completedAt: 20,
       supervision: { ...run().supervision, progress: zeroProgress },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
     const active = renderToStaticMarkup(<RunDetails run={run({
       supervision: { ...run().supervision, progress: zeroProgress },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
 
-    expect(terminal).not.toContain(">Supervisor review<");
-    expect(terminal).not.toContain("Recorded progress");
-    expect(active).toContain(">Supervisor review<");
-    expect(active).toContain("Observing execution");
-    expect(active).not.toContain("Recorded progress");
+    expect(terminal).not.toContain("Review details");
+    expect(terminal).not.toContain("Progress signals");
+    expect(active).not.toContain("Review details");
+    expect(active).not.toContain("Observing execution");
+    expect(active).not.toContain("Progress signals");
     expect(active).not.toContain("0 meaningful changes");
     expect(active).not.toContain("0 consecutive failures");
     expect(active).not.toContain("0 repeated operations");
+  });
+
+  it("shows only distinct Task contract boundaries and omits an empty criteria suffix", () => {
+    const markup = renderToStaticMarkup(<RunDetails run={run({
+      contract: {
+        sourceInput: "Ship the result", summary: "Ship the result", acceptanceCriteria: ["交付目标结果：Ship the result", "Report verification"],
+        scope: "Ship the result", nonGoals: ["Do not deploy", "Do not deploy", ""], sourceInboxIds: [], parentRunId: null,
+        relation: "independent", intent: "new_task", decisionReason: "Bounded work", routerVersion: "v1",
+      },
+    })} />);
+
+    expect(markup).toContain(">Task contract<");
+    expect(markup).toContain("1 criterion");
+    expect(markup).not.toContain("No criteria");
+    expect(markup).not.toContain("交付目标结果");
+    expect(markup).toContain("Report verification");
+    expect(markup).not.toContain(">Included<");
+    expect(markup).toContain(">Not included<");
+    expect(markup.match(/Do not deploy/g)).toHaveLength(1);
   });
 
   it("renders only populated Context manifest summaries and disclosures", () => {
@@ -1743,7 +2060,7 @@ describe("Web workbench behavior", () => {
     const selectedOnly = renderToStaticMarkup(<RunDetails run={run({
       status: "completed", phase: "done", completedAt: 20,
       supervision: { ...run().supervision, latestContextManifest: manifest },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
     const withOmitted = renderToStaticMarkup(<RunDetails run={run({
       status: "completed", phase: "done", completedAt: 20,
       supervision: {
@@ -1756,11 +2073,11 @@ describe("Web workbench behavior", () => {
           ],
         },
       },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
     const empty = renderToStaticMarkup(<RunDetails run={run({
       status: "completed", phase: "done", completedAt: 20,
       supervision: { ...run().supervision, latestContextManifest: { ...manifest, items: [] } },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
     const omittedOnly = renderToStaticMarkup(<RunDetails run={run({
       status: "completed", phase: "done", completedAt: 20,
       supervision: {
@@ -1770,31 +2087,59 @@ describe("Web workbench behavior", () => {
           items: [{ kind: "session_message" as const, sourceId: "message-1", selected: false, reason: "outside recent-turn policy", estimatedTokens: 12 }],
         },
       },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
+    const grouped = renderToStaticMarkup(<RunDetails run={run({
+      status: "completed", phase: "done", completedAt: 20,
+      supervision: {
+        ...run().supervision,
+        latestContextManifest: {
+          ...manifest,
+          items: [
+            { kind: "session_message" as const, sourceId: "message-1", selected: true, reason: "selected by recent-turn policy", estimatedTokens: 12 },
+            { kind: "session_message" as const, sourceId: "message-2", selected: true, reason: "selected by recent-turn policy", estimatedTokens: 14 },
+          ],
+        },
+      },
+    })} />);
 
     expect(selectedOnly).toContain('<details class="audit-section audit-disclosure">');
-    expect(selectedOnly).toContain(">Context manifests<");
-    expect(selectedOnly).toContain("1 selected");
+    expect(selectedOnly).toContain(">Context sources<");
+    expect(selectedOnly).toContain("1 total");
+    expect(selectedOnly).not.toContain("1 source");
+    expect(selectedOnly).not.toContain("1 used</small>");
     expect(selectedOnly).toContain("hash abcdef123456");
-    expect(selectedOnly).toContain("Selected sources");
+    expect(selectedOnly).toContain("Used sources");
+    expect(selectedOnly).toContain("Current request");
+    expect(selectedOnly).not.toContain("current input");
+    expect(selectedOnly).not.toContain("prompt-1");
+    expect(selectedOnly).toContain("Context provenance");
     expect(selectedOnly).not.toContain("retained");
     expect(selectedOnly).not.toContain("0 omitted");
     expect(selectedOnly).not.toContain("0 estimated tokens");
     expect(selectedOnly).not.toContain("Omitted sources");
     expect(selectedOnly).not.toContain(">None<");
-    expect(selectedOnly).not.toContain("Changes from previous manifest");
-    expect(withOmitted).toContain("1 selected · 1 omitted");
+    expect(selectedOnly).not.toContain("Snapshot changes");
+    expect(withOmitted).toContain("2 total · 1 omitted");
     expect(withOmitted).toContain("42 estimated tokens");
     expect(withOmitted).toContain("Omitted sources");
-    expect(withOmitted).toContain("outside recent-turn policy");
-    expect(empty).toContain("hash abcdef123456");
+    expect(withOmitted).toContain('<summary><span>Omitted sources</span><svg');
+    expect(withOmitted).not.toContain('<summary><span>Omitted sources</span><small>1</small>');
+    expect(withOmitted).toContain("Outside the recent conversation window");
+    expect(withOmitted).not.toContain("outside recent-turn policy");
+    expect(withOmitted).not.toContain("message-1");
+    expect(empty).not.toContain("Context sources");
+    expect(empty).not.toContain("hash abcdef123456");
     expect(empty).not.toContain("0 selected");
     expect(empty).not.toContain("0 omitted");
-    expect(omittedOnly).toContain("1 omitted");
-    expect(omittedOnly).not.toContain("0 selected");
+    expect(omittedOnly).toContain("1 total · 1 omitted");
+    expect(omittedOnly).not.toContain("0 used");
+    expect(grouped).toContain("Conversation message · 2");
+    expect(grouped).toContain("Recent conversation");
+    expect(grouped).not.toContain("message-1");
+    expect(grouped).not.toContain("message-2");
   });
 
-  it("keeps the Run summary free of duplicate state and count grammar", () => {
+  it("keeps the Run summary free of duplicate state and observational usage noise", () => {
     const details = renderToStaticMarkup(<RunDetails run={run({
       status: "blocked", phase: "blocked", transcriptCount: 1,
       contract: {
@@ -1802,39 +2147,41 @@ describe("Web workbench behavior", () => {
         scope: "Repository", nonGoals: [], sourceInboxIds: [], parentRunId: null,
         relation: "independent", intent: "new_task", decisionReason: "Parsed 1 semantic objective(s) into a TaskRun contract.", routerVersion: "v1",
       },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
     const partialUsage = renderToStaticMarkup(<RunDetails run={run({
       status: "completed",
       phase: "done",
       completedAt: 20,
       usage: { input: 5, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
     const inputOnlyUsage = renderToStaticMarkup(<RunDetails run={run({
       status: "completed", phase: "done", completedAt: 20,
       usage: { input: 5, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
+    const embedded = renderToStaticMarkup(<RunDetails run={run({
+      status: "completed", phase: "done", completedAt: 20,
+    })} showIdentity={false} />);
 
     expect(details).toContain('<div class="phase-line meta-line"><span class="status-label" data-tone="warning"><span class="status-dot"></span>Blocked</span></div>');
-    expect(details).toContain("1 message");
+    expect(details).not.toContain("1 message");
     expect(details).not.toContain("1 messages");
     expect(details).not.toContain("Blocked</span><span>Blocked");
     expect(details).not.toContain("attempt 1");
     expect(details).toContain("Parsed 1 semantic objective into a TaskRun contract.");
     expect(details).not.toContain("objective(s)");
-    expect(details).toContain(">pending<");
     expect(details).not.toContain("0 blockers");
-    expect(partialUsage).toContain("5 in / 2 out");
+    expect(partialUsage).not.toContain("7 tokens");
+    expect(partialUsage).not.toContain("5 in / 2 out");
     expect(partialUsage).not.toContain("0 tokens");
     expect(partialUsage).not.toContain("token usage is observational only");
-    expect(inputOnlyUsage).toContain(">5 in<");
+    expect(inputOnlyUsage).not.toContain(">5 tokens<");
     expect(inputOnlyUsage).not.toContain("0 out");
+    expect(embedded).not.toContain("run-summary");
+    expect(embedded).not.toContain("Ship the result");
+    expect(embedded).not.toContain(">Completed<");
   });
 
   it("renders operational sections only when they contain inspectable data", () => {
-    const tool = {
-      seq: 4, index: 0, attempt: 1, kind: "tool", toolCallId: "call-1", toolName: "bash",
-      arguments: { command: "npm test" }, result: "passed", isError: false, status: "completed", createdAt: 4,
-    } satisfies Extract<TranscriptItem, { kind: "tool" }>;
     const populated = renderToStaticMarkup(<RunDetails run={run({
       transcriptCount: 7,
       usage: { input: 120, output: 45, cacheRead: 0, cacheWrite: 0, totalTokens: 165, cost: 0 },
@@ -1849,43 +2196,82 @@ describe("Web workbench behavior", () => {
         leaseOwner: "", leaseUntil: null, heartbeatAt: null,
       }],
       artifacts: [{ id: "artifact-1", title: "Verification report", kind: "markdown", uri: "artifact://report" }],
-    })} toolEvents={[{
-      runId: "run-1", seq: 4, type: "tool.completed",
-      data: { toolCallId: "call-1", toolName: "bash" }, createdAt: 4,
-    }]} transcriptTools={[tool]} />);
-    const recentOnly = renderToStaticMarkup(<RunDetails run={run()} toolEvents={[{
-      runId: "run-1", seq: 4, type: "tool.completed",
-      data: { toolCallId: "call-1", toolName: "bash" }, createdAt: 4,
-    }]} transcriptTools={[]} />);
+      supervision: {
+        ...run().supervision,
+        progress: { meaningfulChanges: 1, consecutiveFailures: 0, repeatedOperations: 0, checkpointSeq: 3, lastProgressAt: 4 },
+      },
+    })} />);
     const planOnly = renderToStaticMarkup(<RunDetails run={run({
       plan: [{ key: "inspect", title: "Inspect the current interface", status: "in_progress", required: true, position: 0 }],
-    })} toolEvents={[]} transcriptTools={[]} />);
+    })} />);
+    const oneBlocked = renderToStaticMarkup(<RunDetails run={run({
+      plan: [{ key: "blocked", title: "Wait for evidence", status: "blocked", required: true, position: 0 }],
+    })} />);
+    const twoBlocked = renderToStaticMarkup(<RunDetails run={run({
+      plan: [{ key: "blocked", title: "Wait for evidence", status: "blocked", required: true, position: 0 }],
+      checks: [{
+        key: "check", title: "Verify evidence", status: "failed", required: true,
+        command: "npm test", evidence: "", stale: false, sourceOperationId: null, observedAt: null,
+      }],
+    })} />);
+    const skippedOnly = renderToStaticMarkup(<RunDetails run={run({
+      plan: [{ key: "optional", title: "Optional refinement", status: "skipped", required: false, position: 0 }],
+    })} />);
+    const blockedWithArtifact = renderToStaticMarkup(<RunDetails run={run({
+      status: "blocked", phase: "blocked", blockedReason: "Verification is missing",
+      completionGate: { passed: false, failures: [{ kind: "check", key: "verify", reason: "Verification is missing" }] },
+      artifacts: [{ id: "partial", title: "Partial result", kind: "markdown", uri: "artifact://partial" }],
+      supervision: {
+        ...run().supervision,
+        latestDecision: {
+          id: "decision-1", evaluator: "system", evaluatorModel: "", action: "block_taskrun",
+          reasonCode: "verification_missing", rationale: "Verification is missing",
+          confidence: 1, status: "settled", attempt: 1, checkpointSeq: 3,
+        },
+      },
+    })} />);
 
-    expect(populated).toContain(">Tool activity<");
-    expect(populated).toContain("7 messages");
-    expect(populated).toContain("165 tokens");
-    expect(populated).toContain("120 in / 45 out");
+    expect(populated).not.toContain(">Tool calls<");
+    expect(populated).not.toContain("7 messages");
+    expect(populated).not.toContain("165 tokens");
+    expect(populated).not.toContain("120 in / 45 out");
     expect(populated).not.toContain("token usage is observational only");
-    expect(populated).toContain("Recorded tool calls");
-    expect(populated).toContain("1 call");
     expect(populated).toContain(">Execution evidence<");
+    expect(populated).toContain(">Complete<");
+    expect(populated).not.toContain('<details class="audit-section audit-disclosure" open');
     expect(populated).toContain('<span class="run-evidence-group-label" data-label="true"><span>Plan</span><small>1/1</small></span>');
     expect(populated).toContain('<span class="run-evidence-group-label" data-label="true"><span>Checks</span><small>1/1</small></span>');
     expect(populated).toContain('<span class="run-evidence-group-label" data-label="true"><span>Continuations</span><small>1</small></span>');
     expect(populated).toContain(">Plan<");
     expect(populated).toContain("Implement the refinement");
+    expect(populated).toContain('aria-label="Implement the refinement: Done"');
+    expect(populated).not.toContain(">Done<");
     expect(populated).toContain(">Checks<");
     expect(populated).toContain("Run regression tests");
+    expect(populated).toContain('aria-label="Run regression tests: Passed"');
+    expect(populated).not.toContain(">Passed<");
     expect(populated).toContain(">Continuations<");
     expect(populated).toContain("Verify the result");
+    expect(populated).toContain('aria-label="Verify the result: Completed"');
+    expect(populated).not.toContain("<strong>#1</strong>");
+    expect(populated).not.toContain(">Completed<");
+    expect(populated).not.toContain("leased");
     expect(populated).toContain(">Artifacts<");
     expect(populated).toContain("Verification report");
-    expect(recentOnly).toContain(">Tool activity<");
-    expect(recentOnly).toContain("1 recent event");
-    expect(recentOnly).not.toContain("0 calls");
+    expect(populated).toContain('aria-label="Preview Verification report"');
+    expect(populated).toContain('class="truncate" title="Verification report"');
+    expect(populated.indexOf(">Artifacts<")).toBeLessThan(populated.indexOf(">Execution evidence<"));
+    expect(populated).not.toContain(">Review details<");
     expect(planOnly).toContain(">Plan<");
-    expect(planOnly).toContain("0/1 complete");
+    expect(planOnly).toContain("1 open");
     expect(planOnly).not.toContain("Execution evidence");
     expect(planOnly).not.toContain("run-evidence-group-label");
+    expect(oneBlocked).toContain("Needs attention");
+    expect(oneBlocked).not.toContain("1 item");
+    expect(twoBlocked).toContain("2 need attention");
+    expect(skippedOnly).toContain(">Complete<");
+    expect(skippedOnly).not.toContain("open");
+    expect(blockedWithArtifact.indexOf("Why it stopped")).toBeLessThan(blockedWithArtifact.indexOf(">Artifacts<"));
+    expect(blockedWithArtifact.indexOf(">Artifacts<")).toBeLessThan(blockedWithArtifact.indexOf(">Review details<"));
   });
 });

@@ -86,7 +86,6 @@ export function MemoryRecallResults({
     <section className="memory-list-section">
       <div className="section-heading">
         <div>
-          <span className="eyebrow">Dynamic recall</span>
           <h3>Results for “{query.trim()}”</h3>
         </div>
         <button className="control" onClick={onClear}>Clear</button>
@@ -105,9 +104,9 @@ export function MemoryRecallResults({
           </button>;
         })}
       </div>}
-      {!hasResults && <div className="panel-empty"><BrainCircuit size={ICON_SIZE.xl} /><strong>No recall matches</strong><p>Try a broader phrase or inspect the memory catalog below.</p></div>}
+      {!hasResults && <div className="panel-empty"><BrainCircuit size={ICON_SIZE.xl} /><strong>No recall matches</strong><p>Try a broader phrase or open Catalog.</p></div>}
       {hasDiagnostics ? <details className="detail-disclosure">
-        <summary><Activity size={ICON_SIZE.sm} /><strong>Recall diagnostics</strong><small>{trace.join(" · ") || "Trace"}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+        <summary><Activity size={ICON_SIZE.sm} /><strong>Recall diagnostics</strong>{trace.length > 0 && <small>{trace.join(" · ")}</small>}<ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
         <div className="detail-disclosure-body">
           {results.trace.embedding && <section><strong>Embedding</strong><p>{results.trace.embedding.configured ? results.trace.embedding.degraded ? "Degraded; lexical and graph paths remained available" : "Available" : "Not configured"}{results.trace.embedding.generation ? ` · ${results.trace.embedding.generation}` : ""}</p>{results.trace.embedding.error && <small>{results.trace.embedding.error}</small>}</section>}
           {Boolean(results.trace.policyTransforms) && <section><strong>Policy transforms</strong><p>{formatCount(results.trace.policyTransforms ?? 0, "candidate")} transformed before presentation.</p></section>}

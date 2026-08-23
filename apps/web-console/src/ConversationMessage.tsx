@@ -12,13 +12,10 @@ function MemoryExtraction({ job }: { job?: CaptureJob | null }) {
   const completed = job.status === "completed";
   const failed = job.status === "dead_letter" || job.status === "retryable_failed";
   const count = job.persistedCount ?? 0;
-  if (completed && count <= 0) return null;
-  const detail = completed
-    ? `${formatCount(count, "memory", "memories")} extracted`
-    : failed ? `Extraction failed${job.errorCode ? ` · ${job.errorCode}` : ""}`
-    : job.status === "running" ? "Extracting durable memory…" : "Queued for extraction";
-  const tone = completed ? "success" : failed ? "danger" : job.status === "running" ? "info" : undefined;
-  return <div className="turn-memory" data-tone={tone} title={`Memory extraction · capture job ${job.id}`}><BrainCircuit size={ICON_SIZE.xs} /><span>{detail}</span></div>;
+  if ((!completed && !failed) || (completed && count <= 0)) return null;
+  const detail = completed ? `${formatCount(count, "memory", "memories")} saved` : "Memory extraction failed";
+  const diagnostic = failed && job.errorCode ? ` · ${job.errorCode}` : "";
+  return <div className="turn-memory" data-tone={completed ? "success" : "danger"} title={`Memory extraction · capture job ${job.id}${diagnostic}`}><BrainCircuit size={ICON_SIZE.xs} /><span>{detail}</span></div>;
 }
 
 function copyTextWithSelection(content: string): boolean {
@@ -59,7 +56,7 @@ function MessageCopy({ content }: { content: string }) {
   }, [content]);
   const copied = state === "copied";
   const failed = state === "failed";
-  return <button className="message-copy" data-tone={copied ? "success" : failed ? "danger" : undefined} type="button" onClick={() => void copy()} aria-label={copied ? "Message copied" : failed ? "Copy unavailable" : "Copy message"} title={copied ? "Copied" : failed ? "Clipboard unavailable" : "Copy message"}>{copied ? <Check size={ICON_SIZE.xs} /> : failed ? <X size={ICON_SIZE.xs} /> : <Copy size={ICON_SIZE.xs} />}<span>{copied ? "Copied" : failed ? "Unavailable" : "Copy"}</span></button>;
+  return <button className="message-copy" data-state={state} data-tone={copied ? "success" : failed ? "danger" : undefined} type="button" onClick={() => void copy()} aria-label={copied ? "Message copied" : failed ? "Copy unavailable" : "Copy message"} title={copied ? "Copied" : failed ? "Clipboard unavailable" : "Copy message"}>{copied ? <Check size={ICON_SIZE.xs} /> : failed ? <X size={ICON_SIZE.xs} /> : <Copy size={ICON_SIZE.xs} />}{(copied || failed) && <span>{copied ? "Copied" : "Unavailable"}</span>}</button>;
 }
 
 function MessageFooter({ createdAt, content, pending = false }: { createdAt?: number; content?: string; pending?: boolean }) {

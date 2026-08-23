@@ -50,6 +50,8 @@ export function RecordDetail({
   const canSaveCorrection = content.trim() && (record.kind === "preference" || title.trim());
   const hasValidity = ("validFrom" in record && Boolean(record.validFrom || record.validTo)) || Boolean(record.supersedesId || record.expiresAt);
   const repeatedContent = memoryTitleRepeatsContent(record);
+  const summary = record.summary?.trim() ?? "";
+  const repeatedSummary = summary ? [memoryTitle(record), memoryContent(record)].some((value) => memoryTextRepeats(summary, value) || memoryTextRepeats(value, summary)) : false;
   const tabs = [
     { value: "overview", label: "Overview" },
     { value: "metadata", label: "Metadata" },
@@ -64,7 +66,7 @@ export function RecordDetail({
 
       <section hidden={section !== "overview"} aria-label="Memory record overview">
         {!repeatedContent && <div className="memory-detail-body"><Markdown>{memoryContent(record)}</Markdown></div>}
-        {record.summary && record.summary !== memoryContent(record) && <div><span className="eyebrow">Summary</span><p>{record.summary}</p></div>}
+        {summary && !repeatedSummary && <div><span className="eyebrow">Summary</span><p>{summary}</p></div>}
       </section>
 
       <section hidden={section !== "metadata"} aria-label="Memory metadata and provenance">

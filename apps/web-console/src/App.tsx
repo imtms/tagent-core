@@ -1,6 +1,6 @@
 import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ArrowDown, BrainCircuit, ChevronDown, ChevronRight, Keyboard, Menu, Moon, MoreHorizontal, Play, Plus, Search, Send, Settings2, Square, Sun, Target, X } from "lucide-react";
-import { api, drainTranscriptView, type GateProfile, type Message, type RuntimeStatus, type Session, type TaskRun, type TranscriptItem } from "./api";
+import { Activity, ArrowDown, BrainCircuit, ChevronDown, ChevronRight, Keyboard, ListChecks, Menu, Moon, MoreHorizontal, Play, Plus, Search, Send, Settings2, Square, Sun, Target, X } from "lucide-react";
+import { api, drainTranscriptView, type GateProfile, type Message, type RuntimeStatus, type Session, type TaskRun } from "./api";
 import { ICON_SIZE } from "./icon-size";
 import { canResumeRun, formatRunStatus, runStatusTone } from "./run-state";
 import { formatShortcut, useShortcutModifier } from "./shortcut-platform";
@@ -53,6 +53,7 @@ const starterPrompts = [
   { label: "Review recent changes", detail: "Check regressions and coverage", prompt: "Review the recent changes for correctness, regressions, maintainability, and missing verification." },
   { label: "Improve the documentation", detail: "Refresh guidance and verify commands", prompt: "Audit the project documentation, fix stale or unclear guidance, and verify the documented commands." },
 ] as const;
+const NOTICE_AUTO_DISMISS_MS = 6_000;
 
 export function ReviewProfileControl({ value, onChange }: { value: GateProfile; onChange: (profile: GateProfile) => void }) {
   const selected = gateProfiles.find((profile) => profile.value === value) ?? gateProfiles[1];
@@ -132,7 +133,6 @@ export function App() {
   });
   const {
     draft,
-    hasSavedDraft,
     historyCursor,
     isComposingRef: composerIsComposingRef,
     textareaRef: composerTextareaRef,
@@ -252,6 +252,11 @@ export function App() {
     onOpenChange: setLeftOpen,
   });
   usePopoverFocus(workspaceMenuOpen, workspaceMenuRef, useCallback(() => setWorkspaceMenuOpen(false), []));
+  useEffect(() => {
+    if (!notice) return;
+    const timer = globalThis.setTimeout(() => setNotice(""), NOTICE_AUTO_DISMISS_MS);
+    return () => globalThis.clearTimeout(timer);
+  }, [notice]);
 
   function openWorkspaceContextMenu(workspace: Session, anchor: DOMRect | { top: number; bottom: number; left: number }, x?: number, y?: number) {
     const menuWidth = 208;
@@ -309,8 +314,6 @@ export function App() {
     setViewingEarlierHistory(false);
   }, [scrollToLatest]);
 
-  const activeTools = useMemo(() => events.filter((event) => event.type.startsWith("tool.")).slice(-20), [events]);
-  const transcriptTools = useMemo(() => transcript.filter((item): item is Extract<TranscriptItem, { kind: "tool" }> => item.kind === "tool"), [transcript]);
   const pendingApprovals = useMemo(() => activeRun?.supervision.approvalRequests.filter((approval) => approval.status === "pending") ?? [], [activeRun]);
 
   async function handleWorkspaceCreate() {
@@ -381,7 +384,6 @@ export function App() {
             {workspaceContextMenuId === workspace.id && <WorkspaceContextMenu workspace={workspace} pinned={pinned} currentEmoji={workspaceEmojiById[workspace.id] ?? ""} emojis={workspaceEmojis} position={workspaceContextMenuPosition} onClose={() => setWorkspaceContextMenuId("")} onTogglePinned={() => togglePinnedWorkspace(workspace.id)} onRename={() => beginRenameWorkspace(workspace)} onChooseEmoji={(emoji) => setWorkspaceEmojiById((current) => ({ ...current, [workspace.id]: emoji }))} />}
           </>}
         </div>})}</section>)}
-        {!workspacesLoading && workspaces.length === 0 && <div className="workspace-list-empty">No workspaces yet</div>}
       </div>
     </aside>
 
@@ -390,7 +392,7 @@ export function App() {
         <button className="icon-button mobile-only" onClick={() => setLeftOpen(true)} aria-label="Open workspace sidebar"><Menu size={ICON_SIZE.xl} /></button>
         <div className="workspace-heading"><h1><button type="button" onClick={() => setWorkspaceSwitcherOpen(true)} title={`Switch workspace (${workspaceShortcut})`}>{selectedWorkspace?.title ?? "TAgent"}<ChevronDown size={ICON_SIZE.sm} /></button></h1><p className="truncate">{workspaceMeta}</p></div>
         <div className="top-actions">
-          {auditAvailable && selectedRunStatus && <button className="run-status-control" data-tone={runStatusTone(selectedRunStatus)} onClick={() => { setWorkspaceMenuOpen(false); setRightOpen(true); }} aria-label={`Open audit panel. Task status: ${formatRunStatus(selectedRunStatus)}`}><span className="status-dot" /><strong>{formatRunStatus(selectedRunStatus)}</strong></button>}
+          {auditAvailable && selectedRunStatus && <button className="run-status-control" data-tone={runStatusTone(selectedRunStatus)} onClick={() => { setWorkspaceMenuOpen(false); setRightOpen(true); }} aria-label={`Open run details. Task status: ${formatRunStatus(selectedRunStatus)}`} title={`Run details · ${formatRunStatus(selectedRunStatus)}`}><ListChecks size={ICON_SIZE.md} /><span className="status-dot" /><strong>{formatRunStatus(selectedRunStatus)}</strong></button>}
           {canResumeRun(selectedRun, activeRun) && <button className="control resume-button" onClick={async () => { setError(""); try { const resumed = await api.resume(selectedRun.id); setActiveRun(resumed); setSelectedRun(resumed); setStreaming(""); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } }}><Play size={ICON_SIZE.md} /><span>Resume</span></button>}
           {activeRun?.status === "running" && <button className="icon-button" data-tone="danger" onClick={() => void api.cancel(activeRun.id)} title="Stop run" aria-label="Stop run"><Square size={ICON_SIZE.lg} /></button>}
           {workspaceId && <WorkspaceSkillsControl workspaceId={workspaceId} open={skillMenuOpen} onOpenChange={setSkillMenuOpen} onBeforeOpen={() => setWorkspaceMenuOpen(false)} onError={setError} onNotice={setNotice} />}
@@ -423,8 +425,8 @@ export function App() {
       </div>
 
       <footer className="composer-wrap">
-        {error && <div className="notice" data-tone="danger">{error}</div>}
-        {notice && <div className="notice" data-tone="success">{notice}</div>}
+        {error && <div className="notice" data-tone="danger" role="alert"><span>{error}</span><button className="icon-button" type="button" onClick={() => setError("")} aria-label="Dismiss error"><X size={ICON_SIZE.sm} /></button></div>}
+        {notice && <div className="notice" data-tone="success" role="status"><span>{notice}</span><button className="icon-button" type="button" onClick={() => setNotice("")} aria-label="Dismiss notice"><X size={ICON_SIZE.sm} /></button></div>}
         {activeRun && pendingApprovals.length > 0 && <ApprovalDock run={activeRun} approvals={pendingApprovals} resolvingId={resolvingApprovalId} resolvingDecision={resolvingApprovalDecision} onResolve={resolveRunApproval} />}
         <div className="composer"><textarea ref={composerTextareaRef} value={draft} onChange={(event) => updateComposerDraft(event.target.value)} onCompositionStart={() => { composerIsComposingRef.current = true; }} onCompositionEnd={() => { composerIsComposingRef.current = false; }} onKeyDown={(event) => {
           if (event.key === "Enter" && enterSubmits && !event.shiftKey && !composerIsComposingRef.current && !event.nativeEvent.isComposing) { event.preventDefault(); if (draft.trim() && !submitting) void submit(); return; }
@@ -432,8 +434,7 @@ export function App() {
           const caretAtEnd = event.currentTarget.selectionStart === draft.length && event.currentTarget.selectionEnd === draft.length;
           if (event.key === "ArrowUp" && (historyCursor !== null || caretAtStart)) { event.preventDefault(); navigateComposerHistory(-1); }
           if (event.key === "ArrowDown" && historyCursor !== null && caretAtEnd) { event.preventDefault(); navigateComposerHistory(1); }
-        }} placeholder="Ask TAgent to accomplish something…" rows={1} aria-label={enterSubmits ? "Message. Press Enter to send and Shift Enter for a new line." : "Message. Use the send button to submit."} /><div className="composer-footer"><ReviewProfileControl value={selectedGateProfile} onChange={selectGateProfile} />{activeRun?.status === "running" && <span className="composer-run-state" data-tone="info"><Activity size={ICON_SIZE.xs} />Running</span>}<button className="composer-send" data-variant="primary" type="button" onClick={() => void submit()} disabled={!draft.trim() || submitting} aria-label="Add to Supervisor queue">{submitting ? <Activity className="spin" size={ICON_SIZE.lg} /> : <Send size={ICON_SIZE.lg} />}</button></div></div>
-        {hasSavedDraft && <div className="composer-hint"><span>Draft saved</span></div>}
+        }} placeholder="Ask TAgent to accomplish something…" rows={1} aria-label={enterSubmits ? "Message. Press Enter to send and Shift Enter for a new line." : "Message. Use the send button to submit."} /><div className="composer-footer"><ReviewProfileControl value={selectedGateProfile} onChange={selectGateProfile} /><button className="composer-send" data-variant="primary" type="button" onClick={() => void submit()} disabled={!draft.trim() || submitting} aria-label={submitting ? "Submitting request" : "Submit request"} title={submitting ? "Submitting request…" : "Submit request"}>{submitting ? <Activity className="spin" size={ICON_SIZE.lg} /> : <Send size={ICON_SIZE.lg} />}</button></div></div>
         {inbox.length > 0 && <section className="supervisor-inbox"><div className="inbox-heading"><span>Up next</span><small>{inbox.length} queued</small></div>{inbox.map((item, index) => <QueuePrompt key={item.id} item={item} index={index} editing={editingInboxId === item.id} draft={editingInboxId === item.id ? inboxDraft : item.content} busy={Boolean(startingInboxId || savingInboxId || reorderingInbox || mutatingInboxId)} starting={startingInboxId === item.id} canMoveUp={index > 0} canMoveDown={index < inbox.length - 1} onEdit={() => startEditingInbox(item)} onDraftChange={setInboxDraft} onSave={() => void saveInbox(item)} onCancelEdit={cancelEditingInbox} onStart={() => void runInboxNow(item)} onToggleDefer={() => void toggleDeferredInbox(item)} onMergeFirst={() => void mergeInboxIntoFirst(item)} onDelete={() => void deleteInboxItem(item)} onMoveUp={() => void moveInbox(item.id, -1)} onMoveDown={() => void moveInbox(item.id, 1)} onDragStart={(event) => { setDraggingInboxId(item.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); }} onDragEnd={() => setDraggingInboxId("")} onDrop={(event) => { event.preventDefault(); void reorderInbox(item.id); }} />)}</section>}
       </footer>
     </main>
@@ -449,10 +450,10 @@ export function App() {
           }} aria-expanded={expanded}>
             {expanded ? <ChevronDown size={ICON_SIZE.md} /> : <ChevronRight size={ICON_SIZE.md} />}
             <span className="status-dot" data-tone={runStatusTone(item.status)} />
-            <span className="history-copy"><strong className="truncate">{item.goal}</strong><small>{formatRunStatus(item.status)}{item.attempt > 1 ? ` · attempt ${item.attempt}` : ""}</small></span>
+            <span className="history-copy"><strong className={expanded ? undefined : "truncate"} title={item.goal}>{item.goal}</strong><small>{formatRunStatus(item.status)}{item.attempt > 1 ? ` · attempt ${item.attempt}` : ""}</small></span>
             {index === 0 && item.status === "running" ? <time>current</time> : <TimeAgo value={item.updatedAt ?? item.createdAt} />}
           </button>
-          {expanded && selectedRun?.id === item.id && <RunDetails run={selectedRun} toolEvents={activeRun?.id === item.id ? activeTools : []} transcriptTools={transcriptTools} />}
+          {expanded && selectedRun?.id === item.id && <RunDetails run={selectedRun} showIdentity={false} />}
         </section>;
       })}</div>
     </aside>}

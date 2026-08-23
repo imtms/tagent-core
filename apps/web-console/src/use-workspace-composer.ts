@@ -109,7 +109,6 @@ export function useWorkspaceComposer(workspaceId: string) {
   const selectedGateProfile = gateProfiles[workspaceId] ?? "relaxed";
   return {
     draft,
-    hasSavedDraft: Boolean(drafts[workspaceId]?.trim()),
     historyCursor,
     isComposingRef,
     textareaRef,

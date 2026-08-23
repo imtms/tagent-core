@@ -18,6 +18,14 @@ export function formatRelativeTime(value: number, now = Date.now()): string {
   return `${Math.floor(seconds / 86_400)}d ago`;
 }
 
+export function formatCompactDuration(value: number): string {
+  const seconds = Math.max(0, Math.floor(value / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3_600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3_600)}h`;
+  return `${Math.floor(seconds / 86_400)}d`;
+}
+
 export function localDayKey(value: number): string {
   const date = new Date(value);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;

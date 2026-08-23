@@ -321,13 +321,13 @@ const statusRules = [
 for (const [selector, property, value] of statusRules) check(ruleHasDeclaration(root, selector, property, value), `${selector} must map ${property} to ${value}`);
 
 check(ruleHasDeclaration(root, ".icon-button", "width", "var(--touch)", "(max-width: 680px)"), "Mobile icon buttons must use the 44px touch target");
+check(ruleHasDeclaration(root, ":root", "--control", "var(--touch)", "(max-width: 680px)"), "Mobile shared control geometry must resolve to the 44px touch target");
 check(ruleHasDeclaration(root, ":is(button, input, textarea, select):disabled", "color", "var(--text-muted)"), "Disabled controls must remain legible through the shared muted text token");
 check(ruleHasDeclaration(root, ":is(.control, .icon-button, .composer-send, input, textarea, select):disabled", "background", "var(--muted)"), "Disabled fields and bounded controls must use the shared muted surface");
 check(ruleHasDeclaration(root, ".control", "min-height", "var(--touch)", "(max-width: 680px)"), "Mobile controls must use the shared 44px touch target");
 check(ruleHasDeclaration(root, ":is(input:not([type=\"checkbox\"]), textarea, select)", "min-height", "var(--touch)", "(max-width: 680px)"), "Mobile fields must use the shared 44px touch target");
 check(ruleHasDeclaration(root, ".composer-send", "height", "var(--touch)", "(max-width: 680px)"), "Mobile send must use the 44px touch target");
-check(ruleHasDeclaration(root, ".run-metrics", "grid-template-columns", "repeat(2, minmax(0, 1fr))", "(max-width: 680px)"), "Mobile Run metrics must retain readable numeric columns");
-check(ruleHasDeclaration(root, ".tool-call-body", "grid-template-columns", "minmax(0, 1fr)"), "Tool call bodies must constrain intrinsic content to the available column");
+check(ruleHasDeclaration(root, ":is(.tool-call-body, .run-contract > div)", "grid-template-columns", "minmax(0, 1fr)"), "Tool call and contract bodies must constrain intrinsic content to the available column");
 check(ruleHasDeclaration(root, ".tool-call-body > div", "min-width", "0"), "Tool call sections must allow long content to shrink before its preformatted child scrolls");
 check(ruleHasDeclaration(root, ".status-label", "display", "inline-flex"), "Operational states must share the compact dot-and-label grammar");
 check(ruleHasDeclaration(root, ".status-dot", "width", "var(--status-dot)"), "Operational status dots must use the shared indicator size");
@@ -338,10 +338,11 @@ check(ruleHasDeclaration(root, ".message-feed", "width", "min(100%, calc(var(--c
 check(ruleHasDeclaration(root, ".topbar", "min-width", "0"), "The application bar must shrink inside the conversation grid at narrow widths");
 check(ruleHasDeclaration(root, ".workspace-heading h1", "width", "100%", "(max-width: 980px)"), "Narrow Workspace headings must fit their allocated application-bar track");
 check(ruleHasDeclaration(root, ".workspace-heading h1 button", "width", "100%", "(max-width: 980px)"), "Narrow Workspace title controls must truncate inside their heading track");
+check(ruleHasDeclaration(root, ".workspace-heading h1 button", "min-height", "var(--control)"), "Workspace title controls must retain the shared desktop hit target");
 check(ruleHasDeclaration(root, ".workspace-heading h1 button", "min-height", "var(--touch)", "(max-width: 680px)"), "Mobile Workspace title controls must use the shared touch target");
 check(ruleHasDeclaration(root, ".notice", "overflow-wrap", "anywhere"), "Feedback notices must wrap generated messages inside their boundary");
 check(ruleHasDeclaration(root, ".notice > :first-child", "min-width", "0"), "Feedback copy must shrink before its action");
-check(ruleHasDeclaration(root, ".notice > .control", "flex", "none"), "Feedback actions must retain their control geometry");
+check(ruleHasDeclaration(root, ".notice > button", "flex", "none"), "Feedback actions must retain their control geometry");
 check(ruleHasDeclaration(root, ".workspace-actions > button", "background", "transparent"), "Workspace creation and search controls must stay quiet on the sidebar surface");
 check(ruleHasDeclaration(root, ".workspace-actions", "grid-template-columns", "minmax(0, 1fr) var(--touch)", "(max-width: 680px)"), "Mobile Workspace creation and search controls must share one touch-height row without overflow");
 check(ruleHasDeclaration(root, ".workspace-switcher-search:focus-within", "box-shadow", "inset 0 -2px 0 var(--focus-ring)"), "Workspace search must focus its composite row instead of outlining a naked input");
@@ -365,6 +366,10 @@ check(ruleHasDeclaration(root, ".message-copy", "color", "var(--text-muted)"), "
 for (const selector of [".audit-panel-heading", ".modal-workspace-header", ".modal > header"]) check(ruleHasDeclaration(root, selector, "height", "var(--bar-height)"), `${selector} must use the shared application bar height`);
 check(ruleHasDeclaration(root, ".panel-tabs .control:hover", "background", "transparent"), "Panel tab hover must not imitate the selected state");
 check(ruleHasDeclaration(root, ".panel-tabs .control:hover", "border-color", "transparent"), "Panel tab hover must keep the ledger underline grammar borderless");
+check(ruleHasDeclaration(root, ".section-heading", "flex-wrap", "wrap"), "Shared section headings must wrap actions before they widen narrow workspaces");
+check(ruleHasDeclaration(root, ".run-history-toggle", "grid-template-columns", "var(--space-4) var(--status-dot) minmax(0, 1fr) auto"), "Run history must let the goal shrink before its status and recency columns");
+check(ruleHasDeclaration(root, ":is(.tool-row, .task-row, .artifact-row)", "grid-template-columns", "auto minmax(0, 1fr) auto"), "Run detail ledgers must let primary copy shrink before their trailing state or action");
+check(ruleHasDeclaration(root, ".goal-criterion-editor > label", "min-height", "var(--control)"), "Goal criterion checkbox labels must inherit shared control hit geometry");
 check(ruleHasDeclaration(root, ".memory-list > *", "align-items", "start"), "Dense Memory rows must align long content from the first text line");
 check(ruleHasDeclaration(root, ".workspace-avatar-options > div", "grid-template-columns", "repeat(5, minmax(0, 1fr))"), "Workspace icon choices must keep their compact five-column grid");
 check(ruleHasDeclaration(root, ".workspace-context-menu", "width", "calc(var(--sidebar-width) - var(--space-3))", "(max-width: 680px)"), "Mobile Workspace actions must use the rail width needed for touch-safe icon choices");
@@ -372,15 +377,26 @@ check(ruleHasDeclaration(root, ".workspace-avatar-options button", "min-height",
 check(ruleHasDeclaration(root, ":is(.workspace-more, .artifact-download, .skill-row-actions button, .inbox-item > button)", "width", "var(--compact)"), "Dense icon actions must share the compact desktop target");
 check(ruleHasDeclaration(root, ":is(.workspace-more, .message-copy, .artifact-download, .skill-row-actions button, .inbox-item > button)", "width", "var(--touch)", "(max-width: 680px)"), "Dense icon actions must expand to the shared mobile touch target");
 check(ruleHasDeclaration(root, ".run-status-control", "width", "var(--touch)", "(max-width: 680px)"), "Mobile run status must use the shared touch target");
+check(ruleHasDeclaration(root, ".run-status-control", "position", "relative"), "Run status must anchor its mobile state marker");
+check(ruleHasDeclaration(root, ".run-status-control > svg", "display", "none"), "Desktop run status must keep the destination icon secondary to its label");
+check(ruleHasDeclaration(root, ".run-status-control > svg", "display", "block", "(max-width: 680px)"), "Mobile run status must expose a recognizable Run details destination icon");
+check(ruleHasDeclaration(root, ".run-status-control > .status-dot", "position", "absolute", "(max-width: 680px)"), "Mobile run status must use its dot as a state marker rather than the whole destination");
 check(ruleHasDeclaration(root, ".inbox-item", "grid-template-columns", "var(--touch) var(--space-6) minmax(0, 1fr) var(--touch)", "(max-width: 680px)"), "Mobile Supervisor rows must reserve touch-safe edge actions without crowding their copy");
+check(ruleHasDeclaration(root, ".inbox-item > div", "overflow-wrap", "anywhere"), "Supervisor request copy must wrap generated URLs and continuous text inside its row");
 check(ruleHasDeclaration(root, ".goal-run-links > *", "text-align", "left"), "Goal audit rows must keep the shared ledger alignment");
-check(ruleHasDeclaration(root, ".continuation-row", "grid-template-columns", "minmax(0, 1fr) auto"), "Continuation rows must reserve a shrink-safe reason column");
+check(ruleHasDeclaration(root, ".continuation-row", "grid-template-columns", "minmax(0, 1fr)"), "Continuation rows must move status below long reasons instead of squeezing the Run details ledger");
 check(ruleHasDeclaration(root, ".continuation-row > div", "grid-template-columns", "auto minmax(0, 1fr)"), "Continuation reasons must shrink within the Run details ledger");
 check(ruleHasDeclaration(root, ".continuation-row > div > span", "overflow-wrap", "anywhere"), "Continuation identifiers must wrap instead of widening the Run details drawer");
 check(ruleHasDeclaration(root, ".memory-operation-group .memory-list > div > div", "grid-template-columns", "auto minmax(0, 1fr) auto"), "Memory jobs must keep status, source, and metrics on one scan line");
 check(ruleHasDeclaration(root, ".memory-operation-group .memory-list > div > div", "grid-template-columns", "auto minmax(0, 1fr)", "(max-width: 680px)"), "Mobile Memory jobs must move metrics below the primary status and source line");
 check(ruleHasDeclaration(root, ".memory-operation-group .memory-list > div > div > small", "grid-column", "2", "(max-width: 680px)"), "Mobile Memory job metrics must align with their source");
+check(ruleHasDeclaration(root, ":is(.workspace-actions-menu, .skill-loader-menu, .workspace-context-menu)", "animation", "surface-in var(--duration-fast) var(--ease) both"), "Menus must share the fast transform-and-opacity entrance");
+check(ruleHasDeclaration(root, ".modal-backdrop", "animation", "backdrop-in var(--duration-base) var(--ease) both"), "Modal backdrops must share the base opacity entrance");
+check(ruleHasDeclaration(root, ":is(.modal, .modal-workspace)", "animation", "surface-in var(--duration-base) var(--ease) both"), "Dialog surfaces must share the base transform-and-opacity entrance");
 
+const appSource = read(path.join(srcRoot, "App.tsx"));
+check(appSource.includes("<ListChecks") && appSource.includes("Run details · ${formatRunStatus(selectedRunStatus)}"), "Mobile run status must retain an explicit Run details destination and state title");
+check(appSource.includes('className={expanded ? undefined : "truncate"} title={item.goal}'), "Expanded Run history must reveal the complete goal while collapsed rows stay bounded");
 const appPanelsSource = read(path.join(srcRoot, "AppPanels.tsx"));
 check(appPanelsSource.includes("selectedId && createPortal("), "Artifact previews must escape the Run details drawer through the shared modal portal");
 check(appPanelsSource.includes("useModalFocus(Boolean(selectedId)"), "Artifact previews must share modal focus, Escape, and restoration behavior");

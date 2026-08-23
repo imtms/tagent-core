@@ -539,6 +539,7 @@ export function MemoryPanel({
     : filteredTopics.length > 0 || hasMoreTopics;
   const initialLoading = status === null && busy;
   const recalledCount = results ? results.cards.length + results.coldTopics.length : 0;
+  const headerSummary = status ? memoryStatusSummary(status) : `${scope.id} · ${runtime.memoryBackend ?? "memory"}/${runtime.memoryColdBackend ?? "local"}`;
   const tabs = [
     { value: "catalog", label: "Catalog", meta: String(records.length + topics.length) },
     { value: "recall", label: "Recall", meta: results ? String(recalledCount) : "—" },
@@ -566,7 +567,7 @@ export function MemoryPanel({
         <header className="modal-workspace-header">
           <div className="modal-heading">
             <BrainCircuit size={ICON_SIZE.xl} />
-            <div className="modal-title-group"><h2 className="truncate" id="memory-center-title">Memory</h2><small data-mono>{status ? memoryStatusSummary(status) : `${scope.id} · ${runtime.memoryBackend ?? "memory"}/${runtime.memoryColdBackend ?? "local"}`}</small></div>
+            <div className="modal-title-group"><h2 className="truncate" id="memory-center-title">Memory</h2>{headerSummary && <small data-mono>{headerSummary}</small>}</div>
           </div>
           <div className="modal-workspace-actions">
             <button
@@ -657,7 +658,7 @@ export function MemoryPanel({
 
               <div hidden={section !== "recall"}>
                 <section className="memory-list-section">
-                  <div className="section-heading"><div><span className="eyebrow">Semantic recall</span><h3>Search every memory tier</h3></div></div>
+                  <div className="section-heading"><div><h3>Search every memory tier</h3>{!results && <small>Enter a cue to retrieve cards, Cold topics and routing diagnostics.</small>}</div></div>
                   <form className="memory-search" onSubmit={(event) => { event.preventDefault(); void searchMemory(); }}>
                     <Search size={ICON_SIZE.md} />
                     <input value={recallCue} onChange={(event) => { setRecallCue(event.target.value); setResults(null); }} aria-label="Recall cue" placeholder="Describe what TAgent should recall" />
@@ -671,7 +672,7 @@ export function MemoryPanel({
                   onClear={() => setResults(null)}
                   onOpenRecord={(recordId) => void openRecord(recordId, "recall")}
                   onSelectTopic={(topic) => { setDetailReturnSection("recall"); setSelectedRecord(null); setSelectedTopic(topic); }}
-                /> : <section className="panel-empty"><Search size={ICON_SIZE.xl} /><p>Enter a cue to retrieve cards, Cold topics and routing diagnostics.</p></section>}
+                /> : null}
               </div>
 
               <div hidden={section !== "core"}>

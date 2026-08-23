@@ -36,5 +36,5 @@ export const memoryStatusSummary = (status: MemoryStatusResult) => {
     status.records.disputed > 0 ? `${status.records.disputed} disputed` : "",
     status.coldTopics > 0 ? `${status.coldTopics} cold topic${status.coldTopics === 1 ? "" : "s"}` : "",
   ].filter(Boolean);
-  return counts.join(" · ") || "No durable memory";
+  return counts.join(" · ");
 };

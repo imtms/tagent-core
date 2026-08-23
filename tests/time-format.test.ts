@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatConversationDay, formatRelativeTime, localDayKey } from "../apps/web-console/src/time-format";
+import { formatCompactDuration, formatConversationDay, formatRelativeTime, localDayKey } from "../apps/web-console/src/time-format";
 
 describe("Web time formatting", () => {
   const now = new Date(2026, 7, 12, 12, 0, 0).getTime();
@@ -10,6 +10,12 @@ describe("Web time formatting", () => {
     expect(formatRelativeTime(now - 3 * 3_600_000, now)).toBe("3h ago");
     expect(formatRelativeTime(now - 4 * 86_400_000, now)).toBe("4d ago");
     expect(formatRelativeTime(now + 60_000, now)).toBe("now");
+  });
+
+  it("keeps operational idle duration compact", () => {
+    expect(formatCompactDuration(20_000)).toBe("20s");
+    expect(formatCompactDuration(125_000)).toBe("2m");
+    expect(formatCompactDuration(3 * 3_600_000)).toBe("3h");
   });
 
   it("labels nearby conversation days without UTC boundary drift", () => {
