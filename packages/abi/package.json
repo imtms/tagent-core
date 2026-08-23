@@ -1,6 +1,6 @@
 {
   "name": "@tagent/abi",
-  "version": "0.8.28",
+  "version": "0.8.29",
   "private": true,
   "type": "module",
   "sideEffects": false,

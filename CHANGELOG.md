@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.8.29] - 2026-08-23
+
 ### Safety
 
 - Rejected Bash commands that stop, restart, or otherwise terminate the hosting `tagent-core` service through common `systemctl`, `sudo`, `service`, init-script, and nested-shell forms. The actionable failure directs Agents to the receipt-backed `core_generation_activate` handoff while leaving unrelated service administration and command text used only as data untouched.
@@ -9,6 +11,10 @@
 ### Reliability
 
 - Reconciled abandoned `running` tool attempts to terminal `outcome_unknown` records in the guarded startup-recovery transaction, including a restart diagnostic and completion timestamp. Unknown attempts remain fail-closed for crash recovery and same-call replay instead of appearing live forever or being mislabeled as failed.
+
+### Compatibility
+
+- The HTTP major, public ABI/profile shapes, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` protocol are unchanged. There are no breaking changes or data-migration requirements. Deploy matching `0.8.29` Core, Web Console, ABI, and Core Client artifacts.
 
 ## [0.8.28] - 2026-08-23
 
