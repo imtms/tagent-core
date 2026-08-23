@@ -2,11 +2,17 @@
 
 ## Unreleased
 
+## [0.8.30] - 2026-08-23
+
 ### Web Console information hierarchy
 
 - Removed empty settled Tool calls, whitespace-only reasoning/output stages, and internal Tool diagnostics from the Execution trace while keeping active and failed operations explicit. Tool rows are expandable only when they contain inspectable arguments, results, or errors.
 - Reduced non-actionable Console chrome across Review, Supervisor queue, Memory, Goals, and Skills. Verdict-only Gates are static rows; duplicate request/contract copy and zero-value counters disappear; routing, receipt, generation, and error-code diagnostics remain available through bounded technical disclosures.
 - Updated the maintained Web Console design contract for operator-first information ownership, readable labels, nested provenance, neutral ledger boundaries, and narrow-screen containment.
+
+### Compatibility
+
+- The HTTP major, public ABI/profile shapes, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` protocol are unchanged. There are no breaking changes or data-migration requirements. Deploy matching `0.8.30` Core, Web Console, ABI, and Core Client artifacts.
 
 ## [0.8.29] - 2026-08-23
 
