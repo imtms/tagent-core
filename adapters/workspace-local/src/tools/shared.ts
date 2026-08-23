@@ -240,6 +240,102 @@ function shortOptionIncludes(args: string[], option: string): boolean {
   return args.some((argument) => /^-[^-]+$/.test(argument) && argument.slice(1).toLowerCase().includes(option));
 }
 
+export const HOSTING_CORE_LIFECYCLE_BLOCK_REASON = "Stopping or restarting the hosting TAgent Core through Bash would bypass the durable Generation handoff; use core_generation_activate instead";
+
+const coreServiceNames = new Set(["tagent-core", "tagent-core.service"]);
+const systemctlLifecycleActions = new Set(["stop", "restart", "try-restart", "reload-or-restart", "reload-or-try-restart", "kill"]);
+const serviceLifecycleActions = new Set(["stop", "restart", "try-restart", "force-reload", "condrestart"]);
+const wrapperOptionsWithValue = new Set([
+  "-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt",
+  "-c", "--close-from", "-r", "--chroot", "-d", "--chdir", "-t", "--command-timeout",
+]);
+const envOptionsWithValue = new Set(["-u", "--unset", "-c", "--chdir", "-s", "--split-string"]);
+
+function unwrapLifecycleCommand(input: string[]): string[] {
+  let words = [...input];
+  for (let depth = 0; depth < 6 && words.length; depth += 1) {
+    const executable = executableName(words[0]);
+    if (["command", "exec", "nohup"].includes(executable)) {
+      words = words.slice(1);
+      continue;
+    }
+    if (executable !== "sudo" && executable !== "env") return words;
+    const optionsWithValue = executable === "sudo" ? wrapperOptionsWithValue : envOptionsWithValue;
+    let index = 1;
+    while (index < words.length) {
+      const value = words[index]!;
+      if (value === "--") { index += 1; break; }
+      if (assignment(value)) { index += 1; continue; }
+      if (!value.startsWith("-")) break;
+      const option = value.split("=", 1)[0]!.toLowerCase();
+      index += !value.includes("=") && optionsWithValue.has(option) ? 2 : 1;
+    }
+    words = words.slice(index);
+  }
+  return words;
+}
+
+function isCoreService(value: string | undefined) {
+  return coreServiceNames.has((value ?? "").toLowerCase());
+}
+
+function systemctlTargetsLocalSystem(args: string[]) {
+  return !args.some((argument) => {
+    const option = argument.toLowerCase();
+    return ["--user", "--global", "-h", "--host", "-m", "--machine", "--root", "--image"].includes(option)
+      || /^(?:--host|--machine|--root|--image)=/.test(option)
+      || /^-[hm].+/.test(option);
+  });
+}
+
+function nestedShellCommand(args: string[]): string | undefined {
+  for (let index = 0; index < args.length - 1; index += 1) {
+    const option = args[index]!;
+    if (/^-[^-]*c[^-]*$/i.test(option)) return args[index + 1];
+  }
+  return undefined;
+}
+
+function commandTargetsHostingCore(command: string, depth: number): boolean {
+  const variables = new Map<string, string>();
+  return parseShellStages(command).some((stage) => {
+    const words = unwrapLifecycleCommand(commandWords(stage, variables));
+    const executable = executableName(words[0]);
+    const args = words.slice(1);
+    if (!executable) return false;
+    if (executable === "systemctl") {
+      if (!systemctlTargetsLocalSystem(args)) return false;
+      const normalized = args.map((argument) => argument.toLowerCase());
+      const actionIndex = normalized.findIndex((argument) => systemctlLifecycleActions.has(argument)
+        || (["disable", "mask"].includes(argument) && normalized.includes("--now")));
+      return actionIndex >= 0 && normalized.slice(actionIndex + 1).some(isCoreService);
+    }
+    if (executable === "service") {
+      return isCoreService(args[0]) && serviceLifecycleActions.has(args[1]?.toLowerCase() ?? "");
+    }
+    const executablePath = (words[0] ?? "").replaceAll("\\", "/").toLowerCase();
+    if (isCoreService(executable) && executablePath === "/etc/init.d/tagent-core") {
+      return serviceLifecycleActions.has(args[0]?.toLowerCase() ?? "");
+    }
+    if (depth < 3 && ["bash", "sh", "dash", "zsh"].includes(executable)) {
+      const nested = nestedShellCommand(args);
+      if (nested && commandTargetsHostingCore(nested, depth + 1)) return true;
+    }
+    if (depth < 3 && stage.substitution) {
+      const source = words.join(" ");
+      for (const match of source.matchAll(/\$\(([^()]*)\)|`([^`]*)`/g)) {
+        if (commandTargetsHostingCore(match[1] ?? match[2] ?? "", depth + 1)) return true;
+      }
+    }
+    return false;
+  });
+}
+
+/** Narrow guard for lifecycle actions that would terminate the Bash-hosting Core Generation. */
+export function bashCommandTargetsHostingCore(command: string): boolean {
+  return commandTargetsHostingCore(command, 0);
+}
+
 /** Best-effort guard for common catastrophic forms; authorization remains the primary boundary. */
 export function bashCommandIsDestructive(command: string, depth = 0): boolean {
   const variables = new Map<string, string>();

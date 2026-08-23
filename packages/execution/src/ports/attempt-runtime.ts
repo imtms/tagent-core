@@ -96,6 +96,8 @@ export interface RuntimeTool<TParameters = unknown, TDetails = unknown> {
 
 export interface RuntimeToolPolicy {
   operationType?: string;
+  /** Deterministic provider guard enforced by Core before approval, attempt recording, or dispatch. */
+  preflightGuard?: (parameters: unknown) => string | undefined;
   workspaceAccess?: "none" | "read_only" | "mutation" | ((parameters: unknown) => "none" | "read_only" | "mutation");
   invalidatesChecks?: boolean | ((parameters: unknown) => boolean);
   /** `explicit` requires Attempt-bound human-approval activation even for an otherwise non-external TaskRun. */

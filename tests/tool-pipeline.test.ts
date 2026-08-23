@@ -47,6 +47,24 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     expectTypeOf<SubprocessSpawnSpec>().toMatchTypeOf<{ signal: AbortSignal }>();
   });
 
+  it("enforces deterministic provider preflight before approval and attempt recording", () => {
+    const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "unsafe" }], details: {} }));
+    const guarded = tool("guarded", execute, true);
+    guarded.policy = { ...guarded.policy, preflightGuard: () => "Use the durable maintenance tool" };
+    const inspect = vi.fn(() => ({ allowed: true, reason: "allowed" }));
+    const record = vi.fn(() => ({ created: true, status: "running" as const, guard: { blocked: false, reason: "" } }));
+    const { port } = capabilities({ inspectExternalActionAuthorization: inspect, recordToolAttempt: record });
+    const pipeline = new ToolExecutionPipeline(port);
+    pipeline.bindCatalog({ tools: [guarded] });
+    expect(pipeline.beforeToolCall("guarded-call", "guarded", {})).toEqual({
+      blocked: true,
+      reason: "Use the durable maintenance tool",
+    });
+    expect(inspect).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("classifies a pre-aborted call without recording or dispatching it", async () => {
     const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "unsafe" }], details: {} }));
     const record = vi.fn(() => ({ created: true, status: "running" as const, guard: { blocked: false, reason: "" } }));
@@ -410,6 +428,21 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     const wrapped = new ToolExecutionPipeline(port).bindCatalog({ tools: [tool("write", execute, true)] }).tools[0];
     await expect(wrapped.execute("completed-call", {}, testSignal)).resolves.toEqual(receipt);
     expect(execute).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it("refuses to replay a tool attempt whose restart outcome is unknown", async () => {
+    const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "unsafe replay" }], details: {} }));
+    const { port, complete } = capabilities({
+      recordToolAttempt: vi.fn(() => ({ created: false, status: "outcome_unknown" as const, guard: { blocked: false, reason: "" } })),
+    });
+    const wrapped = new ToolExecutionPipeline(port).bindCatalog({ tools: [tool("write", execute, true)] }).tools[0];
+    await expect(wrapped.execute("unknown-call", {}, testSignal)).rejects.toMatchObject({
+      code: "NOT_AUTHORIZED",
+      message: expect.stringContaining("unknown outcome after service restart"),
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(port.claimOperation).not.toHaveBeenCalled();
     expect(complete).not.toHaveBeenCalled();
   });
 });

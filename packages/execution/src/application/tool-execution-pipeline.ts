@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type { RuntimeCapabilityCatalog, RuntimeTool, RuntimeToolResult, ToolCapabilityApplicationPort } from "../ports/index.js";
 import { classifyToolError, type StructuredToolError, ToolExecutionError } from "../ports/tool-error.js";
-
 interface ToolCallState {
   toolName: string;
   argsHash: string;
@@ -81,9 +80,9 @@ export class ToolExecutionPipeline {
       }
       return existing.blocked ? { blocked: true, reason: existing.blocked } : { blocked: false };
     }
-    let blocked: string | undefined;
-    let recorded = false;
+    let blocked: string | undefined, recorded = false;
     if (!this.capabilities.isCurrentAttempt()) blocked = "Attempt is no longer current";
+    else blocked = tool.policy?.preflightGuard?.(args);
     const access = typeof tool.policy?.workspaceAccess === "function" ? tool.policy.workspaceAccess(args) : tool.policy?.workspaceAccess;
     const requireExplicit = tool.policy?.externalAction === "explicit";
     const activatesExternalAuthorization = requireExplicit
@@ -113,6 +112,7 @@ export class ToolExecutionPipeline {
       recorded = attempt.created && attempt.status === "running";
       if (!attempt.created && attempt.status === "failed") blocked = `Tool attempt ${toolCallId} already failed`;
       else if (!attempt.created && attempt.status === "running") blocked = `Tool attempt ${toolCallId} is already running`;
+      else if (!attempt.created && attempt.status === "outcome_unknown") blocked = `Tool attempt ${toolCallId} has an unknown outcome after service restart and cannot be replayed automatically`;
       else if (!attempt.created && !tool.policy?.operationType) blocked = `Tool attempt ${toolCallId} already succeeded without a replayable receipt`;
       else if (attempt.created && attempt.guard.blocked) blocked = attempt.guard.reason;
     }

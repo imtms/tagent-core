@@ -1,7 +1,7 @@
 import type { RunEvent, RunId, TaskRun, TaskRunExecutionState, UserInputField, UserInputRequest } from "../domain/index.js";
 import type { ArtifactSinkPort } from "./artifact-sink-port.js";
 import type { WorkspaceEditPort } from "./workspace-edit-port.js";
-import type { TaskRunStateMutation } from "./attempt-repository.js";
+import type { TaskRunStateMutation, ToolAttemptStatus } from "./attempt-repository.js";
 import type { OperationRecord } from "@tagent/governance/ports";
 import type { TranscriptLiteralSearchResult } from "./transcript-repository.js";
 
@@ -75,7 +75,7 @@ export interface ToolCapabilityApplicationPort {
   requestUserInput(toolCallId: string, prompt: string, fields: UserInputField[]): UserInputRequest;
   recordToolAttempt(toolCallId: string, toolName: string, args: unknown): {
     created: boolean;
-    status: "running" | "succeeded" | "failed";
+    status: ToolAttemptStatus;
     guard: { blocked: boolean; reason: string };
   };
   completeToolAttempt(toolCallId: string, success: boolean, error?: string): boolean;

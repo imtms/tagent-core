@@ -39,6 +39,7 @@ export type {
   FencedRuntimeMutationContext,
   FencedRuntimeMutationPort,
   TaskRunStateMutation,
+  ToolAttemptStatus,
 } from "./attempt-repository.js";
 export type { ClaimedContinuation, ContinuationQueue, ContinuationRecoveryItem } from "./continuation-queue.js";
 export type { ControlInbox, EnqueueControlResult } from "./control-inbox.js";

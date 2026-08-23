@@ -974,16 +974,33 @@ describe("Store", () => {
     secondStore.close();
   });
 
-  it("marks unfinished operations outcome unknown after restart", () => {
+  it("atomically marks unfinished operations and tool attempts outcome unknown after restart", () => {
     const filename = path.join(mkdtempSync(path.join(tmpdir(), "tagent-store-")), "restart.db");
-    const store = new Store(filename);
+    const store = new Store(filename, { deferStartupRecovery: true });
     const session = store.createSession();
     const run = store.createRun(session.id, "operation restart");
-    store.claimOperation("op-running", run.id, 1, "tool.bash", { command: "echo x" });
-    store.updateOperation("op-running", { status: "running", stage: "executing" });
+    const toolCallId = "op-running";
+    const operationId = `${run.id}:1:${toolCallId}`;
+    store.recordToolAttempt(run.id, 1, toolCallId, "bash", { command: "echo x" });
+    store.claimOperation(operationId, run.id, 1, "tool.bash", { command: "echo x" });
+    store.updateOperation(operationId, { status: "running", stage: "executing" });
     store.close();
-    const reopened = new Store(filename);
-    expect(reopened.getOperation("op-running")).toMatchObject({ status: "outcome_unknown", stage: "service_restart" });
+    const reopened = new Store(filename, { deferStartupRecovery: true });
+    expect(reopened.runStartupRecovery()).toEqual({ operations: 1, toolAttempts: 1, controlInbox: 0 });
+    expect(reopened.getOperation(operationId)).toMatchObject({
+      status: "outcome_unknown", stage: "service_restart", completedAt: expect.any(Number),
+    });
+    const recoveredAttempt = reopened.db.prepare(`SELECT status,error,completed_at AS completedAt
+      FROM tool_attempts WHERE run_id=? AND attempt=1 AND tool_call_id=?`).get(run.id, toolCallId);
+    expect(recoveredAttempt).toMatchObject({
+      status: "outcome_unknown",
+      error: expect.stringContaining("side effects may have occurred"),
+      completedAt: expect.any(Number),
+    });
+    expect(reopened.runStartupRecovery()).toEqual({ operations: 0, toolAttempts: 0, controlInbox: 0 });
+    expect(reopened.db.prepare(`SELECT status,error,completed_at AS completedAt
+      FROM tool_attempts WHERE run_id=? AND attempt=1 AND tool_call_id=?`).get(run.id, toolCallId))
+      .toEqual(recoveredAttempt);
     reopened.close();
   });
 
@@ -1125,6 +1142,9 @@ describe("Store", () => {
       } else {
         if (ambiguity === "unfinished tool") {
           store.recordToolAttempt(run.id, 1, "tool-call", "bash", { command: "work" });
+          store.runStartupRecovery();
+          expect(store.db.prepare("SELECT status FROM tool_attempts WHERE run_id=? AND tool_call_id='tool-call'").get(run.id))
+            .toEqual({ status: "outcome_unknown" });
         } else if (ambiguity === "pending user input") {
           store.requestUserInput(run.id, "Choose", [{
             key: "choice",

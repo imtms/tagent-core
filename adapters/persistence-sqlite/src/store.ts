@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
-import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
+import type { RuntimeMessage as AgentMessage, ToolAttemptStatus } from "@tagent/execution/ports";
 import {
   GENERATION_ACTIVATION_OPERATION,
   GENERATION_HANDOFF_MARKER,
@@ -314,7 +314,8 @@ export class Store {
    * that started becomes outcome_unknown, while an authorized effect that did
    * not start becomes cancelled/restart_before_effect. Both are terminal exact
    * replays and retain their append-only allow receipt and approval use. Other
-   * running operations use the outcome_unknown/service_restart projection.
+   * running operations use the outcome_unknown/service_restart projection;
+   * abandoned running tool attempts become terminal outcome_unknown records.
    * Production supplies the current WriterFenceGuard as `guard`.
    */
   runStartupRecovery(guard?: StoreMutationRunner) {
@@ -350,14 +351,18 @@ export class Store {
         .run(timestamp, timestamp).changes;
       const ordinaryOperations = db.prepare(`UPDATE operations SET
         status='outcome_unknown',stage='service_restart',
-        error='Service restarted before operation outcome was recorded',updated_at=?
+        error='Service restarted before operation outcome was recorded',updated_at=?,completed_at=?
         WHERE status='running' AND NOT (
           attempt_id IS NOT NULL AND EXISTS (SELECT 1 FROM approval_receipts receipt
             WHERE receipt.operation_id=operations.id AND receipt.outcome='allow')
-        )`).run(timestamp).changes;
+        )`).run(timestamp, timestamp).changes;
       const operations = capabilityRunning + capabilityAuthorized + ordinaryOperations;
+      const toolAttempts = db.prepare(`UPDATE tool_attempts SET
+        status='outcome_unknown',
+        error='Service restarted before the tool outcome was durably recorded; side effects may have occurred',
+        completed_at=? WHERE status='running'`).run(timestamp).changes;
       const controlInbox = db.prepare("UPDATE control_inbox SET status = 'outcome_unknown', error = 'Service restarted while Pi delivery outcome was unknown', completed_at = ? WHERE status = 'delivering'").run(timestamp).changes;
-      return { operations, controlInbox };
+      return { operations, toolAttempts, controlInbox };
     };
     if (guard) return guard.run(recover);
     return this.db.transaction(() => recover(this.db)).immediate();
@@ -1403,7 +1408,7 @@ ${source.content}`;
           AND NOT EXISTS (SELECT 1 FROM task_run_command_receipts command
             WHERE command.task_run_id=run.id AND command.status='outcome_unknown')
           AND NOT EXISTS (SELECT 1 FROM tool_attempts tool
-            WHERE tool.run_id=run.id AND tool.status='running')
+            WHERE tool.run_id=run.id AND tool.status IN ('running','outcome_unknown'))
           AND NOT EXISTS (SELECT 1 FROM user_input_requests input
             WHERE input.run_id=run.id AND input.status='pending')
           AND NOT EXISTS (SELECT 1 FROM approval_requests approval
@@ -1970,7 +1975,7 @@ ${source.content}`;
       WHERE run_id=? AND attempt=? AND tool_call_id=?`).get(runId, attempt, toolCallId) as {
         toolName: string;
         argsHash: string;
-        status: "running" | "succeeded" | "failed";
+        status: ToolAttemptStatus;
       };
     if (row.toolName !== toolName || row.argsHash !== argsHash) {
       throw new Error(`Tool attempt ${toolCallId} already exists with different content`);

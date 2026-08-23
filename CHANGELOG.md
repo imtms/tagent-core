@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Safety
+
+- Rejected Bash commands that stop, restart, or otherwise terminate the hosting `tagent-core` service through common `systemctl`, `sudo`, `service`, init-script, and nested-shell forms. The actionable failure directs Agents to the receipt-backed `core_generation_activate` handoff while leaving unrelated service administration and command text used only as data untouched.
+
+### Reliability
+
+- Reconciled abandoned `running` tool attempts to terminal `outcome_unknown` records in the guarded startup-recovery transaction, including a restart diagnostic and completion timestamp. Unknown attempts remain fail-closed for crash recovery and same-call replay instead of appearing live forever or being mislabeled as failed.
+
 ## [0.8.28] - 2026-08-23
 
 ### Workspace Goal execution

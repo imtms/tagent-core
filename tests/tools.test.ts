@@ -5,7 +5,7 @@ import path from "node:path";
 import { Store } from "@tagent/persistence-sqlite/store";
 import type { RunEvent, RunId } from "@tagent/execution/domain";
 import type { ToolCapabilityApplicationPort } from "@tagent/execution/ports";
-import { bashCommandIsDestructive, bashInvalidatesChecks, composeWorkspaceTools, createLocalSubprocessPort, createWorkspaceArtifactSink, createWorkspaceEditPort, listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "@tagent/workspace-local";
+import { bashCommandIsDestructive, bashCommandTargetsHostingCore, bashInvalidatesChecks, composeWorkspaceTools, createLocalSubprocessPort, createWorkspaceArtifactSink, createWorkspaceEditPort, listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "@tagent/workspace-local";
 
 const testSignal = new AbortController().signal;
 
@@ -313,6 +313,54 @@ describe("workspace tools", () => {
       "echo safe & (rm -rf .)",
     ]) expect(bashCommandIsDestructive(command), command).toBe(true);
     expect(bashCommandIsDestructive("echo 'rm -rf .'")).toBe(false);
+  });
+
+  it("recognizes hosting Core lifecycle commands without matching benign data", () => {
+    for (const command of [
+      "systemctl restart tagent-core.service",
+      "sudo systemctl stop tagent-core",
+      "sudo -n /bin/systemctl try-restart tagent-core.service",
+      "env systemctl reload-or-restart tagent-core.service",
+      "service tagent-core restart",
+      "sudo service tagent-core stop",
+      "/etc/init.d/tagent-core restart",
+      "bash -lc 'systemctl restart tagent-core.service'",
+      "sudo -u root sh -c 'service tagent-core restart'",
+      "echo \"$(systemctl restart tagent-core.service)\"",
+    ]) expect(bashCommandTargetsHostingCore(command), command).toBe(true);
+    for (const command of [
+      "echo 'systemctl restart tagent-core.service'",
+      "printf '%s' 'service tagent-core restart'",
+      "systemctl status tagent-core.service",
+      "systemctl start tagent-core.service",
+      "systemctl restart tagent-worker.service",
+      "systemctl --host remote restart tagent-core.service",
+      "systemctl -M container restart tagent-core.service",
+      "systemctl --user restart tagent-core.service",
+      "systemctl --root=/mnt restart tagent-core.service",
+      "service tagent-core status",
+      "./fixtures/init.d/tagent-core restart",
+      "bash -lc 'echo systemctl restart tagent-core.service'",
+    ]) expect(bashCommandTargetsHostingCore(command), command).toBe(false);
+  });
+
+  it("blocks hosting Core lifecycle commands with durable handoff guidance", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-core-lifecycle-"));
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "restart Core safely");
+    const bash = createTestTools(store, run.id, workspace).find((tool) => tool.name === "bash")!;
+    for (const [index, command] of [
+      "systemctl restart tagent-core.service",
+      "sudo systemctl stop tagent-core.service",
+      "service tagent-core restart",
+      "bash -lc 'systemctl restart tagent-core.service'",
+    ].entries()) {
+      await expect(bash.execute(`core-lifecycle-${index}`, { command }, testSignal))
+        .rejects.toThrow(/core_generation_activate/);
+    }
+    expect(store.db.prepare("SELECT COUNT(*) AS count FROM tool_attempts").get()).toEqual({ count: 0 });
+    expect(store.listOperations(run.id)).toEqual([]);
+    store.close();
   });
 
   it("publishes task updates and infers phases from plan, mutation, and checks", async () => {

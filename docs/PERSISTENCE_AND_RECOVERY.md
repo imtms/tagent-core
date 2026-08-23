@@ -51,6 +51,7 @@ Startup never blindly repeats an effect whose outcome may have escaped Core:
 - a capability effect that reached `effect_started` becomes `outcome_unknown`;
 - an authorized capability operation that had not started is cancelled with `restart_before_effect`;
 - other running operations become `outcome_unknown` with `service_restart`;
+- running tool attempts become terminal `outcome_unknown` records with a restart diagnostic and `completed_at`; the same tool-call identity cannot be replayed automatically;
 - in-flight control delivery becomes `outcome_unknown`;
 - started TaskRun command, Workspace Goal, and capability-profile operation receipts become `outcome_unknown`;
 - exact terminal receipts remain replayable without repeating the effect.
@@ -62,7 +63,7 @@ Workspace Goal recovery separately replays safe, idempotent projections rather t
 An unexpectedly terminated or heartbeat-unresponsive Generation is restarted by the Host on the committed release with durable exponential backoff and a bounded crash budget. Pre-`READY` failures consume the same budget across Host restarts; release-resolution and verification failures do not. Startup may queue a crash-recovery Continuation only when all of these are true for an interrupted TaskRun:
 
 - no operation, control delivery, or TaskRun command is `outcome_unknown`;
-- no tool attempt is still `running`;
+- no tool attempt is `running` or `outcome_unknown`;
 - no user input or approval is pending;
 - no Continuation is already queued or running;
 - the Run has neither external-action execution policy nor any external-action approval history;

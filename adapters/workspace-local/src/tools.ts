@@ -1,5 +1,6 @@
 export {
   bashCommandIsDestructive,
+  bashCommandTargetsHostingCore,
   bashInvalidatesChecks,
   composeWorkspaceTools,
   ensureWorkspace,

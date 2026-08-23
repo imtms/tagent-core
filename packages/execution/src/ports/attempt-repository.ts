@@ -15,6 +15,8 @@ import type {
 import type { Artifact, PlanItem, RunCheck } from "@tagent/governance/domain";
 import type { OperationRecord, OperationUpdate } from "@tagent/governance/ports";
 
+export type ToolAttemptStatus = "running" | "succeeded" | "failed" | "outcome_unknown";
+
 export interface AttemptRepository {
   getAttempt(attemptId: string): Attempt | undefined;
   getAttemptForRun(runId: string, ordinal: number): Attempt | undefined;
@@ -128,7 +130,7 @@ export interface FencedRuntimeMutationPort {
   ): {
     argsHash: string;
     created: boolean;
-    status: "running" | "succeeded" | "failed";
+    status: ToolAttemptStatus;
     guard: { blocked: boolean; reason: string };
   };
   completeToolAttempt(

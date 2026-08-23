@@ -5,7 +5,7 @@ import { Type, type Static } from "typebox";
 import type { ToolProvider } from "@tagent/execution/composition";
 import type { RuntimeTool, RuntimeToolResult, RuntimeToolUpdateCallback, SubprocessPort, ToolCapabilityApplicationPort } from "@tagent/execution/ports";
 import { readWorkspaceFile } from "../workspace-path.js";
-import { bashCommandIsDestructive, bashInvalidatesChecks, durableTextResult, MAX_DURABLE_OUTPUT, MAX_OUTPUT, persistToolOutputArtifact, previewText, safeArtifactId, textResult } from "./shared.js";
+import { bashCommandIsDestructive, bashCommandTargetsHostingCore, bashInvalidatesChecks, durableTextResult, HOSTING_CORE_LIFECYCLE_BLOCK_REASON, MAX_DURABLE_OUTPUT, MAX_OUTPUT, persistToolOutputArtifact, previewText, safeArtifactId, textResult } from "./shared.js";
 
 const BashSchema = Type.Object({ command: Type.String(), timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })) });
 
@@ -19,10 +19,13 @@ export class BashToolProvider implements ToolProvider {
 
   provideTools(): readonly RuntimeTool[] {
     const tool: RuntimeTool<Static<typeof BashSchema>, Record<string, unknown>> = {
-      name: "bash", label: "Run command", description: "Run a non-interactive shell command in the workspace. A minimal best-effort guard blocks common catastrophic forms; it is not an operating-system sandbox.",
+      name: "bash", label: "Run command", description: "Run a non-interactive shell command in the workspace. Deterministic guards reject common catastrophic forms and attempts to stop or restart the hosting tagent-core service; use core_generation_activate for durable Generation handoff. This is not an operating-system sandbox.",
       parameters: BashSchema, executionMode: "sequential",
       policy: {
         operationType: "tool.bash",
+        preflightGuard: (value) => bashCommandTargetsHostingCore((value as Static<typeof BashSchema>).command)
+          ? HOSTING_CORE_LIFECYCLE_BLOCK_REASON
+          : undefined,
         externalAction: true,
         workspaceAccess: (value) => bashInvalidatesChecks((value as Static<typeof BashSchema>).command) ? "mutation" : "read_only",
         invalidatesChecks: (value) => bashInvalidatesChecks((value as Static<typeof BashSchema>).command),
@@ -38,6 +41,9 @@ export class BashToolProvider implements ToolProvider {
     signal: AbortSignal,
     onUpdate?: RuntimeToolUpdateCallback<Record<string, unknown>>,
   ): Promise<RuntimeToolResult<Record<string, unknown>>> {
+    if (bashCommandTargetsHostingCore(params.command)) {
+      throw new Error(HOSTING_CORE_LIFECYCLE_BLOCK_REASON);
+    }
     if (bashCommandIsDestructive(params.command)) {
       throw new Error("Command blocked by the minimal safety policy");
     }
