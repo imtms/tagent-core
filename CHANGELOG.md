@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## [0.8.28] - 2026-08-23
+
+### Workspace Goal execution
+
+- Kept each Roadmap TaskRun bounded to its own outcome and verification instead of requiring an early stage to satisfy Goal-wide criteria that may depend on later stages. Mapped Goal criteria now accumulate as non-gating evidence across linked Runs.
+- Continued an approved Roadmap serially after its operator-started stage completes, admitting each next untouched item through the existing Supervisor Inbox, Goal authorization and TaskRun paths in Roadmap document order.
+- Required every approved Roadmap item and every required criterion to complete before a Goal becomes ready to close; explicit user confirmation remains the only Goal-completion path.
+
+### Reliability
+
+- Added deterministic successor request identities and startup reconciliation so a crash between terminal projection and successor admission can be repaired without duplicate execution.
+- Stopped automatic progression on failed, cancelled, blocked, interrupted, queued, running, no-longer-approved, paused or revised work, with no implicit retry.
+- Preserved evidence recovery for existing Runs whose Goal observations were persisted on the legacy contract gate.
+
+### Compatibility
+
+- The HTTP major, public ABI/profile shapes, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` protocol are unchanged. There are no breaking changes or data-migration requirements. Deploy matching `0.8.28` Core, Web Console, ABI, and Core Client artifacts.
+
 ## [0.8.27] - 2026-08-23
 
 ### Runtime context and performance
