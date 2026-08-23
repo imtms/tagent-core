@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## [0.8.30] - 2026-08-23
+## [0.8.31] - 2026-08-23
 
 ### Web Console information hierarchy
 
@@ -10,9 +10,17 @@
 - Reduced non-actionable Console chrome across Review, Supervisor queue, Memory, Goals, and Skills. Verdict-only Gates are static rows; duplicate request/contract copy and zero-value counters disappear; routing, receipt, generation, and error-code diagnostics remain available through bounded technical disclosures.
 - Updated the maintained Web Console design contract for operator-first information ownership, readable labels, nested provenance, neutral ledger boundaries, and narrow-screen containment.
 
+### Release validation
+
+- Aligned the Web Console Gate test fixture with the current `system | llm` evaluator contract so the full repository TypeScript gate validates the new static-verdict regression.
+
 ### Compatibility
 
-- The HTTP major, public ABI/profile shapes, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` protocol are unchanged. There are no breaking changes or data-migration requirements. Deploy matching `0.8.30` Core, Web Console, ABI, and Core Client artifacts.
+- The HTTP major, public ABI/profile shapes, SQLite schema revision `2`, PostgreSQL Memory schema version `1`, and `tagent-core/state-0.8-r2` protocol are unchanged. There are no breaking changes or data-migration requirements. Deploy matching `0.8.31` Core, Web Console, ABI, and Core Client artifacts.
+
+## [0.8.30] - 2026-08-23
+
+> Tag `v0.8.30` failed release validation before artifacts were built, so no GitHub Release was published. Its intended Web Console changes ship in `v0.8.31`.
 
 ## [0.8.29] - 2026-08-23
 
