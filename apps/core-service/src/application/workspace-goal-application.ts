@@ -102,6 +102,41 @@ export class CoreWorkspaceGoalApplication {
 
   startWorkspaceGoalRoadmapTask(goalId:string,roadmapItemId:string,requestId?:string){const result=this.startWorkspaceGoalRoadmapItem(goalId,roadmapItemId,requestId);return{goal:this.requireGoal(goalId),inboxItemId:result.item.id,runId:result.run?.id??null};}
 
+  /**
+   * Projects one terminal Run and deterministically admits the next untouched
+   * item in the already approved Roadmap slice. This is orchestration, not a
+   * new agent loop: blocked/failed/retry work and approval changes stop here.
+   */
+  recordWorkspaceGoalRunOutcome(runId: string, options: { autoStart?: boolean } = {}) {
+    const goal = this.goals.recordRunOutcome(runId);
+    if (!goal || options.autoStart === false) return { goal, started: null };
+    const link = goal.runLinks.find((item) => item.runId === runId);
+    const completedItem = goal.roadmapProgress.find((item) => item.runId === runId);
+    if (goal.status !== "active" || link?.mode !== "roadmap" || !goal.roadmap
+      || link.roadmapRevisionId !== goal.activeRoadmapRevisionId || link.roadmapRevisionId !== goal.roadmap.id
+      || completedItem?.status !== "completed" || completedItem.runStatus !== "completed") {
+      return { goal, started: null };
+    }
+    const roadmap = goal.roadmap?.content as WorkspaceGoalRoadmap | undefined;
+    const approval = [...goal.decisions].reverse().find((decision) => decision.kind === "approve_roadmap"
+      && decision.targetRevisionId === goal.roadmap?.id && decision.targetHash === goal.roadmap.contentHash);
+    const approved = new Set(approval?.approvedItemIds ?? []);
+    const orderedItems = roadmap?.items.filter((item) => approved.has(item.id)) ?? [];
+    const completedIndex = Math.max(...link.roadmapItemIds.map((itemId) => orderedItems.findIndex((item) => item.id === itemId)));
+    const nextItemId = completedIndex >= 0
+      ? orderedItems.slice(completedIndex + 1).find((item) => goal.roadmapProgress.find((progress) => progress.itemId === item.id)?.status !== "completed")?.id ?? null
+      : null;
+    const nextProgress = nextItemId ? goal.roadmapProgress.find((item) => item.itemId === nextItemId) : undefined;
+    // Never turn automatic progression into an implicit retry. A failed,
+    // cancelled, blocked or already queued item remains an explicit stop.
+    if (!nextItemId || nextProgress?.status !== "pending" || nextProgress.runId || nextProgress.queueStatus) {
+      return { goal, started: null };
+    }
+    const requestId = `goal:auto:${goal.id}:roadmap:${goal.activeRoadmapRevisionId}:item:${nextItemId}`;
+    const started = this.startWorkspaceGoalRoadmapItem(goal.id, nextItemId, requestId);
+    return { goal: this.requireGoal(goal.id), started };
+  }
+
   private runOperation<T extends object>(goalId:string,requestId:string,operationType:string,payload:Record<string,unknown>,operation:()=>T):T{const operations=this.requireOperations(),claim=operations.claimWorkspaceGoalOperation({goalId,requestId,operationType,canonicalPayload:canonicalJson(payload)});if(!claim.claimed)return this.replayOperation(claim.receipt) as T;try{const result=operation();operations.settleWorkspaceGoalOperation(goalId,requestId,"succeeded",result as unknown as Record<string,unknown>);return result;}catch(error){operations.settleWorkspaceGoalOperation(goalId,requestId,"failed",{},operationError(error));throw error;}}
 
   private replayOperation(receipt:WorkspaceGoalOperationReceipt):Record<string,unknown>{if(receipt.state==="succeeded"&&receipt.result)return receipt.result;if(receipt.state==="failed")throw new Error(String(receipt.error?.message??"Workspace Goal operation failed"));if(receipt.state==="started")throw new Error("Workspace Goal operation is still in progress");throw new Error("Workspace Goal operation outcome is unknown; inspect the Goal before retrying with a new requestId");}

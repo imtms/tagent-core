@@ -179,7 +179,7 @@ describe("Workspace Goal Roadmap execution", () => {
     expect(policy).toMatchObject({ mode: "exact_delivery", evidencePolicy: "none", reviewPolicy: "local", exactOutput: "OK" });
   });
 
-  it("embeds only an approved Roadmap slice and Goal criterion prompts in a Roadmap TaskRun", () => {
+  it("embeds only an approved Roadmap slice and keeps Goal criteria outside TaskRun acceptance", () => {
     const store = new Store(":memory:");
     try {
       const { workspace, goals, goal } = createApprovedGoal(store);
@@ -195,7 +195,10 @@ describe("Workspace Goal Roadmap execution", () => {
         targetCriterionKeys: ["stored"],
         roadmapItems: [expect.objectContaining({ id: "storage", criterionKeys: ["stored"] })],
       });
-      expect(attached.contract?.acceptanceCriteria).toContain("[Workspace Goal criterion stored] Goal is durably stored");
+      expect(attached.contract?.workspaceGoal?.criterionPrompts).toEqual([
+        { key: "stored", prompt: "[Workspace Goal criterion stored] Goal is durably stored" },
+      ]);
+      expect(attached.contract?.acceptanceCriteria.some((item) => item.startsWith("[Workspace Goal criterion"))).toBe(false);
       expect(persistence(store).workspaceGoals.authorizeRunMutation(run.id)).toEqual({ allowed: true, reason: "Goal Roadmap slice is approved" });
       expect(() => goals.linkRun({ goalId: goal.id, runId: store.createRun(workspace.id, "overreach").id, goalRevision: 1, roadmapRevisionId: revision.id, roadmapItemIds: ["storage"], criterionKeys: ["compatible"], mode: "roadmap" })).toThrow("outside the selected Roadmap item");
       expect(() => goals.addRoadmap(goal.id, roadmap(), null, "user")).toThrow("while a guided TaskRun is active");
@@ -237,7 +240,7 @@ describe("Workspace Goal Roadmap execution", () => {
       upsertTrustedCheck(store, run.id, { key: "storage-test", title: "Storage test", command: "npm test -- storage" });
       const prompt = store.getRun(run.id)!.contract!.workspaceGoal!.criterionPrompts[0].prompt;
       store.recordGateEvaluation({
-        id: randomUUID(), runId: run.id, attempt: run.attempt, checkpointSeq: 1, gateType: "contract",
+        id: randomUUID(), runId: run.id, attempt: run.attempt, checkpointSeq: 1, gateType: "evidence",
         evaluator: "llm", evaluatorModel: "supervisor-test", summary: "covered", passed: true, failures: [],
         criterionCoverage: [{ criterion: prompt, status: "covered", evidenceRefs: ["check:storage-test"], reason: "The successful test verifies storage." }],
         inputManifestHash: "manifest", createdAt: Date.now(),
@@ -251,6 +254,42 @@ describe("Workspace Goal Roadmap execution", () => {
         roadmapProgress: [expect.objectContaining({ itemId: "storage", status: "completed", runId: run.id })],
         evidenceLinks: [expect.objectContaining({ criterionKey: "stored", runId: run.id, checkKey: "storage-test", status: "valid" })],
       });
+    } finally { store.close(); }
+  });
+
+  it("continues approved Roadmap work after an early item already verifies the Goal criterion", () => {
+    const store = new Store(":memory:");
+    try {
+      const value = definition([{ key: "complete", title: "The complete rollout is verified", required: true }]);
+      const { workspace, goals, goal } = createApprovedGoal(store, value);
+      const revision = addApprovedRoadmap(goals, goal.id, roadmap([
+        { id: "foundation", title: "Build foundation", outcome: "Foundation is ready", verification: "Run foundation tests", criterionKeys: ["complete"] },
+        { id: "integration", title: "Integrate rollout", outcome: "Integration is ready", verification: "Run integration tests", criterionKeys: ["complete"] },
+      ]));
+      const first = store.createRun(workspace.id, "build the foundation");
+      goals.linkRun({ goalId: goal.id, runId: first.id, goalRevision: 1, roadmapRevisionId: revision.id, roadmapItemIds: ["foundation"], criterionKeys: ["complete"], mode: "roadmap" });
+      upsertTrustedCheck(store, first.id, { key: "foundation-test", title: "Foundation test", command: "npm test -- foundation" });
+      const prompt = store.getRun(first.id)!.contract!.workspaceGoal!.criterionPrompts[0].prompt;
+      store.recordGateEvaluation({
+        id: randomUUID(), runId: first.id, attempt: first.attempt, checkpointSeq: 1, gateType: "evidence",
+        evaluator: "llm", evaluatorModel: "supervisor-test", summary: "Goal observation covered without gating the item", passed: true, failures: [],
+        criterionCoverage: [{ criterion: prompt, status: "covered", evidenceRefs: ["check:foundation-test"], reason: "The current receipt supports the Goal criterion." }],
+        inputManifestHash: "manifest", createdAt: Date.now(),
+      });
+      store.transitionRun(first.id, ["running"], "completed", "run.completed", {}, "done", first.attempt);
+      goals.recordRunOutcome(first.id);
+
+      expect(goals.get(goal.id)).toMatchObject({
+        status: "active",
+        verifiedCriteria: 1,
+        nextAction: { kind: "run_roadmap_item", roadmapItemId: "integration" },
+        roadmapProgress: [
+          expect.objectContaining({ itemId: "foundation", status: "completed" }),
+          expect.objectContaining({ itemId: "integration", status: "pending" }),
+        ],
+      });
+      const second = store.createRun(workspace.id, "integrate the rollout");
+      expect(() => goals.linkRun({ goalId: goal.id, runId: second.id, goalRevision: 1, roadmapRevisionId: revision.id, roadmapItemIds: ["integration"], criterionKeys: ["complete"], mode: "roadmap" })).not.toThrow();
     } finally { store.close(); }
   });
 

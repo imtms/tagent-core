@@ -70,6 +70,7 @@ export class AdmissionCoordinator {
       eventHub: RunEventPublisherPort;
       settlement: AttemptSettlementPort;
       supervisor: AdmissionSupervisorPort;
+      workspaceGoalRunReconciled?: (runId: string) => void;
     },
   ) {}
 
@@ -680,7 +681,16 @@ export class AdmissionCoordinator {
   recoverSessionInbox() {
     if (this.state.closing) return [];
     if (!this.goalRunStateReconciled) {
-      this.state.persistence.workspaceGoals.reconcileRunState();
+      const reconciled = this.state.persistence.workspaceGoals.reconcileRunState();
+      for (const runId of reconciled) {
+        try { this.dependencies.workspaceGoalRunReconciled?.(runId); }
+        catch (error) {
+          this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "run.updated", {
+            action: "workspace_goal_auto_advance_failed",
+            error: error instanceof Error ? error.message : String(error),
+          }));
+        }
+      }
       this.goalRunStateReconciled = true;
     }
     const started: string[] = [];

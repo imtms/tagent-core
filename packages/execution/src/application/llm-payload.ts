@@ -99,6 +99,9 @@ export function runtimeAttemptRunContext(run: TaskRun) {
   const workspaceGoal = run.contract?.workspaceGoal;
   const targetRoadmapItemIds = new Set(workspaceGoal?.targetRoadmapItemIds ?? []);
   const targetCriterionKeys = new Set(workspaceGoal?.targetCriterionKeys ?? []);
+  const goalCriterionPrompts = new Set(workspaceGoal?.mode === "roadmap"
+    ? workspaceGoal.criterionPrompts.map((item) => item.prompt)
+    : []);
   return {
     id: run.id,
     attempt: run.attempt,
@@ -106,7 +109,7 @@ export function runtimeAttemptRunContext(run: TaskRun) {
     contract: run.contract ? {
       summary: truncateUtf8(run.contract.summary, 3_000),
       objectives: run.contract.objectives.slice(0, 20).map((item) => ({ ...item, summary: truncateUtf8(item.summary, 2_000) })),
-      acceptanceCriteria: run.contract.acceptanceCriteria.slice(0, 30).map((item) => truncateUtf8(item, 2_000)),
+      acceptanceCriteria: run.contract.acceptanceCriteria.filter((item) => !goalCriterionPrompts.has(item)).slice(0, 30).map((item) => truncateUtf8(item, 2_000)),
       scope: truncateUtf8(run.contract.scope, 2_000),
       nonGoals: run.contract.nonGoals.slice(0, 20).map((item) => truncateUtf8(item, 1_000)),
       intent: run.contract.intent,

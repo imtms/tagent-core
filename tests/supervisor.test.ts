@@ -22,6 +22,7 @@ function semanticVerdict(options: {
   contradictory?: boolean;
   reason?: string;
   criterionCoverage?: unknown[];
+  goalCriterionCoverage?: unknown[];
   failures?: unknown[];
 } = {}) {
   return {
@@ -32,6 +33,7 @@ function semanticVerdict(options: {
       reason: options.reason ?? "Complete.",
     },
     criterionCoverage: options.criterionCoverage ?? [],
+    ...(options.goalCriterionCoverage ? { goalCriterionCoverage: options.goalCriterionCoverage } : {}),
     failures: (options.failures ?? []).map((failure) => ({ operationRefs: [], ...(failure as Record<string, unknown>) })),
   };
 }
@@ -351,6 +353,60 @@ describe("TaskRunSupervisor LLM audit", () => {
       expect(prompt).toContain('"trusted":true');
       expect(prompt).toContain(operation.id);
       expect(audit).toMatchObject({ action: "start_continuation", gates: { evidence: { passed: false }, contract: { passed: false }, completion: { passed: false } } });
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("observes mapped Goal criteria without making them Roadmap-item completion gates", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "complete stage one");
+    const goalPrompt = "[Workspace Goal criterion rollout_complete] The complete rollout is verified";
+    const contract = {
+      sourceInput: run.goal, summary: run.goal,
+      objectives: [{ id: "stage-one", summary: "Foundation is ready", timing: "current" as const, kind: "change" as const }],
+      // Simulate a pre-fix immutable contract that already persisted the Goal
+      // prompt as a third TaskRun acceptance criterion.
+      acceptanceCriteria: ["Foundation is ready", "Foundation tests pass", goalPrompt], scope: "foundation", nonGoals: [], sourceInboxIds: [],
+      parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "workspace-goal-roadmap-v1",
+      workspaceGoal: {
+        goalId: "goal-1", mode: "roadmap" as const, definitionRevisionId: "definition-1", definitionRevision: 1, definitionHash: "definition-hash",
+        title: "Roll out the feature", outcome: "The complete feature is rolled out", scope: ["foundation", "integration"], nonGoals: [],
+        criteria: [{ key: "rollout_complete", title: "The complete rollout is verified", required: true }],
+        roadmapRevisionId: "roadmap-1", roadmapRevision: 1, roadmapHash: "roadmap-hash", approvedRoadmapItemIds: ["foundation", "integration"],
+        targetRoadmapItemIds: ["foundation"], roadmapItems: [{ id: "foundation", title: "Build foundation", outcome: "Foundation is ready", verification: "Foundation tests pass", criterionKeys: ["rollout_complete"] }],
+        targetCriterionKeys: ["rollout_complete"], criterionPrompts: [{ key: "rollout_complete", prompt: goalPrompt }], attachedAt: Date.now(),
+      },
+    };
+    store.db.prepare("UPDATE runs SET contract_json=? WHERE id=?").run(JSON.stringify(contract), run.id);
+    const verification = upsertTrustedCheck(store, run.id, { key: "foundation", title: "Foundation tests", command: "npm test -- foundation", output: "foundation passed" });
+    const payload = semanticVerdict({
+      criterionCoverage: [
+        { criterionId: "ac-1", status: "covered", evidenceRefs: ["check:foundation"], reason: "The foundation is present." },
+        { criterionId: "ac-2", status: "covered", evidenceRefs: ["check:foundation"], reason: "The foundation verification passed." },
+      ],
+      goalCriterionCoverage: [{ criterionId: "gc-1", status: "unsupported", evidenceRefs: [], reason: "Integration belongs to a later Roadmap item." }],
+      failures: [{ kind: "contract", key: "gc-1", reason: "The complete rollout is not finished yet.", disposition: "auto_fixable" }],
+    });
+    let prompt = "";
+    const original = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => {
+      prompt = (JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> }).messages[0].content;
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(payload) } }] }), { status: 200 });
+    };
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({
+        run: store.getRun(run.id)!, response: "Stage one is complete and verified.", operations: store.listOperations(run.id), progress: undefined,
+      });
+      expect(prompt).toContain('"goalCriteriaForEvidence":[{"criterionId":"gc-1"');
+      expect(prompt).toContain("not acceptance criteria for this bounded TaskRun");
+      expect(prompt).toContain(verification.id);
+      expect(audit).toMatchObject({
+        action: "complete_taskrun",
+        gates: {
+          evidence: { passed: true, criterionCoverage: [{ criterion: goalPrompt, status: "unsupported" }] },
+          contract: { passed: true, criterionCoverage: [{ criterion: "Foundation is ready", status: "covered" }, { criterion: "Foundation tests pass", status: "covered" }] },
+          completion: { passed: true },
+        },
+      });
     } finally { globalThis.fetch = original; store.close(); }
   });
 

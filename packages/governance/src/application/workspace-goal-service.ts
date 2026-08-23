@@ -132,7 +132,6 @@ export function workspaceGoalNextAction(input: {
   if (input.currentRunId) return action("system", "view_running_task", "A Goal TaskRun is active", "The current TaskRun is executing with an immutable Goal direction snapshot.", "View task", null, input.currentRunId);
   if (!input.hasRoadmap) return action("system", "generate_roadmap", "Generate a Goal Roadmap", "Use one bounded LLM call to draft TaskRun-sized outcomes, then edit and approve them.", "Generate Roadmap");
   if (!input.hasApprovedRoadmap) return action("user", "review_roadmap", "Review the Goal Roadmap", "Edit the draft and approve only the items that may drive TaskRuns.", "Approve selected");
-  if (input.requiredCriteria > 0 && input.verifiedCriteria >= input.requiredCriteria) return action("user", "view_result", "Verified criteria are ready", "Review the evidence and confirm closure.", "Confirm closure");
   const progress = new Map(input.roadmapProgress.map((item) => [item.itemId, item]));
   const nextItemId = input.approvedItemIds.find((itemId) => progress.get(itemId)?.status !== "completed") ?? null;
   const nextProgress = nextItemId ? progress.get(nextItemId) : undefined;
@@ -140,6 +139,7 @@ export function workspaceGoalNextAction(input: {
     return action("user", "resolve_problem", "A Roadmap TaskRun needs attention", "Resume or resolve the original blocked TaskRun before retrying this Roadmap item.", "Open task", nextItemId, nextProgress.runId);
   }
   if (nextItemId) return action("user", "run_roadmap_item", "Run the next Roadmap item", "Start one bounded TaskRun with the Goal and Roadmap item embedded in its execution contract.", nextProgress?.retryable ? "Retry TaskRun" : "Start TaskRun", nextItemId);
+  if (input.requiredCriteria > 0 && input.verifiedCriteria >= input.requiredCriteria) return action("user", "view_result", "Roadmap and criteria are ready", "All approved Roadmap items are complete. Review the evidence and confirm closure.", "Confirm closure");
   return action("user", "review_roadmap", "Extend the Goal Roadmap", "Approved Roadmap work is exhausted while required Goal criteria remain open.", "Revise Roadmap");
 }
 
@@ -181,7 +181,7 @@ export function authorizeWorkspaceGoalRunMutation(goal:WorkspaceGoal|null,link:W
 
 export function validateWorkspaceGoalEvidenceTarget(goal:WorkspaceGoal,input:{goalRevision:number;criterionKey:string;runId:string;checkKey?:string|null;artifactId?:string|null;operationId?:string|null;status?:WorkspaceGoalEvidenceStatus},runWorkspaceId:string){if(["completed","cancelled"].includes(goal.status))throw new Error("terminal workspace Goal cannot accept evidence");if(runWorkspaceId!==goal.workspaceId)throw new Error("TaskRun belongs to a different workspace");if(!goal.definition||input.goalRevision!==goal.definition.revision)throw new Error("workspace Goal definition revision is stale");if(!(goal.definition.content as CreateWorkspaceGoalInput["definition"]).criteria.some((criterion)=>criterion.key===input.criterionKey))throw new Error("criterion not found");const runLink=goal.runLinks.find((link)=>link.runId===input.runId);if(!runLink)throw new Error("TaskRun is not linked to this workspace Goal");if(runLink.goalRevision!==input.goalRevision)throw new Error("TaskRun is linked to a different workspace Goal definition revision");if(!runLink.criterionKeys.includes(input.criterionKey))throw new Error("TaskRun is not authorized to provide evidence for this Goal criterion");if(!input.checkKey&&!input.artifactId&&!input.operationId)throw new Error("evidence must reference a check, artifact or operation");}
 
-export function shouldWorkspaceGoalBeReady(goal:WorkspaceGoal){return!goal.currentRunId&&goal.requiredCriteria>0&&goal.verifiedCriteria>=goal.requiredCriteria&&goal.activeDefinitionRevisionId===goal.definition?.id&&Boolean(goal.roadmap&&goal.activeRoadmapRevisionId===goal.roadmap.id&&latestRoadmapApproval(goal,goal.roadmap.id));}
+export function shouldWorkspaceGoalBeReady(goal:WorkspaceGoal){const approval=goal.roadmap?latestRoadmapApproval(goal,goal.roadmap.id):undefined,progress=new Map(goal.roadmapProgress.map((item)=>[item.itemId,item.status]));return!goal.currentRunId&&goal.requiredCriteria>0&&goal.verifiedCriteria>=goal.requiredCriteria&&goal.activeDefinitionRevisionId===goal.definition?.id&&Boolean(goal.roadmap&&goal.activeRoadmapRevisionId===goal.roadmap.id&&approval&&approval.approvedItemIds.every((itemId)=>progress.get(itemId)==="completed"));}
 
 function action(actor: WorkspaceGoalNextAction["actor"], kind: WorkspaceGoalNextAction["kind"], title: string, explanation: string, primaryActionLabel: string, roadmapItemId: string | null = null, taskRunId: string | null = null): WorkspaceGoalNextAction {
   return { actor, kind, title, explanation, primaryActionLabel, roadmapItemId, taskRunId };

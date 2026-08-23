@@ -173,6 +173,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
   const recoveryRef = createOneShotPort<RecoveryControlPort>("RecoveryControlPort");
   const contextRef = createOneShotPort<RunContextPort>("RunContextPort");
   const admissionRef = createOneShotPort<AdmissionDispatchPort>("AdmissionDispatchPort");
+  let workspaceGoalApplication: CoreWorkspaceGoalApplication | undefined;
 
   const eventHub = new RunEventHub(state);
   const collaborators = createExecutionCollaborationAdapters({
@@ -219,7 +220,10 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
       },
       attemptFinalized: (run, context) => {
         const current = options.persistence.taskRuns.getRun(run.id);
-        if (current) options.persistence.workspaceGoals.recordRunOutcome(current.id);
+        if (current) {
+          if (workspaceGoalApplication) workspaceGoalApplication.recordWorkspaceGoalRunOutcome(current.id, { autoStart: !context.shuttingDown });
+          else options.persistence.workspaceGoals.recordRunOutcome(current.id);
+        }
         if (!context.shuttingDown) admissionRef.port.dispatchSessionInbox(run.sessionId);
       },
       continuationStarted: (runId) => {
@@ -285,11 +289,13 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     eventHub,
     settlement: settlementRef.port,
     supervisor,
+    workspaceGoalRunReconciled: (runId) => workspaceGoalApplication?.recordWorkspaceGoalRunOutcome(runId),
   });
   admissionRef.bind(admission);
   const roadmapGenerator = runtimeDefaults.workspaceGoalRoadmapGenerator
     ?? (routerModel && runtimeDefaults.credential ? new OpenAiWorkspaceGoalRoadmapGenerator({ model: routerModel, credential: runtimeDefaults.credential, timeoutMs: routerTimeoutMs }) : undefined);
   const workspaceGoals = new CoreWorkspaceGoalApplication(options.persistence.workspaceGoals, admission, roadmapGenerator, options.persistence.sessions, options.persistence.workspaceGoalOperations);
+  workspaceGoalApplication = workspaceGoals;
   const skills = new CoreSkillApplication(options.persistence.skills, options.persistence.sessions, options.workspace);
   const lifecycle = new ExecutionLifecycleService(state, collaborators.backgroundWork);
 

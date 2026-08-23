@@ -79,22 +79,38 @@ function parseFailures(value: unknown, validOperationRefs: Set<string>): ParsedS
   });
 }
 function criterionId(index: number) { return `ac-${index + 1}`; }
-function parseCoverage(value: unknown, criteria: string[], validEvidenceRefs: Set<string>): CriterionCoverage[] {
+function goalCriterionId(index: number) { return `gc-${index + 1}`; }
+function taskRunAcceptanceCriteria(run: GovernanceTaskRunView): string[] {
+  const criteria = run.contract?.acceptanceCriteria ?? [];
+  const workspaceGoal = run.contract?.workspaceGoal as TaskRunWorkspaceGoalSnapshot | null | undefined;
+  if (workspaceGoal?.mode !== "roadmap") return criteria;
+  const goalPrompts = new Set(workspaceGoal.criterionPrompts.map((item) => item.prompt));
+  // Interpret pre-fix immutable contracts safely without rewriting history.
+  return criteria.filter((criterion) => !goalPrompts.has(criterion));
+}
+function parseCoverage(
+  value: unknown,
+  criteria: string[],
+  validEvidenceRefs: Set<string>,
+  options: { id: (index: number) => string; label: string } = { id: criterionId, label: "acceptance criterion" },
+): CriterionCoverage[] {
+  if (!criteria.length && value === undefined) return [];
   if (!Array.isArray(value)) throw new Error("Supervisor LLM returned invalid criterion coverage receipts");
   const byId = new Map<string, Record<string, unknown>>();
+  const knownIds = new Set(criteria.map((_, index) => options.id(index)));
   for (const entry of value) {
     const item = object(entry, "criterion coverage");
     const id = text(item.criterionId, "criterionId");
-    if (!/^ac-[1-9]\d*$/.test(id) || Number(id.slice(3)) > criteria.length) throw new Error(`Supervisor LLM returned unknown acceptance criterion id: ${id}`);
+    if (!knownIds.has(id)) throw new Error(`Supervisor LLM returned unknown ${options.label} id: ${id}`);
     if (byId.has(id)) throw new Error(`Supervisor LLM returned duplicate coverage receipt for ${id}`);
     byId.set(id, item);
   }
   if (byId.size !== criteria.length) {
-    const missing = criteria.map((_, index) => criterionId(index)).filter((id) => !byId.has(id));
-    throw new Error(`Supervisor LLM must return exactly one coverage receipt per acceptance criterion; missing: ${missing.join(", ") || "none"}`);
+    const missing = criteria.map((_, index) => options.id(index)).filter((id) => !byId.has(id));
+    throw new Error(`Supervisor LLM must return exactly one coverage receipt per ${options.label}; missing: ${missing.join(", ") || "none"}`);
   }
   return criteria.map((criterion, index) => {
-    const id = criterionId(index);
+    const id = options.id(index);
     const item = byId.get(id)!;
     const status = text(item.status, "criterion status") as CriterionCoverage["status"];
     if (!coverageStatuses.has(status)) throw new Error("Supervisor LLM returned unknown criterion status");
@@ -282,7 +298,7 @@ export class OpenAiSupervisorReviewer implements SupervisorReviewer {
   constructor(private readonly options: { model: RuntimeModelSpec; fallbackModel?: RuntimeModelSpec; credential: NonNullable<import("@tagent/execution/ports").AttemptRuntimeSpec["credential"]>; timeoutMs?: number; onUsage?: (runId: string, model: string, usage: import("./openai-sse.js").OpenAiUsage) => void }) { this.model = options.model.id; }
 
   async reviewRelaxed(input: SupervisorSettledReviewInput): Promise<SupervisorAudit> {
-    const criteria = input.run.contract?.acceptanceCriteria ?? [];
+    const criteria = taskRunAcceptanceCriteria(input.run);
     const candidateProjection = projectUtf8HeadTail(input.response, 10_000, 4_000);
     const reviewArtifacts = input.run.artifacts.slice(-24);
     const artifactContentBudget = Math.max(800, Math.min(2_400, Math.floor(32_000 / Math.max(1, reviewArtifacts.length))));
@@ -351,7 +367,7 @@ Return compact JSON only: {"delivery":{"complete":true,"relevant":true,"contradi
   }
 
   async reviewSemanticLite(input: SupervisorSettledReviewInput): Promise<SupervisorAudit> {
-    const criteria = input.run.contract?.acceptanceCriteria ?? [];
+    const criteria = taskRunAcceptanceCriteria(input.run);
     const candidateProjection = projectUtf8HeadTail(input.response, 8_000, 3_000);
     const payload = {
       contract: input.run.contract ? {
@@ -399,7 +415,11 @@ Return compact JSON only: {"delivery":{"complete":true,"relevant":true,"contradi
   }
 
   async reviewSettled(input: SupervisorSettledReviewInput): Promise<SupervisorAudit> {
-    const criteria = input.run.contract?.acceptanceCriteria ?? [];
+    const criteria = taskRunAcceptanceCriteria(input.run);
+    const workspaceGoal = input.run.contract?.workspaceGoal as TaskRunWorkspaceGoalSnapshot | null | undefined;
+    const goalCriteria = workspaceGoal?.mode === "roadmap"
+      ? workspaceGoal.criterionPrompts.map((item) => item.prompt)
+      : [];
     const trusted = trustedEvidence(input);
     const selectedOperations = selectReviewOperations(input, trusted);
     const recentOperations = selectedOperations.operations;
@@ -429,7 +449,6 @@ Return compact JSON only: {"delivery":{"complete":true,"relevant":true,"contradi
     const historicalAttemptOperations = recentOperations
       .filter((operation) => operation.attempt !== input.run.attempt)
       .map((operation) => operationProjection(operation, "audit_context_only"));
-    const workspaceGoal = input.run.contract?.workspaceGoal as TaskRunWorkspaceGoalSnapshot | null | undefined;
     const supervisorGoalContext = workspaceGoal ? {
       goalId: workspaceGoal.goalId,
       mode: workspaceGoal.mode,
@@ -455,7 +474,7 @@ Return compact JSON only: {"delivery":{"complete":true,"relevant":true,"contradi
       contract: input.run.contract ? {
         summary: truncateUtf8(input.run.contract.summary, 2_000),
         objectives: input.run.contract.objectives.slice(0, 20).map((item) => ({ ...item, summary: truncateUtf8(item.summary, 1_000) })),
-        acceptanceCriteria: input.run.contract.acceptanceCriteria.map((item, index) => ({ criterionId: criterionId(index), text: truncateUtf8(item, 1_000) })),
+        acceptanceCriteria: criteria.map((item, index) => ({ criterionId: criterionId(index), text: truncateUtf8(item, 1_000) })),
         nonGoals: input.run.contract.nonGoals.slice(0, 20).map((item) => truncateUtf8(item, 500)),
         intent: input.run.contract.intent,
         relation: input.run.contract.relation,
@@ -473,6 +492,7 @@ Return compact JSON only: {"delivery":{"complete":true,"relevant":true,"contradi
       operationsOmitted: input.operations.length - recentOperations.length,
       allowedEvidenceRefs: [...validEvidenceRefs],
       memoryEvidence,
+      goalCriteriaForEvidence: goalCriteria.map((item, index) => ({ criterionId: goalCriterionId(index), text: truncateUtf8(item, 1_000) })),
       progress: input.progress ? { meaningfulChanges: input.progress.meaningfulChanges, consecutiveFailures: input.progress.consecutiveFailures, repeatedOperations: input.progress.repeatedOperations } : null,
       candidateResponse: candidateProjection.text,
       candidateResponseProjection: {
@@ -492,6 +512,8 @@ Authoritative audit rules:
 - Only allowedEvidenceRefs may support criterion coverage. A check is usable only when trusted=true, which means Core bound it to a current successful Bash receipt.
 - Inspect the actual operation payload and result receipt, including command, exit code, output, effects, digest, and time. Status="succeeded" alone does not prove a semantic claim.
 - Evaluate every acceptance criterion independently. Identify receipts only by the supplied criterionId; never copy or rewrite criterion text into receipts.
+- Goal criteria for evidence are cumulative Workspace Goal observations, not acceptance criteria for this bounded TaskRun. Evaluate whether this Run's supplied evidence covers or contradicts them, but an unsupported or blocked Goal criterion must never fail this TaskRun or make its delivery incomplete.
+- Return exactly one goalCriterionCoverage receipt for every supplied gc-* criterionId. Do not report a failure merely because a Goal criterion is incomplete; later Roadmap items may advance it.
 - Acceptance criteria describe final settlement, not intermediate milestones. Treat sample-count thresholds, required files, coverage breadth, and final synthesis requirements as pass/fail conditions only when auditing the settled candidate; do not require each operation or artifact to satisfy the entire contract alone. Artifact byte/line counts, SHA-256 digests, and CSV columns/dataRows are Core-computed structural facts; use them for quantitative/shape checks while using the bounded content projection for semantic quality.
 - Return exactly one contract criterionCoverage receipt for every supplied criterionId, with no duplicates or extras. Receipt array order is not significant.
 - Map only evidence that substantively supports that specific criterion; generic evidence must not certify every criterion.
@@ -512,14 +534,14 @@ Authoritative audit rules:
 - Report only semantic failures not already expressed by criterion coverage. Do not invent plan/check prerequisite failures.
 
 Return compact JSON only. Keep every reason under 160 characters. Use this exact shape:
-{"delivery":{"complete":true,"relevant":true,"contradictory":false,"reason":"..."},"criterionCoverage":[{"criterionId":"ac-1","status":"covered|unsupported|contradicted|blocked","evidenceRefs":["check:key|artifact:id|operation:id|memory:record-or-revision"],"reason":"..."}],"failures":[{"kind":"progress|evidence|check|contract|completion","key":"...","reason":"...","disposition":"auto_fixable|needs_user_input|needs_approval|external_dependency|runtime_transient|non_recoverable","operationRefs":["operation:id"]}]}
+{"delivery":{"complete":true,"relevant":true,"contradictory":false,"reason":"..."},"criterionCoverage":[{"criterionId":"ac-1","status":"covered|unsupported|contradicted|blocked","evidenceRefs":["check:key|artifact:id|operation:id|memory:record-or-revision"],"reason":"..."}],"goalCriterionCoverage":[{"criterionId":"gc-1","status":"covered|unsupported|contradicted|blocked","evidenceRefs":["check:key|artifact:id|operation:id|memory:record-or-revision"],"reason":"..."}],"failures":[{"kind":"progress|evidence|check|contract|completion","key":"...","reason":"...","disposition":"auto_fixable|needs_user_input|needs_approval|external_dependency|runtime_transient|non_recoverable","operationRefs":["operation:id"]}]}
 Each failure is {"kind":"...","key":"...","reason":"...","disposition":"auto_fixable|needs_user_input|needs_approval|external_dependency|runtime_transient|non_recoverable","operationRefs":["operation:id"]}. operationRefs may be empty except that operation-based progress failures must cite current-Attempt operations.
 TASKRUN_DATA=${JSON.stringify(payload)}`;
     try {
       const response = await this.request(basePrompt, input.run.id);
       try {
         const audit = this.parseSemanticVerdict(
-          object(repairJsonSyntax(response), "audit"), criteria, validEvidenceRefs, input, trusted,
+          object(repairJsonSyntax(response), "audit"), criteria, goalCriteria, validEvidenceRefs, input, trusted,
           new Set(recentOperations.map((operation) => `operation:${operation.id}`)),
         );
         return this.removeProjectionOnlyFailures(audit, input.modelOutputTruncated === true, candidateProjection.strategy);
@@ -578,6 +600,7 @@ TASKRUN_DATA=${JSON.stringify(payload)}`;
   private parseSemanticVerdict(
     result: Record<string, unknown>,
     criteria: string[],
+    goalCriteria: string[],
     validEvidenceRefs: Set<string>,
     input: SupervisorSettledReviewInput,
     trusted: TrustedEvidenceSet,
@@ -589,6 +612,7 @@ TASKRUN_DATA=${JSON.stringify(payload)}`;
     }
     const deliveryReason = text(delivery.reason, "delivery reason");
     const coverage = parseCoverage(result.criterionCoverage, criteria, validEvidenceRefs);
+    const goalCoverage = parseCoverage(result.goalCriterionCoverage, goalCriteria, validEvidenceRefs, { id: goalCriterionId, label: "Goal criterion" });
     const semanticFailures = parseFailures(result.failures, validOperationRefs);
     const currentOperationRefs = new Set(input.operations
       .filter((operation) => operation.attempt === input.run.attempt)
@@ -606,7 +630,7 @@ TASKRUN_DATA=${JSON.stringify(payload)}`;
       return [];
     });
     const failuresOfKind = (...kinds: string[]) => semanticFailures
-      .filter((item) => kinds.includes(item.failure.kind)).map((item) => item.failure);
+      .filter((item) => kinds.includes(item.failure.kind) && !/^gc-[1-9]\d*$/.test(item.failure.key)).map((item) => item.failure);
     const evidenceFailures = failuresOfKind("evidence", "check");
     const contractFailures = failuresOfKind("contract");
     const explicitCompletionFailures = failuresOfKind("completion");
@@ -647,7 +671,12 @@ TASKRUN_DATA=${JSON.stringify(payload)}`;
       confidence: 1,
       gates: {
         progress: gate(normalizedProgress, "The execution trajectory is acceptable.", "The execution trajectory has unresolved semantic failures."),
-        evidence: gate(normalizedEvidence, "Required evidence is semantically consistent with the candidate.", "Required evidence is missing or contradictory."),
+        evidence: gate(
+          normalizedEvidence,
+          goalCoverage.length ? "Required evidence is consistent; mapped Goal criteria were observed without gating this TaskRun." : "Required evidence is semantically consistent with the candidate.",
+          "Required evidence is missing or contradictory.",
+          goalCoverage.length ? goalCoverage : undefined,
+        ),
         contract: gate(normalizedContract, "Every acceptance criterion is covered.", "One or more acceptance criteria are not covered.", coverage),
         completion: gate(completionFailures, "The candidate is relevant, complete, and non-contradictory.", "The candidate requires repair or external resolution."),
         continuation: gate(blockers, "No blocker prevents automatic continuation.", "A blocker prevents automatic continuation."),
@@ -656,7 +685,7 @@ TASKRUN_DATA=${JSON.stringify(payload)}`;
   }
 
   private conservativeSettledAudit(input: Parameters<SupervisorReviewer["reviewSettled"]>[0], error: string): SupervisorAudit {
-    const criteria = input.run.contract?.acceptanceCriteria ?? [];
+    const criteria = taskRunAcceptanceCriteria(input.run);
     const evidenceRefs = [...trustedEvidence(input).validRefs];
     const gate = (passed: boolean, summary: string, gateFailures: GateFailure[] = [], criterionCoverage?: CriterionCoverage[]): AuditedGate => ({ passed, failures: gateFailures, summary, criterionCoverage });
     const failure: GateFailure = {

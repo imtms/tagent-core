@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCoreApplication } from "@tagent/core-service/application";
+import { CoreWorkspaceGoalApplication, createCoreApplication } from "@tagent/core-service/application";
 import type { WorkspaceGoalRoadmapGenerator } from "@tagent/core-service/application";
+import { TestSupervisorReviewer } from "@tagent/core-service/composition";
 import { OpenAiWorkspaceGoalRoadmapGenerator } from "../apps/core-service/src/composition/workspace-goal-roadmap-generator.js";
 import { credentialReference } from "@tagent/execution/ports";
 import { WorkspaceGoalService } from "@tagent/governance";
 import { Store } from "@tagent/persistence-sqlite";
-import type { AttemptRuntimeFactory, AttemptRuntimePort, AttemptRuntimeSpec } from "@tagent/execution/ports";
+import type { AttemptRuntimeFactory, AttemptRuntimePort, AttemptRuntimeSpec, RuntimeMessage } from "@tagent/execution/ports";
 import { corePersistence } from "./support/test-persistence.js";
+import { upsertTrustedCheck } from "./support/trusted-evidence.js";
 
 class DeferredRuntime implements AttemptRuntimePort {
   private resolvePrompt?: () => void;
@@ -16,6 +18,10 @@ class DeferredRuntime implements AttemptRuntimePort {
   async dispose() { await this.abort(); }
   getMessages() { return []; }
   getError() { return undefined; }
+}
+
+function assistantMessage(text: string): RuntimeMessage {
+  return { role: "assistant", content: [{ type: "text", text }], api: "openai-completions", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: Date.now() };
 }
 
 function definition() {
@@ -174,10 +180,12 @@ describe("Workspace Goal Core execution", () => {
         targetRoadmapItemIds: ["persist"],
         targetCriterionKeys: ["stored"],
       });
-      expect(started.run?.contract?.acceptanceCriteria).toContain("[Workspace Goal criterion stored] State is stored");
+      expect(started.run?.contract?.acceptanceCriteria).toEqual(["State is stored", "Run storage tests"]);
+      expect(started.run?.contract?.acceptanceCriteria.some((criterion) => criterion.startsWith("[Workspace Goal criterion"))).toBe(false);
       expect(goals.get(goal.id)?.roadmapProgress).toContainEqual(expect.objectContaining({ itemId: "persist", status: "running", runId: started.run!.id }));
       expect(runtimeSpec?.attemptContext).toContain("State is stored");
       expect(runtimeSpec?.attemptContext).not.toContain("Behavior is verified");
+      expect(runtimeSpec?.attemptContext).toContain("not additional TaskRun completion requirements");
 
       const replay = service.startWorkspaceGoalRoadmapItem(goal.id, "persist", "start-persist");
       expect(replay.item.id).toBe(started.item.id);
@@ -189,6 +197,95 @@ describe("Workspace Goal Core execution", () => {
       await service.closeRuntimes();
       store.close();
     }
+  });
+
+  it("automatically executes successful approved stages in Roadmap document order", async () => {
+    const store = new Store(":memory:");
+    const { workspace, goals, goal } = createApprovedGoal(store);
+    const roadmap = goals.addRoadmap(goal.id, {
+      summary: "Document order must win over canonical approval sorting",
+      items: [
+        { id: "z_foundation", title: "Build foundation", outcome: "Foundation is ready", verification: "Run foundation tests", criterionKeys: ["stored"] },
+        { id: "a_integration", title: "Integrate behavior", outcome: "Integration is ready", verification: "Run integration tests", criterionKeys: ["verified"] },
+      ],
+    }, null, "test");
+    goals.decide({ goalId: goal.id, targetRevisionId: roadmap.id, targetHash: roadmap.contentHash, kind: "approve_roadmap", approvedItemIds: ["z_foundation", "a_integration"], actorId: "user" });
+    const launched: string[] = [];
+    const service = createCoreApplication({
+      persistence: corePersistence(store), workspace: "/tmp",
+      runtimeFactory: (spec) => {
+        const itemId = store.getRun(spec.token.runId)?.contract?.workspaceGoal?.targetRoadmapItemIds[0] ?? "unknown";
+        launched.push(itemId);
+        return {
+          async prompt() {
+            store.upsertPlanItem(spec.token.runId, { key: "stage", title: `Complete ${itemId}`, status: "done", required: true, position: 1 });
+            upsertTrustedCheck(store, spec.token.runId, { key: "verify", title: `Verify ${itemId}`, command: `npm test -- ${itemId}`, output: `${itemId} passed` });
+          },
+          async steer() { return "accepted" as const; }, abort() {}, async dispose() {},
+          getMessages() { return [assistantMessage(`${itemId} completed and verified.`)]; }, getError() { return undefined; },
+        };
+      },
+      runtimeDefaults: { supervisorReviewer: new TestSupervisorReviewer() },
+    });
+    try {
+      service.startWorkspaceGoalRoadmapItem(goal.id, "z_foundation", "start-auto-chain");
+      await vi.waitFor(() => expect(goals.get(goal.id)?.roadmapProgress.map((item) => item.status)).toEqual(["completed", "completed"]));
+      expect(launched).toEqual(["z_foundation", "a_integration"]);
+      expect(store.listRuns(workspace.id)).toHaveLength(2);
+      expect(store.listSessionInbox(workspace.id, true)).toContainEqual(expect.objectContaining({
+        requestId: expect.stringContaining(`goal:auto:${goal.id}:roadmap:${roadmap.id}`),
+        summary: "Integrate behavior",
+      }));
+    } finally { await service.closeRuntimes(); store.close(); }
+  });
+
+  it("repairs a missed automatic successor on startup recovery", async () => {
+    const store = new Store(":memory:");
+    const { workspace, goals, goal } = createApprovedGoal(store);
+    const roadmap = goals.addRoadmap(goal.id, {
+      summary: "Recover the successor",
+      items: [
+        { id: "first", title: "First", outcome: "First done", verification: "Check first", criterionKeys: ["stored"] },
+        { id: "second", title: "Second", outcome: "Second started", verification: "Check second", criterionKeys: ["verified"] },
+      ],
+    }, null, "test");
+    goals.decide({ goalId: goal.id, targetRevisionId: roadmap.id, targetHash: roadmap.contentHash, kind: "approve_roadmap", approvedItemIds: ["first", "second"], actorId: "user" });
+    const first = store.createRun(workspace.id, "first");
+    goals.linkRun({ goalId: goal.id, runId: first.id, goalRevision: 1, roadmapRevisionId: roadmap.id, roadmapItemIds: ["first"], criterionKeys: ["stored"], mode: "roadmap" });
+    store.transitionRun(first.id, ["running"], "completed", "run.completed", {}, "done", first.attempt);
+    const service = createCoreApplication({ persistence: corePersistence(store), workspace: "/tmp", runtimeFactory: () => new DeferredRuntime(), startupOptions: { startupMode: "deferred" } });
+    try {
+      service.initialize();
+      service.recoverSessionInbox();
+      await vi.waitFor(() => expect(goals.get(goal.id)?.roadmapProgress).toEqual([
+        expect.objectContaining({ itemId: "first", status: "completed" }),
+        expect.objectContaining({ itemId: "second", status: "running", runId: expect.any(String) }),
+      ]));
+      expect(store.listSessionInbox(workspace.id, true).filter((item) => item.requestId.startsWith("goal:auto:"))).toHaveLength(1);
+    } finally { await service.closeRuntimes(); store.close(); }
+  });
+
+  it("stops automatic progression after a failed Roadmap stage", () => {
+    const store = new Store(":memory:");
+    try {
+      const { workspace, goals, goal } = createApprovedGoal(store);
+      const roadmap = goals.addRoadmap(goal.id, {
+        summary: "Stop on failure",
+        items: [
+          { id: "first", title: "First", outcome: "First done", verification: "Check first", criterionKeys: ["stored"] },
+          { id: "second", title: "Second", outcome: "Second done", verification: "Check second", criterionKeys: ["verified"] },
+        ],
+      }, null, "test");
+      goals.decide({ goalId: goal.id, targetRevisionId: roadmap.id, targetHash: roadmap.contentHash, kind: "approve_roadmap", approvedItemIds: ["first", "second"], actorId: "user" });
+      const failed = store.createRun(workspace.id, "first");
+      goals.linkRun({ goalId: goal.id, runId: failed.id, goalRevision: 1, roadmapRevisionId: roadmap.id, roadmapItemIds: ["first"], criterionKeys: ["stored"], mode: "roadmap" });
+      store.transitionRun(failed.id, ["running"], "failed", "run.failed", { reason: "test failure" }, "test failure", failed.attempt);
+      const enqueue = vi.fn();
+      const application = new CoreWorkspaceGoalApplication(corePersistence(store).workspaceGoals, { enqueueGoalRoadmapItem: enqueue } as never);
+      application.recordWorkspaceGoalRunOutcome(failed.id);
+      expect(enqueue).not.toHaveBeenCalled();
+      expect(goals.get(goal.id)).toMatchObject({ nextAction: { kind: "run_roadmap_item", roadmapItemId: "first" } });
+    } finally { store.close(); }
   });
 
   it("discards a late LLM Roadmap when the Goal changed during generation", async () => {

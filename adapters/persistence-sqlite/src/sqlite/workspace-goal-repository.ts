@@ -106,10 +106,17 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
     const roadmapApproval = row.activeRoadmapRevisionId === roadmap?.id
       ? [...decisions].reverse().find((item) => item.kind === "approve_roadmap" && item.targetRevisionId === roadmap.id && item.targetHash === roadmap.contentHash && item.approvedItemIds.length > 0)
       : undefined;
+    const approvedItemSet = new Set(roadmapApproval?.approvedItemIds ?? []);
+    const approvedRoadmapItemIds = roadmap
+      ? roadmapContent(roadmap).items.filter((item) => approvedItemSet.has(item.id)).map((item) => item.id)
+      : [];
     const roadmapProgress = roadmap ? this.roadmapProgress(goalId, roadmap, roadmapApproval?.approvedItemIds ?? []) : [];
     const verifiedCriteria = requiredKeys.filter((key) => decisiveEvidence.get(key)?.status === "valid").length;
+    const progressByItem = new Map(roadmapProgress.map((item) => [item.itemId, item.status]));
+    const approvedRoadmapComplete = Boolean(roadmapApproval
+      && roadmapApproval.approvedItemIds.every((itemId) => progressByItem.get(itemId) === "completed"));
     let status = row.status;
-    if (status === "ready_to_close" && (verifiedCriteria < requiredKeys.length || !hasApprovedDefinition || !roadmapApproval)) status = "active";
+    if (status === "ready_to_close" && (verifiedCriteria < requiredKeys.length || !hasApprovedDefinition || !approvedRoadmapComplete)) status = "active";
     return {
       ...row,
       status,
@@ -133,7 +140,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
         requiredCriteria: requiredKeys.length,
         verifiedCriteria,
         roadmapProgress,
-        approvedItemIds: roadmapApproval?.approvedItemIds ?? [],
+        approvedItemIds: approvedRoadmapItemIds,
       }),
     };
   }
@@ -384,14 +391,20 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
     const contract = contractJson ? JSON.parse(contractJson) as TaskRunContractSnapshot : null;
     const snapshot = contract?.workspaceGoal;
     if (!snapshot || snapshot.goalId !== link.goalId || !snapshot.criterionPrompts.length) return;
-    const row = this.db.prepare(`SELECT evaluation.attempt,evaluation.checkpoint_seq as checkpointSeq,evaluation.criterion_coverage_json as coverageJson
+    const rows = this.db.prepare(`SELECT evaluation.attempt,evaluation.checkpoint_seq as checkpointSeq,evaluation.gate_type as gateType,evaluation.criterion_coverage_json as coverageJson
       FROM gate_evaluations evaluation JOIN runs run ON run.id=evaluation.run_id AND run.attempt=evaluation.attempt
-      WHERE evaluation.run_id=? AND evaluation.gate_type='contract' AND evaluation.evaluator='llm'
-      ORDER BY evaluation.checkpoint_seq DESC,evaluation.created_at DESC LIMIT 1`).get(link.runId) as { attempt: number; checkpointSeq: number; coverageJson: string } | undefined;
-    if (!row) return;
-    const coverage = JSON.parse(row.coverageJson) as CriterionCoverage[];
+      WHERE evaluation.run_id=? AND evaluation.gate_type IN ('evidence','contract') AND evaluation.evaluator='llm'
+      ORDER BY evaluation.checkpoint_seq DESC,CASE evaluation.gate_type WHEN 'evidence' THEN 0 ELSE 1 END,evaluation.created_at DESC LIMIT 4`).all(link.runId) as Array<{ attempt: number; checkpointSeq: number; gateType: "evidence" | "contract"; coverageJson: string }>;
+    const latest = rows[0];
+    if (!latest) return;
+    const currentRows = rows.filter((row) => row.attempt === latest.attempt && row.checkpointSeq === latest.checkpointSeq);
     for (const target of snapshot.criterionPrompts) {
-      const verdict = coverage.find((item) => item.criterion === target.prompt && ["covered", "contradicted"].includes(item.status));
+      // New reviews keep non-gating Goal observations on the evidence gate.
+      // Contract coverage remains a legacy fallback for already persisted Runs.
+      const source = currentRows.map((row) => ({ row, coverage: JSON.parse(row.coverageJson) as CriterionCoverage[] }))
+        .find(({ coverage }) => coverage.some((item) => item.criterion === target.prompt && ["covered", "contradicted"].includes(item.status)));
+      if (!source) continue;
+      const verdict = source.coverage.find((item) => item.criterion === target.prompt && ["covered", "contradicted"].includes(item.status));
       if (!verdict) continue;
       for (const ref of verdict.evidenceRefs) {
         const [kind, id] = splitEvidenceRef(ref);
@@ -399,7 +412,7 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
         try {
           this.linkEvidence({
             goalId: link.goalId,
-            requestId: `supervisor:${link.runId}:attempt:${row.attempt}:checkpoint:${row.checkpointSeq}:${target.key}:${kind}:${id}`,
+            requestId: `supervisor:${link.runId}:attempt:${source.row.attempt}:checkpoint:${source.row.checkpointSeq}:${target.key}:${kind}:${id}`,
             goalRevision: link.goalRevision,
             criterionKey: target.key,
             runId: link.runId,
@@ -755,12 +768,14 @@ export class SqliteWorkspaceGoalRepository implements WorkspaceGoalRepository {
 
 function mergeGoalSnapshot(run: { goal: string; contractJson: string }, snapshot: TaskRunWorkspaceGoalSnapshot): TaskRunContractSnapshot {
   const existing = run.contractJson ? JSON.parse(run.contractJson) as TaskRunContractSnapshot : null;
-  const criterionPrompts = snapshot.criterionPrompts.map((item) => item.prompt);
   return {
     sourceInput: existing?.sourceInput ?? run.goal,
     summary: existing?.summary ?? run.goal,
     objectives: existing?.objectives ?? [{ id: "objective-1", summary: run.goal, timing: "current", kind: "other" }],
-    acceptanceCriteria: [...new Set([...(existing?.acceptanceCriteria ?? []), ...criterionPrompts])],
+    // Goal criteria are cumulative Goal-level evidence targets, not terminal
+    // conditions for one bounded Roadmap item. The item's own outcome and
+    // verification remain the only TaskRun acceptance criteria.
+    acceptanceCriteria: [...new Set(existing?.acceptanceCriteria ?? [])],
     scope: existing?.scope ?? run.goal,
     nonGoals: [...new Set([...(existing?.nonGoals ?? []), ...snapshot.nonGoals])],
     sourceInboxIds: existing?.sourceInboxIds ?? [],

@@ -593,6 +593,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
           </div>;
         })}
         {!approval && <p data-meta>{requiresRoadmapRevision ? "Changes were requested. Edit and save a new Roadmap revision before approval." : "Select the items that may drive TaskRuns, then approve them with the primary action above."}</p>}
+        {approval && approvedRoadmapItems > completedRoadmapItems && <p data-meta>Start one approved item; each successful stage automatically queues the next approved item in Roadmap order. Failures and blockers stop the sequence for review.</p>}
         </div>
       </> : <div className="panel-empty"><Target size={ICON_SIZE.xl} /><strong>No Roadmap yet</strong><p>Generate a bounded Roadmap or create one manually after the Goal definition is approved.</p>{canCreateRoadmapManually && <button className="control" onClick={onEditRoadmap} disabled={busy}><Plus size={ICON_SIZE.sm} />Create manually</button>}</div>}
     </section>

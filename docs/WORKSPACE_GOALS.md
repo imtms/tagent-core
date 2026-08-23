@@ -1,6 +1,6 @@
 # Workspace Goals
 
-Workspace Goals are the durable, Workspace-level direction above TaskRun. A Goal describes the long-term outcome, scope, non-goals and completion criteria; an approved Goal Roadmap breaks that direction into bounded TaskRun-sized items. TaskRun remains the only execution unit: Goals do not add another agent loop, background controller or automatic completion path.
+Workspace Goals are the durable, Workspace-level direction above TaskRun. A Goal describes the long-term outcome, scope, non-goals and completion criteria; an approved Goal Roadmap breaks that direction into bounded TaskRun-sized items. TaskRun remains the only execution unit: Goals do not add another agent loop or background controller. After the user starts one approved item, Core may deterministically admit the next untouched approved item when the current item completes.
 
 ## Execution model
 
@@ -9,7 +9,8 @@ Goal definition
   -> user approval
   -> one initial Roadmap draft (LLM or manual)
   -> user edits and approves a Roadmap revision/slice
-  -> approved Roadmap items launch bounded TaskRuns
+  -> user starts one approved Roadmap item
+  -> each successful item automatically admits the next approved item in Roadmap order
   -> existing Supervisor review maps actual receipts to Goal criteria
   -> all required criteria have valid evidence
   -> explicit user confirmation closes the Goal
@@ -22,11 +23,13 @@ There are two Goal-guidance modes:
 | TaskRun source | Attached Goal context | Responsibility |
 | --- | --- | --- |
 | User starts ordinary work in the Workspace | Immutable snapshot of the active Goal definition: title, outcome, scope, non-goals and criteria | Use the Goal as direction. The Run keeps its own contract and is not required to complete the Roadmap or every Goal criterion. |
-| User starts an approved Roadmap item | Goal definition plus only the selected Roadmap item and its mapped criterion keys | Execute that bounded item. Mapped Goal criteria are added to the TaskRun acceptance criteria and may receive evidence from this Run. |
+| User starts an approved Roadmap item | Goal definition plus only the selected Roadmap item and its mapped criterion keys | Execute that bounded item. Only the item's outcome and verification gate the TaskRun; mapped Goal criteria are cumulative evidence targets that this Run may advance. |
 
 An ordinary manually started Workspace TaskRun is automatically attached before its first Attempt starts. There is no manual run-link endpoint and no best-effort attachment after execution has begun. If the Goal was `ready_to_close`, starting more guided work returns it to `active` until evidence is re-evaluated. Ordinary Goal direction does not by itself raise an exact or semantic TaskRun to `workspace_mutation`; Core raises policy only for an approved Roadmap Run or when the current Attempt actually observes a mutation-capable operation.
 
 Roadmap launches persist their Goal authorization on the Supervisor Inbox item before dispatch. The Inbox content, routing analysis, execution policy, Goal/revision, selected item and criterion slice form one canonical idempotency binding. Reusing a request ID with any different field conflicts. A linked Goal Inbox item is immutable through generic edit, merge, delete, defer, duplicate and route operations; Goal-specific lifecycle logic owns it.
+
+Cross-stage progression is serial and approval-bounded. Completion of a Roadmap TaskRun creates one deterministic idempotency identity for the next untouched item in the approved slice and admits it through the same Supervisor Inbox path as a manual start. Roadmap document order is authoritative even though approval identities are canonically sorted. Automatic progression stops when the next item is already queued or running, previously failed or cancelled, blocked, no longer approved, the Goal is paused/revised, Core is shutting down, or all approved items are complete. It never performs an implicit retry. Startup reconciliation replays completed Run outcomes and safely repairs a missed successor admission with the same identity.
 
 Claiming the Inbox item, creating the Run, attaching the immutable Goal snapshot and exposing the started item share one SQLite transaction. An idempotent replay validates the canonical Inbox payload and durable Goal link and repairs an interrupted attachment when possible. Authorization failure leaves a failed, non-retryable Run, never a runnable ordinary Run. Startup reconciliation repairs a missing Inbox-to-Run attachment and replays idempotent terminal projections; an internal Roadmap Run that still lacks durable authorization fails closed.
 
@@ -55,7 +58,8 @@ Revising the Goal definition invalidates both definition and Roadmap approval. R
 draft
   -> approve Goal definition -> active
   -> create/generate, edit and approve Goal Roadmap
-  -> launch approved Roadmap items as TaskRuns
+  -> start one approved Roadmap item as a TaskRun
+  -> automatically continue across successful approved items
   -> collect criterion evidence at TaskRun terminal checkpoints
   -> ready_to_close
   -> explicit user close -> completed
@@ -72,14 +76,14 @@ Roadmap progress is durable and projected as `unapproved`, `pending`, `running`,
 
 Goal verification reuses the TaskRun's existing semantic Supervisor review. It does not add a second Goal-verifier LLM call:
 
-1. A Roadmap TaskRun adds only its mapped Goal criterion prompts to the normal TaskRun acceptance criteria.
-2. At a terminal checkpoint, the existing Supervisor call returns criterion-level `covered`, `unsupported`, `contradicted` or `blocked` coverage and cites only supplied evidence references.
-3. Core reads only evaluations with `evaluator='llm'` and maps `covered` or `contradicted` results back to the corresponding Goal criteria.
+1. A Roadmap TaskRun keeps its item outcome and verification as its only acceptance criteria. Mapped Goal criterion prompts remain a separate, non-gating observation set.
+2. At a terminal checkpoint, the existing Supervisor call returns ordinary gating coverage for the TaskRun criteria and separate non-gating `covered`, `unsupported`, `contradicted` or `blocked` observations for mapped Goal criteria. Both may cite only supplied evidence references.
+3. Core reads only the non-gating Goal observations from evaluations with `evaluator='llm'` and maps `covered` or `contradicted` results back to the corresponding Goal criteria. Historical Runs that stored these observations on the contract gate remain readable for recovery compatibility.
 4. Core independently resolves every cited Check, Artifact or Operation against the linked Run. Invalid, stale or fabricated references are ignored.
 
 Checks are trusted only when bound to a successful current-Attempt Bash receipt with the same command and exit code zero. Operations must be successful current-Attempt receipts. Inline TaskRun Artifacts must originate in the current Attempt; externally durable Artifact content must remain readable, and receipt-backed Artifacts require a successful current-Attempt receipt. Evidence stores a Core-computed digest that includes Attempt identity; later receipt, content, check or Attempt changes dynamically make it stale.
 
-Blocked TaskRuns can still contribute genuine partial or contradictory evidence. For each criterion, the newest non-stale evidence link is decisive: a newer valid result can resolve an older contradiction, while a newer contradiction revokes earlier validity. `stale` and currently decisive `contradicted` evidence never count toward closure. A Goal reaches `ready_to_close` only when every required criterion has decisive valid evidence, no guided Run remains active and the current Roadmap revision has an active approval. Completion policy is always `user_confirm`, so Core never closes a Goal automatically.
+Blocked TaskRuns can still contribute genuine partial or contradictory evidence. For each criterion, the newest non-stale evidence link is decisive: a newer valid result can resolve an older contradiction, while a newer contradiction revokes earlier validity. `stale` and currently decisive `contradicted` evidence never count toward closure. A Goal reaches `ready_to_close` only when every approved Roadmap item is complete, every required criterion has decisive valid evidence, no guided Run remains active and the current Roadmap revision has an active approval. Completion policy is always `user_confirm`, so Core never closes a Goal automatically.
 
 There is no Goal polling loop. TaskRun finalization and launch-failure transitions update Roadmap progress and harvest evidence. Reads deterministically recalculate evidence freshness, progress, status and one `nextAction` without calling an LLM.
 
@@ -129,7 +133,7 @@ Roadmap revision kind, decision kind, and linkage columns use current `roadmap` 
 Workspace Goals do not add:
 
 - Planning, Implementation, Verification, Repair, Reviewer, Observer or Reflector agent roles;
-- an automatic Goal-to-TaskRun successor loop;
+- automatic execution of unapproved work or implicit retry of failed/blocked work;
 - a background Goal controller or polling worker;
 - a separate Goal Supervisor or evidence-model call;
 - automatic Goal completion;
