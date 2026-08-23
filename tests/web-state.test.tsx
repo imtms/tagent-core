@@ -2138,7 +2138,7 @@ describe("Web workbench behavior", () => {
       supervision: {
         ...run().supervision,
         latestGates: [{
-          id: "gate-pass", evaluator: "rule", evaluatorModel: "", summary: "Completion passed",
+          id: "gate-pass", evaluator: "system", evaluatorModel: "", summary: "Completion passed",
           gateType: "completion", passed: true, failures: [], criterionCoverage: [],
         }],
       },
