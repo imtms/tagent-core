@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Web Console information hierarchy
+
+- Removed empty settled Tool calls, whitespace-only reasoning/output stages, and internal Tool diagnostics from the Execution trace while keeping active and failed operations explicit. Tool rows are expandable only when they contain inspectable arguments, results, or errors.
+- Reduced non-actionable Console chrome across Review, Supervisor queue, Memory, Goals, and Skills. Verdict-only Gates are static rows; duplicate request/contract copy and zero-value counters disappear; routing, receipt, generation, and error-code diagnostics remain available through bounded technical disclosures.
+- Updated the maintained Web Console design contract for operator-first information ownership, readable labels, nested provenance, neutral ledger boundaries, and narrow-screen containment.
+
 ## [0.8.29] - 2026-08-23
 
 ### Safety

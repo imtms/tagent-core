@@ -14,8 +14,7 @@ function MemoryExtraction({ job }: { job?: CaptureJob | null }) {
   const count = job.persistedCount ?? 0;
   if ((!completed && !failed) || (completed && count <= 0)) return null;
   const detail = completed ? `${formatCount(count, "memory", "memories")} saved` : "Memory extraction failed";
-  const diagnostic = failed && job.errorCode ? ` · ${job.errorCode}` : "";
-  return <div className="turn-memory" data-tone={completed ? "success" : "danger"} title={`Memory extraction · capture job ${job.id}${diagnostic}`}><BrainCircuit size={ICON_SIZE.xs} /><span>{detail}</span></div>;
+  return <div className="turn-memory" data-tone={completed ? "success" : "danger"}><BrainCircuit size={ICON_SIZE.xs} /><span>{detail}</span></div>;
 }
 
 function copyTextWithSelection(content: string): boolean {

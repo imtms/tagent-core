@@ -70,9 +70,9 @@ export function RecordDetail({
       </section>
 
       <section hidden={section !== "metadata"} aria-label="Memory metadata and provenance">
-        <div className="section-heading"><strong>Metadata and provenance</strong><small>{record.scope.type}:{record.scope.id}</small></div>
+        <div className="section-heading"><strong>Metadata and provenance</strong></div>
         <div className="detail-disclosure-body">
-          <section><span data-meta>Record identity</span><div data-mono>{record.id}</div></section>
+          <section><span data-meta>Record identity</span><div data-mono>{record.id} · {record.scope.type}:{record.scope.id}</div></section>
           {record.kind === "preference" && <section><span data-meta>Preference semantics</span><div>{(record as PreferenceRecord).applicability} · {(record as PreferenceRecord).origin}</div></section>}
           {record.provenance && <section><span data-meta>Source authority</span><div>{record.provenance.evidenceClass.replaceAll("_", " ")} · {record.provenance.trustLevel} trust · {record.provenance.verificationState}{record.provenance.sourceReliability === undefined ? "" : ` · ${Math.round(record.provenance.sourceReliability * 100)}% reliability`}</div></section>}
           {record.semantic && <section><span data-meta>Canonical meaning</span><div data-mono>{record.semantic.subject} · {record.semantic.predicate} · {record.semantic.object} · {record.semantic.polarity}</div></section>}
@@ -103,7 +103,7 @@ export function RecordDetail({
           </div>}
         </div>
       </section>
-      <small data-mono>Created {formatMemoryDate(record.createdAt)} · updated {formatMemoryDate(record.updatedAt)}</small>
+      <small data-mono>Created {formatMemoryDate(record.createdAt)}{record.updatedAt !== record.createdAt ? ` · updated ${formatMemoryDate(record.updatedAt)}` : ""}</small>
     </div>
   );
 }
@@ -121,7 +121,7 @@ export function TopicDetail({ topic, onForget, onRestore, busy = false }: { topi
   ] satisfies readonly PanelTab<TopicDetailSection>[];
   return (
     <div className="memory-detail-content">
-      <small data-mono>{fullTopic ? `cold · ${descriptor.kind} · revision ${fullTopic.revision.revision} · ${fullTopic.revision.tokenCount.toLocaleString()} tokens · ${descriptor.status} · full page` : `topic · ${descriptor.kind} · descriptor · ${descriptor.status} · no cold page`}</small>
+      <small data-mono>{descriptor.kind} · {descriptor.status}{fullTopic && fullTopic.revision.tokenCount > 0 ? ` · ${fullTopic.revision.tokenCount.toLocaleString()} tokens` : ""}</small>
       <h3>{repeatedDescription ? descriptor.description : descriptor.title}</h3>
       <PanelTabs label="Memory topic views" value={section} tabs={tabs} onChange={setSection} />
 
@@ -131,7 +131,7 @@ export function TopicDetail({ topic, onForget, onRestore, busy = false }: { topi
       </section>
 
       <section hidden={section !== "metadata"} aria-label="Memory topic metadata and storage">
-        <div className="section-heading"><strong>Metadata and storage</strong><small>{fullTopic ? `revision ${fullTopic.revision.revision}` : "descriptor only"}</small></div>
+        <div className="section-heading"><strong>Metadata and storage</strong></div>
         <div className="detail-disclosure-body">
           <section><span data-meta>Topic identity</span><div data-mono>{descriptor.topicId} · {descriptor.scope.type}:{descriptor.scope.id}</div></section>
           {descriptor.aliases.length > 0 && <section><span data-meta>Aliases</span><div className="memory-tags">{descriptor.aliases.map((alias) => <code key={alias}>{alias}</code>)}</div></section>}

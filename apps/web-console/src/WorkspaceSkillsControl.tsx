@@ -283,7 +283,7 @@ export function WorkspaceSkillsControl({
               return <div className={`skill-catalog-row ${selected ? "selected" : ""}`} key={skill.id}>
                 <button type="button" className="skill-reference-toggle" aria-pressed={selected} disabled={busy} onClick={() => void toggleWorkspaceSkill(skill.id)}>
                   <span className="skill-select-box">{selected && <Check size={ICON_SIZE.xs} />}</span>
-                  <span><strong>{skill.name}</strong><small>{skill.description}</small></span>
+                  <span><strong>{skill.name}</strong>{skill.description.trim() && <small>{skill.description}</small>}</span>
                   <em>v{skill.latestRevision}</em>
                 </button>
                 <div className="skill-row-actions">

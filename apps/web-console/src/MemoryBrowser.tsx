@@ -45,8 +45,20 @@ function captureJobSummary(job: CaptureJob): string {
     job.attempts > 0 ? formatCount(job.attempts, "attempt") : "",
     (job.proposalCount ?? 0) > 0 ? `${job.proposalCount} proposed` : "",
     (job.persistedCount ?? 0) > 0 ? `${job.persistedCount} persisted` : "",
-    job.errorCode ?? "",
   ].filter(Boolean).join(" · ");
+}
+
+function captureJobLabel(job: CaptureJob): string {
+  const sourceKind = job.request.captureSource?.kind;
+  if (sourceKind === "user_message") return "User message";
+  if (sourceKind === "assistant_message") return "Assistant response";
+  if (sourceKind === "context_summary") return "Conversation summary";
+  if (sourceKind === "manual_input") return "Manual memory";
+  if (sourceKind === "tool_result") return "Tool result";
+  if (sourceKind === "task_structure") return "Task context";
+  const sourceTypes = [...new Set(job.request.sourceRefs.map((source) => source.sourceType))];
+  if (sourceTypes.length !== 1) return sourceTypes.length > 1 ? formatCount(sourceTypes.length, "source") : "Manual memory";
+  return ({ message: "Conversation message", run: "Task run", transcript: "Transcript", manual: "Manual memory", check: "Check result", artifact: "Artifact", operation: "Operation" } as const)[sourceTypes[0]];
 }
 
 function memoryJobTone(status: CaptureJob["status"] | ReindexJob["status"]): "info" | "success" | "warning" | "danger" | undefined {
@@ -58,7 +70,8 @@ function memoryJobTone(status: CaptureJob["status"] | ReindexJob["status"]): "in
 }
 
 function memoryJobLabel(status: CaptureJob["status"] | ReindexJob["status"]): string {
-  return status.replaceAll("_", " ");
+  const label = status.replaceAll("_", " ");
+  return label.replace(/^./, (character) => character.toUpperCase());
 }
 
 function MemoryJobState({ status }: { status: CaptureJob["status"] | ReindexJob["status"] }) {
@@ -105,7 +118,7 @@ export function MemoryRecallResults({
         })}
       </div>}
       {!hasResults && <div className="panel-empty"><BrainCircuit size={ICON_SIZE.xl} /><strong>No recall matches</strong><p>Try a broader phrase or open Catalog.</p></div>}
-      {hasDiagnostics ? <details className="detail-disclosure">
+      {hasDiagnostics && <details className="detail-disclosure">
         <summary><Activity size={ICON_SIZE.sm} /><strong>Recall diagnostics</strong>{trace.length > 0 && <small>{trace.join(" · ")}</small>}<ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
         <div className="detail-disclosure-body">
           {results.trace.embedding && <section><strong>Embedding</strong><p>{results.trace.embedding.configured ? results.trace.embedding.degraded ? "Degraded; lexical and graph paths remained available" : "Available" : "Not configured"}{results.trace.embedding.generation ? ` · ${results.trace.embedding.generation}` : ""}</p>{results.trace.embedding.error && <small>{results.trace.embedding.error}</small>}</section>}
@@ -113,7 +126,7 @@ export function MemoryRecallResults({
           {coldRoutes.length > 0 && <section><strong>Cold routes</strong><div className="memory-list">{coldRoutes.map((route) => <div key={route.topicId}><div><strong>{route.topicId}</strong><small>{route.selected ? "selected" : "not selected"} · {route.channels.join(" + ")} · {route.reason}</small></div></div>)}</div></section>}
           {candidates.length > 0 && <section><strong>Candidate outcomes</strong><div className="memory-list">{candidates.map((candidate) => <div key={`${candidate.id}:${candidate.outcome}`}><div><strong>{candidate.id}</strong><small>{candidate.outcome.replaceAll("_", " ")} · {candidate.channels.join(" + ")}{candidate.finalScore === undefined ? "" : ` · ${Math.round(candidate.finalScore * 100)}% final`}{candidate.reason ? ` · ${candidate.reason}` : ""}</small>{candidate.scoreBreakdown && <small data-mono>{Object.entries(candidate.scoreBreakdown).map(([key, value]) => `${key} ${Math.round(value * 100)}%`).join(" · ")}</small>}</div></div>)}</div></section>}
         </div>
-      </details> : trace.length > 0 && <small>{trace.join(" · ")}</small>}
+      </details>}
     </section>
   );
 }
@@ -180,7 +193,6 @@ interface MemoryJobListsProps {
 }
 
 export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex, onRestore }: MemoryJobListsProps) {
-  const total = reindexJobs.length + jobs.length;
   const [recordIds, setRecordIds] = useState("");
   const [topicIds, setTopicIds] = useState("");
   const restoreRecords = ids(recordIds);
@@ -215,8 +227,9 @@ export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex, onRestore }
               <div key={job.id}>
                 <div>
                   <MemoryJobState status={job.status} />
-                  <strong className="truncate">{job.generation}</strong>
+                  <strong className="truncate">Reindex · {formatMemoryDate(job.updatedAt)}</strong>
                   <small>{reindexJobSummary(job)}</small>
+                  <details className="memory-job-debug"><summary><span>Technical details</span><ChevronRight className="tool-chevron" size={ICON_SIZE.xs} /></summary><code>Generation {job.generation}</code></details>
                 </div>
               </div>
             ))}
@@ -230,16 +243,14 @@ export function MemoryJobLists({ reindexJobs, jobs, busy, onReindex, onRestore }
               return <div key={job.id}>
                 <div>
                   <MemoryJobState status={job.status} />
-                  <strong className="truncate">
-                    {job.request.sourceRefs.map((source) => `${source.sourceType}:${source.sourceId}`).join(", ") || "manual capture"}
-                  </strong>
+                  <strong className="truncate">{captureJobLabel(job)}</strong>
                   {summary && <small>{summary}</small>}
+                  {job.errorCode && <details className="memory-job-debug"><summary><span>Technical details</span><ChevronRight className="tool-chevron" size={ICON_SIZE.xs} /></summary><code>{job.errorCode}</code></details>}
                 </div>
               </div>
             })}
           </div>
         </section>}
-        {total === 0 && <p data-meta>Capture and reindex jobs will appear here with their current state and outcome.</p>}
       </div>
     </section>
   );

@@ -470,8 +470,8 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
   const auditCount = goal.runLinks.length + goal.evidenceLinks.length + goal.decisions.length;
   const tabs = [
     { value: "overview", label: "Overview", meta: `${goal.verifiedCriteria}/${goal.requiredCriteria}` },
-    { value: "roadmap", label: "Roadmap", meta: goal.roadmap ? `${completedRoadmapItems}/${approvedRoadmapItems || roadmap?.items.length || 0}` : "—" },
-    { value: "activity", label: "Activity", meta: String(auditCount) },
+    { value: "roadmap", label: "Roadmap", meta: goal.roadmap ? `${completedRoadmapItems}/${approvedRoadmapItems || roadmap?.items.length || 0}` : undefined },
+    { value: "activity", label: "Activity", meta: auditCount > 0 ? String(auditCount) : undefined },
     { value: "controls", label: "Controls" },
   ] satisfies readonly PanelTab<GoalSection>[];
   const nextRoadmapItem = goal.nextAction.kind === "run_roadmap_item"
@@ -604,7 +604,7 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
       {auditCount === 0 ? <div className="panel-empty"><Target size={ICON_SIZE.xl} /><strong>No activity yet</strong><p>TaskRuns, evidence and Goal decisions will appear here without crowding the current plan.</p></div> : <>
         {goal.runLinks.length > 0 && <section><div className="section-heading"><strong>Linked TaskRuns</strong><small data-mono>{goal.runLinks.length}</small></div><div className="goal-run-links">{[...goal.runLinks].reverse().map((link) => <button key={link.runId} onClick={() => onOpenRun?.(link.runId)} aria-label={`Open ${runLinkTitle(link, roadmap)}`}><strong>{runLinkTitle(link, roadmap)}</strong><span>{runLinkLabel(link)}</span></button>)}</div></section>}
         {goal.evidenceLinks.length > 0 && <section><div className="section-heading"><strong>Evidence log</strong><small>{formatCount(goal.evidenceLinks.length, "link")}</small></div><div className="goal-run-links">{[...goal.evidenceLinks].reverse().map((link) => <button key={link.id} onClick={() => onOpenRun?.(link.runId)} aria-label={`Open evidence for ${criterionTitle(link.criterionKey, definition)}`}><strong>{criterionTitle(link.criterionKey, definition)}</strong><span>{statusLabelForValue(link.status)} · {evidenceSourceLabel(link)}</span></button>)}</div></section>}
-        {goal.decisions.length > 0 && <section><div className="section-heading"><strong>Decision history</strong><small>{formatCount(goal.decisions.length, "decision")}</small></div><div className="goal-run-links">{[...goal.decisions].reverse().map((decision) => <div key={decision.id}><code>{decisionLabel(decision.kind)}</code><span>{decision.reason ? `${decision.reason} · ` : ""}{decision.actorId} · {dateLabel(decision.createdAt)}</span></div>)}</div></section>}
+        {goal.decisions.length > 0 && <section><div className="section-heading"><strong>Decision history</strong><small>{formatCount(goal.decisions.length, "decision")}</small></div><div className="goal-run-links">{[...goal.decisions].reverse().map((decision) => <div key={decision.id}><code>{decisionLabel(decision.kind)}</code><span>{decision.reason ? `${decision.reason} · ` : ""}{decisionActorLabel(decision.actorId)} · {dateLabel(decision.createdAt)}</span></div>)}</div></section>}
       </>}
     </section>
 
@@ -625,22 +625,24 @@ export function GoalView({ goal, busy, decide, onGenerateRoadmap, onStartRoadmap
     </section>
 
     <section hidden={section !== "controls"} aria-label="Goal operation recovery">
-      <div className="section-heading"><strong>Operation recovery</strong><small>{latestOperationRequestId ? `Last request ${latestOperationRequestId.slice(0, 12)}…` : "Receipt by request ID"}</small></div>
-      <div className="form-columns">
-        <label className="form-field"><span>Request ID <small>definition, Roadmap, or generation</small></span><input maxLength={300} value={operationRequestId} onChange={(event) => setOperationRequestId(event.target.value)} placeholder="Paste the original request ID" /></label>
-        <div><span className="eyebrow">Durable receipt</span><p data-meta>Inspect an interrupted or uncertain Goal operation without repeating it.</p><button className="control" disabled={operationBusy || !operationRequestId.trim()} onClick={() => void recoverOperation()}>{operationBusy ? "Looking up…" : "Inspect receipt"}</button></div>
-      </div>
-      {operationError && <p className="goal-field-error" role="alert">{operationError}</p>}
-      {operationReceipt && <>
-        <div className="goal-run-links">
-          <div><code>{statusLabelForValue(operationReceipt.state)}</code><span>{statusLabelForValue(operationReceipt.operationType)} · updated {dateLabel(operationReceipt.updatedAt)}</span></div>
-          <div><code>{operationReceipt.requestId}</code><span data-mono>payload {operationReceipt.payloadHash}</span></div>
+      <details className="detail-disclosure">
+        <summary><span>Operation recovery</span><small>Interrupted changes</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+        <div className="run-step-content">
+          <div className="form-columns">
+            <label className="form-field"><span>Request ID <small>definition, Roadmap, or generation</small></span><input maxLength={300} value={operationRequestId} onChange={(event) => setOperationRequestId(event.target.value)} placeholder="Paste the original request ID" /></label>
+            <div><span className="eyebrow">Durable receipt</span><p data-meta>Inspect an interrupted or uncertain Goal operation without repeating it.</p><button className="control" disabled={operationBusy || !operationRequestId.trim()} onClick={() => void recoverOperation()}>{operationBusy ? "Looking up…" : "Inspect receipt"}</button></div>
+          </div>
+          {operationError && <p className="goal-field-error" role="alert">{operationError}</p>}
+          {operationReceipt && <>
+            <div className="goal-run-links"><div><code>{statusLabelForValue(operationReceipt.state)}</code><span>{statusLabelForValue(operationReceipt.operationType)} · updated {dateLabel(operationReceipt.updatedAt)}</span></div></div>
+            <details className="audit-disclosure">
+              <summary><span>Technical receipt</span><small>IDs and raw payload</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+              <div className="audit-ledger"><div className="gate-detail"><span>Request ID</span><code>{operationReceipt.requestId}</code></div><div className="gate-detail"><span>Payload hash</span><code>{operationReceipt.payloadHash}</code></div></div>
+              <div className="tool-call-body"><pre>{JSON.stringify({ payload: operationReceipt.payload, result: operationReceipt.result, error: operationReceipt.error, createdAt: operationReceipt.createdAt, completedAt: operationReceipt.completedAt }, null, 2)}</pre></div>
+            </details>
+          </>}
         </div>
-        <details className="audit-disclosure">
-          <summary><span>Payload and outcome</span><small>Raw receipt</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
-          <div className="tool-call-body"><pre>{JSON.stringify({ payload: operationReceipt.payload, result: operationReceipt.result, error: operationReceipt.error, createdAt: operationReceipt.createdAt, completedAt: operationReceipt.completedAt }, null, 2)}</pre></div>
-        </details>
-      </>}
+      </details>
     </section>
   </article>;
 }
@@ -710,6 +712,12 @@ function decisionNotice(kind: GoalDecisionKind): string {
 
 function decisionLabel(kind: WorkspaceGoal["decisions"][number]["kind"]): string {
   return ({ approve_goal: "Goal approved", approve_roadmap: "Roadmap approved", request_change: "Changes requested", pause: "Paused", resume: "Resumed", close: "Closed", cancel: "Cancelled" } as const)[kind];
+}
+
+function decisionActorLabel(actorId: string): string {
+  if (["web_console", "operator", "user"].includes(actorId)) return "You";
+  if (actorId === "system") return "System";
+  return "Operator";
 }
 
 function statusLabelForValue(value: string): string {

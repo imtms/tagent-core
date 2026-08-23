@@ -74,6 +74,23 @@ function formatToolArguments(value: unknown): string {
   }
 }
 
+function toolCallHasDetails(item: Extract<TranscriptItem, { kind: "tool" }>): boolean {
+  const argumentsText = formatToolArguments(item.arguments);
+  const errorMessage = item.error?.message.trim() ?? "";
+  const hasResult = Boolean(item.result.trim());
+  const resultRepeatsError = Boolean(hasResult && errorMessage && normalizedNotice(item.result) === normalizedNotice(errorMessage));
+  return Boolean(argumentsText || errorMessage || (hasResult && !resultRepeatsError));
+}
+
+function toolCallIsVisible(item: Extract<TranscriptItem, { kind: "tool" }>): boolean {
+  const status = item.isError ? "failed" : item.status;
+  return toolCallHasDetails(item) || !["completed", "done"].includes(status);
+}
+
+function executionGroupHasContent(group: ExecutionGroup): boolean {
+  return Boolean(group.reasoning?.text.trim() || group.output?.text.trim() || group.tools.some(toolCallIsVisible));
+}
+
 function ToolCall({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> }) {
   const status = item.isError ? "failed" : item.status;
   const showStatus = !["completed", "done"].includes(status);
@@ -95,24 +112,48 @@ function ToolCall({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> })
 }
 
 function ExecutionGroupView({ group, ordinal }: { group: ExecutionGroup; ordinal: number }) {
-  const anchor = group.reasoning ?? group.tools[0] ?? group.output;
+  const reasoning = group.reasoning?.text.trim() ? group.reasoning : undefined;
+  const outputItem = group.output?.text.trim() ? group.output : undefined;
+  const visibleTools = group.tools.filter(toolCallIsVisible);
+  const anchor = reasoning ?? visibleTools[0] ?? outputItem;
   if (!anchor) return null;
   const meta = [
-    group.tools.length ? formatCount(group.tools.length, "tool call") : "",
+    visibleTools.length ? formatCount(visibleTools.length, "tool call") : "",
     anchor.attempt > 1 ? `attempt ${anchor.attempt}` : "",
     formatTime(anchor.createdAt),
   ].filter(Boolean).join(" · ");
-  const tools = group.tools.length > 0 && <div className="tool-stack" aria-label={`Stage ${ordinal} tool calls`}>{group.tools.map((item) => <ToolCall key={`${item.seq}-${item.index}`} item={item} />)}</div>;
-  const output = group.output && <div className="run-step-content"><span data-label>Model output</span><Markdown>{group.output.text}</Markdown></div>;
-  if (group.reasoning) return <details className="run-step">
-    <summary><BrainCircuit size={ICON_SIZE.sm} /><strong>{group.reasoning.redacted ? "Reasoning unavailable" : `Reasoning ${ordinal}`}</strong><small>{meta}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
-    <div className="run-step-content"><Markdown>{group.reasoning.text}</Markdown></div>
+  const tools = visibleTools.length > 0 && <div className="tool-stack" aria-label={`Stage ${ordinal} tool calls`}>{visibleTools.map((item) => <ToolCall key={`${item.seq}-${item.index}`} item={item} />)}</div>;
+  const output = outputItem && <div className="run-step-content"><span data-label>Model output</span><Markdown>{outputItem.text}</Markdown></div>;
+  if (reasoning) return <details className="run-step">
+    <summary><BrainCircuit size={ICON_SIZE.sm} /><strong>{reasoning.redacted ? "Reasoning unavailable" : `Reasoning ${ordinal}`}</strong><small>{meta}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+    <div className="run-step-content"><Markdown>{reasoning.text}</Markdown></div>
     {tools}{output}
   </details>;
   return <article className="run-step">
-    <div className="run-step-meta">{group.tools.length ? <Terminal size={ICON_SIZE.sm} /> : <Bot size={ICON_SIZE.sm} />}<strong>{group.tools.length ? `Execution ${ordinal}` : "Model output"}</strong><small>{meta}</small></div>
+    <div className="run-step-meta">{visibleTools.length ? <Terminal size={ICON_SIZE.sm} /> : <Bot size={ICON_SIZE.sm} />}<strong>{visibleTools.length ? `Execution ${ordinal}` : "Model output"}</strong><small>{meta}</small></div>
     {tools}{output}
   </article>;
+}
+
+const liveToolEventTypes = new Set(["tool.started", "tool.progress", "tool.completed", "tool.failed"]);
+
+function LiveToolCall({ event }: { event: RunEvent }) {
+  const failed = event.type === "tool.failed" || Boolean(event.data.isError);
+  const status = failed ? "failed" : "running";
+  const toolName = String(event.data.toolName ?? "tool");
+  const structuredError = event.data.error && typeof event.data.error === "object" && !Array.isArray(event.data.error)
+    ? event.data.error as Record<string, unknown>
+    : null;
+  const errorMessage = typeof structuredError?.message === "string"
+    ? structuredError.message.trim()
+    : typeof event.data.reason === "string" ? event.data.reason.trim() : "";
+  const errorCode = typeof structuredError?.code === "string" ? structuredError.code.trim() : "";
+  const summary = <><Terminal size={ICON_SIZE.sm} /><span className="truncate" title={toolName}>{toolName}</span><small data-tone={operationalTone(status)}>{formatRunValue(status)}</small></>;
+  if (!errorMessage) return <div className="tool-call tool-call-static">{summary}</div>;
+  return <details className="tool-call">
+    <summary>{summary}<ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+    <div className="tool-call-body"><div><strong>Error</strong><pre>{errorMessage}{errorCode ? `\n\nCode: ${errorCode}` : ""}</pre></div></div>
+  </details>;
 }
 
 export function UserInputCard({ request, submitting, onSubmit }: { request: UserInputRequest; submitting: boolean; onSubmit: (values: Record<string, string>) => Promise<void> }) {
@@ -147,14 +188,14 @@ export function ExecutionTimeline({ runId, isRunning, items, events, liveThinkin
   const [expanded, setExpanded] = useState(isRunning);
   const bodyRef = useRef<HTMLDivElement>(null);
   const visible = items.filter((item) => item.kind !== "user");
-  const groups = groupExecutionItems(visible);
+  const groups = groupExecutionItems(visible).filter(executionGroupHasContent);
   const completedToolIds = new Set(items.filter((item): item is Extract<TranscriptItem, { kind: "tool" }> => item.kind === "tool").map((item) => item.toolCallId));
-  const liveTools = events.filter((event) => event.type.startsWith("tool.") && !completedToolIds.has(String(event.data.toolCallId ?? ""))).reduce<RunEvent[]>((latest, event) => {
+  const liveTools = events.filter((event) => liveToolEventTypes.has(event.type) && !completedToolIds.has(String(event.data.toolCallId ?? ""))).reduce<RunEvent[]>((latest, event) => {
     const id = String(event.data.toolCallId ?? event.seq);
     const existing = latest.findIndex((item) => String(item.data.toolCallId ?? item.seq) === id);
     if (existing >= 0) latest[existing] = event; else latest.push(event);
     return latest;
-  }, []);
+  }, []).filter((event) => event.type !== "tool.completed" || Boolean(event.data.isError));
   useEffect(() => { setExpanded(isRunning); }, [runId, isRunning]);
   useEffect(() => {
     if (!isRunning || !expanded) return;
@@ -164,8 +205,10 @@ export function ExecutionTimeline({ runId, isRunning, items, events, liveThinkin
     });
     return () => cancelAnimationFrame(frame);
   }, [expanded, isRunning, visible.length, liveTools.length, liveThinking, liveOutput, events]);
-  if (!visible.length && !liveThinking && !liveOutput && !liveTools.length) return null;
-  const hasLiveStage = Boolean(liveThinking || liveOutput || liveTools.length);
+  const hasLiveThinking = Boolean(liveThinking.trim());
+  const hasLiveOutput = Boolean(liveOutput.trim());
+  if (!groups.length && !hasLiveThinking && !hasLiveOutput && !liveTools.length) return null;
+  const hasLiveStage = Boolean(hasLiveThinking || hasLiveOutput || liveTools.length);
   const stageCount = groups.length + Number(hasLiveStage);
   return <section className="execution-timeline" aria-label="Agent execution timeline">
     <button className="execution-timeline-heading" type="button" aria-expanded={expanded} aria-controls={`execution-trace-${runId}`} onClick={() => setExpanded((current) => !current)}>
@@ -174,7 +217,7 @@ export function ExecutionTimeline({ runId, isRunning, items, events, liveThinkin
     </button>
     {expanded && <div className="execution-timeline-body" id={`execution-trace-${runId}`} ref={bodyRef}>
       {groups.map((group, index) => <ExecutionGroupView key={group.key} group={group} ordinal={index + 1} />)}
-      {hasLiveStage && <article className="run-step"><div className="run-step-meta"><Activity size={ICON_SIZE.sm} /><strong>Current stage</strong></div>{liveThinking && <div className="run-step-content"><span data-label>Reasoning</span><LiveText>{liveThinking}</LiveText></div>}{liveTools.length > 0 && <div className="tool-stack">{liveTools.map((event) => { const status = event.type === "tool.started" ? "running" : event.data.isError ? "failed" : "completed"; const toolName = String(event.data.toolName ?? "tool"); return <div className="tool-row" key={`${event.seq}-${event.type}`}><Terminal size={ICON_SIZE.sm} /><strong className="truncate" title={toolName}>{toolName}</strong>{status !== "completed" && <small data-tone={operationalTone(status)}>{formatRunValue(status)}</small>}</div>; })}</div>}{liveOutput && <div className="run-step-content"><span data-label>Model output</span><LiveText>{liveOutput}</LiveText></div>}</article>}
+      {hasLiveStage && <article className="run-step"><div className="run-step-meta"><Activity size={ICON_SIZE.sm} /><strong>Current stage</strong></div>{hasLiveThinking && <div className="run-step-content"><span data-label>Reasoning</span><LiveText>{liveThinking}</LiveText></div>}{liveTools.length > 0 && <div className="tool-stack">{liveTools.map((event) => <LiveToolCall event={event} key={`${event.seq}-${event.type}`} />)}</div>}{hasLiveOutput && <div className="run-step-content"><span data-label>Model output</span><LiveText>{liveOutput}</LiveText></div>}</article>}
     </div>}
   </section>;
 }
@@ -255,13 +298,18 @@ function GateEvaluationHistory({ gates, primaryFailureGateId, primaryFailureReas
     const summaryRepeatsDetail = [...failures.map((failure) => failure.reason), ...(gate.criterionCoverage ?? []).map((criterion) => criterion.reason)]
       .some((detail) => noticesOverlap(summary, detail));
     const statusLabel = gate.passed ? "Passed" : failures.length > 1 ? formatCount(failures.length, "failure") : failures.length ? "Failed" : "Deferred";
+    const showSummary = Boolean(summary && !summaryRestatesVerdict && !summaryRepeatsDetail);
+    const visibleFailures = gate.id === primaryFailureGateId ? [] : failures;
+    const hasDetails = Boolean(showSummary || gate.criterionCoverage?.length || visibleFailures.length);
+    const heading = <><span className="meta-line" data-tone={operationalTone(status)}>{gate.passed ? <Check size={ICON_SIZE.sm} /> : failures.length ? <X size={ICON_SIZE.sm} /> : <Circle size={ICON_SIZE.sm} />}{formatRunValue(gate.gateType)}</span><small data-tone={operationalTone(status)}>{statusLabel}</small></>;
+    if (!hasDetails) return <div className="gate-evaluation gate-evaluation-static" key={gate.id}>{heading}</div>;
     return <details className="gate-evaluation" key={gate.id}>
-      <summary><span className="meta-line" data-tone={operationalTone(status)}>{gate.passed ? <Check size={ICON_SIZE.sm} /> : failures.length ? <X size={ICON_SIZE.sm} /> : <Circle size={ICON_SIZE.sm} />}{formatRunValue(gate.gateType)}</span><small data-tone={operationalTone(status)}>{statusLabel}</small><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
-      <div className="run-step-content">{summary && !summaryRestatesVerdict && !summaryRepeatsDetail && <p>{summary}</p>}{gate.criterionCoverage?.length ? <div className="criterion-list">{gate.criterionCoverage.map((criterion) => {
+      <summary>{heading}<ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
+      <div className="run-step-content">{showSummary && <p>{summary}</p>}{gate.criterionCoverage?.length ? <div className="criterion-list">{gate.criterionCoverage.map((criterion) => {
         const reasonRepeatsPrimaryFailure = gate.id === primaryFailureGateId
           && primaryFailureReasons.some((reason) => noticesOverlap(reason, criterion.reason));
         return <div className="criterion-row" data-tone={criterion.status === "covered" ? "success" : criterion.status === "blocked" ? "warning" : "danger"} key={criterion.criterion}><strong>{formatRunValue(criterion.status)}</strong><p>{criterion.criterion}</p>{criterion.reason && !reasonRepeatsPrimaryFailure && <small>{criterion.reason}</small>}</div>;
-      })}</div> : null}{gate.id !== primaryFailureGateId && failures.map((failure) => <GateFailureRow failure={failure} label={failure.disposition} key={`${failure.kind}:${failure.key}`} />)}</div>
+      })}</div> : null}{visibleFailures.map((failure) => <GateFailureRow failure={failure} label={failure.disposition} key={`${failure.kind}:${failure.key}`} />)}</div>
     </details>;
   })}</div>;
 }
@@ -596,7 +644,8 @@ function TaskContractPanel({ contract, runGoal }: { contract: NonNullable<TaskRu
     seenNonGoals.add(normalized);
     return true;
   });
-  return <details className="run-contract">
+  if (!criteria.length && !scopeIsDistinct && !nonGoals.length) return null;
+  return <section className="audit-section"><details className="run-contract">
     <summary><span>Task contract</span>{criteriaSummary && <small>{criteriaSummary}</small>}<ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary>
     <div>
       {criteria.length > 0 && <div><span data-label>Acceptance criteria</span><ul>{criteria.map((criterion) => <li key={normalizedNotice(criterion)}>{criterion}</li>)}</ul></div>}
@@ -610,7 +659,7 @@ function TaskContractPanel({ contract, runGoal }: { contract: NonNullable<TaskRu
         </div>
       </details>
     </div>
-  </details>;
+  </details></section>;
 }
 
 function RunStatusNotice({ notice }: { notice: NonNullable<ReturnType<typeof runStatusNotice>> }) {
@@ -668,7 +717,7 @@ export function RunDetails({ run, showIdentity = true }: { run: TaskRun; showIde
     {showReviewOutcome && <RunReviewPanel run={run} outcomeExplanation={reviewOutcomeExplanation} mode="outcome" />}
     {run.artifacts.length > 0 && <ArtifactsPanel run={run} />}
     {checkpoint && <details className="audit-section audit-disclosure"><summary><FileText size={ICON_SIZE.sm} /><span>Preserved work</span><ChevronRight className="tool-chevron" size={ICON_SIZE.sm} /></summary><div className="audit-ledger">{checkpoint.currentTool && <div className="gate-detail"><span>Last tool</span><strong className="truncate" title={checkpoint.currentTool.toolName}>{checkpoint.currentTool.toolName}</strong></div>}{checkpoint.assistantPartial.trim() && <div className="gate-detail"><span>Partial response</span><p>{checkpoint.assistantPartial}</p></div>}</div></details>}
-    {run.contract && <section className="audit-section"><TaskContractPanel contract={run.contract} runGoal={run.goal} /></section>}
+    {run.contract && <TaskContractPanel contract={run.contract} runGoal={run.goal} />}
     {reviewHasOutcome ? <RunReviewPanel run={run} outcomeExplanation={reviewOutcomeExplanation} mode="details" /> : <RunReviewPanel run={run} />}
     <RunEvidencePanel run={run} />
     <ContextManifestPanel run={run} />
@@ -729,11 +778,16 @@ export function QueuePrompt({ item, index, editing, draft, busy, starting, canMo
   const summary = item.analysis.summary.trim();
   const originalRequest = item.content.trim();
   const requestSummary = summary || originalRequest;
-  const hasDistinctOriginal = Boolean(summary && originalRequest && summary !== originalRequest);
+  const hasDistinctOriginal = Boolean(summary && originalRequest && normalizedNotice(summary) !== normalizedNotice(originalRequest));
+  const acceptanceCriteria = [...new Set(item.analysis.acceptanceCriteria.map((criterion) => criterion.trim()).filter(Boolean))];
+  const routingReason = item.analysis.reason.trim();
+  const showRoutingReason = Boolean(routingReason && ![requestSummary, originalRequest, ...acceptanceCriteria].some((value) => noticesOverlap(routingReason, value)));
+  const hasTaskDetails = hasDistinctOriginal || acceptanceCriteria.length > 0;
+  const routing = <><div className="inbox-routing"><span className="intent-badge">{formatRunValue(item.analysis.intent)}</span><span>{formatRunValue(item.analysis.relation)}</span><span>{formatRunValue(item.analysis.urgency)} · priority {item.analysis.priority}</span><span>{Math.round(item.analysis.confidence * 100)}% confidence</span></div>{showRoutingReason && <p>{routingReason}</p>}</>;
   return <article className="inbox-item" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={onDrop}>
     <button draggable={!busy && !editing} onDragStart={onDragStart} onDragEnd={onDragEnd} disabled={busy || editing} aria-label={`Drag prompt ${index + 1} to reorder`} title="Drag to reorder"><GripVertical size={ICON_SIZE.sm} /></button>
     <span className="inbox-position">{index + 1}</span>
-    <div>{editing ? <textarea className="queue-editor" value={draft} onChange={(event) => onDraftChange(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") onCancelEdit(); if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) onSave(); }} autoFocus rows={2} aria-label="Edit queued prompt" /> : <><strong>{requestSummary}</strong>{item.decision === "defer" && <span className="intent-badge">Deferred</span>}<details className="queue-details"><summary><span>Task details</span><ChevronRight className="tool-chevron" size={ICON_SIZE.xs} /></summary><div>{hasDistinctOriginal && <div><span data-label>Original request</span><p>{item.content}</p></div>}<div className="inbox-routing"><span className="intent-badge">{formatRunValue(item.analysis.intent)}</span><span>{formatRunValue(item.analysis.relation)}</span><span>{formatRunValue(item.analysis.urgency)} · priority {item.analysis.priority}</span><span>{Math.round(item.analysis.confidence * 100)}% confidence</span>{item.analysis.targetRunId && <span>run {item.analysis.targetRunId.slice(0, 8)}</span>}</div>{item.analysis.reason && <p>{item.analysis.reason}</p>}{item.analysis.acceptanceCriteria.length > 0 && <div><strong>Acceptance criteria</strong><ul>{item.analysis.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></div>}</div></details></>}
+    <div>{editing ? <textarea className="queue-editor" value={draft} onChange={(event) => onDraftChange(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") onCancelEdit(); if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) onSave(); }} autoFocus rows={2} aria-label="Edit queued prompt" /> : <><strong>{requestSummary}</strong>{item.decision === "defer" && <span className="intent-badge">Deferred</span>}<details className="queue-details"><summary><span>{hasTaskDetails ? "Task details" : "Routing details"}</span><ChevronRight className="tool-chevron" size={ICON_SIZE.xs} /></summary><div>{hasDistinctOriginal && <div><span data-label>Original request</span><p>{item.content}</p></div>}{acceptanceCriteria.length > 0 && <div><strong>Acceptance criteria</strong><ul>{acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul></div>}{hasTaskDetails ? <details className="queue-routing-details"><summary><span>Routing details</span><ChevronRight className="tool-chevron" size={ICON_SIZE.xs} /></summary><div>{routing}</div></details> : routing}</div></details></>}
       <div className="inbox-actions">{editing ? <><button onClick={onSave} disabled={busy || !draft.trim()}>Save</button><button onClick={onCancelEdit} disabled={busy}>Cancel</button></> : <><button data-tone="accent" onClick={onStart} disabled={busy}>{starting ? "Starting…" : "Run now"}</button><details><summary>More <ChevronDown size={ICON_SIZE.xs} /></summary><div><button onClick={onEdit} disabled={busy}><Pencil size={ICON_SIZE.xs} /> Edit</button><button onClick={onToggleDefer} disabled={busy}>{item.decision === "defer" ? "Resume" : "Defer"}</button>{index > 0 && <button onClick={onMergeFirst} disabled={busy}>Merge first</button>}<button onClick={onMoveUp} disabled={busy || !canMoveUp} aria-label={`Move queued prompt ${index + 1} up`}>Move up</button><button onClick={onMoveDown} disabled={busy || !canMoveDown} aria-label={`Move queued prompt ${index + 1} down`}>Move down</button></div></details></>}</div>
     </div>
     <button onClick={onDelete} disabled={busy} aria-label="Remove queued input"><X size={ICON_SIZE.sm} /></button>

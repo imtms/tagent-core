@@ -368,7 +368,7 @@ check(ruleHasDeclaration(root, ".panel-tabs .control:hover", "background", "tran
 check(ruleHasDeclaration(root, ".panel-tabs .control:hover", "border-color", "transparent"), "Panel tab hover must keep the ledger underline grammar borderless");
 check(ruleHasDeclaration(root, ".section-heading", "flex-wrap", "wrap"), "Shared section headings must wrap actions before they widen narrow workspaces");
 check(ruleHasDeclaration(root, ".run-history-toggle", "grid-template-columns", "var(--space-4) var(--status-dot) minmax(0, 1fr) auto"), "Run history must let the goal shrink before its status and recency columns");
-check(ruleHasDeclaration(root, ":is(.tool-row, .task-row, .artifact-row)", "grid-template-columns", "auto minmax(0, 1fr) auto"), "Run detail ledgers must let primary copy shrink before their trailing state or action");
+check(ruleHasDeclaration(root, ":is(.task-row, .artifact-row)", "grid-template-columns", "auto minmax(0, 1fr) auto"), "Run detail ledgers must let primary copy shrink before their trailing state or action");
 check(ruleHasDeclaration(root, ".goal-criterion-editor > label", "min-height", "var(--control)"), "Goal criterion checkbox labels must inherit shared control hit geometry");
 check(ruleHasDeclaration(root, ".memory-list > *", "align-items", "start"), "Dense Memory rows must align long content from the first text line");
 check(ruleHasDeclaration(root, ".workspace-avatar-options > div", "grid-template-columns", "repeat(5, minmax(0, 1fr))"), "Workspace icon choices must keep their compact five-column grid");
@@ -388,6 +388,8 @@ check(ruleHasDeclaration(root, ".continuation-row", "grid-template-columns", "mi
 check(ruleHasDeclaration(root, ".continuation-row > div", "grid-template-columns", "auto minmax(0, 1fr)"), "Continuation reasons must shrink within the Run details ledger");
 check(ruleHasDeclaration(root, ".continuation-row > div > span", "overflow-wrap", "anywhere"), "Continuation identifiers must wrap instead of widening the Run details drawer");
 check(ruleHasDeclaration(root, ".memory-operation-group .memory-list > div > div", "grid-template-columns", "auto minmax(0, 1fr) auto"), "Memory jobs must keep status, source, and metrics on one scan line");
+check(ruleHasDeclaration(root, ".memory-job-debug", "grid-column", "2 / -1"), "Memory job identifiers and error codes must stay below the readable operation row");
+check(ruleHasDeclaration(root, ":is(.queue-details, .queue-routing-details) > div", "border-left", "1px solid var(--border)"), "Supervisor routing diagnostics must retain a nested disclosure boundary");
 check(ruleHasDeclaration(root, ".memory-operation-group .memory-list > div > div", "grid-template-columns", "auto minmax(0, 1fr)", "(max-width: 680px)"), "Mobile Memory jobs must move metrics below the primary status and source line");
 check(ruleHasDeclaration(root, ".memory-operation-group .memory-list > div > div > small", "grid-column", "2", "(max-width: 680px)"), "Mobile Memory job metrics must align with their source");
 check(ruleHasDeclaration(root, ":is(.workspace-actions-menu, .skill-loader-menu, .workspace-context-menu)", "animation", "surface-in var(--duration-fast) var(--ease) both"), "Menus must share the fast transform-and-opacity entrance");

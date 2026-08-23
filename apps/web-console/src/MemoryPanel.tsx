@@ -539,12 +539,14 @@ export function MemoryPanel({
     : filteredTopics.length > 0 || hasMoreTopics;
   const initialLoading = status === null && busy;
   const recalledCount = results ? results.cards.length + results.coldTopics.length : 0;
-  const headerSummary = status ? memoryStatusSummary(status) : `${scope.id} · ${runtime.memoryBackend ?? "memory"}/${runtime.memoryColdBackend ?? "local"}`;
+  const headerSummary = status ? memoryStatusSummary(status) : "";
+  const catalogCount = records.length + topics.length;
+  const operationCount = jobs.length + reindexJobs.length;
   const tabs = [
-    { value: "catalog", label: "Catalog", meta: String(records.length + topics.length) },
-    { value: "recall", label: "Recall", meta: results ? String(recalledCount) : "—" },
-    { value: "core", label: "Core", meta: core ? `v${core.revision}` : "—" },
-    { value: "operations", label: "Operations", meta: String(jobs.length + reindexJobs.length) },
+    { value: "catalog", label: "Catalog", meta: catalogCount > 0 ? String(catalogCount) : undefined },
+    { value: "recall", label: "Recall", meta: results && recalledCount > 0 ? String(recalledCount) : undefined },
+    { value: "core", label: "Core", meta: core ? `v${core.revision}` : undefined },
+    { value: "operations", label: "Operations", meta: operationCount > 0 ? String(operationCount) : undefined },
   ] satisfies readonly PanelTab<MemorySection>[];
 
   const content = <>
@@ -725,7 +727,7 @@ export function MemoryPanel({
             <footer>
               <span>
                 <ShieldCheck size={ICON_SIZE.sm} />
-                Scope: {scope.id}
+                Scoped to this workspace
               </span>
               <div>
                 <button className="control" onClick={closeCapture}>Cancel</button>

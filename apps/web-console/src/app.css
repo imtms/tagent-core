@@ -398,10 +398,11 @@ small, [data-meta], .approval-dock-heading, .gate-detail p, .criterion-row p { m
 :where(.memory-list, .goal-criteria-list, .goal-roadmap-list, .goal-run-links) > :last-child,
 .detail-disclosure-body > section:last-child { border-bottom: 0; }
 .pulse { background: var(--info); animation: breathe var(--duration-pulse) ease-in-out infinite; opacity: 0.25; transform: scale(0.7); }
-:is(.run-step, .tool-call, .gate-evaluation) { border-bottom: 1px solid var(--border); }
-:is(.run-step, .tool-call, .gate-evaluation):last-child { border-bottom: 0; }
+:is(.run-step, .tool-call, .gate-evaluation, .gate-evaluation-static) { border-bottom: 1px solid var(--border); }
+:is(.run-step, .tool-call, .gate-evaluation, .gate-evaluation-static):last-child { border-bottom: 0; }
 :is(.run-step, .tool-call, .audit-disclosure, .run-contract, .detail-disclosure, .gate-evaluation) > summary,
 .tool-call-static,
+.gate-evaluation-static,
 .run-step > .run-step-meta,
 .goal-form > details > summary {
   min-height: var(--control);
@@ -422,8 +423,8 @@ details[open] > summary .tool-chevron { transform: rotate(90deg); }
 :is(.run-step-content, .tool-call-body, .run-contract > div) { min-width: 0; display: grid; gap: var(--space-2); padding: var(--space-2) var(--space-3) var(--space-3); overflow-wrap: anywhere; }
 :is(.tool-call-body, .run-contract > div) { grid-template-columns: minmax(0, 1fr); border-top: 1px solid var(--border); }
 .tool-call-body > div { min-width: 0; }
-:is(.tool-call, .audit-disclosure, .run-contract, .detail-disclosure, .gate-evaluation) > summary > span, .tool-call-static > span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
-:is(.tool-call, .audit-disclosure, .run-contract, .detail-disclosure, .gate-evaluation, .run-step) > summary > small, .tool-call-static > small { max-width: 48%; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:is(.tool-call, .audit-disclosure, .run-contract, .detail-disclosure, .gate-evaluation) > summary > span, :is(.tool-call-static, .gate-evaluation-static) > span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+:is(.tool-call, .audit-disclosure, .run-contract, .detail-disclosure, .gate-evaluation, .run-step) > summary > small, :is(.tool-call-static, .gate-evaluation-static) > small { max-width: 48%; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :is(.user-input-card, .approval-card) { padding: var(--space-4); border: 1px solid var(--border); border-left: 2px solid var(--warning); border-radius: var(--radius); background: var(--surface); }
 .user-input-card label { margin-top: var(--space-3); }
 .user-input-card > form > .control { margin-top: var(--space-3); }
@@ -441,9 +442,9 @@ details[open] > summary .tool-chevron { transform: rotate(90deg); }
 .inbox-item p { margin: var(--space-1) 0; color: var(--text-muted); }
 .inbox-position { color: var(--text-muted); font-family: var(--font-mono); }
 :is(.inbox-routing, .inbox-actions) { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); color: var(--text-muted); font-size: var(--text-xs); }
-.queue-details { margin-top: var(--space-1); color: var(--text-muted); font-size: var(--text-xs); }
-.queue-details > summary { width: fit-content; min-height: var(--compact); display: flex; align-items: center; gap: var(--space-1); border-radius: var(--radius-sm); cursor: pointer; }
-.queue-details > div { min-width: 0; display: grid; gap: var(--space-1); padding-left: var(--space-2); border-left: 1px solid var(--border); overflow-wrap: anywhere; }
+:is(.queue-details, .queue-routing-details) { margin-top: var(--space-1); color: var(--text-muted); font-size: var(--text-xs); }
+:is(.queue-details, .queue-routing-details, .memory-job-debug) > summary { width: fit-content; min-height: var(--compact); display: flex; align-items: center; gap: var(--space-1); border-radius: var(--radius-sm); cursor: pointer; }
+:is(.queue-details, .queue-routing-details) > div { min-width: 0; display: grid; gap: var(--space-1); padding-left: var(--space-2); border-left: 1px solid var(--border); overflow-wrap: anywhere; }
 .queue-details .inbox-routing { margin-top: 0; }
 .queue-details ul { margin: var(--space-1) 0 0; padding-left: var(--space-4); }
 .inbox-actions button { padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); color: var(--text-muted); }
@@ -499,12 +500,12 @@ details[open] > summary .tool-chevron { transform: rotate(90deg); }
 .run-status-note > p { margin: 0; padding: var(--space-2) 0; color: var(--text-muted); overflow-wrap: anywhere; }
 .section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-3); }
 .section-heading > :is(span, strong), .section-heading h3 { margin: 0; font: 600 var(--text-sm)/1.4 var(--font-sans); }
-:where(.audit-ledger, .tool-row, .gate-detail, .criterion-row, .task-row, .continuation-row, .artifact-row) { min-height: calc(var(--control) + var(--space-1)); padding: var(--space-2) 0; border-bottom: 1px solid var(--border); }
+:where(.audit-ledger, .gate-detail, .criterion-row, .task-row, .continuation-row, .artifact-row) { min-height: calc(var(--control) + var(--space-1)); padding: var(--space-2) 0; border-bottom: 1px solid var(--border); }
 .audit-ledger p { margin: 0; }
 .current-operation-ledger { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
 .review-outcome > div, .modal > header > span, .modal > footer > div, .modal-workspace-actions { min-width: 0; display: flex; align-items: center; gap: var(--space-2); }
 .review-outcome p { margin: 0; overflow-wrap: anywhere; }
-:is(.tool-row, .task-row, .artifact-row) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); overflow-wrap: anywhere; }
+:is(.task-row, .artifact-row) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); overflow-wrap: anywhere; }
 .run-evidence-group + .run-evidence-group { margin-top: var(--space-3); }
 .run-evidence-group-label { display: flex; justify-content: space-between; padding: var(--space-2) 0; }
 .continuation-row { display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; gap: var(--space-1); }
@@ -647,6 +648,8 @@ details[open] > summary .tool-chevron { transform: rotate(90deg); }
 .detail-disclosure-body > section { display: grid; grid-template-columns: minmax(120px, .3fr) minmax(0, 1fr); gap: var(--space-3); padding: var(--space-3) var(--space-2); border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .memory-operation-group { margin-top: var(--space-6); }
 .memory-operation-group .memory-list > div > div { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: var(--space-2); }
+.memory-job-debug { min-width: 0; grid-column: 2 / -1; color: var(--text-muted); font-size: var(--text-xs); }
+.memory-job-debug > code { display: block; margin-top: var(--space-1); overflow-wrap: anywhere; }
 .memory-modal { width: min(620px, 100%); }
 .memory-modal > section { display: grid; align-content: start; gap: var(--space-3); padding: var(--space-4); }
 .memory-modal textarea { min-height: 180px; resize: vertical; }
