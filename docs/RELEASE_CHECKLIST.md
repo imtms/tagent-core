@@ -29,7 +29,7 @@ npm run audit:all
 git diff --check
 ```
 
-The audit scripts always use the official npm registry and the high threshold. They retry only recognized registry/transport failures with bounded timeouts; any vulnerability result or unrecognized failure remains immediately fail-closed.
+The audit scripts use the official npm registry as the primary source with the high threshold. They retry only recognized registry/transport failures with bounded timeouts. If those retries are exhausted, they query the GitHub Advisory Database in bounded batches for every exact package version in the lockfile; high/critical findings, fallback API failures, malformed responses, and all unrecognized npm failures remain fail-closed. Set `GITHUB_TOKEN` in automated environments to avoid anonymous API rate limits.
 
 - [ ] All commands exit 0.
 - [ ] No generated `*.tsbuildinfo`, database, WAL/SHM, secret, log, release archive, or local `runtime/activation.json` Host state is tracked.

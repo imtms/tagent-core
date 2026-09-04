@@ -42,7 +42,7 @@ Deliver the hardening in independently verified layers while retaining the modul
 - Accepted-uncertainty regressions prove criterion scope, actor attribution, expiry, idempotency, separation from effect approval, same-Candidate re-adjudication, retained rejection history, and a single terminal winner when acceptance races resume or cancellation.
 - Context and Transcript regressions prove projected-content commitments, provider-envelope linkage, immutable Memory evidence projections, failed-operation exclusion, Unicode term search, case-sensitive literal search, write-time filters, stable exclusive pagination, and exact-sequence retrieval.
 - Architecture tests prove that approval and finalization extraction retain one mutation authority in the modular monolith and add no process or network boundary.
-- Release verification uses fresh `npm run lint`, `npm run check`, full Vitest, build, compaction benchmark, fail-closed official-registry audit, and diff gates; audit transport failures receive bounded retries while vulnerability results do not. The tagged workflow additionally runs the PostgreSQL 17 gate and builds/verifies all release assets.
+- Release verification uses fresh `npm run lint`, `npm run check`, full Vitest, build, compaction benchmark, fail-closed dependency audit, and diff gates; recognized npm registry transport failures receive bounded retries and, only after exhaustion, exact lockfile versions are checked against the GitHub Advisory Database. Vulnerability results and fallback failures remain fail-closed. The tagged workflow additionally runs the PostgreSQL 17 gate and builds/verifies all release assets.
 
 ## Consequences
 

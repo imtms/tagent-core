@@ -23,7 +23,7 @@
 ### Security
 
 - Updated Fastify, fflate, and transitive fast-uri dependencies to releases that address schema-validation, proxy-header, archive-processing, URI-canonicalization, and SSRF advisories detected by the release audit.
-- Made release audits retry only bounded, recognized official-registry transport failures while keeping vulnerability findings fail-closed, and removed redundant install-time audit requests from CI and artifact assembly.
+- Made release audits retry only bounded, recognized official-registry transport failures, then check exact locked versions against the GitHub Advisory Database if that transport remains unavailable; vulnerability findings and fallback failures stay fail-closed, and redundant install-time audit requests were removed from CI and artifact assembly.
 
 ### Persistence and upgrade
 

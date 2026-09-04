@@ -63,7 +63,11 @@ jobs:
       - run: npm test -- --run
       - run: npm run build
       - run: npm run audit:production
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: npm run audit:all
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Verify tag matches package version
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}

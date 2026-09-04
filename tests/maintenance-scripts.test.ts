@@ -10,13 +10,30 @@ const repoRoot = process.cwd();
 describe("maintenance scripts", () => {
   it("retries only transient npm audit transport failures", async () => {
     const moduleUrl = pathToFileURL(path.join(repoRoot, "scripts/audit-dependencies.mjs")).href;
-    const { auditWithRetry, isRetryableAuditFailure } = await import(moduleUrl) as {
+    const { auditCoordinatesFromLockfile, auditGitHubFallback, auditWithRetry, isRetryableAuditFailure } = await import(moduleUrl) as {
+      auditCoordinatesFromLockfile(
+        lockfile: object,
+        options?: { omitDev?: boolean },
+      ): string[];
+      auditGitHubFallback(options: {
+        lockfile: object;
+        omitDev?: boolean;
+        token?: string;
+        query(options: { coordinates: string[]; severity: string; token?: string }): Promise<{
+          code: number;
+          stdout: string;
+          stderr: string;
+        }>;
+        wait(milliseconds: number): Promise<void>;
+        write(stream: "stdout" | "stderr", value: string): void;
+      }): Promise<number>;
       auditWithRetry(options: {
         run(): Promise<{ code: number; stdout: string; stderr: string }>;
         wait(milliseconds: number): Promise<void>;
         write(stream: "stdout" | "stderr", value: string): void;
         maxAttempts: number;
         retryDelaysMs: number[];
+        fallback?(): Promise<number>;
       }): Promise<number>;
       isRetryableAuditFailure(output: string): boolean;
     };
@@ -51,6 +68,78 @@ describe("maintenance scripts", () => {
       retryDelaysMs: [0, 0],
     })).toBe(1);
     expect(vulnerabilityRuns).toBe(1);
+
+    let fallbackRuns = 0;
+    expect(await auditWithRetry({
+      run: async () => ({ code: 1, stdout: "", stderr: "npm error audit endpoint returned an error" }),
+      wait: async () => undefined,
+      write: () => undefined,
+      maxAttempts: 2,
+      retryDelaysMs: [0],
+      fallback: async () => {
+        fallbackRuns += 1;
+        return 0;
+      },
+    })).toBe(0);
+    expect(fallbackRuns).toBe(1);
+
+    const lockfile = {
+      packages: {
+        "": { version: "0.8.32" },
+        "node_modules/production-package": { version: "1.2.3" },
+        "node_modules/dev-package": { version: "2.0.0", dev: true },
+        "node_modules/workspace-link": { resolved: "packages/workspace-link", link: true },
+        "node_modules/wrapper/node_modules/@scope/nested": { version: "3.1.4" },
+      },
+    };
+    expect(auditCoordinatesFromLockfile(lockfile)).toEqual([
+      "@scope/nested@3.1.4",
+      "dev-package@2.0.0",
+      "production-package@1.2.3",
+    ]);
+    expect(auditCoordinatesFromLockfile(lockfile, { omitDev: true })).toEqual([
+      "@scope/nested@3.1.4",
+      "production-package@1.2.3",
+    ]);
+
+    const queries: Array<{ coordinates: string[]; severity: string; token?: string }> = [];
+    const fallbackOutput: string[] = [];
+    expect(await auditGitHubFallback({
+      lockfile,
+      omitDev: true,
+      token: "test-token",
+      query: async (options) => {
+        queries.push(options);
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      wait: async () => undefined,
+      write: (_stream, value) => { fallbackOutput.push(value); },
+    })).toBe(0);
+    expect(queries).toEqual([
+      {
+        coordinates: ["@scope/nested@3.1.4", "production-package@1.2.3"],
+        severity: "high",
+        token: "test-token",
+      },
+      {
+        coordinates: ["@scope/nested@3.1.4", "production-package@1.2.3"],
+        severity: "critical",
+        token: "test-token",
+      },
+    ]);
+    expect(fallbackOutput.join("\n")).toContain("2 exact lockfile package versions");
+
+    let vulnerableQueries = 0;
+    expect(await auditGitHubFallback({
+      lockfile,
+      query: async () => {
+        vulnerableQueries += 1;
+        return { code: 1, stdout: "", stderr: "high: GHSA-test\n" };
+      },
+      wait: async () => undefined,
+      write: () => undefined,
+    })).toBe(1);
+    expect(vulnerableQueries).toBe(1);
   });
 
   it("uses path-aware documentation containment on Windows separators", () => {
@@ -95,6 +184,7 @@ describe("maintenance scripts", () => {
     expect(ciWorkflow.match(/npm ci --no-audit/g)).toHaveLength(2);
     expect(releaseWorkflow).toContain("npm run audit:production");
     expect(releaseWorkflow).toContain("npm run audit:all");
+    expect(releaseWorkflow.match(/GITHUB_TOKEN: \$\{\{ github\.token \}\}/g)).toHaveLength(2);
     expect(releaseBuild.match(/npm ci --no-audit/g)).toHaveLength(2);
   });
 });
