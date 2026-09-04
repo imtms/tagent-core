@@ -243,7 +243,7 @@ describe("production release deployment", () => {
     expect(source).toContain('cp -a "$source/package.json" "$source/dist" "$target/"');
     expect(source).toContain('install_root="$work/production-install"');
     expect(source).toContain('cd "$install_root"');
-    expect(source).toContain("npm ci --omit=dev --workspace @tagent/core-service --include-workspace-root");
+    expect(source).toContain("npm ci --no-audit --omit=dev --workspace @tagent/core-service --include-workspace-root");
     expect(source).not.toContain("npm prune");
     expect(source).toContain('find "$core_release/node_modules" -type d -name .bin -prune -exec rm -rf {} +');
     expect(source).toContain('find "$core_release" -type l -print > "$release_links"');

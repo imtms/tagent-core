@@ -29,6 +29,8 @@
     "preview": "npm run preview -w @tagent/web-console",
     "benchmark:performance": "npm run build:packages && node scripts/performance-efficiency-benchmark.mjs",
     "benchmark:compaction": "node scripts/compaction-summary-loss-benchmark.mjs",
+    "audit:production": "node scripts/audit-dependencies.mjs --omit=dev",
+    "audit:all": "node scripts/audit-dependencies.mjs",
     "release:manifest": "node scripts/release-manifest.mjs",
     "release:sdk": "node scripts/build-sdk-release.mjs",
     "release:build": "bash scripts/build-release.sh",

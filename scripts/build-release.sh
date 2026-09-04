@@ -29,7 +29,7 @@ web_release="$work/tagent-web-console-$commit"
 
 # Build native dependencies where a compiler is available. The production host
 # never runs npm and only receives this already-built directory.
-npm ci
+npm ci --no-audit
 npm run lint
 npm run check
 npm test -- --run
@@ -47,7 +47,7 @@ for workspace_manifest in "$PWD"/packages/*/package.json "$PWD"/adapters/*/packa
 done
 (
   cd "$install_root"
-  npm ci --omit=dev --workspace @tagent/core-service --include-workspace-root
+  npm ci --no-audit --omit=dev --workspace @tagent/core-service --include-workspace-root
 )
 
 mkdir -p "$core_release/scripts"

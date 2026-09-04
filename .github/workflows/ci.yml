@@ -17,7 +17,7 @@ jobs:
         with:
           node-version: 24.18.1
           cache: npm
-      - run: npm ci
+      - run: npm ci --no-audit
       - run: npm run lint
       - run: npm run check
       - run: npm test
@@ -45,7 +45,7 @@ jobs:
         with:
           node-version: 24.18.1
           cache: npm
-      - run: npm ci
+      - run: npm ci --no-audit
       - run: npm run build -w @tagent/memory
       - name: Required PostgreSQL 17, pgvector and pg_trgm integration
         env:

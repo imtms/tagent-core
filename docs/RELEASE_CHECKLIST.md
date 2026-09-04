@@ -18,16 +18,18 @@ Do not prefill this checklist or infer a pass from a previous release. Record th
 Run from a clean checkout with the official npm registry:
 
 ```bash
-npm ci --registry=https://registry.npmjs.org
+npm ci --no-audit --registry=https://registry.npmjs.org
 npm run lint
 npm run check
 npm test -- --run
 npm run build
 npm run benchmark:compaction
-npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
-npm audit --audit-level=high --registry=https://registry.npmjs.org
+npm run audit:production
+npm run audit:all
 git diff --check
 ```
+
+The audit scripts always use the official npm registry and the high threshold. They retry only recognized registry/transport failures with bounded timeouts; any vulnerability result or unrecognized failure remains immediately fail-closed.
 
 - [ ] All commands exit 0.
 - [ ] No generated `*.tsbuildinfo`, database, WAL/SHM, secret, log, release archive, or local `runtime/activation.json` Host state is tracked.
