@@ -1,5 +1,6 @@
 import type {
   ContextManifestItem,
+  ContextEvidenceSource,
   RunEvent,
   RunId,
   TaskRun,
@@ -26,7 +27,7 @@ export interface AttemptLauncherPort {
     prompt: string,
     initialMessages?: RuntimeMessage[],
     continuationId?: string,
-    launchOptions?: { initialize?: boolean; inboxItemId?: string; retry?: boolean; attemptContext?: string },
+    launchOptions?: { initialize?: boolean; inboxItemId?: string; retry?: boolean; attemptContext?: string; contextManifestId?: string },
   ): void;
 }
 
@@ -88,6 +89,8 @@ export interface PreparedExecutionContext {
   messages: RuntimeMessage[];
   droppedMessages: RuntimeMessage[];
   contextItems: ContextManifestItem[];
+  systemContentHash: string;
+  promptContentHash: string;
   stats: {
     source: "session" | "transcript";
     contextWindow: number;
@@ -103,6 +106,8 @@ export interface PreparedExecutionContext {
   };
   recalledMemory?: string;
   memoryContextItems?: ContextManifestItem[];
+  /** Private exact memory projections persisted atomically with the public manifest. */
+  contextEvidenceSources?: ContextEvidenceSource[];
   projectContextItems?: ContextManifestItem[];
   projectContextHash?: string;
 }
@@ -118,9 +123,9 @@ export interface RunContextPort {
   buildLiveContext(runId: RunId): string;
   requiresAsyncPreparation(): boolean;
   prepareContinuationTranscript(run: TaskRun, prompt: string): PreparedExecutionContext;
-  prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter: number | undefined, signal: AbortSignal): Promise<PreparedExecutionContext>;
-  prepareSessionHistoryWithoutRecall(run: TaskRun, query: string, excludeCurrentUserAfter?: number): PreparedExecutionContext;
-  publishContextEvents(runId: RunId, assembly: PreparedExecutionContext): void;
+  prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter: number | undefined, signal: AbortSignal, excludeCurrentUserContent?: string): Promise<PreparedExecutionContext>;
+  prepareSessionHistoryWithoutRecall(run: TaskRun, query: string, excludeCurrentUserAfter?: number, excludeCurrentUserContent?: string): PreparedExecutionContext;
+  publishContextEvents(runId: RunId, assembly: PreparedExecutionContext): import("../domain/task-run.js").ContextManifest | undefined;
 }
 
 export interface ExternalActionApprovalBoundaryPort {
@@ -165,6 +170,7 @@ export interface UserMessageObserverPort {
 export interface ExecutionContextEnrichment {
   promptSection: string;
   contextItems: ContextManifestItem[];
+  evidenceSources: ContextEvidenceSource[];
 }
 
 export interface ContextEnrichmentPort {

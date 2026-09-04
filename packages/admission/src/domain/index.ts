@@ -2,6 +2,8 @@ export type {
   SessionInputAnalysis,
   SessionInputIntent,
   SessionInputRelation,
+  SessionInputRoutingProvenance,
+  SessionInputRoutingUsage,
   TaskObjective,
   TaskObjectiveKind,
   TaskObjectiveTiming,

@@ -25,6 +25,7 @@ import { createApp, type ServiceCredential } from "@tagent/http-fastify";
 import { createCoreApplication } from "@tagent/core-service/application";
 import { Store } from "@tagent/persistence-sqlite/store";
 import { corePersistence, httpTestResources, transitionTaskRun } from "./support/test-persistence.js";
+import { blockCandidateForUncertainty } from "./support/blocked-candidate.js";
 
 const apps: Array<ReturnType<typeof createApp>> = [];
 const temporaryDirectories: string[] = [];
@@ -129,8 +130,8 @@ describe("v1 API contracts", () => {
     expect(decodeAbi(SessionSchema, decodeAbi(SuccessEnvelopeSchema, read.json()).data)).toEqual(session);
     const capabilities = decodeAbi(CoreCapabilitiesResponseSchema, (await app.inject({ method: "GET", url: "/api/v1/capabilities" })).json()).data;
     expect(capabilities).toMatchObject({
-      releaseVersion: "0.8.31",
-      persistenceSchemaVersion: 2,
+      releaseVersion: "0.8.32",
+      persistenceSchemaVersion: 3,
       interactions: { approvalResolution: true, userInputSubmission: true },
       operator: { roadmapGenerationIdempotent: true },
       approval: { ready: true },
@@ -492,6 +493,26 @@ describe("v1 API contracts", () => {
     expect(second).toMatchObject({ items: [{ sequence: 3, text: "three" }], pageInfo: { nextCursor: null, hasMore: false, limit: 2 } });
   });
 
+  it("filters the public Transcript by Attempt, durable role, and rendered kind", async () => {
+    const { app, store } = await fixture();
+    const run = store.createRun(store.createSession().id, "filtered public transcript");
+    store.appendTranscript(run.id, 1, { role: "user", content: "attempt one", timestamp: 1 });
+    store.appendTranscript(run.id, 1, {
+      role: "assistant", content: [{ type: "thinking", thinking: "private trace" }, { type: "text", text: "public answer" }],
+      api: "test", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: 2,
+    });
+    store.appendTranscript(run.id, 2, { role: "user", content: "attempt two", timestamp: 3 });
+
+    const attempt = decodeAbi(TranscriptResponseSchema, (await app.inject({
+      method: "GET", url: `/api/v1/task-runs/${run.id}/transcript?attempt=2&role=user`,
+    })).json()).data;
+    expect(attempt.items).toMatchObject([{ sequence: 3, attempt: 2, kind: "user", text: "attempt two" }]);
+    const thinking = decodeAbi(TranscriptResponseSchema, (await app.inject({
+      method: "GET", url: `/api/v1/task-runs/${run.id}/transcript?kind=thinking`,
+    })).json()).data;
+    expect(thinking.items).toMatchObject([{ sequence: 2, attempt: 1, kind: "thinking", text: "private trace" }]);
+  });
+
   it("keeps Console Context Manifest responses aligned with the Web decoder", async () => {
     const { app, store } = await fixture();
     const run = store.createRun(store.createSession().id, "console context manifest");
@@ -550,6 +571,14 @@ describe("v1 API contracts", () => {
     store.appendTranscript(run.id, 1, {
       role: "toolResult", toolCallId: "split-tool", toolName: "read",
       content: [{ type: "text", text: "file contents" }], details: {}, isError: false, timestamp: 2,
+    });
+
+    const replayedFirst = decodeAbi(TranscriptResponseSchema, (await app.inject({
+      method: "GET", url: `/api/v1/task-runs/${run.id}/transcript?after=0&limit=1`,
+    })).json()).data;
+    expect(replayedFirst).toMatchObject({
+      items: [expect.objectContaining({ sequence: 1, kind: "tool", status: "pending" })],
+      pageInfo: { nextCursor: 1, hasMore: true, limit: 1 },
     });
 
     const second = decodeAbi(TranscriptResponseSchema, (await app.inject({
@@ -710,6 +739,54 @@ describe("v1 API contracts", () => {
     expect(decodeAbi(CommandResponseSchema, recovered.json()).data.receipt).toMatchObject({ state: "succeeded" });
     expect(store.getRun(runId)).toMatchObject({ status: "running", attempt: 2 });
     expect(store.listEvents(runId).filter((event) => event.type === "supervisor.approval.approved")).toHaveLength(1);
+  });
+
+  it("accepts criterion-level uncertainty only through an actor-attributed operator command", async () => {
+    const { app, store } = await fixture();
+    const session = store.createSession();
+    const blocked = blockCandidateForUncertainty(store, { sessionId: session.id, requestId: "api-uncertainty-blocked" });
+    for (const [commandId, evidenceRef] of [
+      ["accept-uncertainty-oversized-ref", "x".repeat(2_001)],
+      ["accept-uncertainty-nul-ref", "artifact:report\0hidden"],
+    ]) {
+      const invalid = await app.inject({
+        method: "POST", url: `/api/v1/task-runs/${blocked.run.id}/commands`,
+        payload: {
+          commandId, expectedAttemptId: null, type: "task_run.accept_uncertainty",
+          payload: { criterionId: "ac-1", rationale: "The upstream is unavailable.", scope: "This run only.", evidenceRefs: [evidenceRef] },
+        },
+      });
+      expect(invalid.statusCode).toBe(400);
+    }
+    expect(store.listAcceptedUncertainties(blocked.run.id)).toEqual([]);
+    const accepted = await app.inject({
+      method: "POST", url: `/api/v1/task-runs/${blocked.run.id}/commands`,
+      payload: {
+        commandId: "accept-uncertainty-1", expectedAttemptId: null, type: "task_run.accept_uncertainty",
+        payload: { criterionId: "ac-1", rationale: "The upstream is unavailable after bounded retries.", scope: "This run only." },
+      },
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(decodeAbi(CommandResponseSchema, accepted.json()).data.receipt).toMatchObject({ state: "succeeded", result: { accepted: true, runCompleted: true } });
+    expect(store.listAcceptedUncertainties(blocked.run.id)).toEqual([expect.objectContaining({ criterionId: "ac-1", actorId: "local-admin", rationale: expect.stringContaining("upstream") })]);
+    expect(store.getRun(blocked.run.id)).toMatchObject({
+      status: "completed",
+      supervision: { acceptedUncertainties: [expect.objectContaining({ criterionId: "ac-1" })], unresolvedUncertainties: [] },
+    });
+    expect(store.listApprovalRequests(blocked.run.id)).toEqual([]);
+
+    const contradicted = blockCandidateForUncertainty(store, {
+      sessionId: session.id, statuses: ["contradicted"], requestId: "api-uncertainty-contradicted",
+    });
+    const rejected = await app.inject({
+      method: "POST", url: `/api/v1/task-runs/${contradicted.run.id}/commands`,
+      payload: {
+        commandId: "accept-uncertainty-contradiction", expectedAttemptId: null, type: "task_run.accept_uncertainty",
+        payload: { criterionId: "ac-1", rationale: "Do not allow this.", scope: "This run only." },
+      },
+    });
+    expect(rejected.statusCode).toBe(409);
+    expect(store.listAcceptedUncertainties(contradicted.run.id)).toHaveLength(0);
   });
 
   it("returns a pending bound approval instead of rejecting manual external-action resume", async () => {

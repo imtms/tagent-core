@@ -1,4 +1,4 @@
-import type { ContextManifest, ExecutionSessionRef } from "../domain/task-run.js";
+import type { ContextEvidenceSource, ContextManifest, ExecutionSessionRef } from "../domain/task-run.js";
 import type { ApprovalRepository, SupervisorDecisionJournal, WorkspaceGoalRepository } from "@tagent/governance/ports";
 import type { AttemptRepository, FencedRuntimeMutationPort } from "./attempt-repository.js";
 import type { CheckpointRepository } from "./checkpoint-repository.js";
@@ -33,7 +33,7 @@ export type ExecutionApprovalPort = Pick<
 >;
 
 export interface ExecutionContextManifestPort {
-  recordContextManifest(manifest: ContextManifest): ContextManifest;
+  recordContextManifest(manifest: ContextManifest, evidenceSources?: readonly ContextEvidenceSource[]): ContextManifest;
 }
 
 export type ExecutionSupervisorDecisionPort = Pick<

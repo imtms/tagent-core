@@ -131,6 +131,7 @@ function inboxItemView(item: OperatorInboxItem): SessionInboxItem {
       summary: item.summary, intent: item.intent, targetRunId: item.targetRunId, priority: item.priority,
       urgency: item.urgency, relation: item.relation, acceptanceCriteria: item.acceptanceCriteria,
       confidence: item.confidence, reason: item.reason,
+      ...(item.routingProvenance ? { routingProvenance: item.routingProvenance } : {}),
     },
   };
 }

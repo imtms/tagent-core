@@ -43,6 +43,13 @@ export class SqliteAttemptRequestEnvelopeRepository implements AttemptRequestEnv
   record(envelope: AttemptRequestEnvelope): AttemptRequestEnvelope {
     return this.db.transaction(() => {
       const expected = createValidatedEnvelope(envelope);
+      if (expected.contextManifestId) {
+        const manifest = this.db.prepare("SELECT run_id as runId,attempt FROM context_manifests WHERE id=?")
+          .get(expected.contextManifestId) as { runId: string; attempt: number } | undefined;
+        if (!manifest || manifest.runId !== expected.runId || manifest.attempt !== expected.attempt) {
+          throw new Error(`Attempt request envelope ${expected.id} references an invalid context manifest`);
+        }
+      }
       const existing = this.get(envelope.id);
       if (existing) {
         if (existing.envelopeHash !== expected.envelopeHash) throw new Error(`Attempt request envelope ${envelope.id} already exists with different content`);
@@ -54,6 +61,8 @@ export class SqliteAttemptRequestEnvelopeRepository implements AttemptRequestEnv
         expected.id, expected.runId, expected.attemptId, expected.attempt, expected.requestOrdinal,
         expected.schemaVersion, canonicalRequestJson(expected), expected.providerPayloadHash, expected.envelopeHash, expected.createdAt,
       );
+      if (expected.contextManifestId) this.db.prepare(`INSERT INTO context_manifest_envelopes
+        (manifest_id,envelope_id,created_at) VALUES (?,?,?)`).run(expected.contextManifestId, expected.id, expected.createdAt);
       return this.get(expected.id)!;
     })();
   }

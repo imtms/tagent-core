@@ -1,4 +1,4 @@
-export { bashCommandIsDestructive, bashCommandTargetsHostingCore, bashInvalidatesChecks, composeWorkspaceTools, ensureWorkspace } from "./tools.js";
+export { bashCommandEffect, bashCommandIsDestructive, bashCommandTargetsHostingCore, bashInvalidatesChecks, bashRequiresExplicitApproval, composeWorkspaceTools, ensureWorkspace } from "./tools.js";
 export { childEnvironment, createLocalSubprocessPort, LocalSubprocessPort } from "./local-subprocess.js";
 export {
   WorkspacePathError,

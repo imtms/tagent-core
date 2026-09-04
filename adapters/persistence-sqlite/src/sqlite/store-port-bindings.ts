@@ -95,6 +95,7 @@ export function createStoreBackedPorts(
       markSessionInboxDuplicate: mutate(store.markSessionInboxDuplicate.bind(store)),
       discardSessionInboxItem: mutate(store.discardSessionInboxItem.bind(store)),
       decideSessionInboxItem: mutate(store.decideSessionInboxItem.bind(store)),
+      markSessionInboxNeedsClarification: mutate(store.markSessionInboxNeedsClarification.bind(store)),
       claimNextSessionInbox: mutate(store.claimNextSessionInbox.bind(store)),
       claimSessionInboxNow: mutate(store.claimSessionInboxNow.bind(store)),
       recordSessionInboxLaunchFailure: mutate(store.recordSessionInboxLaunchFailure.bind(store)),
@@ -152,6 +153,7 @@ export function createStoreBackedPorts(
       appendTranscript: mutate(store.appendTranscript.bind(store)),
       listTranscriptEntries: query(store.listTranscriptEntries.bind(store)),
       searchTranscriptLiteral: query(store.searchTranscriptLiteral.bind(store)),
+      searchTranscriptTerms: query(store.searchTranscriptTerms.bind(store)),
       listTranscript: query(store.listTranscript.bind(store)),
       repairTranscript: mutate(store.repairTranscript.bind(store)),
       listTranscriptView: query(store.listTranscriptView.bind(store)),
@@ -221,6 +223,11 @@ export function createStoreBackedPorts(
       hasPendingApproval: query(store.hasPendingApproval.bind(store)),
       inspectExternalActionAuthorization: query(store.inspectExternalActionAuthorization.bind(store)),
       activateExternalActionAuthorization: mutate(store.activateExternalActionAuthorization.bind(store)),
+    }),
+
+    uncertainties: Object.freeze({
+      acceptUncertainty: mutate(store.acceptUncertainty.bind(store)),
+      listAcceptedUncertainties: query(store.listAcceptedUncertainties.bind(store)),
     }),
 
     supervisorDecisions: Object.freeze({

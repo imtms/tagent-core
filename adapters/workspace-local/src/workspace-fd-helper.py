@@ -174,6 +174,57 @@ def write_file(root_fd: int, parts: list[str]) -> None:
 
 
 
+def create_file(root_fd: int, parts: list[str]) -> None:
+    if not parts:
+        fail("A file path is required")
+    parent = descend(root_fd, parts[:-1], create=True)
+    temporary = f".tagent-create-{uuid.uuid4().hex}.tmp"
+    staged = False
+    try:
+        test_pause("after_parent_open")
+        try:
+            metadata = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+            if stat.S_ISLNK(metadata.st_mode):
+                fail("Symbolic-link file targets are not allowed")
+            fail("Workspace file target already exists", "WORKSPACE_CREATE_EXISTS")
+        except FileNotFoundError:
+            pass
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600, dir_fd=parent)
+        staged = True
+        try:
+            while True:
+                chunk = sys.stdin.buffer.read(1024 * 1024)
+                if not chunk:
+                    break
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(fd, view)
+                    view = view[written:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        try:
+            # Linking the complete temporary inode is an atomic create-only
+            # commit: a concurrently created destination makes link fail.
+            os.link(temporary, parts[-1], src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+        except FileExistsError:
+            metadata = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+            if stat.S_ISLNK(metadata.st_mode):
+                fail("Symbolic-link file targets are not allowed")
+            fail("Workspace file target already exists", "WORKSPACE_CREATE_EXISTS")
+        os.unlink(temporary, dir_fd=parent)
+        staged = False
+        os.fsync(parent)
+        sys.stdout.write(json.dumps({"ok": True}))
+    finally:
+        if staged:
+            try:
+                os.unlink(temporary, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+        os.close(parent)
+
+
 def commit_batch(root_fd: int, payload: dict) -> None:
     entries = payload.get("entries")
     if not isinstance(entries, list) or not entries:
@@ -280,6 +331,8 @@ def main() -> None:
             read_file(root_fd, parts)
         elif operation == "list":
             list_directory(root_fd, parts)
+        elif operation == "create":
+            create_file(root_fd, parts)
         elif operation == "write":
             write_file(root_fd, parts)
         elif operation == "commit-batch":

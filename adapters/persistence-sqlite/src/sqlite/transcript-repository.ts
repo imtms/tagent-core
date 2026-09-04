@@ -1,8 +1,28 @@
 import type Database from "better-sqlite3";
 import type { RunId, TaskRun } from "@tagent/execution/domain";
 import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
+import type { TranscriptEntryQuery, TranscriptFilters, TranscriptSearchOptions } from "@tagent/execution/ports";
 
 const now = () => Date.now();
+
+function transcriptFilterSql(alias: string, options: TranscriptFilters, params: Array<string | number>): string[] {
+  const filters: string[] = [];
+  if (options.attempt !== undefined) { filters.push(`${alias}.attempt=?`); params.push(options.attempt); }
+  if (options.role !== undefined) { filters.push(`${alias}.role=?`); params.push(options.role); }
+  if (options.createdAfter !== undefined) { filters.push(`${alias}.created_at>=?`); params.push(options.createdAfter); }
+  if (options.createdBefore !== undefined) { filters.push(`${alias}.created_at<?`); params.push(options.createdBefore); }
+  if (options.kind === "user") filters.push(`${alias}.role='user'`);
+  else if (options.kind === "assistant") filters.push(`${alias}.role='assistant' AND EXISTS (
+    SELECT 1 FROM json_each(${alias}.message_json,'$.content') part WHERE json_extract(part.value,'$.type')='text'
+  )`);
+  else if (options.kind === "thinking") filters.push(`${alias}.role='assistant' AND EXISTS (
+    SELECT 1 FROM json_each(${alias}.message_json,'$.content') part WHERE json_extract(part.value,'$.type')='thinking'
+  )`);
+  else if (options.kind === "tool") filters.push(`(${alias}.role='toolResult' OR ${alias}.role='assistant' AND EXISTS (
+    SELECT 1 FROM json_each(${alias}.message_json,'$.content') part WHERE json_extract(part.value,'$.type')='toolCall'
+  ))`);
+  return filters;
+}
 
 /** SQLite-owned transcript storage and wire-view projection. */
 export class SqliteTranscriptRepository {
@@ -41,38 +61,35 @@ export class SqliteTranscriptRepository {
     })();
   }
 
-  listTranscriptEntries(runId: RunId, options: { limit?: number; attempt?: number; after?: number } = {}) {
+  listTranscriptEntries(runId: RunId, options: TranscriptEntryQuery = {}) {
     const limit = options.limit === undefined ? undefined : Math.max(1, Math.floor(options.limit));
-    const rows = options.after !== undefined
-      ? options.attempt === undefined
-        ? limit === undefined
-          ? this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? AND seq > ? ORDER BY seq").all(runId, options.after)
-          : this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? AND seq > ? ORDER BY seq LIMIT ?").all(runId, options.after, limit)
-        : limit === undefined
-          ? this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? AND attempt = ? AND seq > ? ORDER BY seq").all(runId, options.attempt, options.after)
-          : this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? AND attempt = ? AND seq > ? ORDER BY seq LIMIT ?").all(runId, options.attempt, options.after, limit)
-      : options.attempt === undefined
-      ? limit === undefined
-        ? this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? ORDER BY seq").all(runId)
-        : this.db.prepare(`SELECT * FROM (SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt
-          FROM run_transcript WHERE run_id = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq`).all(runId, limit)
-      : limit === undefined
-        ? this.db.prepare("SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt FROM run_transcript WHERE run_id = ? AND attempt = ? ORDER BY seq").all(runId, options.attempt)
-        : this.db.prepare(`SELECT * FROM (SELECT seq, attempt, role, message_json as messageJson, created_at as createdAt
-          FROM run_transcript WHERE run_id = ? AND attempt = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq`).all(runId, options.attempt, limit);
+    const params: Array<string | number> = [runId];
+    const filters = [`t.run_id=?`, ...transcriptFilterSql("t", options, params)];
+    if (options.after !== undefined) { filters.push("t.seq>?"); params.push(options.after); }
+    const select = `SELECT t.seq,t.attempt,t.role,t.message_json as messageJson,t.created_at as createdAt
+      FROM run_transcript t WHERE ${filters.join(" AND ")}`;
+    let sql: string;
+    if (limit === undefined) sql = `${select} ORDER BY t.seq`;
+    else if (options.after !== undefined) { sql = `${select} ORDER BY t.seq LIMIT ?`; params.push(limit); }
+    else { sql = `SELECT * FROM (${select} ORDER BY t.seq DESC LIMIT ?) ORDER BY seq`; params.push(limit); }
+    const rows = this.db.prepare(sql).all(...params);
     return (rows as Array<{ seq: number; attempt: number; role: string; messageJson: string; createdAt: number }>)
       .map(({ messageJson, ...row }) => ({ ...row, message: JSON.parse(messageJson) as AgentMessage }));
   }
 
-  searchTranscriptLiteral(runId: RunId, query: string, options: { limit?: number; snippetChars?: number; beforeSeq?: number } = {}) {
+  searchTranscriptLiteral(runId: RunId, query: string, options: TranscriptSearchOptions = {}) {
     if (!query) throw new Error("Transcript literal search query cannot be empty");
+    if (query.includes("\0") || query.length > 256) throw new Error("Transcript literal search query is invalid");
     const limit = Math.min(20, Math.max(1, Math.floor(options.limit ?? 8)));
     const snippetChars = Math.min(1_000, Math.max(80, Math.floor(options.snippetChars ?? 320)));
     const encodedQuery = JSON.stringify(query).slice(1, -1);
     const beforeSeq = options.beforeSeq ?? Number.MAX_SAFE_INTEGER;
-    const rows = this.db.prepare(`SELECT seq,attempt,role,message_json as messageJson,created_at as createdAt
-      FROM run_transcript WHERE run_id=? AND seq < ? AND instr(message_json, ?) > 0
-      ORDER BY seq DESC LIMIT ?`).all(runId, beforeSeq, encodedQuery, limit + 1) as Array<{
+    const params: Array<string | number> = [runId, beforeSeq, encodedQuery];
+    const filters = ["t.run_id=?", "t.seq<?", "instr(t.message_json,?)>0", ...transcriptFilterSql("t", options, params)];
+    params.push(limit + 1);
+    const rows = this.db.prepare(`SELECT t.seq,t.attempt,t.role,t.message_json as messageJson,t.created_at as createdAt
+      FROM run_transcript t WHERE ${filters.join(" AND ")}
+      ORDER BY t.seq DESC LIMIT ?`).all(...params) as Array<{
         seq: number; attempt: number; role: string; messageJson: string; createdAt: number;
       }>;
     const matches = rows.slice(0, limit).map(({ messageJson, ...row }) => {
@@ -86,6 +103,31 @@ export class SqliteTranscriptRepository {
         snippet: `${start > 0 ? "…" : ""}${messageJson.slice(start, end)}${end < messageJson.length ? "…" : ""}`,
       };
     });
+    return { matches, truncated: rows.length > limit };
+  }
+
+  searchTranscriptTerms(runId: RunId, query: string, options: TranscriptSearchOptions = {}) {
+    if (query.includes("\0") || query.length > 256) throw new Error("Transcript term search query is invalid");
+    const terms = query.trim().split(/\s+/).filter(Boolean);
+    if (!terms.length) throw new Error("Transcript term search query cannot be empty");
+    const limit = Math.min(20, Math.max(1, Math.floor(options.limit ?? 8)));
+    const snippetChars = Math.min(1_000, Math.max(80, Math.floor(options.snippetChars ?? 320)));
+    const beforeSeq = options.beforeSeq ?? Number.MAX_SAFE_INTEGER;
+    const expression = terms.map((term) => `"${term.replace(/"/g, '""')}"`).join(" AND ");
+    const params: Array<string | number> = [runId, beforeSeq, expression];
+    const filters = ["t.run_id=?", "t.seq<?", "run_transcript_fts MATCH ?", ...transcriptFilterSql("t", options, params)];
+    params.push(limit + 1);
+    const rows = this.db.prepare(`SELECT t.seq,t.attempt,t.role,
+      snippet(run_transcript_fts,2,'[',']','…',24) AS rawSnippet,t.created_at as createdAt
+      FROM run_transcript_fts JOIN run_transcript t
+        ON t.run_id=run_transcript_fts.run_id AND t.seq=run_transcript_fts.seq
+      WHERE ${filters.join(" AND ")} ORDER BY t.seq DESC LIMIT ?`).all(...params) as Array<{
+        seq: number; attempt: number; role: string; rawSnippet: string; createdAt: number;
+      }>;
+    const matches = rows.slice(0, limit).map(({ rawSnippet, ...row }) => ({
+      ...row,
+      snippet: rawSnippet.length <= snippetChars ? rawSnippet : `${rawSnippet.slice(0, Math.max(0, snippetChars - 1))}…`,
+    }));
     return { matches, truncated: rows.length > limit };
   }
 
@@ -119,7 +161,7 @@ export class SqliteTranscriptRepository {
     })();
   }
 
-  listTranscriptView(runId: RunId, options: { limit?: number; attempt?: number; after?: number } = {}) {
+  listTranscriptView(runId: RunId, options: TranscriptEntryQuery = {}) {
     type TranscriptViewItem =
       | { seq: number; index?: number; attempt: number; kind: "user" | "assistant"; text: string; createdAt: number }
       | { seq: number; index: number; attempt: number; kind: "thinking"; text: string; redacted: boolean; createdAt: number }
@@ -163,37 +205,29 @@ export class SqliteTranscriptRepository {
       }
       entries.sort((left, right) => left.seq - right.seq);
     }
-    const missingToolCallIds = [...toolCallIds].filter((id) => !toolResults.has(id));
-    if (missingToolCallIds.length) {
-      const rows = this.db.prepare(`SELECT seq,attempt,message_json as messageJson,created_at as createdAt FROM run_transcript
-        WHERE run_id=? AND role='toolResult' AND json_extract(message_json,'$.toolCallId') IN (SELECT value FROM json_each(?))
-        ORDER BY seq`).all(runId, JSON.stringify(missingToolCallIds)) as Array<{
-          seq: number; attempt: number; messageJson: string; createdAt: number;
-        }>;
-      for (const row of rows) {
-        const message = JSON.parse(row.messageJson) as Extract<AgentMessage, { role: "toolResult" }>;
-        const content = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
-        toolResults.set(message.toolCallId, {
-          content, isError: message.isError, error: message.error, toolName: message.toolName,
-          seq: row.seq, attempt: row.attempt, createdAt: row.createdAt,
-        });
-      }
-    }
+    // Do not fetch a result beyond the selected durable-entry window. Doing so
+    // would move the rendered tool item to a later sequence and can turn the
+    // current cursor page into an empty page. A selected result may still fetch
+    // its earlier call source above, while an earlier call remains pending until
+    // its result's own sequence is selected.
     const view: TranscriptViewItem[] = [];
+    const selectedKind = options.kind;
     for (const entry of entries) {
       const message = entry.message;
       if (message.role === "user") {
-        view.push({ seq: entry.seq, attempt: entry.attempt, kind: "user", text: typeof message.content === "string" ? message.content : "", createdAt: entry.createdAt });
+        if (selectedKind === undefined || selectedKind === "user") {
+          view.push({ seq: entry.seq, attempt: entry.attempt, kind: "user", text: typeof message.content === "string" ? message.content : "", createdAt: entry.createdAt });
+        }
         continue;
       }
       if (message.role !== "assistant") continue;
       for (const [index, part] of message.content.entries()) {
         if (supplementalEntrySeqs.has(entry.seq) && (part.type !== "toolCall" || !completedToolCallIds.has(part.id))) continue;
-        if (part.type === "text" && part.text) {
+        if (part.type === "text" && part.text && (selectedKind === undefined || selectedKind === "assistant")) {
           view.push({ seq: entry.seq, index, attempt: entry.attempt, kind: "assistant", text: part.text, createdAt: entry.createdAt });
-        } else if (part.type === "thinking" && (part.thinking || part.redacted)) {
+        } else if (part.type === "thinking" && (part.thinking || part.redacted) && (selectedKind === undefined || selectedKind === "thinking")) {
           view.push({ seq: entry.seq, index, attempt: entry.attempt, kind: "thinking", text: part.redacted ? "Reasoning was redacted by the model provider." : part.thinking, redacted: Boolean(part.redacted), createdAt: entry.createdAt });
-        } else if (part.type === "toolCall") {
+        } else if (part.type === "toolCall" && (selectedKind === undefined || selectedKind === "tool")) {
           const result = toolResults.get(part.id);
           view.push({
             seq: result?.seq ?? entry.seq, index, attempt: result?.attempt ?? entry.attempt, kind: "tool",

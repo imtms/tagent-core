@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Store } from "@tagent/persistence-sqlite/store";
 import type { RunEvent, RunId } from "@tagent/execution/domain";
 import type { ToolCapabilityApplicationPort } from "@tagent/execution/ports";
-import { bashCommandIsDestructive, bashCommandTargetsHostingCore, bashInvalidatesChecks, composeWorkspaceTools, createLocalSubprocessPort, createWorkspaceArtifactSink, createWorkspaceEditPort, listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "@tagent/workspace-local";
+import { bashCommandEffect, bashCommandIsDestructive, bashCommandTargetsHostingCore, bashInvalidatesChecks, bashRequiresExplicitApproval, composeWorkspaceTools, createLocalSubprocessPort, createWorkspaceArtifactSink, createWorkspaceEditPort, listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "@tagent/workspace-local";
 
 const testSignal = new AbortController().signal;
 
@@ -62,12 +63,23 @@ function createTestTools(
       return event;
     },
     history: {
-      search: async (query, signal) => {
+      search: async (query, searchOptions, signal) => {
         signal.throwIfAborted();
-        const beforeSeq = store.getLastTranscriptSeq(runId);
-        const result = store.searchTranscriptLiteral(runId, query, { beforeSeq, limit: 8, snippetChars: 320 });
+        const currentSeq = store.getLastTranscriptSeq(runId);
+        const beforeSeq = searchOptions.beforeSeq === undefined ? currentSeq : Math.min(currentSeq, searchOptions.beforeSeq);
+        const options = { ...searchOptions, beforeSeq, limit: 8, snippetChars: 320 };
+        const result = searchOptions.mode === "terms"
+          ? store.searchTranscriptTerms(runId, query, options)
+          : store.searchTranscriptLiteral(runId, query, options);
         signal.throwIfAborted();
-        return { ...result, beforeSeq };
+        return { ...result, beforeSeq, nextBeforeSeq: result.truncated ? result.matches.at(-1)?.seq ?? null : null };
+      },
+      get: async (seq, signal) => {
+        signal.throwIfAborted();
+        const currentSeq = store.getLastTranscriptSeq(runId);
+        if (seq >= currentSeq) return undefined;
+        const entry = store.listTranscriptEntries(runId, { after: seq - 1, limit: 1 })[0];
+        return entry?.seq === seq ? entry : undefined;
       },
     },
     ...overrides,
@@ -198,6 +210,29 @@ describe("workspace tools", () => {
     store.close();
   });
 
+  it("uses raw BOM-bearing bytes for snapshot-bound replacement and edit", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-bom-snapshot-"));
+    const original = Buffer.from("\uFEFFhello", "utf8");
+    await writeFile(path.join(workspace, "bom.txt"), original);
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "edit BOM text");
+    const tools = createTestTools(store, run.id, workspace);
+    const read = tools.find((tool) => tool.name === "read")!;
+    const write = tools.find((tool) => tool.name === "write")!;
+    const edit = tools.find((tool) => tool.name === "edit")!;
+
+    const first = await read.execute("bom-replace-read", { path: "bom.txt" }, testSignal);
+    expect(first.details).toMatchObject({ contentHash: createHash("sha256").update(original).digest("hex") });
+    await write.execute("bom-replace", { path: "bom.txt", content: "replaced", ...(first.details as object) }, testSignal);
+    expect(await readFile(path.join(workspace, "bom.txt"), "utf8")).toBe("replaced");
+
+    await writeFile(path.join(workspace, "bom.txt"), original);
+    const second = await read.execute("bom-edit-read", { path: "bom.txt" }, testSignal);
+    await edit.execute("bom-edit", { path: "bom.txt", ...(second.details as object), oldText: "hello", newText: "updated" }, testSignal);
+    expect(await readFile(path.join(workspace, "bom.txt"), "utf8")).toBe("updated");
+    store.close();
+  });
+
   it("appends through edit and reports the first changed line", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-"));
     await writeFile(path.join(workspace, "notes.txt"), "one\ntwo\n", "utf8");
@@ -264,6 +299,27 @@ describe("workspace tools", () => {
     expect(await readFile(path.join(workspace, "result.txt"), "utf8")).toBe("tampered");
     expect(store.listOperations(run.id)[0]).toMatchObject({ status: "succeeded", effects: expect.arrayContaining([{ kind: "checks", action: "stale", count: 1 }]) });
     await expect(write.execute("stable-call", { path: "result.txt", content: "different" }, testSignal)).rejects.toThrow("different payload");
+    store.close();
+  });
+
+  it("requires a current snapshot before replacing an existing file", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-write-snapshot-"));
+    await writeFile(path.join(workspace, "existing.txt"), "original", "utf8");
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "snapshot-bound replace");
+    const tools = createTestTools(store, run.id, workspace);
+    const read = tools.find((tool) => tool.name === "read")!;
+    const write = tools.find((tool) => tool.name === "write")!;
+    await expect(write.execute("blind-replace", { path: "existing.txt", content: "unsafe" }, testSignal)).rejects.toThrow("already exists");
+    expect(await readFile(path.join(workspace, "existing.txt"), "utf8")).toBe("original");
+
+    const snapshot = await read.execute("read-snapshot", { path: "existing.txt" }, testSignal);
+    const details = snapshot.details as { snapshotId: string; contentHash: string };
+    await write.execute("snapshot-replace", { path: "existing.txt", content: "replaced", ...details }, testSignal);
+    expect(await readFile(path.join(workspace, "existing.txt"), "utf8")).toBe("replaced");
+
+    await expect(write.execute("stale-replace", { path: "existing.txt", content: "stale", ...details }, testSignal)).rejects.toThrow("stale");
+    expect(await readFile(path.join(workspace, "existing.txt"), "utf8")).toBe("replaced");
     store.close();
   });
 
@@ -380,7 +436,7 @@ describe("workspace tools", () => {
     expect(mutationText.length).toBeLessThan(1_000);
     expect(JSON.parse(mutationText)).toMatchObject({ ok: true, action: "plan", runId: run.id, phase: "plan", counts: { plan: 1 } });
     expect(mutationText).not.toContain('"contract"');
-    expect(store.getRun(run.id)?.phase).toBe("plan");
+    expect(store.getRun(run.id)).toMatchObject({ phase: "plan", plan: [{ schemaVersion: 2, objectiveIds: [], criterionIds: [], dependencies: [], createdAttempt: 1, updatedAttempt: 1 }] });
     expect(events).toEqual(["run.updated:plan"]);
     await write.execute("write", { path: "result.txt", content: "done" }, testSignal);
     expect(store.getRun(run.id)?.phase).toBe("implement");
@@ -388,6 +444,41 @@ describe("workspace tools", () => {
     await taskRun.execute("check", { action: "check", key: "test", title: "Test", status: "passed", command: "printf verified" }, testSignal);
     expect(store.getRun(run.id)?.phase).toBe("verify");
     expect(events.at(-1)).toBe("run.updated:verify");
+    store.close();
+  });
+
+  it("does not require Run-local criterion IDs for legacy Roadmap Goal criteria", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-roadmap-plan-"));
+    const store = new Store(":memory:");
+    const goalPrompt = "[Workspace Goal criterion stored] Durable state is stored";
+    const run = store.createRun(store.createSession().id, "persist roadmap item", "legacy-roadmap-plan", {
+      sourceInput: "persist roadmap item",
+      summary: "persist roadmap item",
+      objectives: [{ id: "roadmap-persist", summary: "Persist", timing: "current", kind: "change" }],
+      acceptanceCriteria: [goalPrompt],
+      scope: "Persist",
+      nonGoals: [],
+      sourceInboxIds: [],
+      parentRunId: null,
+      relation: "independent",
+      intent: "new_task",
+      decisionReason: "legacy immutable Roadmap contract",
+      routerVersion: "workspace-goal-roadmap-v1",
+      workspaceGoal: {
+        goalId: "goal-1", mode: "roadmap", definitionRevisionId: "definition-1", definitionRevision: 1,
+        definitionHash: "a".repeat(64), title: "Goal", outcome: "Stored", scope: [], nonGoals: [],
+        criteria: [{ key: "stored", title: "Durable state is stored", required: true }],
+        roadmapRevisionId: "roadmap-1", roadmapRevision: 1, roadmapHash: "b".repeat(64),
+        approvedRoadmapItemIds: ["persist"], targetRoadmapItemIds: ["persist"],
+        roadmapItems: [{ id: "persist", title: "Persist", outcome: "Stored", verification: "Run tests", criterionKeys: ["stored"] }],
+        targetCriterionKeys: ["stored"], criterionPrompts: [{ key: "stored", prompt: goalPrompt }], attachedAt: Date.now(),
+      },
+    });
+    const taskRun = createTestTools(store, run.id, workspace).find((tool) => tool.name === "task_run")!;
+    await expect(taskRun.execute("roadmap-plan", {
+      action: "plan", key: "persist", title: "Persist", status: "done", objectiveIds: ["roadmap-persist"],
+    }, testSignal)).resolves.toBeDefined();
+    expect(store.getRun(run.id)?.plan).toMatchObject([{ criterionIds: [] }]);
     store.close();
   });
   it("batches independent task_run mutations into one compact receipt", async () => {
@@ -427,7 +518,7 @@ describe("workspace tools", () => {
     expect(store.getOperation(`${run.id}:${run.attempt}:observe`)?.effects).toEqual(expect.arrayContaining([
       { kind: "workspace", action: "read_only" },
     ]));
-    expect(bashInvalidatesChecks(`cd ${workspace} && npm run lint && npx vitest run tests/tools.test.ts`)).toBe(false);
+    expect(bashInvalidatesChecks(`cd ${workspace} && npm run lint && npx vitest run tests/tools.test.ts`)).toBe(true);
     await bash.execute("mutate", { command: "touch changed.txt", timeoutSeconds: 5 }, testSignal);
     expect(store.getRun(run.id)?.checks[0].stale).toBe(true);
     expect(store.getOperation(`${run.id}:${run.attempt}:mutate`)?.effects).toEqual(expect.arrayContaining([
@@ -441,18 +532,107 @@ describe("workspace tools", () => {
       'echo "git add file"',
       "ls | grep rm",
       "cat README.md | grep mv",
-      "npm test",
-      "npx vitest run",
-      "python -m pytest",
+      "sed -n '1,20p' README.md",
     ]) expect(bashInvalidatesChecks(command), command).toBe(false);
     for (const command of [
       "git add file",
       "rm file",
       "mv a b",
+      "npm test",
+      "npx vitest run",
+      "python -m pytest",
       "npm test -- --updateSnapshot",
       "npx vitest --update",
       "python -m pytest --snapshot-update",
     ]) expect(bashInvalidatesChecks(command), command).toBe(true);
+  });
+
+  it("requires explicit approval unless Bash is a proven workspace-relative observation", () => {
+    for (const command of [
+      "rg Router .",
+      "rg --files .",
+      "find . -maxdepth 1 -type f",
+      "ls -la .",
+      "printf ready; pwd",
+    ]) expect(bashRequiresExplicitApproval(command), command).toBe(false);
+    for (const command of [
+      "curl -X POST https://example.com/deploy",
+      "git status --short",
+      "cat README.md",
+      "sed -n '1,20p' README.md",
+      "cd; pwd",
+      "cd linked-directory; rg needle .",
+      "rg --follow needle .",
+      "rg -L needle .",
+      "rg needle linked-file",
+      "rg --files linked-directory",
+      "find linked-directory -type f",
+      "find -L . -type f",
+      "ls linked-directory",
+      "ls -L .",
+      "cat /etc/passwd",
+      "rg secret ../outside",
+      "touch changed.txt",
+      "printf changed > result.txt",
+      "cat </etc/passwd",
+      "cat < ../outside",
+      "cat <<< secret",
+      "ps aux",
+      "cat $HOME/.config/token",
+      "npm test -- --run",
+    ]) expect(bashRequiresExplicitApproval(command), command).toBe(true);
+  });
+
+  it("fails executable observation options and workspace-code verification out of the read-only class", () => {
+    const executableOptions = [
+      "sed -n '1e touch escaped.txt' README.md",
+      "sed -n -e '1w escaped.txt' README.md",
+      "sed -n -f scripts/observe.sed README.md",
+      "rg --pre 'touch escaped.txt' needle .",
+      "rg --pre=./preprocessor needle .",
+      "git diff --ext-diff",
+      "git show --textconv HEAD:file.txt",
+      "git log --output=escaped.txt -1",
+      "find . -fprint escaped.txt",
+      "cat < README.md",
+      "GIT_EXTERNAL_DIFF=./escape git diff",
+    ];
+    for (const command of executableOptions) {
+      expect(bashCommandEffect(command), command).toBe("mutation_or_external");
+      expect(bashInvalidatesChecks(command), command).toBe(true);
+      expect(bashRequiresExplicitApproval(command), command).toBe(true);
+    }
+    for (const command of [
+      "npm test", "pnpm run lint", "yarn typecheck", "npx vitest run",
+      "python -m pytest", "go test ./...", "cargo clippy", "eslint src",
+    ]) {
+      expect(bashCommandEffect(command), command).toBe("code_execution");
+      expect(bashInvalidatesChecks(command), command).toBe(true);
+      expect(bashRequiresExplicitApproval(command), command).toBe(true);
+    }
+    for (const command of ["rg needle src", "git diff --no-ext-diff --no-textconv", "sed -n '1,20p' README.md"]) {
+      expect(bashCommandEffect(command), command).toBe("read_only");
+    }
+  });
+
+  it("requires Attempt approval and records workspace verification as code execution", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-code-effect-"));
+    await writeFile(path.join(workspace, "package.json"), JSON.stringify({ scripts: { test: "printf verified" } }), "utf8");
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "execute workspace verification");
+    const denied = createTestTools(store, run.id, workspace, undefined, {
+      inspectExternalActionAuthorization: () => ({ allowed: false, reason: "operator approval required" }),
+    }).find((tool) => tool.name === "bash")!;
+    await expect(denied.execute("denied-test", { command: "npm test", timeoutSeconds: 5 }, testSignal))
+      .rejects.toThrow(/External action approval guard/);
+    expect(store.listOperations(run.id)).toEqual([]);
+
+    const bash = createTestTools(store, run.id, workspace).find((tool) => tool.name === "bash")!;
+    await bash.execute("approved-test", { command: "npm test", timeoutSeconds: 5 }, testSignal);
+    expect(store.getOperation(`${run.id}:${run.attempt}:approved-test`)?.effects).toEqual(expect.arrayContaining([
+      { kind: "workspace", action: "code_execution" },
+    ]));
+    store.close();
   });
 
   it("rolls back every task_run batch mutation when one mutation fails", async () => {
@@ -490,20 +670,90 @@ describe("workspace tools", () => {
     store.close();
   });
 
-  it("searches only earlier same-Run durable history with fixed literal bounds", async () => {
+  it("pages and retrieves only earlier same-Run durable history with fixed literal bounds", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-history-"));
     const store = new Store(":memory:");
     const run = store.createRun(store.createSession().id, "history search");
-    store.appendTranscript(run.id, run.attempt, { role: "user", content: "Earlier receipt receipt:op_%_literal", timestamp: 1 });
-    store.appendTranscript(run.id, run.attempt, { role: "user", content: "Second receipt receipt:op_%_literal", timestamp: 2 });
-    store.appendTranscript(run.id, run.attempt, { role: "user", content: "Current query receipt:op_%_literal", timestamp: 3 });
+    for (let index = 1; index <= 10; index += 1) {
+      store.appendTranscript(run.id, run.attempt, {
+        role: "user",
+        content: `Earlier receipt ${index} receipt:op_%_literal`,
+        timestamp: index,
+      });
+    }
+    store.appendTranscript(run.id, run.attempt, { role: "user", content: "Current query receipt:op_%_literal", timestamp: 11 });
     const history = createTestTools(store, run.id, workspace).find((tool) => tool.name === "history_search")!;
-    expect(history.parameters).toMatchObject({ type: "object", properties: { query: expect.any(Object) } });
+    expect(history.parameters).toMatchObject({
+      type: "object",
+      properties: {
+        action: expect.any(Object),
+        mode: expect.any(Object),
+        query: expect.any(Object),
+        beforeSeq: expect.any(Object),
+        seq: expect.any(Object),
+        attempt: expect.any(Object),
+        role: expect.any(Object),
+        kind: expect.any(Object),
+      },
+    });
     expect(history.parameters).not.toHaveProperty("properties.runId");
-    const result = await history.execute("history-call", { query: "receipt:op_%_literal" }, testSignal);
-    const payload = JSON.parse((result.content[0] as { text: string }).text) as { beforeSeq: number; matches: Array<{ seq: number; snippet: string }>; truncated: boolean };
-    expect(payload).toMatchObject({ beforeSeq: 3, truncated: false, matches: [{ seq: 2 }, { seq: 1 }] });
-    expect(payload.matches.every((match) => match.snippet.length <= 322)).toBe(true);
+    const firstResult = await history.execute("history-call", { query: "receipt:op_%_literal" }, testSignal);
+    const first = JSON.parse((firstResult.content[0] as { text: string }).text) as {
+      beforeSeq: number;
+      nextBeforeSeq: number | null;
+      matches: Array<{ seq: number; snippet: string }>;
+      truncated: boolean;
+    };
+    expect(first).toMatchObject({
+      action: "search",
+      beforeSeq: 11,
+      nextBeforeSeq: 3,
+      truncated: true,
+      matches: [{ seq: 10 }, { seq: 9 }, { seq: 8 }, { seq: 7 }, { seq: 6 }, { seq: 5 }, { seq: 4 }, { seq: 3 }],
+    });
+    expect(first.matches.every((match) => match.snippet.length <= 322)).toBe(true);
+
+    const secondResult = await history.execute("history-page-2", {
+      query: "receipt:op_%_literal",
+      beforeSeq: first.nextBeforeSeq!,
+    }, testSignal);
+    const second = JSON.parse((secondResult.content[0] as { text: string }).text) as {
+      beforeSeq: number;
+      nextBeforeSeq: number | null;
+      matches: Array<{ seq: number }>;
+      truncated: boolean;
+    };
+    expect(second).toMatchObject({
+      beforeSeq: 3,
+      nextBeforeSeq: null,
+      truncated: false,
+      matches: [{ seq: 2 }, { seq: 1 }],
+    });
+    expect(new Set([...first.matches, ...second.matches].map((match) => match.seq)).size).toBe(10);
+
+    const termsResult = await history.execute("history-terms", {
+      mode: "terms", query: "Earlier literal", attempt: 1, role: "user",
+    }, testSignal);
+    const terms = JSON.parse((termsResult.content[0] as { text: string }).text) as {
+      semantics: string; matches: Array<{ seq: number; role: string }>;
+    };
+    expect(terms.semantics).toBe("unicode terms (all terms)");
+    expect(terms.matches).toHaveLength(8);
+    expect(terms.matches.every((match) => match.role === "user" && match.seq < 11)).toBe(true);
+
+    const exactResult = await history.execute("history-get", { action: "get", seq: 1 }, testSignal);
+    const exact = JSON.parse((exactResult.content[0] as { text: string }).text) as {
+      action: string;
+      exactSeq: number;
+      entry: { seq: number; message: { role: string; content: string } };
+    };
+    expect(exact).toMatchObject({
+      action: "get",
+      exactSeq: 1,
+      entry: { seq: 1, message: { role: "user", content: "Earlier receipt 1 receipt:op_%_literal" } },
+    });
+    await expect(history.execute("history-get-current", { action: "get", seq: 11 }, testSignal)).rejects.toThrow("unavailable");
+    await expect(history.execute("history-get-future", { action: "get", seq: 99 }, testSignal)).rejects.toThrow("unavailable");
     expect(store.db.prepare(`SELECT tool_call_id as toolCallId,tool_name as toolName,status
       FROM tool_attempts WHERE run_id=? AND tool_call_id=?`).get(run.id, "history-call")).toMatchObject({
       toolCallId: "history-call", toolName: "history_search", status: "succeeded",

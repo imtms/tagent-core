@@ -275,12 +275,24 @@ describe("Pi AgentHarness integration", () => {
     store.close();
   });
 
-  it("settles an active tool attempt before disposing an aborted session", async () => {
+  it("settles an active approved read-only Bash attempt before disposing an aborted session", async () => {
     const faux = fauxProvider({ models: [{ id: "faux-abort", contextWindow: 32_000, maxTokens: 2_000 }] });
-    faux.setResponses([fauxAssistantMessage([{ type: "toolCall", id: "slow-bash", name: "bash", arguments: { command: "printf ready; sleep 30" } }], { stopReason: "toolUse" })]);
+    faux.setResponses([fauxAssistantMessage([{ type: "toolCall", id: "slow-bash", name: "bash", arguments: { command: "printf ready; tail -f package.json" } }], { stopReason: "toolUse" })]);
     const store = new Store(":memory:");
     const session = store.createSession();
     const run = store.createRun(session.id, "abort active tool");
+    store.recordSupervisorDecision({
+      id: "slow-read-approval-decision", runId: run.id, attempt: run.attempt, checkpointSeq: 0,
+      trigger: "settled", action: "pause_for_approval", reasonCode: "explicit_read_approval",
+      rationale: "Approve the intentionally long generic path-reading command used by this abort test.",
+      confidence: 1, epistemicStatus: "deterministic", instruction: "", candidateResponseHash: "",
+      status: "executed", error: "", createdAt: Date.now(), executedAt: Date.now(), evaluator: "system", evaluatorModel: "",
+    });
+    const approval = store.ensureApprovalRequest(run.id, "slow-read-approval-decision", "Approve abort-test observation", {
+      actionType: "execute_external_action", targetType: "taskrun", targetId: run.id,
+      metadata: { sessionId: session.id, approvedAttempt: run.attempt },
+    });
+    store.resolveApprovalRequest(approval.id, "approved", "test-operator", "Required by the explicit Bash read policy");
     const eventProbe = new RunEventProbe();
     const runtime = new PiRuntime(runtimeSpec(store, run, { workspace: process.cwd(), systemPrompt: "Controlled prompt", model: faux.getModel(), models: fauxModels(faux), initialMessages: [] }, eventProbe.observe));
     const prompt = runtime.prompt("start");
@@ -289,7 +301,20 @@ describe("Pi AgentHarness integration", () => {
     await prompt;
     await runtime.dispose();
     expect(store.db.prepare("SELECT status FROM tool_attempts WHERE run_id = ? AND tool_call_id = 'slow-bash'").get(run.id)).toMatchObject({ status: "failed" });
-    expect(store.listOperations(run.id)[0]).toMatchObject({ status: "failed", stage: "execution_failed" });
+    // Generic path-reading Bash requires explicit approval. Its workspace effect
+    // remains read-only, but the approved call uses the standard execution
+    // receipt boundary instead of the approval-free observation boundary.
+    expect(store.listOperations(run.id)).toMatchObject([{
+      status: "failed",
+      stage: "execution_failed",
+      effects: expect.arrayContaining([
+        { kind: "workspace", action: "read_only" },
+        expect.objectContaining({
+          kind: "error",
+          error: expect.objectContaining({ code: "ABORTED" }),
+        }),
+      ]),
+    }]);
     store.close();
   });
 
@@ -511,7 +536,17 @@ describe("Pi AgentHarness integration", () => {
     expect(store.listEvents(run.id)).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "tool.completed", data: expect.objectContaining({ error: expect.objectContaining({ code: "PATH_REJECTED" }) }) }),
     ]));
-    expect(store.listOperations(run.id)).toHaveLength(0);
+    expect(store.listOperations(run.id)).toMatchObject([{
+      status: "failed",
+      stage: "observation_failed",
+      effects: expect.arrayContaining([
+        { kind: "workspace", action: "read_only" },
+        expect.objectContaining({
+          kind: "error",
+          error: expect.objectContaining({ code: "PATH_REJECTED" }),
+        }),
+      ]),
+    }]);
     await runtime.dispose();
     store.close();
   });

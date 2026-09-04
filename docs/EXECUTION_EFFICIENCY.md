@@ -90,7 +90,7 @@ Bash timeout is classified separately from generic signal termination and emits 
 
 After a Bash command fails or times out, an identical canonical command is fenced before the next execution. The Agent must inspect preserved output or materially change the command/timeout/recovery approach. This prevents expensive blind reruns while allowing a changed recovery action.
 
-The check-invalidation classifier parses command positions and shell stages. Quoted mutation words in `echo`, `grep`, or other recognized observations do not stale checks, while output redirection, substitution, unknown executables, and test snapshot-update flags do. A separate minimal catastrophic-command guard catches common `rm -rf`, `git clean --force`, wrapper, variable, and nested-shell forms. It intentionally does not claim complete shell parsing or operating-system isolation.
+The check-invalidation classifier parses command positions and shell stages. Quoted mutation words in `echo`, `grep`, or other recognized observations do not stale checks, while input/output redirection, substitution, unknown executables, and test snapshot-update flags do. Any unquoted input redirection requires explicit approval because generic Bash cannot prove that its resolved source remains inside the Workspace. A separate minimal catastrophic-command guard catches common `rm -rf`, `git clean --force`, wrapper, variable, and nested-shell forms. It intentionally does not claim complete shell parsing, descriptor-relative containment, or operating-system isolation; use the dedicated read/list/edit tools when filesystem containment is required.
 
 ## Continuation stall detection
 

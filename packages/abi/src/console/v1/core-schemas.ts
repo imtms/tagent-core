@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
 import { JsonObjectSchema, TimestampMillisecondsSchema } from "../../shared/primitives.js";
+import { RoutingProvenanceSchema } from "../../shared/routing-provenance.js";
 import { GateProfileSchema } from "../../channel/v1/submission-schemas.js";
 
 const ConsoleNullableTimestampSchema = Type.Union([TimestampMillisecondsSchema, Type.Null()]);
@@ -12,7 +13,6 @@ export const ConsoleReasoningEffortSchema = Type.Union([
   Type.Literal("minimal"), Type.Literal("low"), Type.Literal("medium"),
   Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max"),
 ]);
-
 export const ConsoleSessionInputAnalysisSchema = Type.Object({
   summary: Type.String(),
   intent: Type.Union([
@@ -35,6 +35,7 @@ export const ConsoleSessionInputAnalysisSchema = Type.Object({
   reason: Type.String(),
   routerVersion: Type.String(),
   executionPolicy: Type.Optional(ConsoleTaskExecutionPolicySchema),
+  routingProvenance: Type.Optional(RoutingProvenanceSchema),
 });
 export type ConsoleSessionInputAnalysis = Static<typeof ConsoleSessionInputAnalysisSchema>;
 
@@ -76,6 +77,7 @@ export const ConsoleTaskRunContractSchema = Type.Object({
   decisionReason: Type.String(),
   routerVersion: Type.String(),
   executionPolicy: Type.Optional(Type.Union([ConsoleTaskExecutionPolicySchema, Type.Null()])),
+  routingProvenance: Type.Optional(Type.Union([RoutingProvenanceSchema, Type.Null()])),
   workspaceGoal: Type.Optional(Type.Union([ConsoleTaskRunWorkspaceGoalSchema, Type.Null()])),
   skills: Type.Optional(Type.Array(ConsoleTaskRunSkillSchema)),
 });
@@ -91,7 +93,7 @@ export const ConsoleSessionInboxItemSchema = Type.Object({
     Type.Literal("routed"), Type.Literal("deleted"), Type.Literal("failed"),
   ]),
   decision: Type.Union([
-    Type.Literal("pending"), Type.Literal("start_taskrun"), Type.Literal("steer"),
+    Type.Literal("pending"), Type.Literal("needs_clarification"), Type.Literal("start_taskrun"), Type.Literal("steer"),
     Type.Literal("follow_up"), Type.Literal("discussion"), Type.Literal("defer"),
     Type.Literal("merge"), Type.Literal("delete"),
   ]),
@@ -129,6 +131,8 @@ export const ConsoleContextManifestItemSchema = Type.Object({
   selected: Type.Boolean(),
   reason: Type.String(),
   estimatedTokens: Type.Number(),
+  projectedContentHash: Type.Optional(Type.String()),
+  sourceRevision: Type.Optional(Type.String()),
   metadata: Type.Optional(JsonObjectSchema),
 });
 export type ConsoleContextManifestItem = Static<typeof ConsoleContextManifestItemSchema>;
@@ -140,6 +144,7 @@ export const ConsoleContextManifestSchema = Type.Object({
   attempt: Type.Number(),
   manifestHash: Type.String(),
   createdAt: TimestampMillisecondsSchema,
+  requestEnvelopeIds: Type.Optional(Type.Array(Type.String())),
   items: Type.Array(ConsoleContextManifestItemSchema),
   stats: Type.Record(Type.String(), Type.Union([Type.Number(), Type.String()])),
 });
@@ -147,6 +152,14 @@ export type ConsoleContextManifest = Static<typeof ConsoleContextManifestSchema>
 
 export const ConsoleTaskRunPlanItemSchema = Type.Object({
   key: Type.String(), title: Type.String(), status: Type.String(), required: Type.Boolean(), position: Type.Number(),
+  schemaVersion: Type.Optional(Type.Literal(2)),
+  objectiveIds: Type.Optional(Type.Array(Type.String())),
+  criterionIds: Type.Optional(Type.Array(Type.String())),
+  dependencies: Type.Optional(Type.Array(Type.String())),
+  createdAttempt: Type.Optional(Type.Number()),
+  updatedAttempt: Type.Optional(Type.Number()),
+  replanReason: Type.Optional(Type.String()),
+  completionEvidenceRefs: Type.Optional(Type.Array(Type.String())),
 });
 export type ConsoleTaskRunPlanItem = Static<typeof ConsoleTaskRunPlanItemSchema>;
 
@@ -219,6 +232,7 @@ export const ConsoleTaskRunSchema = Type.Object({
       id: Type.String(), evaluator: Type.Union([Type.Literal("llm"), Type.Literal("system")]),
       evaluatorModel: Type.String(), action: Type.String(), reasonCode: Type.String(), rationale: Type.String(),
       confidence: Type.Number(), status: Type.String(), attempt: Type.Number(), checkpointSeq: Type.Number(),
+      epistemicStatus: Type.Optional(Type.Union([Type.Literal("deterministic"), Type.Literal("model_assessed"), Type.Literal("degraded")])),
     }), Type.Null()]),
     latestGates: Type.Array(Type.Object({
       id: Type.String(), evaluator: Type.Union([Type.Literal("llm"), Type.Literal("system")]),
@@ -227,7 +241,18 @@ export const ConsoleTaskRunSchema = Type.Object({
       criterionCoverage: Type.Optional(Type.Array(Type.Object({
         criterion: Type.String(),
         status: Type.Union([Type.Literal("covered"), Type.Literal("unsupported"), Type.Literal("contradicted"), Type.Literal("blocked")]),
-        evidenceRefs: Type.Array(Type.String()), reason: Type.String(),
+        evidenceRefs: Type.Array(Type.String()),
+        evidenceQuotes: Type.Optional(Type.Array(Type.Object({
+          sourceRef: Type.String(), sourceRevision: Type.String(), sourceHash: Type.String(), quote: Type.String(),
+          selector: Type.Union([
+            Type.Object({ kind: Type.Literal("text_quote"), exact: Type.String(), occurrence: Type.Optional(Type.Number()) }),
+            Type.Object({ kind: Type.Literal("line_range"), startLine: Type.Number(), endLine: Type.Number() }),
+            Type.Object({ kind: Type.Literal("byte_range"), startByte: Type.Number(), endByte: Type.Number() }),
+            Type.Object({ kind: Type.Literal("json_pointer"), pointer: Type.String() }),
+          ]),
+        }))),
+        acceptedUncertaintyId: Type.Optional(Type.String()),
+        reason: Type.String(),
       }))),
     })),
     progress: Type.Union([Type.Object({
@@ -243,6 +268,15 @@ export const ConsoleTaskRunSchema = Type.Object({
       requestedAt: TimestampMillisecondsSchema, resolvedAt: ConsoleNullableTimestampSchema,
       resolvedBy: Type.String(), resolution: Type.String(),
     })),
+    acceptedUncertainties: Type.Optional(Type.Array(Type.Object({
+      id: Type.String(), runId: Type.String(), criterionId: Type.String(), criterion: Type.String(), contractHash: Type.String(),
+      actorId: Type.String(), rationale: Type.String(), scope: Type.String(), evidenceRefs: Type.Array(Type.String()),
+      expiresAt: ConsoleNullableTimestampSchema, createdAt: TimestampMillisecondsSchema,
+    }))),
+    unresolvedUncertainties: Type.Optional(Type.Array(Type.Object({
+      criterionId: Type.String(), criterion: Type.String(),
+      status: Type.Union([Type.Literal("unsupported"), Type.Literal("blocked")]), reason: Type.String(),
+    }))),
     latestContextManifest: Type.Union([ConsoleContextManifestSchema, Type.Null()]),
   }),
 });

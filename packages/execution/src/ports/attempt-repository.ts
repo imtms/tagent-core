@@ -22,6 +22,7 @@ export interface AttemptRepository {
   getAttemptForRun(runId: string, ordinal: number): Attempt | undefined;
   getActiveAttempt(runId: string): Attempt | undefined;
   listAttempts(runId: string): Attempt[];
+  getCandidateForAttempt(attemptId: string): CandidateResult | undefined;
   acquireExecutionLease(input: {
     attemptId: string;
     expectedVersion: number;
@@ -64,6 +65,18 @@ export interface AttemptRepository {
     reason: string;
     timestamp?: number;
   }): Attempt;
+  reAdjudicateBlockedCandidate(input: {
+    attemptId: string;
+    expectedVersion: number;
+    candidateResultId: string;
+    candidateResponseHash: string;
+    previousSupervisorDecisionId: string;
+    supervisorDecisionId: string;
+    gateEvaluationIds: string[];
+    acceptedUncertaintyIds: string[];
+    reason: string;
+    timestamp?: number;
+  }): { attempt: Attempt; event: RunEvent };
   recoverInterruptedAttempt(input: {
     attemptId: string;
     expectedVersion: number;

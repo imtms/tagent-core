@@ -84,6 +84,7 @@ export async function durableTextResult(
 
 interface ParsedShellStage {
   words: string[];
+  inputRedirect: boolean;
   outputRedirect: boolean;
   substitution: boolean;
 }
@@ -94,6 +95,7 @@ function parseShellStages(command: string): ParsedShellStage[] {
   let word = "";
   let quote: "single" | "double" | undefined;
   let escaped = false;
+  let inputRedirect = false;
   let outputRedirect = false;
   let substitution = false;
   const finishWord = () => {
@@ -102,8 +104,9 @@ function parseShellStages(command: string): ParsedShellStage[] {
   };
   const finishStage = () => {
     finishWord();
-    if (words.length || outputRedirect || substitution) stages.push({ words, outputRedirect, substitution });
+    if (words.length || inputRedirect || outputRedirect || substitution) stages.push({ words, inputRedirect, outputRedirect, substitution });
     words = [];
+    inputRedirect = false;
     outputRedirect = false;
     substitution = false;
   };
@@ -152,6 +155,12 @@ function parseShellStages(command: string): ParsedShellStage[] {
       if (command[index + 1] === ">") index += 1;
       continue;
     }
+    if (character === "<") {
+      inputRedirect = true;
+      finishWord();
+      while (command[index + 1] === "<") index += 1;
+      continue;
+    }
     if ([";", "|", "&", "(", ")", "{", "}"].includes(character)) {
       finishStage();
       if ((character === "|" || character === "&") && command[index + 1] === character) index += 1;
@@ -190,49 +199,168 @@ function executableName(word: string | undefined): string {
   return (word ?? "").replaceAll("\\", "/").split("/").at(-1)!.toLowerCase();
 }
 
-function includesMutationFlag(args: string[]): boolean {
-  return args.some((argument) => /^(?:-u|--update(?:snapshot)?|--update-snapshot|--snapshot-update)(?:=|$)/i.test(argument)
-    || /^(?:--fix|--write)(?:=|$)/i.test(argument));
+function hasCommandEnvironment(words: readonly string[]): boolean {
+  let assignments = 0;
+  while (assignments < words.length && assignment(words[assignments]!)) assignments += 1;
+  return assignments > 0 && assignments < words.length;
 }
 
-function isObservation(words: string[]): boolean {
+function sedScriptIsObservation(script: string): boolean {
+  return script.split(";").every((statement) => /^(?:(?:\d+|\$)(?:,(?:\d+|\$))?)?[pq=]$/.test(statement.trim()));
+}
+
+function sedIsObservation(args: string[]): boolean {
+  let quiet = false;
+  const scripts: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (["-n", "--quiet", "--silent", "-E", "-r", "--regexp-extended", "-s", "--separate", "-u", "--unbuffered", "-z", "--null-data"].includes(argument)) {
+      quiet ||= argument === "-n" || argument === "--quiet" || argument === "--silent";
+      continue;
+    }
+    if (argument === "-e" || argument === "--expression") {
+      const script = args[index + 1];
+      if (script === undefined) return false;
+      scripts.push(script);
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--expression=")) {
+      scripts.push(argument.slice("--expression=".length));
+      continue;
+    }
+    if (argument.startsWith("-e") && argument.length > 2) {
+      scripts.push(argument.slice(2));
+      continue;
+    }
+    if (argument.startsWith("-")) return false;
+    if (!scripts.length) scripts.push(argument);
+  }
+  return quiet && scripts.length > 0 && scripts.every(sedScriptIsObservation);
+}
+
+function hasAnyOption(args: string[], options: readonly string[]): boolean {
+  return args.some((argument) => options.some((option) => argument.toLowerCase() === option || argument.toLowerCase().startsWith(`${option}=`)));
+}
+
+function isFileObservation(words: string[]): boolean {
   const executable = executableName(words[0]);
   const args = words.slice(1);
-  if (["echo", "printf", "test", "[", "rg", "grep", "ls", "cat", "head", "tail", "wc", "pwd"].includes(executable)) return true;
+  if (["echo", "printf", "test", "[", "grep", "ls", "cat", "head", "tail", "wc", "pwd"].includes(executable)) return true;
+  if (executable === "rg") return !hasAnyOption(args, ["--pre"]);
   if (executable === "cd") return true;
-  if (executable === "find") return !args.some((argument) => ["-delete", "-exec", "-execdir", "-ok", "-okdir"].includes(argument.toLowerCase()));
-  if (executable === "sed") return args.some((argument) => argument === "-n" || /^-[a-z]*n[a-z]*$/i.test(argument))
-    && !args.some((argument) => argument === "-i" || argument.startsWith("-i") || argument.startsWith("--in-place"));
+  if (executable === "find") return !args.some((argument) => [
+    "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls",
+  ].includes(argument.toLowerCase()));
+  if (executable === "sed") return sedIsObservation(args);
   if (executable === "git") {
     const subcommand = args[0]?.toLowerCase();
+    if (hasAnyOption(args, ["--ext-diff", "--textconv", "--output"])) return false;
     return ["status", "diff", "log", "show", "rev-parse"].includes(subcommand ?? "")
       || (subcommand === "branch" && args[1] === "--show-current");
   }
+  return false;
+}
+
+function isWorkspaceCodeExecution(words: string[]): boolean {
+  const executable = executableName(words[0]);
+  const args = words.slice(1);
   if (["npm", "pnpm", "yarn"].includes(executable)) {
-    if (includesMutationFlag(args)) return false;
     return args[0]?.toLowerCase() === "test"
+      || (executable !== "npm" && ["lint", "check", "typecheck"].includes(args[0]?.toLowerCase() ?? ""))
       || (args[0]?.toLowerCase() === "run" && ["test", "lint", "check", "typecheck"].includes(args[1]?.toLowerCase() ?? ""));
   }
   if (executable === "npx") {
-    if (includesMutationFlag(args)) return false;
     const invoked = executableName(args[0]);
     return invoked === "vitest" || invoked === "eslint" || (invoked === "tsc" && args.some((argument) => argument.toLowerCase() === "--noemit"));
   }
-  if (["vitest", "pytest", "eslint"].includes(executable)) return !includesMutationFlag(args);
-  if (/^python(?:3)?$/.test(executable)) return args[0] === "-m" && args[1]?.toLowerCase() === "pytest" && !includesMutationFlag(args.slice(2));
+  if (["vitest", "pytest", "eslint"].includes(executable)) return true;
+  if (/^python(?:3)?$/.test(executable)) return args[0] === "-m" && args[1]?.toLowerCase() === "pytest";
   if (executable === "go") return args[0]?.toLowerCase() === "test";
   if (executable === "cargo") return ["test", "check", "clippy"].includes(args[0]?.toLowerCase() ?? "");
   if (executable === "tsc") return args.some((argument) => argument.toLowerCase() === "--noemit");
   return false;
 }
 
+export type BashCommandEffect = "read_only" | "code_execution" | "mutation_or_external";
+
+/** Classify the strongest shell stage without pretending workspace code is a file observation. */
+export function bashCommandEffect(command: string): BashCommandEffect {
+  const variables = new Map<string, string>();
+  let effect: BashCommandEffect = "read_only";
+  for (const stage of parseShellStages(command.trim())) {
+    const environment = hasCommandEnvironment(stage.words);
+    const words = commandWords(stage, variables);
+    if (!words.length) continue;
+    if (stage.inputRedirect || stage.outputRedirect || stage.substitution || environment) return "mutation_or_external";
+    if (isFileObservation(words)) continue;
+    if (isWorkspaceCodeExecution(words)) effect = "code_execution";
+    else return "mutation_or_external";
+  }
+  return effect;
+}
+
 /** Verification and read-only commands observe state; they do not invalidate prior receipts. */
 export function bashInvalidatesChecks(command: string) {
+  return bashCommandEffect(command) !== "read_only";
+}
+
+/**
+ * Generic Bash is not filesystem- or network-sandboxed. Only the small command
+ * grammar proven to be a workspace-relative observation can inherit ordinary
+ * TaskRun authority; every unknown or externally addressed command requires a
+ * current-Attempt explicit approval before dispatch.
+ */
+export function bashRequiresExplicitApproval(command: string) {
   const variables = new Map<string, string>();
   return parseShellStages(command.trim()).some((stage) => {
-    if (stage.outputRedirect || stage.substitution) return true;
+    const environment = hasCommandEnvironment(stage.words);
     const words = commandWords(stage, variables);
-    return words.length > 0 && !isObservation(words);
+    if (!words.length) return false;
+    if (stage.inputRedirect || stage.outputRedirect || stage.substitution || environment) return true;
+    if (!isFileObservation(words)) return true;
+    if (words.slice(1).some((word) => {
+      const value = word.trim();
+      return value.startsWith("/")
+        || value.startsWith("~")
+        || value.includes("=/")
+        || /(^|\/)\.\.(\/|$)/.test(value)
+        || /[$`]/.test(value);
+    })) return true;
+    const executable = executableName(words[0]);
+    const args = words.slice(1);
+    if (["echo", "printf", "pwd"].includes(executable)) return false;
+    if (executable === "rg") {
+      if (hasAnyOption(args, ["--pre", "--follow"])
+        || args.some((argument) => /^-[^-]*L/.test(argument))) return true;
+      // Avoid guessing which following operand belongs to an option. `--x=y`
+      // forms remain analyzable; separated option values require approval.
+      if (args.some((argument) => [
+        "-e", "--regexp", "-f", "--file", "-g", "--glob", "--iglob",
+        "-t", "--type", "-T", "--type-not", "--type-add", "--type-clear",
+        "-j", "--threads", "-m", "--max-count", "-A", "--after-context",
+        "-B", "--before-context", "-C", "--context", "--max-depth",
+        "--max-filesize", "--path-separator", "--sort", "--sortr",
+      ].includes(argument))) return true;
+      const positional = args.filter((argument) => !argument.startsWith("-") && argument !== "--");
+      const paths = hasAnyOption(args, ["--files"]) ? positional : positional.slice(1);
+      return paths.some((argument) => argument !== ".");
+    }
+    if (executable === "ls") {
+      if (hasAnyOption(args, ["--dereference"]) || args.some((argument) => /^-[^-]*L/.test(argument))) return true;
+      return args.filter((argument) => !argument.startsWith("-") && argument !== "--")
+        .some((argument) => argument !== ".");
+    }
+    if (executable === "find") {
+      if (args.some((argument) => ["-H", "-L"].includes(argument))) return true;
+      const expressionIndex = args.findIndex((argument) => argument.startsWith("-") || argument === "(" || argument === "!");
+      const roots = args.slice(0, expressionIndex < 0 ? args.length : expressionIndex);
+      return roots.some((argument) => argument !== ".");
+    }
+    // Generic path-reading commands (including cat/grep/head/tail/sed), git,
+    // test, and cd can follow a workspace symlink or execute repository/user
+    // configuration. Their lexical path is not a containment proof.
+    return true;
   });
 }
 

@@ -33,6 +33,53 @@ export interface CriterionCoverage {
   criterion: string;
   status: "covered" | "unsupported" | "contradicted" | "blocked";
   evidenceRefs: string[];
+  /** Core-verified excerpts from immutable evidence sources. */
+  evidenceQuotes?: EvidenceQuote[];
+  /** Durable operator decision accepting honest residual uncertainty for this criterion. */
+  acceptedUncertaintyId?: string;
+  reason: string;
+}
+
+export type EvidenceQuoteSelector =
+  | { kind: "text_quote"; exact: string; occurrence?: number }
+  | { kind: "line_range"; startLine: number; endLine: number }
+  | { kind: "byte_range"; startByte: number; endByte: number }
+  | { kind: "json_pointer"; pointer: string };
+
+export interface EvidenceQuote {
+  sourceRef: string;
+  sourceRevision: string;
+  sourceHash: string;
+  selector: EvidenceQuoteSelector;
+  quote: string;
+}
+
+export interface EvidenceSource {
+  sourceRef: string;
+  kind: "artifact" | "operation" | "transcript" | "memory";
+  sourceRevision: string;
+  sourceHash: string;
+  content: string;
+}
+
+export interface AcceptedUncertainty {
+  id: string;
+  runId: string;
+  criterionId: string;
+  criterion: string;
+  contractHash: string;
+  actorId: string;
+  rationale: string;
+  scope: string;
+  evidenceRefs: string[];
+  expiresAt: number | null;
+  createdAt: number;
+}
+
+export interface UnresolvedUncertainty {
+  criterionId: string;
+  criterion: string;
+  status: "unsupported" | "blocked";
   reason: string;
 }
 
@@ -76,6 +123,8 @@ export interface SupervisorDecision {
   reasonCode: string;
   rationale: string;
   confidence: number;
+  /** Structured epistemic provenance; confidence remains for legacy readers. */
+  epistemicStatus?: "deterministic" | "model_assessed" | "degraded";
   instruction: string;
   candidateResponseHash: string;
   status: "proposed" | "executed" | "superseded" | "failed";
@@ -107,6 +156,28 @@ export interface PlanItem {
   status: "pending" | "in_progress" | "done" | "blocked" | "skipped";
   required: boolean;
   position: number;
+  /** Present for criterion-aware plans; absent rows retain legacy compatibility. */
+  schemaVersion?: 2;
+  objectiveIds?: string[];
+  criterionIds?: string[];
+  dependencies?: string[];
+  createdAttempt?: number;
+  updatedAttempt?: number;
+  replanReason?: string;
+  completionEvidenceRefs?: string[];
+}
+
+/** Immutable audit snapshot for one material criterion-aware Plan mutation. */
+export interface PlanItemRevision {
+  id: number;
+  runId: string;
+  itemKey: string;
+  revision: number;
+  snapshot: PlanItem;
+  snapshotHash: string;
+  attempt: number;
+  reason: string;
+  createdAt: number;
 }
 
 export interface RunCheck {

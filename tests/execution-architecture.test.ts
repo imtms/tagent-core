@@ -330,7 +330,10 @@ describe("execution architecture boundaries", () => {
     expect(sourceText("packages/execution/src/application/execution-services.ts")).not.toMatch(/Admission|ServiceDependencies/);
     const composition = sourceText("apps/core-service/src/composition/execution-composition.ts");
     expect(composition).not.toMatch(/mutableServices|as\s+ExecutionServices/);
-    expect(composition.match(/createOneShotPort</g)?.length).toBe(6);
+    expect(composition.match(/createOneShotPort</g)?.length).toBe(5);
+    expect(composition).toContain("CoreExternalActionApprovalApplication");
+    expect(composition).toContain("CoreRunFinalizationApplication");
+    expect(composition).not.toContain("AdmissionDispatchPort");
     for (const forbidden of ["SessionInputRouter", "TaskRunSupervisor", "MemoryFacade", "@earendil-works/pi-"]) {
       expect(sourceText("packages/execution/src/application/execution-state.ts")).not.toContain(forbidden);
     }

@@ -10,6 +10,10 @@ export function toTaskRunContractSnapshot(contract: TaskRunContract): TaskRunCon
     nonGoals: [...contract.nonGoals],
     sourceInboxIds: [...contract.sourceInboxIds],
     executionPolicy: contract.executionPolicy ? { ...contract.executionPolicy } : undefined,
+    routingProvenance: contract.routingProvenance ? {
+      ...contract.routingProvenance,
+      usage: contract.routingProvenance.usage.map((usage) => ({ ...usage })),
+    } : undefined,
   };
 }
 

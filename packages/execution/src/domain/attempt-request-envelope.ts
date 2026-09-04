@@ -10,6 +10,8 @@ export interface AttemptRequestEnvelopeDraft {
   providerPayload: unknown;
   model: RuntimeModelSpec;
   createdAt: number;
+  /** Context provenance only; the exact provider payload remains owned by this envelope. */
+  contextManifestId?: string;
 }
 
 export interface AttemptRequestEnvelope extends AttemptRequestEnvelopeDraft {

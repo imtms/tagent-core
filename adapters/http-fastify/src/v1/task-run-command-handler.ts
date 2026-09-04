@@ -19,6 +19,7 @@ export async function executeTaskRunCommand(
   dependencies: ChannelV1Dependencies,
   taskRunId: string,
   command: TaskRunCommand,
+  actorId: string,
 ): Promise<Record<string, unknown>> {
   const { service } = dependencies;
   switch (command.type) {
@@ -54,6 +55,26 @@ export async function executeTaskRunCommand(
         ? await service.approveRunApproval(command.payload.approvalRequestId, command.payload.resolution)
         : service.rejectRunApproval(command.payload.approvalRequestId, command.payload.resolution);
       return { accepted: true, taskRunId: resultingTaskRunId(run, taskRunId) };
+    }
+    case "task_run.accept_uncertainty": {
+      const uncertainty = service.acceptRunUncertainty({
+        decisionId: command.commandId,
+        runId: taskRunId,
+        criterionId: command.payload.criterionId,
+        actorId,
+        rationale: command.payload.rationale,
+        scope: command.payload.scope,
+        evidenceRefs: command.payload.evidenceRefs,
+        expiresAt: command.payload.expiresAt === undefined || command.payload.expiresAt === null
+          ? null
+          : Date.parse(command.payload.expiresAt),
+      });
+      return {
+        accepted: true,
+        taskRunId,
+        uncertaintyId: (uncertainty as { id: string }).id,
+        runCompleted: (uncertainty as { runCompleted?: boolean }).runCompleted === true,
+      };
     }
   }
 }

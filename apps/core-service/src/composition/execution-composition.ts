@@ -42,7 +42,6 @@ import { createRuntimeHost, type AdditionalToolProviderFactory } from "./runtime
 import { createProjectContextSource } from "@tagent/workspace-local/project-context";
 import { createWorkspaceArtifactSink } from "@tagent/workspace-local/artifact-file-sink";
 import { createWorkspaceEditPort } from "@tagent/workspace-local/snapshot-edit";
-import type { AdmissionDispatchPort } from "@tagent/admission/composition";
 import type { CoreApplicationPersistencePort } from "../application/ports/index.js";
 import type { MemoryFacade } from "@tagent/memory";
 import type { SupervisorReviewer } from "./supervisor-reviewer.js";
@@ -54,6 +53,9 @@ import {
 import { CoreWorkspaceGoalApplication, type WorkspaceGoalRoadmapGenerator } from "../application/workspace-goal-application.js";
 import { OpenAiWorkspaceGoalRoadmapGenerator } from "./workspace-goal-roadmap-generator.js";
 import { CoreSkillApplication } from "../application/skill-application.js";
+import { CoreRunGovernanceApplication } from "../application/run-governance-application.js";
+import { CoreExternalActionApprovalApplication } from "../application/external-action-approval-application.js";
+import { CoreRunFinalizationApplication } from "../application/run-finalization-application.js";
 
 export type CoreRuntimeDefaults = ExecutionRuntimeDefaults & {
   routerModel?: RuntimeModelSpec;
@@ -80,7 +82,7 @@ export interface ExecutionCompositionOptions {
 type CredentialBinding = { reference: CredentialReference; resolver: CredentialResolverPort };
 
 function createSessionInputModelPort(model: RuntimeModelSpec, credential: CredentialBinding, timeoutMs: number): SessionInputModelPort {
-  return { request: async ({ prompt }) => {
+  return { contextWindow: model.contextWindow, maxOutputTokens: model.maxTokens, request: async ({ prompt }) => {
     const apiKey = await credential.resolver.resolve(credential.reference);
     if (!apiKey) throw new Error(`Missing configured credential: ${credential.reference}`);
     const controller = new AbortController();
@@ -172,10 +174,22 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
   const continuationRef = createOneShotPort<ContinuationControlPort>("ContinuationControlPort");
   const recoveryRef = createOneShotPort<RecoveryControlPort>("RecoveryControlPort");
   const contextRef = createOneShotPort<RunContextPort>("RunContextPort");
-  const admissionRef = createOneShotPort<AdmissionDispatchPort>("AdmissionDispatchPort");
-  let workspaceGoalApplication: CoreWorkspaceGoalApplication | undefined;
+  const finalization = new CoreRunFinalizationApplication({
+    submissions: options.persistence.submissions,
+    taskRuns: options.persistence.taskRuns,
+    workspaceGoals: options.persistence.workspaceGoals,
+  });
 
   const eventHub = new RunEventHub(state);
+  const externalActionApprovals = new CoreExternalActionApprovalApplication({
+    mutations: options.persistence.mutations,
+    approvals: options.persistence.approvals,
+    attempts: options.persistence.attempts,
+    events: options.persistence.events,
+    taskRuns: options.persistence.taskRuns,
+    taskRunTransitions: options.persistence.taskRunTransitions,
+    workspaceGoals: options.persistence.workspaceGoals,
+  }, { supervisor, eventHub });
   const collaborators = createExecutionCollaborationAdapters({
     persistence: options.persistence,
     memory: options.memory,
@@ -200,8 +214,8 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     contextEnrichment: collaborators.contextEnrichment,
     continuation: continuationRef.port,
     externalActionApproval: {
-      requestForResume: (input) => admissionRef.port.requestExternalActionApprovalForResume(input),
-      requestAfterUserInput: (input) => admissionRef.port.requestExternalActionApprovalAfterUserInput(input),
+      requestForResume: (input) => externalActionApprovals.requestForResume(input),
+      requestAfterUserInput: (input) => externalActionApprovals.requestAfterUserInput(input),
     },
     eventHub,
     recovery: recoveryRef.port,
@@ -214,23 +228,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     continuation: continuationRef.port,
     controlInbox,
     eventHub,
-    postAttempt: {
-      attemptLaunchFailed: ({ inboxItemId, runId, message }) => {
-        options.persistence.submissions.recordSessionInboxLaunchFailure(inboxItemId, runId, message);
-      },
-      attemptFinalized: (run, context) => {
-        const current = options.persistence.taskRuns.getRun(run.id);
-        if (current) {
-          if (workspaceGoalApplication) workspaceGoalApplication.recordWorkspaceGoalRunOutcome(current.id, { autoStart: !context.shuttingDown });
-          else options.persistence.workspaceGoals.recordRunOutcome(current.id);
-        }
-        if (!context.shuttingDown) admissionRef.port.dispatchSessionInbox(run.sessionId);
-      },
-      continuationStarted: (runId) => {
-        const continued = options.persistence.taskRuns.getRun(runId);
-        if (continued?.status === "running") options.persistence.workspaceGoals.recordRunOutcome(continued.id);
-      },
-    },
+    postAttempt: finalization,
     requestEnvelopes: options.persistence.requestEnvelopes,
     recovery: recoveryRef.port,
     runtimeHost: {
@@ -244,7 +242,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
           artifactSink,
           workspaceEdit,
           additionalToolProviders: options.additionalToolProviders,
-          requestExternalActionApproval: (toolCallId, toolName) => admissionRef.port.requestExternalActionApproval({
+          requestExternalActionApproval: (toolCallId, toolName) => externalActionApprovals.requestForTool({
             runId: input.token.runId,
             attemptId: input.token.attemptId,
             attempt: input.token.ordinal,
@@ -289,19 +287,33 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     eventHub,
     settlement: settlementRef.port,
     supervisor,
-    workspaceGoalRunReconciled: (runId) => workspaceGoalApplication?.recordWorkspaceGoalRunOutcome(runId),
+    externalActionApprovals,
+    workspaceGoalRunReconciled: (runId) => finalization.workspaceGoalRunReconciled(runId),
   });
-  admissionRef.bind(admission);
   const roadmapGenerator = runtimeDefaults.workspaceGoalRoadmapGenerator
     ?? (routerModel && runtimeDefaults.credential ? new OpenAiWorkspaceGoalRoadmapGenerator({ model: routerModel, credential: runtimeDefaults.credential, timeoutMs: routerTimeoutMs }) : undefined);
   const workspaceGoals = new CoreWorkspaceGoalApplication(options.persistence.workspaceGoals, admission, roadmapGenerator, options.persistence.sessions, options.persistence.workspaceGoalOperations);
-  workspaceGoalApplication = workspaceGoals;
+  finalization.bind({
+    dispatchSessionInbox: (sessionId) => admission.dispatchSessionInbox(sessionId),
+    recordWorkspaceGoalRunOutcome: (runId, finalizeOptions) => workspaceGoals.recordWorkspaceGoalRunOutcome(runId, finalizeOptions),
+  });
   const skills = new CoreSkillApplication(options.persistence.skills, options.persistence.sessions, options.workspace);
+  const governance = new CoreRunGovernanceApplication({
+    mutations: options.persistence.mutations,
+    taskRuns: options.persistence.taskRuns,
+    attempts: options.persistence.attempts,
+    uncertainties: options.persistence.uncertainties,
+    supervisor: options.persistence.supervisor,
+  }, {
+    eventHub,
+    taskFinalized: (runId) => finalization.taskFinalized(runId),
+  });
   const lifecycle = new ExecutionLifecycleService(state, collaborators.backgroundWork);
 
-  for (const port of [attemptLauncherRef, settlementRef, continuationRef, recoveryRef, contextRef, admissionRef]) {
+  for (const port of [attemptLauncherRef, settlementRef, continuationRef, recoveryRef, contextRef]) {
     port.assertBound();
   }
+  finalization.assertBound();
   const execution = new ExecutionCoordinator(Object.freeze({
     attemptExecutor,
     settlement,
@@ -318,6 +330,7 @@ export function composeExecutionApplication(options: ExecutionCompositionOptions
     execution,
     workspaceGoals,
     skills,
+    governance,
   }));
   if ((options.startupOptions?.startupMode ?? "automatic") === "automatic") {
     coordinator.initialize();

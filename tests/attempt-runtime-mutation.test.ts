@@ -165,6 +165,16 @@ describe("Fenced RuntimeMutationPort", () => {
     expect(store.getRun(run.id)).toMatchObject({ phase: "discover", plan: [], artifacts: [expect.objectContaining({ id: "duplicate", title: "Existing" })] });
   });
 
+  it("rolls back the complete task_run batch when its prospective Plan creates a cycle", () => {
+    const { store, adapter, run, context } = fixture();
+    expect(() => adapter.runtimeMutations.applyTaskRunBatch(context, [
+      { action: "plan", item: { key: "a", title: "A", status: "pending", required: true, position: 1, schemaVersion: 2, objectiveIds: [], criterionIds: [], dependencies: ["b"], completionEvidenceRefs: [] } },
+      { action: "plan", item: { key: "b", title: "B", status: "pending", required: true, position: 2, schemaVersion: 2, objectiveIds: [], criterionIds: [], dependencies: ["a"], completionEvidenceRefs: [] } },
+    ])).toThrow(/acyclic/);
+    expect(store.getRun(run.id)).toMatchObject({ phase: "discover", plan: [] });
+    expect(store.listPlanItemRevisions(run.id)).toEqual([]);
+  });
+
   it("atomically settles request_user_input, its event, and the active tool attempt", () => {
     const { store, adapter, run, attempt, context } = fixture();
     adapter.runtimeMutations.recordToolAttempt(context, "tool-input", "task_run", { action: "request_user_input" });

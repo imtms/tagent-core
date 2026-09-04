@@ -15,9 +15,10 @@ import type {
 import type { MemoryFacade } from "@tagent/memory";
 import { corePersistence, transitionTaskRun } from "./support/test-persistence.js";
 import { upsertTrustedCheck } from "./support/trusted-evidence.js";
+import { blockCandidateForUncertainty } from "./support/blocked-candidate.js";
 
-function assistantMessage(text: string): AgentMessage {
-  return { role: "assistant", content: [{ type: "text", text }], api: "openai-completions", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: Date.now() };
+function assistantMessage(text: string, stopReason: "stop" | "length" = "stop"): AgentMessage {
+  return { role: "assistant", content: [{ type: "text", text }], api: "openai-completions", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason, timestamp: Date.now() };
 }
 
 function continuationAudit(reason = "More work is required."): SupervisorAudit {
@@ -365,7 +366,7 @@ describe("Core application runtime boundary", () => {
     store.close();
   });
 
-  it("passes the configured Router output budget to the OpenAI-compatible request", async () => {
+  it("passes the configured Router output budget and preserves usage through an explicit Gate profile", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const originalFetch = globalThis.fetch;
@@ -378,7 +379,10 @@ describe("Core application runtime boundary", () => {
         intent: "new_task", targetActiveRun: false, priority: 500, urgency: "normal", relation: "independent",
         acceptanceCriteria: ["The runtime is optimized and verified"], scope: "runtime", nonGoals: [], confidence: 1, reason: "Explicit request",
       };
-      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(analysis) } }] }), { headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify(analysis) } }],
+        usage: { prompt_tokens: 17, completion_tokens: 5, total_tokens: 22 },
+      }), { headers: { "content-type": "application/json" } });
     });
     const service = createCoreApplication({
       persistence: corePersistence(store),
@@ -390,12 +394,105 @@ describe("Core application runtime boundary", () => {
       }
     });
     try {
-      await service.enqueueSessionInput(session.id, "Analyze and optimize this runtime end to end, including all performance-sensitive paths and verification evidence. ".repeat(5), "router-budget");
+      const admitted = await service.enqueueSessionInput(session.id, "Analyze and optimize this runtime end to end, including all performance-sensitive paths and verification evidence. ".repeat(5), "router-budget", undefined, "strict");
       expect(JSON.parse(requestBody)).toMatchObject({ model: "router-test", max_completion_tokens: 321, stream: true });
+      expect(store.getRun(admitted.run!.id)?.usage).toMatchObject({ input: 17, output: 5, totalTokens: 22 });
+      expect(admitted.item.analysis.routingProvenance).toMatchObject({
+        decisionSource: "model", usage: [{ model: "router-test", input: 17, output: 5, totalTokens: 22 }],
+        abstention: "none",
+      });
+      expect(store.getRun(admitted.run!.id)?.contract?.routingProvenance).toEqual(admitted.item.analysis.routingProvenance);
+
+      const queued = store.enqueueSessionInbox(session.id, "Draft queued request", {
+        ...admitted.item.analysis,
+        summary: "Draft queued request",
+        executionPolicy: { ...admitted.item.analysis.executionPolicy!, gateProfile: "relaxed" },
+      }, "queued-for-reroute");
+      const revision = (store.db.prepare("SELECT revision FROM session_inbox_revisions WHERE session_id=?").get(session.id) as { revision: number }).revision;
+      const usageBeforeReroute = store.getRun(admitted.run!.id)!.usage.totalTokens;
+      const rerouted = await service.updateSessionInputProfile(session.id, queued.id, "Analyze the newly edited queued request", {
+        principalId: "operator", grantedScopes: ["operator:inbox:write"], requestId: "reroute-request",
+        idempotencyKey: "reroute-key", canonicalPayload: JSON.stringify({ content: "Analyze the newly edited queued request" }),
+        expectedRevision: revision,
+      });
+      expect(rerouted).toMatchObject({
+        status: "succeeded",
+        value: { items: [{ id: queued.id, executionPolicy: { gateProfile: "relaxed" }, routingProvenance: { decisionSource: "model", usage: [{ model: "router-test", totalTokens: 22 }] } }] },
+      });
+      const updated = store.getSessionInboxItem(queued.id)!;
+      expect(updated.analysis).toMatchObject({
+        executionPolicy: { gateProfile: "relaxed" },
+        routingProvenance: { decisionSource: "model", usage: [{ model: "router-test", totalTokens: 22 }] },
+      });
+      expect(store.getRun(admitted.run!.id)!.usage.totalTokens).toBe(usageBeforeReroute);
     } finally {
       await service.closeRuntimes();
       globalThis.fetch = originalFetch;
       store.close();
+    }
+  });
+
+  it("holds low effective-confidence intake for clarification until an operator explicitly starts it", async () => {
+    const store = new Store(":memory:"); const session = store.createSession();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      summary: "Investigate an ambiguous integration",
+      objectives: [{ summary: "Investigate an ambiguous integration", timing: "current", kind: "investigate" }],
+      intent: "new_task", targetActiveRun: false, priority: 500, urgency: "normal", relation: "independent",
+      acceptanceCriteria: ["Report the integration findings"], scope: "integration", nonGoals: [], confidence: .95, reason: "The target is ambiguous.",
+      executionPolicy: { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", confidence: .5, reason: "The required access is unclear." },
+    }) } }] }), { headers: { "content-type": "application/json" } }));
+    const service = createCoreApplication({
+      persistence: corePersistence(store), workspace: "/tmp", runtimeFactory: () => new DeferredRuntime(),
+      runtimeDefaults: {
+        routerModel: { id: "router-test", api: "openai-completions", baseUrl: "https://router.test/v1", maxTokens: 512 } as never,
+        credential: { reference: credentialReference("TEST_API_KEY"), resolver: createEnvironmentCredentialResolver({ TEST_API_KEY: "test-key" }) },
+      },
+    });
+    try {
+      const admitted = await service.enqueueSessionInput(session.id, "Analyze this ambiguous integration end to end, determine which system is authoritative, and report evidence without making changes. ".repeat(4), "low-confidence-intake");
+      expect(admitted).toMatchObject({ run: null, clarificationRequired: true, item: { status: "queued", decision: "needs_clarification", analysis: { confidence: .95, executionPolicy: { confidence: .5 }, routingProvenance: { abstention: "new_task_low_confidence" } } } });
+      expect(store.listRuns(session.id)).toEqual([]);
+      const started = service.startSessionInputNow(session.id, admitted.item.id);
+      expect(started).toMatchObject({ status: "started", run: { status: "running" } });
+    } finally {
+      await service.closeRuntimes(); globalThis.fetch = originalFetch; store.close();
+    }
+  });
+
+  it("durably abstains from a low-confidence active-Run control instead of dispatching new work", async () => {
+    const store = new Store(":memory:"); const session = store.createSession();
+    const runtime = new InboxRuntime();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      summary: "Possibly change the active investigation",
+      objectives: [{ summary: "Possibly change the active investigation", timing: "current", kind: "investigate" }],
+      intent: "steer_active", targetActiveRun: true, priority: 800, urgency: "normal", relation: "correction",
+      acceptanceCriteria: ["The intended correction is applied"], scope: "active Run", nonGoals: [], confidence: .8,
+      reason: "The referent of this correction remains ambiguous.",
+      executionPolicy: { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", confidence: .9, reason: "Inspection only." },
+    }) } }] }), { headers: { "content-type": "application/json" } }));
+    const service = createCoreApplication({
+      persistence: corePersistence(store), workspace: "/tmp", runtimeFactory: () => runtime,
+      runtimeDefaults: {
+        routerModel: { id: "router-test", api: "openai-completions", baseUrl: "https://router.test/v1", maxTokens: 512 } as never,
+        credential: { reference: credentialReference("TEST_API_KEY"), resolver: createEnvironmentCredentialResolver({ TEST_API_KEY: "test-key" }) },
+      },
+    });
+    try {
+      const active = await service.enqueueSessionInput(session.id, "分析当前模块", "active-abstention-base");
+      expect(active.run).toMatchObject({ status: "running" });
+      const admitted = await service.enqueueSessionInput(session.id,
+        "结合以上所有上下文，对当前正在运行的调查做一个可能相关但指代仍不明确的修正，并保留完整证据。".repeat(6),
+        "active-abstention-control");
+      expect(admitted).toMatchObject({
+        run: null, clarificationRequired: true,
+        item: { decision: "needs_clarification", analysis: { routingProvenance: { abstention: "active_control_low_confidence" } } },
+      });
+      expect(store.listRuns(session.id)).toHaveLength(1);
+      expect(runtime.delivered).toEqual([]);
+    } finally {
+      await service.closeRuntimes(); globalThis.fetch = originalFetch; store.close();
     }
   });
 
@@ -966,6 +1063,63 @@ describe("Core application runtime boundary", () => {
     store.close();
   });
 
+  it("rolls back the complete external-approval boundary when its Attempt transition fails", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let runtimeOptions: Parameters<RuntimeFactory>[0] | undefined;
+    const externalTool: RuntimeTool = {
+      name: "test_atomic_external_action",
+      label: "Test atomic external action",
+      description: "A test-only explicit external action",
+      parameters: { type: "object", additionalProperties: false, properties: {} },
+      executionMode: "sequential",
+      policy: {
+        operationType: "test.atomic_external_action",
+        workspaceAccess: "none",
+        invalidatesChecks: false,
+        externalAction: "explicit",
+      },
+      execute: vi.fn(async () => ({ content: [{ type: "text" as const, text: "executed" }], details: {} })),
+    };
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: (options) => {
+        runtimeOptions = options;
+        return new DeferredRuntime();
+      },
+      additionalToolProviders: () => [{ id: "test.atomic-external", provideTools: () => [externalTool] }],
+    });
+    const admitted = await service.enqueueSessionInput(session.id, "修复本地代码结构", "atomic-external-boundary");
+    const runId = admitted.run!.id;
+    store.db.exec(`CREATE TEMP TRIGGER reject_external_boundary BEFORE UPDATE OF status ON runs
+      WHEN OLD.status='running' AND NEW.status='blocked'
+      BEGIN SELECT RAISE(ABORT,'reject external boundary'); END`);
+
+    expect(runtimeOptions!.eventSink.beforeToolCall({
+      toolCallId: "atomic-external-failed",
+      toolName: externalTool.name,
+      args: {},
+    })).toMatchObject({ blocked: true, reason: expect.stringContaining("approval request failed") });
+    expect(store.getRun(runId)).toMatchObject({ status: "running", attempt: 1 });
+    expect(store.listApprovalRequests(runId)).toEqual([]);
+    expect(store.listSupervisorDecisions(runId)).toEqual([]);
+    expect(store.listEvents(runId).filter((event) => event.type === "supervisor.approval.requested")).toEqual([]);
+
+    store.db.exec("DROP TRIGGER reject_external_boundary");
+    expect(runtimeOptions!.eventSink.beforeToolCall({
+      toolCallId: "atomic-external-retry",
+      toolName: externalTool.name,
+      args: {},
+    })).toMatchObject({ blocked: true, reason: expect.stringContaining("Approval requested") });
+    expect(store.listApprovalRequests(runId)).toHaveLength(1);
+    expect(store.listSupervisorDecisions(runId)).toHaveLength(1);
+    expect(store.listEvents(runId).filter((event) => event.type === "supervisor.approval.requested")).toHaveLength(1);
+
+    await service.closeRuntimes();
+    store.close();
+  });
+
   it("keeps external-action approval mandatory when completion Gate is off", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
@@ -1116,7 +1270,7 @@ describe("Core application runtime boundary", () => {
     store.close();
   });
 
-  it("recovers a timeout resume approval persisted before its blocked boundary", async () => {
+  it("rolls back a timeout resume approval when its blocked boundary fails and retries cleanly", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
     const policy = {
@@ -1141,12 +1295,14 @@ describe("Core application runtime boundary", () => {
       BEGIN SELECT RAISE(ABORT,'reject external resume boundary'); END`);
 
     await expect(service.resume(run.id)).rejects.toThrow("reject external resume boundary");
-    const approval = store.listApprovalRequests(run.id).find((item) => item.status === "pending")!;
     expect(store.getRun(run.id)).toMatchObject({ status: "failed", attempt: 1 });
+    expect(store.listApprovalRequests(run.id)).toEqual([]);
+    expect(store.listSupervisorDecisions(run.id)).toEqual([]);
     expect(store.listEvents(run.id).filter((event) => event.type === "supervisor.approval.requested")).toHaveLength(0);
     store.db.exec("DROP TRIGGER reject_external_resume_boundary");
 
     await expect(service.resume(run.id)).resolves.toMatchObject({ status: "blocked", attempt: 1 });
+    const approval = store.listApprovalRequests(run.id).find((item) => item.status === "pending")!;
     expect(store.listApprovalRequests(run.id).filter((item) => item.status === "pending")).toHaveLength(1);
     expect(store.listEvents(run.id).filter((event) => event.type === "supervisor.approval.requested")).toHaveLength(1);
     expect(store.listSupervisorDecisions(run.id).find((decision) => decision.id === approval.decisionId))
@@ -1338,6 +1494,35 @@ describe("Core application runtime boundary", () => {
     await service.closeRuntimes(); store.close();
   });
 
+  it("rejects an empty final assistant message instead of reusing an older runtime-history response", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const runtimeFactory: RuntimeFactory = () => ({
+      async prompt() {},
+      async steer() { return "accepted" as const; },
+      abort() {},
+      async dispose() {},
+      getMessages() { return [assistantMessage("obsolete intermediate response"), assistantMessage("")]; },
+      getError() { return undefined; },
+    });
+    const service = createCoreApplication({ persistence: corePersistence(store), workspace: "/tmp", runtimeFactory });
+    const admitted = await service.enqueueSessionInput(
+      session.id,
+      "分析当前实现并给出最终结果",
+      "empty-final-assistant-candidate",
+      undefined,
+      "off",
+    );
+    await vi.waitFor(() => expect(store.getRun(admitted.run!.id)?.status).toBe("blocked"));
+    expect(store.getRun(admitted.run!.id)?.supervision.latestDecision).toMatchObject({
+      action: "block_taskrun",
+      reasonCode: "runtime_candidate_integrity_failed",
+      evaluator: "system",
+    });
+    expect(store.listMessages(session.id).some((message) => message.role === "assistant")).toBe(false);
+    await service.closeRuntimes(); store.close();
+  });
+
   it("resets the durable partial when a new assistant message starts", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
@@ -1356,6 +1541,169 @@ describe("Core application runtime boundary", () => {
     runtime.emit("message.delta", { delta: "replacement", ordinal: 2 });
     await new Promise((resolve) => setTimeout(resolve, 550));
     expect(store.getCheckpoint(run.id)?.assistantPartial).toBe("replacement");
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("never completes a Gate-off Run with an empty provider candidate", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const runtimeFactory: RuntimeFactory = () => ({
+      async prompt() {},
+      async steer() { return "accepted" as const; },
+      abort() {},
+      async dispose() {},
+      getMessages() { return [assistantMessage("")]; },
+      getError() { return undefined; },
+      getProviderFailure() { return { kind: "empty_response", retryable: true }; },
+    });
+    const service = createCoreApplication({ persistence: corePersistence(store), workspace: "/tmp", runtimeFactory });
+    const admitted = await service.enqueueSessionInput(session.id, "分析当前实现并给出结果", "gate-off-empty-candidate", undefined, "off");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const run = store.getRun(admitted.run!.id)!;
+    expect(run.status).toBe("blocked");
+    expect(run.supervision.latestDecision).toMatchObject({
+      action: "block_taskrun",
+      reasonCode: "runtime_candidate_integrity_failed",
+      evaluator: "system",
+    });
+    expect(store.listMessages(session.id).some((message) => message.role === "assistant")).toBe(false);
+    store.close();
+  });
+
+  it("never completes a Gate-off Run with a token-truncated provider candidate", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let semanticReviews = 0;
+    const runtimeFactory: RuntimeFactory = () => ({
+      async prompt() {},
+      async steer() { return "accepted" as const; },
+      abort() {},
+      async dispose() {},
+      getMessages() { return [assistantMessage("A substantive but truncated result", "length")]; },
+      getError() { return undefined; },
+    });
+    const service = createCoreApplication({
+      persistence: corePersistence(store), workspace: "/tmp", runtimeFactory,
+      runtimeDefaults: { supervisorReviewer: {
+        evaluator: "llm", model: "must-not-run",
+        async reviewSettled() { semanticReviews += 1; return passingTestAudit(); },
+        async reviewAttemptFailure() { throw new Error("must not classify deterministic candidate integrity"); },
+      } },
+    });
+    const admitted = await service.enqueueSessionInput(session.id, "分析当前实现并给出结果", "gate-off-truncated-candidate", undefined, "off");
+    await vi.waitFor(() => expect(store.getRun(admitted.run!.id)?.status).toBe("blocked"));
+    const run = store.getRun(admitted.run!.id)!;
+    expect(run.supervision.latestDecision).toMatchObject({
+      action: "block_taskrun",
+      reasonCode: "runtime_candidate_integrity_failed",
+      evaluator: "system",
+    });
+    expect(corePersistence(store).attempts.getCandidateForAttempt(`attempt:${run.id}:1` as never))
+      .toMatchObject({ status: "rejected", response: "A substantive but truncated result" });
+    expect(semanticReviews).toBe(0);
+    expect(store.listMessages(session.id).some((message) => message.role === "assistant")).toBe(false);
+    store.close();
+  });
+
+  it("re-adjudicates the same blocked Candidate after the final uncertainty acceptance without launching an Agent", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const blocked = blockCandidateForUncertainty(store, { sessionId: session.id });
+    let runtimeCalls = 0;
+    const service = createCoreApplication({
+      persistence: corePersistence(store), workspace: "/tmp",
+      runtimeFactory: () => { runtimeCalls += 1; return new DeferredRuntime(); },
+    });
+
+    const accepted = service.acceptRunUncertainty({
+      decisionId: "accept-final-uncertainty", runId: blocked.run.id, criterionId: "ac-1",
+      actorId: "operator:test", rationale: "The upstream remains unavailable.", scope: "This TaskRun only.",
+    });
+
+    expect(accepted).toMatchObject({ criterionId: "ac-1", runCompleted: true });
+    expect(store.getRun(blocked.run.id)).toMatchObject({
+      status: "completed", phase: "done", attempt: 1, blockedReason: "",
+      supervision: {
+        latestDecision: { action: "complete_taskrun", reasonCode: "accepted_uncertainty_readjudicated", evaluator: "system", status: "executed" },
+        unresolvedUncertainties: [],
+      },
+    });
+    expect(corePersistence(store).attempts.getAttemptForRun(blocked.run.id, 1)).toMatchObject({ status: "completed", active: false });
+    expect(corePersistence(store).attempts.getCandidateForAttempt(blocked.candidate.attemptId)).toMatchObject({
+      id: blocked.candidate.id, status: "accepted", responseHash: blocked.candidate.responseHash,
+    });
+    expect(store.listEvents(blocked.run.id).map((event) => event.type)).toEqual(expect.arrayContaining(["message.rejected", "run.blocked", "run.completed"]));
+    expect(store.listEvents(blocked.run.id).at(-1)).toMatchObject({
+      type: "run.completed", data: { candidateResultId: blocked.candidate.id, reAdjudicated: true },
+    });
+    expect(store.listMessages(session.id).filter((message) => message.role === "assistant")).toHaveLength(1);
+    expect(runtimeCalls).toBe(0);
+    await expect(service.resume(blocked.run.id)).rejects.toThrow("cannot continue TaskRun from completed");
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("keeps a Candidate blocked after partial uncertainty acceptance and completes after the final acceptance", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const blocked = blockCandidateForUncertainty(store, { sessionId: session.id, statuses: ["unsupported", "blocked"] });
+    let runtimeCalls = 0;
+    const service = createCoreApplication({
+      persistence: corePersistence(store), workspace: "/tmp",
+      runtimeFactory: () => { runtimeCalls += 1; return new DeferredRuntime(); },
+    });
+    const first = service.acceptRunUncertainty({
+      decisionId: "accept-one", runId: blocked.run.id, criterionId: "ac-1", actorId: "operator:test",
+      rationale: "Criterion one is irreducibly unavailable.", scope: "Criterion one only.",
+    });
+    expect(first.runCompleted).toBe(false);
+    expect(store.getRun(blocked.run.id)?.status).toBe("blocked");
+    expect(corePersistence(store).attempts.getCandidateForAttempt(blocked.candidate.attemptId)?.status).toBe("rejected");
+
+    const secondInput = {
+      decisionId: "accept-two", runId: blocked.run.id, criterionId: "ac-2", actorId: "operator:test",
+      rationale: "Criterion two is blocked by the external source.", scope: "Criterion two only.",
+    };
+    expect(service.acceptRunUncertainty(secondInput)).toMatchObject({ runCompleted: true });
+    expect(service.acceptRunUncertainty(secondInput)).toMatchObject({ runCompleted: true });
+    expect(store.listAcceptedUncertainties(blocked.run.id)).toHaveLength(2);
+    expect(store.listEvents(blocked.run.id).filter((event) => event.type === "run.completed")).toHaveLength(1);
+    expect(store.listMessages(session.id).filter((message) => message.role === "assistant")).toHaveLength(1);
+    expect(store.getRun(blocked.run.id)?.supervision.latestGates.find((gate) => gate.gateType === "contract"))
+      .toMatchObject({
+        evaluator: "system", evaluatorModel: "accepted-uncertainty-readjudication-v1", passed: true,
+        criterionCoverage: [{ acceptedUncertaintyId: first.id }, { acceptedUncertaintyId: `uncertainty:${blocked.run.id}:accept-two` }],
+      });
+    expect(runtimeCalls).toBe(0);
+    await service.closeRuntimes();
+    store.close();
+  });
+
+  it("rolls back uncertainty acceptance when re-adjudication loses atomic authority, and rejects acceptance after resume wins", async () => {
+    const store = new Store(":memory:");
+    const blocked = blockCandidateForUncertainty(store);
+    const service = createCoreApplication({
+      persistence: corePersistence(store), workspace: "/tmp", runtimeFactory: () => new DeferredRuntime(),
+    });
+    store.db.exec(`CREATE TEMP TRIGGER reject_uncertainty_readjudication BEFORE UPDATE OF status ON candidate_results
+      WHEN OLD.status='rejected' AND NEW.status='accepted'
+      BEGIN SELECT RAISE(ABORT,'reject uncertainty readjudication'); END`);
+    const input = {
+      decisionId: "atomic-accept", runId: blocked.run.id, criterionId: "ac-1", actorId: "operator:test",
+      rationale: "The upstream remains unavailable.", scope: "This TaskRun only.",
+    };
+    expect(() => service.acceptRunUncertainty(input)).toThrow("reject uncertainty readjudication");
+    expect(store.listAcceptedUncertainties(blocked.run.id)).toEqual([]);
+    expect(store.getRun(blocked.run.id)?.status).toBe("blocked");
+    expect(store.listSupervisorDecisions(blocked.run.id)).toHaveLength(1);
+    expect(store.listLatestGateEvaluations(blocked.run.id).every((gate) => gate.evaluatorModel === "fixture-supervisor")).toBe(true);
+    store.db.exec("DROP TRIGGER reject_uncertainty_readjudication");
+
+    const resumed = await service.resume(blocked.run.id);
+    expect(resumed).toMatchObject({ status: "running", attempt: 2 });
+    expect(() => service.acceptRunUncertainty(input)).toThrow("requires a blocked TaskRun Candidate");
+    expect(store.listAcceptedUncertainties(blocked.run.id)).toEqual([]);
     await service.closeRuntimes();
     store.close();
   });

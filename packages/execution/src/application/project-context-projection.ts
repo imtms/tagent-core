@@ -11,6 +11,8 @@ export function projectContextItems(snapshot: ProjectContextSnapshot): ContextMa
   return snapshot.rules.map((rule) => ({
     kind: "project_rule", sourceId: `workspace:${rule.path}`, selected: rule.selected, reason: rule.reason,
     estimatedTokens: estimateContextTokens(rule.content),
+    ...(rule.selected ? { projectedContentHash: rule.sha256 } : {}),
+    sourceRevision: rule.sha256,
     metadata: { path: rule.path, sha256: rule.sha256, precedence: rule.precedence, bytes: rule.bytes, trust: "untrusted_project_policy" },
   }));
 }

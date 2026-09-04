@@ -140,16 +140,16 @@ describe("Fastify HTTP adapter workspace package", () => {
   it("publishes only the compiled root, auth, ports, and v1 package entry points", () => {
     const root = readJson<{ dependencies: Record<string, string>; devDependencies: Record<string, string>; scripts: Record<string, string> }>("package.json");
     const manifest = readJson<PackageManifest>(`${packageRoot}/package.json`);
-    expect(manifest).toMatchObject({ name: "@tagent/http-fastify", version: "0.8.31", private: true });
+    expect(manifest).toMatchObject({ name: "@tagent/http-fastify", version: "0.8.32", private: true });
     expect(root.devDependencies[manifest.name]).toBe(manifest.version);
     expect(root.dependencies).not.toHaveProperty("fastify");
     expect(Object.keys(manifest.exports).sort()).toEqual([".", "./auth", "./ports", "./v1"]);
     expect(manifest.dependencies).toEqual({
-      "@tagent/abi": "0.8.31",
-      "@tagent/admission": "0.8.31",
-      "@tagent/execution": "0.8.31",
-      "@tagent/governance": "0.8.31",
-      fastify: "^5.10.0",
+      "@tagent/abi": "0.8.32",
+      "@tagent/admission": "0.8.32",
+      "@tagent/execution": "0.8.32",
+      "@tagent/governance": "0.8.32",
+      fastify: "^5.12.1",
       typebox: "^1.1.24",
     });
     for (const target of Object.values(manifest.exports)) {

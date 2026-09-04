@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
 import { IdentifierSchema, IsoDateTimeSchema, JsonObjectSchema } from "../../shared/primitives.js";
+import { RoutingProvenanceSchema } from "../../shared/routing-provenance.js";
 import { TaskRunPhaseSchema, TaskRunStatusSchema } from "./session-schemas.js";
 
 export const TaskObjectiveSchema = Type.Object({
@@ -82,6 +83,7 @@ export const TaskRunContractSchema = Type.Object({
   decisionReason: Type.String(),
   routerVersion: Type.String(),
   executionPolicy: Type.Optional(Type.Union([TaskExecutionPolicySchema, Type.Null()])),
+  routingProvenance: Type.Optional(Type.Union([RoutingProvenanceSchema, Type.Null()])),
   workspaceGoal: Type.Optional(Type.Union([TaskRunWorkspaceGoalSchema, Type.Null()])),
 });
 export type TaskRunContract = Static<typeof TaskRunContractSchema>;
@@ -95,6 +97,14 @@ export const TaskRunPlanItemSchema = Type.Object({
   ]),
   required: Type.Boolean(),
   position: Type.Integer({ minimum: 0 }),
+  schemaVersion: Type.Optional(Type.Literal(2)),
+  objectiveIds: Type.Optional(Type.Array(IdentifierSchema, { maxItems: 50 })),
+  criterionIds: Type.Optional(Type.Array(IdentifierSchema, { maxItems: 100 })),
+  dependencies: Type.Optional(Type.Array(IdentifierSchema, { maxItems: 50 })),
+  createdAttempt: Type.Optional(Type.Integer({ minimum: 1 })),
+  updatedAttempt: Type.Optional(Type.Integer({ minimum: 1 })),
+  replanReason: Type.Optional(Type.String({ maxLength: 4_000 })),
+  completionEvidenceRefs: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 2_000, pattern: "^[^\\u0000]+$" }), { maxItems: 100 })),
 });
 export type TaskRunPlanItem = Static<typeof TaskRunPlanItemSchema>;
 

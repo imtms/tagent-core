@@ -1,16 +1,20 @@
 import type { TaskRunContractSnapshot } from "./task-run-launch.js";
 import type {
   ApprovalRequest,
+  AcceptedUncertainty,
   Artifact,
   CompletionGate,
+  EvidenceSource,
   GateEvaluation,
   PlanItem,
   ProgressSnapshot,
   RunCheck,
   SupervisorDecision,
+  UnresolvedUncertainty,
 } from "@tagent/governance/domain";
 
 export type {
+  AcceptedUncertainty,
   ApprovalRequest,
   Artifact,
   CompletionGate,
@@ -22,6 +26,7 @@ export type {
   RunCheck,
   SupervisorAction,
   SupervisorDecision,
+  UnresolvedUncertainty,
 } from "@tagent/governance/domain";
 
 /** Consumer-neutral reference to a conversation identifier owned outside Execution. */
@@ -104,8 +109,34 @@ export interface UserInputRequest { id: string; runId: RunId; attempt: number; p
 
 export type ContextManifestSource = "session" | "transcript";
 export type ContextManifestItemKind = "system_prompt" | "taskrun_contract" | "workspace_goal" | "skill" | "session_message" | "transcript_message" | "core_memory" | "memory_card" | "cold_topic" | "project_rule" | "user_prompt";
-export interface ContextManifestItem { kind: ContextManifestItemKind; sourceId: string; role?: string; selected: boolean; reason: string; estimatedTokens: number; metadata?: Record<string, unknown> }
-export interface ContextManifest { id: string; runId: RunId; attempt: number; source: ContextManifestSource; items: ContextManifestItem[]; stats: Record<string, number | string>; manifestHash: string; createdAt: number }
+export interface ContextManifestItem {
+  kind: ContextManifestItemKind;
+  sourceId: string;
+  role?: string;
+  selected: boolean;
+  reason: string;
+  estimatedTokens: number;
+  /** Hash of the exact projection represented by this item, not its unbounded source. */
+  projectedContentHash?: string;
+  /** Durable source revision or identity used to produce the projection. */
+  sourceRevision?: string;
+  metadata?: Record<string, unknown>;
+}
+export interface ContextManifest {
+  id: string;
+  runId: RunId;
+  attempt: number;
+  source: ContextManifestSource;
+  items: ContextManifestItem[];
+  stats: Record<string, number | string>;
+  manifestHash: string;
+  createdAt: number;
+  /** Provider envelopes that consumed this projection; payload bytes remain envelope-owned. */
+  requestEnvelopeIds?: string[];
+}
+
+/** Exact private bytes committed by selected Context Manifest items for later quote verification. */
+export type ContextEvidenceSource = EvidenceSource & { kind: "memory" };
 
 export interface RunContinuation { id: string; runId: RunId; ordinal: number; status: "queued" | "running" | "completed" | "blocked" | "failed" | "cancelled"; reason: string; error: string; notBefore: number; createdAt: number; startedAt: number | null; completedAt: number | null; leaseOwner: string; leaseUntil: number | null; heartbeatAt: number | null }
 type RunEventPayload = Record<string, unknown>;
@@ -205,6 +236,8 @@ export interface TaskRun {
     progress: ProgressSnapshot | null;
     approvalRequests: ApprovalRequest[];
     latestContextManifest: ContextManifest | null;
+    acceptedUncertainties?: AcceptedUncertainty[];
+    unresolvedUncertainties?: UnresolvedUncertainty[];
   };
   userInputRequests: UserInputRequest[];
   pendingUserInput: UserInputRequest | null;

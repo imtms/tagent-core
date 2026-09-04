@@ -71,7 +71,7 @@ export type SystemTransitionAuthority =
   }
   | {
     readonly kind: "external_action_guard";
-    readonly component: "admission_coordinator";
+    readonly component: "core_external_action_approval_application";
     readonly approvalId: string;
   }
   | {

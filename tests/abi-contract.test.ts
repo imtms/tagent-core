@@ -70,6 +70,15 @@ import {
 import { MEMORY_SOURCE_TYPES as DOMAIN_MEMORY_SOURCE_TYPES } from "@tagent/memory";
 
 describe("ABI runtime decoding", () => {
+  it("rejects NUL-bearing criterion-aware plan evidence references", () => {
+    const item = {
+      key: "plan", title: "Plan", status: "done", required: true, position: 1,
+      schemaVersion: 2, objectiveIds: [], criterionIds: [], dependencies: [],
+      completionEvidenceRefs: ["artifact:proof\0suffix"],
+    };
+    expect(() => decodeAbi(ChannelV1.TaskRunPlanItemSchema, item)).toThrow();
+  });
+
   it("publishes strict capability-profile descriptors and canonical fixtures", () => {
     expect(ProfilesV1.CAPABILITY_PROFILE_IDS).toHaveLength(5);
     expect(decodeAbi(ProfilesV1.CapabilityProfileRegistryResponseSchema, capabilityProfileRegistryFixture))

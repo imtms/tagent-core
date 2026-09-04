@@ -339,11 +339,109 @@ describe("SessionInputRouter background filtering", () => {
         acceptanceCriteria: ["给出分析结果"], scope: "复杂任务", nonGoals: [], confidence: 0.96, reason: "semantic model result",
       }), [{ model: "router-model", input: 12, output: 8, cacheRead: 2, cacheWrite: 0, totalTokens: 20 }]),
     });
-    const result = await router.analyze("结合现有上下文，详细分析这个跨模块复杂任务并给出完整结论。".repeat(12));
-    expect(router.takeUsage(result)).toEqual([{
+    const result = await router.route("结合现有上下文，详细分析这个跨模块复杂任务并给出完整结论。".repeat(12));
+    expect(result.usage).toEqual([{
       model: "router-model",
       usage: { input: 12, output: 8, cacheRead: 2, cacheWrite: 0, totalTokens: 20 },
     }]);
-    expect(router.takeUsage(result)).toEqual([]);
+    expect(result.analysis.routingProvenance).toMatchObject({
+      decisionSource: "model", modelAttempted: true, modelSucceeded: true,
+      projectionStrategy: "full", usage: [{ model: "router-model", totalTokens: 20 }], abstention: "none",
+    });
+  });
+
+  it("bounds deterministic fallback expansion when semantic routing fails", async () => {
+    const router = new SessionInputRouter({
+      model: modelPort(async () => { throw new Error("context overflow"); }),
+    });
+    const background = Array.from({ length: 40 }, (_, index) => `背景条目 ${index + 1}。`).join("");
+    const result = await router.analyze(`${background}请总结文档。`);
+    expect(result.routerVersion).toBe("semantic-rules-v3");
+    expect(result.objectives.length).toBeLessThanOrEqual(12);
+    expect(result.acceptanceCriteria.length).toBeLessThanOrEqual(24);
+    expect(result.objectives.at(-1)?.summary).toContain("总结文档");
+    expect(result.routingProvenance).toMatchObject({
+      decisionSource: "fallback", modelAttempted: true, modelSucceeded: false,
+      abstention: "none", detail: "context overflow",
+    });
+  });
+
+  it("retains provider usage in the explicit envelope when model output is rejected", async () => {
+    const routed = await new SessionInputRouter({
+      model: modelPort(async () => ({ intent: "invalid" }), [{
+        model: "router-model", input: 9, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 11,
+      }]),
+    }).route("Analyze a complex ambiguous integration and produce a complete, evidence-backed recommendation. ".repeat(4));
+    expect(routed.analysis.routerVersion).toBe("semantic-rules-v3");
+    expect(routed.usage).toMatchObject([{ model: "router-model", usage: { totalTokens: 11 } }]);
+    expect(routed.provenance).toMatchObject({
+      decisionSource: "fallback", modelAttempted: true, modelSucceeded: false,
+      usage: [{ model: "router-model", totalTokens: 11 }],
+    });
+  });
+
+  it("rejects the legacy merge_candidate model intent and falls back to a target-free contract", async () => {
+    const router = new SessionInputRouter({ model: modelPort(async () => ({
+      summary: "merge this", objectives: [{ summary: "merge this", timing: "current", kind: "change" }],
+      intent: "merge_candidate", targetActiveRun: false, priority: 500, urgency: "normal", relation: "same_goal",
+      acceptanceCriteria: ["merged"], scope: "queue", nonGoals: [], confidence: .99, reason: "invented target",
+      executionPolicy: { mode: "workspace_mutation", sideEffectRisk: "workspace", evidencePolicy: "trusted_check", reviewPolicy: "full", confidence: .99, reason: "mutation" },
+    })) });
+    const result = await router.analyze("Analyze this queued request in depth and implement a reliable standalone result without assuming any unspecified merge target. ".repeat(4));
+    expect(result.intent).not.toBe("merge_candidate");
+    expect(result.targetRunId).toBeNull();
+    expect(result.routerVersion).toBe("semantic-rules-v3");
+    expect(result.reason).toContain("deterministic fallback used");
+  });
+
+  it("projects oversized Router input inside the configured model budget", async () => {
+    let observedPrompt = "";
+    const port = modelPort(async (prompt) => {
+      observedPrompt = prompt;
+      return {
+        summary: "总结长文档", objectives: [{ summary: "总结长文档", timing: "current", kind: "answer" }],
+        intent: "new_task", targetActiveRun: false, priority: 500, urgency: "normal", relation: "independent",
+        acceptanceCriteria: ["给出总结"], scope: "长文档", nonGoals: [], confidence: .9, reason: "request is in the projected tail",
+        executionPolicy: { mode: "semantic_delivery", sideEffectRisk: "none", evidencePolicy: "semantic", reviewPolicy: "semantic_lite", confidence: .9, reason: "summary only" },
+      };
+    });
+    Object.assign(port, { contextWindow: 12_000, maxOutputTokens: 1_000 });
+    const source = `背景开始。${"中间背景。".repeat(20_000)}请总结这份文档。`;
+    const result = await new SessionInputRouter({ model: port }).analyze(source);
+    expect(Buffer.byteLength(observedPrompt, "utf8")).toBeLessThanOrEqual(10_500);
+    expect(observedPrompt).toContain('"strategy":"head_tail"');
+    expect(observedPrompt).toContain("背景开始");
+    expect(observedPrompt).toContain("请总结这份文档");
+    expect(observedPrompt).not.toContain(source);
+    expect(result.summary).toBe("总结长文档");
+    expect(result.routingProvenance).toMatchObject({
+      decisionSource: "model", projectionStrategy: "head_tail", sourceChars: source.length,
+      modelAttempted: true, modelSucceeded: true,
+    });
+    expect(result.routingProvenance!.projectedChars).toBeLessThan(source.length);
+  });
+
+  it.each([
+    ["high-entropy ASCII", "QWxhZGRpbjpvcGVuIHNlc2FtZQ==a9Z0+/".repeat(8_000)],
+    ["complex Unicode", "🧑🏽‍💻🏳️‍🌈漢字e\u0301".repeat(8_000)],
+  ])("keeps %s Router prompts below the conservative byte upper bound", async (_label, body) => {
+    let observedPrompt = "";
+    const port = modelPort(async (prompt) => {
+      observedPrompt = prompt;
+      return {
+        summary: "Analyze bounded input", objectives: [{ summary: "Analyze bounded input", timing: "current", kind: "investigate" }],
+        intent: "new_task", targetActiveRun: false, priority: 500, urgency: "normal", relation: "independent",
+        acceptanceCriteria: ["Report the result"], scope: "bounded input", nonGoals: [], confidence: .9, reason: "bounded request",
+        executionPolicy: { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", confidence: .9, reason: "analysis only" },
+      };
+    });
+    Object.assign(port, { contextWindow: 12_000, maxOutputTokens: 1_000 });
+    const source = `Analyze this payload and report the result. ${body} End of payload.`;
+    const result = await new SessionInputRouter({ model: port }).analyze(source);
+    expect(Buffer.byteLength(observedPrompt, "utf8")).toBeLessThanOrEqual(10_488);
+    expect(result.routingProvenance).toMatchObject({
+      decisionSource: "model", projectionStrategy: "head_tail", inputBudgetTokens: 10_488,
+    });
+    expect(result.routingProvenance!.promptEstimatedTokens).toBe(Buffer.byteLength(observedPrompt, "utf8"));
   });
 });

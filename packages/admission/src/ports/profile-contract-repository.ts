@@ -84,7 +84,7 @@ export interface ProfileInboxItemRecord {
   sessionId: string;
   content: string;
   status: "queued" | "claimed" | "started" | "routed" | "deleted" | "failed";
-  decision: "pending" | "start_taskrun" | "steer" | "follow_up" | "discussion" | "defer" | "merge" | "delete";
+  decision: "pending" | "needs_clarification" | "start_taskrun" | "steer" | "follow_up" | "discussion" | "defer" | "merge" | "delete";
   runId: string | null;
   position: number;
   summary: string;
@@ -97,6 +97,7 @@ export interface ProfileInboxItemRecord {
   confidence: number;
   reason: string;
   executionPolicy: { gateProfile?: "off" | "relaxed" | "strict" } | null;
+  routingProvenance: import("../domain/index.js").SessionInputRoutingProvenance | null;
   revision: number;
   createdAt: number;
   updatedAt: number;

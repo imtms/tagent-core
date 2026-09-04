@@ -98,10 +98,11 @@ export interface RuntimeToolPolicy {
   operationType?: string;
   /** Deterministic provider guard enforced by Core before approval, attempt recording, or dispatch. */
   preflightGuard?: (parameters: unknown) => string | undefined;
-  workspaceAccess?: "none" | "read_only" | "mutation" | ((parameters: unknown) => "none" | "read_only" | "mutation");
+  /** `code_execution` is mutation-capable even when invoked as verification; it is never a file-only observation. */
+  workspaceAccess?: "none" | "read_only" | "code_execution" | "mutation" | ((parameters: unknown) => "none" | "read_only" | "code_execution" | "mutation");
   invalidatesChecks?: boolean | ((parameters: unknown) => boolean);
   /** `explicit` requires Attempt-bound human-approval activation even for an otherwise non-external TaskRun. */
-  externalAction?: boolean | "explicit";
+  externalAction?: boolean | "explicit" | ((parameters: unknown) => boolean | "explicit");
 }
 
 export interface RuntimeCapabilityCatalog {
@@ -197,6 +198,7 @@ export interface AttemptRuntimeSpec {
   /** Source for Core-owned compact checkpoints appended to Session only when their hash changes. */
   liveContext?: () => string;
   requestEnvelopes?: import("./attempt-request-envelope-repository.js").AttemptRequestEnvelopeRepository;
+  contextManifestId?: string;
 }
 
 export type AttemptRuntimeFactory = (spec: AttemptRuntimeSpec) => AttemptRuntimePort;

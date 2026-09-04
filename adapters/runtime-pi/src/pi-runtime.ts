@@ -551,6 +551,7 @@ export class PiRuntime implements AttemptRuntimePort {
         },
         providerPayload: payload,
         createdAt: Date.now(),
+        contextManifestId: this.options.contextManifestId,
       });
       this.options.requestEnvelopes.record(envelope);
       const durable = this.options.requestEnvelopes.get(envelope.id);

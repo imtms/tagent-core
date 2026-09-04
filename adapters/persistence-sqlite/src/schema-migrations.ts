@@ -7,6 +7,8 @@ import {
   CURRENT_SCHEMA_SQL,
   CURRENT_SCHEMA_VERSION,
   MIGRATION_JOURNAL_SCHEMA_SQL,
+  REVISION_2_SCHEMA_SQL,
+  SEMANTIC_CONTROL_PLANE_SCHEMA_SQL,
 } from "./current-schema.js";
 
 export interface SchemaMigration {
@@ -20,6 +22,11 @@ const MIGRATIONS: readonly SchemaMigration[] = [
     version: 2,
     description: "add append-only schema migration journal",
     sql: MIGRATION_JOURNAL_SCHEMA_SQL,
+  },
+  {
+    version: 3,
+    description: "add semantic control-plane provenance",
+    sql: SEMANTIC_CONTROL_PLANE_SCHEMA_SQL,
   },
 ];
 
@@ -78,29 +85,35 @@ function recordMigration(db: Database.Database, migration: SchemaMigration, appl
 }
 
 /** Apply a caller-supplied, contiguous migration plan as one immediate transaction. */
+function executeSqliteMigrations(
+  db: Database.Database,
+  migrations: readonly SchemaMigration[],
+  appliedAt: number,
+): void {
+  for (const migration of migrations) {
+    const installedVersion = userVersion(db);
+    if (migration.version !== installedVersion + 1
+      && !(installedVersion === 0 && migration.version === BASE_SCHEMA_VERSION + 1)) {
+      throw new Error(`SQLite migration sequence is not contiguous at revision ${migration.version}`);
+    }
+    db.exec(migration.sql);
+    recordMigration(db, migration, appliedAt);
+    setUserVersion(db, migration.version);
+  }
+}
+
 export function applySqliteMigrations(
   db: Database.Database,
   migrations: readonly SchemaMigration[],
   appliedAt: number,
 ): void {
-  db.transaction(() => {
-    for (const migration of migrations) {
-      const installedVersion = userVersion(db);
-      if (migration.version !== installedVersion + 1
-        && !(installedVersion === 0 && migration.version === BASE_SCHEMA_VERSION + 1)) {
-        throw new Error(`SQLite migration sequence is not contiguous at revision ${migration.version}`);
-      }
-      db.exec(migration.sql);
-      recordMigration(db, migration, appliedAt);
-      setUserVersion(db, migration.version);
-    }
-  }).immediate();
+  db.transaction(() => executeSqliteMigrations(db, migrations, appliedAt)).immediate();
 }
 
-function validateJournal(db: Database.Database): void {
+function validateJournal(db: Database.Database, throughVersion = CURRENT_SCHEMA_VERSION): void {
   const expected = [
     { version: BASE_SCHEMA_VERSION, description: "baseline exact tagent-core/0.8 schema", checksum: checksum(BASE_SCHEMA_SQL) },
-    ...MIGRATIONS.map((migration) => ({
+    ...MIGRATIONS.filter((migration) => migration.version <= throughVersion).map((migration) => ({
       version: migration.version,
       description: migration.description,
       checksum: checksum(migration.sql),
@@ -129,7 +142,10 @@ export function initializeSqliteSchema(db: Database.Database, appliedAt = Date.n
     db.transaction(() => {
       db.exec(BASE_SCHEMA_SQL);
       setUserVersion(db, BASE_SCHEMA_VERSION);
+      executeSqliteMigrations(db, MIGRATIONS, appliedAt);
+      assertCurrentSqliteSchema(db);
     }).immediate();
+    return;
   }
 
   assertMarker(db);
@@ -145,11 +161,18 @@ export function initializeSqliteSchema(db: Database.Database, appliedAt = Date.n
   }
   if (version === BASE_SCHEMA_VERSION) {
     assertShape(db, BASE_SCHEMA_SQL, `${CURRENT_SCHEMA_ID} revision ${BASE_SCHEMA_VERSION}`);
+  } else if (version === 2) {
+    assertShape(db, REVISION_2_SCHEMA_SQL, `${CURRENT_SCHEMA_ID} revision 2`);
+    validateJournal(db, 2);
   }
 
   const pending = MIGRATIONS.filter((migration) => migration.version > version);
   if (pending.length) {
-    applySqliteMigrations(db, pending, appliedAt);
+    db.transaction(() => {
+      executeSqliteMigrations(db, pending, appliedAt);
+      assertCurrentSqliteSchema(db);
+    }).immediate();
+    return;
   }
   assertCurrentSqliteSchema(db);
 }

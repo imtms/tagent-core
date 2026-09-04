@@ -173,7 +173,7 @@ describe("Web API request headers", () => {
   it("sources versioned Console wire DTOs from the ABI", async () => {
     const source = await readFile(new URL("../apps/web-console/src/api.ts", import.meta.url), "utf8");
     const types = await readFile(new URL("../apps/web-console/src/api-types.ts", import.meta.url), "utf8");
-    expect(types).toContain('type { ConsoleV1 }');
+    expect(types).toMatch(/import type \{[^}]*\bConsoleV1\b[^}]*\} from "@tagent\/abi";/);
     expect(source).toContain('import { ConsoleDecode } from "@tagent/core-client"');
     expect(source).not.toMatch(/export interface (?:TaskRun|MemoryRecord)\b/);
   });

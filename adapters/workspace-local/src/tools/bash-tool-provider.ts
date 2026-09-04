@@ -5,7 +5,7 @@ import { Type, type Static } from "typebox";
 import type { ToolProvider } from "@tagent/execution/composition";
 import type { RuntimeTool, RuntimeToolResult, RuntimeToolUpdateCallback, SubprocessPort, ToolCapabilityApplicationPort } from "@tagent/execution/ports";
 import { readWorkspaceFile } from "../workspace-path.js";
-import { bashCommandIsDestructive, bashCommandTargetsHostingCore, bashInvalidatesChecks, durableTextResult, HOSTING_CORE_LIFECYCLE_BLOCK_REASON, MAX_DURABLE_OUTPUT, MAX_OUTPUT, persistToolOutputArtifact, previewText, safeArtifactId, textResult } from "./shared.js";
+import { bashCommandEffect, bashCommandIsDestructive, bashCommandTargetsHostingCore, bashInvalidatesChecks, bashRequiresExplicitApproval, durableTextResult, HOSTING_CORE_LIFECYCLE_BLOCK_REASON, MAX_DURABLE_OUTPUT, MAX_OUTPUT, persistToolOutputArtifact, previewText, safeArtifactId, textResult } from "./shared.js";
 
 const BashSchema = Type.Object({ command: Type.String(), timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })) });
 
@@ -26,8 +26,11 @@ export class BashToolProvider implements ToolProvider {
         preflightGuard: (value) => bashCommandTargetsHostingCore((value as Static<typeof BashSchema>).command)
           ? HOSTING_CORE_LIFECYCLE_BLOCK_REASON
           : undefined,
-        externalAction: true,
-        workspaceAccess: (value) => bashInvalidatesChecks((value as Static<typeof BashSchema>).command) ? "mutation" : "read_only",
+        externalAction: (value) => bashRequiresExplicitApproval((value as Static<typeof BashSchema>).command) ? "explicit" : false,
+        workspaceAccess: (value) => {
+          const effect = bashCommandEffect((value as Static<typeof BashSchema>).command);
+          return effect === "read_only" ? "read_only" : effect === "code_execution" ? "code_execution" : "mutation";
+        },
         invalidatesChecks: (value) => bashInvalidatesChecks((value as Static<typeof BashSchema>).command),
       },
       execute: (id, params, signal, onUpdate) => this.execute(id, params, signal, onUpdate),
@@ -83,7 +86,7 @@ export class BashToolProvider implements ToolProvider {
     const timer = setTimeout(() => { timedOut = true; timeoutController.abort(new Error("timeout")); }, timeoutSeconds * 1000);
     try {
       const child = this.subprocess.spawn({
-        argv: ["bash", "-lc", params.command], cwd: this.workspace, signal: timeoutController.signal,
+        argv: ["bash", "--noprofile", "--norc", "-c", params.command], cwd: this.workspace, signal: timeoutController.signal,
         terminationGraceMs: 2_000,
         onStdout: (chunk) => capture("stdout", chunk), onStderr: (chunk) => capture("stderr", chunk),
       });

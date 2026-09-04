@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { CoreWorkspaceGoalApplication, createCoreApplication } from "@tagent/core-service/application";
 import type { WorkspaceGoalRoadmapGenerator } from "@tagent/core-service/application";
 import { TestSupervisorReviewer } from "@tagent/core-service/composition";
@@ -472,9 +473,18 @@ describe("Workspace Goal Core execution", () => {
       expect(specs[0].attemptContext).toContain("user-started TaskRun");
       expect(specs[0].attemptContext).toContain("do not treat this Run as responsible for completing every Goal criterion");
       const manifest = store.getLatestContextManifest(admitted.run!.id)!;
+      const projectedRun = JSON.parse(specs[0].attemptContext!.match(/^TASK_RUN: (.+)$/m)?.[1] ?? "null") as { contract: unknown };
+      const projectedContract = JSON.stringify(projectedRun.contract);
+      const projectedWorkspaceGoal = JSON.stringify((projectedRun.contract as { workspaceGoal: unknown }).workspaceGoal);
       expect(manifest.items).toEqual(expect.arrayContaining([
-        expect.objectContaining({ kind: "taskrun_contract", selected: true }),
-        expect.objectContaining({ kind: "workspace_goal", selected: true, sourceId: expect.stringContaining(goal.id) }),
+        expect.objectContaining({
+          kind: "taskrun_contract", selected: true,
+          projectedContentHash: createHash("sha256").update(projectedContract).digest("hex"),
+        }),
+        expect.objectContaining({
+          kind: "workspace_goal", selected: true, sourceId: expect.stringContaining(goal.id),
+          projectedContentHash: createHash("sha256").update(projectedWorkspaceGoal).digest("hex"),
+        }),
       ]));
     } finally {
       await service.closeRuntimes();

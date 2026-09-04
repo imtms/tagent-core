@@ -1,4 +1,5 @@
 import type { TaskRun } from "../domain/task-run.js";
+import { taskRunPlanningCriteria } from "../domain/task-run-launch.js";
 import type { TaskExecutionPolicy } from "@tagent/governance/domain";
 
 const encoder = new TextEncoder();
@@ -60,10 +61,10 @@ export function taskPolicySystemInstruction(policy: TaskExecutionPolicy): string
   const gateProfile = policy.gateProfile ?? "strict";
   if (gateProfile === "off") return "Completion Gate is disabled for this TaskRun. Focus on the requested outcome and return the best final response directly; do not create plans, checks, Bash receipts, or Artifacts solely for settlement. Safety approvals and tool policies still apply.";
   if (gateProfile === "relaxed") return "This TaskRun uses result-oriented completion review. Focus on delivering the core outcome. Plans, checks, Bash receipts, and Artifacts are optional unless they genuinely help the work; do not create them solely for settlement. State meaningful uncertainty or blockers honestly.";
-  if (["workspace_mutation", "external_action"].includes(policy.mode)) return "Use the task_run tool for substantial work. Maintain a plan and checks before claiming completion. A passed required check must follow a successful Bash verification in the current Attempt; task_run will bind it by exact command or the latest successful Bash receipt and Core will derive the evidence. Batch independent TaskRun mutations in one task_run action=batch call instead of spending a model round-trip per item.";
+  if (["workspace_mutation", "external_action"].includes(policy.mode)) return "Use the task_run tool for substantial work. Maintain a criterion-aware plan: every required item declares objectiveIds, criterionIds, dependencies, and completionEvidenceRefs; provide replanReason when changing its scope. A passed required check must follow a successful Bash verification in the current Attempt; task_run will bind it by exact command or the latest successful Bash receipt and Core will derive the evidence. Batch independent TaskRun mutations in one task_run action=batch call instead of spending a model round-trip per item.";
   if (policy.mode === "exact_delivery") return `Return exactly the requested literal output${policy.exactOutput ? `: ${JSON.stringify(policy.exactOutput)}` : ""}. Do not create plans, checks, Artifacts, or tool operations.`;
   if (policy.mode === "semantic_delivery") return "This is a no-side-effect semantic delivery. Do not create artificial plans, checks, Bash receipts, or workspace Artifacts. Produce one relevant, complete, standalone response; if you use a mutation-capable tool, Core will automatically raise the Run to full governance.";
-  return "This is read-only analysis. Maintain a concise required plan for substantial investigation and cite actual inspected operations or Artifacts when they support factual conclusions. Do not mutate the workspace unless the user requested it; mutation automatically raises the Run to full trusted-check governance.";
+  return "This is read-only analysis. Maintain a concise criterion-aware required plan with objectiveIds, criterionIds, dependencies, and completionEvidenceRefs; provide replanReason when changing its scope. Cite actual inspected operations, Transcript entries, or Artifacts when they support factual conclusions. Do not mutate the workspace unless the user requested it; mutation automatically raises the Run to full trusted-check governance.";
 }
 
 export function taskPolicyResumeInstructions(policy: TaskExecutionPolicy): [string, string] {
@@ -99,9 +100,6 @@ export function runtimeAttemptRunContext(run: TaskRun) {
   const workspaceGoal = run.contract?.workspaceGoal;
   const targetRoadmapItemIds = new Set(workspaceGoal?.targetRoadmapItemIds ?? []);
   const targetCriterionKeys = new Set(workspaceGoal?.targetCriterionKeys ?? []);
-  const goalCriterionPrompts = new Set(workspaceGoal?.mode === "roadmap"
-    ? workspaceGoal.criterionPrompts.map((item) => item.prompt)
-    : []);
   return {
     id: run.id,
     attempt: run.attempt,
@@ -109,7 +107,7 @@ export function runtimeAttemptRunContext(run: TaskRun) {
     contract: run.contract ? {
       summary: truncateUtf8(run.contract.summary, 3_000),
       objectives: run.contract.objectives.slice(0, 20).map((item) => ({ ...item, summary: truncateUtf8(item.summary, 2_000) })),
-      acceptanceCriteria: run.contract.acceptanceCriteria.filter((item) => !goalCriterionPrompts.has(item)).slice(0, 30).map((item) => truncateUtf8(item, 2_000)),
+      acceptanceCriteria: taskRunPlanningCriteria(run.contract).slice(0, 30).map((item) => truncateUtf8(item, 2_000)),
       scope: truncateUtf8(run.contract.scope, 2_000),
       nonGoals: run.contract.nonGoals.slice(0, 20).map((item) => truncateUtf8(item, 1_000)),
       intent: run.contract.intent,

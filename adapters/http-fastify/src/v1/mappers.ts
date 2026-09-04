@@ -100,6 +100,7 @@ export function mapTaskRun(run: TaskRunReadView): V1TaskRun {
       decisionReason: run.contract.decisionReason,
       routerVersion: run.contract.routerVersion,
       executionPolicy: run.contract.executionPolicy ?? null,
+      routingProvenance: run.contract.routingProvenance ?? null,
       workspaceGoal: run.contract.workspaceGoal ? {
         ...run.contract.workspaceGoal,
         attachedAt: iso(run.contract.workspaceGoal.attachedAt),

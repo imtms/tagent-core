@@ -5,24 +5,15 @@ import type { ContextSourcePort } from "../ports/context-source-port.js";
 import type { SystemTransitionAuthority, SystemTransitionCommand } from "../ports/task-run-transition-port.js";
 import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 import { estimateContextTokens } from "./context-token-estimate.js";
-import { taskPolicyResumeInstructions } from "./llm-payload.js";
+import { runtimeAttemptRunContext, taskPolicyResumeInstructions } from "./llm-payload.js";
 import { buildRuntimeAttemptContext, buildRuntimeLiveContext } from "./runtime-dynamic-context.js";
 import { loadProjectContext, projectContextItems } from "./project-context-projection.js";
 import { submitRunUserInput } from "./user-input-submission.js";
 import type { ExecutionStateView } from "./execution-state.js";
 import { prepareExternalActionResumeBoundary } from "./external-action-resume-boundary.js";
-import type {
-  AttemptLauncherPort,
-  ContextEnrichmentPort,
-  ContinuationControlPort,
-  ExternalActionApprovalBoundaryPort,
-  RecoveryControlPort,
-  RunResumeOptions,
-  RunEventPublisherPort,
-  RuntimeControlPort,
-} from "./collaboration-ports.js";
+import type { AttemptLauncherPort, ContextEnrichmentPort, ContinuationControlPort, ExternalActionApprovalBoundaryPort, RecoveryControlPort, RunResumeOptions, RunEventPublisherPort, RuntimeControlPort } from "./collaboration-ports.js";
 import { effectiveTaskExecutionPolicy } from "@tagent/governance/domain";
-
+function hashContextProjection(value: string) { return createHash("sha256").update(value).digest("hex"); }
 type RunContextState = ExecutionStateView<
   "closing" | "executionTasks" | "persistence" | "runtimeDefaults" | "runtimes" | "workspace",
   "approvals" | "attempts" | "contextManifests" | "continuations" | "events" | "sessions" | "taskRuns" | "taskRunTransitions" | "transcript"
@@ -56,7 +47,6 @@ export class RunContextService {
     this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(approval.runId, "supervisor.approval.rejected", { approvalId, resolution }));
     return this.state.persistence.taskRuns.getRun(approval.runId)!;
   }
-
   async submitUserInput(requestId: string, response: Record<string, string>) {
     return submitRunUserInput(this.state, {
       continuation: this.dependencies.continuation,
@@ -66,7 +56,6 @@ export class RunContextService {
       resume: (runId, request) => this.resume(runId, { inputRequest: request }),
     }, requestId, response);
   }
-
   async resume(runId: RunId, options: RunResumeOptions = {}) {
     if (this.state.closing) throw new Error("Service is shutting down");
     if (this.state.runtimes.has(runId)) {
@@ -128,12 +117,13 @@ export class RunContextService {
     }
     const approvalBound = Boolean(options.approvalId);
     const provisionalPrompt = options?.inputRequest ? this.buildUserInputResumePrompt(run, options.inputRequest) : this.buildResumePrompt(run, this.state.persistence.transcript.getTranscriptCount(run.id), approvalBound);
-    const transcript = this.prepareTranscript(run, provisionalPrompt);
+    let transcript = this.prepareTranscript(run, provisionalPrompt);
     const prompt = options?.inputRequest ? this.buildUserInputResumePrompt(run, options.inputRequest) : this.buildResumePrompt(run, transcript.messages.length, approvalBound);
-    this.publishContextEvents(run.id, transcript);
+    if (prompt !== provisionalPrompt) transcript = this.prepareTranscript(run, prompt);
+    const contextManifest = this.publishContextEvents(run.id, transcript);
     const event = this.state.persistence.events.appendEvent(run.id, "run.resumed", { attempt: run.attempt, resumedAt: run.resumedAt, mode: transcript.messages.length ? "transcript-continuation" : "durable-snapshot-replay", transcriptCount: transcript.messages.length });
     this.dependencies.eventHub.publish(event);
-    this.dependencies.attemptExecutor.launch(run, prompt, transcript.messages, undefined, { attemptContext: transcript.attemptContext });
+    this.dependencies.attemptExecutor.launch(run, prompt, transcript.messages, undefined, { attemptContext: transcript.attemptContext, contextManifestId: contextManifest?.id });
     return this.state.persistence.taskRuns.getRun(run.id)!;
   }
 
@@ -168,8 +158,8 @@ export class RunContextService {
     };
   }
 
-  public prepareSessionHistoryWithoutRecall(run: TaskRun, query: string, excludeCurrentUserAfter?: number) {
-    const history = this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter);
+  public prepareSessionHistoryWithoutRecall(run: TaskRun, query: string, excludeCurrentUserAfter?: number, excludeCurrentUserContent = query) {
+    const history = this.sessionHistoryMessages(run.sessionId, excludeCurrentUserContent, excludeCurrentUserAfter);
     const enrichment = this.dependencies.contextEnrichment.prepareWithoutRecall(run, query);
     const projectContext = loadProjectContext(this.dependencies.projectContextSource);
     const attemptContext = buildRuntimeAttemptContext(run, enrichment.promptSection);
@@ -178,21 +168,22 @@ export class RunContextService {
       attemptContext,
       recalledMemory: enrichment.promptSection,
       memoryContextItems: enrichment.contextItems,
+      contextEvidenceSources: enrichment.evidenceSources,
       projectContextItems: projectContextItems(projectContext),
       projectContextHash: projectContext.snapshotHash,
     };
   }
 
-  public async prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter: number | undefined, signal: AbortSignal) {
+  public async prepareSessionHistory(run: TaskRun, query: string, excludeCurrentUserAfter: number | undefined, signal: AbortSignal, excludeCurrentUserContent = query) {
     signal.throwIfAborted();
     const enrichment = await this.dependencies.contextEnrichment.enrich(run, query, signal);
     signal.throwIfAborted();
-    const history = this.sessionHistoryMessages(run.sessionId, query, excludeCurrentUserAfter);
+    const history = this.sessionHistoryMessages(run.sessionId, excludeCurrentUserContent, excludeCurrentUserAfter);
     const projectContext = loadProjectContext(this.dependencies.projectContextSource);
     const attemptContext = buildRuntimeAttemptContext(run, enrichment.promptSection);
     const assembly = this.contextAssembler().assemble("session", history.messages, this.buildSystemPrompt(projectContext), query, history.sourceIds, attemptContext, this.liveContextFor(run));
     this.capturePrunedUserContext(run, assembly.droppedMessages);
-    return { ...assembly, attemptContext, recalledMemory: enrichment.promptSection, memoryContextItems: enrichment.contextItems, projectContextItems: projectContextItems(projectContext), projectContextHash: projectContext.snapshotHash };
+    return { ...assembly, attemptContext, recalledMemory: enrichment.promptSection, memoryContextItems: enrichment.contextItems, contextEvidenceSources: enrichment.evidenceSources, projectContextItems: projectContextItems(projectContext), projectContextHash: projectContext.snapshotHash };
   }
 
   public capturePrunedUserContext(run: TaskRun, messages: AgentMessage[]) {
@@ -212,24 +203,34 @@ export class RunContextService {
 
   private sessionHistoryMessageLimit() { return Math.max(40, (this.state.runtimeDefaults.maxContextTurns ?? 20) * 4); }
   private transcriptMessageLimit() { return Math.max(80, (this.state.runtimeDefaults.maxContextTurns ?? 20) * 12); }
-  public publishContextEvents(runId: RunId, assembly: ContextAssembly & { memoryContextItems?: ContextManifestItem[]; projectContextItems?: ContextManifestItem[]; projectContextHash?: string }) {
+  public publishContextEvents(runId: RunId, assembly: ContextAssembly & { memoryContextItems?: ContextManifestItem[]; contextEvidenceSources?: import("../domain/task-run.js").ContextEvidenceSource[]; projectContextItems?: ContextManifestItem[]; projectContextHash?: string }) {
     const { source, ...stats } = assembly.stats;
     const run = this.state.persistence.taskRuns.getRun(runId);
     if (run) {
+      const projectedContract = runtimeAttemptRunContext(run).contract;
       const items: ContextManifestItem[] = [
-        { kind: "system_prompt", sourceId: `run:${runId}:attempt:${run.attempt}`, selected: true, reason: "required runtime instruction", estimatedTokens: stats.systemTokens },
-        ...(run.contract ? [{ kind: "taskrun_contract" as const, sourceId: run.requestId, selected: true, reason: "active TaskRun execution contract", estimatedTokens: estimateContextTokens(JSON.stringify({ ...run.contract, workspaceGoal: undefined, skills: undefined })) }] : []),
-        ...(run.contract?.workspaceGoal ? [{ kind: "workspace_goal" as const, sourceId: `${run.contract.workspaceGoal.goalId}:${run.contract.workspaceGoal.definitionRevisionId}`, selected: true, reason: "immutable Workspace Goal direction", estimatedTokens: estimateContextTokens(JSON.stringify(run.contract.workspaceGoal)), metadata: { mode: run.contract.workspaceGoal.mode, roadmapRevisionId: run.contract.workspaceGoal.roadmapRevisionId } }] : []),
-        ...(run.contract?.skills ?? []).map((skill) => ({ kind: "skill" as const, sourceId: skill.revisionId, selected: true, reason: "Workspace-referenced immutable Skill revision", estimatedTokens: estimateContextTokens(skill.content), metadata: { name: skill.name, revision: skill.revision, sha256: skill.sha256, filePath: skill.filePath } })),
+        { kind: "system_prompt", sourceId: `run:${runId}:attempt:${run.attempt}`, selected: true, reason: "required runtime instruction", estimatedTokens: stats.systemTokens, projectedContentHash: assembly.systemContentHash, sourceRevision: `attempt:${run.attempt}` },
+        ...(projectedContract ? [{ kind: "taskrun_contract" as const, sourceId: run.requestId, selected: true, reason: "active TaskRun execution contract", estimatedTokens: estimateContextTokens(JSON.stringify(projectedContract)), projectedContentHash: hashContextProjection(JSON.stringify(projectedContract)), sourceRevision: run.requestId }] : []),
+        ...(projectedContract?.workspaceGoal && run.contract?.workspaceGoal ? [{ kind: "workspace_goal" as const, sourceId: `${run.contract.workspaceGoal.goalId}:${run.contract.workspaceGoal.definitionRevisionId}`, selected: true, reason: "immutable Workspace Goal direction", estimatedTokens: estimateContextTokens(JSON.stringify(projectedContract.workspaceGoal)), projectedContentHash: hashContextProjection(JSON.stringify(projectedContract.workspaceGoal)), sourceRevision: run.contract.workspaceGoal.definitionRevisionId, metadata: { mode: run.contract.workspaceGoal.mode, roadmapRevisionId: run.contract.workspaceGoal.roadmapRevisionId } }] : []),
+        ...(run.contract?.skills ?? []).map((skill) => ({ kind: "skill" as const, sourceId: skill.revisionId, selected: true, reason: "Workspace-referenced immutable Skill revision", estimatedTokens: estimateContextTokens(skill.content), projectedContentHash: skill.sha256, sourceRevision: skill.revisionId, metadata: { name: skill.name, revision: skill.revision, sha256: skill.sha256, filePath: skill.filePath } })),
         ...assembly.contextItems,
         ...(assembly.memoryContextItems ?? []),
         ...(assembly.projectContextItems ?? []),
-        { kind: "user_prompt", sourceId: `run:${runId}:attempt:${run.attempt}:prompt`, selected: true, reason: "current runtime instruction", estimatedTokens: stats.promptTokens },
+        { kind: "user_prompt", sourceId: `run:${runId}:attempt:${run.attempt}:prompt`, selected: true, reason: "current runtime instruction", estimatedTokens: stats.promptTokens, projectedContentHash: assembly.promptContentHash, sourceRevision: `attempt:${run.attempt}` },
       ];
       const manifestHash = createHash("sha256").update(JSON.stringify({ runId, attempt: run.attempt, source, items, stats, projectContextHash: assembly.projectContextHash ?? "" })).digest("hex");
-      const manifest = this.state.persistence.contextManifests.recordContextManifest({ id: randomUUID(), runId, attempt: run.attempt, source, items, stats: { source, ...stats }, manifestHash, createdAt: Date.now() });
-      void manifest;
+      const manifest = this.state.persistence.contextManifests.recordContextManifest(
+        { id: randomUUID(), runId, attempt: run.attempt, source, items, stats: { source, ...stats }, manifestHash, createdAt: Date.now(), requestEnvelopeIds: [] },
+        assembly.contextEvidenceSources,
+      );
+      this.publishContextPruningEvents(runId, source, stats, assembly);
+      return manifest;
     }
+    this.publishContextPruningEvents(runId, source, stats, assembly);
+    return undefined;
+  }
+
+  private publishContextPruningEvents(runId: RunId, source: "session" | "transcript", stats: Omit<ContextAssembly["stats"], "source">, assembly: ContextAssembly & { projectContextItems?: ContextManifestItem[]; projectContextHash?: string }) {
     this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "context.loaded", { source, ...stats, projectRules: assembly.projectContextItems?.filter((item) => item.selected).length ?? 0, projectContextHash: assembly.projectContextHash ?? "" }));
     if (stats.droppedTurns > 0 || stats.compressedTurns > 0) {
       this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(runId, "context.pruned", { source, ...stats }));

@@ -48,6 +48,14 @@ export type TranscriptItem = Static<typeof TranscriptItemSchema>;
 export const TranscriptQuerySchema = Type.Object({
   after: Type.Optional(Type.Integer({ minimum: 0 })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+  attempt: Type.Optional(Type.Integer({ minimum: 1 })),
+  role: Type.Optional(Type.Union([
+    Type.Literal("user"), Type.Literal("assistant"), Type.Literal("toolResult"),
+    Type.Literal("bashExecution"), Type.Literal("custom"), Type.Literal("branchSummary"), Type.Literal("compactionSummary"),
+  ])),
+  kind: Type.Optional(Type.Union([Type.Literal("user"), Type.Literal("assistant"), Type.Literal("thinking"), Type.Literal("tool")])),
+  createdAfter: Type.Optional(Type.Integer({ minimum: 0 })),
+  createdBefore: Type.Optional(Type.Integer({ minimum: 1 })),
 }, { additionalProperties: false });
 export type TranscriptQuery = Static<typeof TranscriptQuerySchema>;
 

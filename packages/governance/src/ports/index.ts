@@ -4,8 +4,10 @@ export type {
   ExternalActionAuthorizationActivation,
   ExternalActionAuthorizationResult,
 } from "./approval-repository.js";
+export type { AcceptedUncertaintyRepository, AcceptUncertaintyInput } from "./accepted-uncertainty-repository.js";
 export type { ContextManifestRepository } from "./context-manifest-repository.js";
 export type { ArtifactMetadata, EvidenceRepository } from "./evidence-repository.js";
+export type { EvidenceSourceRepository } from "./evidence-source-repository.js";
 export type { GateEvaluationRepository } from "./gate-evaluation-repository.js";
 export type {
   GovernanceCompletionRunView,

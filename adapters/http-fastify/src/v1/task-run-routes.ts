@@ -101,7 +101,7 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
       throw mismatch;
     }
     try {
-      const result = await executeTaskRunCommand(dependencies, taskRunId, command);
+      const result = await executeTaskRunCommand(dependencies, taskRunId, command, principalId);
       taskRunCommands.settleTaskRunCommand(principalId, taskRunId, command.commandId, "succeeded", result);
     } catch (error) {
       const mapped = error instanceof V1HttpError
@@ -132,18 +132,27 @@ export function registerTaskRunV1Routes(app: FastifyInstance, dependencies: Chan
   }, async (request) => {
     const { taskRunId } = request.params as TaskRunParams;
     requireChannelTaskRun(request, taskRuns, taskRunId);
-    const raw = request.query as { after?: number | string; limit?: number | string };
+    const raw = request.query as Record<string, number | string | undefined>;
     const query = decodeQuery(TranscriptQuerySchema, {
       ...(raw.after === undefined ? {} : { after: Number(raw.after) }),
       ...(raw.limit === undefined ? {} : { limit: Number(raw.limit) }),
+      ...(raw.attempt === undefined ? {} : { attempt: Number(raw.attempt) }),
+      ...(raw.role === undefined ? {} : { role: raw.role }),
+      ...(raw.kind === undefined ? {} : { kind: raw.kind }),
+      ...(raw.createdAfter === undefined ? {} : { createdAfter: Number(raw.createdAfter) }),
+      ...(raw.createdBefore === undefined ? {} : { createdBefore: Number(raw.createdBefore) }),
     });
     const after = query.after ?? 0;
     const limit = query.limit ?? 100;
-    const entries = transcript.listTranscriptEntries(taskRunId, { after, limit: limit + 1 });
+    const filters = {
+      attempt: query.attempt, role: query.role, kind: query.kind,
+      createdAfter: query.createdAfter, createdBefore: query.createdBefore,
+    };
+    const entries = transcript.listTranscriptEntries(taskRunId, { ...filters, after, limit: limit + 1 });
     const pageEntries = entries.slice(0, limit);
     const hasMore = entries.length > limit;
     const boundary = pageEntries.at(-1)?.seq ?? null;
-    const view = transcript.listTranscriptView(taskRunId, { after, limit });
+    const view = transcript.listTranscriptView(taskRunId, { ...filters, after, limit });
     const items = boundary === null ? [] : view.filter((item) => item.seq > after && item.seq <= boundary).map(mapTranscriptItem);
     return encodeAbi(
       TranscriptResponseSchema,

@@ -22,7 +22,7 @@ export class SnapshotWorkspaceEdit implements WorkspaceEditPort {
   async read(path: string, signal: AbortSignal): Promise<WorkspaceReadSnapshot> {
     const source = await readWorkspaceFile(this.workspace, path, signal);
     const content = source.buffer.toString("utf8").replace(/^\uFEFF/, "");
-    const contentHash = workspaceContentHash(content);
+    const contentHash = workspaceContentHash(source.buffer);
     return { path: source.relative, content, contentHash, snapshotId: `sha256:${contentHash}`, bytes: source.buffer.length };
   }
 

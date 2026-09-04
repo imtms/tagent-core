@@ -39,6 +39,9 @@ describe("security execution primitives", () => {
       SERVICE_CREDENTIAL: "service-secret",
       TAGENT_SERVICE_CREDENTIALS: "control-secret",
       TAGENT_EVALUATION_RECEIPT_SECRET: "receipt-secret",
+      BASH_ENV: "/tmp/untrusted-startup",
+      BASH_FUNC_injected: "() { printf injected; }",
+      RIPGREP_CONFIG_PATH: "/tmp/untrusted-ripgrep-config",
     };
     expect(scrubbedParentEnvironment(inherited)).toEqual({ PATH: "/safe/bin", LANG: "en_US.UTF-8" });
     expect(childEnvironment({ OPENAI_API_KEY: "explicit-trusted", CUSTOM: "visible" }, inherited)).toEqual({

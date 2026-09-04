@@ -25,6 +25,7 @@ const PUBLIC_METHODS = {
     "updateSkillProfile", "deleteSkill", "deleteSkillProfile", "listWorkspaceSkills",
     "listWorkspaceSkillsProfile", "replaceWorkspaceSkills", "replaceWorkspaceSkillsProfile",
   ],
+  governance: ["acceptRunUncertainty"],
 } as const satisfies {
   [Group in keyof CoreApplicationServices]: readonly (keyof CoreApplicationServices[Group])[];
 };
@@ -38,7 +39,8 @@ export type CoreApplicationCoordinator =
   & SelectedMethods<"admission">
   & SelectedMethods<"execution">
   & SelectedMethods<"workspaceGoals">
-  & SelectedMethods<"skills">;
+  & SelectedMethods<"skills">
+  & SelectedMethods<"governance">;
 
 /**
  * Exposes the intentionally flat application ABI without maintaining a forwarding God class.

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import type { RuntimeMessage as AgentMessage } from "@tagent/execution/ports";
 import { ContextAssembler, estimateTextTokens } from "@tagent/execution/composition";
 
@@ -20,10 +21,16 @@ describe("ContextAssembler", () => {
     expect(estimateTextTokens("中文中文中文中文")).toBeGreaterThan(estimateTextTokens("abcdefgh"));
   });
 
-  it("reports context usage without enforcing a Core token budget", () => {
+  it("reports context usage inside the Core token budget", () => {
     const result = new ContextAssembler({ contextWindow: 20_000, maxOutputTokens: 4_000, maxTurns: 10 }).assemble("session", [], "S".repeat(400), "Q".repeat(200));
     expect(result.stats).toMatchObject({ contextWindow: 20_000, originalMessages: 0, keptMessages: 0 });
     expect(result.stats).not.toHaveProperty("messageBudgetTokens");
+  });
+
+  it("fails before provider dispatch when fixed context and the current prompt exceed the model window", () => {
+    const assembler = new ContextAssembler({ contextWindow: 500, maxOutputTokens: 100, maxTurns: 10 });
+    expect(() => assembler.assemble("session", [], "system", "当前输入".repeat(1_000)))
+      .toThrow(/Current Attempt context exceeds the model window before history/);
   });
 
   it("reserves the exact stable Attempt context and live tail used at runtime", () => {
@@ -46,6 +53,18 @@ describe("ContextAssembler", () => {
       .assemble("session", messages, "system", "prompt", ["message:10", "message:11", "message:12", "message:13"]);
     expect(result.contextItems.filter((item) => item.selected).map((item) => item.sourceId)).toEqual(["message:12", "message:13"]);
     expect(result.contextItems.filter((item) => !item.selected).map((item) => item.sourceId)).toEqual(["message:10", "message:11"]);
+    const selected = result.contextItems.filter((item) => item.selected);
+    expect(selected.map((item) => item.sourceRevision)).toEqual(["message:12", "message:13"]);
+    expect(selected[0]?.projectedContentHash).toBe(createHash("sha256").update(JSON.stringify(result.messages[0])).digest("hex"));
+    expect(result.contextItems.find((item) => !item.selected)).not.toHaveProperty("projectedContentHash");
+  });
+
+  it("commits system/runtime and current-prompt projections independently", () => {
+    const systemPrompt = "system"; const attemptContext = "attempt"; const liveContext = "live"; const prompt = "prompt";
+    const result = new ContextAssembler({ contextWindow: 20_000, maxOutputTokens: 1_000, maxTurns: 5 })
+      .assemble("session", [], systemPrompt, prompt, [], attemptContext, liveContext);
+    expect(result.systemContentHash).toBe(createHash("sha256").update(JSON.stringify({ systemPrompt, attemptContext, liveContext })).digest("hex"));
+    expect(result.promptContentHash).toBe(createHash("sha256").update(prompt).digest("hex"));
   });
 
   it("keeps original source IDs when a tool-heavy turn is compressed", () => {

@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
 import { IdentifierSchema, IsoDateTimeSchema, RequestIdSchema } from "../../shared/primitives.js";
+import { RoutingProvenanceSchema } from "../../shared/routing-provenance.js";
 import { ProfilePageInfoSchema, ResourceRevisionSchema } from "../../profiles/v1/schemas.js";
 
 export const OperatorInboxItemSchema = Type.Object({
@@ -11,7 +12,7 @@ export const OperatorInboxItemSchema = Type.Object({
     Type.Literal("routed"), Type.Literal("deleted"), Type.Literal("failed"),
   ]),
   decision: Type.Union([
-    Type.Literal("pending"), Type.Literal("start_taskrun"), Type.Literal("steer"),
+    Type.Literal("pending"), Type.Literal("needs_clarification"), Type.Literal("start_taskrun"), Type.Literal("steer"),
     Type.Literal("follow_up"), Type.Literal("discussion"), Type.Literal("defer"),
     Type.Literal("merge"), Type.Literal("delete"),
   ]),
@@ -35,6 +36,7 @@ export const OperatorInboxItemSchema = Type.Object({
   confidence: Type.Number({ minimum: 0, maximum: 1 }),
   reason: Type.String({ maxLength: 4_000 }),
   gateProfile: Type.Union([Type.Literal("off"), Type.Literal("relaxed"), Type.Literal("strict")]),
+  routingProvenance: Type.Optional(Type.Union([RoutingProvenanceSchema, Type.Null()])),
   revision: ResourceRevisionSchema,
   createdAt: IsoDateTimeSchema,
   updatedAt: IsoDateTimeSchema,

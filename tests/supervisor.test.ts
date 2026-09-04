@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { performance } from "node:perf_hooks";
 import { Store } from "@tagent/persistence-sqlite/store";
-import { TaskRunSupervisor, OpenAiSupervisorReviewer, TestSupervisorReviewer, passingTestAudit, type SupervisorAudit } from "@tagent/core-service/composition";
+import { TaskRunSupervisor, OpenAiSupervisorReviewer, TestSupervisorReviewer, passingTestAudit, type SupervisorAudit, type SupervisorReviewer } from "@tagent/core-service/composition";
 import { createEnvironmentCredentialResolver, credentialReference } from "@tagent/execution/ports";
 import { upsertTrustedCheck } from "./support/trusted-evidence.js";
 
@@ -50,7 +50,7 @@ describe("TaskRunSupervisor LLM audit", () => {
     expect(run.gateRequired).toBe(false);
     expect(calls).toBe(0);
     expect(review.gates).toEqual([]);
-    expect(review.decision).toMatchObject({ action: "complete_taskrun", evaluator: "system", evaluatorModel: "gate-disabled-v1", reasonCode: "gate_disabled" });
+    expect(review.decision).toMatchObject({ action: "complete_taskrun", evaluator: "system", evaluatorModel: "gate-disabled-v1", reasonCode: "gate_disabled", epistemicStatus: "deterministic" });
     expect(store.getRun(run.id)?.supervision.latestGates).toEqual([]);
     store.close();
   });
@@ -99,6 +99,57 @@ describe("TaskRunSupervisor LLM audit", () => {
     const review = await new TaskRunSupervisor(store, new TestSupervisorReviewer(audit)).reviewSettled(store.getRun(run.id)!, 9, "generic answer");
     expect(review.decision).toMatchObject({ action: "start_continuation", evaluator: "llm", evaluatorModel: "test-supervisor-llm" });
     expect(store.getRun(run.id)?.supervision.latestGates.find((gate) => gate.gateType === "contract")).toMatchObject({ evaluator: "llm", evaluatorModel: "test-supervisor-llm", summary: expect.any(String), criterionCoverage: [{ criterion, status: "unsupported", evidenceRefs: [], reason: expect.any(String) }] });
+    store.close();
+  });
+
+  it("completes with active accepted uncertainty but never exempts contradicted coverage", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "qualify the unavailable result");
+    const criterion = "Report the upstream result or its irreducible unavailability";
+    store.db.prepare("UPDATE runs SET contract_json=? WHERE id=?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, objectives: [], acceptanceCriteria: [criterion], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
+    store.upsertPlanItem(run.id, { key: "qualify", title: "Qualify result", status: "done", required: true, position: 1 });
+    const accepted = store.acceptUncertainty({ id: "uncertainty-1", runId: run.id, criterionId: "ac-1", actorId: "operator:test", rationale: "The upstream remained unavailable after bounded recovery.", scope: "This TaskRun only.", evidenceRefs: [], expiresAt: null, createdAt: Date.now() });
+    const unsupported = failedAudit("start_continuation", "unsupported", { kind: "contract", key: "acceptance_criterion_1", reason: "The upstream is unavailable.", disposition: "external_dependency" }, [criterion]);
+    const completed = await new TaskRunSupervisor(store, new TestSupervisorReviewer(unsupported)).reviewSettled(store.getRun(run.id)!, 4, "The upstream limitation is documented.");
+    expect(completed.decision.action).toBe("complete_taskrun");
+    expect(completed.gates.find((gate) => gate.gateType === "contract")).toMatchObject({
+      passed: true, failures: [], criterionCoverage: [{ status: "unsupported", acceptedUncertaintyId: accepted.id }],
+    });
+
+    const independentEvidenceFailure = {
+      ...unsupported,
+      gates: {
+        ...unsupported.gates,
+        evidence: {
+          passed: false,
+          failures: [{
+            kind: "evidence", key: "ac-1", reason: "The independently required evidence is missing.",
+            disposition: "auto_fixable" as const,
+          }],
+          criterionCoverage: [{
+            criterion: "Observe the cumulative Goal result", status: "blocked" as const,
+            evidenceRefs: [], reason: "The Goal observation is not available yet.",
+          }],
+          summary: "Required evidence is missing.",
+        },
+      },
+    };
+    const evidenceBlocked = await new TaskRunSupervisor(store, new TestSupervisorReviewer(independentEvidenceFailure))
+      .reviewSettled(store.getRun(run.id)!, 5, "The upstream limitation is documented.");
+    expect(evidenceBlocked.decision.action).toBe("start_continuation");
+    expect(evidenceBlocked.gates.find((gate) => gate.gateType === "evidence")).toMatchObject({
+      passed: false,
+      failures: [{ kind: "evidence", key: "ac-1" }],
+      criterionCoverage: [{ status: "blocked" }],
+    });
+    expect(evidenceBlocked.gates.find((gate) => gate.gateType === "evidence")?.criterionCoverage?.[0])
+      .not.toHaveProperty("acceptedUncertaintyId");
+
+    const contradicted = failedAudit("start_continuation", "contradicted", { kind: "contract", key: "acceptance_criterion_1", reason: "The candidate contradicts durable evidence.", disposition: "auto_fixable" }, [criterion]);
+    contradicted.gates.contract.criterionCoverage![0]!.status = "contradicted";
+    contradicted.gates.completion.criterionCoverage![0]!.status = "contradicted";
+    const rejected = await new TaskRunSupervisor(store, new TestSupervisorReviewer(contradicted)).reviewSettled(store.getRun(run.id)!, 5, "A contradictory claim.");
+    expect(rejected.decision.action).toBe("start_continuation");
+    expect(rejected.gates.find((gate) => gate.gateType === "contract")).toMatchObject({ passed: false, criterionCoverage: [{ status: "contradicted" }] });
     store.close();
   });
 
@@ -280,6 +331,23 @@ describe("TaskRunSupervisor LLM audit", () => {
     store.close();
   });
 
+  it("fails closed when a Gate reports failure without an auditable reason", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "fail closed");
+    const inconsistent = passingTestAudit();
+    inconsistent.gates.progress.passed = false;
+    inconsistent.gates.completion.passed = false;
+    const review = await new TaskRunSupervisor(store, new TestSupervisorReviewer(inconsistent))
+      .reviewSettled(run, 3, "unsupported completion");
+    expect(review.decision).toMatchObject({ action: "block_taskrun", reasonCode: "authoritative_block_taskrun" });
+    expect(review.gates.find((gate) => gate.gateType === "completion")).toMatchObject({
+      passed: false,
+      failures: [expect.objectContaining({
+        kind: "supervisor", key: "inconsistent_gate_state", disposition: "non_recoverable",
+      })],
+    });
+    store.close();
+  });
+
   it("accepts completion only when the structured LLM completion gate passes", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "complete");
     const review = await new TaskRunSupervisor(store, new TestSupervisorReviewer(passingTestAudit())).reviewSettled(run, 4, "standalone result");
@@ -377,10 +445,12 @@ describe("TaskRunSupervisor LLM audit", () => {
     };
     store.db.prepare("UPDATE runs SET contract_json=? WHERE id=?").run(JSON.stringify(contract), run.id);
     const verification = upsertTrustedCheck(store, run.id, { key: "foundation", title: "Foundation tests", command: "npm test -- foundation", output: "foundation passed" });
+    const verificationSource = store.resolveEvidenceSources(run.id, [`operation:${verification.id}`])[0]!;
+    const verificationQuote = { sourceRef: verificationSource.sourceRef, sourceRevision: verificationSource.sourceRevision, sourceHash: verificationSource.sourceHash, selector: { kind: "text_quote", exact: "foundation passed" }, quote: "foundation passed" };
     const payload = semanticVerdict({
       criterionCoverage: [
-        { criterionId: "ac-1", status: "covered", evidenceRefs: ["check:foundation"], reason: "The foundation is present." },
-        { criterionId: "ac-2", status: "covered", evidenceRefs: ["check:foundation"], reason: "The foundation verification passed." },
+        { criterionId: "ac-1", status: "covered", evidenceRefs: ["check:foundation", verificationSource.sourceRef], evidenceQuotes: [verificationQuote], reason: "The foundation is present." },
+        { criterionId: "ac-2", status: "covered", evidenceRefs: ["check:foundation", verificationSource.sourceRef], evidenceQuotes: [verificationQuote], reason: "The foundation verification passed." },
       ],
       goalCriterionCoverage: [{ criterionId: "gc-1", status: "unsupported", evidenceRefs: [], reason: "Integration belongs to a later Roadmap item." }],
       failures: [{ kind: "contract", key: "gc-1", reason: "The complete rollout is not finished yet.", disposition: "auto_fixable" }],
@@ -395,6 +465,7 @@ describe("TaskRunSupervisor LLM audit", () => {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
       const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({
         run: store.getRun(run.id)!, response: "Stage one is complete and verified.", operations: store.listOperations(run.id), progress: undefined,
+        evidenceSources: [verificationSource],
       });
       expect(prompt).toContain('"goalCriteriaForEvidence":[{"criterionId":"gc-1"');
       expect(prompt).toContain("not acceptance criteria for this bounded TaskRun");
@@ -428,8 +499,9 @@ describe("TaskRunSupervisor LLM audit", () => {
     const verification = upsertTrustedCheck(store, run.id, {
       key: "verify", title: "Verify repaired migration", command: "npm test", output: "migration and regression tests passed",
     });
+    const verificationSource = store.resolveEvidenceSources(run.id, [`operation:${verification.id}`])[0]!;
     const verdict = semanticVerdict({
-      criterionCoverage: [{ criterionId: "ac-1", status: "covered", evidenceRefs: ["check:verify"], reason: "The current verification covers the repaired final state." }],
+      criterionCoverage: [{ criterionId: "ac-1", status: "covered", evidenceRefs: ["check:verify", verificationSource.sourceRef], evidenceQuotes: [{ sourceRef: verificationSource.sourceRef, sourceRevision: verificationSource.sourceRevision, sourceHash: verificationSource.sourceHash, selector: { kind: "text_quote", exact: "migration and regression tests passed" }, quote: "migration and regression tests passed" }], reason: "The current verification covers the repaired final state." }],
       failures: [{
         kind: "progress", key: "historical_migration_failure", reason: "Attempt 1 contained a failed migration.",
         disposition: "auto_fixable", operationRefs: [`operation:${priorFailure.id}`],
@@ -445,7 +517,7 @@ describe("TaskRunSupervisor LLM audit", () => {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
       const audit = await new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({
         run: store.getRun(run.id)!, response: "The migration was repaired and the current verification passed.",
-        operations: store.listOperations(run.id), progress: undefined,
+        operations: store.listOperations(run.id), progress: undefined, evidenceSources: [verificationSource],
       });
       expect(audit).toMatchObject({
         action: "complete_taskrun", reasonCode: "non_current_progress_ignored",
@@ -541,6 +613,132 @@ describe("TaskRunSupervisor LLM audit", () => {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
       await expect(new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(run.id)!, response: "done", operations: [], progress: undefined })).rejects.toThrow("unknown evidence reference");
     } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("persists only Core-verified Evidence Quotes in immutable Gate evaluations", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "audit the durable report");
+    const policy = { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "inspection" } as const;
+    const contract = { sourceInput: run.goal, summary: run.goal, objectives: [{ id: "o1", summary: run.goal, timing: "current" as const, kind: "investigate" as const }], acceptanceCriteria: ["The report contains the verified result"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
+    store.db.prepare("UPDATE runs SET contract_json=? WHERE id=?").run(JSON.stringify(contract), run.id);
+    store.addArtifact(run.id, { id: "report", title: "Report", kind: "text", content: "header\nverified result\nfooter", uri: "artifact://report" });
+    store.upsertPlanItem(run.id, { key: "audit", title: "Audit report", status: "done", required: true, position: 1, schemaVersion: 2, objectiveIds: ["o1"], criterionIds: ["ac-1"], dependencies: [], completionEvidenceRefs: ["artifact:report"] });
+    const source = store.resolveEvidenceSources(run.id, ["artifact:report"])[0]!;
+    const verdict = semanticVerdict({ criterionCoverage: [{
+      criterionId: "ac-1", status: "covered", evidenceRefs: [source.sourceRef],
+      evidenceQuotes: [{ sourceRef: source.sourceRef, sourceRevision: source.sourceRevision, sourceHash: source.sourceHash, selector: { kind: "line_range", startLine: 2, endLine: 2 }, quote: "verified result" }],
+      reason: "The immutable report contains the result.",
+    }] });
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(verdict) } }] }), { status: 200 });
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const review = await new TaskRunSupervisor(store, new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }))
+        .reviewSettled(store.getRun(run.id)!, 8, "The verified result is in the durable report.");
+      expect(review.decision).toMatchObject({ action: "complete_taskrun", epistemicStatus: "model_assessed" });
+      expect(store.getRun(run.id)?.supervision.latestGates.find((gate) => gate.gateType === "contract")?.criterionCoverage?.[0])
+        .toMatchObject({ status: "covered", evidenceRefs: ["artifact:report"], evidenceQuotes: [{ sourceHash: source.sourceHash, quote: "verified result" }] });
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("rejects excessive per-criterion and aggregate Evidence Quote payloads before persistence", async () => {
+    const original = globalThis.fetch;
+    const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+    const policy = { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "inspection" } as const;
+    const store = new Store(":memory:");
+    try {
+      const run = store.createRun(store.createSession().id, "bounded evidence quotes");
+      const contract = { sourceInput: run.goal, summary: run.goal, objectives: [], acceptanceCriteria: ["Bounded proof"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
+      store.db.prepare("UPDATE runs SET contract_json=? WHERE id=?").run(JSON.stringify(contract), run.id);
+      store.addArtifact(run.id, { id: "bounded", title: "Bounded", kind: "text", content: "proof", uri: "artifact://bounded" });
+      const source = store.resolveEvidenceSources(run.id, ["artifact:bounded"])[0]!;
+      const quote = { sourceRef: source.sourceRef, sourceRevision: source.sourceRevision, sourceHash: source.sourceHash, selector: { kind: "text_quote", exact: "proof" }, quote: "proof" };
+      globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(semanticVerdict({ criterionCoverage: [{ criterionId: "ac-1", status: "covered", evidenceRefs: [source.sourceRef], evidenceQuotes: Array.from({ length: 17 }, () => quote), reason: "proof" }] })) } }] }), { status: 200 }));
+      await expect(new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(run.id)!, response: "done", operations: [], progress: undefined, evidenceSources: [source] }))
+        .rejects.toThrow("more than 16 evidence quotes");
+
+      const aggregateRun = store.createRun(store.createSession().id, "aggregate evidence cap");
+      const criteria = Array.from({ length: 9 }, (_, index) => `Criterion ${index + 1}`);
+      const chunks = criteria.map((_, index) => `${index}:` + String.fromCharCode(97 + index).repeat(14_998));
+      const aggregateContract = { ...contract, sourceInput: aggregateRun.goal, summary: aggregateRun.goal, acceptanceCriteria: criteria, scope: aggregateRun.goal };
+      store.db.prepare("UPDATE runs SET contract_json=? WHERE id=?").run(JSON.stringify(aggregateContract), aggregateRun.id);
+      store.addArtifact(aggregateRun.id, { id: "large", title: "Large", kind: "text", content: chunks.join("\n"), uri: "artifact://large" });
+      const large = store.resolveEvidenceSources(aggregateRun.id, ["artifact:large"])[0]!;
+      const coverage = chunks.map((chunk, index) => ({
+        criterionId: `ac-${index + 1}`, status: "covered", evidenceRefs: [large.sourceRef], reason: "proof",
+        evidenceQuotes: [{ sourceRef: large.sourceRef, sourceRevision: large.sourceRevision, sourceHash: large.sourceHash, selector: { kind: "text_quote", exact: chunk }, quote: chunk }],
+      }));
+      globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(semanticVerdict({ criterionCoverage: coverage })) } }] }), { status: 200 }));
+      await expect(new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({ run: store.getRun(aggregateRun.id)!, response: "done", operations: [], progress: undefined, evidenceSources: [large] }))
+        .rejects.toThrow("131072-byte verdict limit");
+    } finally {
+      globalThis.fetch = original;
+      store.close();
+    }
+  });
+
+  it("rejects check-only strict coverage that omits its underlying Operation quote", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "verify with a check receipt");
+    const criterion = "The verification passes";
+    store.db.prepare("UPDATE runs SET contract_json=? WHERE id=?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, objectives: [], acceptanceCriteria: [criterion], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test" }), run.id);
+    const operation = upsertTrustedCheck(store, run.id, { key: "verify", title: "Verify", command: "npm test", output: "all tests passed" });
+    const verdict = semanticVerdict({ criterionCoverage: [{ criterionId: "ac-1", status: "covered", evidenceRefs: ["check:verify"], evidenceQuotes: [], reason: "The check passed." }] });
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(verdict) } }] }), { status: 200 });
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      await expect(new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({
+        run: store.getRun(run.id)!, response: "Verified.", operations: store.listOperations(run.id), progress: undefined,
+        evidenceSources: store.resolveEvidenceSources(run.id, [`operation:${operation.id}`]),
+      })).rejects.toThrow("Core-verifiable evidence quote");
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("rejects a check backed by an unrelated valid quote instead of its underlying Operation", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "verify with the exact check receipt");
+    const criterion = "The verification passes";
+    const policy = { mode: "workspace_mutation", sideEffectRisk: "workspace", evidencePolicy: "trusted_check", reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "change" } as const;
+    store.db.prepare("UPDATE runs SET contract_json=? WHERE id=?").run(JSON.stringify({ sourceInput: run.goal, summary: run.goal, objectives: [], acceptanceCriteria: [criterion], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent", intent: "new_task", decisionReason: "test", routerVersion: "test", executionPolicy: policy }), run.id);
+    const operation = upsertTrustedCheck(store, run.id, { key: "verify", title: "Verify", command: "npm test", output: "all tests passed" });
+    store.addArtifact(run.id, { id: "unrelated", title: "Unrelated note", kind: "text", content: "all tests passed", uri: "artifact://unrelated" });
+    const [operationSource, artifactSource] = store.resolveEvidenceSources(run.id, [`operation:${operation.id}`, "artifact:unrelated"]);
+    const verdict = semanticVerdict({ criterionCoverage: [{
+      criterionId: "ac-1", status: "covered", evidenceRefs: ["check:verify", operationSource!.sourceRef, artifactSource!.sourceRef],
+      evidenceQuotes: [{ sourceRef: artifactSource!.sourceRef, sourceRevision: artifactSource!.sourceRevision, sourceHash: artifactSource!.sourceHash, selector: { kind: "text_quote", exact: "all tests passed" }, quote: "all tests passed" }],
+      reason: "The check passed.",
+    }] });
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(verdict) } }] }), { status: 200 });
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      await expect(new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }).reviewSettled({
+        run: store.getRun(run.id)!, response: "Verified.", operations: store.listOperations(run.id), progress: undefined,
+        evidenceSources: [operationSource!, artifactSource!],
+      })).rejects.toThrow(`must quote the underlying Operation operation:${operation.id}`);
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
+  it("selects explicitly linked old evidence independently of the recent operation window", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "use the early receipt");
+    const policy = { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "inspection" } as const;
+    const contract = { sourceInput: run.goal, summary: run.goal, objectives: [{ id: "o1", summary: run.goal, timing: "current" as const, kind: "investigate" as const }], acceptanceCriteria: ["Use the durable early receipt"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
+    store.db.prepare("UPDATE runs SET contract_json=? WHERE id=?").run(JSON.stringify(contract), run.id);
+    store.claimOperation("early", run.id, 1, "tool.bash", { command: "rg early" });
+    store.updateOperation("early", { status: "succeeded", effects: [{ kind: "workspace", action: "read_only" }], result: { details: { exitCode: 0 } } });
+    for (let index = 0; index < 20; index += 1) {
+      store.claimOperation(`recent-${index}`, run.id, 1, "tool.bash", { command: `rg ${index}` });
+      store.updateOperation(`recent-${index}`, { status: "succeeded", effects: [{ kind: "workspace", action: "read_only" }], result: { details: { exitCode: 0 } } });
+    }
+    store.upsertPlanItem(run.id, { key: "audit", title: "Audit", status: "done", required: true, position: 1, schemaVersion: 2, objectiveIds: ["o1"], criterionIds: ["ac-1"], dependencies: [], completionEvidenceRefs: ["operation:early"] });
+    let observed: string[] = [];
+    const capture: SupervisorReviewer = {
+      evaluator: "llm", model: "capture-linked-evidence",
+      async reviewSettled(input) { observed = input.operations.map((operation) => operation.id); return passingTestAudit(); },
+      async reviewAttemptFailure() { return { action: "block_taskrun", reasonCode: "unused", rationale: "unused", confidence: 1 }; },
+    };
+    await new TaskRunSupervisor(store, capture).reviewSettled(store.getRun(run.id)!, 9, "done");
+    expect(observed).toContain("early");
+    expect(observed).toHaveLength(17);
+    store.close();
   });
 
   it("rejects hallucinated operation references on semantic failures", async () => {
@@ -668,7 +866,8 @@ describe("TaskRunSupervisor LLM audit", () => {
       const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
       const supervisor = new TaskRunSupervisor(store, new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }));
       const review = await supervisor.reviewSettled(store.getRun(run.id)!, 2, "candidate");
-      expect(review.decision).toMatchObject({ evaluator: "system", evaluatorModel: "deterministic-transport-recovery-v1", reasonCode: "supervisor_transport_unavailable" });
+      expect(review.decision).toMatchObject({ evaluator: "system", evaluatorModel: "deterministic-transport-recovery-v1", reasonCode: "supervisor_transport_unavailable", epistemicStatus: "degraded" });
+      expect(store.listSupervisorDecisions(run.id).at(-1)?.epistemicStatus).toBe("degraded");
       expect(review.gates.every((gate) => gate.evaluator === "system" && gate.evaluatorModel === "deterministic-transport-recovery-v1")).toBe(true);
     } finally { globalThis.fetch = original; store.close(); }
   });

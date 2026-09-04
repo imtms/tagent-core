@@ -1,4 +1,4 @@
-import type { ConsoleV1 } from "@tagent/abi";
+import type { ConsoleV1, OperatorInboxItem } from "@tagent/abi";
 
 export interface Session {
   id: string;
@@ -18,7 +18,7 @@ export interface SessionInboxItem {
   sessionId: string;
   content: string;
   status: "queued" | "claimed" | "started" | "routed" | "deleted" | "failed";
-  decision: "pending" | "start_taskrun" | "steer" | "follow_up" | "discussion" | "defer" | "merge" | "delete";
+  decision: "pending" | "needs_clarification" | "start_taskrun" | "steer" | "follow_up" | "discussion" | "defer" | "merge" | "delete";
   runId: string | null;
   position: number;
   createdAt: number;
@@ -33,6 +33,7 @@ export interface SessionInboxItem {
     acceptanceCriteria: string[];
     confidence: number;
     reason: string;
+    routingProvenance?: NonNullable<OperatorInboxItem["routingProvenance"]>;
   };
 }
 

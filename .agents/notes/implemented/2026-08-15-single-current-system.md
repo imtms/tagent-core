@@ -3,7 +3,7 @@
 Status: implemented
 Kind: simplification
 
-The later evolvable-current-state decision supersedes only this decision's fresh-only/no-migration consequence. One current API and one authority per mutation remain in force; exact legacy 0.8 SQLite state now migrates monotonically to revision 2.
+The later evolvable-current-state decision supersedes only this decision's fresh-only/no-migration consequence. One current API and one authority per mutation remain in force; exact legacy 0.8 SQLite state now migrates monotonically to revision 3.
 
 ## Problem
 
@@ -11,7 +11,7 @@ Core retained historical HTTP and DTO aliases, aggregate compatibility clients, 
 
 ## Decision
 
-Treat the current public feature set as the only supported application system. Core 0.8 keeps the `tagent-core/0.8` identity, reports public schema revision `2`, creates through the ordered migration runner, and upgrades only the exact legacy revision-1/pre-`user_version` 0.8 shape. It rejects unmarked, differently identified, newer, journal-mismatched, or structurally drifted databases instead of ad-hoc repair.
+Treat the current public feature set as the only supported application system. Core 0.8 keeps the `tagent-core/0.8` identity, reports public schema revision `3`, creates through the ordered migration runner, and upgrades only the exact revision-1/revision-2/pre-`user_version` 0.8 shapes. It rejects unmarked, differently identified, newer, journal-mismatched, or structurally drifted databases instead of ad-hoc repair.
 
 Persistent Memory initializes only an absent PostgreSQL `memory` schema, records `tagent-memory/0.8` with schema version `1`, and rejects an existing unmarked or differently identified schema. Its current schema is expressed directly without column-upgrade statements.
 
@@ -44,4 +44,4 @@ The immutable Core/Web archive build requires Linux x64, Node 24.18.1, and ABI 1
 
 Core has one current schema and one authority per durable operation, reducing its code, recovery, security, and test surface. Application ports describe only mounted behavior, and tests no longer force production storage to retain bypass helpers. Schema changes advance an ordered migration history without restoring historical application authorities or compatibility APIs.
 
-Existing exact 0.8 revision-1 databases are supported migration inputs; other historical databases and older Gateway, ABI, or Core Client tuples remain unsupported. Marker/journal edits and row copying are unsupported. Rollback requires a binary declaring the current r2 state protocol or restoration of the matching pre-upgrade backup.
+Existing exact 0.8 revision-1 and revision-2 databases are supported migration inputs; other historical databases and older Gateway, ABI, or Core Client tuples remain unsupported. Marker/journal edits and row copying are unsupported. Rollback requires a binary declaring the current r3 state protocol or restoration of the matching pre-upgrade backup.

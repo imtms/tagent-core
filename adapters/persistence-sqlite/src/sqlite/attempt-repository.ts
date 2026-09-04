@@ -313,6 +313,123 @@ export class SqliteAttemptRepository implements AttemptRepository {
     })();
   }
 
+  reAdjudicateBlockedCandidate(
+    input: Parameters<AttemptRepository["reAdjudicateBlockedCandidate"]>[0],
+  ): ReturnType<AttemptRepository["reAdjudicateBlockedCandidate"]> {
+    return this.db.transaction(() => {
+      const timestamp = input.timestamp ?? Date.now();
+      const attempt = this.getAttempt(input.attemptId);
+      if (!attempt) throw new Error(`Attempt ${input.attemptId} does not exist`);
+      if (attempt.version !== input.expectedVersion) throw new Error(`Attempt version mismatch for ${input.attemptId}`);
+      if (attempt.active || attempt.status !== "blocked") throw new Error(`Attempt ${input.attemptId} is not blocked`);
+      const candidate = this.getCandidate(input.candidateResultId);
+      if (!candidate || candidate.attemptId !== attempt.id || candidate.status !== "rejected") {
+        throw new Error(`Candidate result ${input.candidateResultId} is not the rejected Candidate for Attempt`);
+      }
+      if (candidate.attemptVersion !== attempt.version - 1
+        || candidate.responseHash !== input.candidateResponseHash
+        || !candidate.response.trim()) {
+        throw new Error("Rejected Candidate integrity does not match the blocked Attempt");
+      }
+      const run = this.db.prepare(`SELECT status,attempt,last_event_seq as lastEventSeq,session_id as sessionId
+        FROM runs WHERE id=?`).get(attempt.runId) as {
+          status: string; attempt: number; lastEventSeq: number; sessionId: string;
+        } | undefined;
+      if (!run || run.status !== "blocked" || run.attempt !== attempt.ordinal) {
+        throw new Error(`TaskRun projection is stale for blocked Attempt ${attempt.id}`);
+      }
+      const prior = this.db.prepare(`SELECT action,status,candidate_response_hash as candidateResponseHash
+        FROM supervisor_decisions WHERE id=? AND run_id=? AND attempt=?`).get(
+        input.previousSupervisorDecisionId, attempt.runId, attempt.ordinal,
+      ) as { action: string; status: string; candidateResponseHash: string } | undefined;
+      if (!prior || prior.action !== "block_taskrun" || prior.status !== "executed"
+        || prior.candidateResponseHash !== candidate.responseHash) {
+        throw new Error("Rejected Candidate is not bound to the prior executed blocking decision");
+      }
+      const decision = this.db.prepare(`SELECT action,status,candidate_response_hash as candidateResponseHash
+        FROM supervisor_decisions WHERE id=? AND run_id=? AND attempt=?`).get(
+        input.supervisorDecisionId, attempt.runId, attempt.ordinal,
+      ) as { action: string; status: string; candidateResponseHash: string } | undefined;
+      if (!decision || decision.action !== "complete_taskrun" || decision.status !== "proposed"
+        || decision.candidateResponseHash !== candidate.responseHash) {
+        throw new Error("Re-adjudication decision does not authorize this Candidate completion");
+      }
+      const gateIds = [...new Set(input.gateEvaluationIds)];
+      const gates = this.db.prepare(`SELECT id,gate_type as gateType,passed,failures_json as failuresJson
+        FROM gate_evaluations WHERE run_id=? AND attempt=? AND id IN (SELECT value FROM json_each(?))`).all(
+        attempt.runId, attempt.ordinal, JSON.stringify(gateIds),
+      ) as Array<{ id: string; gateType: string; passed: number; failuresJson: string }>;
+      const requiredGateTypes = ["progress", "evidence", "contract", "completion"];
+      if (gates.length !== gateIds.length || requiredGateTypes.some((type) => !gates.some((gate) => gate.gateType === type
+        && Boolean(gate.passed) && (JSON.parse(gate.failuresJson) as unknown[]).length === 0))) {
+        throw new Error("Re-adjudication Gates do not authorize Candidate completion");
+      }
+      const uncertaintyIds = [...new Set(input.acceptedUncertaintyIds)];
+      if (!uncertaintyIds.length) throw new Error("Candidate re-adjudication requires accepted uncertainty");
+      const uncertainties = this.db.prepare(`SELECT id FROM accepted_uncertainties
+        WHERE run_id=? AND id IN (SELECT value FROM json_each(?))
+          AND (expires_at IS NULL OR expires_at > ?)`).all(
+        attempt.runId, JSON.stringify(uncertaintyIds), timestamp,
+      ) as Array<{ id: string }>;
+      if (uncertainties.length !== uncertaintyIds.length) {
+        throw new Error("Candidate re-adjudication uncertainty is missing or expired");
+      }
+      const eventSeq = run.lastEventSeq + 1;
+      const data = {
+        attemptId: attempt.id,
+        candidateResultId: candidate.id,
+        response: candidate.response,
+        supervisionDecisionId: input.supervisorDecisionId,
+        previousSupervisionDecisionId: input.previousSupervisorDecisionId,
+        action: decision.action,
+        reason: input.reason,
+        acceptedUncertaintyIds: uncertaintyIds,
+        reAdjudicated: true,
+      };
+      this.db.prepare(`INSERT INTO run_events (run_id,seq,attempt_id,type,data,created_at)
+        VALUES (?,?,?,'run.completed',?,?)`).run(
+        attempt.runId, eventSeq, attempt.id, JSON.stringify(data), timestamp,
+      );
+      const attemptUpdate = this.db.prepare(`UPDATE attempts SET status='completed',version=version+1,
+        event_sequence=?,updated_at=?,completed_at=?
+        WHERE id=? AND version=? AND active=0 AND status='blocked'`).run(
+        eventSeq, timestamp, timestamp, attempt.id, attempt.version,
+      );
+      if (attemptUpdate.changes !== 1) throw new Error("Blocked Attempt changed during Candidate re-adjudication");
+      const runUpdate = this.db.prepare(`UPDATE runs SET status='completed',phase='done',blocked_reason='',
+        last_event_seq=?,completed_at=?,updated_at=? WHERE id=? AND status='blocked' AND attempt=?`).run(
+        eventSeq, timestamp, timestamp, attempt.runId, attempt.ordinal,
+      );
+      if (runUpdate.changes !== 1) throw new Error("Blocked TaskRun changed during Candidate re-adjudication");
+      const candidateUpdate = this.db.prepare(`UPDATE candidate_results SET status='accepted'
+        WHERE id=? AND status='rejected' AND response_hash=?`).run(candidate.id, candidate.responseHash);
+      if (candidateUpdate.changes !== 1) throw new Error("Rejected Candidate changed during re-adjudication");
+      const decisionUpdate = this.db.prepare(`UPDATE supervisor_decisions SET status='executed',error='',executed_at=?
+        WHERE id=? AND status='proposed'`).run(timestamp, input.supervisorDecisionId);
+      if (decisionUpdate.changes !== 1) throw new Error("Re-adjudication decision changed before completion");
+      this.db.prepare(`INSERT INTO messages (session_id,role,content,created_at)
+        VALUES (?,'assistant',?,?)`).run(run.sessionId, candidate.response, timestamp);
+      this.db.prepare("UPDATE sessions SET updated_at=? WHERE id=?").run(timestamp, run.sessionId);
+      finalizeAttemptProjectionCheckpoint(this.db, {
+        runId: attempt.runId,
+        attemptId: attempt.id,
+        attemptOrdinal: attempt.ordinal,
+        eventSeq,
+        timestamp,
+      });
+      this.db.prepare(`INSERT INTO attempt_transition_audit
+        (id,attempt_id,run_id,ordinal,from_status,to_status,trigger,scenario,reason,version,event_sequence,created_at)
+        VALUES (?,?,?,?,?,'completed',?,'uncertainty_readjudication',?,?,?,?)`).run(
+        randomUUID(), attempt.id, attempt.runId, attempt.ordinal, attempt.status, attempt.trigger,
+        input.reason, attempt.version + 1, eventSeq, timestamp,
+      );
+      return {
+        attempt: this.getAttempt(attempt.id)!,
+        event: { runId: attempt.runId, seq: eventSeq, type: "run.completed" as const, data, createdAt: timestamp },
+      };
+    })();
+  }
+
   recoverInterruptedAttempt(
     input: Parameters<AttemptRepository["recoverInterruptedAttempt"]>[0],
   ): ReturnType<AttemptRepository["recoverInterruptedAttempt"]> {
@@ -519,7 +636,7 @@ export class SqliteAttemptRepository implements AttemptRepository {
       FROM candidate_results WHERE id=?`).get(id) as CandidateResult | undefined;
   }
 
-  private getCandidateForAttempt(attemptId: string): CandidateResult | undefined {
+  getCandidateForAttempt(attemptId: string): CandidateResult | undefined {
     return this.db.prepare(`SELECT id,attempt_id as attemptId,attempt_version as attemptVersion,
       response,response_hash as responseHash,status,created_at as createdAt,settled_at as settledAt
       FROM candidate_results WHERE attempt_id=?`).get(attemptId) as CandidateResult | undefined;

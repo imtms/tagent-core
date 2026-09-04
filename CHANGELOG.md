@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+## [0.8.32] - 2026-09-04
+
+### Semantic control plane
+
+- Bounded Router input to its configured model window, persisted routing provenance and partial usage independently of object identity, capped deterministic fallback, prohibited model-authored legacy `merge_candidate`, and routed materially low-confidence intake to durable clarification.
+- Added criterion-aware version-2 plans with objective/criterion coverage, dependencies, append-only revisions, replanning reasons, linked completion evidence, and acyclic deterministic Gate checks. Roadmap Goal observations remain separate from Run-local `ac-*` completion criteria.
+- Added Core-verified Evidence Quotes over immutable Artifact, Operation, exact Transcript, and selected Memory projections, with bounded selectors, hashes, source revisions, quote budgets, and exact `check:*` to `operation:*` binding.
+- Added append-only accepted-uncertainty decisions for authorized `runs:control` callers. Core can transactionally re-adjudicate the preserved rejected Candidate without rerunning the Agent while retaining the original rejection and Gate history.
+
+### Runtime, tools, and recovery
+
+- Added projected-content commitments to Context Manifests and linked each manifest to the hash-verified provider request envelopes that actually used it; the request envelope remains the authority for each exact provider payload.
+- Added append-only Unicode FTS, bounded literal/term search, stable exclusive pagination, filters, exact-sequence retrieval, and cross-page Tool Call/result pairing to the durable Transcript.
+- Made candidate settlement reject empty, failed, transport-incomplete, and genuinely token-truncated output under every Gate profile.
+- Tightened workspace mutation and Bash policy: existing-file replacement is snapshot-bound, Bash starts without user profiles, ambient shell hooks are scrubbed, symlink/path-following and workspace code execution require current-Attempt approval, and only a narrow non-dereferencing observation set remains approval-free.
+- Moved the complete external-action approval transition into one writer-fenced Unit of Work and publish durable events only after commit. Corrected accepted uncertainty so it exempts only the matching contract/completion failure, never same-key evidence/progress failures or Goal coverage.
+- Split Admission, approval, finalization, governance, and operation-receipt execution responsibilities without adding a service or mutation boundary.
+
+### Security
+
+- Updated Fastify, fflate, and transitive fast-uri dependencies to releases that address schema-validation, proxy-header, archive-processing, URI-canonicalization, and SSRF advisories detected by the release audit.
+
+### Persistence and upgrade
+
+- Advanced SQLite `tagent-core/0.8` to revision `3` and the state protocol to `tagent-core/state-0.8-r3`. Revision 3 adds semantic-control provenance, immutable plan/evidence state, accepted uncertainty, Context Manifest linkage, and Transcript FTS.
+- The first r3 deployment requires a complete Host/service restart. Stop all writers and back up SQLite together with its WAL/SHM files before starting `0.8.32`.
+- The migration accepts exact revision-1, revision-2, and pre-`user_version` 0.8 databases, runs transactionally after revision-specific drift preflight, and validates the complete schema and append-only journal on reopen.
+- A migrated revision-3 database cannot be used by an r2 binary and is not automatically downgraded. Rollback to r2 requires stopping the service and restoring the matching pre-r3 SQLite/WAL/SHM recovery set.
+
+### Compatibility
+
+- The HTTP major remains `/api/v1`, Host protocol remains `2`, all five capability profiles remain `1.0`, and PostgreSQL Memory remains `tagent-memory/0.8` schema version `1`. Deploy matching `0.8.32` Core, Web Console, ABI, and Core Client artifacts.
+
 ## [0.8.31] - 2026-08-23
 
 ### Web Console information hierarchy

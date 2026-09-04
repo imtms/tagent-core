@@ -12,6 +12,7 @@ export const TASK_RUN_COMMAND_TYPES = [
   "task_run.compact",
   "task_run.submit_user_input",
   "task_run.resolve_approval",
+  "task_run.accept_uncertainty",
 ] as const;
 
 export const TaskRunCommandTypeSchema = Type.Union([
@@ -22,6 +23,7 @@ export const TaskRunCommandTypeSchema = Type.Union([
   Type.Literal("task_run.compact"),
   Type.Literal("task_run.submit_user_input"),
   Type.Literal("task_run.resolve_approval"),
+  Type.Literal("task_run.accept_uncertainty"),
 ]);
 export type TaskRunCommandType = Static<typeof TaskRunCommandTypeSchema>;
 
@@ -87,6 +89,19 @@ export const TaskRunResolveApprovalCommandSchema = Type.Object({
 }, { additionalProperties: false });
 export type TaskRunResolveApprovalCommand = Static<typeof TaskRunResolveApprovalCommandSchema>;
 
+export const TaskRunAcceptUncertaintyCommandSchema = Type.Object({
+  ...TaskRunCommandBase,
+  type: Type.Literal("task_run.accept_uncertainty"),
+  payload: Type.Object({
+    criterionId: Type.String({ minLength: 4, maxLength: 256, pattern: "^ac-[1-9][0-9]*$" }),
+    rationale: Type.String({ minLength: 1, maxLength: 4_000, pattern: "^[^\\u0000]+$" }),
+    scope: Type.String({ minLength: 1, maxLength: 2_000, pattern: "^[^\\u0000]+$" }),
+    evidenceRefs: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 2_000, pattern: "^[^\\u0000]+$" }), { maxItems: 100 })),
+    expiresAt: Type.Optional(Type.Union([IsoDateTimeSchema, Type.Null()])),
+  }, { additionalProperties: false }),
+}, { additionalProperties: false });
+export type TaskRunAcceptUncertaintyCommand = Static<typeof TaskRunAcceptUncertaintyCommandSchema>;
+
 export const TaskRunCommandSchema = Type.Union([
   TaskRunSteerCommandSchema,
   TaskRunFollowUpCommandSchema,
@@ -95,6 +110,7 @@ export const TaskRunCommandSchema = Type.Union([
   TaskRunCompactCommandSchema,
   TaskRunSubmitUserInputCommandSchema,
   TaskRunResolveApprovalCommandSchema,
+  TaskRunAcceptUncertaintyCommandSchema,
 ]);
 export type TaskRunCommand = Static<typeof TaskRunCommandSchema>;
 

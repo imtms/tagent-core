@@ -3,11 +3,13 @@ import type { RuntimeModelSpec } from "@tagent/execution/ports";
 import type { ContextManifest, TaskRunWorkspaceGoalSnapshot } from "@tagent/execution/domain";
 import type {
   CriterionCoverage,
+  EvidenceSource,
   GateFailure,
   ProgressSnapshot,
   SupervisorAction,
 } from "@tagent/governance/domain";
 import { deriveSupervisorAction, effectiveTaskExecutionPolicy } from "@tagent/governance/domain";
+import { verifyEvidenceQuote } from "@tagent/governance/application";
 import type { GovernanceTaskRunView, OperationRecord } from "@tagent/governance/ports";
 import { projectUtf8HeadTail, truncateUtf8 } from "@tagent/execution/composition";
 import { OpenAiResponseHeaderTimeoutError, OpenAiSseIdleTimeoutError, readOpenAiChatContent } from "./openai-sse.js";
@@ -31,6 +33,7 @@ export interface SupervisorSettledReviewInput {
   operations: OperationRecord[];
   progress: ProgressSnapshot | undefined;
   contextManifest?: ContextManifest;
+  evidenceSources?: EvidenceSource[];
 }
 export class SupervisorReviewError extends Error {
   constructor(message: string) { super(message); this.name = "SupervisorReviewError"; }
@@ -50,6 +53,9 @@ export interface SupervisorReviewer {
 
 const failureDispositions = new Set<GateFailure["disposition"]>(["auto_fixable", "needs_user_input", "needs_approval", "external_dependency", "runtime_transient", "non_recoverable"]);
 const coverageStatuses = new Set<CriterionCoverage["status"]>(["covered", "unsupported", "contradicted", "blocked"]);
+const MAX_EVIDENCE_QUOTES_PER_COVERAGE = 16;
+const MAX_EVIDENCE_QUOTES_PER_VERDICT_BYTES = 128 * 1_024;
+interface EvidenceQuoteBudget { usedBytes: number }
 
 function object(value: unknown, label: string): Record<string, unknown> {
   if (!value || Array.isArray(value) || typeof value !== "object") throw new Error(`Supervisor LLM returned invalid ${label}`);
@@ -93,6 +99,10 @@ function parseCoverage(
   criteria: string[],
   validEvidenceRefs: Set<string>,
   options: { id: (index: number) => string; label: string } = { id: criterionId, label: "acceptance criterion" },
+  evidenceSources: ReadonlyMap<string, EvidenceSource> = new Map(),
+  requireEvidenceQuotes = false,
+  checkOperationRefs: ReadonlyMap<string, string> = new Map(),
+  quoteBudget: EvidenceQuoteBudget = { usedBytes: 0 },
 ): CriterionCoverage[] {
   if (!criteria.length && value === undefined) return [];
   if (!Array.isArray(value)) throw new Error("Supervisor LLM returned invalid criterion coverage receipts");
@@ -115,7 +125,32 @@ function parseCoverage(
     const status = text(item.status, "criterion status") as CriterionCoverage["status"];
     if (!coverageStatuses.has(status)) throw new Error("Supervisor LLM returned unknown criterion status");
     if (!Array.isArray(item.evidenceRefs) || !item.evidenceRefs.every((ref) => typeof ref === "string" && validEvidenceRefs.has(ref))) throw new Error("Supervisor LLM returned unknown evidence reference");
-    return { criterion, status, evidenceRefs: item.evidenceRefs as string[], reason: text(item.reason, "coverage reason") };
+    const evidenceRefs = item.evidenceRefs as string[];
+    if (item.evidenceQuotes !== undefined && !Array.isArray(item.evidenceQuotes)) throw new Error("Supervisor LLM returned invalid evidence quotes");
+    const proposedQuotes = item.evidenceQuotes as unknown[] | undefined ?? [];
+    if (proposedQuotes.length > MAX_EVIDENCE_QUOTES_PER_COVERAGE) {
+      throw new Error(`Supervisor LLM returned more than ${MAX_EVIDENCE_QUOTES_PER_COVERAGE} evidence quotes for ${id}`);
+    }
+    const evidenceQuotes = proposedQuotes.map((quote) => verifyEvidenceQuote(quote, evidenceSources));
+    quoteBudget.usedBytes += evidenceQuotes.reduce((bytes, quote) => bytes + Buffer.byteLength(quote.quote, "utf8"), 0);
+    if (quoteBudget.usedBytes > MAX_EVIDENCE_QUOTES_PER_VERDICT_BYTES) {
+      throw new Error(`Supervisor LLM evidence quotes exceed the ${MAX_EVIDENCE_QUOTES_PER_VERDICT_BYTES}-byte verdict limit`);
+    }
+    if (evidenceQuotes.some((quote) => !evidenceRefs.includes(quote.sourceRef))) throw new Error("Evidence quote source must also appear in evidenceRefs");
+    const hasEvidenceThatRequiresQuote = evidenceRefs.some((ref) => evidenceSources.has(ref) || ref.startsWith("check:"));
+    if (requireEvidenceQuotes && status === "covered" && hasEvidenceThatRequiresQuote && evidenceQuotes.length === 0) {
+      throw new Error(`Supervisor LLM must return a Core-verifiable evidence quote for ${id}`);
+    }
+    if (requireEvidenceQuotes && status === "covered") for (const checkRef of evidenceRefs.filter((ref) => checkOperationRefs.has(ref))) {
+      const operationRef = checkOperationRefs.get(checkRef)!;
+      if (!evidenceRefs.includes(operationRef)) {
+        throw new Error(`Supervisor LLM must cite the underlying Operation ${operationRef} for ${checkRef}`);
+      }
+      if (!evidenceQuotes.some((quote) => quote.sourceRef === operationRef)) {
+        throw new Error(`Supervisor LLM must quote the underlying Operation ${operationRef} for ${checkRef}`);
+      }
+    }
+    return { criterion, status, evidenceRefs, ...(evidenceQuotes.length ? { evidenceQuotes } : {}), reason: text(item.reason, "coverage reason") };
   });
 }
 interface TrustedEvidenceSet {
@@ -237,6 +272,9 @@ function selectReviewOperations(input: SupervisorSettledReviewInput, trusted: Tr
   const sourceIds = new Set(input.run.checks
     .filter((check) => check.required && check.sourceOperationId && trusted.trustedCheckRefs.has(`check:${check.key}`))
     .map((check) => check.sourceOperationId!));
+  for (const source of input.evidenceSources ?? []) {
+    if (source.kind === "operation" && source.sourceRef.startsWith("operation:")) sourceIds.add(source.sourceRef.slice("operation:".length));
+  }
   const selectedIds = new Set<string>();
   for (let index = input.operations.length - 1; index >= 0 && selectedIds.size < limit; index -= 1) {
     const operation = input.operations[index];
@@ -421,9 +459,13 @@ Return compact JSON only: {"delivery":{"complete":true,"relevant":true,"contradi
       ? workspaceGoal.criterionPrompts.map((item) => item.prompt)
       : [];
     const trusted = trustedEvidence(input);
+    const sourceByRef = new Map((input.evidenceSources ?? []).map((source) => [source.sourceRef, source]));
     const selectedOperations = selectReviewOperations(input, trusted);
     const recentOperations = selectedOperations.operations;
-    const reviewArtifacts = input.run.artifacts.slice(-24);
+    const linkedArtifactIds = new Set([...sourceByRef.values()].filter((source) => source.kind === "artifact")
+      .map((source) => source.sourceRef.slice("artifact:".length)));
+    const recentArtifactIds = new Set(input.run.artifacts.slice(-24).map((artifact) => artifact.id));
+    const reviewArtifacts = input.run.artifacts.filter((artifact) => linkedArtifactIds.has(artifact.id) || recentArtifactIds.has(artifact.id));
     const artifactContentBudget = Math.max(1_200, Math.min(4_000, Math.floor(48_000 / Math.max(1, reviewArtifacts.length))));
     const memoryEvidence = input.contextManifest?.items
       .filter((item) => item.selected && ["core_memory","memory_card","cold_topic"].includes(item.kind))
@@ -433,7 +475,8 @@ Return compact JSON only: {"delivery":{"complete":true,"relevant":true,"contradi
       ...input.run.checks.filter((check) => check.required && trusted.trustedCheckRefs.has(`check:${check.key}`)).map((check) => `check:${check.key}`),
       ...recentOperations.filter((operation) => selectedOperations.trustedIds.has(operation.id)).map((operation) => `operation:${operation.id}`),
       ...reviewArtifacts.map((artifact) => `artifact:${artifact.id}`).filter((ref) => trusted.validRefs.has(ref)),
-      ...memoryEvidence.map((item) => item.ref),
+      ...[...sourceByRef.values()].filter((source) => source.kind === "transcript").map((source) => source.sourceRef),
+      ...memoryEvidence.map((item) => item.ref).filter((ref) => sourceByRef.get(ref)?.kind === "memory"),
     ]);
     const candidateProjection = projectUtf8HeadTail(input.response, 8_000, 3_000);
     const operationProjection = (operation: OperationRecord, settlementRole: "current_attempt" | "audit_context_only") => ({
@@ -491,6 +534,14 @@ Return compact JSON only: {"delivery":{"complete":true,"relevant":true,"contradi
       historicalAttemptOperations,
       operationsOmitted: input.operations.length - recentOperations.length,
       allowedEvidenceRefs: [...validEvidenceRefs],
+      evidenceQuoteSources: [...sourceByRef.values()].map((source) => {
+        const projection = projectUtf8HeadTail(source.content, 1_600, 600);
+        return {
+          sourceRef: source.sourceRef, kind: source.kind, sourceRevision: source.sourceRevision, sourceHash: source.sourceHash,
+          content: projection.text,
+          contentProjection: { strategy: projection.strategy, omittedBytes: projection.omittedBytes },
+        };
+      }),
       memoryEvidence,
       goalCriteriaForEvidence: goalCriteria.map((item, index) => ({ criterionId: goalCriterionId(index), text: truncateUtf8(item, 1_000) })),
       progress: input.progress ? { meaningfulChanges: input.progress.meaningfulChanges, consecutiveFailures: input.progress.consecutiveFailures, repeatedOperations: input.progress.repeatedOperations } : null,
@@ -510,6 +561,8 @@ Authoritative audit rules:
 - Objectively checkable facts belong to deterministic checks and operation receipts; do not replace them with model opinion.
 - Tool/operation/check facts are evidence, but agent-authored labels alone are not proof.
 - Only allowedEvidenceRefs may support criterion coverage. A check is usable only when trusted=true, which means Core bound it to a current successful Bash receipt.
+- Evidence quotes may cite only evidenceQuoteSources. Copy its sourceRevision and sourceHash exactly. Use a text_quote for an exact visible excerpt, a 1-based inclusive line_range, a 0-based half-open UTF-8 byte_range, or an RFC 6901 json_pointer. The quote field must equal the selected source bytes/value exactly. Include the quote sourceRef in evidenceRefs.
+- A covered receipt that cites check:* must also cite and quote that check's underlying operation:* source. The check label alone is not a quotable receipt.
 - Inspect the actual operation payload and result receipt, including command, exit code, output, effects, digest, and time. Status="succeeded" alone does not prove a semantic claim.
 - Evaluate every acceptance criterion independently. Identify receipts only by the supplied criterionId; never copy or rewrite criterion text into receipts.
 - Goal criteria for evidence are cumulative Workspace Goal observations, not acceptance criteria for this bounded TaskRun. Evaluate whether this Run's supplied evidence covers or contradicts them, but an unsupported or blocked Goal criterion must never fail this TaskRun or make its delivery incomplete.
@@ -534,7 +587,7 @@ Authoritative audit rules:
 - Report only semantic failures not already expressed by criterion coverage. Do not invent plan/check prerequisite failures.
 
 Return compact JSON only. Keep every reason under 160 characters. Use this exact shape:
-{"delivery":{"complete":true,"relevant":true,"contradictory":false,"reason":"..."},"criterionCoverage":[{"criterionId":"ac-1","status":"covered|unsupported|contradicted|blocked","evidenceRefs":["check:key|artifact:id|operation:id|memory:record-or-revision"],"reason":"..."}],"goalCriterionCoverage":[{"criterionId":"gc-1","status":"covered|unsupported|contradicted|blocked","evidenceRefs":["check:key|artifact:id|operation:id|memory:record-or-revision"],"reason":"..."}],"failures":[{"kind":"progress|evidence|check|contract|completion","key":"...","reason":"...","disposition":"auto_fixable|needs_user_input|needs_approval|external_dependency|runtime_transient|non_recoverable","operationRefs":["operation:id"]}]}
+{"delivery":{"complete":true,"relevant":true,"contradictory":false,"reason":"..."},"criterionCoverage":[{"criterionId":"ac-1","status":"covered|unsupported|contradicted|blocked","evidenceRefs":["check:key|artifact:id|operation:id|transcript:run:seq|memory:record-or-revision"],"evidenceQuotes":[{"sourceRef":"operation:id","sourceRevision":"...","sourceHash":"sha256:...","selector":{"kind":"text_quote","exact":"..."},"quote":"..."}],"reason":"..."}],"goalCriterionCoverage":[{"criterionId":"gc-1","status":"covered|unsupported|contradicted|blocked","evidenceRefs":["check:key|artifact:id|operation:id|transcript:run:seq|memory:record-or-revision"],"evidenceQuotes":[],"reason":"..."}],"failures":[{"kind":"progress|evidence|check|contract|completion","key":"...","reason":"...","disposition":"auto_fixable|needs_user_input|needs_approval|external_dependency|runtime_transient|non_recoverable","operationRefs":["operation:id"]}]}
 Each failure is {"kind":"...","key":"...","reason":"...","disposition":"auto_fixable|needs_user_input|needs_approval|external_dependency|runtime_transient|non_recoverable","operationRefs":["operation:id"]}. operationRefs may be empty except that operation-based progress failures must cite current-Attempt operations.
 TASKRUN_DATA=${JSON.stringify(payload)}`;
     try {
@@ -611,8 +664,14 @@ TASKRUN_DATA=${JSON.stringify(payload)}`;
       throw new Error("Supervisor LLM returned invalid delivery verdict");
     }
     const deliveryReason = text(delivery.reason, "delivery reason");
-    const coverage = parseCoverage(result.criterionCoverage, criteria, validEvidenceRefs);
-    const goalCoverage = parseCoverage(result.goalCriterionCoverage, goalCriteria, validEvidenceRefs, { id: goalCriterionId, label: "Goal criterion" });
+    const sourceByRef = new Map((input.evidenceSources ?? []).map((source) => [source.sourceRef, source]));
+    const requiresQuotes = effectiveTaskExecutionPolicy(input.run.contract, input.operations, input.run.attempt).evidencePolicy !== "semantic";
+    const checkOperationRefs = new Map(input.run.checks.flatMap((check) => check.sourceOperationId && trusted.trustedCheckRefs.has(`check:${check.key}`)
+      ? [[`check:${check.key}`, `operation:${check.sourceOperationId}`] as const]
+      : []));
+    const quoteBudget = { usedBytes: 0 };
+    const coverage = parseCoverage(result.criterionCoverage, criteria, validEvidenceRefs, { id: criterionId, label: "acceptance criterion" }, sourceByRef, requiresQuotes, checkOperationRefs, quoteBudget);
+    const goalCoverage = parseCoverage(result.goalCriterionCoverage, goalCriteria, validEvidenceRefs, { id: goalCriterionId, label: "Goal criterion" }, sourceByRef, false, new Map(), quoteBudget);
     const semanticFailures = parseFailures(result.failures, validOperationRefs);
     const currentOperationRefs = new Set(input.operations
       .filter((operation) => operation.attempt === input.run.attempt)

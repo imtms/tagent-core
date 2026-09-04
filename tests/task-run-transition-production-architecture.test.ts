@@ -243,6 +243,7 @@ describe("production TaskRun transition authority", () => {
       "packages/execution/src/application/runtime-initialization-failure.ts",
     ]);
     expect(productionFiles.filter((file) => directPortCalls(file, "transitionSystem") > 0).sort()).toEqual([
+      "apps/core-service/src/application/external-action-approval-application.ts",
       "packages/admission/src/application/admission-coordinator.ts",
       "packages/execution/src/application/execution-lifecycle-service.ts",
       "packages/execution/src/application/run-context-service.ts",

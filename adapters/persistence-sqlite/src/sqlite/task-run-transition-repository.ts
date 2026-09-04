@@ -427,7 +427,7 @@ export class SqliteTaskRunTransitionRepository implements TaskRunTransitionPort 
         return { kind: value.kind, component: value.component, inboxItemId: value.inboxItemId };
       case "external_action_guard":
         assertExactKeys(value, ["kind", "component", "approvalId"], "SystemTransitionAuthority");
-        if (value.component !== "admission_coordinator") throw new TypeError("External action guard component is invalid");
+        if (value.component !== "core_external_action_approval_application") throw new TypeError("External action guard component is invalid");
         assertNonEmpty(value.approvalId, "SystemTransitionAuthority.approvalId");
         return { kind: value.kind, component: value.component, approvalId: value.approvalId };
       case "lifecycle_interrupt":

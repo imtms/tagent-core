@@ -1,4 +1,5 @@
 export const SENSITIVE_ENVIRONMENT_NAME = /KEY|PASSWORD|SECRET|TOKEN|CREDENTIAL|AUTHORIZATION|COOKIE/i;
+const PROCESS_STARTUP_ENVIRONMENT_NAME = /^(?:BASH_ENV|ENV|CDPATH|PROMPT_COMMAND|RIPGREP_CONFIG_PATH)$/i;
 
 /** Build a fresh child environment without ambient credentials or TAgent-owned state. */
 export function scrubbedParentEnvironment(
@@ -7,6 +8,8 @@ export function scrubbedParentEnvironment(
   return Object.fromEntries(Object.entries(environment).filter(([name, value]) =>
     value !== undefined
     && !SENSITIVE_ENVIRONMENT_NAME.test(name)
+    && !PROCESS_STARTUP_ENVIRONMENT_NAME.test(name)
+    && !name.toUpperCase().startsWith("BASH_FUNC_")
     && !name.toUpperCase().startsWith("TAGENT_")));
 }
 

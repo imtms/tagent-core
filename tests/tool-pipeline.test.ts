@@ -150,7 +150,7 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("records read observations after execution", async () => {
+  it("preclaims read observations and replays their successful receipt", async () => {
     const order: string[] = [];
     let durableResult: unknown;
     let claimed = true;
@@ -168,9 +168,53 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     const firstPipeline = new ToolExecutionPipeline(port);
     const first = firstPipeline.bindCatalog({ tools: [tool("read", execute)] }).tools[0];
     await first.execute("read-once", {}, testSignal);
-    expect(order).toEqual(["execute", "claim"]);
+    expect(order).toEqual(["claim", "execute"]);
     expect(durableResult).toBeDefined();
     expect(execute).toHaveBeenCalledTimes(1);
+    claimed = false;
+    const replayPipeline = new ToolExecutionPipeline(port);
+    const replay = replayPipeline.bindCatalog({ tools: [tool("read", execute)] }).tools[0];
+    await expect(replay.execute("read-once", {}, testSignal)).resolves.toEqual(durableResult);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["failure", new Error("missing file"), "UNKNOWN"],
+    ["timeout", Object.assign(new Error("read timed out"), { code: "TIMEOUT" }), "TIMEOUT"],
+  ])("persists a non-evidentiary diagnostic receipt for read %s", async (_label, failure, code) => {
+    const execute = vi.fn(async () => { throw failure; });
+    const { port, update } = capabilities();
+    const wrapped = new ToolExecutionPipeline(port).bindCatalog({ tools: [tool("read", execute)] }).tools[0];
+    await expect(wrapped.execute(`read-${code}`, {}, testSignal)).rejects.toMatchObject({ code });
+    expect(update).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      status: "failed",
+      stage: "observation_failed",
+      effects: [
+        { kind: "workspace", action: "read_only" },
+        expect.objectContaining({ kind: "error", error: expect.objectContaining({ code }) }),
+      ],
+      error: expect.any(String),
+    }));
+  });
+
+  it("persists ABORTED after a dispatched read joins cooperative cleanup", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const cleanup = new Promise<void>((resolve) => { release = resolve; });
+    const execute = vi.fn(async () => { entered(); await cleanup; return { content: [{ type: "text" as const, text: "late" }], details: {} }; });
+    const { port, update } = capabilities();
+    const wrapped = new ToolExecutionPipeline(port).bindCatalog({ tools: [tool("read", execute)] }).tools[0];
+    const controller = new AbortController();
+    const pending = wrapped.execute("read-abort", {}, controller.signal);
+    await started;
+    controller.abort(new Error("cancelled observation"));
+    release();
+    await expect(pending).rejects.toMatchObject({ code: "ABORTED" });
+    expect(update).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      status: "failed", stage: "observation_failed",
+      effects: expect.arrayContaining([expect.objectContaining({ kind: "error", error: expect.objectContaining({ code: "ABORTED" }) })]),
+    }));
   });
 
   it("orders stale-attempt, external-approval, workspace, and durable attempt guards before execution", async () => {
@@ -213,6 +257,19 @@ describe("ToolRegistry and ToolExecutionPipeline", () => {
     expect(request).toHaveBeenCalledWith("maintenance-1", "maintenance");
     expect(pipeline.beforeToolCall("maintenance-1", "maintenance", {})).toMatchObject({ blocked: true });
     expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("evaluates parameter-dependent explicit effects before recording or dispatch", () => {
+    const approval = vi.fn(() => ({ allowed: false, reason: "missing" }));
+    const request = vi.fn(() => ({ approvalId: "approval-dynamic", reason: "Approval requested" }));
+    const dynamic = tool("dynamic", undefined, false);
+    dynamic.policy = { ...dynamic.policy!, externalAction: (parameters) => (parameters as { remote?: boolean }).remote ? "explicit" : false };
+    const pipeline = new ToolExecutionPipeline(capabilities({ inspectExternalActionAuthorization: approval, requestExternalActionApproval: request }).port);
+    pipeline.bindCatalog({ tools: [dynamic] });
+    expect(pipeline.beforeToolCall("local", "dynamic", { remote: false })).toEqual({ blocked: false });
+    expect(pipeline.beforeToolCall("remote", "dynamic", { remote: true })).toMatchObject({ blocked: true, reason: expect.stringContaining("Approval requested") });
+    expect(approval).toHaveBeenCalledWith(true);
+    expect(request).toHaveBeenCalledWith("remote", "dynamic");
   });
 
   it("activates approval only after local guards and durable claim, immediately before dispatch", async () => {

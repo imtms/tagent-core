@@ -3,7 +3,7 @@ import type { ArtifactSinkPort } from "./artifact-sink-port.js";
 import type { WorkspaceEditPort } from "./workspace-edit-port.js";
 import type { TaskRunStateMutation, ToolAttemptStatus } from "./attempt-repository.js";
 import type { OperationRecord } from "@tagent/governance/ports";
-import type { TranscriptLiteralSearchResult } from "./transcript-repository.js";
+import type { TranscriptFilters, TranscriptLiteralSearchResult } from "./transcript-repository.js";
 
 export interface MemoryToolCapabilities {
   search(query: string, kinds: string[] | undefined, maxResults: number | undefined, signal: AbortSignal): Promise<unknown>;
@@ -13,7 +13,12 @@ export interface MemoryToolCapabilities {
 }
 
 export interface HistoryToolCapabilities {
-  search(query: string, signal: AbortSignal): Promise<TranscriptLiteralSearchResult & { beforeSeq: number }>;
+  search(
+    query: string,
+    options: TranscriptFilters & { beforeSeq?: number; mode?: "literal" | "terms" },
+    signal: AbortSignal,
+  ): Promise<TranscriptLiteralSearchResult & { beforeSeq: number; nextBeforeSeq: number | null }>;
+  get(seq: number, signal: AbortSignal): Promise<import("./transcript-repository.js").TranscriptEntry | undefined>;
 }
 
 /** Consumer-owned application capabilities exposed to built-in agent tools. */

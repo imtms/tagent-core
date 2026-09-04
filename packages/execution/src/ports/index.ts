@@ -76,9 +76,14 @@ export type {
 } from "./tool-capability-application-port.js";
 export type {
   TranscriptEntry,
+  TranscriptEntryQuery,
+  TranscriptFilters,
   TranscriptLiteralSearchMatch,
   TranscriptLiteralSearchResult,
   TranscriptRepository,
+  TranscriptRole,
+  TranscriptSearchOptions,
+  TranscriptViewKind,
   TranscriptViewItem,
 } from "./transcript-repository.js";
 export {

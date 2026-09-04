@@ -1,5 +1,6 @@
 export {
   SessionInputRouter,
+  type RoutedSessionInputAnalysis,
   type SessionInputModelPort,
   type SessionInputModelRequest,
   type SessionInputModelResponse,
@@ -12,6 +13,7 @@ export { toTaskRunContractSnapshot, toTaskRunLaunchSpec } from "./task-run-launc
 export { AdmissionCoordinator } from "./admission-coordinator.js";
 export type {
   AdmissionDispatchPort,
+  AdmissionExternalActionApprovalPort,
   AdmissionRouterPort,
   AdmissionSupervisorPort,
 } from "./collaboration-ports.js";

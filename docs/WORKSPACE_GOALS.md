@@ -126,7 +126,7 @@ workspace_goal_roadmap_item_progress
 workspace_goal_operation_receipts
 ```
 
-Roadmap revision kind, decision kind, and linkage columns use current `roadmap` terminology. Goal operation receipts bind request IDs to canonical payload hashes and preserve result/error or `outcome_unknown` recovery state. Core 0.8 accepts an empty database or the exact legacy/current `tagent-core/0.8` shape and migrates it monotonically to revision 2.
+Roadmap revision kind, decision kind, and linkage columns use current `roadmap` terminology. Goal operation receipts bind request IDs to canonical payload hashes and preserve result/error or `outcome_unknown` recovery state. Core 0.8 accepts an empty database or the exact revision-1/revision-2/current `tagent-core/0.8` shape and migrates it monotonically to revision 3.
 
 ## Explicit non-goals
 

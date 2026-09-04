@@ -1,6 +1,7 @@
 import type {
   SessionInputIntent,
   SessionInputRelation,
+  SessionInputRoutingProvenance,
   TaskObjective,
 } from "./session-input.js";
 import type { TaskExecutionPolicy } from "./task-execution-policy.js";
@@ -20,4 +21,5 @@ export interface TaskRunContract {
   decisionReason: string;
   routerVersion: string;
   executionPolicy?: TaskExecutionPolicy;
+  routingProvenance?: SessionInputRoutingProvenance;
 }

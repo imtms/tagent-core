@@ -29,7 +29,7 @@ function validateTarget(target: string) {
 
 type HelperOptions = { signal: AbortSignal; input?: string | Buffer; env?: NodeJS.ProcessEnv };
 
-async function runHelper(operation: "read" | "write" | "list" | "commit-batch", root: string, target: string, options: HelperOptions) {
+async function runHelper(operation: "read" | "write" | "create" | "list" | "commit-batch", root: string, target: string, options: HelperOptions) {
   assertWorkspacePlatformSupported();
   options.signal.throwIfAborted();
   const normalized = validateTarget(target);
@@ -97,6 +97,13 @@ export async function readWorkspaceFile(root: string, target: string, signal: Ab
 export async function writeWorkspaceFile(root: string, target: string, content: string | Buffer, signal: AbortSignal, env?: NodeJS.ProcessEnv) {
   const normalized = validateTarget(target);
   await runHelper("write", root, normalized, { signal, input: content, env });
+  return { root: path.resolve(root), parent: path.dirname(path.resolve(root, normalized)), path: path.resolve(root, normalized), relative: normalized };
+}
+
+/** Atomically creates a new regular file and rejects every existing destination. */
+export async function createWorkspaceFile(root: string, target: string, content: string | Buffer, signal: AbortSignal, env?: NodeJS.ProcessEnv) {
+  const normalized = validateTarget(target);
+  await runHelper("create", root, normalized, { signal, input: content, env });
   return { root: path.resolve(root), parent: path.dirname(path.resolve(root, normalized)), path: path.resolve(root, normalized), relative: normalized };
 }
 

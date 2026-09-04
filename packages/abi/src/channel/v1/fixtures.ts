@@ -65,6 +65,7 @@ export const taskRunCommandFixtures = [
   { commandId: "command-compact", type: "task_run.compact", expectedAttemptId: "attempt-002", payload: { reason: "Context pressure" } },
   { commandId: "command-input", type: "task_run.submit_user_input", expectedAttemptId: "attempt-002", payload: { requestId: "input-001", response: { answer: "yes" } } },
   { commandId: "command-approval", type: "task_run.resolve_approval", expectedAttemptId: "attempt-002", payload: { approvalRequestId: "approval-001", decision: "approved", resolution: "Reviewed" } },
+  { commandId: "command-uncertainty", type: "task_run.accept_uncertainty", expectedAttemptId: "attempt-002", payload: { criterionId: "ac-1", rationale: "The external source remains unavailable.", scope: "This TaskRun only." } },
 ] as const satisfies readonly TaskRunCommand[];
 
 export const commandResponseFixture = {
@@ -89,7 +90,7 @@ export const commandResponseFixture = {
 
 export const coreCapabilitiesFixture = {
   data: {
-    releaseVersion: "0.8.31", apiVersions: ["channel.v1", "operator.console.v1", "operator.read.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 2,
+    releaseVersion: "0.8.32", apiVersions: ["channel.v1", "operator.console.v1", "operator.read.v1"], eventSpecVersion: "1.0", persistenceSchemaVersion: 3,
     commandTypes: taskRunCommandFixtures.map((command) => command.type),
     eventTypes: ["task_run.started", "task_run.completed", "diagnostic.internal"],
     interactions: { approvalResolution: true, userInputSubmission: true },

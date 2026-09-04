@@ -11,9 +11,9 @@ const TERMINAL_UNACKED_CRITICAL_AGE_MS = 120_000;
 const RECEIPT_UNCERTAIN_CRITICAL_AGE_MS = 120_000;
 const SETTLED_STATUSES = ["completed", "failed", "cancelled", "blocked"];
 const FINAL_STATUSES = ["completed", "cancelled"];
-const EXPECTED_SCHEMA_VERSION = 2;
+const EXPECTED_SCHEMA_VERSION = 3;
 const EXPECTED_SCHEMA_ID = "tagent-core/0.8";
-const REQUIRED_COMMANDS = ["task_run.steer", "task_run.follow_up", "task_run.cancel", "task_run.resume", "task_run.compact", "task_run.submit_user_input", "task_run.resolve_approval"];
+const REQUIRED_COMMANDS = ["task_run.steer", "task_run.follow_up", "task_run.cancel", "task_run.resume", "task_run.compact", "task_run.submit_user_input", "task_run.resolve_approval", "task_run.accept_uncertainty"];
 const REQUIRED_EVENTS = ["task_run.started", "task_run.waiting_input", "task_run.blocked", "task_run.resumed", "task_run.completed", "task_run.failed", "task_run.cancelled", "approval.requested", "approval.resolved", "user_input.submitted"];
 const REQUIRED_OPERATOR_ENDPOINTS = [
   "channel.sessions.create", "channel.sessions.get", "channel.submissions.create", "channel.submissions.get",

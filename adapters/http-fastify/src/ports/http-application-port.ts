@@ -29,8 +29,16 @@ type HttpExecutionApplicationPort = Pick<ExecutionCoordinator,
   approveRunApproval(approvalId: string, resolution?: string): unknown;
 };
 
+interface HttpRunGovernanceApplicationPort {
+  acceptRunUncertainty(input: {
+    decisionId: string; runId: string; criterionId: string; actorId: string;
+    rationale: string; scope: string; evidenceRefs?: string[]; expiresAt?: number | null;
+  }): unknown;
+}
+
 export type HttpApplicationPort = HttpAdmissionApplicationPort
   & HttpExecutionApplicationPort
+  & HttpRunGovernanceApplicationPort
   & HttpWorkspaceGoalApplicationPort
   & {
     listSkills(): unknown;

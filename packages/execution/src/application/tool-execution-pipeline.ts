@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { RuntimeCapabilityCatalog, RuntimeTool, RuntimeToolResult, ToolCapabilityApplicationPort } from "../ports/index.js";
 import { classifyToolError, type StructuredToolError, ToolExecutionError } from "../ports/tool-error.js";
+import { evidencedResult, executeReadOnlyOperation } from "./operation-receipt-execution.js";
 interface ToolCallState {
   toolName: string;
   argsHash: string;
@@ -13,7 +14,6 @@ interface ToolCallState {
   settled: boolean;
   recorded: boolean;
 }
-
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>)
@@ -22,7 +22,6 @@ function canonical(value: unknown): unknown {
     .map(([key, item]) => [key, canonical(item)]));
   return value;
 }
-
 function argsHash(value: unknown) {
   return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
 }
@@ -31,26 +30,6 @@ function operationId(capabilities: ToolCapabilityApplicationPort, toolCallId: st
   const attempt = capabilities.getRunExecutionState?.()?.attempt ?? capabilities.getRun()?.attempt;
   if (attempt === undefined) throw new Error("Run not found");
   return `${capabilities.runId}:${attempt}:${toolCallId}`;
-}
-
-function evidencedResult(result: RuntimeToolResult, receiptId: string, mutation: boolean): RuntimeToolResult {
-  const observedAt = Date.now();
-  const resultDigest = createHash("sha256").update(JSON.stringify(result)).digest("hex");
-  return {
-    ...result,
-    content: mutation ? result.content.map((part, index) => {
-      if (index !== 0 || part.type !== "text") return part;
-      const marker = `\n[trusted operation receipt: ${receiptId}]`;
-      const budget = Math.max(0, 24_000 - Buffer.byteLength(marker));
-      const source = Buffer.from(part.text);
-      let end = Math.min(source.length, budget);
-      while (end > 0 && (source[end] & 0xc0) === 0x80) end -= 1;
-      return { ...part, text: source.subarray(0, end).toString("utf8") + marker };
-    }) : result.content,
-    details: result.details && typeof result.details === "object"
-      ? { ...result.details, operationId: receiptId, observedAt, resultDigest }
-      : { value: result.details, operationId: receiptId, observedAt, resultDigest },
-  };
 }
 
 /** Non-bypassable execution path for authorization, receipts, execution and settlement. */
@@ -84,9 +63,10 @@ export class ToolExecutionPipeline {
     if (!this.capabilities.isCurrentAttempt()) blocked = "Attempt is no longer current";
     else blocked = tool.policy?.preflightGuard?.(args);
     const access = typeof tool.policy?.workspaceAccess === "function" ? tool.policy.workspaceAccess(args) : tool.policy?.workspaceAccess;
-    const requireExplicit = tool.policy?.externalAction === "explicit";
+    const externalAction = typeof tool.policy?.externalAction === "function" ? tool.policy.externalAction(args) : tool.policy?.externalAction;
+    const requireExplicit = externalAction === "explicit";
     const activatesExternalAuthorization = requireExplicit
-      || Boolean(tool.policy?.externalAction && access !== "read_only");
+      || Boolean(externalAction && access !== "read_only");
     if (!blocked && activatesExternalAuthorization) {
       const approval = this.capabilities.inspectExternalActionAuthorization(requireExplicit);
       if (!approval.allowed) {
@@ -102,7 +82,7 @@ export class ToolExecutionPipeline {
         blocked = `External action approval guard: ${reason}`;
       }
     }
-    if (!blocked && access === "mutation") {
+    if (!blocked && (access === "mutation" || access === "code_execution")) {
       const goal = this.capabilities.authorizeWorkspaceMutation();
       if (!goal.allowed) blocked = `Workspace Goal mutation guard: ${goal.reason}`;
       else this.capabilities.advanceRunPhase("implement");
@@ -180,21 +160,12 @@ export class ToolExecutionPipeline {
     }
     const id = operationId(this.capabilities, toolCallId);
     const access = typeof policy.workspaceAccess === "function" ? policy.workspaceAccess(args) : policy.workspaceAccess;
-    // An explicit remote effect needs a pre-dispatch claim even when workspace access is read-only.
-    if (access === "read_only" && policy.externalAction !== "explicit") {
-      this.activateExternalAuthorization(toolCallId);
-      const result = await this.executeToolBody(tool, toolCallId, args, signal, onUpdate);
-      const receipt = this.capabilities.claimOperation(id, policy.operationType, args);
-      if (!receipt.claimed) {
-        if (receipt.status === "succeeded") return receipt.result as RuntimeToolResult;
-        throw new Error(`Operation ${id} cannot be recorded from status ${receipt.status}`);
-      }
-      const evidenced = evidencedResult(result, id, false);
-      this.capabilities.updateOperation(id, {
-        status: "succeeded", stage: "observed",
-        effects: [{ kind: "workspace", action: "read_only" }], result: evidenced,
-      });
-      return evidenced;
+    const requireExplicit = this.calls.get(toolCallId)?.externalAuthorization?.requireExplicit === true;
+    // Every dispatched observation is preclaimed so timeout, abort, and failure
+    // remain diagnosable without making the failed receipt valid evidence.
+    if (access === "read_only" && !requireExplicit) {
+      return executeReadOnlyOperation({ capabilities: this.capabilities, id, operationType: policy.operationType, args, signal,
+        execute: () => { this.activateExternalAuthorization(toolCallId); return this.executeToolBody(tool, toolCallId, args, signal, onUpdate); } });
     }
     const receipt = this.capabilities.claimOperation(id, policy.operationType, args);
     if (!receipt.claimed) {

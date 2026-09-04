@@ -14,6 +14,7 @@ import type {
 } from "@tagent/execution/ports";
 import type {
   ApprovalRepository,
+  AcceptedUncertaintyRepository,
   ContextManifestRepository,
   SupervisorDecisionJournal,
   SupervisorPersistencePort,
@@ -23,6 +24,8 @@ import type {
 
 /** Persistence capabilities required by the Core application, grouped by domain context. */
 export interface CoreApplicationPersistencePort {
+  /** One synchronous Core-owned transaction; nested adapter mutations reuse it. */
+  readonly mutations: { run<T>(work: () => T): T };
   readonly attempts: AttemptRepository;
   readonly runtimeMutations: FencedRuntimeMutationPort;
   readonly sessions: SessionRepository;
@@ -36,6 +39,7 @@ export interface CoreApplicationPersistencePort {
   readonly transcript: TranscriptRepository;
   readonly checkpoints: CheckpointRepository;
   readonly approvals: ApprovalRepository;
+  readonly uncertainties: AcceptedUncertaintyRepository;
   readonly contextManifests: ContextManifestRepository;
   readonly requestEnvelopes: AttemptRequestEnvelopeRepository;
   readonly supervisorDecisions: SupervisorDecisionJournal;

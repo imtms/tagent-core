@@ -225,9 +225,16 @@ export class WriterFenceGuard implements MutationUnitOfWork {
   }
 
   private listMainApplicationTables(): string[] {
-    return (this.db.prepare(`SELECT name FROM main.sqlite_schema
-      WHERE type = 'table' AND name NOT GLOB 'sqlite_*' AND name <> 'core_writer_lease'
-      ORDER BY name`).all() as Array<{ name: string }>).map((row) => row.name);
+    return (this.db.prepare(`SELECT application.name FROM main.sqlite_schema application
+      WHERE application.type = 'table' AND application.name NOT GLOB 'sqlite_*'
+        AND application.name <> 'core_writer_lease'
+        AND UPPER(COALESCE(application.sql,'')) NOT LIKE 'CREATE VIRTUAL TABLE%'
+        AND NOT EXISTS (
+          SELECT 1 FROM main.sqlite_schema vtable
+          WHERE vtable.type='table' AND UPPER(COALESCE(vtable.sql,'')) LIKE 'CREATE VIRTUAL TABLE%'
+            AND application.name GLOB vtable.name || '_*'
+        )
+      ORDER BY application.name`).all() as Array<{ name: string }>).map((row) => row.name);
   }
 
   private listManagedTriggers(): string[] {

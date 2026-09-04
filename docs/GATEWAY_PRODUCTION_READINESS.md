@@ -34,7 +34,7 @@ NODE
 
 ## Current-schema gate
 
-Core 0.8 creates or upgrades the exact legacy 0.8 shape to current revision 2, then validates its marker, migration journal/checksums, and complete schema. On an isolated deployment path, open the intended database twice:
+Core 0.8 creates or upgrades the exact revision-1/revision-2 legacy 0.8 shape to current revision 3, then validates its marker, migration journal/checksums, and complete schema. On an isolated deployment path, open the intended database twice:
 
 ```sh
 TAGENT_DB=/var/lib/tagent/core.sqlite \
@@ -53,7 +53,7 @@ NODE
 Both opens must exit `0` and return:
 
 ```json
-{"schemaId":"tagent-core/0.8","schemaVersion":2,"activeTables":true}
+{"schemaId":"tagent-core/0.8","schemaVersion":3,"activeTables":true}
 ```
 
 The second open proves idempotent migration and exact current-shape validation. A different marker, unsupported revision, journal mismatch, or any `sqlite_master` drift blocks deployment and requires recovery from backup.
@@ -81,7 +81,7 @@ Exit codes:
 | `1` | Probe ran and one or more gates failed; `reasons` is authoritative. |
 | `2` | Probe could not run, for example because the database is missing or unreadable. |
 
-The current output has `probeVersion: 7`, `schemaId: "tagent-core/0.8"`, and `schemaVersion: 2`. The probe reads the actual SQLite `PRAGMA user_version`; important fields are:
+The current output has `probeVersion: 7`, `schemaId: "tagent-core/0.8"`, and `schemaVersion: 3`. The probe reads the actual SQLite `PRAGMA user_version`; important fields are:
 
 | Field | Meaning |
 | --- | --- |
@@ -141,7 +141,7 @@ GROUP BY status;
 
 1. Stop Gateway admission and all Core writers.
 2. Verify the release and configuration gates.
-3. Back up and validate an exact revision-1 Core database, or provision an empty database, then pass the revision-2 schema gate.
+3. Back up and validate an exact revision-1/revision-2 Core database, or provision an empty database, then pass the revision-3 schema gate.
 4. Start Core, then start one Gateway writer and claim fresh event-consumer generations.
 5. Run the runtime probe and admit traffic only when it exits `0`, returns `ready=true`, and has no reasons.
 

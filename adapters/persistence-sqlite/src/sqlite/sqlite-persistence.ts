@@ -18,6 +18,7 @@ import type {
 } from "@tagent/execution/ports";
 import type {
   ApprovalRepository,
+  AcceptedUncertaintyRepository,
   ContextManifestRepository,
   EvidenceRepository,
   GateEvaluationRepository,
@@ -66,6 +67,7 @@ export class GuardedSqliteUnitOfWork implements MutationUnitOfWork {
 
 /** Narrow, context-oriented ports over the SQLite Store and its writer fence. */
 export class SqlitePersistence {
+  readonly mutations: MutationUnitOfWork;
   readonly sessions: SessionRepository;
   readonly skills: SkillRepository;
   readonly messageSources: MessageSourceRepository;
@@ -84,6 +86,7 @@ export class SqlitePersistence {
   readonly contextManifests: ContextManifestRepository;
   readonly requestEnvelopes: AttemptRequestEnvelopeRepository;
   readonly approvals: ApprovalRepository;
+  readonly uncertainties: AcceptedUncertaintyRepository;
   readonly supervisorDecisions: SupervisorDecisionJournal;
   readonly runtime: RuntimePersistencePort;
   readonly tools: ToolPersistencePort;
@@ -104,6 +107,7 @@ export class SqlitePersistence {
   readonly profileContracts: ProfileContractRepository;
 
   constructor(store: Store, mutationUnitOfWork: MutationUnitOfWork) {
+    this.mutations = mutationUnitOfWork;
     const mutate = <Args extends unknown[], Result>(operation: SynchronousOperation<Args, Result>) =>
       mutation(mutationUnitOfWork, operation);
     const sqliteAttempts = new SqliteAttemptRepository(store.db);
@@ -159,11 +163,13 @@ export class SqlitePersistence {
       getAttemptForRun: query(sqliteAttempts.getAttemptForRun.bind(sqliteAttempts)),
       getActiveAttempt: query(sqliteAttempts.getActiveAttempt.bind(sqliteAttempts)),
       listAttempts: query(sqliteAttempts.listAttempts.bind(sqliteAttempts)),
+      getCandidateForAttempt: query(sqliteAttempts.getCandidateForAttempt.bind(sqliteAttempts)),
       acquireExecutionLease: mutate(sqliteAttempts.acquireExecutionLease.bind(sqliteAttempts)),
       renewExecutionLease: mutate(sqliteAttempts.renewExecutionLease.bind(sqliteAttempts)),
       releaseExecutionLease: mutate(sqliteAttempts.releaseExecutionLease.bind(sqliteAttempts)),
       recordCandidateResult: mutate(sqliteAttempts.recordCandidateResult.bind(sqliteAttempts)),
       settleAttempt: mutate(sqliteAttempts.settleAttempt.bind(sqliteAttempts)),
+      reAdjudicateBlockedCandidate: mutate(sqliteAttempts.reAdjudicateBlockedCandidate.bind(sqliteAttempts)),
       recoverInterruptedAttempt: mutate(sqliteAttempts.recoverInterruptedAttempt.bind(sqliteAttempts)),
       cancelAttempt: mutate(sqliteAttempts.cancelAttempt.bind(sqliteAttempts)),
     });
@@ -215,6 +221,7 @@ export class SqlitePersistence {
     this.requestEnvelopes = storePorts.requestEnvelopes;
     this.generationMaintenance = storePorts.generationMaintenance;
     this.approvals = storePorts.approvals;
+    this.uncertainties = storePorts.uncertainties;
     this.supervisorDecisions = storePorts.supervisorDecisions;
     this.tools = Object.freeze({
       getRun: this.taskRuns.getRun,
@@ -242,6 +249,8 @@ export class SqlitePersistence {
       getRun: this.taskRuns.getRun,
       listControlInbox: this.controlInbox.listControlInbox,
       listOperations: this.operations.listOperations,
+      resolveEvidenceSources: store.resolveEvidenceSources.bind(store),
+      listAcceptedUncertainties: this.uncertainties.listAcceptedUncertainties,
       getProgressSnapshot: this.progress.getProgressSnapshot,
       updateProgressSnapshot: this.progress.updateProgressSnapshot,
       getLatestContextManifest: this.contextManifests.getLatestContextManifest,

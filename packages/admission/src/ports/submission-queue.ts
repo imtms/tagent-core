@@ -97,6 +97,7 @@ export interface SubmissionQueue {
   /** Compensates a failed pre-launch admission before the Inbox item becomes observable work. */
   discardSessionInboxItem(id: string, sessionId: SessionId): boolean;
   decideSessionInboxItem(id: string, sessionId: SessionId, decision: "pending" | "defer"): boolean;
+  markSessionInboxNeedsClarification(id: string, sessionId: SessionId, reason: string): Submission | undefined;
   claimNextSessionInbox(sessionId: SessionId): ClaimedSubmission | undefined;
   claimSessionInboxNow(itemId: string, sessionId: SessionId, allowApprovedParallel?: boolean): SubmissionStartResult;
   recordSessionInboxLaunchFailure(itemId: string, runId: RunId, error: string): void;

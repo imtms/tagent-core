@@ -34,7 +34,7 @@ import type {
   RunContextPort,
   RunEventPublisherPort,
 } from "@tagent/execution/composition";
-import type { AdmissionRouterPort, AdmissionSupervisorPort } from "./collaboration-ports.js";
+import type { AdmissionExternalActionApprovalPort, AdmissionRouterPort, AdmissionSupervisorPort } from "./collaboration-ports.js";
 
 interface AdmissionState {
   readonly closing: boolean;
@@ -70,6 +70,7 @@ export class AdmissionCoordinator {
       eventHub: RunEventPublisherPort;
       settlement: AttemptSettlementPort;
       supervisor: AdmissionSupervisorPort;
+      externalActionApprovals: AdmissionExternalActionApprovalPort;
       workspaceGoalRunReconciled?: (runId: string) => void;
     },
   ) {}
@@ -101,14 +102,28 @@ export class AdmissionCoordinator {
       return { item: existing, run: existing.runId ? this.state.persistence.taskRuns.getRun(existing.runId) ?? null : null };
     }
     const activeRun = this.state.persistence.taskRuns.getActiveRun(sessionId);
-    const routedAnalysis = await this.dependencies.router.analyze(content, activeRun, this.sessionRouterContext(sessionId));
+    const routed = await this.dependencies.router.route(content, activeRun, this.sessionRouterContext(sessionId));
+    const routedAnalysis = routed.analysis;
+    const routerUsage = routed.usage;
     // Gate acceptance style is a user choice, not a semantic Router decision.
     // Freeze it after routing so model output cannot override or omit the selection.
-    const analysis: SessionInputAnalysis = gateProfile
+    const selectedAnalysis: SessionInputAnalysis = gateProfile
       ? { ...routedAnalysis, executionPolicy: { ...effectiveTaskExecutionPolicy(routedAnalysis), gateProfile } }
       : routedAnalysis;
-    const routerUsage = this.dependencies.router.takeUsage(analysis);
-    if (activeRun) for (const observed of routerUsage) this.state.persistence.taskRuns.recordModelUsage(activeRun.id, "router", observed.model, observed.usage);
+    const routingConfidence = Math.min(selectedAnalysis.confidence, selectedAnalysis.executionPolicy?.confidence ?? 1);
+    const targetsActiveControl = Boolean(activeRun && selectedAnalysis.targetRunId === activeRun.id
+      && ["steer_active", "follow_up_active", "update_active_context", "parallel_task"].includes(selectedAnalysis.intent));
+    const abstention = targetsActiveControl && routingConfidence < .85
+      ? "active_control_low_confidence" as const
+      : ["new_task", "parallel_task"].includes(selectedAnalysis.intent) && routingConfidence < .7
+        ? "new_task_low_confidence" as const
+        : "none" as const;
+    const analysis: SessionInputAnalysis = abstention === "none" ? selectedAnalysis : {
+      ...selectedAnalysis,
+      routingProvenance: selectedAnalysis.routingProvenance
+        ? { ...selectedAnalysis.routingProvenance, abstention }
+        : undefined,
+    };
     const duplicate = !activeRun ? this.state.persistence.submissions.findMergeCandidate(sessionId, analysis) : undefined;
     const item = this.state.persistence.submissions.enqueueSessionInbox(sessionId, content, analysis, requestId, audit);
     if (item.content !== content) throw new Error("Session Inbox request idempotency conflict");
@@ -120,8 +135,17 @@ export class AdmissionCoordinator {
       const merged = this.state.persistence.submissions.markSessionInboxDuplicate(item.id, duplicate.id, sessionId)!;
       return { item: merged, run: null, duplicate: true, mergedInto: duplicate.id };
     }
+    if (abstention !== "none") {
+      const reason = `Clarification required before dispatch: effective routing confidence ${routingConfidence.toFixed(2)}. ${analysis.reason}`;
+      const pending = this.state.persistence.submissions.markSessionInboxNeedsClarification(item.id, sessionId, reason);
+      if (targetsActiveControl && activeRun) for (const observed of routerUsage) {
+        this.state.persistence.taskRuns.recordModelUsage(activeRun.id, "router", observed.model, observed.usage);
+      }
+      return { item: pending ?? item, run: null, clarificationRequired: true };
+    }
 
     if (activeRun && analysis.targetRunId === activeRun.id && analysis.confidence >= 0.85) {
+      for (const observed of routerUsage) this.state.persistence.taskRuns.recordModelUsage(activeRun.id, "router", observed.model, observed.usage);
       const userMessage = this.state.persistence.sessions.appendMessage(sessionId, "user", content);
       this.dependencies.continuation.captureUserMessage(activeRun, userMessage.id, content, audit?.principalId);
       if (analysis.intent === "steer_active" || analysis.intent === "update_active_context") {
@@ -237,11 +261,11 @@ export class AdmissionCoordinator {
     const item = this.state.persistence.submissions.getSessionInboxItem(itemId);
     if (!item || item.sessionId !== sessionId || item.status !== "queued") return { status: "state_conflict" };
     const activeRun = this.state.persistence.taskRuns.getActiveRun(sessionId);
-    const routed = await this.dependencies.router.analyze(content, activeRun, this.sessionRouterContext(sessionId));
+    const routed = await this.dependencies.router.route(content, activeRun, this.sessionRouterContext(sessionId));
     const selectedGateProfile = item.analysis.executionPolicy?.gateProfile;
     const analysis = selectedGateProfile
-      ? { ...routed, executionPolicy: { ...effectiveTaskExecutionPolicy(routed), gateProfile: selectedGateProfile } }
-      : routed;
+      ? { ...routed.analysis, executionPolicy: { ...effectiveTaskExecutionPolicy(routed.analysis), gateProfile: selectedGateProfile } }
+      : routed.analysis;
     return this.state.persistence.submissions.updateSessionInboxItemProfile({
       sessionId, itemId, content, analysis, mutation,
     });
@@ -381,14 +405,14 @@ export class AdmissionCoordinator {
     const currentUserAfter = item.startedAt ?? run.createdAt;
     if (!this.dependencies.contextService.requiresAsyncPreparation()) {
       try {
-        const sessionHistory = this.dependencies.contextService.prepareSessionHistoryWithoutRecall(run, item.content, currentUserAfter);
+        const sessionHistory = this.dependencies.contextService.prepareSessionHistoryWithoutRecall(run, this.buildContractPrompt(run, item.content), currentUserAfter, item.content);
         this.completeClaimedSessionLaunch(item, run, sessionHistory, retry);
         return this.state.persistence.taskRuns.getRun(run.id)!;
       } catch (error) { return this.failClaimedSessionLaunch(item, run, error); }
     }
     void this.trackPreparation(run.id, async (signal) => {
       try {
-        const sessionHistory = await this.dependencies.contextService.prepareSessionHistory(run, item.content, currentUserAfter, signal);
+        const sessionHistory = await this.dependencies.contextService.prepareSessionHistory(run, this.buildContractPrompt(run, item.content), currentUserAfter, signal, item.content);
         if (signal.aborted || !this.currentLaunchRun(run)) return;
         this.completeClaimedSessionLaunch(item, run, sessionHistory, retry);
       } catch (error) {
@@ -400,83 +424,7 @@ export class AdmissionCoordinator {
   }
 
   private pauseForExternalActionApproval(item: Submission, run: TaskRun, retry: boolean) {
-    const reason = `External action requires explicit approval before any mutation-capable tool can execute: ${run.contract?.summary || item.content}`;
-    const attempt = this.state.persistence.attempts.getAttemptForRun(run.id, run.attempt);
-    if (!attempt) throw new Error(`TaskRun ${run.id} has no Attempt ${run.attempt} for external approval`);
-    this.requireExternalActionApprovalBoundary({
-      run,
-      attempt,
-      reason,
-      decisionSummary: run.contract?.summary || item.content,
-      metadata: { sessionId: run.sessionId, approvedAttempt: run.attempt + 1 },
-      transitionError: `TaskRun ${run.id} external approval transition returned no event`,
-      onApprovalEnsured: retry ? undefined : () => {
-        this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(run.id, "run.started", {
-          goal: run.goal, sourceInput: item.content, contract: run.contract,
-          source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: 0,
-        }));
-      },
-    });
-  }
-
-  private requireExternalActionApprovalBoundary(input: {
-    run: TaskRun;
-    attempt: { id: string; version: number };
-    reason: string;
-    decisionSummary: string;
-    metadata: Record<string, unknown>;
-    requestedEventData?: Record<string, unknown>;
-    transitionError: string;
-    onApprovalEnsured?: () => void;
-  }) {
-    const decision = this.dependencies.supervisor.proposeExternalActionStart(input.run.id, input.decisionSummary);
-    let approval: ReturnType<ApprovalRepository["ensureApprovalRequest"]>;
-    try {
-      approval = this.state.persistence.approvals.ensureApprovalRequest(input.run.id, decision.id, input.reason, {
-        actionType: "execute_external_action",
-        targetType: "taskrun",
-        targetId: input.run.id,
-        metadata: input.metadata,
-      });
-    } catch (error) {
-      this.dependencies.supervisor.markExecuted(decision.id, "failed", error instanceof Error ? error.message : String(error));
-      throw error;
-    }
-    input.onApprovalEnsured?.();
-    let transition: ReturnType<typeof this.state.persistence.taskRunTransitions.transitionSystem>["transitions"][number] | undefined;
-    try {
-      transition = this.state.persistence.taskRunTransitions.transitionSystem({
-        kind: "require_external_approval",
-        attemptId: input.attempt.id,
-        expectedVersion: input.attempt.version,
-        approvalId: approval.id,
-        reason: input.reason,
-      }, {
-        kind: "external_action_guard",
-        component: "admission_coordinator",
-        approvalId: approval.id,
-      }).transitions[0];
-    } catch (error) {
-      this.dependencies.supervisor.markExecuted(decision.id, "failed", error instanceof Error ? error.message : String(error));
-      throw error;
-    }
-    if (!transition?.event) throw new Error(input.transitionError);
-    if (approval.decisionId === decision.id) {
-      this.dependencies.supervisor.markExecuted(decision.id, "executed");
-    } else {
-      this.dependencies.supervisor.markExecuted(decision.id, "superseded");
-      this.dependencies.supervisor.markExecuted(approval.decisionId, "executed");
-    }
-    this.dependencies.eventHub.publish(transition.event);
-    this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(input.run.id, "supervisor.approval.requested", {
-      approvalId: approval.id,
-      decisionId: approval.decisionId,
-      reason: input.reason,
-      actionType: approval.actionType,
-      ...input.requestedEventData,
-    }));
-    this.state.persistence.workspaceGoals.recordRunOutcome(input.run.id);
-    return approval;
+    this.dependencies.externalActionApprovals.requestForInitialLaunch(item, run, retry);
   }
 
   public requestExternalActionApproval(input: {
@@ -487,40 +435,7 @@ export class AdmissionCoordinator {
     toolCallId: string;
     toolName: string;
   }): { approvalId: string; reason: string } {
-    const toolName = input.toolName.trim();
-    const toolCallId = input.toolCallId.trim();
-    if (!toolName || toolName.length > 128 || toolName.includes("\0")) {
-      throw new Error("External-action approval tool name is invalid");
-    }
-    if (!toolCallId || toolCallId.length > 512 || toolCallId.includes("\0")) {
-      throw new Error("External-action approval tool call identity is invalid");
-    }
-    const run = this.state.persistence.taskRuns.getRun(input.runId);
-    if (!run || run.status !== "running" || run.attempt !== input.attempt) {
-      throw new Error(`TaskRun ${input.runId} is not running Attempt ${input.attempt}`);
-    }
-    const attempt = this.state.persistence.attempts.getAttempt(input.attemptId);
-    if (!attempt || attempt.runId !== run.id || attempt.ordinal !== input.attempt
-      || attempt.version !== input.expectedVersion || !attempt.active || attempt.status !== "running") {
-      throw new Error(`Attempt ${input.attemptId} cannot request external-action approval`);
-    }
-    const reason = `Tool ${toolName} requires explicit external-action approval before execution`;
-    const approval = this.requireExternalActionApprovalBoundary({
-      run,
-      attempt,
-      reason,
-      decisionSummary: reason,
-      metadata: {
-        sessionId: run.sessionId,
-        approvedAttempt: run.attempt + 1,
-        requestedAttempt: run.attempt,
-        requestedToolName: toolName,
-        requestedToolCallId: toolCallId,
-      },
-      requestedEventData: { toolName, requestedAttempt: run.attempt, approvedAttempt: run.attempt + 1 },
-      transitionError: `TaskRun ${run.id} external approval transition returned no event`,
-    });
-    return { approvalId: approval.id, reason: `Approval requested for ${toolName}; resume will use Attempt ${run.attempt + 1}` };
+    return this.dependencies.externalActionApprovals.requestForTool(input);
   }
 
   public requestExternalActionApprovalAfterUserInput(input: {
@@ -530,35 +445,7 @@ export class AdmissionCoordinator {
     expectedVersion: number;
     inputRequestId: string;
   }): { approvalId: string; reason: string } {
-    const run = this.state.persistence.taskRuns.getRun(input.runId);
-    if (!run || run.status !== "waiting_input" || run.attempt !== input.attempt || run.pendingUserInput) {
-      throw new Error(`TaskRun ${input.runId} is not ready for approval after submitted user input`);
-    }
-    const attempt = this.state.persistence.attempts.getAttempt(input.attemptId);
-    if (!attempt || attempt.runId !== run.id || attempt.ordinal !== input.attempt
-      || attempt.version !== input.expectedVersion || attempt.active || attempt.status !== "waiting_input") {
-      throw new Error(`Attempt ${input.attemptId} cannot request approval after user input`);
-    }
-    const reason = `A fresh external-action approval is required because submitted user input will resume TaskRun ${run.id} in Attempt ${run.attempt + 1}`;
-    const approval = this.requireExternalActionApprovalBoundary({
-      run,
-      attempt,
-      reason,
-      decisionSummary: reason,
-      metadata: {
-        sessionId: run.sessionId,
-        approvedAttempt: run.attempt + 1,
-        requestedAttempt: run.attempt,
-        submittedInputRequestId: input.inputRequestId,
-      },
-      requestedEventData: {
-        requestedAttempt: run.attempt,
-        approvedAttempt: run.attempt + 1,
-        inputRequestId: input.inputRequestId,
-      },
-      transitionError: `TaskRun ${run.id} post-input approval transition returned no event`,
-    });
-    return { approvalId: approval.id, reason };
+    return this.dependencies.externalActionApprovals.requestAfterUserInput(input);
   }
 
   public requestExternalActionApprovalForResume(input: {
@@ -569,43 +456,7 @@ export class AdmissionCoordinator {
     actorId: string;
     reason: string;
   }): { approvalId: string; reason: string } {
-    const run = this.state.persistence.taskRuns.getRun(input.runId);
-    const externalAction = run && (effectiveTaskExecutionPolicy(run.contract).mode === "external_action"
-      || run.supervision.approvalRequests.some((approval) => approval.actionType === "execute_external_action"));
-    if (!run || !run.resumable || run.attempt !== input.attempt || !externalAction) {
-      throw new Error(`TaskRun ${input.runId} is not an external-action resume boundary`);
-    }
-    const attempt = this.state.persistence.attempts.getAttempt(input.attemptId);
-    if (!attempt || attempt.runId !== run.id || attempt.ordinal !== input.attempt
-      || attempt.version !== input.expectedVersion || attempt.active) {
-      throw new Error(`Attempt ${input.attemptId} cannot request external-action resume approval`);
-    }
-    const actorId = input.actorId.trim();
-    if (!actorId || actorId.includes("\0")) throw new Error("External-action resume actor is invalid");
-    const resumeReason = input.reason.trim();
-    if (!resumeReason || resumeReason.includes("\0")) throw new Error("External-action resume reason is invalid");
-    const reason = `A fresh external-action approval is required before user-requested resume of TaskRun ${run.id} in Attempt ${run.attempt + 1}`;
-    const approval = this.requireExternalActionApprovalBoundary({
-      run,
-      attempt,
-      reason,
-      decisionSummary: resumeReason,
-      metadata: {
-        sessionId: run.sessionId,
-        approvedAttempt: run.attempt + 1,
-        requestedAttempt: run.attempt,
-        manualResumeRequested: true,
-        resumeActorId: actorId,
-        resumeReason,
-      },
-      requestedEventData: {
-        requestedAttempt: run.attempt,
-        approvedAttempt: run.attempt + 1,
-        manualResumeRequested: true,
-      },
-      transitionError: `TaskRun ${run.id} external resume approval transition returned no event`,
-    });
-    return { approvalId: approval.id, reason };
+    return this.dependencies.externalActionApprovals.requestForResume(input);
   }
 
   public completeClaimedSessionLaunch(item: Submission, run: TaskRun, sessionHistory: PreparedExecutionContext, retry: boolean) {
@@ -615,13 +466,14 @@ export class AdmissionCoordinator {
     if (!retry) {
       this.dependencies.eventHub.publish(this.state.persistence.events.appendEvent(run.id, "run.started", { goal: run.goal, sourceInput: item.content, contract: run.contract, source: "session_supervisor_inbox", inboxItemId: item.id, sessionHistoryCount: sessionHistory.messages.length }));
     }
-    this.dependencies.contextService.publishContextEvents(run.id, sessionHistory);
+    const contextManifest = this.dependencies.contextService.publishContextEvents(run.id, sessionHistory);
     this.state.recalledMemory.set(run.id, sessionHistory.recalledMemory ?? "");
     this.dependencies.attemptExecutor.launch(run, this.buildContractPrompt(run, item.content), sessionHistory.messages, undefined, {
       initialize: true,
       inboxItemId: item.id,
       retry,
       attemptContext: sessionHistory.attemptContext,
+      contextManifestId: contextManifest?.id,
     });
     if (!this.state.runtimes.has(run.id)) {
       const current = this.state.persistence.taskRuns.getRun(run.id);

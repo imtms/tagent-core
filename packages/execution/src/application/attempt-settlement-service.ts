@@ -53,6 +53,10 @@ export class AttemptSettlementService {
       }
       const runtimeError = runtime.getError();
       if (runtimeError) throw new Error(runtimeError);
+      const providerFailure = runtime.getProviderFailure?.();
+      if (providerFailure) {
+        throw new Error(`Runtime provider failure remained after bounded recovery: ${providerFailure.kind}`);
+      }
       if (continuationId && !this.state.persistence.continuations.ownsContinuationLease(continuationId, this.state.continuationOwner)) {
         this.dependencies.recovery.recoverContinuations();
         return false;
@@ -63,15 +67,26 @@ export class AttemptSettlementService {
       const messages = runtime.getMessages();
       const checkpointResponse = this.state.persistence.checkpoints.getCheckpoint(runId)?.assistantPartial.trim() ?? "";
       const assistantMessages = messages.filter((message) => message.role === "assistant" && "content" in message);
-      const assistantResponses = assistantMessages
-        .map((message) => typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join(""))
-        .map((value) => value.trim())
-        .filter(Boolean);
-      const response = checkpointResponse || assistantResponses.at(-1) || "";
+      const finalAssistantMessage = assistantMessages.at(-1);
+      const finalAssistantResponse = finalAssistantMessage ? {
+        message: finalAssistantMessage,
+        response: (typeof finalAssistantMessage.content === "string"
+          ? finalAssistantMessage.content
+          : finalAssistantMessage.content.filter((part) => part.type === "text").map((part) => part.text).join("")).trim(),
+      } : undefined;
+      const response = checkpointResponse || finalAssistantResponse?.response || "";
+      if (!response) throw new Error("Runtime settled without a non-empty deliverable candidate after bounded provider recovery");
+      if (!checkpointResponse && finalAssistantResponse && "stopReason" in finalAssistantResponse.message
+        && !["stop", "length"].includes(finalAssistantResponse.message.stopReason)) {
+        throw new Error(`Runtime settled without a transport-complete deliverable candidate (stopReason=${finalAssistantResponse.message.stopReason})`);
+      }
       candidateResponse = response;
       candidate = this.recordCandidate(token, response);
-      const finalAssistant = assistantMessages.at(-1);
+      const finalAssistant = finalAssistantResponse?.message;
       const modelOutputTruncated = finalAssistant && "stopReason" in finalAssistant && finalAssistant.stopReason === "length";
+      if (modelOutputTruncated) {
+        throw new Error("Runtime settled with a token-truncated deliverable candidate (stopReason=length)");
+      }
       const checkpointSeq = this.state.persistence.checkpoints.getCheckpoint(runId)?.lastEventSeq ?? current.lastEventSeq;
       const review = await this.dependencies.supervisor.reviewSettled(current, checkpointSeq, response, { modelOutputTruncated });
       const decision = review.decision;

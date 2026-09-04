@@ -6,7 +6,8 @@ import type {
   SupervisorAction,
   SupervisorDecision,
 } from "@tagent/governance/domain";
-import { deriveSupervisorAction, effectiveGateProfile, effectiveTaskExecutionPolicy } from "@tagent/governance/domain";
+import { effectiveGateProfile, effectiveTaskExecutionPolicy } from "@tagent/governance/domain";
+import { enforceCompletionAuditAlgebra } from "@tagent/governance/application";
 import type {
   GovernanceRunEventView,
   GovernanceTaskRunView,
@@ -74,9 +75,17 @@ export class TaskRunSupervisor {
     // Do not spend a model round-trip proving facts already authoritatively known by the local gate.
     // Semantic review still runs whenever deterministic prerequisites pass.
     const prerequisiteAudit = gateProfile === "strict" ? this.reviewDeterministicPrerequisites(run) : undefined;
+    const linkedEvidenceRefs = [
+      ...run.plan.flatMap((item) => item.completionEvidenceRefs ?? []),
+      ...(run.supervision.latestGates ?? []).flatMap((gate) => gate.criterionCoverage ?? []).flatMap((coverage) => [
+        ...coverage.evidenceRefs,
+        ...(coverage.evidenceQuotes ?? []).map((quote) => quote.sourceRef),
+      ]),
+    ];
+    const linkedOperationIds = linkedEvidenceRefs.filter((ref) => ref.startsWith("operation:")).map((ref) => ref.slice("operation:".length));
     const operations = prerequisiteAudit ? [] : this.store.listOperations(run.id, {
       limit: 16,
-      ids: run.checks.flatMap((check) => check.sourceOperationId ? [check.sourceOperationId] : []),
+      ids: [...run.checks.flatMap((check) => check.sourceOperationId ? [check.sourceOperationId] : []), ...linkedOperationIds],
     });
     const executionPolicy = effectiveTaskExecutionPolicy(run.contract, operations, run.attempt);
     const exactAudit = prerequisiteAudit || gateProfile !== "strict" ? undefined : this.reviewExactCompletion(run, response, operations, options, executionPolicy);
@@ -84,13 +93,24 @@ export class TaskRunSupervisor {
     const storedProgress = deterministicAudit ? undefined : this.store.getProgressSnapshot(run.id);
     const progress = storedProgress?.attempt === run.attempt ? storedProgress : undefined;
     const contextManifest = deterministicAudit ? undefined : this.store.getLatestContextManifest(run.id);
-    const reviewInput = { run, response, modelOutputTruncated: options.modelOutputTruncated, operations, progress, contextManifest };
+    const memoryRefs = contextManifest?.items
+      .filter((item) => item.selected && ["core_memory", "memory_card", "cold_topic"].includes(item.kind))
+      .map((item) => `memory:${item.sourceId}`) ?? [];
+    const recentArtifacts = run.artifacts.slice(-24).map((artifact) => `artifact:${artifact.id}`);
+    const evidenceSources = deterministicAudit ? [] : this.store.resolveEvidenceSources(run.id, [
+      ...linkedEvidenceRefs,
+      ...operations.map((operation) => `operation:${operation.id}`),
+      ...recentArtifacts,
+      ...memoryRefs,
+    ]);
+    const reviewInput = { run, response, modelOutputTruncated: options.modelOutputTruncated, operations, progress, contextManifest, evidenceSources };
     const reviewedAudit = deterministicAudit ?? (gateProfile === "relaxed" && this.reviewer.reviewRelaxed
       ? await this.reviewer.reviewRelaxed(reviewInput)
       : executionPolicy.reviewPolicy === "semantic_lite" && this.reviewer.reviewSemanticLite
       ? await this.reviewer.reviewSemanticLite(reviewInput)
       : await this.reviewer.reviewSettled(reviewInput));
-    const audit = this.enforceAuditAlgebra(this.requireExternalContinuationApproval(reviewedAudit, executionPolicy), gateProfile);
+    const acceptedUncertainties = this.store.listAcceptedUncertainties(run.id, Date.now());
+    const audit = enforceCompletionAuditAlgebra(this.requireExternalContinuationApproval(reviewedAudit, executionPolicy), gateProfile, acceptedUncertainties);
     const evaluator = deterministicAudit ? "system" as const : audit.evaluator ?? this.reviewer.evaluator;
     const evaluatorModel = prerequisiteAudit ? "deterministic-prerequisite-gate" : exactAudit ? "deterministic-exact-delivery-v1" : audit.evaluatorModel ?? this.reviewer.model;
     const createdAt = Date.now();
@@ -162,7 +182,8 @@ export class TaskRunSupervisor {
       ...failure,
       disposition: "auto_fixable",
     });
-    const planFailures = localFailures.filter((failure) => failure.kind === "plan" || failure.kind === "plan_item").map(toFailure);
+    const planFailures = localFailures.filter((failure) =>
+      ["plan", "plan_item", "plan_dependency", "plan_coverage", "plan_evidence"].includes(failure.kind)).map(toFailure);
     const checkFailures = localFailures.filter((failure) => failure.kind === "check").map(toFailure);
     // Unknown local failure kinds must still go through semantic review instead of being guessed here.
     if (planFailures.length + checkFailures.length !== localFailures.length) return undefined;
@@ -187,40 +208,6 @@ export class TaskRunSupervisor {
         completion: gate(completionFailures, "Completion is blocked by authoritative deterministic prerequisites."),
         continuation: gate([], "The prerequisite failures are automatically repairable."),
       },
-    };
-  }
-
-  private enforceAuditAlgebra(source: SupervisorAudit, gateProfile: "relaxed" | "strict" = "strict"): SupervisorAudit {
-    const gates = Object.fromEntries(Object.entries(source.gates).map(([type, gate]) => [type, {
-      ...gate,
-      failures: [...gate.failures],
-      criterionCoverage: gate.criterionCoverage?.map((coverage) => ({ ...coverage, evidenceRefs: [...coverage.evidenceRefs] })),
-    }])) as SupervisorAudit["gates"];
-    const contractCoverageFailures: GateFailure[] = (gates.contract.criterionCoverage ?? []).flatMap((coverage, index) =>
-      coverage.status === "covered" || (gateProfile === "relaxed" && coverage.status === "unsupported") ? [] : [{
-        kind: "contract",
-        key: `acceptance_criterion_${index + 1}`,
-        reason: `Acceptance criterion is ${coverage.status}: ${coverage.reason}`,
-        disposition: coverage.status === "blocked" ? "external_dependency" as const : "auto_fixable" as const,
-      }]);
-    gates.contract.failures = this.uniqueFailures([...gates.contract.failures, ...contractCoverageFailures]);
-    gates.contract.passed = gates.contract.passed && gates.contract.failures.length === 0
-      && (gates.contract.criterionCoverage?.every((coverage) => coverage.status === "covered" || (gateProfile === "relaxed" && coverage.status === "unsupported")) ?? true);
-    gates.completion.failures = this.uniqueFailures([
-      ...gates.completion.failures,
-      ...gates.progress.failures,
-      ...gates.evidence.failures,
-      ...gates.contract.failures,
-    ]);
-    gates.completion.passed = gates.completion.passed && gates.progress.passed && gates.evidence.passed
-      && gates.contract.passed && gates.completion.failures.length === 0;
-    const action = deriveSupervisorAction(gates.completion.failures);
-    return {
-      ...source,
-      gates,
-      action,
-      reasonCode: action === source.action ? source.reasonCode : `authoritative_${action}`,
-      rationale: action === source.action ? source.rationale : `${source.rationale} Core corrected an inconsistent proposed action using authoritative gate failures.`,
     };
   }
 
@@ -259,16 +246,6 @@ export class TaskRunSupervisor {
     };
   }
 
-  private uniqueFailures(failures: GateFailure[]) {
-    const seen = new Set<string>();
-    return failures.filter((failure) => {
-      const key = `${failure.kind}\u0000${failure.key}\u0000${failure.reason}\u0000${failure.disposition}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }
-
   async reviewAttemptFailure(run: GovernanceTaskRunView, checkpointSeq: number, error: string) {
     const deterministic = this.classifyAttemptFailure(error);
     if (deterministic) {
@@ -303,6 +280,9 @@ export class TaskRunSupervisor {
 
   private classifyAttemptFailure(error: string): { action: "pause_for_approval" | "block_taskrun" | "start_continuation"; reasonCode: string; rationale: string } | undefined {
     const source = error.toLowerCase();
+    if (/(?:non-empty|transport-complete|token-truncated) deliverable candidate|provider failure remained after bounded recovery/.test(source)) {
+      return { action: "block_taskrun", reasonCode: "runtime_candidate_integrity_failed", rationale: `Runtime exhausted its bounded provider recovery without a valid deliverable candidate: ${error}` };
+    }
     if (/(?:approval required|requires? (?:explicit )?approval|needs? approval|等待.*审批|需要.*批准)/i.test(error)) {
       return { action: "pause_for_approval", reasonCode: "runtime_approval_required", rationale: `Runtime reported an explicit approval boundary: ${error}` };
     }
@@ -337,7 +317,10 @@ export class TaskRunSupervisor {
     const reviewed = trigger === "attempt_terminal" || (trigger === "settled" && !["wait_for_runtime"].includes(action));
     const evaluator = evaluatorOverride ?? (reviewed ? this.reviewer.evaluator : "system");
     const evaluatorModel = evaluatorModelOverride ?? (reviewed ? this.reviewer.model : "");
-    const decision: SupervisorDecision = { id: randomUUID(), runId: run.id, evaluator, evaluatorModel, attempt: run.attempt, checkpointSeq, trigger, action, reasonCode, rationale, confidence, instruction: action === "steer" || action === "follow_up" ? rationale : "", candidateResponseHash: createHash("sha256").update(candidateResponse).digest("hex"), status: "proposed", error: "", createdAt: Date.now(), executedAt: null };
+    const epistemicStatus: NonNullable<SupervisorDecision["epistemicStatus"]> = evaluator === "llm"
+      ? "model_assessed"
+      : /(?:unavailable|fallback|recovery)/.test(`${reasonCode} ${evaluatorModel}`) ? "degraded" : "deterministic";
+    const decision: SupervisorDecision = { id: randomUUID(), runId: run.id, evaluator, evaluatorModel, attempt: run.attempt, checkpointSeq, trigger, action, reasonCode, rationale, confidence, epistemicStatus, instruction: action === "steer" || action === "follow_up" ? rationale : "", candidateResponseHash: createHash("sha256").update(candidateResponse).digest("hex"), status: "proposed", error: "", createdAt: Date.now(), executedAt: null };
     return this.store.recordSupervisorDecision(decision);
   }
 }

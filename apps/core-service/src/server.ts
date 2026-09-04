@@ -63,6 +63,7 @@ function assembleCoreApplicationPersistence(
   persistence: SqlitePersistence,
 ): CoreApplicationPersistencePort {
   return Object.freeze({
+    mutations: persistence.mutations,
     attempts: persistence.attempts,
     runtimeMutations: persistence.runtimeMutations,
     sessions: persistence.sessions,
@@ -76,6 +77,7 @@ function assembleCoreApplicationPersistence(
     transcript: persistence.transcript,
     checkpoints: persistence.checkpoints,
     approvals: persistence.approvals,
+    uncertainties: persistence.uncertainties,
     contextManifests: persistence.contextManifests,
     requestEnvelopes: persistence.requestEnvelopes,
     supervisorDecisions: persistence.supervisorDecisions,

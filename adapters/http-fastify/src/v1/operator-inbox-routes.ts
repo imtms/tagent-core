@@ -51,6 +51,7 @@ function mapItem(item: ProfileInboxItemRecord): OperatorInboxItem {
     confidence: item.confidence,
     reason: item.reason ? "Classified by Core" : "",
     gateProfile: item.executionPolicy?.gateProfile ?? "strict",
+    routingProvenance: item.routingProvenance,
     revision: item.revision,
     createdAt: new Date(item.createdAt).toISOString(),
     updatedAt: new Date(item.updatedAt).toISOString(),

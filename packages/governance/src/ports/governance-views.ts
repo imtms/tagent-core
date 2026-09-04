@@ -55,6 +55,7 @@ export interface GovernanceTaskRunView extends GovernanceCompletionRunView, Gove
   completionGate: CompletionGate;
   supervision: {
     latestDecision: SupervisorDecision | null;
+    latestGates?: import("../domain/index.js").GateEvaluation[];
   };
 }
 
@@ -86,8 +87,11 @@ export interface GovernanceContextManifestView {
     selected: boolean;
     reason: string;
     estimatedTokens: number;
+    projectedContentHash?: string;
+    sourceRevision?: string;
     metadata?: Record<string, unknown>;
   }>;
+  requestEnvelopeIds?: string[];
   stats: Record<string, number | string>;
   manifestHash: string;
   createdAt: number;

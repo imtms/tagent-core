@@ -11,13 +11,13 @@ Core 0.8 supports one current database shape and a monotonic revision history:
 | Field | Value |
 | --- | --- |
 | Durable marker | `core_schema.schema_id = 'tagent-core/0.8'` |
-| Public numeric schema version | `2` |
+| Public numeric schema version | `3` |
 | Creation source | deterministic SQL fragments under `adapters/persistence-sqlite/src/schema` |
-| Upgrade support | exact revision 1 and pre-`user_version` 0.8 databases migrate transactionally to revision 2 |
+| Upgrade support | exact revision 1, revision 2, and pre-`user_version` 0.8 databases migrate transactionally to revision 3 |
 
-An empty database is created from the revision-1 baseline and upgraded through the same ordered migration runner used for existing databases. Revision 2 adds the append-only `core_schema_migrations` journal and records SHA-256 checksums for the exact baseline and migration SQL. `PRAGMA user_version`, the journal, marker, and ordered `sqlite_master` definitions must all agree. Migration execution uses one `BEGIN IMMEDIATE` transaction; a failure leaves the prior revision intact. A missing marker, unsupported/newer revision, changed journal, or structural drift fails startup instead of attempting ad-hoc repair.
+An empty database is created from the revision-1 baseline and upgraded through the same ordered migration runner used for existing databases. Revision 2 adds the append-only `core_schema_migrations` journal and records SHA-256 checksums for the exact baseline and migration SQL. Revision 3 adds semantic-control provenance: criterion-aware plan metadata/revisions, routing provenance, accepted uncertainty, Context Manifest request-envelope/evidence-source linkage, and append-only Unicode Transcript FTS. FTS virtual/shadow tables are derived index state and cannot host the ordinary per-table writer triggers; application writes remain fenced on append-only `run_transcript`, whose schema trigger alone updates FTS, while exact-shape validation covers the virtual table and every shadow object. `PRAGMA user_version`, the journal, marker, and ordered `sqlite_master` definitions must all agree. Migration execution uses one `BEGIN IMMEDIATE` transaction; a failure leaves the prior revision intact. A missing marker, unsupported/newer revision, changed journal, or structural drift fails startup instead of attempting ad-hoc repair.
 
-For a new deployment, point `TAGENT_DB` at a nonexistent file, a verified empty database, or an exact revision-1 0.8 database. Back up the database and WAL/SHM recovery set before the first revision-2 start. If Core reports an unsupported schema, checksum mismatch, or structural drift, restore/repair from a verified backup. Do not copy rows or edit markers, revisions, or the journal to bypass validation.
+For a new deployment, point `TAGENT_DB` at a nonexistent file, a verified empty database, or an exact revision-1/revision-2 0.8 database. Back up the database and WAL/SHM recovery set before the first revision-3 start. If Core reports an unsupported schema, checksum mismatch, or structural drift, restore/repair from a verified backup. Do not copy rows or edit markers, revisions, or the journal to bypass validation.
 
 ## Generation startup order
 
@@ -118,6 +118,6 @@ For same-release disaster recovery:
 4. back up PostgreSQL and cold storage consistently when Memory is enabled;
 5. test the restore with the identical release artifact in an isolated location.
 
-Backups from another schema ID are not upgrade inputs for Core 0.8. A release rollback is safe only when it accepts both `tagent-core/0.8` revision 2 and the declared state protocol; otherwise restore the matching pre-upgrade backup or keep the current release running.
+Backups from another schema ID are not upgrade inputs for Core 0.8. A release rollback is safe only when it accepts both `tagent-core/0.8` revision 3 and the declared state protocol; otherwise restore the matching pre-upgrade backup or keep the current release running.
 
-Generation self-management does not run an in-band state-protocol transition. Revision 2 release manifests declare `tagent-core/state-0.8-r2`; the stable Host rejects revision-1 manifests, preventing automatic rollback to a binary that cannot read the migrated database. The first r2 deployment therefore requires a full Host/service restart after backup. Later automatic activation rollback is allowed only among releases declaring the same r2 protocol. Optional Memory remains unchanged.
+Generation self-management does not run an in-band state-protocol transition. Revision 3 release manifests declare `tagent-core/state-0.8-r3`; the stable Host rejects r1/r2 manifests, preventing automatic rollback to a binary that cannot read the migrated database. The first r3 deployment therefore requires a full Host/service restart after backup. Later automatic activation rollback is allowed only among releases declaring the same r3 protocol. Returning to r2 requires stopping the service and restoring the complete pre-r3 SQLite/WAL/SHM recovery set. Optional Memory remains unchanged.

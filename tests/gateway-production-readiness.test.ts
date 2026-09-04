@@ -914,7 +914,7 @@ describe("Gateway production readiness", () => {
     expect(secondSchemaOpen.status, secondSchemaOpen.stderr).toBe(0);
     const schemaEvidence = {
       schemaId: "tagent-core/0.8",
-      schemaVersion: 2,
+      schemaVersion: 3,
       objects: [
         "approval_receipts",
         "attempts",
@@ -981,7 +981,7 @@ describe("Gateway production readiness", () => {
       }).toEqual({
         probeVersion: 7,
         schemaId: "tagent-core/0.8",
-        schemaVersion: 2,
+        schemaVersion: 3,
         writerReady: true,
         writerFence: readinessLease.authority.fence,
         writerLeaseFresh: true,
@@ -1108,7 +1108,7 @@ describe("Gateway production readiness", () => {
         severity: rejected.severity,
         reasons: rejected.reasons,
       }).toEqual({
-        schemaVersion: 2,
+        schemaVersion: 3,
         writerReady: false,
         writerLeaseFresh: false,
         consumerLag: 0,

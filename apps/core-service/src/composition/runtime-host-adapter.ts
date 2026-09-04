@@ -158,16 +158,33 @@ export function createRuntimeHost(options: RuntimeHostOptions): RuntimeHost {
     consumeAtomicallySettledToolCall: (toolCallId) => atomicallySettledToolCalls.delete(toolCallId),
     publish,
     history: {
-      search: async (query, signal) => {
+      search: async (query, searchOptions, signal) => {
         signal.throwIfAborted();
-        const beforeSeq = persistence.transcript.getLastTranscriptSeq(token.runId);
-        const result = persistence.transcript.searchTranscriptLiteral(token.runId, query, {
+        const currentSeq = persistence.transcript.getLastTranscriptSeq(token.runId);
+        const beforeSeq = searchOptions.beforeSeq === undefined ? currentSeq : Math.min(currentSeq, searchOptions.beforeSeq);
+        const options = {
           beforeSeq,
           limit: 8,
           snippetChars: 320,
-        });
+          attempt: searchOptions.attempt,
+          role: searchOptions.role,
+          kind: searchOptions.kind,
+          createdAfter: searchOptions.createdAfter,
+          createdBefore: searchOptions.createdBefore,
+        };
+        const result = searchOptions.mode === "terms"
+          ? persistence.transcript.searchTranscriptTerms(token.runId, query, options)
+          : persistence.transcript.searchTranscriptLiteral(token.runId, query, options);
         signal.throwIfAborted();
-        return { ...result, beforeSeq };
+        return { ...result, beforeSeq, nextBeforeSeq: result.truncated ? result.matches.at(-1)?.seq ?? null : null };
+      },
+      get: async (seq, signal) => {
+        signal.throwIfAborted();
+        const currentSeq = persistence.transcript.getLastTranscriptSeq(token.runId);
+        if (seq >= currentSeq) return undefined;
+        const entry = persistence.transcript.listTranscriptEntries(token.runId, { after: seq - 1, limit: 1 })[0];
+        signal.throwIfAborted();
+        return entry?.seq === seq ? entry : undefined;
       },
     },
     memory: options.memory ? {

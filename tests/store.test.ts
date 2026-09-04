@@ -4,13 +4,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
 import { Store } from "@tagent/persistence-sqlite";
+import { createAttemptRequestEnvelope } from "@tagent/execution/domain";
+import { createEvidenceSource, verifyEvidenceQuote } from "@tagent/governance/application";
 import {
   BASE_SCHEMA_SQL,
   CURRENT_SCHEMA_VERSION,
   MIGRATION_JOURNAL_SCHEMA_SQL,
 } from "../adapters/persistence-sqlite/src/current-schema.js";
-import { applySqliteMigrations } from "../adapters/persistence-sqlite/src/schema-migrations.js";
-import { cancelTaskRun, transitionTaskRun } from "./support/test-persistence.js";
+import { applySqliteMigrations, initializeSqliteSchema } from "../adapters/persistence-sqlite/src/schema-migrations.js";
+import { cancelTaskRun, corePersistence, transitionTaskRun } from "./support/test-persistence.js";
 import { recordSuccessfulBash, upsertTrustedCheck } from "./support/trusted-evidence.js";
 
 const stores: Store[] = [];
@@ -790,6 +792,7 @@ describe("Store", () => {
       .toEqual([
         { version: 1, description: "baseline exact tagent-core/0.8 schema" },
         { version: 2, description: "add append-only schema migration journal" },
+        { version: 3, description: "add semantic control-plane provenance" },
       ]);
   });
 
@@ -811,10 +814,11 @@ describe("Store", () => {
     const journal = upgraded.db.prepare(
       "SELECT version,description,checksum,applied_at AS appliedAt FROM core_schema_migrations ORDER BY version",
     ).all();
-    expect(journal).toHaveLength(2);
+    expect(journal).toHaveLength(3);
     expect(journal).toEqual([
       expect.objectContaining({ version: 1, checksum: expect.stringMatching(/^[a-f0-9]{64}$/) }),
       expect.objectContaining({ version: 2, checksum: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+      expect.objectContaining({ version: 3, checksum: expect.stringMatching(/^[a-f0-9]{64}$/) }),
     ]);
     upgraded.close();
 
@@ -836,6 +840,28 @@ describe("Store", () => {
       .toThrow("core_schema_migrations is append-only");
   });
 
+  it("keeps accepted uncertainty append-only and excludes expired decisions from the active ledger", () => {
+    const store = createStore();
+    const contract = { sourceInput: "inspect", summary: "inspect", objectives: [], acceptanceCriteria: ["Report uncertainty"], scope: "report", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test" };
+    const run = store.createRun(store.createSession().id, "inspect", undefined, contract);
+    const decision = store.acceptUncertainty({ id: "expiring-uncertainty", runId: run.id, criterionId: "ac-1", actorId: "operator:test", rationale: "Bounded attempts could not resolve this.", scope: "This run.", evidenceRefs: [], createdAt: 100, expiresAt: 200 });
+    expect(store.listAcceptedUncertainties(run.id, 150)).toEqual([decision]);
+    expect(store.listAcceptedUncertainties(run.id, 200)).toEqual([]);
+    expect(() => store.db.prepare("UPDATE accepted_uncertainties SET rationale='changed' WHERE id=?").run(decision.id))
+      .toThrow("accepted uncertainties are append-only");
+    expect(() => store.db.prepare("DELETE FROM accepted_uncertainties WHERE id=?").run(decision.id))
+      .toThrow("accepted uncertainties are append-only");
+    const invalid = (id: string, evidenceRefs: string[]) => store.acceptUncertainty({
+      id, runId: run.id, criterionId: "ac-1", actorId: "operator:test",
+      rationale: "Bounded attempts could not resolve this.", scope: "This run.",
+      evidenceRefs, createdAt: 100, expiresAt: null,
+    });
+    expect(() => invalid("oversized-evidence-ref", ["x".repeat(2_001)]))
+      .toThrow("evidence reference is invalid");
+    expect(() => invalid("nul-evidence-ref", ["artifact:report\0hidden"]))
+      .toThrow("evidence reference is invalid");
+  });
+
   it("rolls back an entire failed migration", () => {
     const db = new Database(":memory:");
     db.exec(BASE_SCHEMA_SQL);
@@ -848,6 +874,47 @@ describe("Store", () => {
     expect(db.pragma("user_version", { simple: true })).toBe(1);
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name IN ('core_schema_migrations','rollback_probe')").all())
       .toEqual([]);
+    db.close();
+  });
+
+  it("rejects revision-2 schema drift before applying revision 3", () => {
+    const db = new Database(":memory:");
+    db.exec(BASE_SCHEMA_SQL);
+    db.pragma("user_version = 1");
+    applySqliteMigrations(db, [{
+      version: 2,
+      description: "add append-only schema migration journal",
+      sql: MIGRATION_JOURNAL_SCHEMA_SQL,
+    }], 1);
+    db.exec("DROP INDEX idx_continuations_due");
+
+    expect(() => initializeSqliteSchema(db, 2)).toThrow(/revision 2/i);
+    expect(db.pragma("user_version", { simple: true })).toBe(2);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name='accepted_uncertainties'").get()).toBeUndefined();
+    db.close();
+  });
+
+  it("rolls back revision 3 when final migration validation fails", () => {
+    const db = new Database(":memory:");
+    db.exec(BASE_SCHEMA_SQL);
+    db.pragma("user_version = 1");
+    applySqliteMigrations(db, [{
+      version: 2,
+      description: "add append-only schema migration journal",
+      sql: MIGRATION_JOURNAL_SCHEMA_SQL,
+    }], 1);
+    db.exec(`CREATE TEMP TRIGGER inject_invalid_migration_journal
+      AFTER INSERT ON main.core_schema_migrations WHEN new.version=3
+      BEGIN
+        INSERT INTO core_schema_migrations(version,description,checksum,applied_at)
+        VALUES (99,'invalid extra row',lower(hex(randomblob(32))),new.applied_at);
+      END`);
+
+    expect(() => initializeSqliteSchema(db, 2)).toThrow(/migration journal/i);
+    expect(db.pragma("user_version", { simple: true })).toBe(2);
+    expect(db.prepare("SELECT version FROM core_schema_migrations ORDER BY version").all())
+      .toEqual([{ version: 1 }, { version: 2 }]);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name='accepted_uncertainties'").get()).toBeUndefined();
     db.close();
   });
 
@@ -875,11 +942,96 @@ describe("Store", () => {
     expect(() => new Store(filename)).toThrow(/schema does not match tagent-core\/0\.8/i);
   });
 
-  it("persists immutable per-attempt context manifests", () => {
+  it("links immutable per-attempt Context Manifests to exact provider envelopes without copying payloads", () => {
     const store = createStore(); const session = store.createSession(); const run = store.createRun(session.id, "manifest");
-    store.recordContextManifest({ id: "manifest-1", runId: run.id, attempt: 1, source: "session", items: [{ kind: "user_prompt", sourceId: "prompt-1", selected: true, reason: "current input", estimatedTokens: 10 }], stats: { keptTurns: 1 }, manifestHash: "abc", createdAt: 100 });
-    expect(store.getLatestContextManifest(run.id)).toMatchObject({ id: "manifest-1", manifestHash: "abc", items: [{ sourceId: "prompt-1", selected: true }] });
+    store.recordContextManifest({ id: "manifest-1", runId: run.id, attempt: 1, source: "session", items: [{ kind: "user_prompt", sourceId: "prompt-1", selected: true, reason: "current input", estimatedTokens: 10, projectedContentHash: "a".repeat(64), sourceRevision: "attempt:1" }], stats: { keptTurns: 1 }, manifestHash: "abc", createdAt: 100, requestEnvelopeIds: [] });
+    const persistence = corePersistence(store);
+    const attempt = persistence.attempts.getAttemptForRun(run.id, 1)!;
+    const envelope = createAttemptRequestEnvelope({
+      runId: run.id, attemptId: attempt.id, attempt: 1, requestOrdinal: 1,
+      providerPayload: { messages: [{ role: "user", content: "PAYLOAD_SECRET" }] },
+      model: { id: "test", provider: "test", api: "openai-completions", baseUrl: "https://example.test", reasoning: false, contextWindow: 10_000, maxTokens: 1_000 },
+      contextManifestId: "manifest-1", createdAt: 101,
+    });
+    persistence.requestEnvelopes.record(envelope);
+    expect(store.getLatestContextManifest(run.id)).toMatchObject({ id: "manifest-1", manifestHash: "abc", requestEnvelopeIds: [envelope.id], items: [{ sourceId: "prompt-1", selected: true, projectedContentHash: "a".repeat(64), sourceRevision: "attempt:1" }] });
     expect(store.getRun(run.id)?.supervision.latestContextManifest?.id).toBe("manifest-1");
+    expect(JSON.stringify(store.getLatestContextManifest(run.id))).not.toContain("PAYLOAD_SECRET");
+
+    const other = store.createRun(session.id, "other");
+    const otherAttempt = persistence.attempts.getAttemptForRun(other.id, 1)!;
+    expect(() => persistence.requestEnvelopes.record(createAttemptRequestEnvelope({
+      runId: other.id, attemptId: otherAttempt.id, attempt: 1, requestOrdinal: 1,
+      providerPayload: { messages: [] }, model: envelope.model, contextManifestId: "manifest-1", createdAt: 102,
+    }))).toThrow("invalid context manifest");
+  });
+
+  it("resolves exact Artifact, Operation, and Transcript evidence sources for quote verification", () => {
+    const store = createStore(); const run = store.createRun(store.createSession().id, "quote sources");
+    store.addArtifact(run.id, { id: "report", title: "Report", kind: "text", content: "artifact evidence", uri: "artifact://report" });
+    store.claimOperation("operation-quote", run.id, 1, "tool.bash", { command: "npm test" });
+    store.updateOperation("operation-quote", { status: "succeeded", result: { content: [{ type: "text", text: "tests passed" }], details: { exitCode: 0 } } });
+    store.appendTranscript(run.id, 1, { role: "user", content: "transcript evidence", timestamp: 1 });
+    const refs = ["artifact:report", "operation:operation-quote", `transcript:${run.id}:1`];
+    const sources = new Map(store.resolveEvidenceSources(run.id, refs).map((source) => [source.sourceRef, source]));
+    expect([...sources.keys()]).toEqual(refs);
+    const transcript = sources.get(`transcript:${run.id}:1`)!;
+    expect(verifyEvidenceQuote({
+      sourceRef: transcript.sourceRef,
+      sourceRevision: transcript.sourceRevision,
+      sourceHash: transcript.sourceHash,
+      selector: { kind: "text_quote", exact: "transcript evidence" },
+      quote: "transcript evidence",
+    }, sources)).toMatchObject({ sourceRevision: "seq:1", quote: "transcript evidence" });
+  });
+
+  it("atomically preserves selected Memory projections as immutable Run-scoped quote sources", () => {
+    const store = createStore(); const session = store.createSession(); const run = store.createRun(session.id, "memory quote source");
+    const record = (id: string, revision: string, content: string, createdAt: number) => {
+      const source = createEvidenceSource("memory", "memory:card-1", revision, content) as ReturnType<typeof createEvidenceSource> & { kind: "memory" };
+      store.recordContextManifest({
+        id, runId: run.id, attempt: 1, source: "session",
+        items: [{
+          kind: "memory_card", sourceId: "card-1", selected: true, reason: "recall", estimatedTokens: 4,
+          projectedContentHash: source.sourceHash.slice("sha256:".length), sourceRevision: revision,
+        }],
+        stats: { keptTurns: 1 }, manifestHash: id, createdAt, requestEnvelopeIds: [],
+      }, [source]);
+      return source;
+    };
+    record("manifest-memory-1", "revision:1", "old durable memory", 100);
+    const latest = record("manifest-memory-2", "revision:2", "new durable memory", 200);
+
+    const resolved = store.resolveEvidenceSources(run.id, ["memory:card-1"])[0]!;
+    expect(resolved).toEqual(latest);
+    expect(verifyEvidenceQuote({
+      sourceRef: resolved.sourceRef, sourceRevision: resolved.sourceRevision, sourceHash: resolved.sourceHash,
+      selector: { kind: "text_quote", exact: "new durable memory" }, quote: "new durable memory",
+    }, new Map([[resolved.sourceRef, resolved]])).quote).toBe("new durable memory");
+    expect(JSON.stringify(store.getLatestContextManifest(run.id))).not.toContain("new durable memory");
+    expect(store.resolveEvidenceSources(store.createRun(session.id, "other").id, ["memory:card-1"])).toEqual([]);
+    expect(() => store.db.prepare("UPDATE context_evidence_sources SET content='changed' WHERE manifest_id=?").run("manifest-memory-2"))
+      .toThrow("append-only");
+    expect(() => store.db.prepare("DELETE FROM context_evidence_sources WHERE manifest_id=?").run("manifest-memory-2"))
+      .toThrow("append-only");
+  });
+
+  it("rolls back a Context Manifest whose private Memory bytes do not match its commitment", () => {
+    const store = createStore(); const run = store.createRun(store.createSession().id, "invalid memory commitment");
+    const source = createEvidenceSource("memory", "memory:card-1", "revision:1", "actual") as ReturnType<typeof createEvidenceSource> & { kind: "memory" };
+    expect(() => store.recordContextManifest({
+      id: "invalid-memory-manifest", runId: run.id, attempt: 1, source: "session",
+      items: [{ kind: "memory_card", sourceId: "card-1", selected: true, reason: "recall", estimatedTokens: 1, projectedContentHash: "0".repeat(64), sourceRevision: "revision:1" }],
+      stats: {}, manifestHash: "invalid", createdAt: 100, requestEnvelopeIds: [],
+    }, [source])).toThrow("does not match its manifest commitment");
+    expect(store.getLatestContextManifest(run.id)).toBeUndefined();
+  });
+
+  it("keeps failed diagnostic Operations out of completion evidence resolution", () => {
+    const store = createStore(); const run = store.createRun(store.createSession().id, "failed observation");
+    store.claimOperation("failed-read", run.id, 1, "tool.read", { path: "missing" });
+    store.updateOperation("failed-read", { status: "failed", stage: "observation_failed", error: "missing" });
+    expect(store.resolveEvidenceSources(run.id, ["operation:failed-read"])).toEqual([]);
   });
   it("persists and archives the latest Run checkpoint", () => {
     const store = createStore();
@@ -933,6 +1085,44 @@ describe("Store", () => {
     expect(store.searchTranscriptLiteral(run.id, "exactcase").matches).toEqual([]);
     expect(store.searchTranscriptLiteral(run.id, 'quoted "value"').matches[0]).toMatchObject({ seq: 2 });
     expect(() => store.searchTranscriptLiteral(run.id, "")).toThrow("cannot be empty");
+    expect(() => store.searchTranscriptLiteral(run.id, "x".repeat(257))).toThrow("is invalid");
+    expect(() => store.searchTranscriptLiteral(run.id, "unsafe\0query")).toThrow("is invalid");
+  });
+
+  it("filters Transcript recall and provides stable Unicode term-search pagination", () => {
+    const store = createStore(); const run = store.createRun(store.createSession().id, "filtered transcript search");
+    const clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(1_000);
+    store.appendTranscript(run.id, 1, { role: "user", content: "alpha 数据 older", timestamp: 1 });
+    clock.mockReturnValue(2_000);
+    store.appendTranscript(run.id, 1, { role: "assistant", content: [{ type: "thinking", thinking: "alpha 数据 hidden" }, { type: "text", text: "alpha visible" }], api: "test", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: 2 });
+    clock.mockReturnValue(3_000);
+    store.appendTranscript(run.id, 2, { role: "user", content: "alpha 数据 newest", timestamp: 3 });
+    clock.mockRestore();
+
+    expect(store.listTranscriptEntries(run.id, { attempt: 1, role: "user", createdAfter: 900, createdBefore: 1_500 }))
+      .toMatchObject([{ seq: 1, attempt: 1, role: "user", createdAt: 1_000 }]);
+    expect(store.listTranscriptView(run.id, { kind: "thinking" }))
+      .toMatchObject([{ seq: 2, attempt: 1, kind: "thinking", text: "alpha 数据 hidden" }]);
+    const first = store.searchTranscriptTerms(run.id, "alpha 数据", { beforeSeq: 4, limit: 1 });
+    expect(first).toMatchObject({ truncated: true, matches: [{ seq: 3, attempt: 2, role: "user" }] });
+    const second = store.searchTranscriptTerms(run.id, "alpha 数据", { beforeSeq: first.matches[0]!.seq, limit: 2, attempt: 1 });
+    expect(second).toMatchObject({ truncated: false, matches: [{ seq: 2 }, { seq: 1 }] });
+    expect(second.matches.every((match) => match.snippet.includes("[alpha]") || match.snippet.includes("[数据]"))).toBe(true);
+    expect(store.searchTranscriptTerms(run.id, "missing term").matches).toEqual([]);
+    expect(() => store.searchTranscriptTerms(run.id, "x".repeat(257))).toThrow("is invalid");
+    expect(() => store.searchTranscriptTerms(run.id, "unsafe\0query")).toThrow("is invalid");
+  });
+
+  it("makes Transcript entries append-only while preserving FTS consistency", () => {
+    const store = createStore(); const run = store.createRun(store.createSession().id, "immutable transcript");
+    store.appendTranscript(run.id, 1, { role: "user", content: "immutable search token", timestamp: 1 });
+    expect(store.searchTranscriptTerms(run.id, "immutable token").matches).toMatchObject([{ seq: 1 }]);
+    expect(() => store.db.prepare("UPDATE run_transcript SET message_json='{}' WHERE run_id=? AND seq=1").run(run.id))
+      .toThrow("run transcript is append-only");
+    expect(() => store.db.prepare("DELETE FROM run_transcript WHERE run_id=? AND seq=1").run(run.id))
+      .toThrow("run transcript is append-only");
+    expect(store.searchTranscriptTerms(run.id, "immutable token").matches).toMatchObject([{ seq: 1 }]);
   });
 
   it("does not let an older attempt overwrite a newer checkpoint", () => {
@@ -1343,6 +1533,119 @@ describe("Store", () => {
     expect(store.getRun(run.id)?.completionGate).toMatchObject({ passed: false, failures: [expect.objectContaining({ key: "plan" })] });
     store.upsertPlanItem(run.id, { key: "inspect", title: "Inspect evidence", status: "done", required: true, position: 1 });
     expect(store.getRun(run.id)?.completionGate).toEqual({ passed: true, failures: [] }); store.close();
+  });
+
+  it("validates criterion-aware plan references, coverage, dependencies, and replanning", () => {
+    const store = createStore();
+    const policy = { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "inspection" } as const;
+    const contract = {
+      sourceInput: "inspect", summary: "inspect",
+      objectives: [
+        { id: "o-current", summary: "inspect", timing: "current" as const, kind: "investigate" as const },
+        { id: "o-later", summary: "document later", timing: "follow_up" as const, kind: "document" as const },
+      ],
+      acceptanceCriteria: ["Report findings", "Cite durable evidence"], scope: "workspace", nonGoals: [], sourceInboxIds: [],
+      parentRunId: null, relation: "independent" as const, intent: "new_task" as const,
+      decisionReason: "test", routerVersion: "test", executionPolicy: policy,
+    };
+    const run = store.createRun(store.createSession().id, "inspect", undefined, contract);
+    store.addArtifact(run.id, { id: "report", title: "Report", kind: "text", content: "verified", uri: "artifact://report" });
+    const item = {
+      key: "synthesize", title: "Synthesize findings", status: "done" as const, required: true, position: 2,
+      schemaVersion: 2 as const, objectiveIds: ["o-current"], criterionIds: ["ac-1", "ac-2"],
+      dependencies: ["inspect"], completionEvidenceRefs: ["artifact:report"],
+    };
+
+    expect(() => store.upsertPlanItem(run.id, { ...item, objectiveIds: ["missing"] })).toThrow("unknown objective");
+    expect(() => store.upsertPlanItem(run.id, { ...item, criterionIds: ["ac-9"] })).toThrow("unknown acceptance criterion");
+    store.upsertPlanItem(run.id, item);
+    expect(store.getRun(run.id)?.completionGate.failures).toContainEqual(expect.objectContaining({ kind: "plan_dependency", key: "synthesize", reason: expect.stringContaining("does not exist") }));
+
+    store.upsertPlanItem(run.id, { key: "inspect", title: "Inspect", status: "pending", required: false, position: 1 });
+    expect(store.getRun(run.id)?.completionGate.failures).toContainEqual(expect.objectContaining({ kind: "plan_dependency", reason: expect.stringContaining("is pending") }));
+    store.upsertPlanItem(run.id, { key: "inspect", title: "Inspect", status: "done", required: false, position: 1 });
+    expect(store.getRun(run.id)?.completionGate).toEqual({ passed: true, failures: [] });
+    expect(store.getRun(run.id)?.plan.find((entry) => entry.key === "synthesize")).toMatchObject({
+      schemaVersion: 2, objectiveIds: ["o-current"], criterionIds: ["ac-1", "ac-2"],
+      dependencies: ["inspect"], createdAttempt: 1, updatedAttempt: 1,
+      completionEvidenceRefs: ["artifact:report"],
+    });
+
+    expect(() => store.upsertPlanItem(run.id, { ...item, title: "Changed scope" })).toThrow("requires a replanReason");
+    store.upsertPlanItem(run.id, { ...item, title: "Changed scope", replanReason: "New evidence narrowed the synthesis." });
+    expect(store.getRun(run.id)?.plan.find((entry) => entry.key === "synthesize")?.replanReason)
+      .toBe("New evidence narrowed the synthesis.");
+  });
+
+  it("rejects complete Plan dependency cycles and detects legacy cycles at the Gate", () => {
+    const store = createStore();
+    const run = store.createRun(store.createSession().id, "acyclic plan");
+    store.upsertPlanItem(run.id, {
+      key: "a", title: "A", status: "pending", required: true, position: 1,
+      schemaVersion: 2, objectiveIds: [], criterionIds: [], dependencies: ["b"], completionEvidenceRefs: [],
+    });
+    expect(() => store.upsertPlanItem(run.id, {
+      key: "b", title: "B", status: "pending", required: true, position: 2,
+      schemaVersion: 2, objectiveIds: [], criterionIds: [], dependencies: ["a"], completionEvidenceRefs: [],
+    })).toThrow(/acyclic.*a, b/);
+    expect(store.getRun(run.id)?.plan.map((item) => item.key)).toEqual(["a"]);
+
+    const legacy = store.createRun(store.createSession().id, "legacy cyclic plan");
+    const metadata = (dependency: string) => JSON.stringify({
+      schemaVersion: 2, objectiveIds: [], criterionIds: [], dependencies: [dependency],
+      completionEvidenceRefs: ["artifact:proof"], createdAttempt: 1, updatedAttempt: 1,
+    });
+    store.addArtifact(legacy.id, { id: "proof", title: "Proof", kind: "text", content: "proof", uri: "artifact://proof" });
+    store.db.prepare(`INSERT INTO plan_items
+      (run_id,item_key,title,status,required,position,metadata_json) VALUES (?,?,?,?,?,?,?)`)
+      .run(legacy.id, "a", "A", "done", 1, 1, metadata("b"));
+    store.db.prepare(`INSERT INTO plan_items
+      (run_id,item_key,title,status,required,position,metadata_json) VALUES (?,?,?,?,?,?,?)`)
+      .run(legacy.id, "b", "B", "done", 1, 2, metadata("a"));
+    expect(store.getRun(legacy.id)?.completionGate.failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "plan_dependency", key: "a", reason: expect.stringContaining("cycle") }),
+      expect.objectContaining({ kind: "plan_dependency", key: "b", reason: expect.stringContaining("cycle") }),
+    ]));
+  });
+
+  it("retains append-only Plan revisions and rejects foreign completion evidence", () => {
+    const store = createStore();
+    const run = store.createRun(store.createSession().id, "audited plan");
+    const base = {
+      key: "work", title: "Work", required: true, position: 1, schemaVersion: 2 as const,
+      objectiveIds: [], criterionIds: [], dependencies: [], completionEvidenceRefs: ["artifact:foreign"],
+    };
+    store.upsertPlanItem(run.id, { ...base, status: "pending" });
+    store.upsertPlanItem(run.id, { ...base, status: "done" });
+    store.upsertPlanItem(run.id, { ...base, status: "done" });
+    expect(store.listPlanItemRevisions(run.id, "work")).toMatchObject([
+      { revision: 1, attempt: 1, reason: "created", snapshot: { status: "pending" } },
+      { revision: 2, attempt: 1, reason: "status:pending->done", snapshot: { status: "done" } },
+    ]);
+    expect(store.getRun(run.id)?.completionGate.failures).toContainEqual(expect.objectContaining({
+      kind: "plan_evidence", key: "work", reason: expect.stringContaining("unavailable for this TaskRun"),
+    }));
+    expect(() => store.db.prepare("UPDATE plan_item_revisions SET reason='tampered' WHERE run_id=?").run(run.id))
+      .toThrow(/append-only/);
+    expect(() => store.db.prepare("DELETE FROM plan_item_revisions WHERE run_id=?").run(run.id))
+      .toThrow(/append-only/);
+  });
+
+  it("attributes criterion-aware plan updates to Attempts while retaining legacy plan compatibility", () => {
+    const store = createStore();
+    const policy = { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "inspection" } as const;
+    const contract = { sourceInput: "inspect", summary: "inspect", objectives: [{ id: "o1", summary: "inspect", timing: "current" as const, kind: "investigate" as const }], acceptanceCriteria: ["Report findings"], scope: "workspace", nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
+    const run = store.createRun(store.createSession().id, "inspect", undefined, contract);
+    store.upsertPlanItem(run.id, { key: "v2", title: "Inspect", status: "done", required: true, position: 1, schemaVersion: 2, objectiveIds: ["o1"], criterionIds: ["ac-1"], dependencies: [], completionEvidenceRefs: [] });
+    transitionTaskRun(store, run.id, "block", "test Attempt boundary");
+    store.resumeRun(run.id);
+    store.upsertPlanItem(run.id, { key: "v2", title: "Inspect", status: "done", required: true, position: 1, schemaVersion: 2, objectiveIds: ["o1"], criterionIds: ["ac-1"], dependencies: [], completionEvidenceRefs: [] });
+    expect(store.getRun(run.id)?.plan[0]).toMatchObject({ createdAttempt: 1, updatedAttempt: 2 });
+
+    const legacy = store.createRun(store.createSession().id, "legacy inspect", undefined, contract);
+    store.upsertPlanItem(legacy.id, { key: "legacy", title: "Legacy plan", status: "done", required: true, position: 1 });
+    expect(store.getRun(legacy.id)?.plan[0]).not.toHaveProperty("schemaVersion");
+    expect(store.getRun(legacy.id)?.completionGate).toEqual({ passed: true, failures: [] });
   });
 
   it("keeps explicit read-only Bash receipts from raising analysis to mutation governance", () => {

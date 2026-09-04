@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { RuntimeMessage as AgentMessage, RuntimeMessagePart } from "../ports/attempt-runtime.js";
 import type { ContextManifestItem } from "../domain/task-run.js";
 
@@ -15,6 +16,8 @@ export interface ContextAssembly {
   messages: AgentMessage[];
   droppedMessages: AgentMessage[];
   contextItems: ContextManifestItem[];
+  systemContentHash: string;
+  promptContentHash: string;
   stats: {
     source: ContextSource;
     contextWindow: number;
@@ -59,11 +62,15 @@ export class ContextAssembler {
       + estimateTextTokens(attemptContext)
       + estimateTextTokens(liveContext);
     const promptTokens = estimateTextTokens(prompt);
+    const fixedTokens = systemTokens + promptTokens + this.options.maxOutputTokens;
+    if (fixedTokens > contextWindow) {
+      throw new Error(`Current Attempt context exceeds the model window before history: required=${fixedTokens}, contextWindow=${contextWindow}, system=${systemTokens}, prompt=${promptTokens}, reservedOutput=${this.options.maxOutputTokens}`);
+    }
     const entries = messages.map((message, index) => ({ message, sourceId: sourceIds[index] || synthesizedMessageIdentity(message, index) }));
     const originalTurns = identifyTurns(entries);
     const turnLimited = originalTurns.slice(-Math.max(1, this.options.maxTurns));
     const prepared = turnLimited.map((turn, index) => this.prepareHistoricalTurn(turn, index === turnLimited.length - 1));
-    const messageBudget = Math.max(0, contextWindow - this.options.maxOutputTokens - systemTokens - promptTokens);
+    const messageBudget = contextWindow - fixedTokens;
     const kept: Turn[] = [];
     let estimatedMessageTokens = 0;
     for (let index = prepared.length - 1; index >= 0; index -= 1) {
@@ -86,13 +93,15 @@ export class ContextAssembler {
     const droppedEntries = originalTurns.flatMap((turn) => turn.entries).filter((entry) => !keptSourceIds.has(entry.sourceId));
     const selectedKind: ContextManifestItem["kind"] = source === "session" ? "session_message" : "transcript_message";
     const contextItems: ContextManifestItem[] = [
-      ...keptEntries.map(({ message, sourceId }) => ({ kind: selectedKind, sourceId, role: message.role, selected: true, reason: "selected by recent-turn policy", estimatedTokens: estimateMessageTokens(message) })),
-      ...droppedEntries.map(({ message, sourceId }) => ({ kind: selectedKind, sourceId, role: message.role, selected: false, reason: "dropped by turn limit or context-window policy", estimatedTokens: estimateMessageTokens(message) })),
+      ...keptEntries.map(({ message, sourceId }) => ({ kind: selectedKind, sourceId, role: message.role, selected: true, reason: "selected by recent-turn policy", estimatedTokens: estimateMessageTokens(message), projectedContentHash: hashProjection(JSON.stringify(message)), sourceRevision: sourceId })),
+      ...droppedEntries.map(({ message, sourceId }) => ({ kind: selectedKind, sourceId, role: message.role, selected: false, reason: "dropped by turn limit or context-window policy", estimatedTokens: estimateMessageTokens(message), sourceRevision: sourceId })),
     ];
     return {
       messages: keptEntries.map((entry) => entry.message),
       droppedMessages: droppedEntries.map((entry) => entry.message),
       contextItems,
+      systemContentHash: hashProjection(JSON.stringify({ systemPrompt, attemptContext, liveContext })),
+      promptContentHash: hashProjection(prompt),
       stats: {
         source,
         contextWindow,
@@ -122,6 +131,8 @@ export class ContextAssembler {
     return { compressed, entries };
   }
 }
+
+function hashProjection(value: string) { return createHash("sha256").update(value).digest("hex"); }
 
 function projectTurnToBudget(turn: Turn, tokenBudget: number): Turn | undefined {
   if (tokenBudget <= 0) return undefined;

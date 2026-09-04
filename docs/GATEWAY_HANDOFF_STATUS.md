@@ -6,9 +6,9 @@ This document records the Core team's responsibility decision for the Gateway ha
 
 | Item | Value |
 | --- | --- |
-| Review date | 2026-08-21 |
-| Target release | `0.8.31` |
-| SQLite schema | ID `tagent-core/0.8`, numeric version `2` |
+| Review date | 2026-09-04 |
+| Target release | `0.8.32` |
+| SQLite schema | ID `tagent-core/0.8`, numeric version `3` |
 | Channel API | `/api/v1` |
 | Operator Read | `operator.read.v1` |
 | Full-feature profiles | five profile `1.0` contracts |
@@ -76,7 +76,7 @@ Gateway must implement and test:
 
 Before traffic, Gateway must validate:
 
-- schema version `2` and the required base command/event catalogs;
+- schema version `3` and the required base command/event catalogs;
 - the base Operator endpoint list and ready Approval contract;
 - exact replay, durable receipt lookup, no blind replay, no pruning, and matching limits;
 - complete cursor traversal beyond 500 members and stable snapshot membership when unread resources are updated;

@@ -3,12 +3,15 @@ import path from "node:path";
 import { Type, type Static } from "typebox";
 import type { ToolProvider } from "@tagent/execution/composition";
 import type { RuntimeTool, ToolCapabilityApplicationPort } from "@tagent/execution/ports";
-import { listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from "../workspace-path.js";
+import { commitWorkspaceFiles, createWorkspaceFile, listWorkspaceDirectory, readWorkspaceFile } from "../workspace-path.js";
 import { currentAttemptOrdinal, durableTextResult, operationId, textResult } from "./shared.js";
 
 const ListSchema = Type.Object({ path: Type.Optional(Type.String()), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })) });
 const ReadSchema = Type.Object({ path: Type.String(), offset: Type.Optional(Type.Integer({ minimum: 1 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 2000 })) });
-const WriteSchema = Type.Object({ path: Type.String(), content: Type.String() });
+const WriteSchema = Type.Object({
+  path: Type.String(), content: Type.String(),
+  snapshotId: Type.Optional(Type.String()), contentHash: Type.Optional(Type.String()),
+});
 const EditSchema = Type.Object({ path: Type.String(), snapshotId: Type.String(), contentHash: Type.String(), oldText: Type.String(), newText: Type.String() });
 const PatchSchema = Type.Object({
   patchId: Type.Optional(Type.String()),
@@ -48,7 +51,7 @@ export class ReadToolProvider implements ToolProvider {
         const { path: filename, relative, metadata: file, buffer } = await readWorkspaceFile(this.workspace, params.path, signal);
         if (buffer.subarray(0, Math.min(buffer.length, 8192)).includes(0)) return textResult(`Binary file: ${params.path}`, { path: filename, type: "binary", bytes: file.size });
         const content = buffer.toString("utf8").replace(/^\uFEFF/, "");
-        const contentHash = createHash("sha256").update(content).digest("hex");
+        const contentHash = createHash("sha256").update(buffer).digest("hex");
         const lines = content.split("\n");
         const offset = params.offset ?? 1, limit = params.limit ?? 300;
         return durableTextResult(this.capabilities, signal, id, lines.slice(offset - 1, offset - 1 + limit).join("\n"), {
@@ -66,11 +69,16 @@ export class WriteToolProvider implements ToolProvider {
   constructor(private readonly workspace: string) {}
   provideTools(): readonly RuntimeTool[] {
     const tool: RuntimeTool<Static<typeof WriteSchema>, Record<string, unknown>> = {
-      name: "write", label: "Write file", description: "Create or overwrite a UTF-8 file inside the workspace.", parameters: WriteSchema, executionMode: "sequential",
+      name: "write", label: "Write file", description: "Create a new UTF-8 file, or replace an existing file only with snapshotId/contentHash returned by read. Existing files are never overwritten blindly.", parameters: WriteSchema, executionMode: "sequential",
       policy: { operationType: "tool.write", workspaceAccess: "mutation", externalAction: true },
       execute: async (_id, params, signal) => {
-        const { path: filename } = await writeWorkspaceFile(this.workspace, params.path, params.content, signal);
-        return textResult(`Wrote ${Buffer.byteLength(params.content)} bytes to ${params.path}`, { path: filename, bytes: Buffer.byteLength(params.content) });
+        const hasSnapshot = params.snapshotId !== undefined || params.contentHash !== undefined;
+        if (hasSnapshot && (!params.snapshotId || !params.contentHash)) throw new Error("Replacing a workspace file requires both snapshotId and contentHash");
+        if (params.snapshotId && params.snapshotId !== `sha256:${params.contentHash}`) throw new Error("snapshotId does not match contentHash");
+        const filename = hasSnapshot
+          ? (await commitWorkspaceFiles(this.workspace, [{ path: params.path, content: params.content, expectedHash: params.contentHash! }], signal), path.resolve(this.workspace, params.path))
+          : (await createWorkspaceFile(this.workspace, params.path, params.content, signal)).path;
+        return textResult(`${hasSnapshot ? "Replaced" : "Created"} ${params.path}`, { path: filename, bytes: Buffer.byteLength(params.content), mode: hasSnapshot ? "replace" : "create" });
       },
     };
     return [tool];

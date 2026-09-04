@@ -12,14 +12,17 @@ import {
   effectiveGateProfile,
   effectiveTaskExecutionPolicy,
   type ApprovalRequest,
+  type AcceptedUncertainty,
   type Artifact,
   type CompletionGate,
   type GateEvaluation,
   type PlanItem,
+  type PlanItemRevision,
   type ProgressSnapshot,
   type RunCheck,
   type SupervisorDecision,
 } from "@tagent/governance/domain";
+import { createEvidenceSource, stableJson } from "@tagent/governance";
 import type {
   GovernanceCompletionRunView,
   GovernanceProgressRunView,
@@ -29,6 +32,7 @@ import type {
 import type {
   ControlInboxItem,
   ContextManifest,
+  ContextEvidenceSource,
   EventConsumerCursor,
   RunCheckpoint,
   RunContinuation,
@@ -58,7 +62,7 @@ import type {
   SkillRevision,
   SkillSummary,
 } from "@tagent/admission/domain";
-import { assertControlContent } from "@tagent/execution/domain";
+import { assertControlContent, taskRunPlanningCriteria } from "@tagent/execution/domain";
 import type {
   ProfileInboxMutationValue,
   ProfileInboxItemRecord,
@@ -587,8 +591,8 @@ export class Store {
       const position = (this.db.prepare("SELECT COALESCE(MAX(position),0)+1 as position FROM session_supervisor_inbox WHERE session_id = ? AND status = 'queued'").get(sessionId) as { position: number }).position;
       const id = randomUUID();
       this.db.prepare(`INSERT INTO session_supervisor_inbox
-        (id,session_id,request_id,content,status,decision,position,created_at,updated_at,summary,objectives_json,intent,target_run_id,priority,urgency,relation,acceptance_json,scope,non_goals_json,confidence,decision_reason,router_version,execution_policy_json)
-        VALUES (?,?,?,?,'queued','pending',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, sessionId, requestId, content, position, timestamp, timestamp, analysis.summary, JSON.stringify(analysis.objectives ?? [{ id: "objective-1", summary: analysis.summary, timing: "current", kind: "other" }]), analysis.intent, analysis.targetRunId, analysis.priority, analysis.urgency, analysis.relation, JSON.stringify(analysis.acceptanceCriteria), analysis.scope, JSON.stringify(analysis.nonGoals), analysis.confidence, analysis.reason, analysis.routerVersion, JSON.stringify(analysis.executionPolicy ?? null));
+        (id,session_id,request_id,content,status,decision,position,created_at,updated_at,summary,objectives_json,intent,target_run_id,priority,urgency,relation,acceptance_json,scope,non_goals_json,confidence,decision_reason,router_version,execution_policy_json,routing_provenance_json)
+        VALUES (?,?,?,?,'queued','pending',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, sessionId, requestId, content, position, timestamp, timestamp, analysis.summary, JSON.stringify(analysis.objectives ?? [{ id: "objective-1", summary: analysis.summary, timing: "current", kind: "other" }]), analysis.intent, analysis.targetRunId, analysis.priority, analysis.urgency, analysis.relation, JSON.stringify(analysis.acceptanceCriteria), analysis.scope, JSON.stringify(analysis.nonGoals), analysis.confidence, analysis.reason, analysis.routerVersion, JSON.stringify(analysis.executionPolicy ?? null), JSON.stringify(analysis.routingProvenance ?? {}));
       this.touchSessionInboxRevision(sessionId, timestamp);
       const item = this.getSessionInboxItem(id)!;
       if (audit) this.recordSubmissionAudit(item, audit);
@@ -604,14 +608,16 @@ export class Store {
     const objectives = JSON.parse(String(row.objectivesJson || "[]")) as TaskObjective[];
     const fallbackObjective = { id: "objective-1", summary: String(row.summary || row.content || ""), timing: row.relation === "parallel" ? "parallel" : row.relation === "follow_up" ? "follow_up" : "current", kind: "other" } as const;
     const executionPolicy = row.executionPolicyJson ? JSON.parse(String(row.executionPolicyJson)) : undefined;
-    return { ...row, manualOrder: Boolean(row.manualOrder), analysis: { summary: String(row.summary || row.content || ""), objectives: objectives.length ? objectives : [fallbackObjective], intent: row.intent, targetRunId: row.targetRunId || null, priority: Number(row.priority || 0), urgency: row.urgency, relation: row.relation, acceptanceCriteria, scope: String(row.scope || row.summary || ""), nonGoals, confidence: Number(row.confidence || 0), reason: String(row.decisionReason || ""), routerVersion: String(row.routerVersion || ""), ...(executionPolicy ? { executionPolicy } : {}) } } as Submission;
+    const routingProvenance = row.routingProvenanceJson ? JSON.parse(String(row.routingProvenanceJson)) : undefined;
+    return { ...row, manualOrder: Boolean(row.manualOrder), analysis: { summary: String(row.summary || row.content || ""), objectives: objectives.length ? objectives : [fallbackObjective], intent: row.intent, targetRunId: row.targetRunId || null, priority: Number(row.priority || 0), urgency: row.urgency, relation: row.relation, acceptanceCriteria, scope: String(row.scope || row.summary || ""), nonGoals, confidence: Number(row.confidence || 0), reason: String(row.decisionReason || ""), routerVersion: String(row.routerVersion || ""), ...(executionPolicy ? { executionPolicy } : {}), ...(routingProvenance && Object.keys(routingProvenance).length ? { routingProvenance } : {}) } } as Submission;
   }
 
   private sessionInboxSelect(where: string) {
     return `SELECT id,session_id as sessionId,request_id as requestId,content,status,decision,run_id as runId,error,position,
       created_at as createdAt,updated_at as updatedAt,claimed_at as claimedAt,started_at as startedAt,
       summary,objectives_json as objectivesJson,intent,target_run_id as targetRunId,priority,urgency,relation,acceptance_json as acceptanceJson,scope,
-      non_goals_json as nonGoalsJson,confidence,decision_reason as decisionReason,router_version as routerVersion,execution_policy_json as executionPolicyJson,manual_order as manualOrder
+      non_goals_json as nonGoalsJson,confidence,decision_reason as decisionReason,router_version as routerVersion,execution_policy_json as executionPolicyJson,
+      routing_provenance_json as routingProvenanceJson,manual_order as manualOrder
       FROM session_supervisor_inbox ${where}`;
   }
 
@@ -703,12 +709,12 @@ export class Store {
     assertSubmissionContentBound(content);
     const resolved = analysis ?? { ...this.getSessionInboxItem(id)?.analysis, summary: trimmed.slice(0, 120), scope: trimmed.slice(0, 120) } as SessionInputAnalysis;
     const changed = this.db.prepare(`UPDATE session_supervisor_inbox SET content=?,summary=?,objectives_json=?,intent=?,target_run_id=?,priority=?,urgency=?,relation=?,
-      acceptance_json=?,scope=?,non_goals_json=?,confidence=?,decision_reason=?,router_version=?,execution_policy_json=?,revision=revision+1,updated_at=?
+      acceptance_json=?,scope=?,non_goals_json=?,confidence=?,decision_reason=?,router_version=?,execution_policy_json=?,routing_provenance_json=?,revision=revision+1,updated_at=?
       WHERE id=? AND session_id=? AND status='queued'
         AND NOT EXISTS (SELECT 1 FROM workspace_goal_inbox_links WHERE inbox_item_id=session_supervisor_inbox.id)`)
       .run(trimmed, resolved.summary, JSON.stringify(resolved.objectives), resolved.intent, resolved.targetRunId, resolved.priority, resolved.urgency, resolved.relation,
         JSON.stringify(resolved.acceptanceCriteria), resolved.scope, JSON.stringify(resolved.nonGoals), resolved.confidence, resolved.reason,
-        resolved.routerVersion, JSON.stringify(resolved.executionPolicy ?? null), now(), id, sessionId).changes;
+        resolved.routerVersion, JSON.stringify(resolved.executionPolicy ?? null), JSON.stringify(resolved.routingProvenance ?? {}), now(), id, sessionId).changes;
     if (changed === 1) this.touchSessionInboxRevision(sessionId);
     return changed === 1 ? this.getSessionInboxItem(id) : undefined;
   }
@@ -788,18 +794,22 @@ export class Store {
     const row = this.db.prepare(`SELECT id,session_id AS sessionId,content,status,decision,run_id AS runId,
       position,summary,intent,target_run_id AS targetRunId,priority,urgency,relation,
       acceptance_json AS acceptanceCriteriaJson,confidence,decision_reason AS reason,
-      execution_policy_json AS executionPolicyJson,revision,created_at AS createdAt,updated_at AS updatedAt
+      execution_policy_json AS executionPolicyJson,routing_provenance_json AS routingProvenanceJson,
+      revision,created_at AS createdAt,updated_at AS updatedAt
       FROM session_supervisor_inbox WHERE session_id=? AND id=?`).get(sessionId, itemId) as
-      (Omit<ProfileInboxItemRecord, "executionPolicy" | "acceptanceCriteria"> & {
-        executionPolicyJson: string; acceptanceCriteriaJson: string;
+      (Omit<ProfileInboxItemRecord, "executionPolicy" | "routingProvenance" | "acceptanceCriteria"> & {
+        executionPolicyJson: string; routingProvenanceJson: string; acceptanceCriteriaJson: string;
       }) | undefined;
     if (!row) return undefined;
-    const { executionPolicyJson, acceptanceCriteriaJson, ...item } = row;
+    const { executionPolicyJson, routingProvenanceJson, acceptanceCriteriaJson, ...item } = row;
     return {
       ...item,
       acceptanceCriteria: JSON.parse(acceptanceCriteriaJson || "[]") as string[],
       executionPolicy: executionPolicyJson
         ? JSON.parse(executionPolicyJson) as ProfileInboxItemRecord["executionPolicy"]
+        : null,
+      routingProvenance: routingProvenanceJson && routingProvenanceJson !== "{}"
+        ? JSON.parse(routingProvenanceJson) as ProfileInboxItemRecord["routingProvenance"]
         : null,
     };
   }
@@ -925,6 +935,16 @@ export class Store {
     return changed;
   }
 
+  markSessionInboxNeedsClarification(id: string, sessionId: SessionId, reason: string) {
+    const timestamp = now();
+    const changed = this.db.prepare(`UPDATE session_supervisor_inbox
+      SET decision='needs_clarification',error=?,revision=revision+1,updated_at=?
+      WHERE id=? AND session_id=? AND status='queued' AND decision='pending'`)
+      .run(reason, timestamp, id, sessionId).changes === 1;
+    if (changed) this.touchSessionInboxRevision(sessionId, timestamp);
+    return changed ? this.getSessionInboxItem(id) : undefined;
+  }
+
   mergeSessionInboxItems(sourceId: string, targetId: string, sessionId: SessionId) {
     if (sourceId === targetId) return false;
     const transaction = this.db.transaction(() => {
@@ -994,7 +1014,7 @@ ${source.content}`;
     if (claimed.changes !== 1) return undefined;
     this.touchSessionInboxRevision(sessionId, timestamp);
     const inbox = this.getSessionInboxItem(itemId)!;
-    const contract: TaskRunContractSnapshot = { sourceInput: inbox.content, summary: inbox.analysis.summary, objectives: inbox.analysis.objectives, acceptanceCriteria: inbox.analysis.acceptanceCriteria, scope: inbox.analysis.scope, nonGoals: inbox.analysis.nonGoals, sourceInboxIds: [inbox.id], parentRunId: inbox.analysis.targetRunId, relation: inbox.analysis.relation, intent: inbox.analysis.intent, decisionReason: inbox.analysis.reason, routerVersion: inbox.analysis.routerVersion, executionPolicy: inbox.analysis.executionPolicy };
+    const contract: TaskRunContractSnapshot = { sourceInput: inbox.content, summary: inbox.analysis.summary, objectives: inbox.analysis.objectives, acceptanceCriteria: inbox.analysis.acceptanceCriteria, scope: inbox.analysis.scope, nonGoals: inbox.analysis.nonGoals, sourceInboxIds: [inbox.id], parentRunId: inbox.analysis.targetRunId, relation: inbox.analysis.relation, intent: inbox.analysis.intent, decisionReason: inbox.analysis.reason, routerVersion: inbox.analysis.routerVersion, executionPolicy: inbox.analysis.executionPolicy, routingProvenance: inbox.analysis.routingProvenance };
     const run = this.createRun(sessionId, inbox.analysis.summary || inbox.content, `inbox:${inbox.id}`, contract);
     if (contract.parentRunId && contract.parentRunId !== run.id) {
       const edgeRelation = contract.relation === "parallel" || contract.relation === "follow_up" || contract.relation === "derived" || contract.relation === "depends_on" ? contract.relation : "derived";
@@ -1136,11 +1156,15 @@ ${source.content}`;
       FROM runs WHERE id = ?
     `).get(id) as RunRow | undefined;
     if (!row) return undefined;
-    const planRows = this.db.prepare(`SELECT item_key as key, title, status, required, position FROM plan_items WHERE run_id = ? ORDER BY position`).all(id) as Array<Omit<PlanItem, "required"> & { required: number }>;
+    const planRows = this.db.prepare(`SELECT item_key as key, title, status, required, position, metadata_json as metadataJson FROM plan_items WHERE run_id = ? ORDER BY position`).all(id) as Array<Omit<PlanItem, "required"> & { required: number; metadataJson: string }>;
     const checkRows = this.db.prepare(`SELECT check_key as key, title, status, required, command, evidence, stale,
       source_operation_id as sourceOperationId, observed_at as observedAt
       FROM run_checks WHERE run_id = ? ORDER BY check_key`).all(id) as Array<Omit<RunCheck, "required" | "stale"> & { required: number; stale: number }>;
-    const plan = planRows.map((item) => ({ ...item, required: Boolean(item.required) }));
+    const plan = planRows.map(({ metadataJson, ...item }) => ({
+      ...item,
+      required: Boolean(item.required),
+      ...(JSON.parse(metadataJson || "{}") as Partial<PlanItem>),
+    }));
     const checks = checkRows.map((item) => ({ ...item, required: Boolean(item.required), stale: Boolean(item.stale) }));
     const artifactColumns = includeArtifactContent
       ? "id, run_id as runId, kind, title, content, uri, created_at as createdAt"
@@ -1168,6 +1192,14 @@ ${source.content}`;
       launchRetryable: this.isInboxLaunchRetryable(id),
       resumable: this.isRunResumable(id),
     };
+    const acceptedUncertainties = this.listAcceptedUncertainties(id);
+    const activeAccepted = new Map(this.listAcceptedUncertainties(id, Date.now()).map((item) => [item.criterionId, item]));
+    const contractCoverage = task.supervision.latestGates.find((gate) => gate.gateType === "contract")?.criterionCoverage ?? [];
+    task.supervision.acceptedUncertainties = acceptedUncertainties;
+    task.supervision.unresolvedUncertainties = contractCoverage.flatMap((coverage, index) => {
+      if (!(["unsupported", "blocked"] as const).includes(coverage.status as "unsupported" | "blocked") || activeAccepted.has(`ac-${index + 1}`)) return [];
+      return [{ criterionId: `ac-${index + 1}`, criterion: coverage.criterion, status: coverage.status as "unsupported" | "blocked", reason: coverage.reason }];
+    });
     task.completionGate = this.evaluateGate(task);
     return task;
   }
@@ -1658,12 +1690,16 @@ ${source.content}`;
     return this.transcriptRepository.appendTranscript(runId, attempt, message);
   }
 
-  listTranscriptEntries(runId: RunId, options: { limit?: number; attempt?: number; after?: number } = {}) {
+  listTranscriptEntries(runId: RunId, options: import("@tagent/execution/ports").TranscriptEntryQuery = {}) {
     return this.transcriptRepository.listTranscriptEntries(runId, options);
   }
 
-  searchTranscriptLiteral(runId: RunId, query: string, options: { limit?: number; snippetChars?: number; beforeSeq?: number } = {}) {
+  searchTranscriptLiteral(runId: RunId, query: string, options: import("@tagent/execution/ports").TranscriptSearchOptions = {}) {
     return this.transcriptRepository.searchTranscriptLiteral(runId, query, options);
+  }
+
+  searchTranscriptTerms(runId: RunId, query: string, options: import("@tagent/execution/ports").TranscriptSearchOptions = {}) {
+    return this.transcriptRepository.searchTranscriptTerms(runId, query, options);
   }
 
   listTranscript(runId: RunId): AgentMessage[] {
@@ -1674,7 +1710,7 @@ ${source.content}`;
     return this.transcriptRepository.repairTranscript(runId, reason);
   }
 
-  listTranscriptView(runId: RunId, options: { limit?: number; attempt?: number; after?: number } = {}) {
+  listTranscriptView(runId: RunId, options: import("@tagent/execution/ports").TranscriptEntryQuery = {}) {
     return this.transcriptRepository.listTranscriptView(runId, options);
   }
 
@@ -1953,6 +1989,122 @@ ${source.content}`;
     return rows.map((row) => this.hydrateOperation(row));
   }
 
+  resolveEvidenceSources(runId: RunId, refs: readonly string[]) {
+    const uniqueRefs = [...new Set(refs.map((ref) => ref.trim()).filter(Boolean))];
+    const sources: import("@tagent/governance/domain").EvidenceSource[] = [];
+    for (const ref of uniqueRefs) {
+      if (ref.startsWith("artifact:")) {
+        const artifact = this.getArtifact(runId, ref.slice("artifact:".length));
+        if (artifact) sources.push(createEvidenceSource("artifact", ref, `created:${artifact.createdAt}`, artifact.content));
+        continue;
+      }
+      if (ref.startsWith("operation:")) {
+        const operation = this.getOperation(ref.slice("operation:".length));
+        if (!operation || operation.runId !== runId || operation.status !== "succeeded" || operation.completedAt === null) continue;
+        const content = stableJson({
+          id: operation.id,
+          attempt: operation.attempt,
+          operationType: operation.operationType,
+          payloadHash: operation.payloadHash,
+          payload: operation.payload ?? null,
+          status: operation.status,
+          stage: operation.stage,
+          effects: operation.effects,
+          result: operation.result ?? null,
+          error: operation.error,
+          completedAt: operation.completedAt,
+        });
+        sources.push(createEvidenceSource("operation", ref, `completed:${operation.completedAt}`, content));
+        continue;
+      }
+      const transcript = /^transcript:(.+):(\d+)$/.exec(ref);
+      if (transcript && transcript[1] === runId) {
+        const seq = Number(transcript[2]);
+        const entry = this.listTranscriptEntries(runId, { after: seq - 1, limit: 1 })[0];
+        if (entry?.seq === seq) sources.push(createEvidenceSource("transcript", ref, `seq:${seq}`, stableJson(entry.message)));
+        continue;
+      }
+      if (ref.startsWith("memory:")) {
+        const row = this.db.prepare(`SELECT source_ref as sourceRef,kind,source_revision as sourceRevision,
+          source_hash as sourceHash,content FROM context_evidence_sources
+          WHERE run_id=? AND source_ref=? ORDER BY created_at DESC,manifest_id DESC LIMIT 1`)
+          .get(runId, ref) as ContextEvidenceSource | undefined;
+        if (row) sources.push(row);
+      }
+    }
+    return sources;
+  }
+
+  acceptUncertainty(input: import("@tagent/governance/ports").AcceptUncertaintyInput): AcceptedUncertainty {
+    const run = this.db.prepare("SELECT contract_json as contractJson FROM runs WHERE id=?").get(input.runId) as { contractJson: string } | undefined;
+    if (!run?.contractJson) throw new Error("Accepted uncertainty requires an immutable TaskRun contract");
+    const contract = JSON.parse(run.contractJson) as TaskRunContractSnapshot;
+    const criteria = taskRunPlanningCriteria(contract);
+    const match = /^ac-([1-9]\d*)$/.exec(input.criterionId);
+    const index = match ? Number(match[1]) - 1 : -1;
+    const criterion = criteria[index];
+    if (!criterion) throw new Error("Accepted uncertainty references an unknown acceptance criterion");
+    const bounded = (value: string, label: string, max: number) => {
+      const normalized = value.trim();
+      if (!normalized || normalized.includes("\0") || normalized.length > max) throw new Error(`Accepted uncertainty ${label} is invalid`);
+      return normalized;
+    };
+    const actorId = bounded(input.actorId, "actorId", 500);
+    const rationale = bounded(input.rationale, "rationale", 4_000);
+    const scope = bounded(input.scope, "scope", 2_000);
+    const evidenceRefs = [...new Set(input.evidenceRefs.map((ref) => ref.trim()).filter(Boolean))];
+    if (evidenceRefs.length > 100) throw new Error("Accepted uncertainty has too many evidence references");
+    if (evidenceRefs.some((ref) => ref.includes("\0") || ref.length > 2_000)) {
+      throw new Error("Accepted uncertainty evidence reference is invalid");
+    }
+    const resolved = new Set(this.resolveEvidenceSources(input.runId, evidenceRefs).map((source) => source.sourceRef));
+    for (const ref of evidenceRefs) {
+      if (resolved.has(ref)) continue;
+      if (ref.startsWith("check:") && this.db.prepare("SELECT 1 FROM run_checks WHERE run_id=? AND check_key=?").get(input.runId, ref.slice(6))) continue;
+      if (ref.startsWith("memory:") && this.listContextManifests(input.runId).some((manifest) => manifest.items.some((item) => item.selected && `memory:${item.sourceId}` === ref))) continue;
+      throw new Error(`Accepted uncertainty evidence reference is unavailable: ${ref}`);
+    }
+    if (input.expiresAt !== null && (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= input.createdAt)) throw new Error("Accepted uncertainty expiry must be later than creation");
+    const contractHash = createHash("sha256").update(stableJson(contract)).digest("hex");
+    const decision: AcceptedUncertainty = {
+      id: input.id,
+      runId: input.runId,
+      criterionId: input.criterionId,
+      criterion,
+      contractHash,
+      actorId,
+      rationale,
+      scope,
+      evidenceRefs,
+      expiresAt: input.expiresAt,
+      createdAt: input.createdAt,
+    };
+    const existing = this.db.prepare(`SELECT id,run_id as runId,criterion_id as criterionId,criterion,contract_hash as contractHash,
+      actor_id as actorId,rationale,scope,evidence_refs_json as evidenceRefsJson,expires_at as expiresAt,created_at as createdAt
+      FROM accepted_uncertainties WHERE id=?`).get(input.id) as (Omit<AcceptedUncertainty, "evidenceRefs"> & { evidenceRefsJson: string }) | undefined;
+    if (existing) {
+      const { evidenceRefsJson, ...row } = existing;
+      const hydrated: AcceptedUncertainty = { ...row, evidenceRefs: JSON.parse(evidenceRefsJson) as string[] };
+      if (stableJson(hydrated) !== stableJson(decision)) throw new Error("Accepted uncertainty id already exists with different content");
+      return decision;
+    }
+    this.db.prepare(`INSERT INTO accepted_uncertainties
+      (id,run_id,criterion_id,criterion,contract_hash,actor_id,rationale,scope,evidence_refs_json,expires_at,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      decision.id, decision.runId, decision.criterionId, decision.criterion, decision.contractHash, decision.actorId,
+      decision.rationale, decision.scope, JSON.stringify(decision.evidenceRefs), decision.expiresAt, decision.createdAt,
+    );
+    return decision;
+  }
+
+  listAcceptedUncertainties(runId: RunId, activeAt?: number): AcceptedUncertainty[] {
+    const rows = this.db.prepare(`SELECT id,run_id as runId,criterion_id as criterionId,criterion,contract_hash as contractHash,
+      actor_id as actorId,rationale,scope,evidence_refs_json as evidenceRefsJson,expires_at as expiresAt,created_at as createdAt
+      FROM accepted_uncertainties WHERE run_id=? ${activeAt === undefined ? "" : "AND (expires_at IS NULL OR expires_at > ?)"}
+      ORDER BY created_at,id`).all(runId, ...(activeAt === undefined ? [] : [activeAt])) as Array<Omit<AcceptedUncertainty, "evidenceRefs"> & { evidenceRefsJson: string }>;
+    return rows.map(({ evidenceRefsJson, ...row }) => ({ ...row, evidenceRefs: JSON.parse(evidenceRefsJson) as string[] }));
+  }
+
   private hydrateOperation(row: Record<string, unknown>) {
     const { payloadJson, effectsJson, resultJson, ...receipt } = row;
     return {
@@ -2029,11 +2181,138 @@ ${source.content}`;
   }
 
   upsertPlanItem(runId: RunId, item: Omit<PlanItem, "runId">) {
-    this.db.prepare(`
-      INSERT INTO plan_items (run_id, item_key, title, status, required, position) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(run_id, item_key) DO UPDATE SET title=excluded.title, status=excluded.status, required=excluded.required, position=excluded.position
-    `).run(runId, item.key, item.title, item.status, Number(item.required), item.position);
-    this.advanceRunPhase(runId, item.status === "pending" ? "plan" : "implement");
+    return this.db.transaction(() => {
+      const metadata = this.normalizePlanMetadata(runId, item);
+      const snapshot: PlanItem = {
+        key: item.key, title: item.title, status: item.status, required: item.required, position: item.position, ...metadata,
+      };
+      this.assertProspectivePlanAcyclic(runId, snapshot);
+      const snapshotJson = stableJson(snapshot);
+      const prior = this.db.prepare(`SELECT title,status,required,position,metadata_json as metadataJson
+        FROM plan_items WHERE run_id=? AND item_key=?`).get(runId, item.key) as {
+          title: string; status: PlanItem["status"]; required: number; position: number; metadataJson: string;
+        } | undefined;
+      const priorSnapshot = prior ? stableJson({
+        key: item.key,
+        title: prior.title,
+        status: prior.status,
+        required: Boolean(prior.required),
+        position: prior.position,
+        ...(JSON.parse(prior.metadataJson || "{}") as Partial<PlanItem>),
+      }) : undefined;
+      this.db.prepare(`
+        INSERT INTO plan_items (run_id, item_key, title, status, required, position, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(run_id, item_key) DO UPDATE SET title=excluded.title, status=excluded.status, required=excluded.required, position=excluded.position, metadata_json=excluded.metadata_json
+      `).run(runId, item.key, item.title, item.status, Number(item.required), item.position, JSON.stringify(metadata));
+      if (metadata.schemaVersion === 2 && priorSnapshot !== snapshotJson) {
+        const revision = (this.db.prepare(`SELECT COALESCE(MAX(revision),0)+1 AS revision
+          FROM plan_item_revisions WHERE run_id=? AND item_key=?`).get(runId, item.key) as { revision: number }).revision;
+        const reason = !prior ? "created"
+          : item.replanReason?.trim() || (prior.status !== item.status ? `status:${prior.status}->${item.status}` : "updated");
+        this.db.prepare(`INSERT INTO plan_item_revisions
+          (run_id,item_key,revision,snapshot_json,snapshot_hash,attempt,reason,created_at)
+          VALUES (?,?,?,?,?,?,?,?)`).run(
+          runId, item.key, revision, snapshotJson,
+          createHash("sha256").update(snapshotJson).digest("hex"), metadata.updatedAttempt, reason, now(),
+        );
+      }
+      this.advanceRunPhase(runId, item.status === "pending" ? "plan" : "implement");
+    })();
+  }
+
+  listPlanItemRevisions(runId: RunId, itemKey?: string): PlanItemRevision[] {
+    const rows = this.db.prepare(`SELECT id,run_id as runId,item_key as itemKey,revision,
+      snapshot_json as snapshotJson,snapshot_hash as snapshotHash,attempt,reason,created_at as createdAt
+      FROM plan_item_revisions WHERE run_id=? ${itemKey === undefined ? "" : "AND item_key=?"}
+      ORDER BY item_key,revision`).all(...(itemKey === undefined ? [runId] : [runId, itemKey])) as Array<Omit<PlanItemRevision, "snapshot"> & { snapshotJson: string }>;
+    return rows.map(({ snapshotJson, ...row }) => ({ ...row, snapshot: JSON.parse(snapshotJson) as PlanItem }));
+  }
+
+  private assertProspectivePlanAcyclic(runId: RunId, item: PlanItem): void {
+    const rows = this.db.prepare(`SELECT item_key as key,title,status,required,position,metadata_json as metadataJson
+      FROM plan_items WHERE run_id=? AND item_key<>?`).all(runId, item.key) as Array<{
+        key: string; title: string; status: PlanItem["status"]; required: number; position: number; metadataJson: string;
+      }>;
+    const plan: PlanItem[] = rows.map(({ metadataJson, required, ...row }) => ({
+      ...row, required: Boolean(required), ...(JSON.parse(metadataJson || "{}") as Partial<PlanItem>),
+    }));
+    plan.push(item);
+    const cyclic = this.cyclicPlanItemKeys(plan);
+    if (cyclic.length) throw new Error(`Plan dependencies must be acyclic; cycle includes ${cyclic.join(", ")}`);
+  }
+
+  private cyclicPlanItemKeys(plan: readonly PlanItem[]): string[] {
+    const dependencies = new Map(plan.filter((item) => item.schemaVersion === 2)
+      .map((item) => [item.key, item.dependencies ?? []]));
+    const visited = new Set<string>();
+    const active = new Map<string, number>();
+    const stack: string[] = [];
+    const cyclic = new Set<string>();
+    const visit = (key: string) => {
+      const activeIndex = active.get(key);
+      if (activeIndex !== undefined) {
+        for (const member of stack.slice(activeIndex)) cyclic.add(member);
+        return;
+      }
+      if (visited.has(key)) return;
+      active.set(key, stack.length);
+      stack.push(key);
+      for (const dependency of dependencies.get(key) ?? []) if (dependencies.has(dependency)) visit(dependency);
+      stack.pop();
+      active.delete(key);
+      visited.add(key);
+    };
+    for (const key of dependencies.keys()) visit(key);
+    return [...cyclic].sort();
+  }
+
+  private normalizePlanMetadata(runId: RunId, item: Omit<PlanItem, "runId">): Partial<PlanItem> {
+    if (item.schemaVersion !== 2) return {};
+    const run = this.db.prepare("SELECT attempt,contract_json as contractJson FROM runs WHERE id=?")
+      .get(runId) as { attempt: number; contractJson: string } | undefined;
+    if (!run) throw new Error(`Unknown TaskRun ${runId}`);
+    const contract = run.contractJson ? JSON.parse(run.contractJson) as TaskRunContractSnapshot : null;
+    const unique = (values: string[] | undefined, label: string, limit: number, maxLength: number) => {
+      if (!Array.isArray(values) || values.length > limit || values.some((value) => typeof value !== "string" || !value.trim() || value.includes("\0") || value.length > maxLength)) {
+        throw new Error(`Criterion-aware plan ${label} must contain at most ${limit} non-empty strings`);
+      }
+      const normalized = values.map((value) => value.trim());
+      if (new Set(normalized).size !== normalized.length) throw new Error(`Criterion-aware plan ${label} must be unique`);
+      return normalized;
+    };
+    const objectiveIds = unique(item.objectiveIds, "objectiveIds", 50, 256);
+    const criterionIds = unique(item.criterionIds, "criterionIds", 100, 256);
+    const dependencies = unique(item.dependencies, "dependencies", 50, 256);
+    const completionEvidenceRefs = unique(item.completionEvidenceRefs, "completionEvidenceRefs", 100, 2_000);
+    if (dependencies.includes(item.key)) throw new Error("A plan item cannot depend on itself");
+    if (completionEvidenceRefs.some((ref) => !/^(?:check|artifact|operation|transcript|memory):/.test(ref))) {
+      throw new Error("Plan completion evidence contains an unsupported reference");
+    }
+    const knownObjectiveIds = new Set(contract?.objectives.map((objective) => objective.id) ?? []);
+    if (objectiveIds.some((id) => !knownObjectiveIds.has(id))) throw new Error("Plan item references an unknown objective");
+    const criteria = taskRunPlanningCriteria(contract);
+    const knownCriterionIds = new Set(criteria.map((_, index) => `ac-${index + 1}`));
+    if (criterionIds.some((id) => !knownCriterionIds.has(id))) throw new Error("Plan item references an unknown acceptance criterion");
+    const existing = this.db.prepare("SELECT title,metadata_json as metadataJson FROM plan_items WHERE run_id=? AND item_key=?")
+      .get(runId, item.key) as { title: string; metadataJson: string } | undefined;
+    const previous = existing ? JSON.parse(existing.metadataJson || "{}") as Partial<PlanItem> : undefined;
+    const changed = Boolean(previous?.schemaVersion === 2 && JSON.stringify({
+      title: existing?.title,
+      objectiveIds: previous.objectiveIds ?? [], criterionIds: previous.criterionIds ?? [], dependencies: previous.dependencies ?? [],
+    }) !== JSON.stringify({ title: item.title, objectiveIds, criterionIds, dependencies }));
+    const replanReason = item.replanReason?.trim() ?? "";
+    if (replanReason.includes("\0") || replanReason.length > 4_000) throw new Error("Plan replanReason is invalid");
+    if (changed && !replanReason) throw new Error("Changing plan scope or dependencies requires a replanReason");
+    return {
+      schemaVersion: 2,
+      objectiveIds,
+      criterionIds,
+      dependencies,
+      completionEvidenceRefs,
+      createdAttempt: previous?.createdAttempt ?? run.attempt,
+      updatedAttempt: run.attempt,
+      ...(replanReason ? { replanReason } : {}),
+    };
   }
 
   markChecksStale(runId: RunId) {
@@ -2224,31 +2503,67 @@ ${source.content}`;
       .run(status, error, now(), id).changes === 1;
   }
 
-  recordContextManifest(manifest: ContextManifest) {
-    this.db.prepare(`INSERT INTO context_manifests
-      (id,run_id,attempt,attempt_id,source,items_json,stats_json,manifest_hash,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?)`).run(
-      manifest.id, manifest.runId, manifest.attempt, this.attemptId(manifest.runId, manifest.attempt),
-      manifest.source, JSON.stringify(manifest.items), JSON.stringify(manifest.stats), manifest.manifestHash,
-      manifest.createdAt,
-    );
-    return manifest;
+  recordContextManifest(manifest: ContextManifest, evidenceSources: readonly ContextEvidenceSource[] = []) {
+    return this.db.transaction(() => {
+      const memoryItems = new Map(manifest.items
+        .filter((item) => item.selected && ["core_memory", "memory_card", "cold_topic"].includes(item.kind))
+        .map((item) => [`memory:${item.sourceId}`, item]));
+      const sources = new Map<string, ContextEvidenceSource>();
+      for (const source of evidenceSources) {
+        if (source.kind !== "memory" || !source.sourceRef.startsWith("memory:")) {
+          throw new Error("Context evidence source must be a memory source");
+        }
+        if (sources.has(source.sourceRef)) throw new Error(`Duplicate context evidence source ${source.sourceRef}`);
+        const item = memoryItems.get(source.sourceRef);
+        if (!item) throw new Error(`Context evidence source is not selected by the manifest: ${source.sourceRef}`);
+        const sourceHash = `sha256:${createHash("sha256").update(source.content).digest("hex")}`;
+        if (source.sourceHash !== sourceHash) throw new Error(`Context evidence source hash does not match: ${source.sourceRef}`);
+        if (item.projectedContentHash !== sourceHash.slice("sha256:".length)
+          || item.sourceRevision !== source.sourceRevision) {
+          throw new Error(`Context evidence source does not match its manifest commitment: ${source.sourceRef}`);
+        }
+        sources.set(source.sourceRef, source);
+      }
+      const missing = [...memoryItems.keys()].filter((ref) => !sources.has(ref));
+      if (missing.length) throw new Error(`Selected memory context is missing exact evidence source bytes: ${missing.join(", ")}`);
+      this.db.prepare(`INSERT INTO context_manifests
+        (id,run_id,attempt,attempt_id,source,items_json,stats_json,manifest_hash,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?)`).run(
+        manifest.id, manifest.runId, manifest.attempt, this.attemptId(manifest.runId, manifest.attempt),
+        manifest.source, JSON.stringify(manifest.items), JSON.stringify(manifest.stats), manifest.manifestHash,
+        manifest.createdAt,
+      );
+      const insert = this.db.prepare(`INSERT INTO context_evidence_sources
+        (manifest_id,run_id,source_ref,kind,source_revision,source_hash,content,created_at)
+        VALUES (?,?,?,?,?,?,?,?)`);
+      for (const source of sources.values()) insert.run(
+        manifest.id, manifest.runId, source.sourceRef, source.kind, source.sourceRevision,
+        source.sourceHash, source.content, manifest.createdAt,
+      );
+      return manifest;
+    })();
   }
 
   listContextManifests(runId: RunId, limit = 20): ContextManifest[] {
     const rows = this.db.prepare(`SELECT id,run_id as runId,attempt,source,items_json as itemsJson,stats_json as statsJson,manifest_hash as manifestHash,created_at as createdAt FROM context_manifests WHERE run_id = ? ORDER BY created_at DESC,id DESC LIMIT ?`).all(runId, limit) as Array<Omit<ContextManifest,"items"|"stats"> & {itemsJson:string;statsJson:string}>;
-    return rows.map(({itemsJson,statsJson,...row}) => ({...row,items:JSON.parse(itemsJson) as ContextManifest["items"],stats:JSON.parse(statsJson) as ContextManifest["stats"]}));
+    return rows.map(({itemsJson,statsJson,...row}) => ({
+      ...row,
+      items:JSON.parse(itemsJson) as ContextManifest["items"],
+      stats:JSON.parse(statsJson) as ContextManifest["stats"],
+      requestEnvelopeIds: (this.db.prepare("SELECT envelope_id as envelopeId FROM context_manifest_envelopes WHERE manifest_id=? ORDER BY created_at,envelope_id")
+        .all(row.id) as Array<{ envelopeId: string }>).map((item) => item.envelopeId),
+    }));
   }
 
   getLatestContextManifest(runId: RunId) { return this.listContextManifests(runId, 1)[0]; }
 
   recordSupervisorDecision(decision: SupervisorDecision) {
     this.db.prepare(`INSERT INTO supervisor_decisions
-      (id,run_id,attempt,attempt_id,checkpoint_seq,trigger,action,reason_code,rationale,confidence,instruction,candidate_response_hash,status,error,created_at,executed_at,evaluator,evaluator_model)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      (id,run_id,attempt,attempt_id,checkpoint_seq,trigger,action,reason_code,rationale,confidence,epistemic_status,instruction,candidate_response_hash,status,error,created_at,executed_at,evaluator,evaluator_model)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       decision.id, decision.runId, decision.attempt, this.attemptId(decision.runId, decision.attempt),
       decision.checkpointSeq, decision.trigger, decision.action, decision.reasonCode, decision.rationale,
-      decision.confidence, decision.instruction, decision.candidateResponseHash, decision.status,
+      decision.confidence, decision.epistemicStatus ?? "model_assessed", decision.instruction, decision.candidateResponseHash, decision.status,
       decision.error, decision.createdAt, decision.executedAt, decision.evaluator, decision.evaluatorModel,
     );
     return decision;
@@ -2256,7 +2571,7 @@ ${source.content}`;
 
   listSupervisorDecisions(runId: RunId, attempt?: number): SupervisorDecision[] {
     const rows = this.db.prepare(`SELECT id,run_id as runId,attempt,checkpoint_seq as checkpointSeq,trigger,action,reason_code as reasonCode,
-      rationale,confidence,instruction,candidate_response_hash as candidateResponseHash,status,error,created_at as createdAt,executed_at as executedAt,evaluator,evaluator_model as evaluatorModel
+      rationale,confidence,epistemic_status as epistemicStatus,instruction,candidate_response_hash as candidateResponseHash,status,error,created_at as createdAt,executed_at as executedAt,evaluator,evaluator_model as evaluatorModel
       FROM supervisor_decisions WHERE run_id = ? ${attempt === undefined ? "" : "AND attempt = ?"} ORDER BY created_at,id`).all(runId, ...(attempt === undefined ? [] : [attempt])) as SupervisorDecision[];
     return rows;
   }
@@ -2282,7 +2597,9 @@ ${source.content}`;
   listLatestGateEvaluations(runId: RunId): GateEvaluation[] {
     const rows = this.db.prepare(`SELECT id,run_id as runId,attempt,checkpoint_seq as checkpointSeq,gate_type as gateType,evaluator,evaluator_model as evaluatorModel,summary,passed,
       failures_json as failuresJson,criterion_coverage_json as criterionCoverageJson,input_manifest_hash as inputManifestHash,created_at as createdAt FROM gate_evaluations
-      WHERE run_id = ? AND (attempt,checkpoint_seq) = (SELECT attempt,checkpoint_seq FROM gate_evaluations WHERE run_id = ? ORDER BY attempt DESC,checkpoint_seq DESC,created_at DESC LIMIT 1) ORDER BY gate_type`).all(runId, runId) as Array<Omit<GateEvaluation,"passed"|"failures"|"criterionCoverage"> & {passed:number;failuresJson:string;criterionCoverageJson:string}>;
+      WHERE run_id = ? AND (attempt,checkpoint_seq) = (SELECT attempt,checkpoint_seq FROM gate_evaluations
+        WHERE run_id = ? ORDER BY attempt DESC,checkpoint_seq DESC,created_at DESC LIMIT 1)
+      ORDER BY gate_type`).all(runId, runId) as Array<Omit<GateEvaluation,"passed"|"failures"|"criterionCoverage"> & {passed:number;failuresJson:string;criterionCoverageJson:string}>;
     return rows.map(({ failuresJson, criterionCoverageJson, ...row }) => ({ ...row, passed: Boolean(row.passed), failures: JSON.parse(failuresJson) as GateEvaluation["failures"], criterionCoverage: JSON.parse(criterionCoverageJson) as GateEvaluation["criterionCoverage"] }));
   }
 
@@ -2680,6 +2997,44 @@ ${source.content}`;
     const planRequired = ["read_only_analysis", "workspace_mutation", "external_action"].includes(executionPolicy.mode);
     if (requiredPlan.length === 0 && planRequired) failures.push({ kind: "plan", key: "plan", reason: "No required plan items" });
     for (const item of requiredPlan) if (item.status !== "done") failures.push({ kind: "plan_item", key: item.key, reason: `Required plan item is ${item.status}` });
+    const semanticPlan = requiredPlan.filter((item) => item.schemaVersion === 2);
+    if (semanticPlan.length) {
+      const knownItems = new Map(run.plan.map((item) => [item.key, item]));
+      for (const key of this.cyclicPlanItemKeys(run.plan)) {
+        failures.push({ kind: "plan_dependency", key, reason: "Plan dependency graph contains a cycle" });
+      }
+      for (const item of semanticPlan) for (const dependency of item.dependencies ?? []) {
+        const target = knownItems.get(dependency);
+        if (!target) failures.push({ kind: "plan_dependency", key: item.key, reason: `Plan dependency ${dependency} does not exist` });
+        else if (item.status === "done" && target.status !== "done") failures.push({ kind: "plan_dependency", key: item.key, reason: `Plan dependency ${dependency} is ${target.status}` });
+      }
+      for (const item of semanticPlan.filter((candidate) => candidate.status === "done")) {
+        const evidenceRefs = item.completionEvidenceRefs ?? [];
+        if (!evidenceRefs.length) {
+          failures.push({ kind: "plan_evidence", key: item.key, reason: "Completed required plan item has no completion evidence" });
+          continue;
+        }
+        const resolved = new Set(this.resolveEvidenceSources(run.id, evidenceRefs).map((source) => source.sourceRef));
+        for (const ref of evidenceRefs) {
+          if (resolved.has(ref)) continue;
+          if (ref.startsWith("check:") && run.checks.some((check) => check.key === ref.slice("check:".length))) continue;
+          if (ref.startsWith("memory:") && this.listContextManifests(run.id).some((manifest) =>
+            manifest.items.some((manifestItem) => manifestItem.selected && `memory:${manifestItem.sourceId}` === ref))) continue;
+          failures.push({ kind: "plan_evidence", key: item.key, reason: `Completion evidence ${ref} is unavailable for this TaskRun` });
+        }
+      }
+      const requiredObjectiveIds = new Set(run.contract?.objectives.filter((objective) => objective.timing === "current").map((objective) => objective.id) ?? []);
+      const coveredObjectiveIds = new Set(semanticPlan.flatMap((item) => item.objectiveIds ?? []));
+      for (const objectiveId of requiredObjectiveIds) if (!coveredObjectiveIds.has(objectiveId)) {
+        failures.push({ kind: "plan_coverage", key: objectiveId, reason: "No required plan item covers this current objective" });
+      }
+      const criteria = taskRunPlanningCriteria(run.contract as TaskRunContractSnapshot | null);
+      const coveredCriterionIds = new Set(semanticPlan.flatMap((item) => item.criterionIds ?? []));
+      criteria.forEach((_, index) => {
+        const criterionId = `ac-${index + 1}`;
+        if (!coveredCriterionIds.has(criterionId)) failures.push({ kind: "plan_coverage", key: criterionId, reason: "No required plan item covers this acceptance criterion" });
+      });
+    }
     for (const check of requiredChecks) {
       if (check.status !== "passed") failures.push({ kind: "check", key: check.key, reason: `Required check is ${check.status}` });
       else if (check.stale) failures.push({ kind: "check", key: check.key, reason: "Evidence is stale" });

@@ -6,7 +6,7 @@ import { EditToolProvider, ListToolProvider, PatchToolProvider, ReadToolProvider
 import { MemoryToolProvider } from "./memory-tool-provider.js";
 import { HistoryToolProvider } from "./history-tool-provider.js";
 import { TaskRunToolProvider } from "./task-run-tool-provider.js";
-export { bashCommandIsDestructive, bashCommandTargetsHostingCore, bashInvalidatesChecks } from "./shared.js";
+export { bashCommandEffect, bashCommandIsDestructive, bashCommandTargetsHostingCore, bashInvalidatesChecks, bashRequiresExplicitApproval } from "./shared.js";
 
 export interface WorkspaceToolComposition {
   readonly catalog: RuntimeCapabilityCatalog;

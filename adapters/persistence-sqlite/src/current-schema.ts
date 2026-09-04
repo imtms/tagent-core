@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 export const CURRENT_SCHEMA_ID = "tagent-core/0.8" as const;
 export const BASE_SCHEMA_VERSION = 1;
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 const BASE_SCHEMA_FILES = [
   "00-core.sql",
@@ -27,6 +27,8 @@ export const BASE_SCHEMA_SQL = BASE_SCHEMA_FILES.map(schemaFile).join("\n\n");
 
 /** Additive revision-2 schema. The migration runner owns journal rows and PRAGMA user_version. */
 export const MIGRATION_JOURNAL_SCHEMA_SQL = schemaFile("70-migration-journal.sql");
+export const SEMANTIC_CONTROL_PLANE_SCHEMA_SQL = schemaFile("71-semantic-control-plane.sql");
+export const REVISION_2_SCHEMA_SQL = `${BASE_SCHEMA_SQL}\n\n${MIGRATION_JOURNAL_SCHEMA_SQL}`;
 
 /** Direct-install schema for a new database at the latest durable revision. */
-export const CURRENT_SCHEMA_SQL = `${BASE_SCHEMA_SQL}\n\n${MIGRATION_JOURNAL_SCHEMA_SQL}`;
+export const CURRENT_SCHEMA_SQL = `${REVISION_2_SCHEMA_SQL}\n\n${SEMANTIC_CONTROL_PLANE_SCHEMA_SQL}`;

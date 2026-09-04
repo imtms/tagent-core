@@ -1,11 +1,15 @@
 import { Type, type Static } from "typebox";
 import type { ToolProvider } from "@tagent/execution/composition";
+import { taskRunPlanningCriteria } from "@tagent/execution/domain";
 import type { RuntimeTool, TaskRunStateMutation, ToolCapabilityApplicationPort } from "@tagent/execution/ports";
 import { currentAttemptOrdinal, previewText, textResult } from "./shared.js";
 
+const PlanIdentifierSchema = Type.String({ minLength: 1, maxLength: 256, pattern: "^[^\\u0000]+$" });
+const PlanEvidenceRefSchema = Type.String({ minLength: 1, maxLength: 2_000, pattern: "^[^\\u0000]+$" });
+const ReplanReasonSchema = Type.String({ maxLength: 4_000, pattern: "^[^\\u0000]*$" });
 const BatchSchema = Type.Union([
   Type.Object({ action: Type.Literal("phase"), phase: Type.Union([Type.Literal("discover"), Type.Literal("plan"), Type.Literal("implement"), Type.Literal("verify"), Type.Literal("review")]) }),
-  Type.Object({ action: Type.Literal("plan"), key: Type.String(), title: Type.String(), status: Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("done"), Type.Literal("blocked"), Type.Literal("skipped")]), required: Type.Optional(Type.Boolean()), position: Type.Optional(Type.Integer()) }),
+  Type.Object({ action: Type.Literal("plan"), key: Type.String(), title: Type.String(), status: Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("done"), Type.Literal("blocked"), Type.Literal("skipped")]), required: Type.Optional(Type.Boolean()), position: Type.Optional(Type.Integer()), objectiveIds: Type.Optional(Type.Array(PlanIdentifierSchema, { maxItems: 50 })), criterionIds: Type.Optional(Type.Array(PlanIdentifierSchema, { maxItems: 100 })), dependencies: Type.Optional(Type.Array(PlanIdentifierSchema, { maxItems: 50 })), replanReason: Type.Optional(ReplanReasonSchema), completionEvidenceRefs: Type.Optional(Type.Array(PlanEvidenceRefSchema, { maxItems: 100 })) }),
   Type.Object({ action: Type.Literal("check"), key: Type.String(), title: Type.String(), status: Type.Union([Type.Literal("pending"), Type.Literal("running"), Type.Literal("passed"), Type.Literal("failed"), Type.Literal("blocked"), Type.Literal("skipped")]), required: Type.Optional(Type.Boolean()), command: Type.Optional(Type.String()), evidence: Type.Optional(Type.String()), stale: Type.Optional(Type.Boolean()), sourceOperationId: Type.Optional(Type.String()) }),
   Type.Object({ action: Type.Literal("mark_checks_stale") }),
   Type.Object({ action: Type.Literal("artifact"), id: Type.String(), title: Type.String(), kind: Type.Optional(Type.String()), content: Type.Optional(Type.String()), uri: Type.Optional(Type.String()) }),
@@ -15,6 +19,7 @@ const Schema = Type.Object({
   phase: Type.Optional(Type.Union([Type.Literal("discover"), Type.Literal("plan"), Type.Literal("implement"), Type.Literal("verify"), Type.Literal("review")])), key: Type.Optional(Type.String()), title: Type.Optional(Type.String()),
   status: Type.Optional(Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("done"), Type.Literal("blocked"), Type.Literal("skipped"), Type.Literal("running"), Type.Literal("passed"), Type.Literal("failed")])),
   required: Type.Optional(Type.Boolean()), position: Type.Optional(Type.Integer()), command: Type.Optional(Type.String()), evidence: Type.Optional(Type.String()), stale: Type.Optional(Type.Boolean()), sourceOperationId: Type.Optional(Type.String()),
+  objectiveIds: Type.Optional(Type.Array(PlanIdentifierSchema, { maxItems: 50 })), criterionIds: Type.Optional(Type.Array(PlanIdentifierSchema, { maxItems: 100 })), dependencies: Type.Optional(Type.Array(PlanIdentifierSchema, { maxItems: 50 })), replanReason: Type.Optional(ReplanReasonSchema), completionEvidenceRefs: Type.Optional(Type.Array(PlanEvidenceRefSchema, { maxItems: 100 })),
   id: Type.Optional(Type.String()), kind: Type.Optional(Type.String()), content: Type.Optional(Type.String()), uri: Type.Optional(Type.String()), prompt: Type.Optional(Type.String()),
   fields: Type.Optional(Type.Array(Type.Object({ key: Type.String(), label: Type.String(), description: Type.Optional(Type.String()), inputType: Type.Optional(Type.Union([Type.Literal("text"), Type.Literal("textarea")])), required: Type.Optional(Type.Boolean()), placeholder: Type.Optional(Type.String()) }), { minItems: 1, maxItems: 12 })),
   mutations: Type.Optional(Type.Array(BatchSchema, { minItems: 1, maxItems: 50 })),
@@ -43,18 +48,32 @@ export class TaskRunToolProvider implements ToolProvider {
       return { key: value.key.trim(), title: value.title.trim(), status: value.status, required, command: value.command ?? "", evidence: value.evidence ?? "", stale: value.stale ?? false, sourceOperationId, observedAt: null };
     };
     const requireText = (name: "key" | "title" | "id" | "prompt") => { const value = params[name]; if (typeof value !== "string" || !value.trim()) throw new Error(`task_run action="${params.action}" requires "${name}".`); return value; };
+    const normalizePlan = (value: Extract<Static<typeof BatchSchema>, { action: "plan" }>) => {
+      const required = value.required ?? true;
+      const run = c.getRun();
+      const criteria = taskRunPlanningCriteria(run?.contract);
+      const currentObjectives = run?.contract?.objectives.filter((objective) => objective.timing === "current") ?? [];
+      if (required && currentObjectives.length && !value.objectiveIds?.length) throw new Error("A required plan item must declare objectiveIds for the active contract");
+      if (required && criteria.length && !value.criterionIds?.length) throw new Error("A required plan item must declare criterionIds for the active contract");
+      return {
+        key: value.key.trim(), title: value.title.trim(), status: value.status, required, position: value.position ?? 0,
+        schemaVersion: 2 as const,
+        objectiveIds: value.objectiveIds ?? [], criterionIds: value.criterionIds ?? [], dependencies: value.dependencies ?? [],
+        replanReason: value.replanReason?.trim() ?? "", completionEvidenceRefs: value.completionEvidenceRefs ?? [],
+      };
+    };
     const normalize = (mutation: Static<typeof BatchSchema>): TaskRunStateMutation => {
       if (mutation.action === "phase") return { action: "phase", phase: mutation.phase };
       if (mutation.action === "mark_checks_stale") return { action: "mark_checks_stale" };
       if ((mutation.action === "plan" || mutation.action === "check") && (!mutation.key.trim() || !mutation.title.trim())) throw new Error(`task_run action="${mutation.action}" requires non-empty "key" and "title".`);
-      if (mutation.action === "plan") return { action: "plan", item: { key: mutation.key, title: mutation.title, status: mutation.status, required: mutation.required ?? true, position: mutation.position ?? 0 } };
+      if (mutation.action === "plan") return { action: "plan", item: normalizePlan(mutation) };
       if (mutation.action === "check") return { action: "check", check: normalizeCheck(mutation) };
       if (!mutation.id.trim() || !mutation.title.trim()) throw new Error('task_run action="artifact" requires non-empty "id" and "title".');
       return { action: "artifact", artifact: { id: mutation.id, title: mutation.title, kind: mutation.kind ?? "artifact", content: mutation.content ?? "", uri: mutation.uri ?? "" } };
     };
     if (params.action === "batch") { if (!params.mutations?.length) throw new Error('task_run action="batch" requires "mutations".'); c.applyTaskRunBatch(params.mutations.map(normalize)); }
     if (params.action === "phase") { if (!params.phase) throw new Error('task_run action="phase" requires "phase".'); c.setRunPhase(params.phase); }
-    if (params.action === "plan") { if (!params.status || !["pending", "in_progress", "done", "blocked", "skipped"].includes(params.status)) throw new Error('task_run action="plan" requires a plan status.'); c.upsertPlanItem({ key: requireText("key"), title: requireText("title"), status: params.status as "pending", required: params.required ?? true, position: params.position ?? 0 }); }
+    if (params.action === "plan") { if (!params.status || !["pending", "in_progress", "done", "blocked", "skipped"].includes(params.status)) throw new Error('task_run action="plan" requires a plan status.'); c.upsertPlanItem(normalizePlan({ action: "plan", key: requireText("key"), title: requireText("title"), status: params.status as "pending", required: params.required, position: params.position, objectiveIds: params.objectiveIds, criterionIds: params.criterionIds, dependencies: params.dependencies, replanReason: params.replanReason, completionEvidenceRefs: params.completionEvidenceRefs })); }
     if (params.action === "check") { if (!params.status || !["pending", "running", "passed", "failed", "blocked", "skipped"].includes(params.status)) throw new Error('task_run action="check" requires a check status.'); c.upsertCheck(normalizeCheck({ action: "check", key: requireText("key"), title: requireText("title"), status: params.status as "pending", required: params.required, command: params.command, evidence: params.evidence, stale: params.stale, sourceOperationId: params.sourceOperationId })); }
     if (params.action === "mark_checks_stale") c.markChecksStale();
     if (params.action === "operations") { const rows = c.listOperations({ limit: 24 }), serialized = JSON.stringify(rows, null, 2); return textResult(previewText(serialized), { returnedOperations: rows.length, responseTruncated: Buffer.byteLength(serialized) > 24_000 }); }

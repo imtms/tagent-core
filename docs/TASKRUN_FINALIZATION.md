@@ -6,11 +6,12 @@ Use this workflow for every substantial development TaskRun using the `strict` G
 
 1. Read the durable TaskRun before planning or changing files.
 2. Update existing plan keys. Do not create a semantically equivalent replacement for an existing required item.
-3. Treat branch checks and deployment preflight as safety gates, not automatically as final completion evidence.
-4. Complete every operation that can change delivery state before registering final required checks.
-5. A final required check must be bound to a successful Bash receipt from the current Attempt.
-6. After final checks are registered, do not run Bash, mutate files, add plans, change Git state, deploy, restart services, or otherwise change delivery state.
-7. Submit the final candidate only after every required plan is terminal, every required check is passed and fresh, and `completionGate.failures` is empty.
+3. For plan schema v2, map required work to current objective IDs and Run-local `ac-*` criterion IDs, declare dependencies and linked evidence, and explain scope/dependency changes with `replanReason`. Roadmap Goal `gc-*` observations are separate and do not belong in plan `criterionIds`.
+4. Treat branch checks and deployment preflight as safety gates, not automatically as final completion evidence.
+5. Complete every operation that can change delivery state before registering final required checks.
+6. A final required check must be bound to a successful Bash receipt from the current Attempt.
+7. After final checks are registered, do not run Bash, mutate files, add plans, change Git state, deploy, restart services, or otherwise change delivery state.
+8. Submit the final candidate only after every required plan is terminal, every required check is passed and fresh, and `completionGate.failures` is empty.
 
 ## Standard sequence
 
@@ -23,7 +24,7 @@ Use this workflow for every substantial development TaskRun using the `strict` G
 
 ### 2. Plan
 
-Keep the plan small and non-overlapping. For an existing required item, update its status rather than introducing an alias. If replanning is necessary, close the superseded item as `done`, `skipped`, or `blocked` in the same batch that introduces its replacement.
+Keep the plan small and non-overlapping. For an existing required item, update its status rather than introducing an alias. New required items declare their current `objectiveIds`, `criterionIds`, `dependencies`, and `completionEvidenceRefs`; Core records Attempt attribution. If replanning is necessary, supply `replanReason` and close the superseded item as `done`, `skipped`, or `blocked` in the same batch that introduces its replacement.
 
 A required plan item must never be abandoned as `pending` or `in_progress` merely because later work covered the same meaning under another key.
 
@@ -122,7 +123,7 @@ Before doing any work, inspect the original TaskRun and already completed extern
 - For stale evidence: do not repeat implementation, MR, merge, or deployment. Re-run only the final verification needed for the actual delivered state and refresh the stale check.
 - For an unfinished required plan: update the original plan key; do not create a semantic duplicate.
 - For a stream interruption: resume from durable state and deliver a complete replacement candidate without repeating side effects.
-- For a real external dependency: request only the missing typed user input and pause.
+- For a real external dependency: request only the missing typed user input and pause. If an authenticated operator explicitly accepts an `unsupported` or `blocked` criterion, Core re-adjudicates the preserved Candidate without rerunning Agent work once every remaining failure is covered. Never use accepted uncertainty for contradiction, approval, candidate integrity, or an otherwise repairable missing deliverable. Evidence excerpts must stay within the Core quote caps; cite multiple focused selectors instead of copying an unbounded source.
 
 ## Quick finalization checklist
 

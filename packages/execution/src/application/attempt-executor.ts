@@ -13,8 +13,7 @@ import type { AttemptSettlementPort, ContinuationControlPort, ControlCommandPort
 type AttemptExecutorState = ExecutionStateView<
   | "checkpointDrafts" | "checkpointTimers" | "checkpointTokens" | "closing" | "continuationOwner" | "executionOwner" | "executionTasks"
   | "lastCheckpointTranscriptSeq" | "persistence" | "recalledMemory" | "runtimeDefaults" | "runtimeFactory" | "runtimes" | "workspace",
-  | "attempts" | "continuations" | "events" | "runtime" | "runtimeMutations" | "sessions" | "taskRuns"
-  | "taskRunTransitions" | "transcript"
+  | "attempts" | "continuations" | "events" | "runtime" | "runtimeMutations" | "sessions" | "taskRuns" | "taskRunTransitions" | "transcript"
 >;
 export class AttemptExecutor {
   constructor(
@@ -33,7 +32,7 @@ export class AttemptExecutor {
       supervisor: SupervisorPort;
     },
   ) {}
-  public launch(run: TaskRun, prompt: string, initialMessages: AgentMessage[] = [], continuationId?: string, launchOptions?: { initialize?: boolean; inboxItemId?: string; retry?: boolean; attemptContext?: string }) {
+  public launch(run: TaskRun, prompt: string, initialMessages: AgentMessage[] = [], continuationId?: string, launchOptions?: { initialize?: boolean; inboxItemId?: string; retry?: boolean; attemptContext?: string; contextManifestId?: string }) {
     if (this.state.closing) return;
     const idleTimeoutMs = this.state.runtimeDefaults.runTimeoutMs ?? 120_000;
     const hardTimeoutMs = this.state.runtimeDefaults.runHardTimeoutMs ?? 86_400_000;
@@ -182,6 +181,7 @@ export class AttemptExecutor {
         attemptContext: launchOptions?.attemptContext,
         liveContext: () => this.dependencies.contextService.buildLiveContext(run.id),
         requestEnvelopes: this.dependencies.requestEnvelopes,
+        contextManifestId: launchOptions?.contextManifestId,
       });
     } catch (error) {
       settleRuntimeFactoryFailure({ state: this.state, run, token, continuationId, continuationOwner: this.state.continuationOwner, launchOptions, error,

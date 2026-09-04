@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { RunEventMap, RunEventType, TaskRun } from "@tagent/execution/domain";
 import type { CoreApplicationPersistencePort } from "../application/ports/index.js";
 import type {
@@ -102,7 +103,7 @@ export function createExecutionCollaborationAdapters(
     contextEnrichment: {
       requiresAsyncPreparation: () => Boolean(options.memory),
       prepareWithoutRecall() {
-        return { promptSection: "", contextItems: [] };
+        return { promptSection: "", contextItems: [], evidenceSources: [] };
       },
       async enrich(run, query, signal) {
         signal.throwIfAborted();
@@ -127,6 +128,13 @@ export function createExecutionCollaborationAdapters(
         }
         signal.throwIfAborted();
         const coreSection = coreSnapshots.map((snapshot) => `<core_memory scope="${snapshot.scope.type}:${snapshot.scope.id}" revision="${snapshot.revision}">\n${snapshot.markdown}\n</core_memory>`).join("\n\n");
+        const memorySource = (sourceRef: string, sourceRevision: string, content: string) => ({
+          kind: "memory" as const,
+          sourceRef,
+          sourceRevision,
+          sourceHash: `sha256:${createHash("sha256").update(content).digest("hex")}`,
+          content,
+        });
         return {
           promptSection: [coreSection, recall?.promptSection]
             .filter(Boolean)
@@ -138,6 +146,8 @@ export function createExecutionCollaborationAdapters(
               selected: true,
               reason: "stable core-memory injection",
               estimatedTokens: coreSnapshot.tokenCount,
+              projectedContentHash: createHash("sha256").update(coreSnapshot.markdown).digest("hex"),
+              sourceRevision: String(coreSnapshot.revision),
               metadata: { revision: coreSnapshot.revision, sourceRecordIds: coreSnapshot.sourceRecordIds },
             })),
             ...(recall?.cards.map((card) => ({
@@ -146,6 +156,8 @@ export function createExecutionCollaborationAdapters(
               selected: true,
               reason: `selected by Recall Trace v${recall.trace.version}`,
               estimatedTokens: estimateContextTokens(`${card.title}: ${card.content}`),
+              projectedContentHash: createHash("sha256").update(`${card.title}: ${card.content}`).digest("hex"),
+              sourceRevision: card.id,
               metadata: { score: card.score, channels: card.retrievalChannels, topicIds: card.topicIds },
             })) ?? []),
             ...(recall?.coldTopics.map((topic) => ({
@@ -154,6 +166,8 @@ export function createExecutionCollaborationAdapters(
               selected: true,
               reason: "selected by topic routing",
               estimatedTokens: topic.revision.tokenCount,
+              projectedContentHash: createHash("sha256").update(topic.body).digest("hex"),
+              sourceRevision: String(topic.revision.revision),
               metadata: { revision: topic.revision.revision },
             })) ?? []),
             ...(recall?.trace?.candidates?.filter((candidate) => candidate.outcome !== "selected").map((candidate) => ({
@@ -164,6 +178,19 @@ export function createExecutionCollaborationAdapters(
               estimatedTokens: 0,
               metadata: { outcome: candidate.outcome, channels: candidate.channels, finalScore: candidate.finalScore },
             })) ?? []),
+          ],
+          evidenceSources: [
+            ...coreSnapshots.map((snapshot) => memorySource(
+              `memory:${snapshot.scope.type}:${snapshot.scope.id}:revision:${snapshot.revision}`,
+              String(snapshot.revision),
+              snapshot.markdown,
+            )),
+            ...(recall?.cards.map((card) => memorySource(`memory:${card.id}`, card.id, `${card.title}: ${card.content}`)) ?? []),
+            ...(recall?.coldTopics.map((topic) => memorySource(
+              `memory:${topic.descriptor.topicId}`,
+              String(topic.revision.revision),
+              topic.body,
+            )) ?? []),
           ],
         };
       },

@@ -16,7 +16,7 @@ export interface Submission {
   requestId: string;
   content: string;
   status: "queued" | "claimed" | "started" | "routed" | "deleted" | "failed";
-  decision: "pending" | "start_taskrun" | "steer" | "follow_up" | "discussion" | "defer" | "merge" | "delete";
+  decision: "pending" | "needs_clarification" | "start_taskrun" | "steer" | "follow_up" | "discussion" | "defer" | "merge" | "delete";
   runId: string | null;
   error: string;
   position: number;

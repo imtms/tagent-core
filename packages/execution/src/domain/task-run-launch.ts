@@ -63,6 +63,21 @@ export interface TaskRunSkillSnapshot {
   disableModelInvocation: boolean;
 }
 
+export interface TaskRunRoutingProvenanceSnapshot {
+  decisionSource: "deterministic" | "model" | "fallback";
+  sourceHash: string;
+  sourceChars: number;
+  projectionStrategy: "not_sent" | "full" | "head_tail";
+  projectedChars: number;
+  promptEstimatedTokens: number;
+  inputBudgetTokens: number | null;
+  modelAttempted: boolean;
+  modelSucceeded: boolean;
+  usage: Array<{ model: string; input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number }>;
+  abstention: "none" | "new_task_low_confidence" | "active_control_low_confidence";
+  detail?: string;
+}
+
 /** Immutable Admission decision copied into the durable Execution aggregate. */
 export interface TaskRunContractSnapshot {
   sourceInput: string;
@@ -78,9 +93,23 @@ export interface TaskRunContractSnapshot {
   decisionReason: string;
   routerVersion: string;
   executionPolicy?: TaskExecutionPolicy;
+  routingProvenance?: TaskRunRoutingProvenanceSnapshot;
   workspaceGoal?: TaskRunWorkspaceGoalSnapshot | null;
   /** All Skill revisions referenced by the Workspace when this Run was admitted. */
   skills?: TaskRunSkillSnapshot[];
+}
+
+/**
+ * Acceptance criteria owned by this TaskRun's plan/completion Gate.
+ * Roadmap Goal criteria are reconciled by Goal governance and are deliberately
+ * excluded from the Run-local `ac-*` namespace.
+ */
+export function taskRunPlanningCriteria(contract: TaskRunContractSnapshot | null | undefined): string[] {
+  const criteria = contract?.acceptanceCriteria ?? [];
+  const workspaceGoal = contract?.workspaceGoal;
+  if (!workspaceGoal || workspaceGoal.mode !== "roadmap") return criteria;
+  const goalPrompts = new Set(workspaceGoal.criterionPrompts.map((item) => item.prompt));
+  return criteria.filter((criterion) => !goalPrompts.has(criterion));
 }
 
 /** Admission-facing command contract. Execution owns this persisted launch representation. */
