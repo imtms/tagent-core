@@ -287,4 +287,50 @@ describe("PostgreSQL memory query shape", () => {
     expect(JSON.parse(call.values?.[4] as string)).toEqual([expect.objectContaining({ generation: "g1", content_hash: "fresh-hash" })]);
     expectValidParameters(call);
   });
+
+  it("atomically finalizes cleanup, generation activation, job completion, and generation GC behind one lease lock", async () => {
+    const calls: Array<{ text: string; values?: unknown[] }> = [];
+    const client = {
+      async query(text: string, values?: unknown[]) {
+        calls.push({ text, values });
+        if (text.includes("SELECT 1 FROM memory.reindex_jobs")) return { rows: [{ "?column?": 1 }], rowCount: 1 };
+        if (text.includes("UPDATE memory.reindex_jobs SET status='active'")) return { rows: [], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      },
+      release() {},
+    };
+    const adapter = new PostgresMemoryAdapter({ connectionString: "postgres://unused" });
+    (adapter as unknown as { pool: { connect: () => Promise<typeof client> } }).pool = { connect: async () => client };
+
+    await expect(adapter.finalizeReindex({
+      jobId: "job-1",
+      owner: "worker-a",
+      leaseToken: "lease-token",
+      fencingToken: 7,
+      scope,
+      generation: "g1",
+      activeRefs: [{ refType: "warm_record", refId: "record-1" }],
+      checkpoint: { phase: "cleanup", recordOffset: 0, topicOffset: 0, processed: 1, indexed: 1, skipped: 0, failed: 0, total: 1 },
+      expected: 1,
+      indexed: 1,
+      skipped: 0,
+    })).resolves.toBe(true);
+
+    expect(calls.map((call) => call.text)).toEqual([
+      "BEGIN",
+      expect.stringContaining("SELECT 1 FROM memory.reindex_jobs"),
+      expect.stringContaining("DELETE FROM memory.embeddings"),
+      expect.stringContaining("UPDATE memory.embedding_generations SET status='retired'"),
+      expect.stringContaining("INSERT INTO memory.embedding_generations"),
+      expect.stringContaining("UPDATE memory.reindex_jobs SET status='active'"),
+      "COMMIT",
+    ]);
+    const lease = calls[1];
+    expect(lease.text).toContain("lease_until>=floor(extract(epoch from clock_timestamp())*1000)::bigint");
+    expect(lease.text).toContain("FOR UPDATE");
+    expect(lease.values).toEqual(["job-1", "worker-a", "lease-token", 7, scope.type, scope.id, "g1"]);
+    expect(calls[2].text).toContain("e.generation<>$3 OR NOT EXISTS");
+    expect(JSON.parse(calls[2].values?.[3] as string)).toEqual([{ ref_type: "warm_record", ref_id: "record-1" }]);
+    for (const call of calls) expectValidParameters(call);
+  });
 });

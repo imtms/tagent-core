@@ -5,6 +5,7 @@ import { createAdminApi } from "./admin-api";
 import { downloadArtifact, request, withCoreAbi } from "./api-transport";
 import type { EventConsumerCursor, GateProfile, Session, SessionInboxItem, TaskRun, TranscriptItem } from "./api-types";
 import { createGoalApi } from "./goal-api";
+import { collectCursorItems } from "./profile-pagination";
 import { createSkillApi } from "./skill-api";
 export { subscribe } from "./api-transport";
 export type {
@@ -143,10 +144,23 @@ function inboxMutationHeaders(sessionId: string, includeRevision = true): Header
 }
 
 async function listInbox(sessionId: string): Promise<SessionInboxItem[]> {
-  return request(`/api/v1/operator/sessions/${encodeURIComponent(sessionId)}/inbox?limit=200`, undefined, (payload) => withCoreAbi((abi) => {
+  const baseUrl = `/api/v1/operator/sessions/${encodeURIComponent(sessionId)}/inbox?limit=200`;
+  const items = await collectCursorItems((cursor) => request(`${baseUrl}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, undefined, (payload) => withCoreAbi((abi) => {
     const data = abi.decodeAbi(abi.OperatorInboxListResponseSchema.properties.data, payload);
     inboxCollectionRevisions.set(sessionId, data.collectionRevision);
-    return data.items.filter((item) => item.status === "queued").map(inboxItemView);
+    return { items: data.items, pageInfo: data.pageInfo };
+  })));
+  return items.filter((item) => item.status === "queued").map(inboxItemView)
+    .sort((left, right) => left.position - right.position || left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+}
+
+async function listSessions(): Promise<Session[]> {
+  const items = await collectCursorItems((cursor) => request(`/api/v1/operator/sessions?limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, undefined, (payload) => withCoreAbi((abi) => {
+    const data = abi.decodeAbi(abi.OperatorSessionListResponseSchema.properties.data, payload);
+    return { items: data.items, pageInfo: data.pageInfo };
+  })));
+  return items.map((item) => sessionView({
+    ...item, latestTaskRunStatus: item.latestTaskRunStatus, latestTaskRunPhase: item.latestTaskRunPhase,
   }));
 }
 
@@ -232,10 +246,7 @@ export async function drainTranscriptView(runId: string, through: number, after 
 
 export const api = {
   ...createAdminApi(request),
-  sessions: () => request("/api/v1/operator/sessions?limit=200", undefined, (payload) => withCoreAbi((abi) =>
-    abi.decodeAbi(abi.OperatorSessionListResponseSchema.properties.data, payload).items.map((item) => sessionView({
-      ...item, latestTaskRunStatus: item.latestTaskRunStatus, latestTaskRunPhase: item.latestTaskRunPhase,
-    })))),
+  sessions: listSessions,
   createSession: (title = "New workspace", requestId = createRequestId()) => request("/api/v1/sessions", {
     method: "POST", headers: { "Idempotency-Key": requestId }, body: JSON.stringify({ title, origin: webOrigin }),
   }, (payload) => withCoreAbi((abi) => sessionView(abi.decodeAbi(abi.SessionSchema, payload)))),

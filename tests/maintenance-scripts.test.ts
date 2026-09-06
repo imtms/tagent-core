@@ -8,6 +8,13 @@ import { describe, expect, it } from "vitest";
 const repoRoot = process.cwd();
 
 describe("maintenance scripts", () => {
+  it("normalizes Windows-relative paths before enforcing Web CSS importer ownership", async () => {
+    const moduleUrl = pathToFileURL(path.join(repoRoot, "apps/web-console/scripts/path-utils.mjs")).href;
+    const { normalizeRelativePath } = await import(moduleUrl) as { normalizeRelativePath(value: string): string };
+    expect(normalizeRelativePath("src\\main.tsx")).toBe("src/main.tsx");
+    expect(normalizeRelativePath("src/main.tsx")).toBe("src/main.tsx");
+  });
+
   it("retries only transient npm audit transport failures", async () => {
     const moduleUrl = pathToFileURL(path.join(repoRoot, "scripts/audit-dependencies.mjs")).href;
     const { auditCoordinatesFromLockfile, auditGitHubFallback, auditWithRetry, isRetryableAuditFailure } = await import(moduleUrl) as {

@@ -759,8 +759,9 @@ describe("Core Host generation lifecycle", () => {
     children[0].deliver(activation(children[0].generationId));
     await rollbackStarted;
 
-    await host.close();
+    const closing = host.close();
     releaseRollbackVerification();
+    await closing;
     await waitFor(() => !host.snapshot().activationBusy, "activation did not stop after Host close");
 
     expect(children).toHaveLength(2);
@@ -1141,6 +1142,47 @@ describe("Core Host generation lifecycle", () => {
 
     expect(children).toHaveLength(1);
     expect(host.snapshot().activeRelease).toBeNull();
+  });
+
+  it("joins activation paused at starting-state persistence before Host close completes", async () => {
+    const root = await releaseRoot();
+    let enterStartingWrite!: () => void;
+    let releaseStartingWrite!: () => void;
+    const startingWriteEntered = new Promise<void>((resolve) => { enterStartingWrite = resolve; });
+    const startingWriteGate = new Promise<void>((resolve) => { releaseStartingWrite = resolve; });
+    const { host, children } = hostFixture(root, new Map([
+      [oldRelease, [{}]],
+      [newRelease, [{}]],
+    ]));
+    const stateStore = (host as unknown as { stateStore: { write(state: { activation: { phase: string } | null }): Promise<void> } }).stateStore;
+    const originalWrite = stateStore.write.bind(stateStore);
+    const writeSpy = vi.spyOn(stateStore, "write").mockImplementation(async (state) => {
+      if (state.activation?.phase === "starting") {
+        enterStartingWrite();
+        await startingWriteGate;
+      }
+      return originalWrite(state);
+    });
+    try {
+      await host.start();
+      children[0].deliver(activation(children[0].generationId));
+      await startingWriteEntered;
+
+      let closed = false;
+      const closing = host.close().then(() => { closed = true; });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(closed).toBe(false);
+      releaseStartingWrite();
+      await closing;
+      await waitFor(() => !host.snapshot().activationBusy, "activation did not settle after close");
+
+      expect(children).toHaveLength(1);
+      expect(host.snapshot().activeRelease).toBeNull();
+    } finally {
+      releaseStartingWrite();
+      await host.close();
+      writeSpy.mockRestore();
+    }
   });
 
   it("fails closed on malformed durable activation state", async () => {

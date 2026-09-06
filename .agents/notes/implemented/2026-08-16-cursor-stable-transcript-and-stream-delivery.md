@@ -5,13 +5,15 @@ Kind: bug-fix
 
 ## Problem
 
-Transcript tool-result hydration currently changes an item whose public sequence belongs to the earlier assistant tool call. An exclusive cursor that already consumed that sequence cannot observe the later status/result change. The SSE route also records HTTP backpressure without pausing replay or bounding live writes, so a slow consumer can grow the response buffer without limit. The first-party Web Console shares a durable consumer identity across tabs, causing generation fencing between independent readers.
+Transcript tool-result hydration currently changes an item whose public sequence belongs to the earlier assistant tool call. An exclusive cursor that already consumed that sequence cannot observe the later status/result change. The SSE route also records HTTP backpressure without pausing replay or bounding live writes, so a slow consumer can grow the response buffer without limit. On the client side, decode or asynchronous persistence failure could reject a subscription without cancelling/unlocking its stream, and a queued higher event could advance cumulative ACK past an earlier failed persistence because the coordinator normalized its serialization tail after rejection. The first-party Web Console shares a durable consumer identity across tabs, causing generation fencing between independent readers.
 
 ## Decision
 
 Make every observable Transcript change carry the durable sequence that caused that change. A hydrated completed/failed tool item uses the tool-result row sequence while retaining the tool-call identity and arguments; pending calls keep the assistant row sequence. Clients merge tool items by `toolCallId`, so a later result replaces the pending projection. Add a regression that reads the pending call, appends the result, and proves an exclusive delta updates it.
 
 Serialize SSE writes through a bounded backpressure-aware pump. Replay waits for `drain`; live delivery uses a bounded queue and closes the stream on overflow so durable replay can resume from the last ACK. Give each Web tab its own consumer identity while retaining it across reloads in that tab.
+
+Core Client owns failed-reader cleanup: normal EOF releases the reader lock, while decoder or awaited message-handler failure first cancels the reader and then releases it without replacing the original exception. `ReplayAckCoordinator` retains the failed sequence as a barrier; queued higher sequences reject until that exact sequence has completed both durable persistence and cumulative ACK. Global sequences need not be contiguous.
 
 ## Alternatives considered
 
@@ -27,11 +29,13 @@ Serialize SSE writes through a bounded backpressure-aware pump. Replay waits for
 - Transcript pagination remains monotonic and bounded, including split tool call/result pages.
 - Replay stops writing until `drain`, live delivery has a tested finite queue, and overflow closes the stream.
 - Two Web tabs do not claim the same consumer generation identity.
+- Decoder and asynchronous message-handler failure cancel the reader and release its lock before the subscription rejects.
+- A failed persistence/ACK at an earlier sequence blocks queued higher ACKs until that same sequence is replayed successfully.
 - Channel, Core Client, Web API, and documentation agree on the sequence semantics.
 
 Completed tool projections now carry the tool-result row sequence, attempt, and timestamp; pending projections retain the call row sequence. Web merges tool projections by `toolCallId`. Fastify replay, live events, and heartbeats share a serialized `SseWritePump` that pauses for `drain`, bounds pending writes at 1,000, and closes on overflow for durable replay. Web consumer identity is stored in `sessionStorage`, making it reload-stable and tab-local.
 
-Behavior coverage proves an exclusive cursor receives a later tool result, split pages converge, backpressure waits without closing, overflow closes deterministically, malformed streams fail closed, and two browser sessions receive independent consumer IDs.
+Behavior coverage proves an exclusive cursor receives a later tool result, split pages converge, backpressure waits without closing, overflow closes deterministically, malformed streams fail closed, decoder/callback failures close and unlock their readers, failed persistence prevents cumulative ACK advancement, and two browser sessions receive independent consumer IDs.
 
 Final validation:
 
@@ -41,4 +45,4 @@ Final validation:
 
 ## Consequences
 
-Completed tool items will carry the result row timestamp/sequence rather than the earlier call row timestamp/sequence. Consumers that incorrectly treated `sequence` as a permanent tool-call creation sequence must instead use `toolCallId` for identity, which is already the contract's stable call identity.
+Completed tool items will carry the result row timestamp/sequence rather than the earlier call row timestamp/sequence. Consumers that incorrectly treated `sequence` as a permanent tool-call creation sequence must instead use `toolCallId` for identity, which is already the contract's stable call identity. Persistence and ACK callbacks used with the coordinator must remain replay-safe for the blocked sequence because an ACK transport failure can require repeating durable persistence before the barrier clears.

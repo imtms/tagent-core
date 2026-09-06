@@ -741,6 +741,38 @@ describe("TaskRunSupervisor LLM audit", () => {
     store.close();
   });
 
+  it("retains an explicitly linked early receipt through the final provider projection", async () => {
+    const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "use the linked early receipt");
+    const policy = { mode: "read_only_analysis", sideEffectRisk: "read_only", evidencePolicy: "operation_receipt", reviewPolicy: "full", policyVersion: "test", confidence: 1, reason: "inspection" } as const;
+    const contract = { sourceInput: run.goal, summary: run.goal, objectives: [{ id: "o1", summary: run.goal, timing: "current" as const, kind: "investigate" as const }], acceptanceCriteria: ["Use the durable early receipt"], scope: run.goal, nonGoals: [], sourceInboxIds: [], parentRunId: null, relation: "independent" as const, intent: "new_task" as const, decisionReason: "test", routerVersion: "test", executionPolicy: policy };
+    store.db.prepare("UPDATE runs SET contract_json=? WHERE id=?").run(JSON.stringify(contract), run.id);
+    store.claimOperation("early", run.id, 1, "tool.bash", { command: "rg early" });
+    store.updateOperation("early", { status: "succeeded", effects: [{ kind: "workspace", action: "read_only" }], result: { output: "early receipt verified" } });
+    for (let index = 0; index < 20; index += 1) {
+      store.claimOperation(`recent-${index}`, run.id, 1, "tool.bash", { command: `rg ${index}` });
+      store.updateOperation(`recent-${index}`, { status: "succeeded", effects: [{ kind: "workspace", action: "read_only" }], result: { output: `recent ${index}` } });
+    }
+    store.upsertPlanItem(run.id, { key: "audit", title: "Audit", status: "done", required: true, position: 1, schemaVersion: 2, objectiveIds: ["o1"], criterionIds: ["ac-1"], dependencies: [], completionEvidenceRefs: ["operation:early"] });
+    const earlySource = store.resolveEvidenceSources(run.id, ["operation:early"])[0]!;
+    expect(earlySource.content).toContain("early receipt verified");
+    const verdict = semanticVerdict({ criterionCoverage: [{
+      criterionId: "ac-1", status: "covered", evidenceRefs: [earlySource.sourceRef],
+      evidenceQuotes: [{
+        sourceRef: earlySource.sourceRef, sourceRevision: earlySource.sourceRevision, sourceHash: earlySource.sourceHash,
+        selector: { kind: "text_quote", exact: "early receipt verified" }, quote: "early receipt verified",
+      }],
+      reason: "The linked receipt verifies the result.",
+    }] });
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(verdict) } }] }), { status: 200 });
+    try {
+      const model = { id: "audit-model", baseUrl: "https://audit.test/v1" } as never;
+      const review = await new TaskRunSupervisor(store, new OpenAiSupervisorReviewer({ model, credential: TEST_CREDENTIAL }))
+        .reviewSettled(store.getRun(run.id)!, 9, "Verified by the linked early receipt.");
+      expect(review.decision.action).toBe("complete_taskrun");
+    } finally { globalThis.fetch = original; store.close(); }
+  });
+
   it("rejects hallucinated operation references on semantic failures", async () => {
     const store = new Store(":memory:"); const run = store.createRun(store.createSession().id, "strict failure refs");
     const payload = semanticVerdict({

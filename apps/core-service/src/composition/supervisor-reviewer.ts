@@ -272,8 +272,14 @@ function selectReviewOperations(input: SupervisorSettledReviewInput, trusted: Tr
   const sourceIds = new Set(input.run.checks
     .filter((check) => check.required && check.sourceOperationId && trusted.trustedCheckRefs.has(`check:${check.key}`))
     .map((check) => check.sourceOperationId!));
-  for (const source of input.evidenceSources ?? []) {
-    if (source.kind === "operation" && source.sourceRef.startsWith("operation:")) sourceIds.add(source.sourceRef.slice("operation:".length));
+  for (const ref of [
+    ...input.run.plan.flatMap((item) => item.completionEvidenceRefs ?? []),
+    ...(input.run.supervision.latestGates ?? []).flatMap((gate) => gate.criterionCoverage ?? []).flatMap((coverage) => [
+      ...coverage.evidenceRefs,
+      ...(coverage.evidenceQuotes ?? []).map((quote) => quote.sourceRef),
+    ]),
+  ]) {
+    if (ref.startsWith("operation:")) sourceIds.add(ref.slice("operation:".length));
   }
   const selectedIds = new Set<string>();
   for (let index = input.operations.length - 1; index >= 0 && selectedIds.size < limit; index -= 1) {

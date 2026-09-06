@@ -75,6 +75,7 @@ export interface ControlCommandPort {
     instruction: string,
     requestId: string,
   ): Promise<{ status: string; item?: unknown }>;
+  runtimeReady(runId: RunId, attempt: number): Promise<void>;
 }
 
 export interface ExecutionMemoryAccess {

@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import type { ContextManifestItem, ExecutionSessionRef, RunId, TaskRun, UserInputRequest } from "../domain/task-run.js";
 import type { RuntimeMessage as AgentMessage } from "../ports/attempt-runtime.js";
 import type { ContextSourcePort } from "../ports/context-source-port.js";
-import type { SystemTransitionAuthority, SystemTransitionCommand } from "../ports/task-run-transition-port.js";
 import { ContextAssembler, type ContextAssembly } from "./context-assembler.js";
 import { estimateContextTokens } from "./context-token-estimate.js";
 import { runtimeAttemptRunContext, taskPolicyResumeInstructions } from "./llm-payload.js";
@@ -12,6 +11,7 @@ import { submitRunUserInput } from "./user-input-submission.js";
 import type { ExecutionStateView } from "./execution-state.js";
 import { prepareExternalActionResumeBoundary } from "./external-action-resume-boundary.js";
 import type { AttemptLauncherPort, ContextEnrichmentPort, ContinuationControlPort, ExternalActionApprovalBoundaryPort, RecoveryControlPort, RunResumeOptions, RunEventPublisherPort, RuntimeControlPort } from "./collaboration-ports.js";
+import { settleResumePreparationFailure, transitionResumedAttempt } from "./run-resume-transition.js";
 import { effectiveTaskExecutionPolicy } from "@tagent/governance/domain";
 function hashContextProjection(value: string) { return createHash("sha256").update(value).digest("hex"); }
 type RunContextState = ExecutionStateView<
@@ -75,37 +75,7 @@ export class RunContextService {
     const { sourceAttempt } = boundary;
     this.state.persistence.continuations.cancelQueuedContinuations(runId, "Superseded by manual resume");
     this.dependencies.recovery.repairTranscript(runId, "resume");
-    const transitionRequest: readonly [SystemTransitionCommand, SystemTransitionAuthority]
-      = options.inputRequest
-        ? [{
-          kind: "resume_input",
-          attemptId: sourceAttempt.id,
-          expectedVersion: sourceAttempt.version,
-          inputRequestId: options.inputRequest.id,
-        }, {
-          kind: "input_resume",
-          inputRequestId: options.inputRequest.id,
-        }]
-        : options.approvalId
-          ? [{
-            kind: "resume_approval",
-            attemptId: sourceAttempt.id,
-            expectedVersion: sourceAttempt.version,
-            approvalId: options.approvalId,
-          }, {
-            kind: "approval_resume",
-            approvalId: options.approvalId,
-          }]
-          : [{
-            kind: "resume_manual",
-            attemptId: sourceAttempt.id,
-            expectedVersion: sourceAttempt.version,
-            reason: options.reason ?? "Manual resume requested",
-          }, {
-            kind: "manual_resume",
-            actorId: options.actorId ?? "user",
-          }];
-    const result = this.state.persistence.taskRunTransitions.transitionSystem(...transitionRequest);
+    const result = transitionResumedAttempt(this.state.persistence, sourceAttempt, options);
     const [transition, ...unexpectedTransitions] = result.transitions;
     if (!transition || unexpectedTransitions.length > 0 || transition.event !== null) {
       throw new Error(`TaskRun ${runId} resume did not return exactly one eventless transition`);
@@ -116,11 +86,20 @@ export class RunContextService {
       throw new Error(`TaskRun ${runId} resume target does not match the persisted Run`);
     }
     const approvalBound = Boolean(options.approvalId);
-    const provisionalPrompt = options?.inputRequest ? this.buildUserInputResumePrompt(run, options.inputRequest) : this.buildResumePrompt(run, this.state.persistence.transcript.getTranscriptCount(run.id), approvalBound);
-    let transcript = this.prepareTranscript(run, provisionalPrompt);
-    const prompt = options?.inputRequest ? this.buildUserInputResumePrompt(run, options.inputRequest) : this.buildResumePrompt(run, transcript.messages.length, approvalBound);
-    if (prompt !== provisionalPrompt) transcript = this.prepareTranscript(run, prompt);
-    const contextManifest = this.publishContextEvents(run.id, transcript);
+    let transcript: ReturnType<RunContextService["prepareTranscript"]>;
+    let prompt: string;
+    let contextManifest: ReturnType<RunContextService["publishContextEvents"]>;
+    try {
+      const provisionalPrompt = options?.inputRequest ? this.buildUserInputResumePrompt(run, options.inputRequest) : this.buildResumePrompt(run, this.state.persistence.transcript.getTranscriptCount(run.id), approvalBound);
+      transcript = this.prepareTranscript(run, provisionalPrompt);
+      prompt = options?.inputRequest ? this.buildUserInputResumePrompt(run, options.inputRequest) : this.buildResumePrompt(run, transcript.messages.length, approvalBound);
+      if (prompt !== provisionalPrompt) transcript = this.prepareTranscript(run, prompt);
+      contextManifest = this.publishContextEvents(run.id, transcript);
+    } catch (error) {
+      settleResumePreparationFailure({ runId, attemptId: transition.targetAttemptId, error,
+        persistence: this.state.persistence, eventHub: this.dependencies.eventHub });
+      throw error;
+    }
     const event = this.state.persistence.events.appendEvent(run.id, "run.resumed", { attempt: run.attempt, resumedAt: run.resumedAt, mode: transcript.messages.length ? "transcript-continuation" : "durable-snapshot-replay", transcriptCount: transcript.messages.length });
     this.dependencies.eventHub.publish(event);
     this.dependencies.attemptExecutor.launch(run, prompt, transcript.messages, undefined, { attemptContext: transcript.attemptContext, contextManifestId: contextManifest?.id });

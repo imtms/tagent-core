@@ -48,7 +48,7 @@ submission -> TaskRun -> execution lease -> Attempt -> AgentHarness model/tool l
                       complete | continue | approval | blocked
 ```
 
-Each resume, retry, or automatic continuation creates/uses the next bounded Attempt under durable authority. Continuations retain the TaskRun contract and selected durable context; they are not independent tasks.
+Each resume, retry, or automatic continuation creates/uses the next bounded Attempt under durable authority. Continuations retain the TaskRun contract and selected durable context; they are not independent tasks. If resume transcript, project context, or Context Manifest preparation fails after the new Attempt transition commits but before Runtime launch, the dedicated context-preparation authority terminalizes that same Attempt and TaskRun as `failed` and persists `run.failed`; Core never leaves a running Attempt without a Runtime or watchdog.
 
 When a TaskRun has a selected Skill, Execution passes one runtime-neutral Skill projection to `@tagent/runtime-pi`. The adapter registers it in `AgentHarness.resources.skills` and invokes `AgentHarness.skill(name, prompt)` explicitly. Skill instructions are not converted into an ordinary user prompt by Core, and they do not grant tools or bypass approval, receipts, path guards, or settlement policy.
 
@@ -82,7 +82,7 @@ Timeout or transport failure is classified through durable Attempt settlement. A
 
 ## Controls
 
-Steer and follow-up controls enter a bounded durable inbox. They are delivered to the active Harness under lease and fence without changing their mode or FIFO order: steering modifies the active response, while follow-up starts the next user turn after settlement. A follow-up that reaches the adapter-owned gap becomes the next continuation prompt rather than an internal unprompted retry. Pending delivery prevents settled completion. Abort clears and audits queued inputs. Recovery classifies an in-flight delivery conservatively when its outcome cannot be proven.
+Steer and follow-up controls enter a bounded durable inbox. They are delivered to the active Harness under lease and fence without changing their mode or FIFO order: steering modifies the active response, while follow-up starts the next user turn after settlement. If a control is accepted while Memory recall or other asynchronous Attempt preparation is still running, Runtime registration schedules a fresh inbox drain after any earlier no-Runtime delivery task settles. A follow-up that reaches the adapter-owned gap becomes the next continuation prompt rather than an internal unprompted retry. Pending delivery prevents settled completion. Abort clears and audits queued inputs. Recovery classifies an in-flight delivery conservatively when its outcome cannot be proven.
 
 ## Tools
 

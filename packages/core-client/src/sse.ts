@@ -42,20 +42,27 @@ export async function readSse(response: Response, onMessage: (message: SseMessag
     else if (field === "retry") retry = parseRetry(value);
   };
 
-  while (true) {
-    const chunk = await reader.read();
-    buffer += decoder.decode(chunk.value, { stream: !chunk.done });
-    let newline = buffer.indexOf("\n");
-    while (newline >= 0) {
-      const line = buffer.slice(0, newline).replace(/\r$/, "");
-      buffer = buffer.slice(newline + 1);
-      await consumeLine(line);
-      newline = buffer.indexOf("\n");
+  let completed = false;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value, { stream: !chunk.done });
+      let newline = buffer.indexOf("\n");
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline).replace(/\r$/, "");
+        buffer = buffer.slice(newline + 1);
+        await consumeLine(line);
+        newline = buffer.indexOf("\n");
+      }
+      if (chunk.done) break;
     }
-    if (chunk.done) break;
+    if (buffer) await consumeLine(buffer.replace(/\r$/, ""));
+    await dispatch();
+    completed = true;
+  } finally {
+    if (!completed) await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
-  if (buffer) await consumeLine(buffer.replace(/\r$/, ""));
-  await dispatch();
 }
 
 export function decodeJsonSse<T>(decode: (payload: unknown) => T): (message: SseMessage) => T {

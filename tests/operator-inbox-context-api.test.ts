@@ -140,6 +140,28 @@ describe("Operator Inbox and Context Manifest profiles", () => {
     expect(decodeAbi(ErrorEnvelopeSchema, stale.json()).error.code).toBe("concurrency.conflict");
   });
 
+  it.each(["update", "decision", "delete", "merge"] as const)("binds the Inbox item ID into %s idempotency", async (operation) => {
+    const { app, store } = await fixture();
+    const session = store.createSession(`Cross-item ${operation}`);
+    const first = store.enqueueSessionInbox(session.id, "First", analysis("First"), `${operation}-first`);
+    const second = store.enqueueSessionInbox(session.id, "Second", analysis("Second"), `${operation}-second`);
+    const target = store.enqueueSessionInbox(session.id, "Target", analysis("Target"), `${operation}-target`);
+    const baseUrl = `/api/v1/operator/sessions/${session.id}/inbox`;
+    const current = decodeAbi(OperatorInboxListResponseSchema, (await app.inject({ method: "GET", url: baseUrl })).json());
+    const headers = mutationHeaders(current.data.collectionRevision, `cross-item-${operation}`);
+    const requestFor = (itemId: string) => {
+      if (operation === "update") return { method: "PATCH" as const, url: `${baseUrl}/${itemId}`, headers, payload: { content: "Changed" } };
+      if (operation === "decision") return { method: "POST" as const, url: `${baseUrl}/${itemId}/decision`, headers, payload: { decision: "defer" } };
+      if (operation === "merge") return { method: "POST" as const, url: `${baseUrl}/${itemId}/merge`, headers, payload: { targetId: target.id } };
+      return { method: "DELETE" as const, url: `${baseUrl}/${itemId}`, headers };
+    };
+
+    expect((await app.inject(requestFor(first.id))).statusCode).toBe(200);
+    const retargeted = await app.inject(requestFor(second.id));
+    expect(retargeted.statusCode).toBe(409);
+    expect(decodeAbi(ErrorEnvelopeSchema, retargeted.json()).error.code).toBe("idempotency.conflict");
+  });
+
   it("starts Inbox work once, exposes durable lookup, and never repeats the TaskRun side effect", async () => {
     const { app, store } = await fixture();
     const session = store.createSession("Start");

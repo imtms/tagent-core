@@ -128,6 +128,37 @@ describe("Core instance lock", () => {
     await expect(replacement.assertHeld()).resolves.toBeUndefined();
   });
 
+  it("recovers an abandoned stale-lock recovery marker after its owner dies", async () => {
+    const { databasePath, options } = await fixture();
+    const stale = await acquire(databasePath, options());
+    const abandonedRecovery = {
+      instanceId: "abandoned-recovery",
+      pid: 3_003,
+      host: "test-host",
+      processStart: "process-start-recovery",
+      acquiredAt: 15_000,
+    };
+    await writeFile(`${stale.path}.recovery`, `${JSON.stringify(abandonedRecovery)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    const processProbe = vi.fn<ProcessIdentityProbe>(async (pid) => {
+      expect([stale.metadata.pid, abandonedRecovery.pid]).toContain(pid);
+      return { status: "dead" as const };
+    });
+
+    const replacement = await acquire(databasePath, options({
+      instanceId: "instance-after-abandoned-recovery",
+      pid: 4_004,
+      processStart: "process-start-replacement",
+      processProbe,
+      clock: () => 20_000,
+    }));
+
+    expect(processProbe).toHaveBeenCalledWith(abandonedRecovery.pid);
+    expect(processProbe).toHaveBeenCalledWith(stale.metadata.pid);
+    expect(replacement.metadata.instanceId).toBe("instance-after-abandoned-recovery");
+    await expect(readFile(`${stale.path}.recovery`, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(replacement.assertHeld()).resolves.toBeUndefined();
+  });
+
   it("takes over after PID reuse when the live process start differs from the recorded owner", async () => {
     const { databasePath, options } = await fixture();
     const stale = await acquire(databasePath, options());

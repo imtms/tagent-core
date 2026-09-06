@@ -4,6 +4,7 @@ import process from "node:process";
 import { fileURLToPath, URL } from "node:url";
 import postcss from "postcss";
 import ts from "typescript";
+import { normalizeRelativePath } from "./path-utils.mjs";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const srcRoot = path.join(projectRoot, "src");
@@ -66,7 +67,7 @@ const cssImports = [];
 for (const file of scriptFiles) {
   const source = read(file);
   const importPattern = /\bimport\s*(?:[^"']*?\sfrom\s*)?["']([^"']+\.css)["']/g;
-  for (const match of source.matchAll(importPattern)) cssImports.push([path.relative(projectRoot, file), match[1]]);
+  for (const match of source.matchAll(importPattern)) cssImports.push([normalizeRelativePath(path.relative(projectRoot, file)), match[1]]);
 }
 check(cssImports.length === 1 && cssImports[0][0] === "src/main.tsx" && cssImports[0][1] === "./app.css", "src/main.tsx must be the only CSS importer and must import ./app.css");
 

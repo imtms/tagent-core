@@ -82,6 +82,60 @@ describe("memory 0.1.5 governance", () => {
     expect(a.vectors.get(`warm_record:${record().id}:lease-fenced`)?.vector).toEqual([2]);
     expect((await a.getGeneration(scope, "lease-fenced"))?.status).toBe("active");
   });
+  it("atomically fences cleanup, activation, completion, and generation GC after lease reclaim", async () => {
+    const a = new InMemoryMemoryAdapter();
+    await a.upsertRecords([{ ...record(), title: "first", summary: "first" }]);
+    let releaseStaleFinalization!: () => void;
+    let staleFinalizationStarted!: () => void;
+    const staleFinalizationGate = new Promise<void>((resolve) => { releaseStaleFinalization = resolve; });
+    const staleFinalizationReady = new Promise<void>((resolve) => { staleFinalizationStarted = resolve; });
+    const finalize = a.finalizeReindex.bind(a);
+    a.finalizeReindex = async (request) => {
+      if (request.owner === "worker-a") {
+        staleFinalizationStarted();
+        await staleFinalizationGate;
+      }
+      return finalize(request);
+    };
+    const staleWorker = new DurableReindexWorker(
+      a, a, a,
+      { generation: "finalize-fenced", async embed() { return [[1]]; } },
+      a, access, 1, 20,
+    );
+    const freshWorker = new DurableReindexWorker(
+      a, a, a,
+      { generation: "finalize-fenced", async embed() { return [[2]]; } },
+      a, access, 1, 20,
+    );
+    await staleWorker.enqueue();
+    const staleRun = staleWorker.runOnce("worker-a");
+    await staleFinalizationReady;
+
+    const running = [...a.reindexJobs.values()][0];
+    running.leaseUntil = Date.now() - 1;
+    const second = {
+      ...record(),
+      id: "22222222-2222-4222-8222-222222222222",
+      title: "second",
+      summary: "second",
+      updatedAt: Date.now() + 1,
+    };
+    await a.upsertRecords([second]);
+    await expect(freshWorker.runOnce("worker-b")).resolves.toBe(true);
+    expect([...a.vectors.values()].filter((document) => document.generation === "finalize-fenced")).toHaveLength(2);
+    expect(await a.getGeneration(scope, "finalize-fenced")).toMatchObject({
+      status: "active",
+      expected: 2,
+    });
+
+    releaseStaleFinalization();
+    await expect(staleRun).rejects.toThrow("reindex_lease_lost");
+    expect([...a.vectors.values()].filter((document) => document.generation === "finalize-fenced")).toHaveLength(2);
+    expect(await a.getGeneration(scope, "finalize-fenced")).toMatchObject({
+      status: "active",
+      expected: 2,
+    });
+  });
   it("tombstones and restores topics without deleting revisions", async () => {
     const a = new InMemoryMemoryAdapter(),
       now = Date.now(),

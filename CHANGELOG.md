@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Reliability and recovery
+
+- Made snapshot edit/patch replacement text literal and preserved existing regular-file permission bits across atomic replacement commits.
+- Drained controls accepted during asynchronous Attempt preparation, terminalized resumed Attempts whose context preparation fails before Runtime launch, joined Host activation during close, and recovered stale instance-lock recovery markers only after repeated owner-death verification.
+- Preserved manual Core Memory during ordinary synchronization, resolved A→B→A fact/preference reactivation conflicts, restored retained Cold pages only for whole-Topic tombstones, and made reindex cleanup, generation activation, job completion, and garbage collection one fenced PostgreSQL transaction.
+- Blocked cumulative event ACK advancement after an earlier persistence/ACK failure until that sequence is replayed, and cancelled/unlocked failed SSE readers.
+
+### Gateway and Web Console
+
+- Bound Session Inbox item IDs into mutation idempotency, traversed every Session/Inbox/Skill profile cursor, projected queued Inbox items in execution position order, and normalized the Web CSS ownership check across Windows and POSIX paths.
+- Preserved explicitly linked early operation receipts through the final bounded Supervisor projection.
+
+### Compatibility
+
+- No public HTTP/ABI, SQLite schema, Host protocol, or PostgreSQL Memory schema change is introduced. Maintained Memory documentation now reflects the already-current `tagent-memory/0.8` schema version `2` and its exact version-1 migration path.
+
 ## [0.8.32] - 2026-09-04
 
 ### Semantic control plane

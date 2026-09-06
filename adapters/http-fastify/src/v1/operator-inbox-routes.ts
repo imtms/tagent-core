@@ -150,7 +150,7 @@ export function registerOperatorInboxV1Routes(app: FastifyInstance, dependencies
     const body = decodeAbi(OperatorInboxUpdateRequestSchema, request.body);
     const normalized = { content: body.content.trim() };
     const headers = profileMutationHeaders(request);
-    const mutation = profileMutationContext(request, headers, normalized);
+    const mutation = profileMutationContext(request, headers, { itemId, payload: normalized });
     const replay = replayProfileMutation<ProfileInboxMutationValue>(dependencies, {
       profileId: "operator.session-inbox.v1", endpointId: "operator.session_inbox.update",
       resourceType: "session_inbox", resourceId: sessionId,
@@ -169,7 +169,7 @@ export function registerOperatorInboxV1Routes(app: FastifyInstance, dependencies
     assertProfileResourceScope(request, "session", sessionId);
     const body = decodeAbi(OperatorInboxDecisionRequestSchema, request.body);
     const headers = profileMutationHeaders(request);
-    const mutation = profileMutationContext(request, headers, body);
+    const mutation = profileMutationContext(request, headers, { itemId, payload: body });
     const replay = replayProfileMutation<ProfileInboxMutationValue>(dependencies, {
       profileId: "operator.session-inbox.v1", endpointId: "operator.session_inbox.decide",
       resourceType: "session_inbox", resourceId: sessionId,
@@ -188,7 +188,7 @@ export function registerOperatorInboxV1Routes(app: FastifyInstance, dependencies
     assertProfileResourceScope(request, "session", sessionId);
     const body = decodeAbi(OperatorInboxMergeRequestSchema, request.body);
     const headers = profileMutationHeaders(request);
-    const mutation = profileMutationContext(request, headers, body);
+    const mutation = profileMutationContext(request, headers, { itemId, payload: body });
     const replay = replayProfileMutation<ProfileInboxMutationValue>(dependencies, {
       profileId: "operator.session-inbox.v1", endpointId: "operator.session_inbox.merge",
       resourceType: "session_inbox", resourceId: sessionId,
@@ -206,7 +206,7 @@ export function registerOperatorInboxV1Routes(app: FastifyInstance, dependencies
     const { sessionId, itemId } = request.params as { sessionId: string; itemId: string };
     assertProfileResourceScope(request, "session", sessionId);
     const headers = profileMutationHeaders(request);
-    const mutation = profileMutationContext(request, headers, {});
+    const mutation = profileMutationContext(request, headers, { itemId, payload: {} });
     const replay = replayProfileMutation<ProfileInboxMutationValue>(dependencies, {
       profileId: "operator.session-inbox.v1", endpointId: "operator.session_inbox.delete",
       resourceType: "session_inbox", resourceId: sessionId,

@@ -260,6 +260,44 @@ describe("Core application runtime boundary", () => {
     store.close();
   });
 
+  it("drains controls accepted while asynchronous runtime preparation is pending", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    let finishRecall!: (value: Awaited<ReturnType<MemoryFacade["recall"]>>) => void;
+    const recall = new Promise<Awaited<ReturnType<MemoryFacade["recall"]>>>((resolve) => { finishRecall = resolve; });
+    const memory = { recall: vi.fn(() => recall), enqueueCapture: vi.fn(async () => ({ jobId: "capture-controls" })) } as unknown as MemoryFacade;
+    let runtime: InboxRuntime | undefined;
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory: () => runtime = new InboxRuntime(),
+      memory,
+      memoryScopeId: "test-scope",
+    });
+    const admitted = await service.enqueueSessionInput(session.id, "prepare before controls", "async-control-admission");
+    const runId = admitted.run!.id;
+
+    await expect(service.steer(runId, "change direction", "preparation-control-1")).resolves.toMatchObject({ status: "accepted" });
+    await expect(service.followUp(runId, "then verify", "preparation-control-2")).resolves.toMatchObject({ status: "accepted" });
+    await expect(service.steer(runId, "change direction", "preparation-control-1")).resolves.toMatchObject({ status: "accepted" });
+    expect(store.listControlInbox(runId)).toEqual([
+      expect.objectContaining({ requestId: "preparation-control-1", status: "queued" }),
+      expect.objectContaining({ requestId: "preparation-control-2", status: "queued" }),
+    ]);
+
+    finishRecall({
+      cards: [], coldTopics: [], promptSection: "",
+      trace: { version: 2, topicIds: [], candidateCount: 0, deniedCount: 0, embedding: { configured: false, degraded: false }, policyTransforms: 0, coldTopicRoutes: [], candidates: [] },
+    });
+    await vi.waitFor(() => expect(runtime?.delivered).toEqual([
+      { kind: "steer", content: "change direction" },
+      { kind: "follow_up", content: "then verify" },
+    ]));
+    expect(store.listControlInbox(runId).every((item) => item.status === "delivered")).toBe(true);
+    await service.closeRuntimes();
+    store.close();
+  });
+
   it("cancels an admitted Run while asynchronous memory preparation is still active", async () => {
     const store = new Store(":memory:");
     const session = store.createSession();
@@ -2153,6 +2191,32 @@ describe("Core application runtime boundary", () => {
     expect(options?.initialMessages).toEqual([user, assistant]);
     expect(runtime.prompts[0]).toContain("persisted pi transcript messages");
     expect(store.listEvents(run.id).find((event) => event.type === "run.resumed")?.data).toMatchObject({ mode: "transcript-continuation", transcriptCount: 2 });
+    store.close();
+  });
+
+  it("terminalizes a resumed Attempt when context preparation fails before runtime launch", async () => {
+    const store = new Store(":memory:");
+    const session = store.createSession();
+    const run = store.createRun(session.id, `resume ${"context ".repeat(2_000)}`);
+    transitionTaskRun(store, run.id, "block", "retry after restart");
+    const runtimeFactory = vi.fn(() => new DeferredRuntime());
+    const service = createCoreApplication({
+      persistence: corePersistence(store),
+      workspace: "/tmp",
+      runtimeFactory,
+      runtimeDefaults: { contextWindow: 2_048, model: { contextWindow: 2_048, maxTokens: 256 } as never },
+    });
+
+    await expect(service.resume(run.id)).rejects.toThrow("Current Attempt context exceeds the model window");
+
+    expect(runtimeFactory).not.toHaveBeenCalled();
+    expect(store.getRun(run.id)).toMatchObject({ status: "failed", attempt: 2 });
+    expect(corePersistence(store).attempts.getAttemptForRun(run.id, 2)).toMatchObject({ status: "failed", active: false });
+    expect(store.listEvents(run.id).at(-1)).toMatchObject({
+      type: "run.failed",
+      data: { reason: "resume_context_preparation_failed", stage: "context_preparation" },
+    });
+    await service.closeRuntimes();
     store.close();
   });
 

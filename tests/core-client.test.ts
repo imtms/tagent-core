@@ -220,6 +220,29 @@ describe("core-client transport", () => {
     expect(headers.get("Accept")).toBe("text/event-stream");
     expect(headers.get("Authorization")).toBe("Bearer events-token");
   });
+
+  it.each(["decode", "callback"] as const)("cancels and unlocks the SSE body after a %s failure", async (failureAt) => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode("data: payload\n\n")); },
+      cancel() { cancelled = true; },
+    });
+    const response = new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    const client = createCoreClient({ fetch: async () => response });
+    const subscription = client.subscribeSse<string>("/api/v1/task-runs/run/events", {
+      decode: (message) => {
+        if (failureAt === "decode") throw new Error("decoder failed");
+        return message.data;
+      },
+      onMessage: async () => {
+        if (failureAt === "callback") throw new Error("persistence failed");
+      },
+    });
+
+    await expect(subscription.completed).rejects.toMatchObject({ code: "client.protocol_mismatch" });
+    expect(cancelled).toBe(true);
+    expect(body.locked).toBe(false);
+  });
 });
 
 describe("channel v1 helpers", () => {
@@ -492,5 +515,37 @@ describe("replay ACK coordination", () => {
     expect(ack).not.toHaveBeenCalled();
     expect(coordinator.getAcknowledgedSequence()).toBe(0);
     await coordinator.idle();
+  });
+
+  it("blocks queued higher ACKs until the failed sequence is durably replayed", async () => {
+    const persisted: number[] = [];
+    const acknowledged: number[] = [];
+    let failFirst = true;
+    const coordinator = createReplayAckCoordinator<{ seq: number }>({
+      ack: async (sequence) => { acknowledged.push(sequence); },
+      persist: async (event) => {
+        if (event.seq === 1 && failFirst) {
+          failFirst = false;
+          throw new Error("outbox unavailable");
+        }
+        persisted.push(event.seq);
+      },
+      sequence: (event) => event.seq,
+    });
+
+    const results = await Promise.allSettled([
+      coordinator.handle({ seq: 1 }),
+      coordinator.handle({ seq: 2 }),
+    ]);
+    expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+    expect(persisted).toEqual([]);
+    expect(acknowledged).toEqual([]);
+    expect(coordinator.getAcknowledgedSequence()).toBe(0);
+
+    await expect(coordinator.handle({ seq: 1 })).resolves.toBe("acknowledged");
+    await expect(coordinator.handle({ seq: 2 })).resolves.toBe("acknowledged");
+    expect(persisted).toEqual([1, 2]);
+    expect(acknowledged).toEqual([1, 2]);
+    expect(coordinator.getAcknowledgedSequence()).toBe(2);
   });
 });

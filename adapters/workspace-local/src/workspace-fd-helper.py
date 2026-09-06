@@ -277,6 +277,7 @@ def commit_batch(root_fd: int, payload: dict) -> None:
             temporary = f".tagent-batch-{uuid.uuid4().hex}.tmp"
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600, dir_fd=parent)
             try:
+                os.fchmod(fd, metadata.st_mode & 0o777)
                 view = memoryview(content)
                 while view:
                     written = os.write(fd, view)

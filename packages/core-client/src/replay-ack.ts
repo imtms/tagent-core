@@ -15,15 +15,25 @@ export interface ReplayAckCoordinator<T> {
 
 export function createReplayAckCoordinator<T>(options: ReplayAckOptions<T>): ReplayAckCoordinator<T> {
   let acknowledgedSequence = options.initialAcknowledgedSequence ?? 0;
+  let failed: { error: unknown; sequence: number } | undefined;
   let tail = Promise.resolve();
   const handle = (event: T): Promise<ReplayAckResult> => {
     const operation = tail.then(async (): Promise<ReplayAckResult> => {
       const sequence = options.sequence(event);
       if (!Number.isSafeInteger(sequence) || sequence < 0) throw new Error(`Invalid replay sequence: ${sequence}`);
       if (sequence <= acknowledgedSequence) return "duplicate";
-      await options.persist(event);
-      await options.ack(sequence);
+      if (failed && sequence !== failed.sequence) {
+        throw new Error(`Replay ACK coordinator is blocked until sequence ${failed.sequence} is durably replayed`, { cause: failed.error });
+      }
+      try {
+        await options.persist(event);
+        await options.ack(sequence);
+      } catch (error) {
+        failed = { error, sequence };
+        throw error;
+      }
       acknowledgedSequence = sequence;
+      failed = undefined;
       return "acknowledged";
     });
     tail = operation.then(() => undefined, () => undefined);

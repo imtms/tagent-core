@@ -48,6 +48,10 @@ export type SystemTransitionCommand =
     readonly approvalId: string;
     readonly reason: string;
   })
+  | (AttemptBoundSystemCommand & {
+    readonly kind: "resume_preparation_failed";
+    readonly error: string;
+  })
   | { readonly kind: "startup_interrupt_active" }
   | { readonly kind: "shutdown_interrupt_active" }
   | (AttemptBoundSystemCommand & {
@@ -73,6 +77,10 @@ export type SystemTransitionAuthority =
     readonly kind: "external_action_guard";
     readonly component: "core_external_action_approval_application";
     readonly approvalId: string;
+  }
+  | {
+    readonly kind: "resume_preparation_failure";
+    readonly component: "run_context_service";
   }
   | {
     readonly kind: "lifecycle_interrupt";

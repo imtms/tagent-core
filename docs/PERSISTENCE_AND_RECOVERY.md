@@ -32,7 +32,7 @@ Production startup is ordered so no runtime can mutate before writer ownership i
 7. run writer-guarded startup recovery;
 8. start HTTP and mark the writer ready.
 
-Core rejects a second live instance. Losing the writer lease or failing a guard clears readiness and initiates shutdown.
+Core rejects a second live instance. Stale-lock recovery uses a persistent recovery marker whose process identity is checked twice: a live or unverifiable owner remains fail-closed, while a marker left by a demonstrably dead or PID-reused owner is reclaimed so a crash cannot permanently prevent startup. Losing the writer lease or failing a guard clears readiness and initiates shutdown.
 
 Before this sequence, the Host resolves `current`, checks that it is a contained 40-character immutable release, uses its own trusted release verifier to validate the artifact, and forks the Generation. Every Generation uses the stable release root—not its immutable release directory—as its working directory, so default relative database/workspace paths remain identical across activation and rollback. The Generation reports `READY` only after HTTP is listening, background reconciliation has completed, and writer readiness is established, then emits writer-fenced IPC heartbeats. Development startup can still run through the Host as a non-activatable `development` Generation; direct `bootstrapCore` tests remain Host-independent.
 
@@ -86,7 +86,7 @@ Graceful replacement reuses the existing state model rather than adding maintena
 
 If the initiating Run reached `completed` or `failed` between its accepted tool receipt and drain, handoff deliberately reopens it as `blocked`. This avoids losing the accepted activation across the final-response race; the continuation may generate one new complete standalone final response.
 
-A drain timeout causes the Host to terminate the old process before starting a candidate. Process death and the existing writer fence then provide exclusion; ambiguous effects are still governed by the same `outcome_unknown` rules. Candidate readiness failure re-verifies and restores the previous release. If the Host itself crashes during activation, `current` plus `activation.json` deterministically decides whether the recovered result is committed or rolled back.
+A drain timeout causes the Host to terminate the old process before starting a candidate. Process death and the existing writer fence then provide exclusion; ambiguous effects are still governed by the same `outcome_unknown` rules. Candidate readiness failure re-verifies and restores the previous release. Host close tracks and joins every in-flight activation, rechecks the stopped boundary after persisted activation phases, and terminates any candidate that crossed close before returning. If the Host itself crashes during activation, `current` plus `activation.json` deterministically decides whether the recovered result is committed or rolled back.
 
 ## Retired schema compatibility
 

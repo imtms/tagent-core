@@ -135,6 +135,7 @@ export class CoreHost {
   private activationBusy = false;
   private startInvoked = false;
   private stopped = false;
+  private readonly activationTasks = new Set<Promise<void>>();
   private restartTask?: Promise<void>;
   private restartDelayCancel?: () => void;
   private heartbeatDeadline?: HostTimer;
@@ -242,6 +243,9 @@ export class CoreHost {
     this.restartDelayCancel?.();
     const session = this.active;
     if (session) await this.stopSession(session, "Generation did not stop after Host close", this.drainTimeoutMs);
+    while (this.activationTasks.size) await Promise.allSettled([...this.activationTasks]);
+    const activated = this.active;
+    if (activated) await this.stopSession(activated, "Generation did not stop after activation crossed Host close", this.drainTimeoutMs);
     if (this.restartTask) await this.restartTask;
   }
 
@@ -292,9 +296,11 @@ export class CoreHost {
   }
 
   private beginActivation(session: GenerationSession, request: CoreHostActivationRequest): void {
-    void this.activate(session, request).catch((error) => {
-      void this.handleDetachedActivationFailure(error);
-    });
+    let task!: Promise<void>;
+    task = this.activate(session, request)
+      .catch((error) => this.handleDetachedActivationFailure(error))
+      .finally(() => { this.activationTasks.delete(task); });
+    this.activationTasks.add(task);
   }
 
   private async handleDetachedActivationFailure(error: unknown): Promise<void> {
@@ -358,6 +364,7 @@ export class CoreHost {
 
       this.state = { ...this.state, activation: this.activationState(request, session, previous.id, target.id, "starting") };
       await this.writeState();
+      if (this.stopped) throw new Error("Core Host stopped before candidate startup");
       candidate = await this.startRelease(
         target,
         true,
@@ -383,6 +390,9 @@ export class CoreHost {
       if (this.stopped) {
         // Preserve the last durable non-terminal phase. On the next Host
         // start, current + activation.json deterministically reconcile it.
+        if (candidate && !candidate.hasExited) {
+          await this.stopSession(candidate, "Candidate did not stop after Host close crossed activation");
+        }
         return;
       }
       if (!oldStopped && this.active === session && !session.hasExited) {

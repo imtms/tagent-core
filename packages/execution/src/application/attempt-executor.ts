@@ -197,6 +197,7 @@ export class AttemptExecutor {
       return;
     }
     this.state.runtimes.set(run.id, runtime);
+    void this.dependencies.controlInbox.runtimeReady(run.id, run.attempt);
     executionLeaseTimer = setInterval(() => {
       try {
         this.state.persistence.attempts.renewExecutionLease({
@@ -295,5 +296,4 @@ export class AttemptExecutor {
     });
     this.state.executionTasks.set(run.id, execution);
   }
-
 }

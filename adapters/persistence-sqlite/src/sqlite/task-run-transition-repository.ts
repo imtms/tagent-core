@@ -172,7 +172,39 @@ export class SqliteTaskRunTransitionRepository implements TaskRunTransitionPort 
     if (normalizedCommand.kind === "require_external_approval") {
       return this.transitionExternalApproval(normalizedCommand, scope);
     }
+    if (normalizedCommand.kind === "resume_preparation_failed") {
+      return this.transitionResumePreparationFailure(normalizedCommand, scope);
+    }
     return this.transitionResume(normalizedCommand, normalizedAuthority, scope);
+  }
+
+  private transitionResumePreparationFailure(
+    command: Extract<SystemTransitionCommand, { kind: "resume_preparation_failed" }>,
+    scope: SystemAttemptScope,
+  ): TaskRunTransitionResult {
+    if (!scope.active || scope.attemptStatus !== "running" || scope.runStatus !== "running") {
+      throw new Error(`Resume context preparation failure requires the active running Attempt ${scope.attemptId}`);
+    }
+    const event = this.store.transitionRun(
+      scope.runId,
+      ["running"],
+      "failed",
+      "run.failed",
+      {
+        error: command.error,
+        reason: "resume_context_preparation_failed",
+        stage: "context_preparation",
+        retryable: false,
+      },
+      command.error,
+      scope.ordinal,
+    );
+    if (!event) throw new Error(`TaskRun ${scope.runId} resume preparation failure lost its compare-and-set`);
+    return { transitions: [{
+      runId: scope.runId, sourceAttemptId: scope.attemptId, sourceOrdinal: scope.ordinal,
+      targetAttemptId: scope.attemptId, targetOrdinal: scope.ordinal, fromStatus: "running",
+      toStatus: "failed", precedingEvents: [], event,
+    }] };
   }
 
   private transitionExternalApproval(
@@ -397,6 +429,10 @@ export class SqliteTaskRunTransitionRepository implements TaskRunTransitionPort 
         assertNonEmpty(value.approvalId, "SystemTransitionCommand.approvalId");
         assertNonEmpty(value.reason, "SystemTransitionCommand.reason");
         break;
+      case "resume_preparation_failed":
+        assertExactKeys(value, ["kind", "attemptId", "expectedVersion", "error"], "SystemTransitionCommand");
+        assertNonEmpty(value.error, "SystemTransitionCommand.error");
+        break;
       case "resume_manual":
         assertExactKeys(value, ["kind", "attemptId", "expectedVersion", "reason"], "SystemTransitionCommand");
         assertNonEmpty(value.reason, "SystemTransitionCommand.reason");
@@ -430,6 +466,10 @@ export class SqliteTaskRunTransitionRepository implements TaskRunTransitionPort 
         if (value.component !== "core_external_action_approval_application") throw new TypeError("External action guard component is invalid");
         assertNonEmpty(value.approvalId, "SystemTransitionAuthority.approvalId");
         return { kind: value.kind, component: value.component, approvalId: value.approvalId };
+      case "resume_preparation_failure":
+        assertExactKeys(value, ["kind", "component"], "SystemTransitionAuthority");
+        if (value.component !== "run_context_service") throw new TypeError("Resume preparation authority component is invalid");
+        return { kind: value.kind, component: value.component };
       case "lifecycle_interrupt":
         assertExactKeys(value, ["kind", "component", "phase"], "SystemTransitionAuthority");
         if (value.component === "execution_lifecycle_service" && value.phase === "startup") {
@@ -464,6 +504,8 @@ export class SqliteTaskRunTransitionRepository implements TaskRunTransitionPort 
       ? authority.kind === "admission_launch_failure" && authority.inboxItemId === command.inboxItemId
       : command.kind === "require_external_approval"
         ? authority.kind === "external_action_guard" && authority.approvalId === command.approvalId
+      : command.kind === "resume_preparation_failed"
+        ? authority.kind === "resume_preparation_failure"
       : command.kind === "startup_interrupt_active"
         ? authority.kind === "lifecycle_interrupt" && authority.phase === "startup"
         : command.kind === "shutdown_interrupt_active"

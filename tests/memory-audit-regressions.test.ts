@@ -114,6 +114,75 @@ describe("Memory audit regressions", () => {
     expect(integrated.records).toEqual([expect.objectContaining({ id: banana.id, status: "active" })]);
   });
 
+  it("reactivates A and supersedes B after fresh A→B→A fact and preference evidence", async () => {
+    const adapter = new InMemoryMemoryAdapter();
+    const core = new CoreMemorySnapshotService(adapter, adapter);
+    const blobs = new LocalBlobStore(await mkdtemp(path.join(tmpdir(), "tagent-memory-reactivation-")));
+    const policy = new DefaultPolicyEngine(adapter);
+    const service = new MemoryService({
+      records: adapter,
+      vectors: adapter,
+      graph: adapter,
+      topics: adapter,
+      blobs,
+      jobs: adapter,
+      policy,
+      coreSnapshots: {
+        get: (value) => core.get(value),
+        generate: (value, options) => core.generate(value, options),
+        update: (value, markdown) => core.update(value, markdown),
+      },
+    });
+    const worker = new MemoryCaptureWorker(
+      adapter,
+      { load: async () => "" },
+      new RuleBasedExtractor(),
+      policy,
+      service,
+      new MemoryLifecycle(adapter, adapter, adapter, adapter),
+      "memory-reactivation-worker",
+    );
+    const capture = async (content: string, key: string) => {
+      await service.enqueueCapture({
+        access,
+        content,
+        sourceRefs: [{ sourceType: "message", sourceId: key }],
+        idempotencyKey: key,
+        captureSource: { kind: "user_message", role: "user", explicitIntent: true },
+      });
+      expect(await worker.runOnce()).toBe(true);
+    };
+
+    await capture("我叫Alice", "identity-a-1");
+    await capture("我叫Bob", "identity-b");
+    await capture("我叫Alice", "identity-a-2");
+    await capture("我希望用中文回答", "language-a-1");
+    await capture("我希望用英文回答", "language-b");
+    await capture("我希望用中文回答", "language-a-2");
+
+    const records = [...adapter.records.values()];
+    expect(records.flatMap((record) => record.status === "active" && record.kind === "fact" ? [record.content] : [])).toEqual([
+      "用户姓名或称呼是 Alice",
+    ]);
+    expect(records.flatMap((record) => record.status === "active" && record.kind === "preference" ? [record.value] : [])).toEqual([
+      "我希望用中文回答",
+    ]);
+    expect(records.find((record) => record.kind === "fact" && record.content.includes("Bob"))?.status).toBe("superseded");
+    expect(records.find((record) => record.kind === "preference" && record.value.includes("英文"))?.status).toBe("superseded");
+
+    const identityRecall = await service.recall({ access, cue: "我叫什么", signal: testSignal });
+    expect(identityRecall.cards.map((card) => card.content)).toEqual(["用户姓名或称呼是 Alice"]);
+    const preferenceRecall = await service.recall({ access, cue: "中文回答", signal: testSignal });
+    expect(preferenceRecall.cards.map((card) => card.content)).toContain("我希望用中文回答");
+    expect(preferenceRecall.cards.map((card) => card.content)).not.toContain("我希望用英文回答");
+
+    const snapshot = await core.get(access);
+    expect(snapshot?.markdown).toContain("Alice");
+    expect(snapshot?.markdown).toContain("我希望用中文回答");
+    expect(snapshot?.markdown).not.toContain("Bob");
+    expect(snapshot?.markdown).not.toContain("我希望用英文回答");
+  });
+
   it("backs off a transient capture failure instead of exhausting retries in one poll", async () => {
     const { adapter, policy, service } = await createService();
     const queued = await service.enqueueCapture({ access, sourceRefs: [], content: "user: durable fact", idempotencyKey: "transient-retry" });
@@ -163,6 +232,55 @@ describe("Memory audit regressions", () => {
     await new ColdStorageReconciler(adapter, blobs).purgeExpired(access);
     expect(await blobs.exists(published.revision.objectKey)).toBe(false);
     expect(adapter.topics.has(topicId)).toBe(false);
+  });
+
+  it("restores retained Cold only for a whole Topic tombstone", async () => {
+    const { adapter, blobs, service } = await createService();
+    const topicId = `${scope.type}.${scope.id}.fact.cold-restore`;
+    const first = {
+      ...fact("10000000-0000-4000-8000-000000000011", topicId),
+      title: "Cold detail one",
+      content: "Retained detail one",
+      summary: "Retained detail one",
+    };
+    const second = {
+      ...fact("10000000-0000-4000-8000-000000000012", topicId),
+      title: "Cold detail two",
+      content: "Retained detail two",
+      summary: "Retained detail two",
+    };
+    const now = Date.now();
+    const descriptor: TopicDescriptor = {
+      topicId,
+      kind: "fact",
+      scope,
+      title: "Cold restore",
+      description: "Two retained details",
+      aliases: [],
+      entityIds: [],
+      relatedTopicIds: [],
+      embeddingText: "cold restore retained details",
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+    };
+    await service.persistExtracted(access, [first, second], [descriptor]);
+    const body = "# Cold restore\n\nRetained detail one. Retained detail two.";
+    const published = await service.publishColdTopic(access, descriptor, body);
+
+    await service.forget({ access: { ...access, purpose: "memory_admin" }, scope, topicIds: [topicId], gracePeriodMs: 60_000 });
+    expect(await service.getColdTopic(access, topicId)).toBeNull();
+    expect(await blobs.exists(published.revision.objectKey)).toBe(true);
+    expect(adapter.revisions.get(published.revision.id)?.state).toBe("published");
+
+    expect(await service.restore({ access, scope, topicIds: [topicId] })).toEqual({ records: 2, topics: 1 });
+    expect(await service.getColdTopic(access, topicId)).toMatchObject({ body, revision: { id: published.revision.id } });
+
+    await service.forget({ access: { ...access, purpose: "memory_admin" }, scope, ids: [first.id], gracePeriodMs: 60_000 });
+    expect(adapter.topics.get(topicId)?.status).toBe("active");
+    expect(adapter.revisions.get(published.revision.id)?.state).toBe("superseded");
+    expect(await service.restore({ access, scope, ids: [first.id] })).toEqual({ records: 1, topics: 0 });
+    expect(await service.getColdTopic(access, topicId)).toBeNull();
   });
 
   it("removes record and topic vectors when forgetting by topic only", async () => {
@@ -223,5 +341,38 @@ describe("Memory audit regressions", () => {
     const forced = await core.generate(access, { force: true });
     expect(forced.markdown).not.toContain("Keep this manual note");
     expect(forced.markdown).toContain("AnotherName");
+  });
+
+  it("preserves manual Core text across approve, correct, and forget synchronization", async () => {
+    const adapter = new InMemoryMemoryAdapter();
+    const core = new CoreMemorySnapshotService(adapter, adapter);
+    const blobs = new LocalBlobStore(await mkdtemp(path.join(tmpdir(), "tagent-memory-core-governance-")));
+    const service = new MemoryService({
+      records: adapter, vectors: adapter, graph: adapter, topics: adapter, blobs, jobs: adapter,
+      policy: new DefaultPolicyEngine(adapter),
+      coreSnapshots: { get: (value) => core.get(value), generate: (value, options) => core.generate(value, options), update: (value, markdown) => core.update(value, markdown) },
+    });
+    const candidate = { ...fact("10000000-0000-4000-8000-000000000010", "core-governance"), status: "candidate" as const };
+    await adapter.upsertRecords([candidate]);
+    await core.generate(access);
+    await core.update(access, "# My Core\n\nNever schedule meetings on Fridays.\n");
+
+    await service.govern!({ access: { ...access, purpose: "memory_admin" }, scope, id: candidate.id, action: "approve" });
+    const approved = await core.get(access);
+    expect(approved?.markdown).toContain("Never schedule meetings on Fridays.");
+    expect(approved?.markdown).toContain("SecretName");
+    expect(approved?.editedAt).toBeDefined();
+
+    await service.govern!({ access: { ...access, purpose: "memory_admin" }, scope, id: candidate.id, action: "correct", content: "用户姓名或称呼是 CorrectedName" });
+    const corrected = await core.get(access);
+    expect(corrected?.markdown).toContain("Never schedule meetings on Fridays.");
+    expect(corrected?.markdown).toContain("CorrectedName");
+    expect(corrected?.markdown).not.toContain("SecretName");
+
+    await service.forget({ access: { ...access, purpose: "memory_admin" }, scope, ids: [candidate.id] });
+    const forgotten = await core.get(access);
+    expect(forgotten?.markdown).toContain("Never schedule meetings on Fridays.");
+    expect(forgotten?.markdown).not.toContain("CorrectedName");
+    expect(forgotten?.editedAt).toBeDefined();
   });
 });

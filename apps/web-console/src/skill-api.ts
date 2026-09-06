@@ -1,6 +1,7 @@
 import type { OperatorSkillRevision, OperatorSkillSummary } from "@tagent/abi";
 import { createRequestId } from "./id";
 import { withCoreAbi } from "./api-transport";
+import { collectCursorItems } from "./profile-pagination";
 
 export type SkillRevision = OperatorSkillRevision;
 export type SkillSummary = OperatorSkillSummary;
@@ -25,12 +26,12 @@ export function createSkillApi(request: Request) {
   const skillResourceRevisions = new Map<string, number>();
   const workspaceRevisions = new Map<string, number>();
 
-  const skills = async (): Promise<SkillSummary[]> => request("/api/v1/operator/skills?limit=200", undefined, (payload) => withCoreAbi((abi) => {
+  const skills = async (): Promise<SkillSummary[]> => collectCursorItems((cursor) => request(`/api/v1/operator/skills?limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, undefined, (payload) => withCoreAbi((abi) => {
     const data = abi.decodeAbi(abi.OperatorSkillCatalogResponseSchema.properties.data, payload);
     catalogRevision = data.collectionRevision;
     for (const item of data.items) skillResourceRevisions.set(item.id, item.resourceRevision);
-    return data.items;
-  }));
+    return { items: data.items, pageInfo: data.pageInfo };
+  })));
 
   const skill = async (skillId: string): Promise<SkillRevision> => request(`/api/v1/operator/skills/${encodeURIComponent(skillId)}`, undefined, (payload) => withCoreAbi((abi) => {
     const data = abi.decodeAbi(abi.OperatorSkillResponseSchema.properties.data, payload);
@@ -48,11 +49,11 @@ export function createSkillApi(request: Request) {
   return {
     skills,
     skill,
-    skillRevisions: (skillId: string) => request(`/api/v1/operator/skills/${encodeURIComponent(skillId)}/revisions?limit=200`, undefined, (payload) => withCoreAbi((abi) => {
+    skillRevisions: (skillId: string) => collectCursorItems((cursor) => request(`/api/v1/operator/skills/${encodeURIComponent(skillId)}/revisions?limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, undefined, (payload) => withCoreAbi((abi) => {
       const data = abi.decodeAbi(abi.OperatorSkillRevisionsResponseSchema.properties.data, payload);
       skillResourceRevisions.set(skillId, data.resourceRevision);
-      return data.items;
-    })),
+      return { items: data.items, pageInfo: data.pageInfo };
+    }))),
     uploadSkill: async (file: File) => request("/api/v1/operator/skills", {
       method: "POST", headers: mutationHeaders(catalogRevision),
       body: JSON.stringify({ filename: file.name, contentBase64: base64(new Uint8Array(await file.arrayBuffer())) }),

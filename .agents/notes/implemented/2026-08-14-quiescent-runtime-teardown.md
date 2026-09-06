@@ -5,11 +5,13 @@ Kind: architecture
 
 ## Problem
 
-Runtime shutdown previously raced owned work against a five-second timer and then released shared persistence, leases, and locks. A timeout could therefore report completion while callbacks, tools, or provider work still used those resources.
+Runtime shutdown previously raced owned work against a five-second timer and then released shared persistence, leases, and locks. A timeout could therefore report completion while callbacks, tools, or provider work still used those resources. The same task-ownership gap appeared at startup: a control-delivery task accepted while context preparation was pending could settle before a Runtime existed, and Runtime registration did not schedule another drain.
 
 ## Decision
 
 `AttemptRuntimePort.dispose()` is required, asynchronous, idempotent, and resolves only at quiescence. Runtime registry shutdown snapshots and joins disposers plus preparation, control-delivery, and execution tasks with `Promise.allSettled`. Rejection of adjacent work still proves that work has settled; only a failed disposer means the runtime-owned quiescence barrier failed. A failed disposer retains runtime ownership and blocks release of the Store, writer lease, guard, and instance lock.
+
+Durable control acceptance remains detached from Runtime preparation, but Runtime registration explicitly schedules a new delivery pass. If an earlier no-Runtime pass is still represented by the per-Run task, registration chains the fresh pass after it settles. This preserves FIFO/mode, avoids duplicate concurrent drain ownership, and guarantees that accepted controls do not remain queued solely because their first delivery attempt preceded Runtime readiness.
 
 Hard time bounds belong at a worker or process termination boundary. Same-process work is cancelled cooperatively and joined; a timer never substitutes for quiescence.
 
@@ -21,8 +23,8 @@ Hard time bounds belong at a worker or process termination boundary. Same-proces
 
 ## Verification
 
-`tests/runtime.test.ts` latches a disposer and proves registry closure remains pending until quiescence, accepts rejected-but-settled adjacent work, and rejects a failed disposer. `tests/core-lifecycle.test.ts` proves a failed runtime barrier leaves lifecycle phase `closing` and retains every downstream resource.
+`tests/runtime.test.ts` latches a disposer and proves registry closure remains pending until quiescence, accepts rejected-but-settled adjacent work, rejects a failed disposer, and delivers steer/follow-up controls accepted during delayed Memory preparation after Runtime registration. `tests/core-lifecycle.test.ts` proves a failed runtime barrier leaves lifecycle phase `closing` and retains every downstream resource.
 
 ## Consequences
 
-Shutdown can remain pending on defective same-process code, which is truthful. Bounded termination now requires moving that code behind an isolatable boundary.
+Shutdown can remain pending on defective same-process code, which is truthful. Bounded termination now requires moving that code behind an isolatable boundary. Runtime registration performs one bounded extra scheduling step when controls were accepted during preparation; the durable inbox remains the sole delivery source.

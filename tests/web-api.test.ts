@@ -262,6 +262,61 @@ describe("Web API request headers", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/task-runs/run/transcript?limit=200&after=200", expect.any(Object));
   });
 
+  it("drains Session and Inbox profile cursors and presents queued items by position", async () => {
+    const session = (id: string) => ({
+      id, title: id, modelId: "gpt-5.6-sol", reasoningEffort: "high",
+      createdAt: "2026-08-15T00:00:00.000Z", updatedAt: "2026-08-15T00:00:00.000Z",
+      latestTaskRunId: null, latestTaskRunStatus: null, latestTaskRunPhase: null,
+      latestActivityAt: "2026-08-15T00:00:00.000Z",
+    });
+    const newer = { ...operatorInboxItem("newer"), position: 2, createdAt: "2026-08-15T00:01:00.000Z" };
+    const older = { ...operatorInboxItem("older"), position: 1, createdAt: "2026-08-15T00:00:00.000Z" };
+    const pageInfo = (nextCursor: string | null, hasMore: boolean) => ({ nextCursor, hasMore, limit: 200, snapshot: "snapshot" });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ items: [session("newer-session")], pageInfo: pageInfo("sessions-next", true) })), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ items: [session("older-session")], pageInfo: pageInfo(null, false) })), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ items: [newer], collectionRevision: 4, pageInfo: pageInfo("inbox-next", true) })), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ items: [older], collectionRevision: 4, pageInfo: pageInfo(null, false) })), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.sessions()).resolves.toEqual([
+      expect.objectContaining({ id: "newer-session" }),
+      expect.objectContaining({ id: "older-session" }),
+    ]);
+    await expect(api.inbox("session")).resolves.toEqual([
+      expect.objectContaining({ id: "older", position: 1 }),
+      expect.objectContaining({ id: "newer", position: 2 }),
+    ]);
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/operator/sessions?limit=200&cursor=sessions-next", expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/v1/operator/sessions/session/inbox?limit=200&cursor=inbox-next", expect.any(Object));
+  });
+
+  it("drains Skill catalog and revision cursors", async () => {
+    const summary = (id: string) => ({
+      id, name: id, latestRevision: 1, latestRevisionId: `${id}-revision`, description: `${id} description`,
+      sha256: "a".repeat(64), workspaceCount: 0, resourceRevision: 1, updatedAt: "2026-08-15T00:00:00.000Z",
+    });
+    const revision = (id: string, value: number) => ({
+      id, skillId: "skill", revision: value, name: "skill", description: "Skill description", content: `revision ${value}`,
+      sha256: "b".repeat(64), disableModelInvocation: false, createdAt: "2026-08-15T00:00:00.000Z",
+    });
+    const pageInfo = (nextCursor: string | null, hasMore: boolean) => ({ nextCursor, hasMore, limit: 200, snapshot: "snapshot" });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ items: [summary("first")], collectionRevision: 3, pageInfo: pageInfo("skills-next", true) })), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ items: [summary("second")], collectionRevision: 3, pageInfo: pageInfo(null, false) })), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ items: [revision("revision-2", 2)], resourceRevision: 2, pageInfo: pageInfo("revisions-next", true) })), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(success({ items: [revision("revision-1", 1)], resourceRevision: 2, pageInfo: pageInfo(null, false) })), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.skills()).resolves.toHaveLength(2);
+    await expect(api.skillRevisions("skill")).resolves.toEqual([
+      expect.objectContaining({ id: "revision-2" }),
+      expect.objectContaining({ id: "revision-1" }),
+    ]);
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/operator/skills?limit=200&cursor=skills-next", expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/v1/operator/skills/skill/revisions?limit=200&cursor=revisions-next", expect.any(Object));
+  });
+
   it("consumes a later tool-result projection at its change sequence", async () => {
     const completed = { sequence: 2, attempt: 1, occurredAt: "2026-08-16T00:00:01.000Z", kind: "tool", toolCallId: "split", toolName: "read", arguments: {}, result: "done", isError: false, status: "completed" };
     const fetchMock = vi.fn()

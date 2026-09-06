@@ -42,7 +42,7 @@ export class SnapshotWorkspaceEdit implements WorkspaceEditPort {
         if (hunk.oldText === "") { content += hunk.newText; continue; }
         const occurrences = content.split(hunk.oldText).length - 1;
         if (occurrences !== 1) throw new WorkspaceEditError(`Expected oldText exactly once in ${file.path}, found ${occurrences}`, "workspace.edit_precondition_failed", { path: file.path, hunk: index, occurrences });
-        content = content.replace(hunk.oldText, hunk.newText);
+        content = content.replace(hunk.oldText, () => hunk.newText);
       }
       prepared.push({ path: file.path, content, before: source.content, beforeHash: source.contentHash, afterHash: workspaceContentHash(content), firstChangedLine: changedLine(source.content, content) });
     }

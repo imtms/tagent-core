@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Store } from "@tagent/persistence-sqlite/store";
@@ -230,6 +230,64 @@ describe("workspace tools", () => {
     const second = await read.execute("bom-edit-read", { path: "bom.txt" }, testSignal);
     await edit.execute("bom-edit", { path: "bom.txt", ...(second.details as object), oldText: "hello", newText: "updated" }, testSignal);
     expect(await readFile(path.join(workspace, "bom.txt"), "utf8")).toBe("updated");
+    store.close();
+  });
+
+  it("writes replacement tokens literally through edit and multi-file patch", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-literal-replacement-"));
+    const replacements = ["$&", "$$", "$`", "$'"];
+    for (const [index] of replacements.entries()) {
+      await writeFile(path.join(workspace, `edit-${index}.txt`), "before TARGET after", "utf8");
+      await writeFile(path.join(workspace, `patch-${index}.txt`), "before TARGET after", "utf8");
+    }
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "write literal replacement text");
+    const tools = createTestTools(store, run.id, workspace);
+    const read = tools.find((tool) => tool.name === "read")!;
+    const edit = tools.find((tool) => tool.name === "edit")!;
+    const patch = tools.find((tool) => tool.name === "patch")!;
+
+    for (const [index, replacement] of replacements.entries()) {
+      const filename = `edit-${index}.txt`;
+      const snapshot = (await read.execute(`read-edit-${index}`, { path: filename }, testSignal)).details as { snapshotId: string; contentHash: string };
+      await edit.execute(`literal-edit-${index}`, { path: filename, ...snapshot, oldText: "TARGET", newText: replacement }, testSignal);
+      expect(await readFile(path.join(workspace, filename), "utf8")).toBe(`before ${replacement} after`);
+    }
+
+    const files = await Promise.all(replacements.map(async (replacement, index) => {
+      const filename = `patch-${index}.txt`;
+      const snapshot = (await read.execute(`read-patch-${index}`, { path: filename }, testSignal)).details as { snapshotId: string; contentHash: string };
+      return { path: filename, ...snapshot, hunks: [{ oldText: "TARGET", newText: replacement }] };
+    }));
+    await patch.execute("literal-patch", { files }, testSignal);
+    for (const [index, replacement] of replacements.entries()) {
+      expect(await readFile(path.join(workspace, `patch-${index}.txt`), "utf8")).toBe(`before ${replacement} after`);
+    }
+    store.close();
+  });
+
+  it("preserves existing regular-file permissions across replacement commits", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tagent-tools-permissions-"));
+    const executable = path.join(workspace, "build.sh");
+    const readable = path.join(workspace, "asset.txt");
+    await writeFile(executable, "#!/bin/sh\nprintf old", "utf8");
+    await writeFile(readable, "old", "utf8");
+    await chmod(executable, 0o755);
+    await chmod(readable, 0o644);
+    const store = new Store(":memory:");
+    const run = store.createRun(store.createSession().id, "preserve file permissions");
+    const tools = createTestTools(store, run.id, workspace);
+    const read = tools.find((tool) => tool.name === "read")!;
+    const write = tools.find((tool) => tool.name === "write")!;
+    const edit = tools.find((tool) => tool.name === "edit")!;
+
+    const executableSnapshot = (await read.execute("read-executable", { path: "build.sh" }, testSignal)).details as { snapshotId: string; contentHash: string };
+    await write.execute("replace-executable", { path: "build.sh", content: "#!/bin/sh\nprintf new", ...executableSnapshot }, testSignal);
+    const readableSnapshot = (await read.execute("read-readable", { path: "asset.txt" }, testSignal)).details as { snapshotId: string; contentHash: string };
+    await edit.execute("edit-readable", { path: "asset.txt", ...readableSnapshot, oldText: "old", newText: "new" }, testSignal);
+
+    expect((await stat(executable)).mode & 0o777).toBe(0o755);
+    expect((await stat(readable)).mode & 0o777).toBe(0o644);
     store.close();
   });
 

@@ -12,6 +12,8 @@ Properties:
 - precondition failures fail with `workspace.edit_precondition_failed`;
 - multi-file patches preflight as a unit and do not intentionally leave partial writes;
 - commit-time hashes are checked again through the descriptor-relative helper;
+- replacement text is applied literally, including JavaScript replacement tokens such as `$&`, `$$`, ``$` ``, and `$'`;
+- replacing an existing regular file preserves its ordinary permission bits, while genuinely new files retain restrictive creation defaults;
 - normal commit failures roll back visible renames;
 - mutation-capable operations invalidate affected checks on both success and failure because a failed operation may have produced partial effects;
 - Operation canonical payloads include the snapshot-bound patch, so receipt replay does not write twice;

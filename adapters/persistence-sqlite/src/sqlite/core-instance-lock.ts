@@ -180,16 +180,6 @@ async function readMetadata(lockPath: string): Promise<CoreInstanceLockMetadata>
   return parseMetadata(await readFile(lockPath, "utf8"), lockPath);
 }
 
-async function pathExists(filename: string): Promise<boolean> {
-  try {
-    await stat(filename);
-    return true;
-  } catch (error) {
-    if (errnoCode(error) === "ENOENT") return false;
-    throw error;
-  }
-}
-
 async function writeLockFile(lockPath: string, metadata: CoreInstanceLockMetadata): Promise<FileHandle> {
   const handle = await open(lockPath, "wx", 0o600);
   try {
@@ -220,6 +210,33 @@ async function assertStale(
   if (identity.status === "alive" && identity.processStart === existing.processStart) {
     throw new WriterAuthorityUnavailableError(`Core instance lock is held by live process ${existing.pid} on ${existing.host}`);
   }
+}
+
+async function recoverAbandonedRecoveryMarker(
+  recoveryPath: string,
+  currentHost: string,
+  processProbe: ProcessIdentityProbe,
+): Promise<void> {
+  let observed: CoreInstanceLockMetadata;
+  try {
+    observed = await readMetadata(recoveryPath);
+  } catch (error) {
+    if (errnoCode(error) === "ENOENT") return;
+    throw error;
+  }
+  await assertStale(observed, currentHost, processProbe, recoveryPath);
+  let confirmed: CoreInstanceLockMetadata;
+  try {
+    confirmed = await readMetadata(recoveryPath);
+  } catch (error) {
+    if (errnoCode(error) === "ENOENT") return;
+    throw error;
+  }
+  await assertStale(confirmed, currentHost, processProbe, recoveryPath);
+  if (confirmed.instanceId !== observed.instanceId) {
+    throw new WriterAuthorityUnavailableError(`Core instance lock recovery owner changed while reclaiming ${recoveryPath}`);
+  }
+  await unlink(recoveryPath);
 }
 
 async function recoverStaleLock(
@@ -365,9 +382,7 @@ export async function acquireCoreInstanceLock(
     throw new TypeError("Core instance lock identity is invalid");
   }
 
-  if (await pathExists(recoveryPath)) {
-    throw new WriterAuthorityUnavailableError(`Core instance lock recovery is already in progress at ${recoveryPath}`);
-  }
+  await recoverAbandonedRecoveryMarker(recoveryPath, host, processProbe);
 
   let handle: FileHandle;
   try {
@@ -386,9 +401,7 @@ export async function acquireCoreInstanceLock(
   }
   const lock = new CoreInstanceLock(lockPath, handle, metadata);
   try {
-    if (await pathExists(recoveryPath)) {
-      throw new WriterAuthorityUnavailableError(`Core instance lock recovery is in progress at ${recoveryPath}`);
-    }
+    await recoverAbandonedRecoveryMarker(recoveryPath, host, processProbe);
     await lock.assertHeld();
     return lock;
   } catch (error) {

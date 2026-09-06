@@ -246,7 +246,7 @@ describe("production TaskRun transition authority", () => {
       "apps/core-service/src/application/external-action-approval-application.ts",
       "packages/admission/src/application/admission-coordinator.ts",
       "packages/execution/src/application/execution-lifecycle-service.ts",
-      "packages/execution/src/application/run-context-service.ts",
+      "packages/execution/src/application/run-resume-transition.ts",
       "packages/execution/src/application/runtime-registry.ts",
     ]);
     expect(sourceFiles("packages/execution/src/application")

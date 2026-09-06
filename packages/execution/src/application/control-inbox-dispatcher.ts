@@ -48,6 +48,12 @@ export class ControlInboxDispatcher {
     return task;
   }
 
+  public runtimeReady(runId: RunId, attempt: number): Promise<void> {
+    const active = this.state.controlDeliveryTasks.get(runId);
+    if (!active) return this.scheduleControlDelivery(runId, attempt);
+    return active.catch(() => undefined).then(() => this.scheduleControlDelivery(runId, attempt));
+  }
+
   public async deliverControlInbox(runId: RunId, attempt: number) {
     const runtime = this.state.runtimes.get(runId);
     if (!runtime || this.state.closing) return;
